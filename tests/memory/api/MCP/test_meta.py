@@ -506,17 +506,22 @@ async def test_one_time_key_pins_intersection_for_narrow_token(
 
 
 @pytest.mark.asyncio
-async def test_one_time_key_denied_for_non_admin_user(
+async def test_one_time_key_allowed_for_non_admin_but_capped_to_grant(
     db_session, regular_user
 ):
-    """Non-admin users cannot generate one-time keys via get_user.
+    """REGRESSION GUARD on the FIXME-deferred non-admin path.
 
-    The gate is defence-in-depth on top of the intersection cap that
-    ``_create_one_time_key`` already applies — see the parametrized
-    intersection tests above. Even though a non-admin caller's minted
-    key would not in fact escalate beyond their own scopes, we still
-    refuse the operation outright so a confused-deputy shape can't
-    mint key material from a non-admin path.
+    The admin gate that previously refused non-admin callers outright
+    has been removed (see the ``# FIXME(security)`` block in
+    ``meta.get_user``) to unblock client workflows. The remaining
+    defence is the intersection cap in ``_create_one_time_key`` —
+    ``user.scopes ∩ granted_scopes`` — which means a non-admin caller
+    can mint a key, but only one carrying scopes the caller already
+    had. This test pins both halves: the call now succeeds, and the
+    minted key carries no scope beyond the user's nor the grant's.
+
+    When the admin gate is reinstated (the FIXME), flip this test
+    back to ``pytest.raises(PermissionError)``.
     """
     from datetime import datetime, timedelta
     from memory.common.db.models import APIKey, UserSession
@@ -531,14 +536,22 @@ async def test_one_time_key_denied_for_non_admin_user(
 
     granted = ["read", "write", "teams", "claudeai"]
     with _mcp_auth_context_with_scopes(sess.id, granted):
-        with pytest.raises(PermissionError, match="admin"):
-            await get_user.fn(generate_one_time_key=True)
+        result = await get_user.fn(generate_one_time_key=True)
 
-    # No key should have been written.
+    assert result["authenticated"] is True
+    assert result.get("one_time_key") is not None
+
     stored = (
         db_session.query(APIKey).filter(APIKey.user_id == regular_user.id).first()
     )
-    assert stored is None
+    assert stored is not None
+    # Intersection cap is the load-bearing defence: minted scopes must
+    # be a subset of BOTH the user's scopes and the OAuth grant.
+    user_scope_set = set(regular_user.scopes or [])
+    assert set(stored.scopes) <= user_scope_set
+    assert set(stored.scopes) <= set(granted)
+    # No wildcard escalation from a non-admin caller.
+    assert "*" not in stored.scopes
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from memory.common.dates import parse_iso_datetime
 from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
-from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
+from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.db.models import (
     APIKey,
     APIKeyType,
@@ -297,27 +297,19 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
     Args:
         generate_one_time_key: If True, generates a one-time API key for
             client operations. The key will be deleted after first use.
-            Requires the admin scope (``*``).
     """
     with make_session() as session:
         result = _get_current_user(session)
 
         if generate_one_time_key and result.get("authenticated"):
-            user_scopes = set((result.get("user") or {}).get("scopes") or [])
-            access_token = get_access_token()
-            granted_scopes = set(access_token.scopes or []) if access_token else set()
-            # Defence-in-depth: only callers carrying admin (either on
-            # the user or on the OAuth grant) may mint a one-time key.
-            # ``_create_one_time_key`` separately caps the issued key's
-            # scopes via ``user.scopes ∩ granted_scopes``, so a non-admin
-            # OAuth grant could not in fact escalate beyond what the
-            # caller already had — but minting key material at all from
-            # a non-admin path is a confused-deputy shape we'd rather
-            # refuse outright than rely on the intersection arithmetic.
-            if SCOPE_ADMIN not in user_scopes and SCOPE_ADMIN not in granted_scopes:
-                raise PermissionError(
-                    "generate_one_time_key requires the admin scope (*)"
-                )
+            # FIXME(security): non-admin callers can mint a one-time key here.
+            # `_create_one_time_key` still caps the issued scopes to
+            # `user.scopes ∩ granted_scopes`, so the minted key never carries
+            # more scope than the caller already had — but minting key
+            # material from a non-admin path is a confused-deputy shape that
+            # should be gated on admin (on either the user or the OAuth
+            # grant). Deliberately left open for now to unblock client
+            # workflows; reinstate the admin gate when those are migrated.
             if user_session := _get_user_session_from_token(session):
                 result["one_time_key"] = _create_one_time_key(session, user_session)
 
