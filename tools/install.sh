@@ -203,6 +203,12 @@ prompt_if_missing "VOYAGE_API_KEY" \
     Used for: all embeddings (voyage-3-large / voyage-multimodal-3) and reranking" \
     "true"
 
+# Also write to secrets file for Docker
+voyage_key=$(get_env_value "VOYAGE_API_KEY")
+if [ -n "$voyage_key" ]; then
+    write_secret "voyage_key.txt" "$voyage_key"
+fi
+
 # ─────────────────────────────────────────────────────────────────────
 # Set defaults for services
 # ─────────────────────────────────────────────────────────────────────

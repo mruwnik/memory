@@ -206,6 +206,11 @@ METRICS_SUMMARY_REFRESH_MINUTE = int(
 CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 * 24))
 
 # Embedding settings
+# Voyage powers both embeddings (embedding.py) and reranking (search/rerank.py).
+# Read via secret_env so it can be supplied as a Docker secret (VOYAGE_API_KEY_FILE)
+# instead of a plain env var. The voyageai SDK only reads the VOYAGE_API_KEY env
+# var itself, so call sites must pass this value explicitly as api_key=.
+VOYAGE_API_KEY = secret_env("VOYAGE_API_KEY")
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")
 MIXED_EMBEDDING_MODEL = os.getenv("MIXED_EMBEDDING_MODEL", "voyage-multimodal-3")
 
