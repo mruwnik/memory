@@ -59,7 +59,7 @@ def test_loopback_urls_recognized(safe_disable_auth_settings, monkeypatch, loopb
         # 0.0.0.0 is INADDR_ANY (bind on all interfaces). A SERVER_URL of
         # 0.0.0.0 is a statement of intent to reach the API from elsewhere
         # on the network, NOT a loopback declaration — it must NOT bypass
-        # the DISABLE_AUTH=true safety check. See _is_loopback_url
+        # the DISABLE_AUTH=true safety check. See is_loopback_url
         # docstring for the OS-dependent dialing footguns.
         "http://0.0.0.0:8000",
         "http://0.0.0.0",
@@ -140,8 +140,8 @@ def test_derive_transfer_token_secret_is_deterministic():
     """Same master key → same derived secret. Required so all API
     instances in a deployment compute the same HMAC key without any
     coordination/round-trip."""
-    a = settings._derive_transfer_token_secret("master-key-abc")
-    b = settings._derive_transfer_token_secret("master-key-abc")
+    a = settings.derive_transfer_token_secret("master-key-abc")
+    b = settings.derive_transfer_token_secret("master-key-abc")
     assert a == b
 
 
@@ -149,8 +149,8 @@ def test_derive_transfer_token_secret_changes_with_input():
     """Different master keys produce different derived secrets. Without
     this, the HKDF would be a no-op and transfer URLs minted under one
     deployment would verify under another."""
-    a = settings._derive_transfer_token_secret("master-key-abc")
-    b = settings._derive_transfer_token_secret("master-key-xyz")
+    a = settings.derive_transfer_token_secret("master-key-abc")
+    b = settings.derive_transfer_token_secret("master-key-xyz")
     assert a != b
 
 
@@ -160,7 +160,7 @@ def test_derive_transfer_token_secret_is_distinct_from_master():
     not equal to the master key — otherwise a leak of the transfer
     secret discloses the at-rest AES-GCM secret."""
     master = "master-key-with-256-bits-of-entropy-deadbeef"
-    derived = settings._derive_transfer_token_secret(master)
+    derived = settings.derive_transfer_token_secret(master)
     assert derived != master
     # And the derivation is one-way: hex output can't simply embed the
     # input by accident.
@@ -171,7 +171,7 @@ def test_derive_transfer_token_secret_is_distinct_from_master():
 def test_derive_transfer_token_secret_returns_hex():
     """The derived secret is hex-encoded for greppability in logs/process
     listings if it ever leaks. 32-byte output → 64 hex chars."""
-    derived = settings._derive_transfer_token_secret("any-master-key")
+    derived = settings.derive_transfer_token_secret("any-master-key")
     assert len(derived) == 64
     assert all(c in "0123456789abcdef" for c in derived)
 
@@ -181,7 +181,7 @@ def test_derive_transfer_token_secret_includes_versioned_info():
     (e.g. switching to a different hash) cleanly invalidates all
     existing tokens by bumping the version tag. Pin the constant so a
     silent edit is caught by this test."""
-    assert settings._TRANSFER_TOKEN_SECRET_HKDF_INFO == (
+    assert settings.TRANSFER_TOKEN_SECRET_HKDF_INFO == (
         b"memory:transfer-token-secret:v1"
     )
 
@@ -197,9 +197,9 @@ def test_derive_transfer_token_secret_uses_secrets_encryption_salt():
     # that drops the salt.
     original_salt = settings.SECRETS_ENCRYPTION_SALT
     try:
-        derived_a = settings._derive_transfer_token_secret("k")
+        derived_a = settings.derive_transfer_token_secret("k")
         settings.SECRETS_ENCRYPTION_SALT = b"different-salt-v1"
-        derived_b = settings._derive_transfer_token_secret("k")
+        derived_b = settings.derive_transfer_token_secret("k")
     finally:
         settings.SECRETS_ENCRYPTION_SALT = original_salt
     assert derived_a != derived_b

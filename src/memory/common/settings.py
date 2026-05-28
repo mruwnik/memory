@@ -1,8 +1,10 @@
 import logging
 import os
 import pathlib
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -362,7 +364,7 @@ DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 DISABLE_AUTH_CONFIRM = os.getenv("I_KNOW_THIS_DISABLES_AUTH", "")
 
 
-def _is_loopback_url(url: str) -> bool:
+def is_loopback_url(url: str) -> bool:
     """Return True if ``url`` clearly points at the local machine.
 
     We deliberately accept only the exact loopback hostnames; anything
@@ -381,8 +383,6 @@ def _is_loopback_url(url: str) -> bool:
     """
     if not url:
         return True
-    from urllib.parse import urlparse
-
     host = (urlparse(url).hostname or "").lower()
     return host in {"localhost", "127.0.0.1", "::1"}
 
@@ -399,12 +399,12 @@ def validate_disable_auth_safety() -> None:
         return
 
     prod_signals: list[str] = []
-    if not _is_loopback_url(SERVER_URL):
+    if not is_loopback_url(SERVER_URL):
         prod_signals.append(f"SERVER_URL={SERVER_URL!r} is not loopback")
     if S3_BACKUP_ENABLED:
         prod_signals.append("S3_BACKUP_ENABLED=true")
     non_loopback_redirects = [
-        p for p in OAUTH_REDIRECT_URI_ALLOWLIST if p != "*" and not _is_loopback_url(p)
+        p for p in OAUTH_REDIRECT_URI_ALLOWLIST if p != "*" and not is_loopback_url(p)
     ]
     if non_loopback_redirects:
         prod_signals.append(
@@ -581,10 +581,10 @@ MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
 # Domain-separating ``info`` includes ``v1`` so that rotating the
 # derivation scheme (e.g. switching to a different hash) cleanly
 # invalidates all existing tokens by bumping the version tag.
-_TRANSFER_TOKEN_SECRET_HKDF_INFO = b"memory:transfer-token-secret:v1"
+TRANSFER_TOKEN_SECRET_HKDF_INFO = b"memory:transfer-token-secret:v1"
 
 
-def _derive_transfer_token_secret(master_key: str) -> str:
+def derive_transfer_token_secret(master_key: str) -> str:
     """HKDF-SHA256-derive a 32-byte (256-bit) HMAC key from ``master_key``.
 
     Returns hex (the existing ``transfer_tokens._sign`` calls
@@ -593,19 +593,12 @@ def _derive_transfer_token_secret(master_key: str) -> str:
     derivation is deterministic — same input → same output — which is
     required so all API instances in a deployment compute the same
     transfer secret without coordination.
-
-    Imports happen at module load (``settings.py`` is imported eagerly
-    by the API), so any cryptography-library bug surfaces at startup
-    rather than first-token mint.
     """
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
     derived_bytes = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
         salt=SECRETS_ENCRYPTION_SALT,
-        info=_TRANSFER_TOKEN_SECRET_HKDF_INFO,
+        info=TRANSFER_TOKEN_SECRET_HKDF_INFO,
     ).derive(master_key.encode("utf-8"))
     return derived_bytes.hex()
 
@@ -614,7 +607,7 @@ _explicit_transfer_secret = secret_env("TRANSFER_TOKEN_SECRET")
 if _explicit_transfer_secret:
     TRANSFER_TOKEN_SECRET: str | None = _explicit_transfer_secret
 elif SECRETS_ENCRYPTION_KEY:
-    TRANSFER_TOKEN_SECRET = _derive_transfer_token_secret(SECRETS_ENCRYPTION_KEY)
+    TRANSFER_TOKEN_SECRET = derive_transfer_token_secret(SECRETS_ENCRYPTION_KEY)
 else:
     TRANSFER_TOKEN_SECRET = None
 

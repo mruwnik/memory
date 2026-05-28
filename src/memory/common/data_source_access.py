@@ -30,8 +30,6 @@ Splitting the two phases avoids enqueueing a task whose state the DB
 hasn't actually committed yet (and would race with subsequent updates).
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -59,7 +57,7 @@ SUPPORTED_SOURCE_TYPES = frozenset(
 )
 
 
-def _value_changed(current: Any, snapshot: Any) -> bool:
+def value_changed(current: Any, snapshot: Any) -> bool:
     """``current != snapshot``, treating None / "" / 0 as distinct values.
 
     Plain ``!=`` is fine here — the historical pattern of using ``or
@@ -94,8 +92,8 @@ def mark_access_control_changed_if_needed(
 
     Returns True iff a change was detected (and ``config_version`` bumped).
     """
-    pid_changed = _value_changed(source.project_id, snapshot_project_id)
-    sens_changed = _value_changed(source.sensitivity, snapshot_sensitivity)
+    pid_changed = value_changed(source.project_id, snapshot_project_id)
+    sens_changed = value_changed(source.sensitivity, snapshot_sensitivity)
     if not (pid_changed or sens_changed):
         return False
     # Bump the version inside the same transaction as the actual mutation

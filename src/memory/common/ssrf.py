@@ -88,7 +88,7 @@ def resolve_hostname(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IP
     return out
 
 
-def _ensure_endpoint_public(host: str, *, label: str) -> None:
+def ensure_endpoint_public(host: str, *, label: str) -> None:
     """Raise ``UnsafeURLError`` unless ``host`` is an IP-literal or
     resolves only to public IPs.
 
@@ -149,7 +149,7 @@ def validate_public_url(url: str) -> None:
     if not hostname:
         raise UnsafeURLError("URL has no hostname")
 
-    _ensure_endpoint_public(hostname, label="URL")
+    ensure_endpoint_public(hostname, label="URL")
 
 
 def validate_public_hostname(hostname: str) -> None:
@@ -173,4 +173,4 @@ def validate_public_hostname(hostname: str) -> None:
     if not hostname:
         raise UnsafeURLError("hostname must not be blank")
 
-    _ensure_endpoint_public(hostname, label="hostname")
+    ensure_endpoint_public(hostname, label="hostname")
