@@ -297,10 +297,7 @@ async def get_user(generate_one_time_key: bool = False) -> dict:
     Args:
         generate_one_time_key: If True, generates a one-time API key for
             client operations. The key will be deleted after first use.
-            Requires the admin scope (``*``) on either the underlying
-            user or the OAuth grant — see the gate comment below for
-            why this is defence-in-depth on top of the intersection
-            cap that ``_create_one_time_key`` already applies.
+            Requires the admin scope (``*``).
     """
     with make_session() as session:
         result = _get_current_user(session)
