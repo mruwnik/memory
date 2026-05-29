@@ -4,7 +4,18 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 
 export default [
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'coverage'] },
+  {
+    // Build/test config files run in Node and use __dirname, process, etc.
+    // Flat-config globs without a slash match root-level files only, which is
+    // exactly the intended scope (vite.config.js, eslint.config.js, ...).
+    files: ['*.config.js'],
+    languageOptions: {
+      globals: globals.node,
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+    },
+    rules: { ...js.configs.recommended.rules },
+  },
   {
     files: ['**/*.{js,jsx}'],
     languageOptions: {

@@ -1,5 +1,7 @@
 import pytest
+from typing import cast
 from unittest.mock import patch, MagicMock
+from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     EmailAccount,
     GoogleAccount,
@@ -410,7 +412,10 @@ def test_process_email_batch_recovers_after_db_error(mock_exists, mock_process_m
         (uid, SIMPLE_EMAIL_RAW) for uid in ("1", "2", "3")
     )
 
-    stats = process_email_batch(account, db, messages)
+    # PoisonableSession is a structural stand-in for a real session (it only
+    # needs rollback()/poisoned for this test); cast so the type checker
+    # accepts it for the DBSession parameter.
+    stats = process_email_batch(account, cast(DBSession, db), messages)
 
     # The poisoned session was rolled back, so messages 2 and 3 survived.
     assert db.rollback_calls >= 1

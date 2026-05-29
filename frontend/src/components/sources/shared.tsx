@@ -240,9 +240,17 @@ interface ConfirmDialogProps {
   message: string
   onConfirm: () => void
   onCancel: () => void
+  title?: string
+  confirmLabel?: string
 }
 
-export const ConfirmDialog = ({ message, onConfirm, onCancel }: ConfirmDialogProps) => {
+export const ConfirmDialog = ({
+  message,
+  onConfirm,
+  onCancel,
+  title,
+  confirmLabel = 'Confirm',
+}: ConfirmDialogProps) => {
   const titleId = useId()
   const cancelRef = useRef<HTMLButtonElement>(null)
 
@@ -268,7 +276,10 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel }: ConfirmDialogPro
         aria-labelledby={titleId}
         className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full"
       >
-        <p id={titleId} className="text-slate-800 mb-4">{message}</p>
+        {title && (
+          <h3 id={titleId} className="text-lg font-semibold text-slate-900 mb-2">{title}</h3>
+        )}
+        <p id={title ? undefined : titleId} className="text-slate-800 mb-4">{message}</p>
         <div className="flex justify-end gap-2">
           <button
             ref={cancelRef}
@@ -281,7 +292,7 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel }: ConfirmDialogPro
             className="py-2 px-4 bg-red-600 text-white rounded hover:bg-red-700"
             onClick={onConfirm}
           >
-            Confirm
+            {confirmLabel}
           </button>
         </div>
       </div>
