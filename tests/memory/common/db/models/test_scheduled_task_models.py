@@ -5,6 +5,7 @@ from memory.common.db.models.scheduled_tasks import (
     ScheduledTask,
     TaskExecution,
     compute_next_cron,
+    iso_utc,
 )
 
 
@@ -192,7 +193,7 @@ def test_compute_next_cron_no_base_time():
 
 
 def test_scheduled_task_default_enabled(db_session, sample_user):
-    """Test that enabled defaults to True."""
+    """Without a next_scheduled_time, a task has no pending run and is disabled."""
     task = ScheduledTask(
         user_id=sample_user.id,
         task_type="notification",
@@ -201,7 +202,7 @@ def test_scheduled_task_default_enabled(db_session, sample_user):
     db_session.add(task)
     db_session.commit()
 
-    assert task.enabled is True
+    assert task.enabled is False
 
 
 def test_task_execution_default_status(db_session, sample_user):
@@ -222,3 +223,103 @@ def test_task_execution_default_status(db_session, sample_user):
     db_session.commit()
 
     assert execution.status == "pending"
+
+
+def test_iso_utc_appends_z_to_naive_datetime():
+    # Stored datetimes are naive but semantically UTC
+    naive = datetime(2026, 5, 29, 9, 0, 0)
+    assert iso_utc(naive) == "2026-05-29T09:00:00Z"
+
+
+def test_iso_utc_none_returns_none():
+    assert iso_utc(None) is None
+
+
+def test_iso_utc_aware_datetime_keeps_offset():
+    aware = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)
+    # Already unambiguous; do not append a second marker
+    assert iso_utc(aware) == "2026-05-29T09:00:00+00:00"
+
+
+def test_serialize_next_scheduled_time_is_utc_marked(db_session, sample_user):
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        next_scheduled_time=datetime(2026, 5, 29, 9, 0, 0),
+    )
+    db_session.add(task)
+    db_session.commit()
+    assert task.serialize()["next_scheduled_time"] == "2026-05-29T09:00:00Z"
+
+
+def test_enabled_true_when_next_scheduled_time_set(db_session, sample_user):
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    assert task.enabled is True
+
+
+def test_enabled_false_when_next_scheduled_time_none(db_session, sample_user):
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        next_scheduled_time=None,
+    )
+    assert task.enabled is False
+
+
+def test_setting_enabled_false_clears_next_scheduled_time(db_session, sample_user):
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    task.enabled = False
+    assert task.next_scheduled_time is None
+    assert task.enabled is False
+
+
+def test_setting_enabled_true_recomputes_recurring(db_session, sample_user):
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        cron_expression="0 9 * * *",
+        next_scheduled_time=None,
+    )
+    task.enabled = True
+    assert task.next_scheduled_time is not None
+    assert task.enabled is True
+
+
+def test_setting_enabled_true_oneoff_is_noop(db_session, sample_user):
+    # A fired one-off (no cron, no next) cannot be resurrected
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        cron_expression=None,
+        next_scheduled_time=None,
+    )
+    task.enabled = True
+    assert task.next_scheduled_time is None
+    assert task.enabled is False
+
+
+def test_enabled_query_expression_filters(db_session, sample_user):
+    active = ScheduledTask(
+        user_id=sample_user.id, task_type="notification",
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    inactive = ScheduledTask(
+        user_id=sample_user.id, task_type="notification",
+        next_scheduled_time=None,
+    )
+    db_session.add_all([active, inactive])
+    db_session.commit()
+
+    enabled_ids = {
+        t.id for t in db_session.query(ScheduledTask).filter(ScheduledTask.enabled).all()
+    }
+    assert active.id in enabled_ids
+    assert inactive.id not in enabled_ids

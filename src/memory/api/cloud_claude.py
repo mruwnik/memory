@@ -878,7 +878,7 @@ async def schedule_session(
         db.query(ScheduledTask)
         .filter(
             ScheduledTask.user_id == user.id,
-            ScheduledTask.enabled.is_(True),
+            ScheduledTask.enabled,
         )
         .count()
     )
@@ -913,7 +913,6 @@ async def schedule_session(
         data={"spawn_config": spawn_data},
         cron_expression=request.cron_expression,
         next_scheduled_time=next_time,
-        enabled=True,
     )
     db.add(task)
     db.commit()

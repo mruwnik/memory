@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from croniter import croniter
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, text
+from sqlalchemy import ColumnElement, DateTime, ForeignKey, Index, Integer, JSON, String, Text, text
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -60,6 +61,21 @@ def compute_next_cron(cron_expression: str, base_time: datetime | None = None) -
     return cron.get_next(datetime)
 
 
+def iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a stored datetime as an explicit-UTC ISO string.
+
+    Stored datetimes are naive but semantically UTC. ``isoformat()`` alone
+    emits no offset, so JS ``new Date(...)`` parses them as browser-local time.
+    Appending ``Z`` for naive values (and preserving any existing offset for
+    aware ones) makes the instant unambiguous on the wire.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.isoformat() + "Z"
+    return dt.isoformat()
+
+
 class ScheduledTask(Base):
     """A scheduled task that can run once or on a recurring schedule."""
     __tablename__ = "scheduled_tasks"
@@ -82,7 +98,6 @@ class ScheduledTask(Base):
 
     cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)
     next_scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, onupdate=func.now())
@@ -96,10 +111,35 @@ class ScheduledTask(Base):
         Index(
             "ix_scheduled_tasks_next_time_enabled",
             "next_scheduled_time",
-            postgresql_where=text("enabled = true AND next_scheduled_time IS NOT NULL"),
+            postgresql_where=text("next_scheduled_time IS NOT NULL"),
         ),
         Index("ix_scheduled_tasks_user_id", "user_id"),
     )
+
+    @hybrid_property
+    def enabled(self) -> bool:
+        """A task is enabled iff it has a pending run.
+
+        State is fully determined by ``(cron_expression, next_scheduled_time)``;
+        ``enabled`` is the derived view the API/UI consume. A fired one-off
+        (``next_scheduled_time is None``) reads as disabled, which is what we
+        want — it will never run again.
+        """
+        return self.next_scheduled_time is not None
+
+    @enabled.inplace.expression
+    @classmethod
+    def _enabled_expression(cls) -> ColumnElement[bool]:
+        return cls.next_scheduled_time.isnot(None)
+
+    @enabled.inplace.setter
+    def _enabled_setter(self, value: bool) -> None:
+        if not value:
+            self.next_scheduled_time = None
+        elif self.next_scheduled_time is None and self.cron_expression:
+            # Resuming a paused recurring task: schedule the next run from now.
+            self.next_scheduled_time = compute_next_cron(self.cron_expression)
+        # value=True with a next already set, or a one-off with no cron: no-op.
 
     def serialize(self) -> dict[str, Any]:
         return {
@@ -112,10 +152,10 @@ class ScheduledTask(Base):
             "notification_target": self.notification_target,
             "data": self.data,
             "cron_expression": self.cron_expression,
-            "next_scheduled_time": self.next_scheduled_time.isoformat() if self.next_scheduled_time else None,
+            "next_scheduled_time": iso_utc(self.next_scheduled_time),
             "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": iso_utc(self.created_at),
+            "updated_at": iso_utc(self.updated_at),
         }
 
 
@@ -162,9 +202,9 @@ class TaskExecution(Base):
         return {
             "id": self.id,
             "task_id": self.task_id,
-            "scheduled_time": self.scheduled_time.isoformat() if self.scheduled_time else None,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "scheduled_time": iso_utc(self.scheduled_time),
+            "started_at": iso_utc(self.started_at),
+            "finished_at": iso_utc(self.finished_at),
             "status": self.status,
             "response": self.response,
             "error_message": self.error_message,

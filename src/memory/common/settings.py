@@ -310,6 +310,8 @@ RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
 # Claude scheduled tasks limits
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
+TASK_EXECUTION_RETENTION_DAYS = int(os.getenv("TASK_EXECUTION_RETENTION_DAYS", 30))
+SCHEDULED_TASK_RETENTION_DAYS = int(os.getenv("SCHEDULED_TASK_RETENTION_DAYS", 90))
 
 # Maximum number of concurrently running Claude session containers a single
 # user may have. Bounds host CPU/memory usage. Enforced in the /claude/spawn

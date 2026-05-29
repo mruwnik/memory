@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import delete, inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -19,6 +19,8 @@ from memory.common.celery_app import (
     CLEANUP_EXPIRED_OAUTH_STATES,
     CLEANUP_EXPIRED_SESSIONS,
     CLEANUP_OLD_CLAUDE_SESSIONS,
+    CLEANUP_OLD_DONE_ONEOFF_TASKS,
+    CLEANUP_OLD_TASK_EXECUTIONS,
     REINGEST_MISSING_CHUNKS,
     REINGEST_CHUNK,
     REINGEST_ITEM,
@@ -36,8 +38,10 @@ from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
     Chunk,
     CodingProject,
+    ScheduledTask,
     Session,
     SourceItem,
+    TaskExecution,
 )
 from memory.common.db.models.source_items import (
     BlogPost,
@@ -1032,3 +1036,91 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
         changed,
     )
     return {"status": "success", "reconciled": reconciled, "changed": changed}
+
+
+@app.task(name=CLEANUP_OLD_TASK_EXECUTIONS)
+@tracked_task
+def cleanup_old_task_executions(retention_days: int | None = None) -> dict:
+    """Delete finished task executions older than retention_days.
+
+    Only terminal executions (finished_at set) are removed; pending/running
+    rows are left for the dispatcher's stale-recovery logic.
+    """
+    if retention_days is None:
+        retention_days = settings.TASK_EXECUTION_RETENTION_DAYS
+
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
+    deleted = 0
+
+    with make_session() as session:
+        batch_size = 10000
+        while True:
+            subquery = (
+                select(TaskExecution.id)
+                .where(
+                    TaskExecution.finished_at.isnot(None),
+                    TaskExecution.finished_at < cutoff,
+                )
+                .limit(batch_size)
+            )
+            stmt = delete(TaskExecution).where(TaskExecution.id.in_(subquery))
+            result = session.execute(stmt)
+            session.commit()
+            if result.rowcount == 0:
+                break
+            deleted += result.rowcount
+
+    logger.info(f"Deleted {deleted} task executions older than {retention_days} days")
+    return {"deleted": deleted, "retention_days": retention_days}
+
+
+@app.task(name=CLEANUP_OLD_DONE_ONEOFF_TASKS)
+@tracked_task
+def cleanup_old_done_oneoff_tasks(retention_days: int | None = None) -> dict:
+    """Delete fired one-off tasks (no cron, no pending run) older than cutoff.
+
+    Cascades their executions (FK ON DELETE CASCADE). Recurring tasks — even
+    paused ones (cron set, next None) — are never touched. Tasks with a
+    non-terminal (pending/running) execution are skipped so a just-fired
+    one-off whose delivery is still in flight isn't deleted out from under
+    the worker (its created_at can already be past the cutoff if it was
+    scheduled far in the future).
+    """
+    if retention_days is None:
+        retention_days = settings.SCHEDULED_TASK_RETENTION_DAYS
+
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
+    deleted = 0
+
+    with make_session() as session:
+        batch_size = 5000
+        while True:
+            has_active_execution = (
+                select(TaskExecution.id)
+                .where(
+                    TaskExecution.task_id == ScheduledTask.id,
+                    TaskExecution.status.in_(["pending", "running"]),
+                )
+                .exists()
+            )
+            subquery = (
+                select(ScheduledTask.id)
+                .where(
+                    ScheduledTask.cron_expression.is_(None),
+                    ScheduledTask.next_scheduled_time.is_(None),
+                    ScheduledTask.created_at < cutoff,
+                    ~has_active_execution,
+                )
+                .limit(batch_size)
+            )
+            # ORM delete so the executions cascade fires per-row.
+            rows = session.query(ScheduledTask).filter(ScheduledTask.id.in_(subquery)).all()
+            if not rows:
+                break
+            for task in rows:
+                session.delete(task)
+            session.commit()
+            deleted += len(rows)
+
+    logger.info(f"Deleted {deleted} fired one-off tasks older than {retention_days} days")
+    return {"deleted": deleted, "retention_days": retention_days}

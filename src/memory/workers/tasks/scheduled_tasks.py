@@ -21,6 +21,7 @@ from memory.common import discord as discord_utils
 from memory.common.celery_app import (
     EXECUTE_SCHEDULED_TASK,
     RUN_SCHEDULED_TASKS,
+    SEND_NOTIFICATION,
     app,
 )
 from memory.common.jobs import tracked_task
@@ -222,8 +223,8 @@ def send_via_email(params: NotificationParams) -> bool:
     return False
 
 
-def send_notification(params: NotificationParams) -> bool:
-    """Send notification via the appropriate channel."""
+def deliver_notification(params: NotificationParams) -> bool:
+    """Route a notification to the right channel and deliver it."""
     channel = params.notification_channel
 
     if channel == "discord":
@@ -235,6 +236,35 @@ def send_notification(params: NotificationParams) -> bool:
 
     logger.error(f"Unknown notification_channel: {channel}")
     return False
+
+
+@app.task(name=SEND_NOTIFICATION)
+@tracked_task
+def send_notification(
+    channel: str,
+    target: str,
+    message: str,
+    user_id: int,
+    topic: str | None = None,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Deliver a one-off notification immediately (fire-and-forget).
+
+    No ScheduledTask / TaskExecution rows: immediate sends are not scheduled
+    work. Success/failure is recorded in the worker log only.
+    """
+    params = NotificationParams(
+        notification_channel=channel,
+        notification_target=target,
+        message=message,
+        user_id=user_id,
+        topic=topic,
+        data=data or {},
+    )
+    sent = deliver_notification(params)
+    if not sent:
+        logger.error(f"Immediate notification to {channel}:{target} failed for user {user_id}")
+    return {"sent": sent}
 
 
 def sanitize_slug(text: str, max_length: int = 30) -> str:
@@ -385,7 +415,7 @@ def execute_scheduled_task(self, execution_id: str):
                 if not params:
                     raise ValueError("Missing notification_channel or notification_target")
 
-                sent = send_notification(params)
+                sent = deliver_notification(params)
                 if sent:
                     final_status = ExecutionStatus.COMPLETED
                 else:
@@ -482,7 +512,6 @@ def run_scheduled_tasks():
         due_tasks = (
             session.query(ScheduledTask)
             .filter(
-                ScheduledTask.enabled.is_(True),
                 ScheduledTask.next_scheduled_time < now,
                 ~ScheduledTask.id.in_(session.query(active_executions_subq.c.task_id)),
             )

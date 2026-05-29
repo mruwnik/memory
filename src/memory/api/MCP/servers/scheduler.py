@@ -64,7 +64,7 @@ async def list_all(
         if task_type:
             query = query.filter(ScheduledTask.task_type == task_type)
         if enabled is not None:
-            query = query.filter(ScheduledTask.enabled == enabled)
+            query = query.filter(ScheduledTask.enabled if enabled else ~ScheduledTask.enabled)
 
         tasks = query.order_by(nullslast(ScheduledTask.next_scheduled_time)).limit(limit).all()
         return [task.serialize() for task in tasks]

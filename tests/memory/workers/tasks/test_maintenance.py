@@ -34,6 +34,8 @@ from memory.workers.tasks.maintenance import (
 )
 import memory.workers.tasks.maintenance as maintenance_module
 
+from memory.common.db.models import ScheduledTask, TaskExecution
+
 
 @pytest.fixture
 def source(db_session):
@@ -1533,3 +1535,125 @@ def test_reconcile_access_control_writes_qdrant_for_explicit_override(
     assert collection == "mail"
     assert point_id == chunk_id
     assert payload == {"project_id": other_project.id, "sensitivity": "basic"}
+
+
+def make_task(db_session, user):
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        task_type="notification",
+        cron_expression="0 9 * * *",
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db_session.add(task)
+    db_session.flush()
+    return task
+
+
+def test_cleanup_old_done_oneoff_tasks(db_session, sample_user):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Fired one-off, old: cron None + next None + created long ago -> delete
+    old_oneoff = ScheduledTask(
+        id=str(uuid.uuid4()), user_id=sample_user.id, task_type="notification",
+        cron_expression=None, next_scheduled_time=None,
+        created_at=now - timedelta(days=120),
+    )
+    # Fired one-off, recent -> keep
+    recent_oneoff = ScheduledTask(
+        id=str(uuid.uuid4()), user_id=sample_user.id, task_type="notification",
+        cron_expression=None, next_scheduled_time=None,
+        created_at=now - timedelta(days=5),
+    )
+    # Paused recurring (cron set, next None), old -> keep (not a one-off)
+    paused_recurring = ScheduledTask(
+        id=str(uuid.uuid4()), user_id=sample_user.id, task_type="notification",
+        cron_expression="0 9 * * *", next_scheduled_time=None,
+        created_at=now - timedelta(days=120),
+    )
+    # Active one-off (future) -> keep
+    pending_oneoff = ScheduledTask(
+        id=str(uuid.uuid4()), user_id=sample_user.id, task_type="notification",
+        cron_expression=None, next_scheduled_time=now + timedelta(days=1),
+        created_at=now - timedelta(days=120),
+    )
+    db_session.add_all([old_oneoff, recent_oneoff, paused_recurring, pending_oneoff])
+    db_session.commit()
+
+    # capture ids before the cleanup runs (it deletes via a separate session)
+    old_id = old_oneoff.id
+    keep_ids = {recent_oneoff.id, paused_recurring.id, pending_oneoff.id}
+
+    result = maintenance_module.cleanup_old_done_oneoff_tasks(retention_days=90)
+
+    db_session.expire_all()
+    assert result["deleted"] == 1
+    remaining = {t.id for t in db_session.query(ScheduledTask).all()}
+    assert old_id not in remaining
+    assert keep_ids <= remaining
+
+
+def test_cleanup_old_done_oneoff_tasks_skips_in_flight_delivery(db_session, sample_user):
+    """A fired far-future one-off (old created_at, cron/next None) whose
+    delivery is still PENDING must not be deleted out from under the worker."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    in_flight = ScheduledTask(
+        id=str(uuid.uuid4()), user_id=sample_user.id, task_type="notification",
+        cron_expression=None, next_scheduled_time=None,
+        created_at=now - timedelta(days=120),
+    )
+    db_session.add(in_flight)
+    db_session.flush()
+    db_session.add(
+        TaskExecution(
+            id=str(uuid.uuid4()), task_id=in_flight.id,
+            scheduled_time=now - timedelta(minutes=1),
+            started_at=None, finished_at=None, status="pending",
+        )
+    )
+    db_session.commit()
+    in_flight_id = in_flight.id
+
+    result = maintenance_module.cleanup_old_done_oneoff_tasks(retention_days=90)
+
+    db_session.expire_all()
+    assert result["deleted"] == 0
+    assert in_flight_id in {t.id for t in db_session.query(ScheduledTask).all()}
+
+
+def test_cleanup_old_task_executions_deletes_old_terminal(db_session, sample_user):
+    task = make_task(db_session, sample_user)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    old_id = str(uuid.uuid4())
+    recent_id = str(uuid.uuid4())
+    running_id = str(uuid.uuid4())
+
+    db_session.add_all([
+        TaskExecution(
+            id=old_id, task_id=task.id,
+            scheduled_time=now - timedelta(days=40),
+            finished_at=now - timedelta(days=40), status="completed",
+        ),
+        TaskExecution(
+            id=recent_id, task_id=task.id,
+            scheduled_time=now - timedelta(days=2),
+            finished_at=now - timedelta(days=2), status="completed",
+        ),
+        TaskExecution(
+            id=running_id, task_id=task.id,
+            scheduled_time=now - timedelta(days=40),
+            started_at=now - timedelta(days=40), finished_at=None, status="running",
+        ),
+    ])
+    db_session.commit()
+
+    result = maintenance_module.cleanup_old_task_executions(retention_days=30)
+
+    assert result["deleted"] == 1
+    db_session.expire_all()
+    remaining = {e.id for e in db_session.query(TaskExecution).all()}
+    assert old_id not in remaining
+    assert recent_id in remaining
+    assert running_id in remaining  # never delete un-finished executions

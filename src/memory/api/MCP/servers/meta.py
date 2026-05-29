@@ -10,7 +10,7 @@ from fastmcp.server.dependencies import get_access_token
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import qdrant
 from memory.common.dates import parse_iso_datetime
-from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
+from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
@@ -22,7 +22,6 @@ from memory.common.db.models import (
     ScheduledTask,
     SlackUserCredentials,
     SourceItem,
-    TaskExecution,
     UserSession,
 )
 
@@ -369,6 +368,14 @@ def get_notification_channel(user_info: dict, preferred: str | None) -> tuple[st
     return channels[0]
 
 
+def format_notification_message(subject: str, message: str, details_url: str | None) -> str:
+    """Render the on-wire notification body (bold subject + optional link)."""
+    full_message = f"**{subject}**\n\n{message}"
+    if details_url:
+        full_message += f"\n\n[View details]({details_url})"
+    return full_message
+
+
 def create_notification(
     session,
     user_id: int,
@@ -381,10 +388,7 @@ def create_notification(
     extra_data: dict[str, Any] | None = None,
 ) -> ScheduledTask:
     """Create a notification record in the database."""
-    # Format message with subject and details URL
-    full_message = f"**{subject}**\n\n{message}"
-    if details_url:
-        full_message += f"\n\n[View details]({details_url})"
+    full_message = format_notification_message(subject, message, details_url)
 
     data = {
         "notification_type": "notify_user",
@@ -397,7 +401,6 @@ def create_notification(
     scheduled_task = ScheduledTask(
         user_id=user_id,
         task_type="notification",
-        enabled=True,
         next_scheduled_time=scheduled_time,
         message=full_message,
         topic=subject,
@@ -461,8 +464,8 @@ async def notify_user(
             raise ValueError("No notification channel available (Discord, Slack, or Email)")
 
         channel_type, channel_identifier, extra_data = channel_info
+        full_message = format_notification_message(subject, message, details_url)
 
-        # Parse scheduled time or use now for immediate
         if scheduled_time:
             scheduled_dt = parse_iso_datetime(scheduled_time)
             if scheduled_dt is None:
@@ -473,52 +476,38 @@ async def notify_user(
             current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
             if scheduled_dt <= current_time_naive:
                 raise ValueError("Scheduled time must be in the future")
-        else:
-            scheduled_dt = None
 
-        # Create the notification record
-        # For immediate sends, next_scheduled_time is None so the beat
-        # scheduler won't also pick it up.
-        notification = create_notification(
-            session=session,
-            user_id=user_id,
-            channel_type=channel_type,
-            channel_identifier=channel_identifier,
-            subject=subject,
-            message=message,
-            details_url=details_url,
-            scheduled_time=scheduled_dt,
-            extra_data=extra_data,
-        )
-
-        # For immediate notifications, create execution in the same transaction
-        # to avoid orphaned ScheduledTask records if execution creation fails
-        execution_id = None
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        if not scheduled_time:
-            session.flush()  # Assign notification.id before referencing it
-            execution = TaskExecution(
-                task_id=notification.id,
-                scheduled_time=now,
-                status="pending",
+            notification = create_notification(
+                session=session,
+                user_id=user_id,
+                channel_type=channel_type,
+                channel_identifier=channel_identifier,
+                subject=subject,
+                message=message,
+                details_url=details_url,
+                scheduled_time=scheduled_dt,
+                extra_data=extra_data,
             )
-            session.add(execution)
-            session.flush()  # Get the execution ID before commit
-            execution_id = execution.id
+            session.commit()
+            return {
+                "success": True,
+                "scheduled": True,
+                "notification_id": notification.id,
+                "channel_type": channel_type,
+                "scheduled_time": scheduled_dt.isoformat() + "Z",
+            }
 
-        session.commit()
-        notification_id = notification.id
-
-    # Dispatch Celery task after successful commit
-    if execution_id:
-        celery_app.send_task(EXECUTE_SCHEDULED_TASK, args=[execution_id])
-
+    # Immediate send: fire-and-forget, no ScheduledTask / TaskExecution rows.
+    celery_app.send_task(
+        SEND_NOTIFICATION,
+        args=[channel_type, channel_identifier, full_message, user_id, subject, extra_data],
+    )
     return {
         "success": True,
-        "scheduled": bool(scheduled_time),
-        "notification_id": notification_id,
+        "scheduled": False,
+        "notification_id": None,
         "channel_type": channel_type,
-        "scheduled_time": scheduled_dt.isoformat() if scheduled_dt else None,
+        "scheduled_time": None,
     }
 
 

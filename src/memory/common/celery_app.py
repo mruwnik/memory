@@ -84,6 +84,8 @@ UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 CLEANUP_EXPIRED_OAUTH_STATES = f"{MAINTENANCE_ROOT}.cleanup_expired_oauth_states"
 CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
+CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
+CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
 SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
@@ -93,6 +95,7 @@ SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 # Scheduled tasks
 EXECUTE_SCHEDULED_TASK = f"{SCHEDULED_TASKS_ROOT}.execute_scheduled_task"
 RUN_SCHEDULED_TASKS = f"{SCHEDULED_TASKS_ROOT}.run_scheduled_tasks"
+SEND_NOTIFICATION = f"{SCHEDULED_TASKS_ROOT}.send_notification"
 
 # Backup tasks
 BACKUP_PATH = f"{BACKUP_ROOT}.backup_path"
@@ -417,6 +420,14 @@ def build_beat_schedule() -> dict:
         "cleanup-old-claude-sessions": {
             "task": CLEANUP_OLD_CLAUDE_SESSIONS,
             "schedule": crontab(hour="3", minute="30"),
+        },
+        "cleanup-old-task-executions": {
+            "task": CLEANUP_OLD_TASK_EXECUTIONS,
+            "schedule": crontab(hour="3", minute="45"),
+        },
+        "cleanup-old-done-oneoff-tasks": {
+            "task": CLEANUP_OLD_DONE_ONEOFF_TASKS,
+            "schedule": crontab(hour="4", minute="15"),
         },
         "process-raw-items": {
             "task": PROCESS_RAW_ITEMS,

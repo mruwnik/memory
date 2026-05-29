@@ -100,12 +100,12 @@ def future_scheduled_task(db_session, sample_user):
     return task
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_execute_scheduled_task_success(
-    mock_send_notification, pending_execution, db_session
+    mock_deliver_notification, pending_execution, db_session
 ):
     """Test successful execution of a scheduled task."""
-    mock_send_notification.return_value = True
+    mock_deliver_notification.return_value = True
 
     result = scheduled_tasks.execute_scheduled_task(pending_execution.id)
 
@@ -135,12 +135,12 @@ def test_execute_scheduled_task_not_pending(completed_execution, db_session):
     assert result == {"error": f"Execution is not pending (status: {completed_execution.status})"}
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_execute_scheduled_task_with_no_message(
-    mock_send_notification, db_session, sample_user
+    mock_deliver_notification, db_session, sample_user
 ):
     """Test execution when message is None, should use empty string."""
-    mock_send_notification.return_value = True
+    mock_deliver_notification.return_value = True
 
     # Create task without message
     task = ScheduledTask(
@@ -171,12 +171,12 @@ def test_execute_scheduled_task_with_no_message(
     assert result["success"] is True
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_execute_scheduled_task_send_failure(
-    mock_send_notification, pending_execution, db_session
+    mock_deliver_notification, pending_execution, db_session
 ):
     """Test execution when notification sending fails."""
-    mock_send_notification.return_value = False
+    mock_deliver_notification.return_value = False
 
     result = scheduled_tasks.execute_scheduled_task(pending_execution.id)
 
@@ -189,12 +189,12 @@ def test_execute_scheduled_task_send_failure(
     assert pending_execution.error_message == "Failed to send notification"
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_execute_scheduled_task_send_exception(
-    mock_send_notification, pending_execution, db_session
+    mock_deliver_notification, pending_execution, db_session
 ):
     """Test execution when notification sending raises an exception."""
-    mock_send_notification.side_effect = Exception("Network error")
+    mock_deliver_notification.side_effect = Exception("Network error")
 
     result = scheduled_tasks.execute_scheduled_task(pending_execution.id)
 
@@ -207,12 +207,12 @@ def test_execute_scheduled_task_send_exception(
     assert "Network error" in pending_execution.error_message
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_execute_scheduled_task_long_message(
-    mock_send_notification, db_session, sample_user
+    mock_deliver_notification, db_session, sample_user
 ):
     """Test execution with a long message."""
-    mock_send_notification.return_value = True
+    mock_deliver_notification.return_value = True
 
     long_message = "A" * 500  # Long message
     task = ScheduledTask(
@@ -243,8 +243,8 @@ def test_execute_scheduled_task_long_message(
     assert result["success"] is True
     assert result["task_type"] == "notification"
 
-    # send_notification was called
-    mock_send_notification.assert_called_once()
+    # deliver_notification was called
+    mock_deliver_notification.assert_called_once()
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
@@ -305,20 +305,45 @@ def test_run_scheduled_tasks_no_due_tasks(
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
+def test_run_scheduled_tasks_skips_tasks_with_no_next_time(
+    mock_delay, db_session, sample_user
+):
+    """A task with next_scheduled_time=None (disabled / fired one-off) is skipped."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="notification",
+        next_scheduled_time=None,
+        message="Inert",
+        notification_channel="discord",
+        notification_target="123456789",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    result = scheduled_tasks.run_scheduled_tasks()
+
+    assert result["count"] == 0
+    mock_delay.assert_not_called()
+
+
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_disabled_task(
     mock_delay, db_session, sample_user
 ):
-    """Test that disabled tasks are not processed."""
-    # Create a disabled task that would be due
+    """Test that disabled tasks are not processed.
+
+    Under the derived-``enabled`` model, a disabled task is one with
+    ``next_scheduled_time = None`` (no pending run), so it is never due.
+    """
     disabled_task = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=None,
         message="Disabled",
         notification_channel="discord",
         notification_target="123456789",
-        enabled=False,
     )
 
     db_session.add(disabled_task)
@@ -379,12 +404,12 @@ def test_run_scheduled_tasks_timezone_handling(
     mock_delay.assert_called_once()
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_status_transition_pending_to_completed(
-    mock_send_notification, pending_execution, db_session
+    mock_deliver_notification, pending_execution, db_session
 ):
     """Test that status transitions correctly during execution."""
-    mock_send_notification.return_value = True
+    mock_deliver_notification.return_value = True
 
     # Initial status should be pending
     assert pending_execution.status == "pending"
@@ -396,12 +421,12 @@ def test_status_transition_pending_to_completed(
     assert pending_execution.status == "completed"
 
 
-@patch("memory.workers.tasks.scheduled_tasks.send_notification")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_execute_scheduled_task_pending_executes(
-    mock_send_notification, db_session, sample_user
+    mock_deliver_notification, db_session, sample_user
 ):
     """Test that pending executions are executed successfully."""
-    mock_send_notification.return_value = True
+    mock_deliver_notification.return_value = True
 
     task = ScheduledTask(
         id=str(uuid.uuid4()),
@@ -504,8 +529,8 @@ def test_extract_notification_params_no_target(db_session, sample_user):
     assert result is None
 
 
-def test_send_notification_unknown_channel(caplog):
-    """Test send_notification returns False for unknown notification_channel."""
+def test_deliver_notification_unknown_channel(caplog):
+    """Test deliver_notification returns False for unknown notification_channel."""
     params = scheduled_tasks.NotificationParams(
         notification_channel="sms",  # Not supported
         notification_target="123456789",
@@ -515,15 +540,15 @@ def test_send_notification_unknown_channel(caplog):
         data={},
     )
 
-    result = scheduled_tasks.send_notification(params)
+    result = scheduled_tasks.deliver_notification(params)
 
     assert result is False
     assert "Unknown notification_channel: sms" in caplog.text
 
 
 @patch("memory.workers.tasks.scheduled_tasks.send_via_discord")
-def test_send_notification_routes_to_discord(mock_send_discord):
-    """Test send_notification routes Discord channel to send_via_discord."""
+def test_deliver_notification_routes_to_discord(mock_send_discord):
+    """Test deliver_notification routes Discord channel to send_via_discord."""
     mock_send_discord.return_value = True
 
     params = scheduled_tasks.NotificationParams(
@@ -535,15 +560,15 @@ def test_send_notification_routes_to_discord(mock_send_discord):
         data={},
     )
 
-    result = scheduled_tasks.send_notification(params)
+    result = scheduled_tasks.deliver_notification(params)
 
     assert result is True
     mock_send_discord.assert_called_once_with(params)
 
 
 @patch("memory.workers.tasks.scheduled_tasks.send_via_slack")
-def test_send_notification_routes_to_slack(mock_send_slack):
-    """Test send_notification routes Slack channel to send_via_slack."""
+def test_deliver_notification_routes_to_slack(mock_send_slack):
+    """Test deliver_notification routes Slack channel to send_via_slack."""
     mock_send_slack.return_value = True
 
     params = scheduled_tasks.NotificationParams(
@@ -555,15 +580,15 @@ def test_send_notification_routes_to_slack(mock_send_slack):
         data={},
     )
 
-    result = scheduled_tasks.send_notification(params)
+    result = scheduled_tasks.deliver_notification(params)
 
     assert result is True
     mock_send_slack.assert_called_once_with(params)
 
 
 @patch("memory.workers.tasks.scheduled_tasks.send_via_email")
-def test_send_notification_routes_to_email(mock_send_email):
-    """Test send_notification routes email channel to send_via_email."""
+def test_deliver_notification_routes_to_email(mock_send_email):
+    """Test deliver_notification routes email channel to send_via_email."""
     mock_send_email.return_value = True
 
     params = scheduled_tasks.NotificationParams(
@@ -575,7 +600,7 @@ def test_send_notification_routes_to_email(mock_send_email):
         data={},
     )
 
-    result = scheduled_tasks.send_notification(params)
+    result = scheduled_tasks.deliver_notification(params)
 
     assert result is True
     mock_send_email.assert_called_once_with(params)
@@ -1037,3 +1062,23 @@ def test_spawn_claude_session_run_id_falls_back_when_slug_empty(
     assert posted_run_id.startswith("task-")
     assert not posted_run_id.startswith("-")
     assert re.search(r"-\d{8}-\d{6}$", posted_run_id)
+
+
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
+def test_send_notification_task_delivers_without_db(mock_deliver, sample_user):
+    mock_deliver.return_value = True
+    result = scheduled_tasks.send_notification(
+        channel="discord",
+        target="123456789",
+        message="**Hi**\n\nthere",
+        user_id=sample_user.id,
+        topic="Hi",
+        data={"discord_bot_id": 7},
+    )
+    assert result == {"sent": True}
+    params = mock_deliver.call_args.args[0]
+    assert params.notification_channel == "discord"
+    assert params.notification_target == "123456789"
+    assert params.message == "**Hi**\n\nthere"
+    assert params.user_id == sample_user.id
+    assert params.data == {"discord_bot_id": 7}
