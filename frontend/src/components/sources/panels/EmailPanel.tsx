@@ -5,6 +5,7 @@ import {
   SourceCard,
   Modal,
   TagsInput,
+  TestConnectionButton,
   EmptyState,
   LoadingState,
   ErrorState,
@@ -13,7 +14,7 @@ import { styles } from '../styles'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
-  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, listGoogleAccounts } = useSources()
+  const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount, listGoogleAccounts } = useSources()
   const { listProjects } = useProjects()
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
@@ -115,6 +116,9 @@ export const EmailPanel = () => {
                   <span>Folders: {account.folders.join(', ')}</span>
                 )}
               </div>
+              {account.account_type !== 'gmail' && (
+                <TestConnectionButton onTest={() => testEmailAccount({ id: account.id })} />
+              )}
               {account.sync_error && (
                 <div className={styles.errorBanner}>{account.sync_error}</div>
               )}
@@ -172,6 +176,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
   })
+  const { testEmailAccount } = useSources()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -307,6 +312,17 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                 className={styles.formInput}
               />
             </div>
+
+            <TestConnectionButton
+              onTest={() => testEmailAccount({
+                id: account?.id,
+                imap_server: formData.imap_server,
+                imap_port: formData.imap_port,
+                username: formData.username,
+                password: formData.password || undefined,
+                use_ssl: formData.use_ssl,
+              })}
+            />
 
             <div className={styles.formCheckbox}>
               <input

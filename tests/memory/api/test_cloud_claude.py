@@ -19,11 +19,9 @@ from memory.api.cloud_claude import (
     spawn_session,
     user_owns_session,
     validate_differ_subpath,
-    validate_scheduled_secret_refs,
 )
 from memory.api.orchestrator_client import OrchestratorError
 from memory.common import settings
-from memory.common.db.models import ScheduledTask
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.users import HumanUser
 
@@ -472,178 +470,11 @@ def test_ssh_key_user_property_none(db_session):
         assert user.ssh_private_key_encrypted is None
 
 
-# --- Schedule endpoint tests ---
-
-
-def test_schedule_request_invalid_cron(client, user):
-    """Test that invalid cron expression returns 400."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "not a cron",
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test prompt",
-            },
-        },
-    )
-    assert response.status_code == 400
-    assert "Invalid cron expression" in response.json()["detail"]
-
-
-def test_schedule_requires_initial_prompt(client, user):
-    """Test that missing initial_prompt returns 400."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "0 9 * * *",
-            "spawn_config": {
-                "environment_id": 1,
-            },
-        },
-    )
-    assert response.status_code == 400
-    assert "initial_prompt" in response.json()["detail"]
-
-
-def test_schedule_creates_scheduled_task(client, user, db_session):
-    """Test that a valid schedule request creates a ScheduledTask in the DB."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "0 9 * * *",
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "Review the latest changes and create a summary",
-            },
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["cron_expression"] == "0 9 * * *"
-    assert data["task_id"]
-    assert data["next_scheduled_time"]
-    assert "Review the latest changes" in data["topic"]
-
-    # Verify it's in the database
-    task = db_session.query(ScheduledTask).filter(ScheduledTask.id == data["task_id"]).first()
-    assert task is not None
-    assert task.task_type == "claude_session"
-    assert task.enabled is True
-    assert task.data["spawn_config"]["environment_id"] == 1
-    # initial_prompt is stored in task.message, not in spawn_config
-    assert "initial_prompt" not in task.data["spawn_config"]
-    assert task.message == "Review the latest changes and create a summary"
-
-
-def test_schedule_rejects_too_frequent_cron(client, user):
-    """Test that cron expressions with intervals below the minimum are rejected."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "* * * * *",  # every minute
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test prompt",
-            },
-        },
-    )
-    assert response.status_code == 400
-    assert "Cron interval too short" in response.json()["detail"]
-
-
-def test_schedule_rejects_over_per_user_limit(client, user, db_session):
-    """Test that exceeding the per-user scheduled task limit is rejected."""
-    # Create MAX_SCHEDULED_TASKS_PER_USER tasks to fill the quota
-    for i in range(settings.MAX_SCHEDULED_TASKS_PER_USER):
-        task = ScheduledTask(
-            user_id=user.id,
-            task_type="claude_session",
-            topic=f"Task {i}",
-            data={"spawn_config": {"environment_id": 1, "initial_prompt": f"prompt {i}"}},
-            cron_expression="0 9 * * *",
-            enabled=True,
-        )
-        db_session.add(task)
-    db_session.commit()
-
-    # The next schedule attempt should be rejected
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "0 9 * * *",
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "one too many",
-            },
-        },
-    )
-    assert response.status_code == 400
-    assert "Maximum" in response.json()["detail"]
-
-
-def test_schedule_stores_enable_playwright_in_spawn_config(client, user, db_session):
-    """Test that enable_playwright is stored in the scheduled task's spawn_config."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "0 9 * * *",
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "Run playwright tests",
-                "enable_playwright": True,
-            },
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-
-    task = db_session.query(ScheduledTask).filter(ScheduledTask.id == data["task_id"]).first()
-    assert task is not None
-    assert task.data["spawn_config"]["enable_playwright"] is True
-
-
-def test_schedule_enable_playwright_defaults_false(client, user, db_session):
-    """Test that enable_playwright defaults to False when not specified."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "0 9 * * *",
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "Normal session",
-            },
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-
-    task = db_session.query(ScheduledTask).filter(ScheduledTask.id == data["task_id"]).first()
-    assert task is not None
-    assert task.data["spawn_config"].get("enable_playwright") is False
-
-
 def test_spawn_request_enable_playwright_cannot_be_set_via_custom_env():
     """Test that ENABLE_PLAYWRIGHT is in the reserved env vars list."""
     from memory.api.cloud_claude import RESERVED_ENV_VARS
 
     assert "ENABLE_PLAYWRIGHT" in RESERVED_ENV_VARS
-
-
-def test_schedule_rejects_six_field_cron(client, user):
-    """Test that 6-field cron expressions (with seconds) are rejected."""
-    response = client.post(
-        "/claude/schedule",
-        json={
-            "cron_expression": "0 0 9 * * *",  # 6 fields
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test prompt",
-            },
-        },
-    )
-    assert response.status_code == 400
-    assert "5-field" in response.json()["detail"]
 
 
 # --- Stats endpoint tests ---
@@ -1011,95 +842,6 @@ def test_spawn_session_swallows_cleanup_failure(tmp_path):
     assert client.delete_volume.await_count == 1
 
 
-# --- validate_scheduled_secret_refs (audit-f10d10a1) -----------------------
-#
-# The schedule_session validation block previously called extract_secret,
-# whose contract is "fall back to literal" — i.e. it never raised on an
-# unknown name, so the try/except wrapping it was dead code. A misspelled
-# secret name was silently accepted and persisted as a literal token in
-# ScheduledTask.data. The fix routes through find_secret directly.
-
-
-def _make_spawn_config(**fields):
-    """Build a SpawnRequest-shaped object with just the fields under test.
-
-    SpawnRequest is heavy (validators + cross-field rules), and this helper
-    only needs the github_token / github_token_write attributes the
-    validator reads via getattr.
-    """
-    config = MagicMock(spec=["github_token", "github_token_write"])
-    config.github_token = fields.get("github_token")
-    config.github_token_write = fields.get("github_token_write")
-    return config
-
-
-def test_validate_scheduled_secret_refs_rejects_unknown_secret_name():
-    db = MagicMock()
-    spawn_config = _make_spawn_config(github_token="my-token-typo")
-    with patch(
-        "memory.api.cloud_claude.find_secret", return_value=None
-    ) as fake_find:
-        with pytest.raises(HTTPException) as exc_info:
-            validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
-
-    assert exc_info.value.status_code == 400
-    detail = exc_info.value.detail
-    # Error must NOT echo the supplied value (credential-reflection trap).
-    assert "my-token-typo" not in detail
-    # Error must name the field, so the operator can find the typo.
-    assert "github_token" in detail
-    fake_find.assert_called_once_with(db, 42, "my-token-typo")
-
-
-def test_validate_scheduled_secret_refs_rejects_for_each_token_field():
-    """Both github_token and github_token_write get the same validation."""
-    db = MagicMock()
-    spawn_config = _make_spawn_config(
-        github_token="ok-name", github_token_write="bad-write-typo"
-    )
-
-    def fake_find_secret(_db, _uid, name):
-        # ok-name resolves; bad-write-typo doesn't.
-        return MagicMock() if name == "ok-name" else None
-
-    with patch(
-        "memory.api.cloud_claude.find_secret", side_effect=fake_find_secret
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
-
-    assert exc_info.value.status_code == 400
-    assert "github_token_write" in exc_info.value.detail
-    assert "bad-write-typo" not in exc_info.value.detail
-
-
-def test_validate_scheduled_secret_refs_passes_when_all_resolve():
-    db = MagicMock()
-    spawn_config = _make_spawn_config(
-        github_token="prod-pat", github_token_write="prod-pat-write"
-    )
-
-    fake_secret = MagicMock()
-    with patch(
-        "memory.api.cloud_claude.find_secret", return_value=fake_secret
-    ) as fake_find:
-        validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
-
-    # Both fields validated.
-    assert fake_find.call_count == 2
-
-
-def test_validate_scheduled_secret_refs_skips_unset_fields():
-    """None / empty token fields don't query the DB at all."""
-    db = MagicMock()
-    spawn_config = _make_spawn_config()  # both None
-    with patch(
-        "memory.api.cloud_claude.find_secret"
-    ) as fake_find:
-        validate_scheduled_secret_refs(db, user_id=42, spawn_config=spawn_config)
-    fake_find.assert_not_called()
-
-
 # --- spawn_session: per-user concurrent session limit ----------------------
 
 
@@ -1112,7 +854,7 @@ def test_spawn_session_rejects_over_concurrent_limit(tmp_path):
 
     # fake_user.id == 7, so its sessions are "u7-...".
     running = [
-        MagicMock(session_id=f"u7-s99-{i:06x}")
+        MagicMock(session_id=f"u7-s99-{i:06x}", status="running")
         for i in range(settings.MAX_CONCURRENT_SESSIONS_PER_USER)
     ]
 
@@ -1157,6 +899,49 @@ def test_spawn_session_concurrent_limit_counts_only_owner(tmp_path):
 
     client = MagicMock()
     client.list_containers = AsyncMock(return_value=foreign)
+    client.create_initialized_volume = AsyncMock(return_value=None)
+    client.create_container = AsyncMock(return_value=result)
+
+    snapshot_file = tmp_path / "snap.tar.gz"
+    snapshot_file.write_bytes(b"snapshot-payload")
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        info = asyncio.run(spawn_session(request, fake_user, db))
+
+    assert info.session_id == "u7-s99-abc123"
+    client.create_container.assert_awaited_once()
+
+
+def test_spawn_session_concurrent_limit_ignores_exited_sessions(tmp_path):
+    """Exited/dead containers the user owns are killed sessions, not live
+    ones — they consume no host CPU/memory and must not count against the
+    per-user concurrent limit. Otherwise stale containers permanently strand
+    a slot (and old short-id ones can't even be killed via the API).
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    # The user (u7) has MAX exited containers plus one running. Only the
+    # running one should count, leaving room for this spawn.
+    owned = [
+        MagicMock(session_id=f"u7-s99-{i:06x}", status="exited")
+        for i in range(settings.MAX_CONCURRENT_SESSIONS_PER_USER)
+    ]
+    owned.append(MagicMock(session_id="u7-s99-aaaaaa", status="running"))
+
+    result = MagicMock(
+        session_id="u7-s99-abc123",
+        container_name="claude-u7-s99-abc123",
+        status="running",
+        differ=None,
+    )
+
+    client = MagicMock()
+    client.list_containers = AsyncMock(return_value=owned)
     client.create_initialized_volume = AsyncMock(return_value=None)
     client.create_container = AsyncMock(return_value=result)
 

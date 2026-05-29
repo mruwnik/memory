@@ -80,6 +80,21 @@ export interface EmailAccountUpdate {
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
+export interface EmailAccountTestRequest {
+  id?: number
+  imap_server?: string
+  imap_port?: number
+  username?: string
+  password?: string
+  use_ssl?: boolean
+}
+
+export interface EmailAccountTestResult {
+  status: 'success' | 'error'
+  message: string
+  folders?: number
+}
+
 // Types for Article Feeds
 export interface ArticleFeed {
   id: number
@@ -493,9 +508,15 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
-  const testEmailAccount = useCallback(async (id: number): Promise<{ status: string; message: string }> => {
-    const response = await apiCall(`/email-accounts/${id}/test`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to test email account')
+  const testEmailAccount = useCallback(async (body: EmailAccountTestRequest): Promise<EmailAccountTestResult> => {
+    const response = await apiCall('/email-accounts/test', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to test email account')
+    }
     return response.json()
   }, [apiCall])
 

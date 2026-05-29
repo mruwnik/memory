@@ -723,7 +723,7 @@ def test_connection_success(mock_imap, client, user, db_session):
     db_session.add(account)
     db_session.commit()
 
-    response = client.post(f"/email-accounts/{account.id}/test")
+    response = client.post("/email-accounts/test", json={"id": account.id})
 
     assert response.status_code == 200
     data = response.json()
@@ -731,10 +731,11 @@ def test_connection_success(mock_imap, client, user, db_session):
     assert "message" in data
     assert data["folders"] == 2
 
-    # Verify connection was attempted with account object
+    # Verify connection was attempted with the stored account's values
     mock_imap.assert_called_once()
     call_arg = mock_imap.call_args[0][0]
-    assert call_arg.id == account.id
+    assert call_arg.imap_server == "imap.example.com"
+    assert call_arg.username == "user"
 
 
 @patch("memory.api.email_accounts.imap_connection")
@@ -754,7 +755,7 @@ def test_connection_failure(mock_imap, client, user, db_session):
     db_session.add(account)
     db_session.commit()
 
-    response = client.post(f"/email-accounts/{account.id}/test")
+    response = client.post("/email-accounts/test", json={"id": account.id})
 
     assert response.status_code == 200
     data = response.json()
@@ -765,7 +766,7 @@ def test_connection_failure(mock_imap, client, user, db_session):
     assert data["message"] == "Connection failed"
 
 
-@patch("memory.workers.email.imap_connection")
+@patch("memory.api.email_accounts.imap_connection")
 def test_connection_not_owned(mock_imap, regular_client, user, db_session):
     """Testing connection on account owned by different user should return 404."""
     other_user = HumanUser(
@@ -789,7 +790,7 @@ def test_connection_not_owned(mock_imap, regular_client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = regular_client.post(f"/email-accounts/{other_account.id}/test")
+    response = regular_client.post("/email-accounts/test", json={"id": other_account.id})
 
     assert response.status_code == 404
     mock_imap.assert_not_called()
@@ -820,11 +821,139 @@ def test_connection_gmail_account(client, user, db_session):
     db_session.commit()
 
     # Gmail accounts don't have IMAP credentials, so test should fail
-    response = client.post(f"/email-accounts/{gmail_account.id}/test")
+    response = client.post("/email-accounts/test", json={"id": gmail_account.id})
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "error"
+
+
+@patch("memory.api.email_accounts.imap_connection")
+def test_connection_typed_credentials_no_id(mock_imap, client, user, db_session):
+    """Posting full IMAP creds with no id should test them directly."""
+    mock_conn = MagicMock()
+    mock_conn.list.return_value = ("OK", [b"INBOX"])
+    mock_imap.return_value.__enter__.return_value = mock_conn
+    mock_imap.return_value.__exit__.return_value = None
+
+    response = client.post(
+        "/email-accounts/test",
+        json={
+            "imap_server": "imap.example.com",
+            "imap_port": 993,
+            "username": "typed-user",
+            "password": "typed-pass",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    probe = mock_imap.call_args[0][0]
+    assert probe.username == "typed-user"
+    assert probe.password == "typed-pass"
+
+
+@patch("memory.api.email_accounts.imap_connection")
+def test_connection_provided_params_override_stored(mock_imap, client, user, db_session):
+    """A provided imap_server should override the stored one."""
+    mock_conn = MagicMock()
+    mock_conn.list.return_value = ("OK", [b"INBOX"])
+    mock_imap.return_value.__enter__.return_value = mock_conn
+    mock_imap.return_value.__exit__.return_value = None
+
+    account = EmailAccount(
+        user_id=user.id,
+        name="Test",
+        email_address="override@example.com",
+        account_type="imap",
+        imap_server="stored.example.com",
+        imap_port=993,
+        username="stored-user",
+        password="stored-pass",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    response = client.post(
+        "/email-accounts/test",
+        json={"id": account.id, "imap_server": "typed.example.com"},
+    )
+
+    assert response.status_code == 200
+    probe = mock_imap.call_args[0][0]
+    assert probe.imap_server == "typed.example.com"
+    # untouched fields fall back to stored
+    assert probe.username == "stored-user"
+
+
+@patch("memory.api.email_accounts.imap_connection")
+def test_connection_blank_password_uses_stored(mock_imap, client, user, db_session):
+    """A blank password with an id should fall back to the stored password."""
+    mock_conn = MagicMock()
+    mock_conn.list.return_value = ("OK", [b"INBOX"])
+    mock_imap.return_value.__enter__.return_value = mock_conn
+    mock_imap.return_value.__exit__.return_value = None
+
+    account = EmailAccount(
+        user_id=user.id,
+        name="Test",
+        email_address="blankpw@example.com",
+        account_type="imap",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="user",
+        password="stored-secret",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    response = client.post(
+        "/email-accounts/test",
+        json={"id": account.id, "username": "user", "password": ""},
+    )
+
+    assert response.status_code == 200
+    probe = mock_imap.call_args[0][0]
+    assert probe.password == "stored-secret"
+
+
+@pytest.mark.parametrize("bad_server", ["127.0.0.1", "localhost", "10.0.0.5"])
+def test_connection_rejects_private_host(client, user, db_session, bad_server):
+    """Private/loopback IMAP hosts are rejected with 400 (SSRF guard).
+
+    The file-wide ``_stub_email_hostname_validation`` autouse fixture
+    no-ops the SSRF check for happy-path tests; restore the real
+    validator here so this test exercises the actual guard.
+    """
+    from memory.common.ssrf import validate_public_hostname
+
+    with patch.object(
+        email_accounts, "validate_public_hostname", validate_public_hostname
+    ):
+        response = client.post(
+            "/email-accounts/test",
+            json={
+                "imap_server": bad_server,
+                "imap_port": 993,
+                "username": "u",
+                "password": "p",
+            },
+        )
+    assert response.status_code == 400
+
+
+def test_connection_rejects_bad_port(client, user, db_session):
+    """Non-standard IMAP port is rejected with 400 (port allowlist)."""
+    response = client.post(
+        "/email-accounts/test",
+        json={
+            "imap_server": "imap.example.com",
+            "imap_port": 5432,
+            "username": "u",
+            "password": "p",
+        },
+    )
+    assert response.status_code == 400
 
 
 # Test helper function: account_to_response

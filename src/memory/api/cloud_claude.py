@@ -16,7 +16,6 @@ import logging
 import re
 import secrets
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Any
 from urllib.parse import quote, unquote, urlencode
 
@@ -32,11 +31,10 @@ from fastapi import (
     Query,
 )
 from fastapi.responses import StreamingResponse
-from croniter import croniter
 from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, get_user_from_token, require_scope
+from memory.api.auth import get_current_user, get_user_from_token
 from memory.api.transfer_tokens import (
     TransferTokenError,
     TransferTokenExpiredError,
@@ -45,7 +43,6 @@ from memory.api.transfer_tokens import (
     verify_token,
 )
 from memory.common.access_control import has_admin_scope
-from memory.common.scopes import SCOPE_SCHEDULE_WRITE
 from memory.api.orchestrator_client import (
     ORCHESTRATOR_SOCKET,
     OrchestratorError,
@@ -60,13 +57,9 @@ from memory.api.tmux_session import (
 )
 from memory.common import paths, settings
 from memory.common.db.connection import get_session, make_session
-from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, ScheduledTask, User
-from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
+from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
 from memory.api.claude_environments import mark_environment_used
-from memory.common.db.models.secrets import (
-    extract as extract_secret,
-    find_secret,
-)
+from memory.common.db.models.secrets import extract as extract_secret
 
 logger = logging.getLogger(__name__)
 
@@ -449,20 +442,12 @@ class SpawnRequest(BaseModel):
         return self
 
 
-class ScheduleRequest(BaseModel):
-    """Request to schedule a recurring Claude Code session."""
-
-    cron_expression: str
-    spawn_config: SpawnRequest
-
-
-class ScheduleResponse(BaseModel):
-    """Response from scheduling a recurring Claude Code session."""
-
-    task_id: str
-    cron_expression: str
-    next_scheduled_time: str
-    topic: str
+# Container statuses that mean the session is no longer live: it holds no
+# host CPU/memory and so must not count against the per-user concurrent
+# limit. A user must always be able to spawn a fresh session once their
+# running ones drop below the cap, regardless of how many dead containers
+# linger (orchestrator cleanup reaps them out of band).
+INACTIVE_SESSION_STATUSES = frozenset({"exited", "dead"})
 
 
 class SessionInfo(BaseModel):
@@ -632,7 +617,10 @@ async def spawn_session(
     ):
         containers = await client.list_containers()
     active_count = sum(
-        1 for c in containers if user_owns_session(user, c.session_id)
+        1
+        for c in containers
+        if user_owns_session(user, c.session_id)
+        and c.status not in INACTIVE_SESSION_STATUSES
     )
     if active_count >= settings.MAX_CONCURRENT_SESSIONS_PER_USER:
         raise HTTPException(
@@ -798,130 +786,6 @@ async def spawn_session(
         status=result.status,
         environment_id=request.environment_id,
         differ=result.differ or None,
-    )
-
-
-def validate_scheduled_secret_refs(
-    db: DBSession, user_id: int, spawn_config: "SpawnRequest"
-) -> None:
-    """Reject scheduled-session requests whose token fields don't resolve
-    to a stored Secret row.
-
-    Unlike the spawn-time path (which uses ``extract_secret``'s silent
-    literal-fallback by design), scheduled-session token values are
-    persisted in ``ScheduledTask.data``. Accepting literals here means a
-    typo ("gihub-token") gets stored verbatim and shipped to the
-    container later as a literal — turning a misspelled secret name into
-    a plaintext credential leak in the DB.
-
-    The error message intentionally does NOT echo ``token_value``. The
-    field accepts either a secret-name OR a literal token at runtime; if
-    a future contributor relaxes that contract, an unintended echo would
-    become a credential-reflection vector via 4xx response bodies.
-    """
-    for token_field in ("github_token", "github_token_write"):
-        token_value = getattr(spawn_config, token_field, None)
-        if token_value and find_secret(db, user_id, token_value) is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Secret reference for '{token_field}' not found. "
-                    "Scheduled sessions require a stored-secret name "
-                    "(create one via /secrets); literal tokens are not "
-                    "accepted because they would be persisted in "
-                    "plaintext in the schedule's data column."
-                ),
-            )
-
-
-@router.post("/schedule")
-async def schedule_session(
-    request: ScheduleRequest,
-    user: User = require_scope(SCOPE_SCHEDULE_WRITE),
-    db: DBSession = Depends(get_session),
-) -> ScheduleResponse:
-    """Schedule a recurring Claude Code session.
-
-    Creates a ScheduledTask that will spawn Claude sessions on a cron schedule.
-    Requires an initial_prompt in the spawn_config.
-    """
-    if not croniter.is_valid(request.cron_expression):
-        raise HTTPException(status_code=400, detail="Invalid cron expression")
-
-    # Validate standard 5-field cron (reject 6-field seconds syntax)
-    cron_parts = request.cron_expression.strip().split()
-    if len(cron_parts) != 5:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Only standard 5-field cron expressions are supported, got {len(cron_parts)} fields",
-        )
-
-    # Enforce minimum interval to prevent excessive spawning.
-    # NOTE: This checks only the gap between the first two upcoming occurrences,
-    # not the minimum gap across all occurrences. For expressions like "0 9 * * 1-5"
-    # (weekdays only), the gap varies (1 day weekday-to-weekday, 3 days Fri-to-Mon).
-    # This is sufficient in practice since we're guarding against sub-10-minute crons.
-    cron = croniter(request.cron_expression)
-    first = cron.get_next(datetime)
-    second = cron.get_next(datetime)
-    interval_minutes = (second - first).total_seconds() / 60
-    if interval_minutes < settings.MIN_CRON_INTERVAL_MINUTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cron interval too short ({interval_minutes:.0f}m). Minimum is {settings.MIN_CRON_INTERVAL_MINUTES} minutes.",
-        )
-
-    # Enforce per-user limit on active scheduled tasks.
-    # NOTE: This is a soft limit (TOCTOU race possible with concurrent requests).
-    # Acceptable for this use case since concurrent scheduling is unlikely.
-    active_count = (
-        db.query(ScheduledTask)
-        .filter(
-            ScheduledTask.user_id == user.id,
-            ScheduledTask.enabled,
-        )
-        .count()
-    )
-    if active_count >= settings.MAX_SCHEDULED_TASKS_PER_USER:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active scheduled tasks per user reached",
-        )
-
-    if not request.spawn_config.initial_prompt:
-        raise HTTPException(
-            status_code=400,
-            detail="Scheduled sessions require an initial_prompt",
-        )
-
-    # Validate token fields against stored secrets (raises 400 on miss).
-    validate_scheduled_secret_refs(db, user.id, request.spawn_config)
-
-    prompt = request.spawn_config.initial_prompt
-    topic = prompt[:100]
-    next_time = compute_next_cron(request.cron_expression)
-
-    # Store initial_prompt in the message field (not in spawn_config)
-    spawn_data = request.spawn_config.model_dump(exclude_none=True)
-    spawn_data.pop("initial_prompt", None)
-
-    task = ScheduledTask(
-        user_id=user.id,
-        task_type=TaskType.CLAUDE_SESSION,
-        topic=topic,
-        message=prompt,
-        data={"spawn_config": spawn_data},
-        cron_expression=request.cron_expression,
-        next_scheduled_time=next_time,
-    )
-    db.add(task)
-    db.commit()
-
-    return ScheduleResponse(
-        task_id=task.id,
-        cron_expression=request.cron_expression,
-        next_scheduled_time=next_time.isoformat(),
-        topic=topic,
     )
 
 

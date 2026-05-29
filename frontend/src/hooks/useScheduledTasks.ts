@@ -40,6 +40,17 @@ export interface UpdateTaskBody {
   spawn_config?: Record<string, unknown>
 }
 
+export interface CreateTaskBody {
+  task_type: 'notification' | 'claude_session'
+  topic?: string
+  message?: string
+  cron_expression?: string
+  scheduled_time?: string
+  notification_channel?: string
+  notification_target?: string
+  spawn_config?: Record<string, unknown>
+}
+
 export const useScheduledTasks = () => {
   const { mcpCall } = useMCP()
 
@@ -65,6 +76,11 @@ export const useScheduledTasks = () => {
     return result[0] as ScheduledTask
   }, [mcpCall])
 
+  const createTask = useCallback(async (body: CreateTaskBody): Promise<ScheduledTask> => {
+    const result = await mcpCall('scheduler_upsert', body as unknown as Record<string, unknown>)
+    return result[0] as ScheduledTask
+  }, [mcpCall])
+
   const toggleTask = useCallback(async (taskId: string, enabled: boolean): Promise<ScheduledTask> => {
     return updateTask(taskId, { enabled })
   }, [updateTask])
@@ -78,5 +94,5 @@ export const useScheduledTasks = () => {
     return result[0] as TaskExecution[]
   }, [mcpCall])
 
-  return { listTasks, updateTask, toggleTask, deleteTask, getExecutions }
+  return { listTasks, createTask, updateTask, toggleTask, deleteTask, getExecutions }
 }

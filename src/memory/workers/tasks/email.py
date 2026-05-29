@@ -122,6 +122,38 @@ def process_message(
         return {"status": "already_exists", "message_id": message_id}
 
 
+def queue_message(
+    db: DBSession,
+    account_id: int,
+    message_id: str,
+    folder: str,
+    raw_email: str,
+) -> bool:
+    """Parse, dedup, and queue a single message for async processing.
+
+    Returns True if the message was newly queued, False if it already
+    exists (dedup hit). On any failure the shared session is rolled back
+    before the exception propagates: a dropped connection (e.g. Postgres'
+    idle-in-transaction timeout firing mid-sync) otherwise poisons the
+    transaction and every subsequent statement cascades into
+    PendingRollbackError. pool_pre_ping then hands out a live connection
+    on the next statement.
+    """
+    try:
+        parsed_email = parse_email_message(raw_email, message_id)
+        if check_content_exists(
+            db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
+        ):
+            return False
+        process_message.delay(  # type: ignore[attr-defined]
+            account_id, message_id, folder, raw_email
+        )
+        return True
+    except Exception:
+        db.rollback()
+        raise
+
+
 def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
     """Get the cutoff date for syncing emails."""
     if since_date:
@@ -180,19 +212,10 @@ def process_email_batch(
                 }
 
         try:
-            parsed_email = parse_email_message(raw_email, message_id)
-            if check_content_exists(
-                db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
+            if queue_message(
+                db, cast(int, account.id), message_id, folder, raw_email
             ):
-                continue
-
-            process_message.delay(  # type: ignore[attr-defined]
-                cast(int, account.id),
-                message_id,
-                folder,
-                raw_email,
-            )
-            new_messages += 1
+                new_messages += 1
         except Exception as e:
             logger.error(f"Error queuing message {message_id}: {e}")
             errors += 1
@@ -211,6 +234,11 @@ def finalize_sync(
 ) -> None:
     """Update account sync status after sync completes."""
     if error:
+        # The failing sync may have left the session in a poisoned
+        # transaction (e.g. a dropped connection mid-query). Roll back
+        # first so the sync_error write can actually be committed instead
+        # of cascading into PendingRollbackError and losing the status.
+        db.rollback()
         account.sync_error = str(error)  # type: ignore
     else:
         account.last_sync_at = datetime.now()  # type: ignore
@@ -233,19 +261,20 @@ def sync_imap_messages(
 
     def message_processor(
         account_id: int, message_id: str, folder: str, raw_email: str
-    ) -> int | None:
-        parsed_email = parse_email_message(raw_email, message_id)
-        if check_content_exists(
-            db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
-        ):
-            return None
-        return process_message.delay(account_id, message_id, folder, raw_email)  # type: ignore
+    ) -> bool:
+        return queue_message(db, account_id, message_id, folder, raw_email)
 
     with imap_connection(account) as conn:
         for folder in folders_to_process:
             # Extend lock before each folder (folders can be large)
             if lock:
                 lock.extend()
+
+            # Close any transaction left open by the previous folder's
+            # delete pass before fetching this folder. fetch_email_since
+            # can take a long time on large folders, and a session left
+            # idle-in-transaction during it gets killed by Postgres.
+            db.commit()
 
             folder_stats = process_folder(
                 conn, folder, account, cutoff_date, message_processor
@@ -289,6 +318,11 @@ def sync_gmail_messages(
         .all()
     }
     new_message_ids = server_message_ids - existing_uids
+
+    # Release the read transaction from the existing-UID query before the
+    # Gmail body fetch, which is network-bound and can exceed the 60s
+    # idle_in_transaction_session_timeout if a transaction is held open.
+    db.commit()
 
     # Fetch content only for new messages
     messages = fetch_gmail_messages_by_ids(service, new_message_ids)
@@ -336,6 +370,14 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
 
             account_type = cast(str, account.account_type) or "imap"
             cutoff_date = get_cutoff_date(account, since_date)
+
+            # Release the read transaction opened by loading the account
+            # before the sync does network I/O (IMAP connect/fetch, Gmail
+            # API calls). Otherwise the session sits "idle in transaction"
+            # for the duration of the fetch and Postgres' 60s
+            # idle_in_transaction_session_timeout kills the connection
+            # mid-sync. expire_on_commit=False keeps `account` usable here.
+            db.commit()
 
             try:
                 if account_type == "gmail":

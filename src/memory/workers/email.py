@@ -168,7 +168,7 @@ def extract_email_uid(
     return uid, raw_email
 
 
-def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> RawEmailResponse | None:
+def fetch_email(conn: imaplib.IMAP4, uid: str) -> RawEmailResponse | None:
     try:
         status, msg_data = conn.fetch(uid, "(UID BODY.PEEK[])")
         if status != "OK" or not msg_data or not msg_data[0]:
@@ -182,7 +182,7 @@ def fetch_email(conn: imaplib.IMAP4_SSL, uid: str) -> RawEmailResponse | None:
 
 
 def fetch_email_since(
-    conn: imaplib.IMAP4_SSL,
+    conn: imaplib.IMAP4,
     folder: str,
     since_date: datetime = datetime(1970, 1, 1),
 ) -> list[RawEmailResponse]:
@@ -220,11 +220,11 @@ def fetch_email_since(
 
 
 def process_folder(
-    conn: imaplib.IMAP4_SSL,
+    conn: imaplib.IMAP4,
     folder: str,
     account: EmailAccount,
     since_date: datetime,
-    processor: Callable[[int, str, str, str], int | None],
+    processor: Callable[[int, str, str, str], bool],
 ) -> dict:
     """
     Process a single folder from an email account.
@@ -271,10 +271,15 @@ def process_folder(
 
 
 @contextmanager
-def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4_SSL, None, None]:
-    conn = imaplib.IMAP4_SSL(
-        host=cast(str, account.imap_server), port=cast(int, account.imap_port)
-    )
+def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, None]:
+    host = cast(str, account.imap_server)
+    port = cast(int, account.imap_port)
+    # use_ssl defaults to True when unset — SSL (993) is the norm and the
+    # historical behaviour. Only an explicit False selects plain IMAP (143).
+    if account.use_ssl is False:
+        conn: imaplib.IMAP4 = imaplib.IMAP4(host=host, port=port)
+    else:
+        conn = imaplib.IMAP4_SSL(host=host, port=port)
     try:
         conn.login(cast(str, account.username), cast(str, account.password))
         yield conn
@@ -336,7 +341,7 @@ def vectorize_email(email: MailMessage):
     logger.info(f"Stored embedding for message {email.message_id}")
 
 
-def get_folder_uids(conn: imaplib.IMAP4_SSL, folder: str) -> set[str]:
+def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
     """
     Get all message UIDs in a folder.
 
@@ -447,7 +452,7 @@ def delete_email_vectors(email: MailMessage) -> None:
 
 
 def delete_removed_emails(
-    conn: imaplib.IMAP4_SSL,
+    conn: imaplib.IMAP4,
     db_session: Session | scoped_session,
     account_id: int,
     folder: str,
