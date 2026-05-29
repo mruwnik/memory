@@ -179,8 +179,14 @@ def build_scheduled_task(
             raise ValueError("scheduled_time must be in the future")
         next_time = parsed
 
-    # A created-disabled task gets next_scheduled_time cleared below and isn't
-    # "active", so it can't breach the cap; only enforce when it will be active.
+    if enabled is False and not cron_expression:
+        raise ValueError(
+            "A one-time task cannot be created disabled; enabled=False is only "
+            "meaningful for recurring (cron) tasks."
+        )
+
+    # A created-disabled recurring task gets next_scheduled_time cleared below
+    # and isn't "active", so it can't breach the cap; only enforce when active.
     if enabled is not False:
         active_count = (
             session.query(ScheduledTask)
@@ -232,7 +238,8 @@ def build_scheduled_task(
         task.data = {"spawn_config": spawn_config}
 
     if enabled is False:
-        # Hybrid setter clears next_scheduled_time, so the task is created Done.
+        # Recurring + disabled (one-time+disabled is rejected above): the hybrid
+        # setter clears next_scheduled_time, so the task is created paused.
         task.enabled = False
 
     session.add(task)
@@ -318,6 +325,12 @@ async def upsert(
                     raise ValueError("A task with this id already exists") from exc
                 raise
             return task.serialize()
+
+        if scheduled_time is not None:
+            raise ValueError(
+                "scheduled_time can only be set when creating a task; to change "
+                "an existing task's schedule use cron_expression."
+            )
 
         if cron_expression is not None:
             validate_cron_interval(cron_expression)

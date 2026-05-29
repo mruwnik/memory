@@ -167,6 +167,34 @@ async def test_upsert_create_rejects_unknown_channel(db_session, regular_user, u
 
 
 @pytest.mark.asyncio
+async def test_upsert_create_one_time_disabled_rejected(db_session, regular_user, user_session):
+    """A one-time task can't be created disabled — the hybrid setter would clear
+    its next_scheduled_time, silently discarding the requested time."""
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="one-time task cannot be created disabled"):
+            await scheduler.upsert.fn(
+                task_type="notification", message="x",
+                scheduled_time="2999-01-01T09:00:00Z", enabled=False,
+                notification_channel="discord", notification_target="1",
+            )
+
+
+@pytest.mark.asyncio
+async def test_upsert_update_rejects_scheduled_time(db_session, regular_user, user_session):
+    """scheduled_time is create-only; passing it on update must error, not no-op."""
+    task = ScheduledTask(
+        id=str(uuid.uuid4()), user_id=regular_user.id, task_type="notification",
+        cron_expression="0 9 * * *",
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db_session.add(task)
+    db_session.commit()
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="scheduled_time can only be set when creating"):
+            await scheduler.upsert.fn(task_id=task.id, scheduled_time="2999-01-01T09:00:00Z")
+
+
+@pytest.mark.asyncio
 async def test_upsert_create_then_update_in_place(db_session, regular_user, user_session):
     """A second upsert with the same (existing) id updates, not duplicates."""
     fixed_id = str(uuid.uuid4())
