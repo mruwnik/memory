@@ -70,14 +70,15 @@ describe('usePolls.listPolls', () => {
 })
 
 describe('usePolls.getPoll', () => {
-  it('returns poll results and sends poll_id', async () => {
+  it('returns poll results and sends poll_id via polling_fetch', async () => {
     const results = { poll: poll(), response_count: 0, aggregated: [], best_slots: [] }
-    const fetchMock = mockFetchRoutes({ polling_get_poll: mcpResult(results) })
+    const fetchMock = mockFetchRoutes({ polling_fetch: mcpResult(results) })
     const { getPoll } = setup()
 
     const out = await getPoll(7)
 
     expect(out).toEqual(results)
+    expect(mcpUrlAt(fetchMock)).toContain('/mcp/polling_fetch')
     expect(mcpArgsAt(fetchMock)).toEqual({ poll_id: 7 })
   })
 })

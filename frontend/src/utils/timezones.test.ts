@@ -107,13 +107,13 @@ describe('toUTCDatetime / fromUTCToLocal roundtrip', () => {
     expect(fromUTCToLocal(utc, tz)).toEqual({ date, hour })
   })
 
-  it('SOURCE QUIRK: fromUTCToLocal reports local midnight as hour 24, not 0', () => {
-    // Intl with hour12:false renders midnight as "24" in this runtime, so the
-    // 0<->24 distinction is lost on the way back. Asserting current behavior.
+  it('roundtrips local midnight as hour 0 (h23 cycle, not 24)', () => {
+    // Regression guard: with hourCycle 'h23' a midnight local hour comes back
+    // as 0, preserving the date and not mis-keying the slot as hour 24.
     const utc = toUTCDatetime('2024-03-10', 0, 'Asia/Tokyo')
     expect(fromUTCToLocal(utc, 'Asia/Tokyo')).toEqual({
       date: '2024-03-10',
-      hour: 24,
+      hour: 0,
     })
   })
 })

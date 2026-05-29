@@ -64,11 +64,13 @@ export const useAuth = () => {
         return true
       } else {
         // Token is invalid, clear it
+        setIsLoading(false)
         logout()
         return false
       }
     } catch (error) {
       console.error('Auth check failed:', error)
+      setIsLoading(false)
       logout()
       return false
     }

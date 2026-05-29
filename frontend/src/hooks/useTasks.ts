@@ -62,7 +62,7 @@ export const useTasks = () => {
   }, [mcpCall])
 
   const getTask = useCallback(async (taskId: number): Promise<TodoTask | null> => {
-    const result = await mcpCall<{ success?: boolean; task?: TodoTask; error?: string }[]>('organizer_get_task', {
+    const result = await mcpCall<{ success?: boolean; task?: TodoTask; error?: string }[]>('organizer_fetch', {
       task_id: taskId,
     })
     // mcpCall returns array from .map(), unwrap the first element

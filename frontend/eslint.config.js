@@ -7,7 +7,9 @@ export default [
   { ignores: ['dist', 'coverage'] },
   {
     // Build/test config files run in Node and use __dirname, process, etc.
-    files: ['*.config.js', 'vite.config.js'],
+    // Flat-config globs without a slash match root-level files only, which is
+    // exactly the intended scope (vite.config.js, eslint.config.js, ...).
+    files: ['*.config.js'],
     languageOptions: {
       globals: globals.node,
       parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },

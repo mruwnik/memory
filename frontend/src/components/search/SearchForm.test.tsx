@@ -126,8 +126,6 @@ describe('SearchForm', () => {
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     const limit = screen.getByRole('spinbutton') as HTMLInputElement
-    // The controlled `value || 10` reset makes incremental typing append to "10",
-    // so set the whole value at once to exercise the limit branch cleanly.
     fireEvent.change(limit, { target: { value: '25' } })
     expect(limit).toHaveValue(25)
     await user.click(screen.getByRole('button', { name: 'Search' }))
@@ -135,7 +133,20 @@ describe('SearchForm', () => {
     expect(onSearch.mock.calls[0][0].config.limit).toBe(25)
   })
 
-  it('defaults the limit to 10 when cleared to an invalid value', async () => {
+  it('clamps an over-max limit to 100 so it cannot block submission', async () => {
+    installFetch()
+    const onSearch = vi.fn()
+    const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
+    const limit = screen.getByRole('spinbutton') as HTMLInputElement
+    fireEvent.change(limit, { target: { value: '1025' } })
+    expect(limit).toHaveValue(100)
+    await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    await waitFor(() => expect(onSearch).toHaveBeenCalled())
+    expect(onSearch.mock.calls[0][0].config.limit).toBe(100)
+  })
+
+  it('clamps the limit to 1 when cleared to an empty/invalid value', async () => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
@@ -144,7 +155,7 @@ describe('SearchForm', () => {
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     await waitFor(() => expect(onSearch).toHaveBeenCalled())
-    expect(onSearch.mock.calls[0][0].config.limit).toBe(10)
+    expect(onSearch.mock.calls[0][0].config.limit).toBe(1)
   })
 
   it('includes dynamic filters once a modality field is filled', async () => {

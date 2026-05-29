@@ -57,24 +57,25 @@ describe('useTasks.listTasks', () => {
 })
 
 describe('useTasks.getTask', () => {
-  it('returns the task and sends task_id', async () => {
-    const fetchMock = mockFetchRoutes({ organizer_get_task: mcpResult({ success: true, task: sampleTask }) })
+  it('returns the task and sends task_id via organizer_fetch', async () => {
+    const fetchMock = mockFetchRoutes({ organizer_fetch: mcpResult({ success: true, task: sampleTask }) })
     const { getTask } = setup()
 
     const out = await getTask(1)
 
     expect(out).toEqual(sampleTask)
+    expect(mcpUrlAt(fetchMock)).toContain('/mcp/organizer_fetch')
     expect(mcpArgsAt(fetchMock)).toEqual({ task_id: 1 })
   })
 
   it('returns null when task is absent', async () => {
-    mockFetchRoutes({ organizer_get_task: mcpResult({ success: true }) })
+    mockFetchRoutes({ organizer_fetch: mcpResult({ success: true }) })
     const { getTask } = setup()
     expect(await getTask(1)).toBeNull()
   })
 
   it('throws when the response carries an error', async () => {
-    mockFetchRoutes({ organizer_get_task: mcpResult({ error: 'not found' }) })
+    mockFetchRoutes({ organizer_fetch: mcpResult({ error: 'not found' }) })
     const { getTask } = setup()
     await expect(getTask(99)).rejects.toThrow('not found')
   })

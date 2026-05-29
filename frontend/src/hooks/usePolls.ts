@@ -147,7 +147,7 @@ export const usePolls = () => {
   }, [mcpCall])
 
   const getPoll = useCallback(async (pollId: number): Promise<PollResults> => {
-    return mcpCall<PollResults>('polling_get_poll', { poll_id: pollId })
+    return mcpCall<PollResults>('polling_fetch', { poll_id: pollId })
   }, [mcpCall])
 
   const updatePoll = useCallback(async (data: UpdatePollRequest): Promise<Poll> => {

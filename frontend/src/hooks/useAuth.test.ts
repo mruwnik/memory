@@ -123,19 +123,33 @@ describe('checkAuth', () => {
     expect(fetchMock).toHaveBeenCalled()
   })
 
-  it('stays unauthenticated when apiCall throws (session cookie but no access token)', async () => {
+  it('stays unauthenticated and stops loading when apiCall throws (session cookie but no access token)', async () => {
     // session cookie present but no access_token -> apiCall throws -> catch -> logout.
-    // SOURCE QUIRK: the catch branch in checkAuth calls logout() but never resets
-    // isLoading, so isLoading stays true; we assert isAuthenticated only.
+    // The catch branch must clear isLoading so the app doesn't hang on a loading
+    // spinner forever after an auth failure.
     setCookie('session_id', 'sess')
     const fetchMock = mockFetch()
     const { result } = renderHook(() => useAuth())
     await waitFor(() => expect(result.current.isAuthenticated).toBe(false))
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
     // /auth/me was never reached (apiCall threw before fetch); only logout fires.
     const meCalls = fetchMock.mock.calls.filter(([u]) =>
       u.toString().includes('/auth/me'),
     )
     expect(meCalls).toHaveLength(0)
+  })
+
+  it('stops loading when /auth/me returns non-ok', async () => {
+    // The non-ok else branch must also clear isLoading (not just authentication).
+    setCookie('access_token', 'tok')
+    mockFetch(async (input) => {
+      const url = input.toString()
+      if (url.includes('/auth/logout')) return mockResponse({ json: {} })
+      return mockResponse({ status: 401 })
+    })
+    const { result } = renderHook(() => useAuth())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.isAuthenticated).toBe(false)
   })
 })
 

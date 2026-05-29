@@ -118,7 +118,9 @@ export function toUTCDatetime(date: string, hour: number, timezone: string): str
     day: 'numeric',
     hour: 'numeric',
     minute: 'numeric',
-    hour12: false,
+    // h23 (0-23) so a midnight local hour parses as 0, not "24", which would
+    // throw off the offset calculation below.
+    hourCycle: 'h23',
   }).formatToParts(tentativeUTC)
 
   const tzHour = parseInt(tzParts.find(p => p.type === 'hour')?.value || '0', 10)
@@ -161,7 +163,9 @@ export function fromUTCToLocal(
   const hourFormatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     hour: 'numeric',
-    hour12: false,
+    // h23 yields 0-23; hour12:false renders midnight as "24" in some ICU
+    // builds, which would lose the 0/24 distinction and mis-key midnight slots.
+    hourCycle: 'h23',
   })
   const hourStr = hourFormatter.format(utcDate)
   const hour = parseInt(hourStr, 10)

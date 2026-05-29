@@ -207,7 +207,14 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                     <input
                         type="number"
                         value={limit}
-                        onChange={(e) => setLimit(parseInt(e.target.value) || 10)}
+                        onChange={(e) => {
+                            const parsed = parseInt(e.target.value, 10)
+                            // Clamp to [1, 100] so an in-progress / out-of-range
+                            // value can never exceed max= (which would silently
+                            // block form submission) or run away on edit.
+                            setLimit(Number.isNaN(parsed) ? 1 : Math.min(100, Math.max(1, parsed)))
+                        }}
+                        onFocus={(e) => e.target.select()}
                         min={1}
                         max={100}
                         className="w-20 py-1 px-2 border border-slate-200 rounded text-sm"

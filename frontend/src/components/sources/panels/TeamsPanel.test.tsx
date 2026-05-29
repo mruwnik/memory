@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithUser, screen, waitFor } from '@/test/utils'
+import { renderWithUser, screen, waitFor, within } from '@/test/utils'
 
 const listTeams = vi.fn()
 const getTeam = vi.fn()
@@ -227,8 +227,11 @@ describe('TeamsPanel - archive flow', () => {
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Archive' }))
-    expect(screen.getByText(/Are you sure you want to archive "Engineering"/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/Are you sure you want to archive "Engineering"/)).toBeInTheDocument()
+    // The dialog renders its own "Archive Team" title and an "Archive" confirm button.
+    expect(within(dialog).getByText('Archive Team')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }))
 
     await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', { is_active: false }))
   })
