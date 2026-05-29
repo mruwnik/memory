@@ -12,10 +12,7 @@ import {
 } from '@/test/utils'
 import PollEdit from './PollEdit'
 import type { Poll } from '@/hooks/usePolls'
-
-function mcpEnvelope(payload: unknown) {
-  return { result: { content: [{ text: JSON.stringify(payload) }] } }
-}
+import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 
 function makePoll(overrides: Partial<Poll> = {}): Poll {
   return {
@@ -51,7 +48,7 @@ function mockEdit({ loadResult = makePoll(), updateResult = {} }: EditMocks = {}
       if (updateResult instanceof Error) {
         return mockResponse({ status: 500, json: { detail: updateResult.message } })
       }
-      return mockResponse({ json: mcpEnvelope(updateResult) })
+      return mockResponse({ json: mcpEnvelopeJson(updateResult) })
     }
     // Public load: GET /polls/respond/:slug
     if (url.includes('/polls/respond/')) {

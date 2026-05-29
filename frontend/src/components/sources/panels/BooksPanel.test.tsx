@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { mcpResult, mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import { BooksPanel } from './BooksPanel'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
@@ -18,11 +19,6 @@ const book = {
   file_path: 'books/dune.epub',
 }
 
-// mcpCall unwraps result.content[].text via JSON.parse; listBooks then takes [0].
-const mcpEnvelope = (payload: unknown) => ({
-  json: { jsonrpc: '2.0', id: 1, result: { content: [{ text: JSON.stringify(payload) }] } },
-})
-
 beforeEach(() => {
   clearCookies()
   setAuthCookies()
@@ -30,14 +26,14 @@ beforeEach(() => {
 
 describe('BooksPanel load states', () => {
   it('shows the empty state when no books are indexed', async () => {
-    mockFetchRoutes({ '/mcp/books_list_books': mcpEnvelope([]), '/auth/me': authMe, __default: { json: {} } })
+    mockFetchRoutes({ '/mcp/books_list_books': mcpResult([]), '/auth/me': authMe, __default: { json: {} } })
     renderWithUser(<BooksPanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('No books indexed yet')).toBeInTheDocument())
   })
 
   it('renders a book with its metadata and a download link', async () => {
-    mockFetchRoutes({ '/mcp/books_list_books': mcpEnvelope([book]), '/auth/me': authMe, __default: { json: {} } })
+    mockFetchRoutes({ '/mcp/books_list_books': mcpResult([book]), '/auth/me': authMe, __default: { json: {} } })
     renderWithUser(<BooksPanel />)
     await waitFor(() => expect(screen.getByText('Dune')).toBeInTheDocument())
     expect(screen.getByText('by Frank Herbert')).toBeInTheDocument()
@@ -53,7 +49,7 @@ describe('BooksPanel load states', () => {
   })
 
   it('renders a plain title (no link) when file_path is missing', async () => {
-    mockFetchRoutes({ '/mcp/books_list_books': mcpEnvelope([{ ...book, file_path: null }]), '/auth/me': authMe, __default: { json: {} } })
+    mockFetchRoutes({ '/mcp/books_list_books': mcpResult([{ ...book, file_path: null }]), '/auth/me': authMe, __default: { json: {} } })
     renderWithUser(<BooksPanel />)
     await waitFor(() => expect(screen.getByText('Dune')).toBeInTheDocument())
     expect(screen.queryByRole('link', { name: 'Dune' })).not.toBeInTheDocument()
@@ -69,7 +65,7 @@ describe('BooksPanel load states', () => {
 describe('BooksPanel upload flow', () => {
   it('uploads a selected file and shows the success banner', async () => {
     const mock = mockFetchRoutes({
-      '/mcp/books_list_books': mcpEnvelope([]),
+      '/mcp/books_list_books': mcpResult([]),
       '/books/upload': { json: { task_id: 't1', status: 'queued' } },
       '/auth/me': authMe,
       __default: { json: {} },
@@ -89,7 +85,7 @@ describe('BooksPanel upload flow', () => {
   })
 
   it('shows the error banner when the upload fails', async () => {
-    const mock = mockFetchRoutes({ '/mcp/books_list_books': mcpEnvelope([]), '/auth/me': authMe, __default: { json: {} } })
+    const mock = mockFetchRoutes({ '/mcp/books_list_books': mcpResult([]), '/auth/me': authMe, __default: { json: {} } })
     mock.mockImplementation(async (input) => {
       const url = String(input)
       if (url.includes('/books/upload')) {
@@ -99,8 +95,8 @@ describe('BooksPanel upload flow', () => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        json: async () => mcpEnvelope([]).json,
-        text: async () => JSON.stringify(mcpEnvelope([]).json),
+        json: async () => mcpEnvelopeJson([]),
+        text: async () => JSON.stringify(mcpEnvelopeJson([])),
       } as unknown as Response
     })
     const { user } = renderWithUser(<BooksPanel />)

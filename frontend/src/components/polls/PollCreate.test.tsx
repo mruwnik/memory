@@ -11,10 +11,7 @@ import {
   mockResponse,
 } from '@/test/utils'
 import PollCreate from './PollCreate'
-
-function mcpEnvelope(payload: unknown) {
-  return { result: { content: [{ text: JSON.stringify(payload) }] } }
-}
+import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 
 // upsert -> error toggle. Auth's /auth/me answered generically.
 function mockMcp(upsertResult: unknown | Error) {
@@ -27,7 +24,7 @@ function mockMcp(upsertResult: unknown | Error) {
       if (upsertResult instanceof Error) {
         return mockResponse({ status: 500, json: { detail: upsertResult.message } })
       }
-      return mockResponse({ json: mcpEnvelope(upsertResult) })
+      return mockResponse({ json: mcpEnvelopeJson(upsertResult) })
     }
     return mockResponse({ status: 404, json: { detail: 'not found' } })
   })

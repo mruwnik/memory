@@ -11,10 +11,7 @@ import {
 } from '@/test/utils'
 import PollResults from './PollResults'
 import type { Poll, PollResults as PollResultsType, SlotAggregation } from '@/hooks/usePolls'
-
-function mcpEnvelope(payload: unknown) {
-  return { result: { content: [{ text: JSON.stringify(payload) }] } }
-}
+import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 
 function makePoll(overrides: Partial<Poll> = {}): Poll {
   return {
@@ -79,7 +76,7 @@ function mockResults({
       if (upsertResult instanceof Error) {
         return mockResponse({ status: 500, json: { detail: upsertResult.message } })
       }
-      return mockResponse({ json: mcpEnvelope(upsertResult) })
+      return mockResponse({ json: mcpEnvelopeJson(upsertResult) })
     }
     if (url.includes('/results')) {
       if (results instanceof Error) {
