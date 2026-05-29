@@ -92,6 +92,51 @@ export const SyncButton = ({ onSync, disabled, label = 'Sync' }: SyncButtonProps
   )
 }
 
+// Test Connection Button (with inline result)
+interface TestConnectionButtonProps {
+  onTest: () => Promise<{ status: string; message: string }>
+  disabled?: boolean
+}
+
+export const TestConnectionButton = ({ onTest, disabled }: TestConnectionButtonProps) => {
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<{ status: string; message: string } | null>(null)
+
+  const handleTest = async () => {
+    setTesting(true)
+    setResult(null)
+    try {
+      setResult(await onTest())
+    } catch (e) {
+      setResult({ status: 'error', message: e instanceof Error ? e.message : 'Connection failed' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2 my-2">
+      <button
+        type="button"
+        onClick={handleTest}
+        disabled={disabled || testing}
+        className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {testing ? 'Testing…' : 'Test Connection'}
+      </button>
+      {result && (
+        <div
+          className={`py-2 px-3 rounded text-sm ${
+            result.status === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+          }`}
+        >
+          {result.message}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Tags Input
 interface TagsInputProps {
   tags: string[]

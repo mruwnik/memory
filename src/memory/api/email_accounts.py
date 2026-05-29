@@ -143,6 +143,22 @@ class EmailAccountUpdate(BaseModel):
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
+class EmailAccountTest(BaseModel):
+    """Credentials to test an IMAP login.
+
+    ``id`` (if given) names a stored account, ownership-checked, whose
+    values form the base. Any other field overrides the stored value;
+    an empty/omitted ``password`` keeps the stored one.
+    """
+
+    id: int | None = None
+    imap_server: str | None = None
+    imap_port: int | None = None
+    username: str | None = None
+    password: str | None = None
+    use_ssl: bool | None = None
+
+
 class GoogleAccountInfo(BaseModel):
     id: int
     name: str
@@ -412,44 +428,70 @@ def trigger_sync(
     return {"task_id": task.id, "status": "scheduled"}
 
 
-@router.post("/{account_id}/test")
+@router.post("/test")
 def test_connection(
-    account_id: int,
+    data: EmailAccountTest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ):
-    """Test IMAP connection for an email account.
+    """Test an IMAP login against typed and/or stored credentials.
 
-    Re-validates ``imap_server`` against the SSRF allowlist before
-    connecting. The stored row passed validation at write time, but
-    DNS may have rebinding since (the column is just a hostname; we
-    re-resolve here and refuse if it now points at a private address).
+    When ``data.id`` is set the stored account supplies base values
+    (loaded via ``get_user_account``, so ownership is enforced); each
+    provided body field overrides it, except a blank ``password`` which
+    falls back to the stored one. The effective ``imap_server`` /
+    ``imap_port`` are re-validated against the SSRF/port allowlist
+    (``validate_public_hostname`` re-resolves DNS, defeating rebinding),
+    then a transient account drives ``imap_connection`` -> ``conn.list()``.
+    Any connection failure returns a deliberately-generic message so the
+    connect/refuse/auth-failed differential can't enumerate internal
+    hosts/ports.
     """
-    account = get_user_account(db, EmailAccount, account_id, user)
+    base = (
+        get_user_account(db, EmailAccount, data.id, user)
+        if data.id is not None
+        else None
+    )
 
-    # DNS-rebinding window: re-validate at connect-time. Without this,
-    # an attacker who controls a public DNS name can flip the A record
-    # between create_account's validation and this test, pointing at
-    # an internal address. Gmail accounts have no imap_server (they
-    # use the Google API), so skip the check for those.
-    if account.imap_server:
-        try:
-            validate_public_hostname(account.imap_server)
-        except UnsafeURLError as exc:
-            logger.warning(
-                "IMAP connection test refused for account %s: %s",
-                account_id,
-                exc,
-            )
-            return {"status": "error", "message": "Connection failed"}
+    if base is not None and base.account_type != "imap":
+        return {
+            "status": "error",
+            "message": "Testing is only supported for IMAP accounts",
+        }
+
+    imap_server = data.imap_server or (base.imap_server if base else None)
+    imap_port = data.imap_port or (base.imap_port if base else None) or 993
+    username = data.username or (base.username if base else None)
+    password = data.password or (base.password if base else None)
+    if data.use_ssl is not None:
+        use_ssl = data.use_ssl
+    else:
+        use_ssl = base.use_ssl if base else True
+
+    if not imap_server or not username or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="imap_server, username and password are required",
+        )
+
+    # Same SSRF / port-allowlist guard as create_account, applied to the
+    # effective merged values. Raises HTTPException(400) on a private/
+    # loopback host or non-standard port.
+    _validate_imap_settings(imap_server, imap_port)
+
+    probe = EmailAccount(
+        imap_server=imap_server,
+        imap_port=imap_port,
+        username=username,
+        password=password,
+        use_ssl=use_ssl,
+    )
 
     try:
-        with imap_connection(account) as conn:
-            # List folders to verify connection works
+        with imap_connection(probe) as conn:
             status, folders = conn.list()
             if status != "OK":
                 return {"status": "error", "message": "Failed to list folders"}
-
             folder_count = len(folders) if folders else 0
             return {
                 "status": "success",
@@ -457,14 +499,9 @@ def test_connection(
                 "folders": folder_count,
             }
     except Exception as e:
-        # Log full error internally; return a generic message so the
-        # connect-vs-refuse-vs-auth-failed differential can't be used
-        # to enumerate internal hosts/ports (the previous branched
-        # responses leaked which hosts were reachable from the API
-        # container's network).
         logger.warning(
-            "IMAP connection test failed for account %s: %s: %s",
-            account_id,
+            "IMAP connection test failed (account id=%s): %s: %s",
+            data.id,
             type(e).__name__,
             e,
         )

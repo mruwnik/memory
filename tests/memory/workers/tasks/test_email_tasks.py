@@ -8,7 +8,12 @@ from memory.common.db.models import (
     EmailAttachment,
 )
 from memory.common import embedding
-from memory.workers.tasks.email import process_message, sync_account
+from memory.workers.tasks.email import (
+    process_email_batch,
+    process_message,
+    sync_account,
+)
+from sqlalchemy.exc import OperationalError, PendingRollbackError
 
 
 # Test email constants
@@ -355,3 +360,78 @@ def test_sync_gmail_handles_api_error(db_session, gmail_email_account, qdrant):
     # Verify sync_error was recorded
     db_session.refresh(gmail_email_account)
     assert gmail_email_account.sync_error == "Gmail API error"
+
+
+class PoisonableSession:
+    """Minimal fake session that reproduces SQLAlchemy's poisoned-transaction
+    behaviour: once a statement fails, every later statement raises
+    PendingRollbackError until rollback() is called."""
+
+    def __init__(self):
+        self.poisoned = False
+        self.rollback_calls = 0
+
+    def rollback(self):
+        self.rollback_calls += 1
+        self.poisoned = False
+
+
+@patch("memory.workers.tasks.email.process_message")
+@patch("memory.workers.tasks.email.check_content_exists")
+def test_process_email_batch_recovers_after_db_error(mock_exists, mock_process_message):
+    """One dropped connection must not poison the whole batch.
+
+    The first message's existence check fails (connection dropped); without
+    a rollback the shared session stays poisoned and every subsequent message
+    raises PendingRollbackError. The handler must rollback so the rest of the
+    batch still gets queued.
+    """
+    db = PoisonableSession()
+    call_count = {"n": 0}
+
+    def fake_check(session, model, **kwargs):
+        call_count["n"] += 1
+        if session.poisoned:
+            raise PendingRollbackError(
+                "Can't reconnect until invalid transaction is rolled back."
+            )
+        if call_count["n"] == 1:
+            session.poisoned = True
+            raise OperationalError(
+                "server closed the connection unexpectedly", None, Exception()
+            )
+        return False
+
+    mock_exists.side_effect = fake_check
+
+    account = MagicMock()
+    account.id = 1
+    messages = (
+        (uid, SIMPLE_EMAIL_RAW) for uid in ("1", "2", "3")
+    )
+
+    stats = process_email_batch(account, db, messages)
+
+    # The poisoned session was rolled back, so messages 2 and 3 survived.
+    assert db.rollback_calls >= 1
+    assert stats["errors"] == 1
+    assert stats["new_messages"] == 2
+    assert mock_process_message.delay.call_count == 2
+
+
+def test_finalize_sync_error_rolls_back_before_commit():
+    """On the error path, the (possibly poisoned) session must be rolled
+    back before committing the sync_error, or the commit cascades into
+    PendingRollbackError and the status is lost."""
+    from memory.workers.tasks.email import finalize_sync
+
+    order = []
+    db = MagicMock()
+    db.rollback.side_effect = lambda: order.append("rollback")
+    db.commit.side_effect = lambda: order.append("commit")
+    account = MagicMock()
+
+    finalize_sync(account, db, error=Exception("boom"))
+
+    assert order == ["rollback", "commit"]
+    assert account.sync_error == "boom"

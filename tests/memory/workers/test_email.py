@@ -28,6 +28,7 @@ from memory.workers.email import (
     get_gmail_label_ids,
     get_gmail_message_ids,
     gmail_message_exists,
+    imap_connection,
     process_attachment,
     process_attachments,
     process_folder,
@@ -864,3 +865,29 @@ def test_gmail_message_exists_api_error():
 
     with pytest.raises(HttpError):
         gmail_message_exists(mock_service, "msg123")
+
+
+@patch("memory.workers.email.imaplib")
+def test_imap_connection_uses_ssl_by_default(mock_imaplib):
+    account = EmailAccount(
+        name="t", email_address="t@example.com", account_type="imap",
+        imap_server="imap.example.com", imap_port=993,
+        username="u", password="p", use_ssl=True,
+    )
+    with imap_connection(account):
+        pass
+    mock_imaplib.IMAP4_SSL.assert_called_once_with(host="imap.example.com", port=993)
+    mock_imaplib.IMAP4.assert_not_called()
+
+
+@patch("memory.workers.email.imaplib")
+def test_imap_connection_plain_when_ssl_disabled(mock_imaplib):
+    account = EmailAccount(
+        name="t", email_address="t2@example.com", account_type="imap",
+        imap_server="imap.example.com", imap_port=143,
+        username="u", password="p", use_ssl=False,
+    )
+    with imap_connection(account):
+        pass
+    mock_imaplib.IMAP4.assert_called_once_with(host="imap.example.com", port=143)
+    mock_imaplib.IMAP4_SSL.assert_not_called()
