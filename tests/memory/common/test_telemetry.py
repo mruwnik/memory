@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from memory.common.db.models import TelemetryEvent
 from memory.common.telemetry import (
     ParsedTelemetryEvent,
     extract_otlp_attributes,
     hash_prompt,
     normalize_metric_name,
     parse_otlp_json,
+    record_event,
 )
 
 
@@ -396,3 +398,40 @@ def test_parsed_telemetry_event_all_fields():
     assert event.tool_name == "Read"
     assert event.attributes == {"key": "value"}
     assert event.body == "result body"
+
+
+# =============================================================================
+# record_event tests
+# =============================================================================
+
+
+def test_record_event_writes_one_row(db_session, admin_user):
+    record_event(
+        name="mcp.call",
+        user_id=admin_user.id,
+        tool_name="upsert",
+        source="upsert",
+        attributes={"name": "Acme"},
+    )
+    rows = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.user_id == admin_user.id
+    assert row.event_type == "log"
+    assert row.tool_name == "upsert"
+    assert row.attributes == {"name": "Acme"}
+
+
+def test_record_event_commits_independently(db_session, admin_user):
+    # record_event opens + commits its own session; the row is visible
+    # from a separate session even without committing db_session.
+    record_event(
+        name="team.external_membership_snapshot",
+        user_id=admin_user.id,
+        attributes={"external_members": [1, 2, 3]},
+    )
+    db_session.expire_all()
+    row = db_session.query(TelemetryEvent).filter(
+        TelemetryEvent.name == "team.external_membership_snapshot"
+    ).one()
+    assert row.attributes["external_members"] == [1, 2, 3]

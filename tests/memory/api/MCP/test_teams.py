@@ -10,7 +10,14 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 
-from memory.common.db.models import DiscordUser, Person, Team, HumanUser, UserSession
+from memory.common.db.models import (
+    DiscordUser,
+    Person,
+    Team,
+    HumanUser,
+    TelemetryEvent,
+    UserSession,
+)
 from memory.common.db.models.discord import DiscordBot, DiscordServer
 from memory.common.db.models.sources import GithubUser, Project, team_members, project_teams
 from memory.common.db import connection as db_connection
@@ -715,6 +722,29 @@ async def test_upsert_clears_members_with_empty_list(db_session, admin_session):
 
 
 @pytest.mark.asyncio
+async def test_upsert_create_defaults_auto_sync_off(db_session, admin_session):
+    """#83: a newly created team must default auto_sync_* to False."""
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(name="Defaults Off Team")
+    assert result["team"]["auto_sync_discord"] is False
+    assert result["team"]["auto_sync_github"] is False
+
+
+@pytest.mark.asyncio
+async def test_upsert_update_preserves_stored_auto_sync(db_session, admin_session):
+    """#83: updating without the flags must preserve the stored auto_sync_* values."""
+    with mcp_auth_context(admin_session.id):
+        # create with sync explicitly on
+        await get_fn(upsert)(
+            name="Pre Synced", auto_sync_discord=True, auto_sync_github=True
+        )
+        # update without passing the flags -> stored value preserved
+        result = await get_fn(upsert)(name="Pre Synced", description="changed")
+    assert result["team"]["auto_sync_discord"] is True
+    assert result["team"]["auto_sync_github"] is True
+
+
+@pytest.mark.asyncio
 async def test_upsert_with_discord_guild_by_id(db_session, admin_session):
     """Test upsert with Discord guild specified by ID."""
 
@@ -792,6 +822,30 @@ async def test_upsert_with_existing_discord_role(db_session, admin_session, disc
     assert result["success"] is True
     assert result["discord_sync"].get("role_created") is not True
     assert result["team"]["discord_role_id"] == "555666777"
+
+
+@pytest.mark.asyncio
+async def test_upsert_link_existing_role_does_not_wipe(db_session, admin_session, discord_bot):
+    """#83 end-to-end: create+link a populated Discord role with defaults -> no wipe."""
+    existing = {"members": [{"id": "8001"}, {"id": "8002"}, {"id": "8003"}]}
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles",
+              return_value={"roles": [{"id": "777", "name": "US-GOV"}]}),
+        patch("memory.common.discord.list_role_members", return_value=existing),
+        patch("memory.common.discord.remove_role_member") as remove_mock,
+    ):
+        result = await get_fn(upsert)(
+            name="US-GOV Application Contributors",
+            discord_role="US-GOV",
+            guild=333,
+            # members, auto_sync_discord, force_empty all unset (defaults)
+        )
+
+    remove_mock.assert_not_called()
+    assert result["discord_sync"].get("members_removed", 0) == 0
+    # default-off means no sync ran at all
+    assert result["team"]["auto_sync_discord"] is False
 
 
 @pytest.mark.asyncio
@@ -1470,6 +1524,152 @@ async def test_ensure_discord_role_no_sync_when_disabled(db_session, admin_sessi
     assert "members_added" not in sync_info
 
 
+@pytest.mark.asyncio
+async def test_ensure_discord_role_refuses_wipe_of_populated_role(db_session, admin_session, discord_bot):
+    """#83: an empty internal team must not strip a populated Discord role."""
+    team = Team(name="US-GOV", slug="us-gov")
+    db_session.add(team)
+    db_session.commit()
+
+    existing = {"members": [{"id": "1001"}, {"id": "1002"}, {"id": "1003"}]}
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles",
+              return_value={"roles": [{"id": "555", "name": "US-GOV"}]}),
+        patch("memory.common.discord.list_role_members", return_value=existing),
+        patch("memory.common.discord.remove_role_member") as remove_mock,
+    ):
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild="111", discord_role="US-GOV", auto_sync_discord=True,
+        )
+
+    remove_mock.assert_not_called()
+    assert sync_info.get("members_removed", 0) == 0
+    assert sync_info.get("removal_skipped") == 3
+    assert any("force_empty" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_ensure_discord_role_force_empty_allows_wipe(db_session, admin_session, discord_bot):
+    """#83: force_empty=True opts in to emptying a populated Discord role."""
+    team = Team(name="US-GOV2", slug="us-gov2")
+    db_session.add(team)
+    db_session.commit()
+
+    existing = {"members": [{"id": "1001"}, {"id": "1002"}]}
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles",
+              return_value={"roles": [{"id": "555", "name": "US-GOV2"}]}),
+        patch("memory.common.discord.list_role_members", return_value=existing),
+        patch("memory.common.discord.remove_role_member", return_value={}),
+    ):
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild="111", discord_role="US-GOV2",
+            auto_sync_discord=True, force_empty=True,
+        )
+
+    assert sync_info.get("members_removed", 0) == 2
+    assert "removal_skipped" not in sync_info
+
+
+@pytest.mark.asyncio
+async def test_ensure_discord_role_snapshots_before_force_wipe(db_session, admin_session, discord_bot):
+    """#83: external membership is snapshotted before a removal occurs."""
+    team = Team(name="Snap", slug="snap")
+    db_session.add(team)
+    db_session.commit()
+
+    existing = {"members": [{"id": "7001"}, {"id": "7002"}]}
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles",
+              return_value={"roles": [{"id": "999", "name": "Snap"}]}),
+        patch("memory.common.discord.list_role_members", return_value=existing),
+        patch("memory.common.discord.remove_role_member", return_value={}),
+    ):
+        await ensure_discord_role(
+            db_session, team.id, guild="222", discord_role="Snap",
+            auto_sync_discord=True, force_empty=True,
+        )
+
+    db_session.expire_all()
+    snap = db_session.query(TelemetryEvent).filter(
+        TelemetryEvent.name == "team.external_membership_snapshot",
+        TelemetryEvent.source == "discord",
+    ).one()
+    assert sorted(snap.attributes["external_members"]) == [7001, 7002]
+    assert snap.attributes["team_id"] == team.id
+
+
+@pytest.mark.asyncio
+async def test_ensure_discord_role_partial_removal_proceeds_and_snapshots(db_session, admin_session, discord_bot):
+    """#83: a partial reduction (>=1 mapped internal member) is NOT blocked,
+    but the removed externals are still snapshotted for recoverability."""
+    team = Team(name="Partial", slug="partial")
+    person = Person(identifier="partial_person", display_name="Partial Person")
+    db_session.add_all([team, person])
+    db_session.flush()
+    db_session.add(DiscordUser(id=9999, username="keep", person_id=person.id))
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=person.id, role="member")
+    )
+    db_session.commit()
+
+    # External role has three members; only 9999 is internal -> 1001/1002/1003 removed.
+    existing = {"members": [{"id": "1001"}, {"id": "1002"}, {"id": "1003"}, {"id": "9999"}]}
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles",
+              return_value={"roles": [{"id": "555", "name": "Partial"}]}),
+        patch("memory.common.discord.list_role_members", return_value=existing),
+        patch("memory.common.discord.remove_role_member", return_value={}),
+    ):
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild="111", discord_role="Partial", auto_sync_discord=True,
+        )
+
+    assert sync_info.get("members_removed", 0) == 3
+    assert "removal_skipped" not in sync_info
+
+    db_session.expire_all()
+    snap = db_session.query(TelemetryEvent).filter(
+        TelemetryEvent.name == "team.external_membership_snapshot",
+        TelemetryEvent.source == "discord",
+    ).one()
+    assert sorted(snap.attributes["to_remove"]) == [1001, 1002, 1003]
+
+
+@pytest.mark.asyncio
+async def test_ensure_discord_role_fails_closed_without_actor(db_session, admin_session, discord_bot):
+    """#83: if the acting user can't be resolved to record a snapshot, removal is skipped."""
+    team = Team(name="NoActor", slug="no-actor")
+    db_session.add(team)
+    db_session.commit()
+
+    existing = {"members": [{"id": "1001"}, {"id": "1002"}]}
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.common.discord.list_roles",
+              return_value={"roles": [{"id": "555", "name": "NoActor"}]}),
+        patch("memory.common.discord.list_role_members", return_value=existing),
+        patch("memory.common.discord.remove_role_member") as remove_mock,
+        patch("memory.api.MCP.servers.teams.get_mcp_current_user", return_value=None),
+    ):
+        sync_info, warnings = await ensure_discord_role(
+            db_session, team.id, guild="111", discord_role="NoActor",
+            auto_sync_discord=True, force_empty=True,
+        )
+
+    remove_mock.assert_not_called()
+    assert sync_info.get("members_removed", 0) == 0
+    assert any("snapshot" in w for w in warnings)
+    db_session.expire_all()
+    assert db_session.query(TelemetryEvent).filter(
+        TelemetryEvent.name == "team.external_membership_snapshot"
+    ).count() == 0
+
+
 # =============================================================================
 # ensure_github_team tests
 # =============================================================================
@@ -1507,6 +1707,37 @@ async def test_ensure_github_team_syncs_members(db_session, admin_session):
 
     assert sync_info.get("members_added", 0) >= 1
     assert not warnings
+
+
+@pytest.mark.asyncio
+async def test_ensure_github_team_snapshots_before_force_wipe(db_session, admin_session):
+    """#83: GitHub external membership is snapshotted before a removal occurs."""
+    team = Team(name="GH Snap", slug="gh-snap")
+    db_session.add(team)
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.fetch_team.return_value = {"github_id": 999, "slug": "gh-snap"}
+    mock_client.get_team_members.return_value = [{"login": "ghuser1"}, {"login": "ghuser2"}]
+    mock_client.remove_team_member.return_value = True
+
+    with (
+        mcp_auth_context(admin_session.id),
+        patch("memory.api.MCP.servers.teams.get_github_client_for_org", return_value=mock_client),
+    ):
+        sync_info, warnings = await ensure_github_team(
+            db_session, team.id, "GH Snap", "myorg", "gh-snap",
+            auto_sync_github=True, force_empty=True,
+        )
+
+    assert sync_info.get("members_removed", 0) == 2
+    db_session.expire_all()
+    snap = db_session.query(TelemetryEvent).filter(
+        TelemetryEvent.name == "team.external_membership_snapshot",
+        TelemetryEvent.source == "github",
+    ).one()
+    assert sorted(snap.attributes["external_members"]) == ["ghuser1", "ghuser2"]
+    assert snap.attributes["team_id"] == team.id
 
 
 @pytest.mark.asyncio

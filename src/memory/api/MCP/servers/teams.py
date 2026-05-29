@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from sqlalchemy.orm import Session, scoped_session, selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
+from memory.api.MCP.audit import audit_call
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import (
     filter_projects_query,
@@ -33,6 +34,7 @@ from memory.common.db.models.sources import (
 )
 from memory.common import discord as discord_client
 from memory.common.github import GithubClient
+from memory.common.telemetry import record_event
 from memory.api.MCP.servers.discord import resolve_bot_id, resolve_guild_id
 from memory.common.project.client import get_github_client_for_org
 
@@ -283,12 +285,58 @@ def upsert_team_record(
     return team, "created"
 
 
+def record_membership_snapshot(
+    *,
+    user_id: int,
+    source: str,
+    team_id: int,
+    external_id: int | str | None,
+    external_members: set[int] | set[str],
+    to_remove: set[int] | set[str],
+    force_empty: bool,
+) -> None:
+    """Record pre-sync external membership so a removal stays recoverable.
+
+    `tool_name` matches the `func.__name__` the audit decorator records for the
+    upsert call, so the snapshot and the `mcp.call` audit row are joinable.
+
+    Note: these rows persist in `telemetry_events` indefinitely (by design, to
+    outlive Discord/GitHub audit retention). They hold external member IDs /
+    usernames and are admin-readable; a retention/pruning policy for
+    `telemetry_events` is a separate follow-up.
+    """
+    logger.warning(
+        "Removing %s member(s) %s from team %s (external_id=%s, force_empty=%s); "
+        "pre-sync members %s snapshotted to telemetry_events",
+        source,
+        sorted(to_remove),
+        team_id,
+        external_id,
+        force_empty,
+        sorted(external_members),
+    )
+    record_event(
+        name="team.external_membership_snapshot",
+        user_id=user_id,
+        source=source,
+        tool_name="upsert",
+        attributes={
+            "team_id": team_id,
+            "external_id": external_id,
+            "external_members": sorted(external_members),
+            "to_remove": sorted(to_remove),
+            "force_empty": force_empty,
+        },
+    )
+
+
 async def ensure_discord_role(
     session: Session | scoped_session[Session],
     team_id: int,
     guild: str | None,
     discord_role: str | None,
     auto_sync_discord: bool,
+    force_empty: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     """Ensure Discord role exists and membership matches internal team.
 
@@ -383,6 +431,39 @@ async def ensure_discord_role(
         # Diff: remove Discord role members not in internal team
         to_remove_ids = external_discord_ids - set(internal_discord_ids.keys())
 
+        # Fix #83: refuse to empty a populated role when no internal member maps
+        # to Discord, unless force_empty is set. This is the "wipe" signature.
+        if not internal_discord_ids and to_remove_ids and not force_empty:
+            sync_info["removal_skipped"] = len(to_remove_ids)
+            warnings.append(
+                f"Refused to remove {len(to_remove_ids)} member(s) from Discord role "
+                f"{resolved_role_id}: internal team has no mapped Discord members. "
+                f"Pass force_empty=True to override."
+            )
+            to_remove_ids = set()
+
+        # Fix #83: snapshot external membership before any removal, so the
+        # pre-sync state is recoverable independent of Discord audit retention.
+        # Fail closed: if we can't attribute a snapshot, don't remove either.
+        if to_remove_ids:
+            actor = get_mcp_current_user()
+            if not actor or actor.id is None:
+                warnings.append(
+                    "Skipping Discord member removal: could not resolve the acting "
+                    "user to record a pre-sync membership snapshot."
+                )
+                to_remove_ids = set()
+            else:
+                record_membership_snapshot(
+                    user_id=actor.id,
+                    source="discord",
+                    team_id=team_id,
+                    external_id=resolved_role_id,
+                    external_members=external_discord_ids,
+                    to_remove=to_remove_ids,
+                    force_empty=force_empty,
+                )
+
         members_added = 0
         members_removed = 0
         errors: list[str] = []
@@ -422,6 +503,7 @@ async def ensure_github_team(
     github_org: str | None,
     github_team_slug: str | None,
     auto_sync_github: bool,
+    force_empty: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     """Ensure GitHub team exists and membership matches internal team.
 
@@ -519,6 +601,30 @@ async def ensure_github_team(
         # Diff: remove GitHub team members not in internal team
         to_remove_usernames = external_github_usernames - set(internal_github_usernames.keys())
 
+        # Fix #83: refuse to empty a populated team when no internal member maps
+        # to GitHub, unless force_empty is set. This is the "wipe" signature.
+        if not internal_github_usernames and to_remove_usernames and not force_empty:
+            sync_info["removal_skipped"] = len(to_remove_usernames)
+            warnings.append(
+                f"Refused to remove {len(to_remove_usernames)} member(s) from GitHub team "
+                f"{github_team_slug}: internal team has no mapped GitHub members. "
+                f"Pass force_empty=True to override."
+            )
+            to_remove_usernames = set()
+
+        # Fix #83: snapshot external membership before any removal, so the
+        # pre-sync state is recoverable independent of GitHub audit retention.
+        if to_remove_usernames:
+            record_membership_snapshot(
+                user_id=user.id,
+                source="github",
+                team_id=team_id,
+                external_id=github_team_slug,
+                external_members=external_github_usernames,
+                to_remove=to_remove_usernames,
+                force_empty=force_empty,
+            )
+
         members_added = 0
         members_removed = 0
         errors: list[str] = []
@@ -552,6 +658,7 @@ async def ensure_github_team(
 
 @teams_mcp.tool()
 @visible_when(require_scopes(SCOPE_TEAMS_WRITE))
+@audit_call(level=logging.INFO)
 async def upsert(
     name: str,
     slug: str | None = None,
@@ -562,13 +669,14 @@ async def upsert(
     # Discord integration
     guild: str | None = None,
     discord_role: str | None = None,
-    auto_sync_discord: bool = True,
+    auto_sync_discord: bool | None = None,
     # GitHub integration
     github_org: str | None = None,
     github_team_slug: str | None = None,
-    auto_sync_github: bool = True,
+    auto_sync_github: bool | None = None,
     # Membership
     members: list[str] | None = None,
+    force_empty: bool = False,
     # Status
     is_active: bool | None = None,
 ) -> dict:
@@ -584,12 +692,15 @@ async def upsert(
                Set to null to clear the owner.
         guild: Discord guild - can be numeric ID or server name
         discord_role: Discord role - can be numeric ID or role name (creates if doesn't exist)
-        auto_sync_discord: Whether to auto-sync membership to Discord (default: true)
+        auto_sync_discord: Whether to auto-sync membership to Discord.
+            None (default) = off for new teams, unchanged for existing teams.
         github_org: GitHub organization for team sync
         github_team_slug: GitHub team slug - creates team if doesn't exist
-        auto_sync_github: Whether to auto-sync membership to GitHub (default: true)
+        auto_sync_github: Same semantics as auto_sync_discord, for GitHub.
         members: If provided, set team to exactly these members.
                  Pass [] to remove all members. Pass None to leave unchanged.
+        force_empty: Allow a sync to remove ALL members from a populated external
+            entity. Without it, such a wipe is refused.
         is_active: Active status (set to false to archive team)
 
     Behavior:
@@ -649,6 +760,23 @@ async def upsert(
         # and expire the object (DetachedInstanceError with scoped_session)
         team_id = team.id
 
+        # Fix #83: resolve auto-sync. None = off on create, unchanged on update.
+        # Apply directly to the team record so the default holds even when no
+        # external service is configured (ensure_* only runs when one is).
+        def resolve_sync(arg: bool | None, stored: bool) -> bool:
+            if arg is not None:
+                return arg
+            return False if action == "created" else stored
+
+        resolved_auto_sync_discord = resolve_sync(
+            auto_sync_discord, bool(team.auto_sync_discord)
+        )
+        resolved_auto_sync_github = resolve_sync(
+            auto_sync_github, bool(team.auto_sync_github)
+        )
+        team.auto_sync_discord = resolved_auto_sync_discord
+        team.auto_sync_github = resolved_auto_sync_github
+
         # Step 2: Set explicit members if provided
         if members is not None:
             team = (
@@ -666,7 +794,8 @@ async def upsert(
         # Step 3: Ensure Discord role + sync membership
         if guild is not None or discord_role is not None:
             discord_sync, discord_warnings = await ensure_discord_role(
-                session, team_id, guild, discord_role, auto_sync_discord
+                session, team_id, guild, discord_role, resolved_auto_sync_discord,
+                force_empty=force_empty,
             )
             result["discord_sync"].update(discord_sync)
             result["warnings"].extend(discord_warnings)
@@ -674,7 +803,8 @@ async def upsert(
         # Step 4: Ensure GitHub team + sync membership
         if github_org is not None:
             github_sync, github_warnings = await ensure_github_team(
-                session, team_id, name, github_org, github_team_slug, auto_sync_github
+                session, team_id, name, github_org, github_team_slug, resolved_auto_sync_github,
+                force_empty=force_empty,
             )
             result["github_sync"].update(github_sync)
             result["warnings"].extend(github_warnings)
@@ -944,6 +1074,7 @@ async def list_all(
 
 @teams_mcp.tool()
 @visible_when(require_scopes(SCOPE_TEAMS_WRITE))
+@audit_call(level=logging.INFO)
 async def team_add_member(
     team: str | int,
     person: str | int,
@@ -1056,6 +1187,7 @@ async def team_add_member(
 
 @teams_mcp.tool()
 @visible_when(require_scopes(SCOPE_TEAMS_WRITE))
+@audit_call(level=logging.INFO)
 async def team_remove_member(
     team: str | int,
     person: str | int,

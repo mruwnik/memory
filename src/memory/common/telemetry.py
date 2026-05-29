@@ -11,7 +11,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from memory.common.db.connection import make_session
 from memory.common.db.models import TelemetryEvent
@@ -232,6 +232,43 @@ def parse_otlp_json(data: bytes | str) -> list[ParsedTelemetryEvent]:
         events.extend(parse_resource_logs(resource_log))
 
     return events
+
+
+def record_event(
+    name: str,
+    *,
+    user_id: int,
+    event_type: Literal["metric", "log"] = "log",
+    value: float | None = None,
+    session_id: str | None = None,
+    source: str | None = None,
+    tool_name: str | None = None,
+    attributes: dict[str, Any] | None = None,
+    body: str | None = None,
+) -> None:
+    """Write a single telemetry event in its own committed transaction.
+
+    Used for forensic records (audit logging, pre-sync membership snapshots)
+    that must persist independently of the caller's transaction — e.g. so a
+    snapshot survives a crash between the DB write and a non-transactional
+    external API call.
+    """
+    with make_session() as session:
+        session.add(
+            TelemetryEvent(
+                timestamp=datetime.now(timezone.utc),
+                user_id=user_id,
+                event_type=event_type,
+                name=name,
+                value=value,
+                session_id=session_id,
+                source=source,
+                tool_name=tool_name,
+                attributes=attributes or {},
+                body=body,
+            )
+        )
+        session.commit()
 
 
 def write_events_to_db(events: list[ParsedTelemetryEvent], user_id: int) -> int:
