@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import io
 import logging
 import mimetypes
+import os
 import pathlib
 import tempfile
 from contextlib import contextmanager
@@ -22,6 +23,32 @@ except (ImportError, OSError):
     HAS_PANDOC = False
 
 logger = logging.getLogger(__name__)
+
+
+def _default_pandoc_lua_filter() -> str:
+    """Locate the pandoc table-unnesting lua filter for docx -> pdf.
+
+    The worker container installs it at ``/app/unnest-table.lua``; a source
+    checkout keeps it under ``docker/workers/``. Prefer whichever exists so
+    conversion works in both places without configuration. Override with the
+    ``PANDOC_LUA_FILTER`` env var.
+    """
+    candidates = (
+        pathlib.Path("/app/unnest-table.lua"),
+        pathlib.Path(__file__).resolve().parents[3]
+        / "docker"
+        / "workers"
+        / "unnest-table.lua",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str(candidates[0])
+
+
+PANDOC_LUA_FILTER = pathlib.Path(
+    os.getenv("PANDOC_LUA_FILTER", _default_pandoc_lua_filter())
+)
 
 MulitmodalChunk = Image.Image | str | bytes
 
@@ -159,16 +186,24 @@ def docx_to_pdf(
     # Now that we have all packages installed, try xelatex first as it has better Unicode support
     try:
         logger.info(f"Converting {docx_path} to PDF using xelatex")
+        extra_args = [
+            "--pdf-engine=xelatex",
+            "--variable=geometry:margin=1in",
+        ]
+        lua_filter = PANDOC_LUA_FILTER
+        if lua_filter.exists():
+            extra_args.append(f"--lua-filter={lua_filter}")
+        else:
+            logger.warning(
+                "Pandoc lua filter not found at %s; converting without it",
+                lua_filter,
+            )
         pypandoc.convert_file(
             str(docx_path),
             format="docx",
             to="pdf",
             outputfile=str(output_path),
-            extra_args=[
-                "--pdf-engine=xelatex",
-                "--variable=geometry:margin=1in",
-                "--lua-filter=/app/unnest-table.lua",
-            ],
+            extra_args=extra_args,
         )
         logger.info(f"Successfully converted {docx_path} to PDF")
         return output_path
