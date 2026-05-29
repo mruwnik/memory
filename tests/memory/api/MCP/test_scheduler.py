@@ -173,6 +173,9 @@ async def test_upsert_reenable_respects_cap(db_session, regular_user, user_sessi
         # Re-enabling it would exceed the cap — must be rejected.
         with pytest.raises(ValueError, match="Maximum"):
             await scheduler.upsert.fn(task_id=paused["id"], enabled=True)
+        # Re-activating via the documented cron-reschedule route is also capped.
+        with pytest.raises(ValueError, match="Maximum"):
+            await scheduler.upsert.fn(task_id=paused["id"], cron_expression="0 11 * * *")
 
 
 @pytest.mark.asyncio

@@ -332,29 +332,17 @@ async def upsert(
                 "an existing task's schedule use cron_expression."
             )
 
+        # Capture activeness before any mutation: an update that flips an
+        # inactive task to active (via cron_expression OR enabled=True) must
+        # respect the per-user cap, else create-disabled-then-reactivate would
+        # bypass it. `enabled` is derived from next_scheduled_time, so we check
+        # the transition after the mutations below rather than per-field.
+        was_active = task.enabled
+
         if cron_expression is not None:
             validate_cron_interval(cron_expression)
             task.cron_expression = cron_expression
             task.next_scheduled_time = compute_next_cron(cron_expression)
-
-        if enabled is True and not task.enabled and task.cron_expression:
-            # Re-activating a paused recurring task must respect the active-task
-            # cap, else create-disabled-then-enable would bypass it. (A fired
-            # one-off has no cron, so enabling it is a no-op — skip the check.)
-            active_count = (
-                session.query(ScheduledTask)
-                .filter(
-                    ScheduledTask.user_id == user_id,
-                    ScheduledTask.enabled,
-                    ScheduledTask.id != task.id,
-                )
-                .count()
-            )
-            if active_count >= settings.MAX_SCHEDULED_TASKS_PER_USER:
-                raise ValueError(
-                    f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active "
-                    "scheduled tasks per user reached"
-                )
 
         if enabled is not None:
             task.enabled = enabled
@@ -384,6 +372,24 @@ async def upsert(
                     existing[key] = value
             data["spawn_config"] = existing
             task.data = data
+
+        if task.enabled and not was_active:
+            # This update re-activated a previously-inactive task — enforce the
+            # active-task cap (excluding this task itself).
+            active_count = (
+                session.query(ScheduledTask)
+                .filter(
+                    ScheduledTask.user_id == user_id,
+                    ScheduledTask.enabled,
+                    ScheduledTask.id != task.id,
+                )
+                .count()
+            )
+            if active_count >= settings.MAX_SCHEDULED_TASKS_PER_USER:
+                raise ValueError(
+                    f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active "
+                    "scheduled tasks per user reached"
+                )
 
         session.commit()
         return task.serialize()
