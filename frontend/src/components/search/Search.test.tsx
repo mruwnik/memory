@@ -1,18 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithRouter, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
+import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import Search from './Search'
 
 const navigateSpy = vi.fn()
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
   return { ...actual, useNavigate: () => navigateSpy }
-})
-
-const mcpEnvelope = (payloads: unknown[]) => ({
-  jsonrpc: '2.0',
-  id: 1,
-  result: { content: payloads.map((p) => ({ type: 'text', text: JSON.stringify(p) })) },
 })
 
 const schemas = {
@@ -26,11 +21,11 @@ const installFetch = (opts: { results?: unknown[]; searchFails?: boolean } = {})
       return mockResponse({ json: { user_id: 1, name: 'T', email: 't@e.com', user_type: 'human', scopes: ['*'] } })
     }
     if (url.includes('/mcp/meta_get_metadata_schemas')) {
-      return mockResponse({ json: mcpEnvelope([schemas]) })
+      return mockResponse({ json: mcpEnvelopeJson(schemas) })
     }
     if (url.includes('/mcp/core_search')) {
       if (opts.searchFails) return mockResponse({ status: 500, json: { detail: 'boom' } })
-      return mockResponse({ json: mcpEnvelope(opts.results ?? []) })
+      return mockResponse({ json: mcpEnvelopeJson(...(opts.results ?? [])) })
     }
     return mockResponse({ status: 404, json: { detail: 'nope' } })
   })

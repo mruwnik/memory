@@ -8,24 +8,12 @@ import {
   setAuthCookies,
   clearCookies,
 } from '@/test/utils'
+import { mcpResult } from './mcpEnvelope.testhelper'
 
 beforeEach(() => {
   clearCookies()
   setAuthCookies()
 })
-
-function mcpResult(...values: unknown[]): MockResponseInit {
-  return {
-    json: {
-      jsonrpc: '2.0',
-      id: 1,
-      result: {
-        content: values.map((v) => ({ type: 'text', text: JSON.stringify(v) })),
-        isError: false,
-      },
-    },
-  }
-}
 
 function routeMcp(resp: MockResponseInit) {
   return mockFetch(async (input) => {

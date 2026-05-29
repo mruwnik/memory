@@ -10,12 +10,7 @@ import {
 } from '@/test/utils'
 import PollList from './PollList'
 import type { Poll } from '@/hooks/usePolls'
-
-// Build an MCP JSON-RPC success envelope. The hook expects
-// result.content[].text to be JSON-parseable.
-function mcpEnvelope(payload: unknown) {
-  return { result: { content: [{ text: JSON.stringify(payload) }] } }
-}
+import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 
 function makePoll(overrides: Partial<Poll> = {}): Poll {
   return {
@@ -49,7 +44,7 @@ function mockMcp(handlers: Record<string, unknown | Error>) {
       if (payload instanceof Error) {
         return mockResponse({ status: 500, json: { detail: payload.message } })
       }
-      return mockResponse({ json: mcpEnvelope(payload) })
+      return mockResponse({ json: mcpEnvelopeJson(payload) })
     }
     return mockResponse({ status: 404, json: { detail: 'not found' } })
   })

@@ -8,26 +8,12 @@ import {
   setAuthCookies,
   clearCookies,
 } from '@/test/utils'
+import { mcpResult } from './mcpEnvelope.testhelper'
 
 beforeEach(() => {
   clearCookies()
   setAuthCookies()
 })
-
-// Build a JSON-RPC tools/call response whose content items JSON-encode `values`.
-// mcpCall returns content.map(item => JSON.parse(item.text)), so result[0] === values[0].
-function mcpResult(...values: unknown[]): MockResponseInit {
-  return {
-    json: {
-      jsonrpc: '2.0',
-      id: 1,
-      result: {
-        content: values.map((v) => ({ type: 'text', text: JSON.stringify(v) })),
-        isError: false,
-      },
-    },
-  }
-}
 
 // Route /auth/me to {} and all /mcp/* calls to the supplied response.
 function routeMcp(resp: MockResponseInit) {

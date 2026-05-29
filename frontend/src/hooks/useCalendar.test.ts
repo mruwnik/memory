@@ -4,23 +4,10 @@ import { useCalendar, CalendarEvent } from './useCalendar'
 import {
   mockFetch,
   mockResponse,
-  MockResponseInit,
   setAuthCookies,
   clearCookies,
 } from '@/test/utils'
-
-function mcpResult(...values: unknown[]): MockResponseInit {
-  return {
-    json: {
-      jsonrpc: '2.0',
-      id: 1,
-      result: {
-        content: values.map((v) => ({ type: 'text', text: JSON.stringify(v) })),
-        isError: false,
-      },
-    },
-  }
-}
+import { mcpResult } from './mcpEnvelope.testhelper'
 
 // Each /mcp call gets a fresh response built from `events` so cache misses fetch.
 function routeMcpDynamic(makeEvents: () => CalendarEvent[]) {

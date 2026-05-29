@@ -2,18 +2,15 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useDiscord } from './useDiscord'
 import { setAuthCookies, clearCookies, mockFetch, mockResponse } from '@/test/utils'
+import { mcpEnvelopeJson } from './mcpEnvelope.testhelper'
 
-// Build the JSON-RPC tools/call body that useMCP.mcpCall expects:
-// { result: { content: [ { text: JSON.stringify(payload) } ] } }
-function mcpResult(payload: unknown) {
+// Build a full Response wrapping the JSON-RPC tools/call envelope that
+// useMCP.mcpCall expects (single payload → one content item).
+function mcpResponse(payload: unknown) {
   return mockResponse({
     status: 200,
     headers: { 'content-type': 'application/json' },
-    text: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      result: { content: [{ type: 'text', text: JSON.stringify(payload) }] },
-    }),
+    text: JSON.stringify(mcpEnvelopeJson(payload)),
   })
 }
 
@@ -219,7 +216,7 @@ describe('useDiscord servers', () => {
 describe('useDiscord channels (MCP-backed list)', () => {
   it('listChannels transforms the MCP response into DiscordChannel objects', async () => {
     mockFetch(async () =>
-      mcpResult({
+      mcpResponse({
         channels: [
           { id: 12345, name: 'general', type: 'text', server_id: 999, collect_messages: true },
         ],
@@ -241,7 +238,7 @@ describe('useDiscord channels (MCP-backed list)', () => {
 
   it('listChannels coerces a null server_id to null (not the string "null")', async () => {
     mockFetch(async () =>
-      mcpResult({
+      mcpResponse({
         channels: [{ id: 'c1', name: 'dm', type: 'dm', server_id: null, collect_messages: false }],
       }),
     )
@@ -251,7 +248,7 @@ describe('useDiscord channels (MCP-backed list)', () => {
   })
 
   it('listChannels passes server_id and server_name as MCP arguments', async () => {
-    const fetchMock = mockFetch(async () => mcpResult({ channels: [] }))
+    const fetchMock = mockFetch(async () => mcpResponse({ channels: [] }))
     await setup().listChannels('999', 'My Server')
     const { init } = callTo(fetchMock, '/mcp/discord_list_channels')
     const body = JSON.parse(init?.body as string)
@@ -259,13 +256,13 @@ describe('useDiscord channels (MCP-backed list)', () => {
   })
 
   it('listChannels returns [] when the MCP payload lacks a channels key', async () => {
-    mockFetch(async () => mcpResult({ unexpected: true }))
+    mockFetch(async () => mcpResponse({ unexpected: true }))
     const channels = await setup().listChannels()
     expect(channels).toEqual([])
   })
 
   it('listChannels treats a missing channels array as empty', async () => {
-    mockFetch(async () => mcpResult({ channels: null }))
+    mockFetch(async () => mcpResponse({ channels: null }))
     const channels = await setup().listChannels()
     expect(channels).toEqual([])
   })

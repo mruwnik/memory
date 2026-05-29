@@ -1,15 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { renderWithUser, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
+import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import SearchForm from './SearchForm'
-
-// Build an MCP JSON-RPC envelope: useMCP reads response.text(), JSON.parses it,
-// then maps result.content[].text through JSON.parse.
-const mcpEnvelope = (payloads: unknown[]) => ({
-  jsonrpc: '2.0',
-  id: 1,
-  result: { content: payloads.map((p) => ({ type: 'text', text: JSON.stringify(p) })) },
-})
 
 const schemas = {
   blog: { schema: { author: { type: 'string', description: 'Author' } }, size: 0 },
@@ -23,10 +16,10 @@ const installFetch = (searchResults: unknown[] = []) =>
       return mockResponse({ json: { user_id: 1, name: 'T', email: 't@e.com', user_type: 'human', scopes: ['*'] } })
     }
     if (url.includes('/mcp/meta_get_metadata_schemas')) {
-      return mockResponse({ json: mcpEnvelope([schemas]) })
+      return mockResponse({ json: mcpEnvelopeJson(schemas) })
     }
     if (url.includes('/mcp/core_search')) {
-      return mockResponse({ json: mcpEnvelope(searchResults) })
+      return mockResponse({ json: mcpEnvelopeJson(...searchResults) })
     }
     return mockResponse({ status: 404, json: { detail: 'nope' } })
   })
