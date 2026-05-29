@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from memory.api.MCP.servers import scheduler
+from memory.common import settings as settings_mod
 from memory.common.db import connection as db_connection
 from memory.common.db.models import ScheduledTask
 from tests.conftest import mcp_auth_context
@@ -63,16 +64,14 @@ async def test_upsert_enable_recurring_recomputes(db_session, regular_user, user
 
 
 def test_validate_scheduled_secret_refs_rejects_unknown(db_session, regular_user):
-    from memory.api.MCP.servers.scheduler import validate_scheduled_secret_refs
     with pytest.raises(ValueError, match="github_token"):
-        validate_scheduled_secret_refs(
+        scheduler.validate_scheduled_secret_refs(
             db_session, regular_user.id, {"github_token": "no-such-secret"}
         )
 
 
 def test_validate_scheduled_secret_refs_allows_no_tokens(db_session, regular_user):
-    from memory.api.MCP.servers.scheduler import validate_scheduled_secret_refs
-    validate_scheduled_secret_refs(db_session, regular_user.id, {"repo_url": "x"})
+    scheduler.validate_scheduled_secret_refs(db_session, regular_user.id, {"repo_url": "x"})
 
 
 @pytest.mark.asyncio
@@ -142,7 +141,6 @@ async def test_create_validation_errors(db_session, regular_user, user_session, 
 
 @pytest.mark.asyncio
 async def test_create_enforces_per_user_cap(db_session, regular_user, user_session, monkeypatch):
-    from memory.common import settings as settings_mod
     monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
     with mcp_auth_context(user_session.id):
         await scheduler.upsert.fn(
@@ -154,6 +152,27 @@ async def test_create_enforces_per_user_cap(db_session, regular_user, user_sessi
                 task_type="notification", message="b", cron_expression="0 10 * * *",
                 notification_channel="discord", notification_target="1",
             )
+
+
+@pytest.mark.asyncio
+async def test_upsert_reenable_respects_cap(db_session, regular_user, user_session, monkeypatch):
+    """create-disabled-then-enable must not bypass the active-task cap."""
+    monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
+    with mcp_auth_context(user_session.id):
+        # One active recurring task — fills the cap.
+        await scheduler.upsert.fn(
+            task_type="notification", message="a", cron_expression="0 9 * * *",
+            notification_channel="discord", notification_target="1",
+        )
+        # A second created disabled (allowed — inactive, doesn't count).
+        paused = await scheduler.upsert.fn(
+            task_type="notification", message="b", cron_expression="0 10 * * *",
+            notification_channel="discord", notification_target="2", enabled=False,
+        )
+        assert paused["enabled"] is False
+        # Re-enabling it would exceed the cap — must be rejected.
+        with pytest.raises(ValueError, match="Maximum"):
+            await scheduler.upsert.fn(task_id=paused["id"], enabled=True)
 
 
 @pytest.mark.asyncio
