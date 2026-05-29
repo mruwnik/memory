@@ -442,6 +442,14 @@ class SpawnRequest(BaseModel):
         return self
 
 
+# Container statuses that mean the session is no longer live: it holds no
+# host CPU/memory and so must not count against the per-user concurrent
+# limit. A user must always be able to spawn a fresh session once their
+# running ones drop below the cap, regardless of how many dead containers
+# linger (orchestrator cleanup reaps them out of band).
+INACTIVE_SESSION_STATUSES = frozenset({"exited", "dead"})
+
+
 class SessionInfo(BaseModel):
     """Info about a running Claude session."""
 
@@ -609,7 +617,10 @@ async def spawn_session(
     ):
         containers = await client.list_containers()
     active_count = sum(
-        1 for c in containers if user_owns_session(user, c.session_id)
+        1
+        for c in containers
+        if user_owns_session(user, c.session_id)
+        and c.status not in INACTIVE_SESSION_STATUSES
     )
     if active_count >= settings.MAX_CONCURRENT_SESSIONS_PER_USER:
         raise HTTPException(

@@ -854,7 +854,7 @@ def test_spawn_session_rejects_over_concurrent_limit(tmp_path):
 
     # fake_user.id == 7, so its sessions are "u7-...".
     running = [
-        MagicMock(session_id=f"u7-s99-{i:06x}")
+        MagicMock(session_id=f"u7-s99-{i:06x}", status="running")
         for i in range(settings.MAX_CONCURRENT_SESSIONS_PER_USER)
     ]
 
@@ -899,6 +899,49 @@ def test_spawn_session_concurrent_limit_counts_only_owner(tmp_path):
 
     client = MagicMock()
     client.list_containers = AsyncMock(return_value=foreign)
+    client.create_initialized_volume = AsyncMock(return_value=None)
+    client.create_container = AsyncMock(return_value=result)
+
+    snapshot_file = tmp_path / "snap.tar.gz"
+    snapshot_file.write_bytes(b"snapshot-payload")
+
+    with (
+        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        info = asyncio.run(spawn_session(request, fake_user, db))
+
+    assert info.session_id == "u7-s99-abc123"
+    client.create_container.assert_awaited_once()
+
+
+def test_spawn_session_concurrent_limit_ignores_exited_sessions(tmp_path):
+    """Exited/dead containers the user owns are killed sessions, not live
+    ones — they consume no host CPU/memory and must not count against the
+    per-user concurrent limit. Otherwise stale containers permanently strand
+    a slot (and old short-id ones can't even be killed via the API).
+    """
+    fake_user, db, request = _make_spawn_session_test_doubles()
+
+    # The user (u7) has MAX exited containers plus one running. Only the
+    # running one should count, leaving room for this spawn.
+    owned = [
+        MagicMock(session_id=f"u7-s99-{i:06x}", status="exited")
+        for i in range(settings.MAX_CONCURRENT_SESSIONS_PER_USER)
+    ]
+    owned.append(MagicMock(session_id="u7-s99-aaaaaa", status="running"))
+
+    result = MagicMock(
+        session_id="u7-s99-abc123",
+        container_name="claude-u7-s99-abc123",
+        status="running",
+        differ=None,
+    )
+
+    client = MagicMock()
+    client.list_containers = AsyncMock(return_value=owned)
     client.create_initialized_volume = AsyncMock(return_value=None)
     client.create_container = AsyncMock(return_value=result)
 
