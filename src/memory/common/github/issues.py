@@ -1157,7 +1157,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         mutation = """
         mutation CreateIssue($input: CreateIssueInput!) {
           createIssue(input: $input) {
-            issue { id, number, url, title, state }
+            issue { id, number, url, title, state, milestone { id number title } }
           }
         }
         """
@@ -1192,7 +1192,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         mutation = """
         mutation UpdateIssue($input: UpdateIssueInput!) {
           updateIssue(input: $input) {
-            issue { id, number, url, title, state }
+            issue { id, number, url, title, state, milestone { id number title } }
           }
         }
         """

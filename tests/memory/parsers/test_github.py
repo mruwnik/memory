@@ -742,6 +742,57 @@ def test_fetch_project_fields_graphql_error():
     assert fields is None
 
 
+def test_update_project_field_value_success():
+    """A clean mutation returns (True, None)."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}}
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        ok, error = client.update_project_field_value(
+            "PVT_1", "PVTI_1", "F_1", "75", "text"
+        )
+
+    assert ok is True
+    assert error is None
+
+
+def test_update_project_field_value_surfaces_graphql_error():
+    """A GraphQL error is returned, not swallowed, so callers can report why."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(
+            data=None,
+            errors=[{"message": "Field is not a valid number"}],
+        )
+        client = GithubClient(credentials)
+        ok, error = client.update_project_field_value(
+            "PVT_1", "PVTI_1", "F_1", "abc", "number"
+        )
+
+    assert ok is False
+    assert error is not None
+    assert "Field is not a valid number" in error
+
+
+def test_update_project_field_value_reports_missing_data():
+    """An HTTP-level failure (data=None, no errors) is reported as a failure."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.side_effect = requests.RequestException("boom")
+        client = GithubClient(credentials)
+        ok, error = client.update_project_field_value(
+            "PVT_1", "PVTI_1", "F_1", "75", "text"
+        )
+
+    assert ok is False
+    assert error is not None
+
+
 # =============================================================================
 # Tests for list_repos (REST - no direct GraphQL equivalent)
 # =============================================================================
@@ -1100,3 +1151,60 @@ def test_update_issue_graphql():
     assert result is not None
     assert result["title"] == "Updated Title"
     assert result["state"] == "CLOSED"
+
+
+def test_update_issue_graphql_requests_and_returns_milestone():
+    """The mutation must request the milestone back so callers can confirm it persisted."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {
+        "updateIssue": {
+            "issue": {
+                "id": "I_123",
+                "number": 1,
+                "url": "https://github.com/owner/repo/issues/1",
+                "title": "T",
+                "state": "OPEN",
+                "milestone": {"id": "MI_1", "number": 4, "title": "Sprint 4"},
+            }
+        }
+    }
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        result = client.update_issue_graphql("I_123", milestone_id="MI_1")
+
+    sent_query = mock_post.call_args.kwargs["json"]["query"]
+    assert "milestone" in sent_query
+    assert result is not None
+    assert result["milestone"]["number"] == 4
+    assert result["milestone"]["title"] == "Sprint 4"
+
+
+def test_create_issue_graphql_requests_milestone():
+    """Issue creation must also request the milestone back for confirmation."""
+    credentials = GithubCredentials(auth_type="pat", access_token="token")
+
+    graphql_data = {
+        "createIssue": {
+            "issue": {
+                "id": "I_new",
+                "number": 9,
+                "url": "u",
+                "title": "New",
+                "state": "OPEN",
+                "milestone": {"id": "MI_2", "number": 7, "title": "Backlog"},
+            }
+        }
+    }
+
+    with patch.object(requests.Session, "post") as mock_post:
+        mock_post.return_value = mock_graphql_response(graphql_data)
+        client = GithubClient(credentials)
+        result = client.create_issue_graphql("R_1", "New", milestone_id="MI_2")
+
+    sent_query = mock_post.call_args.kwargs["json"]["query"]
+    assert "milestone" in sent_query
+    assert result is not None
+    assert result["milestone"]["number"] == 7

@@ -797,7 +797,10 @@ def test_extract_deadline_project_field_takes_priority():
 
 @pytest.fixture
 def mock_upsert_deps():
-    """Patch all the side-effecting machinery for upsert_issue input tests."""
+    """Patch all the side-effecting machinery for upsert_issue tests."""
+    client = MagicMock()
+    # The post-write verification re-reads live field values from GitHub.
+    client.fetch_project_fields.return_value = {"EquiStamp.Status": "Internal Review"}
     with (
         patch("memory.api.MCP.servers.github.get_mcp_current_user") as mock_user,
         patch("memory.api.MCP.servers.github.make_session") as mock_session,
@@ -810,19 +813,37 @@ def mock_upsert_deps():
         patch(
             "memory.api.MCP.servers.github.sync_issue_to_database"
         ) as mock_sync,
+        patch(
+            "memory.api.MCP.servers.github.resolve_local_milestone_id"
+        ) as mock_resolve_ms,
+        patch("memory.api.MCP.servers.github.refresh_item_cache") as mock_refresh,
     ):
         mock_user.return_value = MagicMock(id=1)
         mock_session.return_value.__enter__ = lambda s: MagicMock()
         mock_session.return_value.__exit__ = lambda s, *args: None
-        mock_get_client.return_value = (MagicMock(), None)
-        mock_create.return_value = ({"title": "T", "state": "OPEN", "url": "u", "id": "x"}, 99)
-        mock_update.return_value = {"title": "T", "state": "OPEN", "url": "u", "id": "x"}
+        mock_get_client.return_value = (client, None)
+        mock_create.return_value = (
+            {"title": "T", "state": "OPEN", "url": "u", "id": "x", "milestone": None},
+            99,
+        )
+        mock_update.return_value = {
+            "title": "T",
+            "state": "OPEN",
+            "url": "u",
+            "id": "x",
+            "milestone": None,
+        }
         mock_project.return_value = ([], None)
         mock_sync.return_value = (False, None)
+        mock_resolve_ms.return_value = None
+        mock_refresh.return_value = True
         yield {
             "create": mock_create,
             "update": mock_update,
             "project": mock_project,
+            "client": client,
+            "resolve_ms": mock_resolve_ms,
+            "refresh": mock_refresh,
         }
 
 
@@ -836,23 +857,151 @@ async def test_upsert_issue_accepts_project_fields_as_json_string(mock_upsert_de
         project_fields='{"Status": "Ready", "Hours": "10"}',
     )
 
-    assert result["project_fields"] == {"Status": "Ready", "Hours": "10"}
-    # handle_project_integration should receive a real dict, not a string
+    # The reported project_fields are the verified live re-read, not the echoed input.
+    assert result["project_fields"] == {"EquiStamp.Status": "Internal Review"}
+    # handle_project_integration should still receive a real dict, not a string
     call_kwargs = mock_upsert_deps["project"].call_args.args
     assert call_kwargs[6] == {"Status": "Ready", "Hours": "10"}
 
 
 @pytest.mark.asyncio
+async def test_upsert_issue_reports_verified_project_fields(mock_upsert_deps):
+    """project_fields in the result reflect a live re-read, not the requested map."""
+    mock_upsert_deps["client"].fetch_project_fields.return_value = {
+        "EquiStamp.Issue Hourly Rate": "75",
+        "EquiStamp.Status": "Internal Review",
+    }
+    mock_upsert_deps["project"].return_value = (["Set Issue Hourly Rate=75"], None)
+
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
+        repo="owner/name",
+        number=95,
+        project="EquiStamp",
+        project_fields={"Issue Hourly Rate": "75"},
+    )
+
+    assert result["project_fields"] == {
+        "EquiStamp.Issue Hourly Rate": "75",
+        "EquiStamp.Status": "Internal Review",
+    }
+    assert result["project_fields_verified"] is True
+    # The cache is refreshed with the verified values so github_fetch isn't stale.
+    refresh_kwargs = mock_upsert_deps["refresh"].call_args.kwargs
+    assert refresh_kwargs["project_fields"] == {
+        "EquiStamp.Issue Hourly Rate": "75",
+        "EquiStamp.Status": "Internal Review",
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_does_not_clobber_cache_on_failed_verification(
+    mock_upsert_deps,
+):
+    """If the verification re-read fails (returns None), keep the requested
+    values, flag them unverified, and don't overwrite the cache with {}."""
+    mock_upsert_deps["client"].fetch_project_fields.return_value = None
+    mock_upsert_deps["project"].return_value = (["Set Issue Hourly Rate=75"], None)
+
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
+        repo="owner/name",
+        number=95,
+        project="EquiStamp",
+        project_fields={"Issue Hourly Rate": "75"},
+    )
+
+    assert result["project_fields_verified"] is False
+    # Requested values are preserved rather than blanked to {}.
+    assert result["project_fields"] == {"Issue Hourly Rate": "75"}
+    # The cache is NOT refreshed with project fields (would clobber good data).
+    if mock_upsert_deps["refresh"].called:
+        assert mock_upsert_deps["refresh"].call_args.kwargs["project_fields"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_reports_confirmed_milestone(mock_upsert_deps):
+    """A milestone confirmed by the mutation response is reported as set."""
+    mock_upsert_deps["update"].return_value = {
+        "title": "T",
+        "state": "OPEN",
+        "url": "u",
+        "id": "x",
+        "milestone": {"id": "MI_1", "number": 4, "title": "Sprint 4"},
+    }
+
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
+        repo="owner/name",
+        number=10,
+        milestone="Sprint 4",
+    )
+
+    assert result["milestone"] == "Sprint 4"
+    assert result["milestone_id"] == "MI_1"
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_reports_unset_milestone_honestly(mock_upsert_deps):
+    """When the mutation response shows no milestone, the result says so —
+    it does not echo the requested value as if it persisted."""
+    mock_upsert_deps["update"].return_value = {
+        "title": "T",
+        "state": "OPEN",
+        "url": "u",
+        "id": "x",
+        "milestone": None,
+    }
+
+    result = await upsert_issue.fn(  # type: ignore[attr-defined]
+        repo="owner/name",
+        number=10,
+        milestone="Ghost Milestone",
+    )
+
+    assert result["milestone"] is None
+    assert result["milestone_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_issue_refreshes_cache_for_untracked_milestone(mock_upsert_deps):
+    """A milestone confirmed by GitHub but not synced as a local Project must
+    still refresh the cache: ``update_milestone=True`` with ``milestone_local_id
+    =None`` so the stale prior milestone_id is replaced with NULL rather than
+    left actively wrong."""
+    mock_upsert_deps["update"].return_value = {
+        "title": "T",
+        "state": "OPEN",
+        "url": "u",
+        "id": "x",
+        "milestone": {"id": "MI_1", "number": 4, "title": "Sprint 4"},
+    }
+    # resolve_local_milestone_id returns None (milestone not tracked locally) —
+    # this is the fixture default, made explicit here for clarity.
+    mock_upsert_deps["resolve_ms"].return_value = None
+
+    await upsert_issue.fn(  # type: ignore[attr-defined]
+        repo="owner/name",
+        number=10,
+        milestone="Sprint 4",
+    )
+
+    refresh_kwargs = mock_upsert_deps["refresh"].call_args.kwargs
+    assert refresh_kwargs["update_milestone"] is True
+    assert refresh_kwargs["milestone_local_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_upsert_issue_coerces_project_fields_values_to_strings(mock_upsert_deps):
     """Numeric values in a project_fields dict should be stringified."""
-    result = await upsert_issue.fn(  # type: ignore[attr-defined]
+    await upsert_issue.fn(  # type: ignore[attr-defined]
         repo="owner/name",
         title="hello",
         project="P",
         project_fields={"Hours": 10, "Min": 50},  # type: ignore[arg-type]
     )
 
-    assert result["project_fields"] == {"Hours": "10", "Min": "50"}
+    # Coercion is observable in the dict handed to handle_project_integration
+    # (the result's project_fields now reflects the verified live re-read).
+    call_args = mock_upsert_deps["project"].call_args.args
+    assert call_args[6] == {"Hours": "10", "Min": "50"}
 
 
 @pytest.mark.asyncio
@@ -909,6 +1058,148 @@ async def test_upsert_issue_title_required_for_create(mock_upsert_deps):
     """Creating a new issue (no number) without a title should raise."""
     with pytest.raises(ValueError, match="title is required"):
         await upsert_issue.fn(repo="owner/name")  # type: ignore[attr-defined]
+
+
+# =============================================================================
+# Tests for write-back cache refresh (refresh_item_cache / resolve_local_milestone_id)
+# =============================================================================
+
+
+def test_refresh_item_cache_updates_project_fields(db_session):
+    """A successful write refreshes the cached row so github_fetch isn't stale."""
+    from memory.api.MCP.servers.github_helpers import refresh_item_cache
+
+    item = GithubItem(
+        kind="issue",
+        repo_path="o/r",
+        number=5,
+        title="t",
+        state="open",
+        project_fields={"P.Status": "Old"},
+        project_status="Old",
+        modality="github",
+        sha256=_make_sha256("refresh-fields"),
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    updated = refresh_item_cache(
+        db_session,
+        "o/r",
+        5,
+        "issue",
+        project_fields={"P.Status": "New", "P.Issue Hourly Rate": "75"},
+    )
+
+    assert updated is True
+    db_session.refresh(item)
+    assert item.project_fields == {"P.Status": "New", "P.Issue Hourly Rate": "75"}
+    assert item.project_status == "New"
+
+
+def test_refresh_item_cache_missing_row_returns_false(db_session):
+    """Refreshing a row that doesn't exist locally is a no-op, not an error."""
+    from memory.api.MCP.servers.github_helpers import refresh_item_cache
+
+    assert (
+        refresh_item_cache(db_session, "no/such", 999, "issue", project_fields={})
+        is False
+    )
+
+
+def test_refresh_item_cache_updates_milestone(db_session):
+    """update_milestone=True writes the resolved local milestone FK onto the row."""
+    from memory.api.MCP.servers.github_helpers import refresh_item_cache
+    from memory.common.db.models import Project
+
+    ms = Project(title="Sprint 4", number=4, state="open")
+    db_session.add(ms)
+    item = GithubItem(
+        kind="issue",
+        repo_path="o/r",
+        number=6,
+        title="t",
+        state="open",
+        modality="github",
+        sha256=_make_sha256("refresh-ms"),
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    refresh_item_cache(
+        db_session,
+        "o/r",
+        6,
+        "issue",
+        milestone_local_id=ms.id,
+        update_milestone=True,
+    )
+
+    db_session.refresh(item)
+    assert item.milestone_id == ms.id
+
+
+def test_resolve_local_milestone_id_maps_number_to_fk(db_session, test_user):
+    """A GitHub milestone number resolves to the local Project FK via the repo."""
+    from memory.api.MCP.servers.github_helpers import resolve_local_milestone_id
+    from memory.common.db.models import Project
+    from memory.common.db.models.sources import GithubAccount, GithubRepo
+
+    account = GithubAccount(
+        user_id=test_user.id,
+        name="acct",
+        auth_type="pat",
+        access_token="ghp_x",
+        active=True,
+    )
+    db_session.add(account)
+    db_session.commit()
+    repo = GithubRepo(account_id=account.id, owner="o", name="r", active=True)
+    db_session.add(repo)
+    db_session.commit()
+    ms = Project(title="Sprint 9", number=9, repo_id=repo.id, state="open")
+    db_session.add(ms)
+    db_session.commit()
+
+    assert resolve_local_milestone_id(db_session, "o/r", 9) == ms.id
+    assert resolve_local_milestone_id(db_session, "o/r", 999) is None
+    assert resolve_local_milestone_id(db_session, "o/r", None) is None
+
+
+# =============================================================================
+# Tests for project-field write reporting (set_project_field)
+# =============================================================================
+
+
+def test_set_project_field_success():
+    """A successful field write reports 'Set <field>=<value>'."""
+    from memory.api.MCP.servers.github_helpers import set_project_field
+
+    client = MagicMock()
+    client.update_project_field_value.return_value = (True, None)
+    available = {"Issue Hourly Rate": {"id": "F_1", "data_type": "NUMBER"}}
+
+    msg = set_project_field(client, "PVT", "ITEM", "Issue Hourly Rate", "75", available)
+
+    assert msg == "Set Issue Hourly Rate=75"
+    # NUMBER fields are sent as a float under the "number" key.
+    args = client.update_project_field_value.call_args.args
+    assert args[3] == 75.0
+    assert args[4] == "number"
+
+
+def test_set_project_field_surfaces_graphql_error():
+    """A failed write includes the GraphQL error so the caller learns why."""
+    from memory.api.MCP.servers.github_helpers import set_project_field
+
+    client = MagicMock()
+    client.update_project_field_value.return_value = (False, "Field is not writable")
+    available = {"Status": {"id": "F_1", "data_type": "TEXT"}}
+
+    msg = set_project_field(client, "PVT", "ITEM", "Status", "Done", available)
+
+    assert "Failed to set Status" in msg
+    assert "Field is not writable" in msg
 
 
 @pytest.mark.asyncio

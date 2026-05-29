@@ -31,7 +31,12 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.sources import GithubRepo
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_ITEM
-from memory.common.github import GithubClient, GithubCredentials, serialize_issue_data
+from memory.common.github import (
+    GithubClient,
+    GithubCredentials,
+    extract_status_priority,
+    serialize_issue_data,
+)
 from memory.common.project.client import get_github_client_for_org
 
 logger = logging.getLogger(__name__)
@@ -374,12 +379,6 @@ def list_teams(
         return teams
 
 
-# extract_status_priority lives in memory.common.github.projects so the
-# worker ingest path can share the implementation. Re-exported here so
-# existing callers within this module keep working.
-from memory.common.github import extract_status_priority  # noqa: E402, F401
-
-
 def fetch_issue(repo: str, number: int, user: Any) -> dict[str, Any]:
     """Get full details of a specific GitHub issue or PR.
 
@@ -450,6 +449,97 @@ def fetch_issue(repo: str, number: int, user: Any) -> dict[str, Any]:
         return result
 
 
+def get_repo_by_path(session: DBSession, repo_path: str) -> GithubRepo | None:
+    """Look up a tracked ``GithubRepo`` by ``"owner/name"``, ignoring account.
+
+    Unlike ``get_github_client``'s lookup, this is not scoped to the calling
+    user's account — it is used for read/cache operations where any tracking
+    row for the repo is sufficient.
+    """
+    parts = repo_path.split("/")
+    if len(parts) != 2:
+        return None
+    owner, name = parts
+    return (
+        session.query(GithubRepo)
+        .filter(GithubRepo.owner == owner, GithubRepo.name == name)
+        .first()
+    )
+
+
+def resolve_local_milestone_id(
+    session: DBSession, repo_path: str, milestone_number: int | None
+) -> int | None:
+    """Map a GitHub milestone number to the local ``Project`` FK, if tracked.
+
+    Returns ``None`` when the milestone is unset, the repo isn't tracked, or
+    the milestone hasn't been synced as a local ``Project`` row.
+    """
+    if milestone_number is None:
+        return None
+    repo = get_repo_by_path(session, repo_path)
+    if repo is None:
+        return None
+    project = (
+        session.query(Project)
+        .filter(Project.repo_id == repo.id, Project.number == milestone_number)
+        .first()
+    )
+    return project.id if project else None
+
+
+def refresh_item_cache(
+    session: DBSession,
+    repo_path: str,
+    number: int,
+    kind: str,
+    *,
+    project_fields: dict[str, Any] | None = None,
+    milestone_local_id: int | None = None,
+    update_milestone: bool = False,
+) -> bool:
+    """Refresh the locally cached ``GithubItem`` row after a write to GitHub.
+
+    ``fetch_issue`` (the ``github_fetch`` tool) serves milestone and
+    project-field data from this cached row and only re-reads project fields
+    from GitHub when the cache is ``None``. Without this refresh, a successful
+    ``upsert_issue`` would still read back stale via ``github_fetch``.
+
+    Only the fields explicitly passed are touched: ``project_fields`` when not
+    ``None``, and the milestone only when ``update_milestone`` is set (so an
+    upsert that didn't touch the milestone leaves the cached value alone).
+    When ``update_milestone`` is set with ``milestone_local_id=None``, the
+    cached ``milestone_id`` is intentionally written to NULL — that means
+    "the milestone exists on GitHub but isn't tracked as a local Project",
+    which is distinct from the "upsert didn't touch the milestone" case above.
+
+    Returns ``True`` if a matching row was found and updated.
+    """
+    item = (
+        session.query(GithubItem)
+        .filter(
+            GithubItem.repo_path == repo_path,
+            GithubItem.number == number,
+            GithubItem.kind == kind,
+        )
+        .first()
+    )
+    if item is None:
+        return False
+
+    if project_fields is not None:
+        status, priority = extract_status_priority(project_fields)
+        item.project_fields = project_fields  # type: ignore[assignment]
+        item.project_status = status  # type: ignore[assignment]
+        item.project_priority = priority  # type: ignore[assignment]
+
+    if update_milestone:
+        item.milestone_id = milestone_local_id  # type: ignore[assignment]
+
+    session.commit()
+    return True
+
+
 def fetch_project_fields_for_item(
     session: DBSession,
     repo_path: str,
@@ -475,11 +565,7 @@ def fetch_project_fields_for_item(
     owner, repo_name = parts
 
     # Try to get GitHub client from the repo's account
-    repo_obj = (
-        session.query(GithubRepo)
-        .filter(GithubRepo.owner == owner, GithubRepo.name == repo_name)
-        .first()
-    )
+    repo_obj = get_repo_by_path(session, repo_path)
 
     if not repo_obj or not repo_obj.account or not repo_obj.account.active:
         return None
@@ -738,7 +824,7 @@ def handle_project_integration(
     if item_id and project_fields:
         available_fields = project_info.get("fields", {})
         for field_name, field_value in project_fields.items():
-            msg = _set_project_field(
+            msg = set_project_field(
                 client, project_id, item_id, field_name, field_value, available_fields
             )
             updates.append(msg)
@@ -746,7 +832,7 @@ def handle_project_integration(
     return updates, None
 
 
-def _set_project_field(
+def set_project_field(
     client: GithubClient,
     project_id: str,
     item_id: str,
@@ -762,36 +848,31 @@ def _set_project_field(
     field_id = field_def["id"]
     data_type = field_def.get("data_type", "TEXT")
 
-    # Single-select field needs option ID resolution
+    # Resolve the (value, value_type) pair GitHub's ProjectV2 mutation expects.
+    value: str | float
     if "options" in field_def and field_def["options"]:
+        # Single-select field needs option ID resolution
         option_id = field_def["options"].get(field_value)
         if not option_id:
             return f"Option '{field_value}' not found for field '{field_name}'"
-        success = client.update_project_field_value(
-            project_id, item_id, field_id, option_id, "singleSelectOptionId"
-        )
+        value, value_type = option_id, "singleSelectOptionId"
     elif data_type == "NUMBER":
         try:
-            num_value = float(field_value)
-            success = client.update_project_field_value(
-                project_id, item_id, field_id, num_value, "number"
-            )
+            value, value_type = float(field_value), "number"
         except ValueError:
             return f"Invalid number '{field_value}' for field '{field_name}'"
     elif data_type == "DATE":
         # GitHub expects ISO 8601 date format (YYYY-MM-DD)
-        success = client.update_project_field_value(
-            project_id, item_id, field_id, field_value, "date"
-        )
+        value, value_type = field_value, "date"
     else:
-        # Text field (default)
-        success = client.update_project_field_value(
-            project_id, item_id, field_id, field_value, "text"
-        )
+        value, value_type = field_value, "text"
 
-    return (
-        f"Set {field_name}={field_value}" if success else f"Failed to set {field_name}"
+    success, error = client.update_project_field_value(
+        project_id, item_id, field_id, value, value_type
     )
+    if success:
+        return f"Set {field_name}={field_value}"
+    return f"Failed to set {field_name}: {error}"
 
 
 def sync_issue_to_database(

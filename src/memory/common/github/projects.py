@@ -207,7 +207,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
         field_id: str,
         value: str | float,
         value_type: str = "singleSelectOptionId",
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         """Update a field value for a project item.
 
         Args:
@@ -218,7 +218,9 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
             value_type: Type of value - "singleSelectOptionId", "text", "number", "date"
 
         Returns:
-            True on success, False on failure
+            ``(True, None)`` on success, or ``(False, error)`` where ``error``
+            is the GraphQL error text (so the caller can report *why* the write
+            failed rather than silently dropping it).
         """
         mutation = """
         mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
@@ -239,7 +241,13 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
             },
             operation_name="update_project_field_value",
         )
-        return data is not None and errors is None
+        if errors:
+            return False, "; ".join(
+                e.get("message", str(e)) for e in errors
+            )
+        if data is None:
+            return False, "GitHub API request failed (no response data)"
+        return True, None
 
     def fetch_project(
         self,

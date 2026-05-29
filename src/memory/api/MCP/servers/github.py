@@ -26,6 +26,8 @@ from memory.api.MCP.servers.github_helpers import (
     handle_project_integration,
     sync_issue_to_database,
     resolve_milestone_node_id,
+    resolve_local_milestone_id,
+    refresh_item_cache,
     create_issue,
     update_issue,
     add_issue_comment,
@@ -353,6 +355,11 @@ async def upsert_issue(
             project_fields = dict(project_fields) if project_fields else {}
             project_fields["Due Date"] = deadline
 
+        # Report the milestone GitHub actually has, taken from the mutation
+        # response — not the resolved node id, which only proves the milestone
+        # *exists*, not that the write took effect.
+        confirmed_milestone = issue_data.get("milestone")
+
         result: dict[str, Any] = {
             "action": action,
             "number": number_int,
@@ -360,13 +367,18 @@ async def upsert_issue(
             "state": issue_data.get("state"),
             "url": issue_data.get("url"),
             "project_updates": [],
-            "milestone_id": milestone_node_id,
+            "milestone_id": confirmed_milestone.get("id") if confirmed_milestone else None,
+            "milestone": confirmed_milestone.get("title") if confirmed_milestone else None,
             "label_ids": label_ids,
             "assignee_ids": assignee_ids,
             "project_fields": project_fields,
         }
 
-        # Handle project integration
+        # Handle project integration, then verify by re-reading the live field
+        # values so the response reflects what persisted, not what was requested.
+        # verified_fields stays None unless the re-read succeeds, which both
+        # gates the cache refresh and drives the project_fields_verified flag.
+        verified_fields: dict[str, Any] | None = None
         if project:
             updates, error = handle_project_integration(
                 client,
@@ -381,7 +393,51 @@ async def upsert_issue(
             if error:
                 result["project_error"] = error
 
-        # Trigger database sync (only if repo is tracked)
+            verified_fields = client.fetch_project_fields(owner, repo_name, number_int)
+            if verified_fields is not None:
+                # Authoritative current board state.
+                result["project_fields"] = verified_fields
+                result["project_fields_verified"] = True
+            else:
+                # Re-read failed (transient error, or issue not in any project).
+                # Keep the requested values but don't assert they persisted, and
+                # don't overwrite the cache with an empty dict below.
+                result["project_fields_verified"] = False
+
+        # Refresh the locally cached row so a follow-up github_fetch reflects the
+        # write instead of serving stale cache. Touch the milestone whenever the
+        # caller assigned one and GitHub confirmed it — even when it doesn't map
+        # to a tracked local Project. In that case milestone_local_id is None, and
+        # caching NULL ("milestone exists on GitHub but isn't tracked as a local
+        # Project") is the honest value; leaving the stale prior milestone_id would
+        # reintroduce the exact response-vs-cache divergence this fix eliminates.
+        # The confirmed_milestone-is-None case (write failed / not assigned) is
+        # deliberately left untouched (update_milestone stays False).
+        milestone_local_id = None
+        update_milestone = False
+        if milestone is not None and confirmed_milestone:
+            milestone_local_id = resolve_local_milestone_id(
+                session, repo, confirmed_milestone.get("number")
+            )
+            update_milestone = True
+
+        if verified_fields is not None or update_milestone:
+            refresh_item_cache(
+                session,
+                repo,
+                number_int,
+                "issue",
+                project_fields=verified_fields,
+                milestone_local_id=milestone_local_id,
+                update_milestone=update_milestone,
+            )
+
+        # Trigger database sync (only if repo is tracked). Two writers touch the
+        # cached row in sequence by design: the synchronous refresh_item_cache
+        # above is the fast path that makes github_fetch correct immediately,
+        # closing the stale-read window; the async SYNC_GITHUB_ITEM task dispatched
+        # here later re-reads live GitHub and converges on / confirms the same row.
+        # The redundancy is deliberate, not accidental.
         if repo_obj is not None:
             success, error = sync_issue_to_database(
                 client, session, repo_obj, owner, repo_name, number_int
