@@ -230,7 +230,7 @@ export const useClaude = () => {
       for (const [k, v] of Object.entries(rest)) {
         if (v !== undefined && v !== null && v !== '') spawn_config[k] = v
       }
-      const result = await mcpCall('scheduler_create', {
+      const result = await mcpCall('scheduler_upsert', {
         task_type: 'claude_session',
         cron_expression: request.cron_expression,
         message: initial_prompt,

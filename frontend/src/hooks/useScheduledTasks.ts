@@ -77,7 +77,7 @@ export const useScheduledTasks = () => {
   }, [mcpCall])
 
   const createTask = useCallback(async (body: CreateTaskBody): Promise<ScheduledTask> => {
-    const result = await mcpCall('scheduler_create', body as unknown as Record<string, unknown>)
+    const result = await mcpCall('scheduler_upsert', body as unknown as Record<string, unknown>)
     return result[0] as ScheduledTask
   }, [mcpCall])
 

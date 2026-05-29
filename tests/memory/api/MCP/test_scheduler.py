@@ -78,7 +78,7 @@ def test_validate_scheduled_secret_refs_allows_no_tokens(db_session, regular_use
 @pytest.mark.asyncio
 async def test_create_notification_recurring(db_session, regular_user, user_session):
     with mcp_auth_context(user_session.id):
-        result = await scheduler.create.fn(
+        result = await scheduler.upsert.fn(
             task_type="notification", topic="Daily ping", message="hello",
             cron_expression="0 9 * * *",
             notification_channel="discord", notification_target="123",
@@ -92,7 +92,7 @@ async def test_create_notification_recurring(db_session, regular_user, user_sess
 @pytest.mark.asyncio
 async def test_create_notification_one_time(db_session, regular_user, user_session):
     with mcp_auth_context(user_session.id):
-        result = await scheduler.create.fn(
+        result = await scheduler.upsert.fn(
             task_type="notification", topic="Once", message="hi",
             scheduled_time="2999-01-01T09:00:00Z",
             notification_channel="email", notification_target="a@b.c",
@@ -104,7 +104,7 @@ async def test_create_notification_one_time(db_session, regular_user, user_sessi
 @pytest.mark.asyncio
 async def test_create_claude_session(db_session, regular_user, user_session):
     with mcp_auth_context(user_session.id):
-        result = await scheduler.create.fn(
+        result = await scheduler.upsert.fn(
             task_type="claude_session", message="Run the digest",
             cron_expression="0 9 * * *",
             spawn_config={"repo_url": "https://github.com/x/y"},
@@ -137,7 +137,7 @@ async def test_create_claude_session(db_session, regular_user, user_session):
 async def test_create_validation_errors(db_session, regular_user, user_session, kwargs, match):
     with mcp_auth_context(user_session.id):
         with pytest.raises(ValueError, match=match):
-            await scheduler.create.fn(**kwargs)
+            await scheduler.upsert.fn(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -145,12 +145,39 @@ async def test_create_enforces_per_user_cap(db_session, regular_user, user_sessi
     from memory.common import settings as settings_mod
     monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
     with mcp_auth_context(user_session.id):
-        await scheduler.create.fn(
+        await scheduler.upsert.fn(
             task_type="notification", message="a", cron_expression="0 9 * * *",
             notification_channel="discord", notification_target="1",
         )
         with pytest.raises(ValueError, match="Maximum"):
-            await scheduler.create.fn(
+            await scheduler.upsert.fn(
                 task_type="notification", message="b", cron_expression="0 10 * * *",
                 notification_channel="discord", notification_target="1",
             )
+
+
+@pytest.mark.asyncio
+async def test_upsert_create_rejects_unknown_channel(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="Unknown notification_channel"):
+            await scheduler.upsert.fn(
+                task_type="notification", message="x", cron_expression="0 9 * * *",
+                notification_channel="carrier_pigeon", notification_target="1",
+            )
+
+
+@pytest.mark.asyncio
+async def test_upsert_create_then_update_in_place(db_session, regular_user, user_session):
+    """A second upsert with the same (existing) id updates, not duplicates."""
+    fixed_id = str(uuid.uuid4())
+    with mcp_auth_context(user_session.id):
+        created = await scheduler.upsert.fn(
+            task_id=fixed_id, task_type="notification", message="x",
+            cron_expression="0 9 * * *",
+            notification_channel="discord", notification_target="1",
+        )
+        assert created["topic"] is None
+        updated = await scheduler.upsert.fn(task_id=fixed_id, topic="renamed")
+    assert updated["id"] == fixed_id
+    assert updated["topic"] == "renamed"
+    assert updated["message"] == "x"
