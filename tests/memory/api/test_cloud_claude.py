@@ -659,19 +659,19 @@ _STATS_SNAPSHOT = {
     },
     "containers": [
         {
-            "id": "u1-e1-aaaa1111",
+            "id": "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111",
             "status": "running",
             "allocated": {"memory_mb": 6144, "cpus": 2.0},
             "used": {"memory_mb": 600, "memory_pct": 9.74, "cpu_pct": 4.05},
         },
         {
-            "id": "u9999-e2-bbbb2222",
+            "id": "u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222",
             "status": "running",
             "allocated": {"memory_mb": 6144, "cpus": 2.0},
             "used": {"memory_mb": 612, "memory_pct": 9.95, "cpu_pct": 3.80},
         },
         {
-            "id": "u1-e3-cccc3333",
+            "id": "u1-e3-cccc3333cccc3333cccc3333cccc3333",
             "status": "exited",
             "allocated": {"memory_mb": 6144, "cpus": 2.0},
             "used": None,
@@ -682,11 +682,11 @@ _STATS_SNAPSHOT = {
 
 _HISTORY_RESULT = {
     "points": [
-        {"ts": "2026-04-27T14:00:00+00:00", "session_id": "u1-e1-aaaa1111",
+        {"ts": "2026-04-27T14:00:00+00:00", "session_id": "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111",
          "cpu_pct": 1.0, "memory_mb": 100, "memory_pct": 1.6},
-        {"ts": "2026-04-27T14:00:30+00:00", "session_id": "u9999-e2-bbbb2222",
+        {"ts": "2026-04-27T14:00:30+00:00", "session_id": "u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222",
          "cpu_pct": 2.0, "memory_mb": 200, "memory_pct": 3.2},
-        {"ts": "2026-04-27T14:01:00+00:00", "session_id": "u1-e1-aaaa1111",
+        {"ts": "2026-04-27T14:01:00+00:00", "session_id": "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111",
          "cpu_pct": 3.0, "memory_mb": 110, "memory_pct": 1.8},
     ],
     "count": 3,
@@ -720,7 +720,7 @@ def test_stats_regular_user_filtered_no_global(regular_client, user):
     data = response.json()
     assert "global" not in data
     ids = sorted(c["id"] for c in data["containers"])
-    assert ids == ["u1-e1-aaaa1111", "u1-e3-cccc3333"]
+    assert ids == ["u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111", "u1-e3-cccc3333cccc3333cccc3333cccc3333"]
 
 
 def test_stats_orchestrator_down_returns_502(client, user):
@@ -742,7 +742,7 @@ def test_container_stats_admin_can_view_others(client, user):
         "memory.api.orchestrator_client.OrchestratorClient.container_stats",
         new=AsyncMock(return_value=payload),
     ):
-        response = client.get("/claude/u9999-e2-bbbb2222/stats")
+        response = client.get("/claude/u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222/stats")
     assert response.status_code == 200
     assert response.json() == payload
 
@@ -750,7 +750,7 @@ def test_container_stats_admin_can_view_others(client, user):
 def test_container_stats_regular_user_404_on_other_user(regular_client, user):
     """Non-admin requesting another user's session gets 404 (not 403) —
     same shape as kill_session and friends, so we don't disclose existence."""
-    response = regular_client.get("/claude/u9999-e2-bbbb2222/stats")
+    response = regular_client.get("/claude/u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222/stats")
     assert response.status_code == 404
 
 
@@ -760,7 +760,7 @@ def test_container_stats_404_when_session_unknown(client, user):
         "memory.api.orchestrator_client.OrchestratorClient.container_stats",
         new=AsyncMock(return_value=None),
     ):
-        response = client.get("/claude/u1-x-deadbeef/stats")
+        response = client.get("/claude/u1-x-deadbeefdeadbeefdeadbeefdeadbeef/stats")
     assert response.status_code == 404
 
 
@@ -775,7 +775,7 @@ def test_container_stats_orchestrator_status_propagates(client, user):
             side_effect=OrchestratorError("orch unavailable", status_code=503)
         ),
     ):
-        response = client.get("/claude/u1-e1-aaaa1111/stats")
+        response = client.get("/claude/u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111/stats")
     assert response.status_code == 503
     assert "orch unavailable" in response.json()["detail"]
 
@@ -803,10 +803,10 @@ def test_stats_history_non_admin_with_own_session_id(regular_client, user):
         new=fake_history,
     ):
         response = regular_client.get(
-            "/claude/stats/history?session_id=u1-e1-aaaa1111"
+            "/claude/stats/history?session_id=u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111"
         )
     assert response.status_code == 200
-    assert captured["session_id"] == "u1-e1-aaaa1111"
+    assert captured["session_id"] == "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111"
     assert response.json() == _HISTORY_RESULT
 
 
@@ -826,7 +826,7 @@ def test_stats_history_404_on_other_user_session(regular_client, user):
     orchestrator. (If we let it through, a regular user could probe which
     session ids exist.)"""
     response = regular_client.get(
-        "/claude/stats/history?session_id=u9999-e2-bbbb2222"
+        "/claude/stats/history?session_id=u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222"
     )
     assert response.status_code == 404
 
@@ -849,11 +849,11 @@ def test_stats_history_passes_query_params_through(client, user):
     ):
         response = client.get(
             "/claude/stats/history?"
-            "session_id=u1-e1-aaaa1111&since=2026-04-27T13:00:00Z&max=200"
+            "session_id=u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111&since=2026-04-27T13:00:00Z&max=200"
         )
     assert response.status_code == 200
     assert captured == {
-        "session_id": "u1-e1-aaaa1111",
+        "session_id": "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111",
         "since": "2026-04-27T13:00:00Z",
         "max_points": 200,
     }

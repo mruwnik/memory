@@ -40,18 +40,18 @@ async def test_session_list_returns_only_user_owned(db_session, admin_user, admi
 
     fake_orch_sessions = [
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-aaaa1111",
-            container_name="claude-aaaa1111",
+            session_id=f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111",
+            container_name="claude-aaaa1111aaaa1111aaaa1111aaaa1111",
             status="running",
         ),
         OrchSessionInfo(
-            session_id="u9999-e6-bbbb2222",  # different user
-            container_name="claude-bbbb2222",
+            session_id="u9999-e6-bbbb2222bbbb2222bbbb2222bbbb2222",  # different user
+            container_name="claude-bbbb2222bbbb2222bbbb2222bbbb2222",
             status="running",
         ),
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-s3-cccc3333",
-            container_name="claude-cccc3333",
+            session_id=f"u{admin_user.id}-s3-cccc3333cccc3333cccc3333cccc3333",
+            container_name="claude-cccc3333cccc3333cccc3333cccc3333",
             status="exited",
         ),
     ]
@@ -64,12 +64,12 @@ async def test_session_list_returns_only_user_owned(db_session, admin_user, admi
             result = await get_fn(session_list)()
 
     ids = [s["session_id"] for s in result]
-    assert f"u{admin_user.id}-e6-aaaa1111" in ids
-    assert f"u{admin_user.id}-s3-cccc3333" in ids
-    assert "u9999-e6-bbbb2222" not in ids
+    assert f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111" in ids
+    assert f"u{admin_user.id}-s3-cccc3333cccc3333cccc3333cccc3333" in ids
+    assert "u9999-e6-bbbb2222bbbb2222bbbb2222bbbb2222" not in ids
     statuses = {s["session_id"]: s["status"] for s in result}
-    assert statuses[f"u{admin_user.id}-e6-aaaa1111"] == "running"
-    assert statuses[f"u{admin_user.id}-s3-cccc3333"] == "exited"
+    assert statuses[f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111"] == "running"
+    assert statuses[f"u{admin_user.id}-s3-cccc3333cccc3333cccc3333cccc3333"] == "exited"
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_session_list_unauthenticated_returns_empty():
 async def test_session_pull_url_mints_read_token(db_session, admin_user, admin_session):
     from memory.api.MCP.servers.claude import session_pull_url
 
-    sid = f"u{admin_user.id}-e6-deadbeef"
+    sid = f"u{admin_user.id}-e6-deadbeefdeadbeefdeadbeefdeadbeef"
     with mcp_auth_context(admin_session.id):
         result = await get_fn(session_pull_url)(
             session_id=sid, path="/workspace/report.md"
@@ -127,7 +127,7 @@ async def test_session_push_url_mints_write_token_separate_field(
 ):
     from memory.api.MCP.servers.claude import session_push_url
 
-    sid = f"u{admin_user.id}-e6-feedface"
+    sid = f"u{admin_user.id}-e6-feedfacefeedfacefeedfacefeedface"
     with mcp_auth_context(admin_session.id):
         result = await get_fn(session_push_url)(
             session_id=sid, path="/workspace"
@@ -151,11 +151,11 @@ async def test_session_pull_url_resolves_latest(
 
     fake_sessions = [
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-aaaa1111aaaa",
+            session_id=f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111",
             status="exited",
         ),
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-bbbb2222bbbb",
+            session_id=f"u{admin_user.id}-e6-bbbb2222bbbb2222bbbb2222bbbb2222",
             status="running",
         ),
     ]
@@ -171,7 +171,7 @@ async def test_session_pull_url_resolves_latest(
     token = result["url"].split("token=", 1)[1]
     payload = verify_token(token)
     # Must pick a running session if available
-    assert payload.session_id == f"u{admin_user.id}-e6-bbbb2222bbbb"
+    assert payload.session_id == f"u{admin_user.id}-e6-bbbb2222bbbb2222bbbb2222bbbb2222"
 
 
 @pytest.mark.asyncio
@@ -188,13 +188,13 @@ async def test_session_pull_url_latest_sorts_deterministically(
 
     fake_sessions = [
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-aaaa1111", status="running"
+            session_id=f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111", status="running"
         ),
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-cccc3333", status="running"
+            session_id=f"u{admin_user.id}-e6-cccc3333cccc3333cccc3333cccc3333", status="running"
         ),
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-bbbb2222", status="running"
+            session_id=f"u{admin_user.id}-e6-bbbb2222bbbb2222bbbb2222bbbb2222", status="running"
         ),
     ]
     with patch(
@@ -209,7 +209,7 @@ async def test_session_pull_url_latest_sorts_deterministically(
     token = result["url"].split("token=", 1)[1]
     payload = verify_token(token)
     # Deterministic: lexically max session_id wins
-    assert payload.session_id == f"u{admin_user.id}-e6-cccc3333"
+    assert payload.session_id == f"u{admin_user.id}-e6-cccc3333cccc3333cccc3333cccc3333"
 
     # Re-run with the list in a different order — same result.
     reshuffled = list(reversed(fake_sessions))
@@ -223,7 +223,7 @@ async def test_session_pull_url_latest_sorts_deterministically(
             )
 
     payload2 = verify_token(result2["url"].split("token=", 1)[1])
-    assert payload2.session_id == f"u{admin_user.id}-e6-cccc3333"
+    assert payload2.session_id == f"u{admin_user.id}-e6-cccc3333cccc3333cccc3333cccc3333"
 
 
 @pytest.mark.asyncio
@@ -246,10 +246,10 @@ async def test_session_pull_url_latest_cross_source_uses_random_suffix(
     # its suffix sorts higher.
     fake_sessions = [
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-s3-aaaa1111", status="running"
+            session_id=f"u{admin_user.id}-s3-aaaa1111aaaa1111aaaa1111aaaa1111", status="running"
         ),
         OrchSessionInfo(
-            session_id=f"u{admin_user.id}-e6-bbbb2222", status="running"
+            session_id=f"u{admin_user.id}-e6-bbbb2222bbbb2222bbbb2222bbbb2222", status="running"
         ),
     ]
     with patch(
@@ -262,8 +262,8 @@ async def test_session_pull_url_latest_cross_source_uses_random_suffix(
             )
 
     payload = verify_token(result["url"].split("token=", 1)[1])
-    # Env session wins because bbbb2222 > aaaa1111, despite e < s lexically.
-    assert payload.session_id == f"u{admin_user.id}-e6-bbbb2222"
+    # Env session wins because bbbb2222... > aaaa1111..., despite e < s lexically.
+    assert payload.session_id == f"u{admin_user.id}-e6-bbbb2222bbbb2222bbbb2222bbbb2222"
 
 
 @pytest.mark.asyncio
@@ -292,7 +292,7 @@ async def test_session_list_dir_proxies_to_orchestrator(
 ):
     from memory.api.MCP.servers.claude import session_list_dir
 
-    sid = f"u{admin_user.id}-e6-aaaabbbbcccc"
+    sid = f"u{admin_user.id}-e6-aaaabbbbccccaaaabbbbccccaaaabbbb"
     fake_manifest = {
         "path": "/workspace",
         "entries": [
@@ -349,7 +349,7 @@ async def test_session_pull_url_rejects_bad_path(
     consistent validation."""
     from memory.api.MCP.servers.claude import session_pull_url
 
-    sid = f"u{admin_user.id}-e6-aaaa1111"
+    sid = f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111"
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError):
             await get_fn(session_pull_url)(session_id=sid, path=bad_path)
@@ -361,7 +361,7 @@ async def test_session_push_url_rejects_traversal(
 ):
     from memory.api.MCP.servers.claude import session_push_url
 
-    sid = f"u{admin_user.id}-e6-aaaa1111"
+    sid = f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111"
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError):
             await get_fn(session_push_url)(

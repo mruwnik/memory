@@ -28,7 +28,7 @@ def patch_secret():
         yield
 
 
-SESSION_ID = "u1-e6-deadbeefcafe"
+SESSION_ID = "u1-e6-deadbeefcafedeadbeefcafedeadbeef"
 
 
 def make_token(
@@ -111,7 +111,9 @@ def test_transfer_pull_rejects_tampered_token(client):
 def test_transfer_pull_rejects_session_not_owned_by_token_user(client):
     """Even if token verifies, the session's user prefix must match the payload's user_id."""
     token = make_token(
-        action="read", session_id="u9999-e6-aaaa", user_id=1
+        action="read",
+        session_id="u9999-e6-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        user_id=1,
     )
     resp = client.get(f"/claude/transfer/pull?token={token}")
     assert resp.status_code == 403

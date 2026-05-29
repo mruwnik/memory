@@ -11,6 +11,19 @@ from memory.api import email_accounts
 from memory.common.db.models import EmailAccount, GoogleAccount, HumanUser
 
 
+@pytest.fixture(autouse=True)
+def _stub_email_hostname_validation():
+    """No-op the SSRF hostname check for this file's happy-path account tests.
+
+    The fictitious imap/smtp hostnames here would otherwise hit real DNS and
+    be rejected. SSRF rejection itself is covered by
+    test_email_account_validators.py against the real validator, so stubbing
+    it here is scoped and safe.
+    """
+    with patch.object(email_accounts, "validate_public_hostname", lambda host: None):
+        yield
+
+
 # Test list_accounts
 
 
@@ -746,7 +759,10 @@ def test_connection_failure(mock_imap, client, user, db_session):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "error"
-    assert "Authentication failed" in data["message"]
+    # The endpoint returns a generic message (not the underlying exception
+    # text) so differential errors can't be used to enumerate internal
+    # hosts/ports — see the connection-test handler's rationale.
+    assert data["message"] == "Connection failed"
 
 
 @patch("memory.workers.email.imap_connection")

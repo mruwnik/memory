@@ -11,6 +11,18 @@ from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 
 
+@pytest.fixture(autouse=True)
+def _stub_caldav_url_validation():
+    """No-op the SSRF URL check for this file's happy-path account tests.
+
+    The fictitious caldav hostnames here would otherwise hit real DNS and be
+    rejected. SSRF rejection itself is covered by test_caldav_url_validator.py
+    against the real validator, so stubbing it here is scoped and safe.
+    """
+    with patch("memory.api.calendar_accounts.validate_public_url", lambda url: None):
+        yield
+
+
 # ====== GET /calendar-accounts tests ======
 
 

@@ -1018,6 +1018,11 @@ def _stub_ssrf_validation():
     # Patch every module that imports it by-name so the binding inside that
     # module sees the no-op (`from memory.common.ssrf import validate_public_url`
     # is the common pattern).
+    #
+    # NOTE: only modules WITHOUT dedicated SSRF-rejection tests belong here.
+    # Modules whose rejection behaviour is asserted elsewhere (calendar/email
+    # account validators, oauth, lesswrong) must keep the real validator;
+    # their happy-path tests stub it file-locally instead.
     targets = [
         (ssrf, "validate_public_url"),
     ]

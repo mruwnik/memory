@@ -1,7 +1,7 @@
 """Tests for MCP OAuth provider."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
 
@@ -498,7 +498,10 @@ async def test_verify_and_load_agree_on_expired_session(db_session):
     user = create_test_user(db_session)
     expired = UserSession(
         user_id=user.id,
-        expires_at=datetime.now() - timedelta(hours=1),  # naive UTC, in the past
+        # Naive UTC, in the past. ``datetime.now()`` (naive *local*) would be
+        # misread as UTC by ``is_expired`` and isn't reliably past on hosts
+        # ahead of UTC, so build the instant in UTC explicitly.
+        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1),
     )
     db_session.add(expired)
     db_session.commit()

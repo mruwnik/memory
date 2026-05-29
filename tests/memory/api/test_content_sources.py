@@ -33,6 +33,7 @@ def test_upload_book_returns_job_id(client: TestClient, mock_dispatch_job, user,
 
     with patch("memory.api.content_sources.settings") as mock_settings:
         mock_settings.EBOOK_STORAGE_DIR = tmp_path
+        mock_settings.MAX_BOOK_UPLOAD_BYTES = 100 * 1024 * 1024
 
         response = client.post(
             "/books/upload",
@@ -74,6 +75,7 @@ def test_upload_photo_returns_job_id(client: TestClient, mock_dispatch_job, user
 
     with patch("memory.api.content_sources.settings") as mock_settings:
         mock_settings.PHOTO_STORAGE_DIR = tmp_path
+        mock_settings.MAX_PHOTO_UPLOAD_BYTES = 100 * 1024 * 1024
 
         response = client.post(
             "/photos/upload",

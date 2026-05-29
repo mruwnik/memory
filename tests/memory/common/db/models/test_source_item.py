@@ -1047,8 +1047,11 @@ def test_explicit_sensitivity_marks_flag_false(db_session: Session):
     item = SourceItem(sha256=b"sen" + bytes(29), modality="text", content="x")
     item.sensitivity = "confidential"
 
+    # Explicit assignment fires the set-listener immediately, so this flag
+    # flips in-memory before any flush. project_id was never assigned, so it
+    # keeps the column default (True) which materializes at flush — checked
+    # after commit below.
     assert item.sensitivity_inherited is False
-    assert item.project_id_inherited is True
 
     db_session.add(item)
     db_session.commit()
