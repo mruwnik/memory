@@ -104,23 +104,57 @@ describe('useClaude sessions', () => {
     await expect(setup().spawnSession({})).rejects.toThrow('Failed to spawn session')
   })
 
-  it('scheduleSession POSTs cron + spawn_config and returns the schedule', async () => {
-    const fetchMock = mockJson({
+  it('scheduleSession upserts a claude_session schedule via scheduler_upsert', async () => {
+    const task = {
+      id: 't1',
+      cron_expression: '0 9 * * *',
+      next_scheduled_time: '2024',
+      topic: 'tp',
+    }
+    const fetchMock = mockFetch(async (input) => {
+      if (String(input).includes('/mcp/scheduler_upsert')) {
+        return mockResponse({
+          json: { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify(task) }] } },
+        })
+      }
+      return mockResponse({ json: {} }) // /auth/me on mount
+    })
+    const r = await setup().scheduleSession({
+      cron_expression: '0 9 * * *',
+      spawn_config: { repo_url: 'r', initial_prompt: 'hi' },
+    })
+    expect(r).toEqual({
       task_id: 't1',
       cron_expression: '0 9 * * *',
       next_scheduled_time: '2024',
       topic: 'tp',
     })
-    const r = await setup().scheduleSession({
+    // initial_prompt is forwarded as `message`; the rest becomes spawn_config.
+    const { init } = callTo(fetchMock, '/mcp/scheduler_upsert')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string).params.arguments).toEqual({
+      task_type: 'claude_session',
       cron_expression: '0 9 * * *',
+      message: 'hi',
       spawn_config: { repo_url: 'r' },
     })
-    expect(r.task_id).toBe('t1')
-    const { init } = callTo(fetchMock, '/claude/schedule')
-    expect(init?.method).toBe('POST')
-    expect(JSON.parse(init?.body as string)).toEqual({
+  })
+
+  it('scheduleSession drops empty/undefined spawn_config fields', async () => {
+    const fetchMock = mockFetch(async (input) => {
+      if (String(input).includes('/mcp/scheduler_upsert')) {
+        return mockResponse({
+          json: { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ id: 't2' }) }] } },
+        })
+      }
+      return mockResponse({ json: {} })
+    })
+    await setup().scheduleSession({
       cron_expression: '0 9 * * *',
-      spawn_config: { repo_url: 'r' },
+      spawn_config: { repo_url: 'r', branch: '', enable_playwright: undefined },
+    })
+    expect(JSON.parse(callTo(fetchMock, '/mcp/scheduler_upsert').init?.body as string).params.arguments.spawn_config).toEqual({
+      repo_url: 'r',
     })
   })
 
@@ -131,13 +165,16 @@ describe('useClaude sessions', () => {
     ).rejects.toThrow('bad cron')
   })
 
-  it('scheduleSession falls back to an HTTP-status message when the body is not JSON', async () => {
-    mockFetch(async () => mockResponse({ status: 500, text: 'proxy boom', json: undefined }))
-    // mockResponse.json() returns undefined here, so error.detail is undefined,
-    // and the catch branch is not hit (json resolves). Falls back to HTTP message.
+  it('scheduleSession throws an MCP error carrying the HTTP status when the call fails', async () => {
+    mockFetch(async (input) => {
+      if (String(input).includes('/mcp/scheduler_upsert')) {
+        return mockResponse({ status: 500, text: 'proxy boom', json: undefined })
+      }
+      return mockResponse({ json: {} })
+    })
     await expect(
       setup().scheduleSession({ cron_expression: 'x', spawn_config: {} }),
-    ).rejects.toThrow('Failed to schedule session (HTTP 500)')
+    ).rejects.toThrow(/scheduler_upsert failed \(500\)/)
   })
 
   it('killSession DELETEs and resolves void', async () => {
