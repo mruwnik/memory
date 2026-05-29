@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth, SERVER_URL, SESSION_COOKIE_NAME } from './useAuth'
+import { useMCP } from './useMCP'
 
 // Get auth token from cookies for WebSocket authentication
 const getAuthToken = (): string | null => {
@@ -194,6 +195,7 @@ export interface PaneListResponse {
 
 export const useClaude = () => {
   const { apiCall } = useAuth()
+  const { mcpCall } = useMCP()
 
   // Session management
   const listSessions = useCallback(async (): Promise<ClaudeSession[]> => {
@@ -222,23 +224,32 @@ export const useClaude = () => {
 
   const scheduleSession = useCallback(
     async (request: { cron_expression: string; spawn_config: SpawnRequest }): Promise<ScheduleResponse> => {
-      const response = await apiCall('/claude/schedule', {
-        method: 'POST',
-        body: JSON.stringify(request),
-      })
-      if (!response.ok) {
-        let detail: string | undefined
-        try {
-          const error = await response.json()
-          detail = error.detail
-        } catch {
-          // Response body is not valid JSON (e.g., plain text 500 from proxy)
-        }
-        throw new Error(detail || `Failed to schedule session (HTTP ${response.status})`)
+      const { initial_prompt, ...rest } = request.spawn_config
+      // Forward only defined spawn-config fields; backend rejects unknown/empty.
+      const spawn_config: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(rest)) {
+        if (v !== undefined && v !== null && v !== '') spawn_config[k] = v
       }
-      return response.json()
+      const result = await mcpCall('scheduler_create', {
+        task_type: 'claude_session',
+        cron_expression: request.cron_expression,
+        message: initial_prompt,
+        spawn_config,
+      })
+      const task = result[0] as {
+        id: string
+        cron_expression: string | null
+        next_scheduled_time: string | null
+        topic: string | null
+      }
+      return {
+        task_id: task.id,
+        cron_expression: task.cron_expression ?? request.cron_expression,
+        next_scheduled_time: task.next_scheduled_time ?? '',
+        topic: task.topic ?? '',
+      }
     },
-    [apiCall]
+    [mcpCall]
   )
 
   const killSession = useCallback(async (sessionId: string): Promise<void> => {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody } from '@/hooks/useScheduledTasks'
+import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody, CreateTaskBody } from '@/hooks/useScheduledTasks'
 import { useClaude, Environment } from '@/hooks/useClaude'
 import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
 
@@ -70,6 +70,14 @@ function formatFutureTime(dateStr: string | null): string {
   if (diffHours < 24) return `in ${diffHours}h`
   if (diffDays < 7) return `in ${diffDays}d`
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+type TaskStatus = 'active' | 'inactive' | 'done'
+
+function getTaskStatus(task: ScheduledTask): TaskStatus {
+  if (task.enabled) return 'active'
+  if (task.cron_expression) return 'inactive'  // paused recurring — re-enablable
+  return 'done'                                 // fired one-off — terminal
 }
 
 function formatDuration(start: string | null, end: string | null): string {
@@ -151,6 +159,109 @@ interface EditFormProps {
 
 const inputClass = "w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
 const labelClass = "block text-xs font-medium text-slate-500 mb-1"
+
+// --- Reusable field-group components (also used by CreateForm) ---
+
+interface NotificationFieldsProps {
+  channel: string
+  target: string
+  onChannel: (v: string) => void
+  onTarget: (v: string) => void
+}
+
+const NotificationFields = ({ channel, target, onChannel, onTarget }: NotificationFieldsProps) => (
+  <div className="flex gap-3">
+    <div className="flex-1">
+      <label className={labelClass}>Channel</label>
+      <select value={channel} onChange={e => onChannel(e.target.value)} className={inputClass}>
+        <option value="">Select...</option>
+        {CHANNELS.map(c => (
+          <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+        ))}
+      </select>
+    </div>
+    <div className="flex-1">
+      <label className={labelClass}>Target</label>
+      <input type="text" value={target} onChange={e => onTarget(e.target.value)}
+        placeholder="channel or email" className={inputClass} />
+    </div>
+  </div>
+)
+
+interface SpawnConfigState {
+  envId: number | null
+  repoUrl: string
+  allowedTools: string
+  enablePlaywright: boolean
+  runId: string
+  customEnvText: string
+}
+
+// Build a spawn_config object (only set keys) from form state.
+function buildSpawnConfig(s: SpawnConfigState): Record<string, unknown> {
+  const cfg: Record<string, unknown> = {}
+  if (s.envId !== null) cfg.environment_id = s.envId
+  if (s.repoUrl) cfg.repo_url = s.repoUrl
+  const tools = s.allowedTools.split(',').map(t => t.trim()).filter(Boolean)
+  if (tools.length) cfg.allowed_tools = tools
+  if (s.enablePlaywright) cfg.enable_playwright = true
+  if (s.runId) cfg.run_id = s.runId
+  const env: Record<string, string> = {}
+  for (const line of s.customEnvText.split('\n')) {
+    const t = line.trim()
+    const i = t.indexOf('=')
+    if (i > 0) env[t.slice(0, i)] = t.slice(i + 1)
+  }
+  if (Object.keys(env).length) cfg.custom_env = env
+  return cfg
+}
+
+interface SpawnConfigFieldsProps {
+  state: SpawnConfigState
+  setState: (updater: (s: SpawnConfigState) => SpawnConfigState) => void
+  environments: Environment[]
+}
+
+const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsProps) => (
+  <>
+    <div className="border-t border-slate-200 pt-3 mt-3">
+      <p className="text-xs font-semibold text-slate-600 mb-2">Spawn Config</p>
+    </div>
+    <div>
+      <label className={labelClass}>Environment</label>
+      <select value={state.envId ?? ''} onChange={e => setState(s => ({ ...s, envId: e.target.value ? Number(e.target.value) : null }))} className={inputClass}>
+        <option value="">Select environment...</option>
+        {environments.map(env => (
+          <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
+        ))}
+      </select>
+    </div>
+    <div className="flex gap-3">
+      <div className="flex-1">
+        <label className={labelClass}>Repo URL</label>
+        <input type="text" value={state.repoUrl} onChange={e => setState(s => ({ ...s, repoUrl: e.target.value }))} placeholder="https://github.com/org/repo" className={inputClass} />
+      </div>
+      <div className="flex-1">
+        <label className={labelClass}>Run ID</label>
+        <input type="text" value={state.runId} onChange={e => setState(s => ({ ...s, runId: e.target.value }))} placeholder="custom-branch-name" className={inputClass} />
+      </div>
+    </div>
+    <div>
+      <label className={labelClass}>Allowed Tools</label>
+      <input type="text" value={state.allowedTools} onChange={e => setState(s => ({ ...s, allowedTools: e.target.value }))} placeholder="Bash, Read, Write, Edit, Grep, Glob" className={inputClass} />
+      <p className="text-xs text-slate-400 mt-1">Comma-separated tool names</p>
+    </div>
+    <div>
+      <label className={labelClass}>Environment Variables</label>
+      <textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className={`${inputClass} font-mono`} />
+      <p className="text-xs text-slate-400 mt-1">One per line: KEY=value</p>
+    </div>
+    <div className="flex items-center gap-2">
+      <input type="checkbox" id="cf-playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} className="rounded border-slate-300" />
+      <label htmlFor="cf-playwright" className="text-xs text-slate-600">Enable Playwright</label>
+    </div>
+  </>
+)
 
 const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
   const [topic, setTopic] = useState(task.topic || '')
@@ -331,27 +442,7 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
       )}
 
       {task.task_type === 'notification' && (
-        <div className="flex gap-3">
-          <div className="flex-1">
-            <label className={labelClass}>Channel</label>
-            <select value={channel} onChange={e => setChannel(e.target.value)} className={inputClass}>
-              <option value="">Select...</option>
-              {CHANNELS.map(c => (
-                <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex-1">
-            <label className={labelClass}>Target</label>
-            <input
-              type="text"
-              value={target}
-              onChange={e => setTarget(e.target.value)}
-              placeholder="channel or email"
-              className={inputClass}
-            />
-          </div>
-        </div>
+        <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}
       <div className="flex gap-2 pt-1">
@@ -370,6 +461,99 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
         >
           Cancel
         </button>
+      </div>
+    </form>
+  )
+}
+
+// --- Create Form ---
+
+interface CreateFormProps {
+  onCreate: (body: CreateTaskBody) => Promise<void>
+  onCancel: () => void
+  saving: boolean
+  error: string | null
+}
+
+const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
+  const [taskType, setTaskType] = useState<'notification' | 'claude_session'>('notification')
+  const [cadence, setCadence] = useState<'recurring' | 'one_time'>('recurring')
+  const [topic, setTopic] = useState('')
+  const [message, setMessage] = useState('')
+  const [cronExpr, setCronExpr] = useState('')
+  const [whenLocal, setWhenLocal] = useState('')
+  const [channel, setChannel] = useState('')
+  const [target, setTarget] = useState('')
+  const [spawn, setSpawn] = useState<SpawnConfigState>({
+    envId: null, repoUrl: '', allowedTools: '', enablePlaywright: false, runId: '', customEnvText: '',
+  })
+
+  const { listEnvironments } = useClaude()
+  const [environments, setEnvironments] = useState<Environment[]>([])
+  useEffect(() => {
+    if (taskType !== 'claude_session') return
+    listEnvironments().then(setEnvironments).catch(() => {})
+  }, [taskType, listEnvironments])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const body: CreateTaskBody = { task_type: taskType }
+    if (topic) body.topic = topic
+    if (message) body.message = message
+    if (cadence === 'recurring') {
+      body.cron_expression = cronExpr
+    } else {
+      // datetime-local is local time; convert to UTC ISO (with Z).
+      body.scheduled_time = whenLocal ? new Date(whenLocal).toISOString() : ''
+    }
+    if (taskType === 'notification') {
+      body.notification_channel = channel
+      body.notification_target = target
+    } else {
+      body.spawn_config = buildSpawnConfig(spawn)
+    }
+    await onCreate(body)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3 border border-slate-200 rounded-lg p-4 bg-slate-50">
+      <div className="flex gap-4">
+        <label className="text-sm"><input type="radio" checked={taskType === 'notification'} onChange={() => setTaskType('notification')} /> Notification</label>
+        <label className="text-sm"><input type="radio" checked={taskType === 'claude_session'} onChange={() => setTaskType('claude_session')} /> Claude session</label>
+      </div>
+      <div>
+        <label className={labelClass}>Topic</label>
+        <input type="text" value={topic} onChange={e => setTopic(e.target.value)} className={inputClass} />
+      </div>
+      <div className="flex gap-4">
+        <label className="text-sm"><input type="radio" checked={cadence === 'recurring'} onChange={() => setCadence('recurring')} /> Recurring</label>
+        <label className="text-sm"><input type="radio" checked={cadence === 'one_time'} onChange={() => setCadence('one_time')} /> One-time</label>
+      </div>
+      {cadence === 'recurring' ? (
+        <div>
+          <label className={labelClass}>Cron Expression</label>
+          <input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className={`${inputClass} font-mono`} />
+          <p className="text-xs text-slate-400 mt-1">{describeCron(cronExpr)}</p>
+        </div>
+      ) : (
+        <div>
+          <label className={labelClass}>Run at (local time)</label>
+          <input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} className={inputClass} />
+        </div>
+      )}
+      <div>
+        <label className={labelClass}>{taskType === 'claude_session' ? 'Initial Prompt' : 'Message'}</label>
+        <textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} className={inputClass} />
+      </div>
+      {taskType === 'notification'
+        ? <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
+        : <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="flex gap-2 pt-1">
+        <button type="submit" disabled={saving} className="bg-primary text-white py-1.5 px-4 rounded text-sm hover:bg-primary-dark disabled:bg-slate-300">
+          {saving ? 'Creating...' : 'Create task'}
+        </button>
+        <button type="button" onClick={onCancel} disabled={saving} className="bg-slate-100 text-slate-700 py-1.5 px-4 rounded text-sm hover:bg-slate-200">Cancel</button>
       </div>
     </form>
   )
@@ -503,7 +687,11 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
                   {typeLabel}
                 </span>
                 <span className="font-semibold text-slate-800 text-sm">{task.topic || 'Untitled'}</span>
-                <StatusBadge active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
+                {getTaskStatus(task) === 'done' ? (
+                  <span className="px-2 py-1 rounded text-xs font-medium bg-sky-100 text-sky-700">Done</span>
+                ) : (
+                  <StatusBadge active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
+                )}
               </div>
 
               <div className="text-sm text-slate-500 mt-1">
@@ -578,7 +766,7 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
 // --- Main Page ---
 
 const ScheduledTasks = () => {
-  const { listTasks, toggleTask, deleteTask, updateTask, getExecutions } = useScheduledTasks()
+  const { listTasks, toggleTask, deleteTask, updateTask, getExecutions, createTask } = useScheduledTasks()
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -621,6 +809,24 @@ const ScheduledTasks = () => {
     const updated = await updateTask(taskId, updates)
     setTasks(prev => prev.map(t => t.id === taskId ? updated : t))
     return updated
+  }
+
+  const [showCreate, setShowCreate] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  const handleCreate = async (body: CreateTaskBody) => {
+    setCreating(true)
+    setCreateError(null)
+    try {
+      await createTask(body)
+      setShowCreate(false)
+      await loadTasks()
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : 'Failed to create task')
+    } finally {
+      setCreating(false)
+    }
   }
 
   const enabledCount = tasks.filter(t => t.enabled).length
@@ -668,6 +874,9 @@ const ScheduledTasks = () => {
           >
             &#8635;
           </button>
+          <button onClick={() => setShowCreate(v => !v)} className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark">
+            {showCreate ? 'Close' : '+ New task'}
+          </button>
         </div>
 
         {error && (
@@ -678,6 +887,12 @@ const ScheduledTasks = () => {
         )}
 
         {loading && <div className="text-center py-8 text-slate-500">Loading scheduled tasks...</div>}
+
+        {showCreate && (
+          <div className="mb-4">
+            <CreateForm onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />
+          </div>
+        )}
 
         {!loading && tasks.length === 0 && (
           <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
