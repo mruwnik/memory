@@ -12,11 +12,44 @@ from typing import Any
 
 import httpx
 
+from memory.common.db.connection import DBSession
+from memory.common.db.models.slack import SlackUserCredentials
+from memory.common.db.models.users import User
+
 logger = logging.getLogger(__name__)
 
 # Rate limit retry settings
 MAX_RATE_LIMIT_RETRIES = 3
 DEFAULT_RETRY_AFTER = 5  # seconds
+
+# Slack object ids are prefix-typed: users are U/W, channels are C (public),
+# G (private) or D (DM). The delivery method is derived from this prefix.
+SLACK_USER_PREFIXES = ("U", "W")
+SLACK_CHANNEL_PREFIXES = ("C", "G", "D")
+
+
+def slack_target_is_dm(target: str) -> bool:
+    """True if the target id is a Slack user (DM), else a channel."""
+    return target[:1].upper() in SLACK_USER_PREFIXES
+
+
+def user_has_workspace_membership(db: DBSession, workspace_id: str, user: User) -> bool:
+    """Cheap any-app membership probe used to gate workspace-level views.
+
+    Returns True if the user has at least one credential for this
+    workspace through any SlackApp they're authorized on. Does NOT
+    return the credential itself — for that, use
+    :func:`memory.api.slack.get_user_credentials_for_app`.
+    """
+    return (
+        db.query(SlackUserCredentials.id)
+        .filter(
+            SlackUserCredentials.workspace_id == workspace_id,
+            SlackUserCredentials.user_id == user.id,
+        )
+        .first()
+        is not None
+    )
 
 
 class SlackAPIError(Exception):
@@ -68,7 +101,9 @@ class SlackClient:
             # Handle rate limiting with retry
             if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
                 try:
-                    retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                    retry_after = int(
+                        response.headers.get("Retry-After", DEFAULT_RETRY_AFTER)
+                    )
                 except (ValueError, TypeError):
                     retry_after = DEFAULT_RETRY_AFTER
                 logger.warning(
@@ -107,7 +142,9 @@ async def async_slack_call(access_token: str, method: str, **params) -> dict:
             # Handle rate limiting with retry
             if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
                 try:
-                    retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+                    retry_after = int(
+                        response.headers.get("Retry-After", DEFAULT_RETRY_AFTER)
+                    )
                 except (ValueError, TypeError):
                     retry_after = DEFAULT_RETRY_AFTER
                 logger.warning(

@@ -16,7 +16,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
@@ -39,8 +39,8 @@ from memory.common.celery_app import (
     SYNC_SLACK_WORKSPACE,
     UPDATE_SLACK_CHANNEL,
     UPDATE_SLACK_REACTIONS,
-    app as celery_app,
 )
+from memory.common.celery_app import app as celery_app
 from memory.common.data_source_access import (
     enqueue_access_control_propagation,
     mark_access_control_changed_if_needed,
@@ -61,6 +61,7 @@ from memory.common.oauth_client import (
     store_state,
     validate_and_consume_state,
 )
+from memory.common.slack import user_has_workspace_membership
 
 logger = logging.getLogger(__name__)
 
@@ -239,27 +240,6 @@ def get_user_credentials_for_app(
     )
 
 
-def user_has_workspace_membership(
-    db: Session, workspace_id: str, user: User
-) -> bool:
-    """Cheap any-app membership probe used to gate workspace-level views.
-
-    Returns True if the user has at least one credential for this
-    workspace through any SlackApp they're authorized on. Does NOT
-    return the credential itself — for that, use
-    :func:`get_user_credentials_for_app`.
-    """
-    return (
-        db.query(SlackUserCredentials.id)
-        .filter(
-            SlackUserCredentials.workspace_id == workspace_id,
-            SlackUserCredentials.user_id == user.id,
-        )
-        .first()
-        is not None
-    )
-
-
 def get_workspace_with_access(
     db: Session, workspace_id: str, user: User
 ) -> SlackWorkspace:
@@ -278,18 +258,29 @@ def workspace_to_response(
     ws: SlackWorkspace, db: Session, current_user: User
 ) -> SlackWorkspaceResponse:
     """Convert workspace to response model."""
-    channel_count = db.query(func.count(SlackChannel.id)).filter(
-        SlackChannel.workspace_id == ws.id
-    ).scalar() or 0
+    channel_count = (
+        db.query(func.count(SlackChannel.id))
+        .filter(SlackChannel.workspace_id == ws.id)
+        .scalar()
+        or 0
+    )
 
-    connected_users = db.query(func.count(SlackUserCredentials.id)).filter(
-        SlackUserCredentials.workspace_id == ws.id
-    ).scalar() or 0
+    connected_users = (
+        db.query(func.count(SlackUserCredentials.id))
+        .filter(SlackUserCredentials.workspace_id == ws.id)
+        .scalar()
+        or 0
+    )
 
-    user_connected = db.query(SlackUserCredentials).filter(
-        SlackUserCredentials.workspace_id == ws.id,
-        SlackUserCredentials.user_id == current_user.id,
-    ).first() is not None
+    user_connected = (
+        db.query(SlackUserCredentials)
+        .filter(
+            SlackUserCredentials.workspace_id == ws.id,
+            SlackUserCredentials.user_id == current_user.id,
+        )
+        .first()
+        is not None
+    )
 
     return SlackWorkspaceResponse(
         id=ws.id,
@@ -349,7 +340,9 @@ def _consume_oauth_state(db: Session, state: str, user: User) -> None:
     for (CSRF binding fix a5c9746d). Raises 400 / 403 on mismatch."""
     state_user_id = validate_and_consume_state(db, state, "slack")
     if not state_user_id:
-        raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
+        raise HTTPException(
+            status_code=400, detail="Invalid or expired state parameter"
+        )
     if user.id != state_user_id:
         raise HTTPException(
             status_code=403, detail="OAuth state was issued for a different session"
@@ -554,17 +547,19 @@ def list_workspaces(
         # Get workspace IDs where the resolved user has credentials
         user_workspace_ids = [
             cred.workspace_id
-            for cred in db.query(SlackUserCredentials).filter(
-                SlackUserCredentials.user_id == resolved_user_id
-            ).all()
+            for cred in db.query(SlackUserCredentials)
+            .filter(SlackUserCredentials.user_id == resolved_user_id)
+            .all()
         ]
 
         if not user_workspace_ids:
             return []
 
-        workspaces = db.query(SlackWorkspace).filter(
-            SlackWorkspace.id.in_(user_workspace_ids)
-        ).all()
+        workspaces = (
+            db.query(SlackWorkspace)
+            .filter(SlackWorkspace.id.in_(user_workspace_ids))
+            .all()
+        )
 
     return [workspace_to_response(w, db, user) for w in workspaces]
 
@@ -648,13 +643,19 @@ def disconnect_workspace(
     db.commit()
 
     # Check remaining users and messages
-    remaining_users = db.query(func.count(SlackUserCredentials.id)).filter(
-        SlackUserCredentials.workspace_id == workspace_id
-    ).scalar() or 0
+    remaining_users = (
+        db.query(func.count(SlackUserCredentials.id))
+        .filter(SlackUserCredentials.workspace_id == workspace_id)
+        .scalar()
+        or 0
+    )
 
-    message_count = db.query(func.count(SlackMessage.id)).filter(
-        SlackMessage.workspace_id == workspace_id
-    ).scalar() or 0
+    message_count = (
+        db.query(func.count(SlackMessage.id))
+        .filter(SlackMessage.workspace_id == workspace_id)
+        .scalar()
+        or 0
+    )
 
     workspace_deleted = False
     if remaining_users == 0 and message_count == 0:
@@ -822,9 +823,7 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
     )
 
 
-def get_slack_app_for_authorized_user(
-    db: Session, app_id: int, user: User
-) -> SlackApp:
+def get_slack_app_for_authorized_user(db: Session, app_id: int, user: User) -> SlackApp:
     """Fetch a SlackApp the user is authorized to see.
 
     Authorized = owner OR in the authorized_users list. Anyone else gets
@@ -862,9 +861,7 @@ def list_slack_apps_for_user(db: Session, user: User) -> list[SlackApp]:
     """
     owned = SlackApp.created_by_user_id == user.id
     authorized = SlackApp.id.in_(
-        db.query(SlackApp.id)
-        .join(SlackApp.authorized_users)
-        .filter(User.id == user.id)
+        db.query(SlackApp.id).join(SlackApp.authorized_users).filter(User.id == user.id)
     )
     return db.query(SlackApp).filter(or_(owned, authorized)).all()
 
@@ -1130,7 +1127,7 @@ def _verify_slack_signature(
     """
     if not signature_header.startswith("v0="):
         return False
-    expected_hex = signature_header[len("v0="):]
+    expected_hex = signature_header[len("v0=") :]
     basestring = f"v0:{request_ts}:".encode() + body
     digest = hmac.new(
         signing_secret.encode("utf-8"),
@@ -1147,9 +1144,7 @@ def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
     return db.get(SlackApp, slack_app_id)
 
 
-def _dispatch_event_callback(
-    body: dict, slack_app_id: int
-) -> dict[str, str]:
+def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
     """Branch on event.type and enqueue the right celery task.
 
     Returns a small status dict for logging — Slack only needs the 200.
@@ -1530,9 +1525,7 @@ def issue_wizard_nonce(
     )
 
 
-@router.post(
-    "/apps/{app_id}/oauth-state", response_model=SlackOAuthStateResponse
-)
+@router.post("/apps/{app_id}/oauth-state", response_model=SlackOAuthStateResponse)
 def issue_oauth_state(
     app_id: int,
     user: User = Depends(get_current_user),
@@ -1606,9 +1599,7 @@ def begin_test_message(
         )
     token = body.token.strip()
     if not token or len(token) < 8:
-        raise HTTPException(
-            status_code=400, detail="token must be at least 8 chars"
-        )
+        raise HTTPException(status_code=400, detail="token must be at least 8 chars")
     _set_test_message_token(app.id, token, WIZARD_TEST_MESSAGE_TTL_SECONDS)
     return SlackTestMessageStatus(status="waiting")
 

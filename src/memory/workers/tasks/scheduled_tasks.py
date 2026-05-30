@@ -18,24 +18,35 @@ from typing import Any
 import requests
 
 from memory.common import discord as discord_utils
+from memory.common import settings
 from memory.common.celery_app import (
     EXECUTE_SCHEDULED_TASK,
     RUN_SCHEDULED_TASKS,
     SEND_NOTIFICATION,
     app,
 )
-from memory.common.jobs import tracked_task
-from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBot, EmailAccount, ScheduledTask, TaskExecution, UserSession
+from memory.common.db.models import (
+    DiscordBot,
+    EmailAccount,
+    ScheduledTask,
+    TaskExecution,
+    UserSession,
+)
 from memory.common.db.models.scheduled_tasks import (
     ExecutionStatus,
     TaskType,
     compute_next_cron,
 )
 from memory.common.db.models.slack import SlackUserCredentials
-from memory.common.email_sender import get_account_by_address, prepare_send_config, send_email
-from memory.common.slack import async_slack_call
+from memory.common.discord_data import discord_target_is_channel
+from memory.common.email_sender import (
+    get_account_by_address,
+    prepare_send_config,
+    send_email,
+)
+from memory.common.jobs import tracked_task
+from memory.common.slack import async_slack_call, slack_target_is_dm
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +59,7 @@ EMAIL_BODY_LIMIT = 100000  # Reasonable limit for email body size
 @dataclass
 class NotificationParams:
     """Parameters for sending notifications."""
+
     notification_channel: str
     notification_target: str
     message: str
@@ -71,53 +83,69 @@ def extract_notification_params(task: ScheduledTask) -> NotificationParams | Non
     )
 
 
+def resolve_discord_bot_id(session, params: NotificationParams) -> int | None:
+    bot_id = params.data.get("discord_bot_id")
+    if bot_id:
+        return bot_id
+    bot = (
+        session.query(DiscordBot)
+        .filter(DiscordBot.authorized_users.any(id=params.user_id))
+        .first()
+    )
+    if bot:
+        return bot.id
+    logger.error(f"No Discord bot found for user {params.user_id}")
+    return None
+
+
 def send_via_discord(params: NotificationParams) -> bool:
-    """Send message via Discord DM."""
-    discord_user_id = params.notification_target
-    if not discord_user_id:
-        logger.error("No Discord user ID for notification")
+    """Send via Discord — channel post or user DM, derived from the target id."""
+    target = params.notification_target
+    if not target:
+        logger.error("No Discord target for notification")
         return False
 
-    bot_id = params.data.get("discord_bot_id")
-
-    if not bot_id:
-        with make_session() as session:
-            bot = (
-                session.query(DiscordBot)
-                .filter(DiscordBot.authorized_users.any(id=params.user_id))
-                .first()
-            )
-            if bot:
-                bot_id = bot.id
-            else:
-                logger.error(f"No Discord bot found for user {params.user_id}")
-                return False
+    with make_session() as session:
+        bot_id = resolve_discord_bot_id(session, params)
+        if bot_id is None:
+            return False
+        is_channel = discord_target_is_channel(session, target)
 
     message = params.message
     if len(message) > DISCORD_MESSAGE_LIMIT:
-        message = message[:DISCORD_MESSAGE_LIMIT - 3] + "..."
-        logger.warning(f"Discord message truncated from {len(params.message)} to {DISCORD_MESSAGE_LIMIT} chars")
+        message = message[: DISCORD_MESSAGE_LIMIT - 3] + "..."
+        logger.warning(
+            f"Discord message truncated from {len(params.message)} to {DISCORD_MESSAGE_LIMIT} chars"
+        )
 
-    success = discord_utils.send_dm(bot_id, discord_user_id, message)
-    if success:
-        logger.info(f"Discord DM sent to user {discord_user_id}")
+    if is_channel:
+        success = discord_utils.send_to_channel(bot_id, target, message)
+        label = f"channel {target}"
     else:
-        logger.error(f"Failed to send Discord DM to user {discord_user_id}")
+        success = discord_utils.send_dm(bot_id, target, message)
+        label = f"user {target}"
+
+    if success:
+        logger.info(f"Discord message sent to {label}")
+    else:
+        logger.error(f"Failed to send Discord message to {label}")
     return success
 
 
 async def send_via_slack_async(params: NotificationParams) -> bool:
-    """Async implementation of Slack DM sending."""
-    slack_user_id = params.notification_target
+    """Async Slack send — opens a DM for a user id, posts directly to a channel."""
+    target = params.notification_target
     message = params.message
 
     # Truncate message if it exceeds Slack's limit
     if len(message) > SLACK_MESSAGE_LIMIT:
-        message = message[:SLACK_MESSAGE_LIMIT - 3] + "..."
-        logger.warning(f"Slack message truncated from {len(params.message)} to {SLACK_MESSAGE_LIMIT} chars")
+        message = message[: SLACK_MESSAGE_LIMIT - 3] + "..."
+        logger.warning(
+            f"Slack message truncated from {len(params.message)} to {SLACK_MESSAGE_LIMIT} chars"
+        )
 
-    if not slack_user_id:
-        logger.error("No Slack user ID for notification")
+    if not target:
+        logger.error("No Slack target for notification")
         return False
 
     with make_session() as session:
@@ -132,11 +160,17 @@ async def send_via_slack_async(params: NotificationParams) -> bool:
         slack_token = credentials.access_token
 
     try:
-        data = await async_slack_call(slack_token, "conversations.open", users=slack_user_id)
-        channel = data.get("channel", {})
-        channel_id = channel.get("id")
-        if not channel_id:
-            raise ValueError(f"Failed to open DM with Slack user {slack_user_id}")
+        if slack_target_is_dm(target):
+            data = await async_slack_call(
+                slack_token, "conversations.open", users=target
+            )
+            channel_id = data.get("channel", {}).get("id")
+            if not channel_id:
+                raise ValueError(f"Failed to open DM with Slack user {target}")
+            label = f"user {target}"
+        else:
+            channel_id = target
+            label = f"channel {target}"
 
         await async_slack_call(
             slack_token,
@@ -145,10 +179,10 @@ async def send_via_slack_async(params: NotificationParams) -> bool:
             text=message,
         )
 
-        logger.info(f"Slack DM sent to user {slack_user_id}")
+        logger.info(f"Slack message sent to {label}")
         return True
     except Exception as e:
-        logger.error(f"Failed to send Slack DM: {e}")
+        logger.error(f"Failed to send Slack message: {e}")
         return False
 
 
@@ -183,8 +217,13 @@ def send_via_email(params: NotificationParams) -> bool:
     message = params.message
     # Truncate message if it exceeds reasonable email body size
     if len(message) > EMAIL_BODY_LIMIT:
-        message = message[:EMAIL_BODY_LIMIT - 100] + "\n\n[Message truncated due to size limit]"
-        logger.warning(f"Email body truncated from {len(params.message)} to {EMAIL_BODY_LIMIT} chars")
+        message = (
+            message[: EMAIL_BODY_LIMIT - 100]
+            + "\n\n[Message truncated due to size limit]"
+        )
+        logger.warning(
+            f"Email body truncated from {len(params.message)} to {EMAIL_BODY_LIMIT} chars"
+        )
 
     from_address = params.data.get("from_address")
 
@@ -263,7 +302,9 @@ def send_notification(
     )
     sent = deliver_notification(params)
     if not sent:
-        logger.error(f"Immediate notification to {channel}:{target} failed for user {user_id}")
+        logger.error(
+            f"Immediate notification to {channel}:{target} failed for user {user_id}"
+        )
     return {"sent": sent}
 
 
@@ -292,7 +333,8 @@ def session_token(db, user_id: int):
     """
     user_session = UserSession(
         user_id=user_id,
-        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5),
+        expires_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        + timedelta(minutes=5),
     )
     db.add(user_session)
     db.commit()
@@ -384,7 +426,9 @@ def execute_scheduled_task(self, execution_id: str):
             return {"error": "Execution not found"}
 
         if execution.status != ExecutionStatus.PENDING:
-            logger.warning(f"TaskExecution {execution_id} is not pending (status: {execution.status})")
+            logger.warning(
+                f"TaskExecution {execution_id} is not pending (status: {execution.status})"
+            )
             return {"error": f"Execution is not pending (status: {execution.status})"}
 
         task = execution.task
@@ -413,7 +457,9 @@ def execute_scheduled_task(self, execution_id: str):
             if task_type == TaskType.NOTIFICATION:
                 params = extract_notification_params(task)
                 if not params:
-                    raise ValueError("Missing notification_channel or notification_target")
+                    raise ValueError(
+                        "Missing notification_channel or notification_target"
+                    )
 
                 sent = deliver_notification(params)
                 if sent:
@@ -471,14 +517,18 @@ def run_scheduled_tasks():
         )
 
         for stale in stale_executions:
-            logger.warning(f"Recovering stale execution {stale.id} (stuck since {stale.started_at})")
+            logger.warning(
+                f"Recovering stale execution {stale.id} (stuck since {stale.started_at})"
+            )
             stale.status = ExecutionStatus.FAILED
             stale.error_message = "Recovered from stale execution state"
             stale.finished_at = now
 
         # 1b. Recover stuck pending executions (pending for too long without being picked up)
         # This handles the case where tasks were dispatched after commit but Celery never received them
-        pending_cutoff = now - timedelta(minutes=30)  # Pending for more than 30 minutes is suspicious
+        pending_cutoff = now - timedelta(
+            minutes=30
+        )  # Pending for more than 30 minutes is suspicious
         stuck_pending = (
             session.query(TaskExecution)
             .filter(
@@ -492,7 +542,9 @@ def run_scheduled_tasks():
 
         recovered_pending_count = 0
         for stuck in stuck_pending:
-            logger.warning(f"Re-dispatching stuck pending execution {stuck.id} (scheduled for {stuck.scheduled_time})")
+            logger.warning(
+                f"Re-dispatching stuck pending execution {stuck.id} (scheduled for {stuck.scheduled_time})"
+            )
             recovered_pending_count += 1
 
         if stale_executions or stuck_pending:
@@ -500,12 +552,18 @@ def run_scheduled_tasks():
             if stale_executions:
                 logger.info(f"Recovered {len(stale_executions)} stale executions")
             if stuck_pending:
-                logger.info(f"Found {recovered_pending_count} stuck pending executions to re-dispatch")
+                logger.info(
+                    f"Found {recovered_pending_count} stuck pending executions to re-dispatch"
+                )
 
         # 2. Find due tasks without pending or running executions
         active_executions_subq = (
             session.query(TaskExecution.task_id)
-            .filter(TaskExecution.status.in_([ExecutionStatus.PENDING, ExecutionStatus.RUNNING]))
+            .filter(
+                TaskExecution.status.in_(
+                    [ExecutionStatus.PENDING, ExecutionStatus.RUNNING]
+                )
+            )
             .subquery()
         )
 

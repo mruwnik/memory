@@ -1,15 +1,149 @@
 import re
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import pytest
 
-from memory.common.db.models import (
-    ScheduledTask,
-    TaskExecution,
-)
+from memory.common.db.models import ScheduledTask, TaskExecution
+from memory.common.db.models.discord import DiscordChannel, DiscordServer
 from memory.workers.tasks import scheduled_tasks
+
+
+def make_notification_params(channel, target, **kw):
+    return scheduled_tasks.NotificationParams(
+        notification_channel=channel,
+        notification_target=target,
+        message=kw.get("message", "hello"),
+        user_id=kw.get("user_id", 1),
+        topic=kw.get("topic"),
+        data=kw.get("data", {}),
+    )
+
+
+@contextmanager
+def null_session():
+    yield None
+
+
+# --- delivery-method derivation ---
+
+
+@pytest.mark.parametrize(
+    "target,is_dm",
+    [
+        ("U12345", True),
+        ("W12345", True),
+        ("C12345", False),
+        ("G12345", False),
+        ("D12345", False),
+        ("u-lowercase-ok", True),
+    ],
+)
+def test_slack_target_is_dm(target, is_dm):
+    assert scheduled_tasks.slack_target_is_dm(target) is is_dm
+
+
+@pytest.mark.parametrize(
+    "target,is_channel",
+    [
+        ("424242", True),  # known channel id (created below)
+        ("999999", False),  # unknown id ⇒ treated as user DM
+        ("not-a-number", False),
+    ],
+)
+def test_discord_target_is_channel(db_session, target, is_channel):
+    server = DiscordServer(id=700, name="G", collect_messages=False)
+    db_session.add(server)
+    db_session.add(
+        DiscordChannel(id=424242, server_id=700, name="general", channel_type="text")
+    )
+    db_session.commit()
+    assert scheduled_tasks.discord_target_is_channel(db_session, target) is is_channel
+
+
+def test_send_via_discord_routes_to_channel(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(scheduled_tasks, "make_session", null_session)
+    monkeypatch.setattr(scheduled_tasks, "resolve_discord_bot_id", lambda s, p: 7)
+    monkeypatch.setattr(scheduled_tasks, "discord_target_is_channel", lambda s, t: True)
+    monkeypatch.setattr(
+        scheduled_tasks.discord_utils,
+        "send_to_channel",
+        lambda bot, target, msg: calls.update(channel=(bot, target, msg)) or True,
+    )
+    monkeypatch.setattr(
+        scheduled_tasks.discord_utils,
+        "send_dm",
+        lambda *a: calls.update(dm=a) or True,
+    )
+    assert (
+        scheduled_tasks.send_via_discord(make_notification_params("discord", "555"))
+        is True
+    )
+    assert calls["channel"] == (7, "555", "hello")
+    assert "dm" not in calls
+
+
+def test_send_via_discord_routes_to_dm(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(scheduled_tasks, "make_session", null_session)
+    monkeypatch.setattr(scheduled_tasks, "resolve_discord_bot_id", lambda s, p: 7)
+    monkeypatch.setattr(
+        scheduled_tasks, "discord_target_is_channel", lambda s, t: False
+    )
+    monkeypatch.setattr(
+        scheduled_tasks.discord_utils,
+        "send_to_channel",
+        lambda *a: calls.update(channel=a) or True,
+    )
+    monkeypatch.setattr(
+        scheduled_tasks.discord_utils,
+        "send_dm",
+        lambda bot, target, msg: calls.update(dm=(bot, target, msg)) or True,
+    )
+    assert (
+        scheduled_tasks.send_via_discord(make_notification_params("discord", "778899"))
+        is True
+    )
+    assert calls["dm"] == (7, "778899", "hello")
+    assert "channel" not in calls
+
+
+@pytest.mark.parametrize(
+    "target,expect_open",
+    [("U777", True), ("C500", False)],
+)
+def test_send_via_slack_routes(monkeypatch, target, expect_open):
+    methods = []
+
+    creds = Mock(access_token="tok")
+    sess = Mock()
+    sess.query.return_value.filter.return_value.first.return_value = creds
+
+    @contextmanager
+    def fake_session():
+        yield sess
+
+    async def fake_call(token, method, **kw):
+        methods.append((method, kw))
+        if method == "conversations.open":
+            return {"channel": {"id": "D-opened"}}
+        return {"ok": True}
+
+    monkeypatch.setattr(scheduled_tasks, "make_session", fake_session)
+    monkeypatch.setattr(scheduled_tasks, "async_slack_call", fake_call)
+
+    assert (
+        scheduled_tasks.send_via_slack(make_notification_params("slack", target))
+        is True
+    )
+
+    called = [m for m, _ in methods]
+    assert ("conversations.open" in called) is expect_open
+    post = next(kw for m, kw in methods if m == "chat.postMessage")
+    assert post["channel"] == ("D-opened" if expect_open else target)
 
 
 @pytest.fixture
@@ -20,7 +154,8 @@ def pending_scheduled_task(db_session, sample_user):
         user_id=sample_user.id,
         task_type="notification",
         topic="Test Topic",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message="What is the weather like today?",
         notification_channel="discord",
         notification_target="123456789",
@@ -70,9 +205,12 @@ def completed_execution(db_session, completed_scheduled_task):
     execution = TaskExecution(
         id=str(uuid.uuid4()),
         task_id=completed_scheduled_task.id,
-        scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1),
-        started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30),
-        finished_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=29),
+        scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(hours=1),
+        started_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=30),
+        finished_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=29),
         status="completed",
         response="Why did the chicken cross the road? To get to the other side!",
     )
@@ -89,7 +227,8 @@ def future_scheduled_task(db_session, sample_user):
         user_id=sample_user.id,
         task_type="notification",
         topic="Future Topic",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        + timedelta(hours=1),
         message="What will happen tomorrow?",
         notification_channel="email",
         notification_target="user@example.com",
@@ -132,7 +271,9 @@ def test_execute_scheduled_task_not_pending(completed_execution, db_session):
     """Test execution of an execution that is not pending."""
     result = scheduled_tasks.execute_scheduled_task(completed_execution.id)
 
-    assert result == {"error": f"Execution is not pending (status: {completed_execution.status})"}
+    assert result == {
+        "error": f"Execution is not pending (status: {completed_execution.status})"
+    }
 
 
 @patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
@@ -148,7 +289,8 @@ def test_execute_scheduled_task_with_no_message(
         user_id=sample_user.id,
         task_type="notification",
         topic="No Message",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message=None,
         notification_channel="discord",
         notification_target="123456789",
@@ -220,7 +362,8 @@ def test_execute_scheduled_task_long_message(
         user_id=sample_user.id,
         task_type="notification",
         topic="Long Message",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message=long_message,
         notification_channel="discord",
         notification_target="123456789",
@@ -248,16 +391,15 @@ def test_execute_scheduled_task_long_message(
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_run_scheduled_tasks_with_due_tasks(
-    mock_delay, db_session, sample_user
-):
+def test_run_scheduled_tasks_with_due_tasks(mock_delay, db_session, sample_user):
     """Test running scheduled tasks with due tasks."""
     # Create multiple due tasks
     due_task1 = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=10),
         message="Test 1",
         notification_channel="discord",
         notification_target="123456789",
@@ -267,7 +409,8 @@ def test_run_scheduled_tasks_with_due_tasks(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message="Test 2",
         notification_channel="slack",
         notification_target="U12345678",
@@ -328,9 +471,7 @@ def test_run_scheduled_tasks_skips_tasks_with_no_next_time(
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_run_scheduled_tasks_disabled_task(
-    mock_delay, db_session, sample_user
-):
+def test_run_scheduled_tasks_disabled_task(mock_delay, db_session, sample_user):
     """Test that disabled tasks are not processed.
 
     Under the derived-``enabled`` model, a disabled task is one with
@@ -359,9 +500,7 @@ def test_run_scheduled_tasks_disabled_task(
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_run_scheduled_tasks_timezone_handling(
-    mock_delay, db_session, sample_user
-):
+def test_run_scheduled_tasks_timezone_handling(mock_delay, db_session, sample_user):
     """Test that timezone handling works correctly."""
     # Create a task that's due (scheduled time in the past)
     past_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
@@ -433,7 +572,8 @@ def test_execute_scheduled_task_pending_executes(
         user_id=sample_user.id,
         task_type="notification",
         topic="Status Test",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message="Test",
         notification_channel="discord",
         notification_target="123456789",
@@ -457,16 +597,15 @@ def test_execute_scheduled_task_pending_executes(
 
 
 @pytest.mark.parametrize("status", ["running", "completed", "failed"])
-def test_execute_scheduled_task_non_pending_rejected(
-    status, db_session, sample_user
-):
+def test_execute_scheduled_task_non_pending_rejected(status, db_session, sample_user):
     """Test that non-pending executions are rejected."""
     task = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
         topic="Status Test",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message="Test",
         notification_channel="discord",
         notification_target="123456789",
@@ -616,7 +755,8 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message="Recurring",
         notification_channel="discord",
         notification_target="123456789",
@@ -651,7 +791,8 @@ def test_run_scheduled_tasks_clears_next_scheduled_time_for_one_time(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         message="One-time",
         notification_channel="discord",
         notification_target="123456789",
@@ -673,14 +814,17 @@ def test_run_scheduled_tasks_clears_next_scheduled_time_for_one_time(
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_run_scheduled_tasks_recovers_stale_executions(mock_delay, db_session, sample_user):
+def test_run_scheduled_tasks_recovers_stale_executions(
+    mock_delay, db_session, sample_user
+):
     """Test that stale running executions are marked as failed."""
     # Create a task with a stale "running" execution (stuck for 3 hours)
     task = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1),  # Future
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        + timedelta(hours=1),  # Future
         message="Test",
         notification_channel="discord",
         notification_target="123456789",
@@ -693,7 +837,8 @@ def test_run_scheduled_tasks_recovers_stale_executions(mock_delay, db_session, s
     stale_execution = TaskExecution(
         id=str(uuid.uuid4()),
         task_id=task.id,
-        scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=3),
+        scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(hours=3),
         started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=3),
         status="running",
     )
@@ -714,7 +859,9 @@ def test_run_scheduled_tasks_recovers_stale_executions(mock_delay, db_session, s
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_run_scheduled_tasks_skips_task_with_pending_execution(mock_delay, db_session, sample_user):
+def test_run_scheduled_tasks_skips_task_with_pending_execution(
+    mock_delay, db_session, sample_user
+):
     """Test that due tasks with pending executions are not re-dispatched."""
     # Create a due task
     past_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
@@ -748,20 +895,25 @@ def test_run_scheduled_tasks_skips_task_with_pending_execution(mock_delay, db_se
     assert len(result["executions"]) == 0
 
     # Verify only one execution exists for this task
-    executions = db_session.query(TaskExecution).filter(TaskExecution.task_id == task.id).all()
+    executions = (
+        db_session.query(TaskExecution).filter(TaskExecution.task_id == task.id).all()
+    )
     assert len(executions) == 1
     assert executions[0].id == existing_execution.id
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_run_scheduled_tasks_recovers_stuck_pending_executions(mock_delay, db_session, sample_user):
+def test_run_scheduled_tasks_recovers_stuck_pending_executions(
+    mock_delay, db_session, sample_user
+):
     """Test that stuck pending executions are re-dispatched."""
     # Create a task
     task = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
         task_type="notification",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1),  # Future
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        + timedelta(hours=1),  # Future
         message="Test",
         notification_channel="discord",
         notification_target="123456789",
@@ -774,7 +926,8 @@ def test_run_scheduled_tasks_recovers_stuck_pending_executions(mock_delay, db_se
     stuck_pending = TaskExecution(
         id=str(uuid.uuid4()),
         task_id=task.id,
-        scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1),
+        scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(hours=1),
         status="pending",
         started_at=None,  # Never started
     )
@@ -788,6 +941,7 @@ def test_run_scheduled_tasks_recovers_stuck_pending_executions(mock_delay, db_se
 
     # Verify the execution was re-dispatched (send_task called with its ID)
     from memory.common.celery_app import EXECUTE_SCHEDULED_TASK
+
     mock_delay.assert_any_call(EXECUTE_SCHEDULED_TASK, args=[stuck_pending.id])
 
 
@@ -809,7 +963,8 @@ def claude_session_task(db_session, sample_user):
             }
         },
         cron_expression="0 9 * * *",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=5),
         enabled=True,
     )
     db_session.add(task)
@@ -886,7 +1041,9 @@ def test_spawn_claude_session_run_id_suffixed(mock_post, db_session, sample_user
 
 
 @patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_does_not_mutate_task_data(mock_post, db_session, sample_user):
+def test_spawn_claude_session_does_not_mutate_task_data(
+    mock_post, db_session, sample_user
+):
     """Test that spawn_claude_session doesn't mutate task.data in place.
 
     The original run_id in the task's data must remain unchanged so that
@@ -923,7 +1080,9 @@ def test_spawn_claude_session_does_not_mutate_task_data(mock_post, db_session, s
 
 
 @patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_passes_enable_playwright(mock_post, db_session, sample_user):
+def test_spawn_claude_session_passes_enable_playwright(
+    mock_post, db_session, sample_user
+):
     """Test that enable_playwright is passed through to the spawn API call."""
     task = ScheduledTask(
         id=str(uuid.uuid4()),
@@ -975,9 +1134,7 @@ def test_sanitize_slug_strips_shell_metachars():
     # Path traversal segments get hyphenated.
     assert scheduled_tasks.sanitize_slug("../../etc/passwd") == "etc-passwd"
     # Spaces become hyphens.
-    assert (
-        scheduled_tasks.sanitize_slug("branch with spaces") == "branch-with-spaces"
-    )
+    assert scheduled_tasks.sanitize_slug("branch with spaces") == "branch-with-spaces"
     # Lowercase.
     assert scheduled_tasks.sanitize_slug("UPPER") == "upper"
     # All-punctuation strips to empty.

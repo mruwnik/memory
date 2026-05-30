@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import desc
 
 from memory.common import discord as discord_client
+from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
@@ -20,6 +21,70 @@ from memory.common.db.models import (
     User,
     discord_bot_users,
 )
+
+
+def discord_channel_for_target(
+    session: DBSession, target: str
+) -> DiscordChannel | None:
+    """Return the DiscordChannel a target id refers to, or None.
+
+    Discord channel and user ids are indistinguishable snowflakes, so a target
+    is a channel iff it's a known DiscordChannel row. Shared by upsert-time
+    validation and dispatch so the two never classify the same id differently.
+    """
+    if not target.isdigit():
+        return None
+    return session.get(DiscordChannel, int(target))
+
+
+def discord_target_is_channel(session: DBSession, target: str) -> bool:
+    """True if the target id is a known Discord channel (else a user DM)."""
+    return discord_channel_for_target(session, target) is not None
+
+
+def caller_can_see_discord_user(
+    db: DBSession, caller: User, discord_user_id: int
+) -> bool:
+    """Return True if ``caller`` is allowed to read a particular DiscordUser row.
+
+    A non-admin caller can only see Discord users they actually have a
+    plausible reason to know about — i.e. one of their authorized bots
+    has stored a message authored by that Discord user. Without this gate,
+    any bot owner could enumerate every DiscordUser row in the system
+    (including admin Discord IDs) and target them with the link endpoint.
+    """
+    if has_admin_scope(caller):
+        return True
+
+    seen = (
+        db.query(DiscordMessage.id)
+        .join(DiscordBot, DiscordMessage.bot_id == DiscordBot.id)
+        .join(discord_bot_users, discord_bot_users.c.bot_id == DiscordBot.id)
+        .filter(
+            DiscordMessage.author_id == discord_user_id,
+            discord_bot_users.c.user_id == caller.id,
+        )
+        .first()
+    )
+    return seen is not None
+
+
+def caller_can_see_discord_channel(
+    db: DBSession, caller: User, channel: DiscordChannel
+) -> bool:
+    """A channel is visible iff its server belongs to one of the caller's bots.
+
+    Mirrors the Discord user gate and the Slack shared-workspace requirement so
+    a caller can't address a server they have no bot in. Admins see everything.
+    """
+    if has_admin_scope(caller):
+        return True
+    if channel.server_id is None:
+        return False
+    server = db.get(DiscordServer, channel.server_id)
+    if server is None or server.bot_id is None:
+        return False
+    return server.bot_id in {bot.id for bot in get_user_bots(db, caller.id)}
 
 
 def get_user_bots(session: DBSession, user_id: int) -> list[DiscordBot]:
@@ -110,17 +175,21 @@ def fetch_channel_history(
         author = authors.get(msg.author_id)
         author_name = author.name if author else f"user_{msg.author_id}"
 
-        formatted.append({
-            "id": str(msg.message_id),
-            "author": author_name,
-            "author_id": str(msg.author_id),
-            "content": msg.content,
-            "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
-            "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
-            "is_pinned": msg.is_pinned,
-            "reactions": msg.reactions,
-            "reply_to": str(msg.reply_to_message_id) if msg.reply_to_message_id else None,
-        })
+        formatted.append(
+            {
+                "id": str(msg.message_id),
+                "author": author_name,
+                "author_id": str(msg.author_id),
+                "content": msg.content,
+                "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
+                "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
+                "is_pinned": msg.is_pinned,
+                "reactions": msg.reactions,
+                "reply_to": str(msg.reply_to_message_id)
+                if msg.reply_to_message_id
+                else None,
+            }
+        )
 
     # Reverse to get chronological order
     formatted.reverse()
@@ -166,20 +235,24 @@ def fetch_channels(
 
     formatted = []
     for ch in channels:
-        formatted.append({
-            "id": str(ch.id),  # String to avoid JS precision loss
-            "name": ch.name,
-            "type": ch.channel_type,
-            "server_id": str(ch.server_id) if ch.server_id else None,
-            "category_id": str(ch.category_id) if ch.category_id else None,
-            "collect_messages": ch.should_collect,
-            "project_id": ch.project_id,
-        })
+        formatted.append(
+            {
+                "id": str(ch.id),  # String to avoid JS precision loss
+                "name": ch.name,
+                "type": ch.channel_type,
+                "server_id": str(ch.server_id) if ch.server_id else None,
+                "category_id": str(ch.category_id) if ch.category_id else None,
+                "collect_messages": ch.should_collect,
+                "project_id": ch.project_id,
+            }
+        )
 
     return {"channels": formatted, "count": len(formatted)}
 
 
-def fetch_servers(session: DBSession, user_id: int | None = None) -> list[DiscordServer]:
+def fetch_servers(
+    session: DBSession, user_id: int | None = None
+) -> list[DiscordServer]:
     """Fetch Discord servers, optionally scoped to a user's bots.
 
     Args:

@@ -1,7 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody, CreateTaskBody } from '@/hooks/useScheduledTasks'
 import { useClaude, Environment } from '@/hooks/useClaude'
+import { useDiscord } from '@/hooks/useDiscord'
+import { useSlack } from '@/hooks/useSlack'
+import { usePeople } from '@/hooks/usePeople'
+import Combobox, { ComboOption } from '@/components/shared/Combobox'
 import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session'
@@ -169,24 +173,181 @@ interface NotificationFieldsProps {
   onTarget: (v: string) => void
 }
 
-const NotificationFields = ({ channel, target, onChannel, onTarget }: NotificationFieldsProps) => (
-  <div className="flex gap-3">
-    <div className="flex-1">
-      <label className={labelClass}>Channel</label>
-      <select value={channel} onChange={e => onChannel(e.target.value)} className={inputClass}>
-        <option value="">Select...</option>
-        {CHANNELS.map(c => (
-          <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-        ))}
-      </select>
+type TargetMode = 'channel' | 'dm'
+
+function slackTargetIsDm(target: string): boolean {
+  return /^[UW]/i.test(target)
+}
+
+const modeToggleClass = (active: boolean) =>
+  `px-3 py-1 rounded text-xs font-medium ${
+    active ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+  }`
+
+const NotificationFields = ({ channel, target, onChannel, onTarget }: NotificationFieldsProps) => {
+  const { listChannels: listDiscordChannels, listServers } = useDiscord()
+  const { listWorkspaces, listChannels: listSlackChannels } = useSlack()
+  const { listPeople } = usePeople()
+
+  const [mode, setMode] = useState<TargetMode>('channel')
+  const [channelOptions, setChannelOptions] = useState<ComboOption[]>([])
+  const [peopleOptions, setPeopleOptions] = useState<ComboOption[]>([])
+  const [loadingChannels, setLoadingChannels] = useState(false)
+  const [loadingPeople, setLoadingPeople] = useState(false)
+  const didInfer = useRef(false)
+  const peopleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const isChat = channel === 'discord' || channel === 'slack'
+
+  // Load channel options for the selected platform.
+  useEffect(() => {
+    if (!isChat) {
+      setChannelOptions([])
+      return
+    }
+    let cancelled = false
+    setLoadingChannels(true)
+
+    const loadDiscord = async (): Promise<ComboOption[]> => {
+      const [channels, servers] = await Promise.all([
+        listDiscordChannels(),
+        listServers().catch(() => []),
+      ])
+      const serverName = new Map(servers.map(s => [s.id, s.name]))
+      return channels.map(c => {
+        const group = serverName.get(c.server_id ?? '') ?? c.server_name ?? 'Discord'
+        return { value: c.id, label: `${group} / #${c.name}`, group }
+      })
+    }
+    const loadSlack = async (): Promise<ComboOption[]> => {
+      const workspaces = await listWorkspaces()
+      const perWorkspace = await Promise.all(
+        workspaces.map(async ws => {
+          const chans = await listSlackChannels(ws.id).catch(() => [])
+          return chans.map(c => ({ value: c.id, label: `${ws.name} / #${c.name}`, group: ws.name }))
+        })
+      )
+      return perWorkspace.flat()
+    }
+
+    ;(channel === 'discord' ? loadDiscord() : loadSlack())
+      .then(opts => { if (!cancelled) setChannelOptions(opts) })
+      .catch(() => { if (!cancelled) setChannelOptions([]) })
+      .finally(() => { if (!cancelled) setLoadingChannels(false) })
+
+    return () => { cancelled = true }
+  }, [channel, isChat, listDiscordChannels, listServers, listWorkspaces, listSlackChannels])
+
+  // Debounced people search (DM mode).
+  const searchPeople = useCallback((query: string) => {
+    if (peopleTimer.current) clearTimeout(peopleTimer.current)
+    setLoadingPeople(true)
+    peopleTimer.current = setTimeout(() => {
+      listPeople({ search: query || undefined, limit: 20 })
+        .then(people =>
+          setPeopleOptions(
+            people.map(p => ({ value: p.identifier, label: `${p.display_name} (${p.identifier})` }))
+          )
+        )
+        .catch(() => setPeopleOptions([]))
+        .finally(() => setLoadingPeople(false))
+    }, 250)
+  }, [listPeople])
+
+  useEffect(() => {
+    if (isChat) searchPeople('')
+    return () => { if (peopleTimer.current) clearTimeout(peopleTimer.current) }
+  }, [isChat, searchPeople])
+
+  // Infer the DM/Channel mode once for an existing target (edit). Slack uses the
+  // id prefix; Discord can't be told from the id, so check the loaded channel list.
+  useEffect(() => {
+    if (didInfer.current || !isChat) return
+    if (!target) { didInfer.current = true; return }
+    if (channel === 'slack') {
+      setMode(slackTargetIsDm(target) ? 'dm' : 'channel')
+      didInfer.current = true
+    } else if (!loadingChannels) {
+      setMode(channelOptions.some(o => o.value === target) ? 'channel' : 'dm')
+      didInfer.current = true
+    }
+  }, [channel, target, isChat, channelOptions, loadingChannels])
+
+  const handlePlatform = (next: string) => {
+    onChannel(next)
+    onTarget('')
+    setMode('channel')
+    didInfer.current = true
+  }
+
+  const handleMode = (next: TargetMode) => {
+    setMode(next)
+    onTarget('')
+  }
+
+  return (
+    <div className="flex gap-3">
+      <div className="flex-1">
+        <label className={labelClass}>Channel</label>
+        <select value={channel} onChange={e => handlePlatform(e.target.value)} className={inputClass}>
+          <option value="">Select...</option>
+          {CHANNELS.map(c => (
+            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex-1">
+        <label className={labelClass}>Target</label>
+        {isChat && (
+          <div className="flex items-center gap-2 mb-1">
+            <button type="button" className={modeToggleClass(mode === 'channel')} onClick={() => handleMode('channel')}>
+              Channel
+            </button>
+            <button type="button" className={modeToggleClass(mode === 'dm')} onClick={() => handleMode('dm')}>
+              Direct message
+            </button>
+          </div>
+        )}
+        {!channel && (
+          <input type="text" value="" disabled placeholder="Select a channel first" className={inputClass} />
+        )}
+        {channel === 'email' && (
+          <>
+            <input
+              type="email"
+              value={target}
+              onChange={e => onTarget(e.target.value)}
+              placeholder="you@example.com"
+              className={inputClass}
+            />
+            <p className="text-xs text-slate-400 mt-1">Email address (or a person's name to look up).</p>
+          </>
+        )}
+        {isChat && mode === 'channel' && (
+          <Combobox
+            value={target}
+            onChange={v => onTarget(v)}
+            options={channelOptions}
+            loading={loadingChannels}
+            allowCustom
+            placeholder={`Search ${channel} channels…`}
+          />
+        )}
+        {isChat && mode === 'dm' && (
+          <Combobox
+            value={target}
+            onChange={v => onTarget(v)}
+            options={peopleOptions}
+            loading={loadingPeople}
+            onQueryChange={searchPeople}
+            allowCustom
+            placeholder="Search people by name…"
+          />
+        )}
+      </div>
     </div>
-    <div className="flex-1">
-      <label className={labelClass}>Target</label>
-      <input type="text" value={target} onChange={e => onTarget(e.target.value)}
-        placeholder="channel or email" className={inputClass} />
-    </div>
-  </div>
-)
+  )
+}
 
 interface SpawnConfigState {
   envId: number | null

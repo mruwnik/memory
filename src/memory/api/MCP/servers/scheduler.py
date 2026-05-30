@@ -10,13 +10,14 @@ from sqlalchemy import nullslast
 from sqlalchemy.exc import IntegrityError
 
 from memory.api.MCP.access import get_mcp_current_user
-from memory.common.dates import parse_iso_datetime
-from memory.common.db.models.secrets import find_secret
+from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
+from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution
 from memory.common.db.models.scheduled_tasks import compute_next_cron
+from memory.common.db.models.secrets import find_secret
 from memory.common.scopes import SCOPE_SCHEDULE, SCOPE_SCHEDULE_WRITE
 
 logger = logging.getLogger(__name__)
@@ -68,16 +69,28 @@ async def list_all(
         if task_type:
             query = query.filter(ScheduledTask.task_type == task_type)
         if enabled is not None:
-            query = query.filter(ScheduledTask.enabled if enabled else ~ScheduledTask.enabled)
+            query = query.filter(
+                ScheduledTask.enabled if enabled else ~ScheduledTask.enabled
+            )
 
-        tasks = query.order_by(nullslast(ScheduledTask.next_scheduled_time)).limit(limit).all()
+        tasks = (
+            query.order_by(nullslast(ScheduledTask.next_scheduled_time))
+            .limit(limit)
+            .all()
+        )
         return [task.serialize() for task in tasks]
 
 
 SPAWN_CONFIG_FIELDS = {
-    "allowed_tools", "repo_url", "custom_env",
-    "enable_playwright", "run_id", "environment_id", "snapshot_id",
-    "github_token", "github_token_write",
+    "allowed_tools",
+    "repo_url",
+    "custom_env",
+    "enable_playwright",
+    "run_id",
+    "environment_id",
+    "snapshot_id",
+    "github_token",
+    "github_token_write",
 }
 
 
@@ -90,9 +103,7 @@ def validate_cron_interval(cron_expression: str) -> None:
         raise ValueError("Invalid cron expression")
     parts = cron_expression.strip().split()
     if len(parts) != 5:
-        raise ValueError(
-            f"Only 5-field cron expressions supported, got {len(parts)}"
-        )
+        raise ValueError(f"Only 5-field cron expressions supported, got {len(parts)}")
     cron = croniter(cron_expression)
     first = cron.get_next(float)
     second = cron.get_next(float)
@@ -218,7 +229,9 @@ def build_scheduled_task(
         validate_notification_channel(notification_channel)
         task.message = message
         task.notification_channel = notification_channel
-        task.notification_target = notification_target
+        task.notification_target = resolve_and_validate_target(
+            session, user_id, notification_channel, notification_target
+        )
         task.data = {"notification_type": "notify_user", "subject": topic}
     else:
         if not spawn_config:
@@ -229,9 +242,7 @@ def build_scheduled_task(
             )
         unknown = set(spawn_config) - SPAWN_CONFIG_FIELDS
         if unknown:
-            raise ValueError(
-                f"Unknown spawn_config keys: {', '.join(sorted(unknown))}"
-            )
+            raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
         validate_scheduled_secret_refs(session, user_id, spawn_config)
         task.message = message
         task.topic = topic or message[:100]
@@ -282,7 +293,12 @@ async def upsert(
         topic: Topic/subject of the task.
         message: Notification body, or the Claude session's initial prompt.
         notification_channel: Notification channel (discord, slack, email).
-        notification_target: Target for notifications.
+        notification_target: Who/where to notify, validated and resolved to a
+            concrete id/address before saving (a clear error is returned if it
+            can't be). Accepts a person name/identifier/email (resolved to the
+            person's Discord/Slack id or email), a Discord/Slack channel id, a
+            raw Discord/Slack user id, or an email address. Delivery method
+            (DM vs channel) is derived from the resolved id.
         spawn_config: Spawn config for claude_session tasks. Supported keys:
             allowed_tools, repo_url, custom_env, enable_playwright, run_id,
             environment_id, snapshot_id, github_token, github_token_write.
@@ -350,18 +366,35 @@ async def upsert(
             task.topic = topic
         if message is not None:
             task.message = message
+        channel_changed = (
+            notification_channel is not None
+            and notification_channel != task.notification_channel
+        )
         if notification_channel is not None:
             validate_notification_channel(notification_channel)
             task.notification_channel = notification_channel
         if notification_target is not None:
-            task.notification_target = notification_target
+            if not task.notification_channel:
+                raise ValueError("notification_target requires a notification_channel")
+            task.notification_target = resolve_and_validate_target(
+                session, user_id, task.notification_channel, notification_target
+            )
+        elif channel_changed and task.notification_target:
+            # The stored target was validated for the OLD channel; a channel
+            # change must re-resolve it (or surface a clear error) rather than
+            # leave a target that silently breaks at dispatch.
+            task.notification_target = resolve_and_validate_target(
+                session, user_id, task.notification_channel, task.notification_target
+            )
 
         if spawn_config is not None:
             if task.task_type != "claude_session":
                 raise ValueError("spawn_config can only be set on claude_session tasks")
             unknown = set(spawn_config.keys()) - SPAWN_CONFIG_FIELDS
             if unknown:
-                raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
+                raise ValueError(
+                    f"Unknown spawn_config keys: {', '.join(sorted(unknown))}"
+                )
 
             data = dict(task.data or {})
             existing = dict(data.get("spawn_config") or {})
