@@ -54,6 +54,7 @@ from memory.api.users import router as users_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.celery_overview import router as celery_overview_router
+from memory.api.ingest import router as ingest_router
 from memory.api.MCP.base import mcp
 from memory.api.safety import validate_disable_auth_safety
 
@@ -472,6 +473,7 @@ app.include_router(users_router)
 app.include_router(discord_router)
 app.include_router(slack_router)
 app.include_router(celery_overview_router)
+app.include_router(ingest_router)
 
 
 # Add health check to MCP server instead of main app

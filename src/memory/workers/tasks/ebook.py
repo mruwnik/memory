@@ -60,6 +60,8 @@ def section_processor(
     section_map: dict[
         tuple[int, int | None], tuple[BookSection, tuple[int, int | None] | None]
     ],
+    creator_id: int | None = None,
+    project_id: int | None = None,
 ):
     def process_section(
         section: Section,
@@ -87,6 +89,8 @@ def section_processor(
                 modality="book",
                 tags=book.tags,
                 pages=section.pages,
+                creator_id=creator_id,
+                project_id=project_id,
             )
 
             all_sections.append(book_section)
@@ -101,13 +105,18 @@ def section_processor(
 
 
 def create_all_sections(
-    ebook_sections: list[Section], book: Book
+    ebook_sections: list[Section],
+    book: Book,
+    creator_id: int | None = None,
+    project_id: int | None = None,
 ) -> tuple[list[BookSection], dict]:
     """Create all sections iteratively to handle parent-child relationships properly."""
     all_sections = []
     section_map = {}  # Maps (level, number) to section for parent lookup
 
-    process_section = section_processor(book, all_sections, section_map)
+    process_section = section_processor(
+        book, all_sections, section_map, creator_id=creator_id, project_id=project_id
+    )
     for section in ebook_sections:
         process_section(section)
 
@@ -195,6 +204,8 @@ def execute_book_processing(
     series: str | dict[str, Any] = "",
     series_number: int | None = None,
     job_id: int | None = None,
+    creator_id: int | None = None,
+    project_id: int | None = None,
 ) -> BookProcessingResult:
     """
     Run the full processing pipeline on a book.
@@ -210,6 +221,8 @@ def execute_book_processing(
         book: Book record (new or existing with sections cleared)
         ebook: Parsed ebook data
         title/author/etc: Optional metadata overrides
+        creator_id/project_id: Owner + project stamped on each BookSection
+            (access control); reingest passes the book's existing values
         job_id: Optional job ID for status tracking
 
     Returns:
@@ -220,7 +233,9 @@ def execute_book_processing(
 
     try:
         # Create all sections
-        all_sections, section_map = create_all_sections(ebook.sections, book)
+        all_sections, section_map = create_all_sections(
+            ebook.sections, book, creator_id=creator_id, project_id=project_id
+        )
         session.add_all(all_sections)
         session.flush()
 
@@ -304,6 +319,8 @@ def sync_book(
     edition: str = "",
     series: str | dict[str, Any] = "",
     series_number: int | None = None,
+    creator_id: int | None = None,
+    project_id: int | None = None,
     job_id: int | None = None,
 ) -> BookProcessingResult:
     """
@@ -315,6 +332,7 @@ def sync_book(
         file_path: Path to the ebook file
         tags: Optional tags for the book
         title/author/etc: Optional metadata overrides
+        creator_id/project_id: Owner + project stamped on each section
         job_id: Optional job ID for status tracking
 
     Returns:
@@ -370,6 +388,8 @@ def sync_book(
             edition=edition,
             series=series,
             series_number=series_number,
+            creator_id=creator_id,
+            project_id=project_id,
             job_id=job_id,
         )
 
@@ -406,6 +426,17 @@ def reprocess_book(
             job_utils.start_job(session, job_id)
             session.commit()
 
+        # Preserve the owner/project across reingest: prepare_book_for_reingest
+        # deletes the existing sections (which hold the access columns), so read
+        # them first or reingest would silently reset the book to unowned.
+        existing_section = (
+            session.query(BookSection)
+            .filter(BookSection.book_id == item_id)
+            .first()
+        )
+        preserved_creator = existing_section.creator_id if existing_section else None
+        preserved_project = existing_section.project_id if existing_section else None
+
         book = prepare_book_for_reingest(session, item_id)
         if not book:
             error = f"Book {item_id} not found"
@@ -435,5 +466,7 @@ def reprocess_book(
             edition=edition,
             series=series,
             series_number=series_number,
+            creator_id=preserved_creator,
+            project_id=preserved_project,
             job_id=job_id,
         )

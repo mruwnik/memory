@@ -992,17 +992,59 @@ class ForumPost(SourceItem):
         return min(2.5, 1.0 + karma / self.karma_reference)
 
 
+class MiscDocPayload(SourceItemPayload):
+    filename: Annotated[str, "Name of the file"]
+    content_type: Annotated[str, "MIME type of the file"]
+
+
 class MiscDoc(SourceItem):
+    """Generic unattached file. Behaves like EmailAttachment but is not tied
+    to any parent: ``filename`` is FILE_STORAGE_DIR-relative (the writer
+    conventionally places bytes under the MISC_STORAGE_DIR subdir), and the
+    file is chunked by mime type via extract.extract_data_chunks. Arbitrary
+    caller-supplied metadata rides in a JSONB column and is surfaced into the
+    Qdrant payload for filtering."""
+
     __tablename__ = "misc_doc"
 
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
-    path: Mapped[str | None] = mapped_column(Text)
+    # DB column is "metadata"; attribute is doc_metadata because SQLAlchemy
+    # reserves `metadata` on declarative models (matches Book.book_metadata).
+    doc_metadata: Mapped[dict | None] = mapped_column(JSONB, name="metadata")
 
     __mapper_args__ = {
         "polymorphic_identity": "misc_doc",
     }
+
+    @property
+    def preview_text(self) -> str | None:
+        return self.filename
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        if self.filename:
+            contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
+        else:
+            contents = self.content or ""
+        return extract.extract_data_chunks(self.mime_type or "", contents)
+
+    def as_payload(self) -> MiscDocPayload:
+        # Caller metadata is merged at lowest precedence so the authoritative
+        # typed fields always win; this also avoids the duplicate-kwarg
+        # TypeError that call-kwarg spreading would raise on key collision.
+        return MiscDocPayload(
+            **{
+                **(self.doc_metadata or {}),
+                **super().as_payload(),
+                "filename": self.filename or "",
+                "content_type": self.mime_type or "",
+            }
+        )
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["doc", "text", "blog", "photo", "book"]
 
 
 class GithubItemPayload(SourceItemPayload):

@@ -197,6 +197,8 @@ def create_photo_from_file(
     exif_data: dict,
     tags: list[str],
     sha256: bytes,
+    creator_id: int | None = None,
+    project_id: int | None = None,
 ) -> Photo:
     """Create a Photo model from file data.
 
@@ -240,6 +242,8 @@ def create_photo_from_file(
         exif_lat=lat,
         exif_lon=lon,
         camera=camera,
+        creator_id=creator_id,
+        project_id=project_id,
     )
 
 
@@ -248,6 +252,8 @@ def create_photo_from_file(
 def sync_photo(
     file_path: str,
     tags: list[str] | None = None,
+    creator_id: int | None = None,
+    project_id: int | None = None,
     job_id: int | None = None,
 ) -> PhotoProcessingResult:
     """
@@ -256,6 +262,8 @@ def sync_photo(
     Args:
         file_path: Path to the photo file (absolute or relative to PHOTO_STORAGE_DIR)
         tags: Optional list of tags to apply
+        creator_id: Optional owner; sets content visibility for the uploader
+        project_id: Optional project to scope visibility
         job_id: Optional job ID for status tracking
 
     Returns:
@@ -284,7 +292,10 @@ def sync_photo(
 
         # Create new photo record (reuse the hash already computed in
         # validate_and_parse_photo to avoid hashing photo bytes twice).
-        photo = create_photo_from_file(path, content, exif_data, tags, sha256)
+        photo = create_photo_from_file(
+            path, content, exif_data, tags, sha256,
+            creator_id=creator_id, project_id=project_id,
+        )
         session.add(photo)
         session.flush()
 

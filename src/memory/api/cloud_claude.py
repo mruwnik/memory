@@ -48,6 +48,7 @@ from memory.api.orchestrator_client import (
     OrchestratorError,
     get_orchestrator_client,
 )
+from memory.api.request_body import read_request_body_with_cap
 from memory.api.terminal_relay_client import RelayClient
 from memory.api.tmux_session import (
     input_handler_loop,
@@ -1065,16 +1066,6 @@ async def transfer_push(request: Request) -> dict:
     token = parts[1].strip()
     payload = verify_transfer_token(token, "write")
 
-    # Cheap pre-check: if the client honestly declared a body larger than
-    # the cap, refuse before reading anything.
-    cap = settings.MAX_TRANSFER_PUSH_BYTES
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > cap:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Upload too large. Maximum size is {cap // (1024 * 1024)} MB",
-        )
-
     # Buffer the request body at the API layer rather than streaming it to the
     # orchestrator. Two reasons:
     #   1. The orchestrator's Unix-socket HTTP parser reads `Content-Length`
@@ -1087,20 +1078,9 @@ async def transfer_push(request: Request) -> dict:
     # this endpoint is for skill-bundled tar uploads of small artifacts
     # (markdown reports, specs, configs). If anyone hits a buffer cap, we
     # extend the orchestrator HTTP parser to handle chunked encoding.
-    #
-    # Streamed read with running cap so a chunked upload (no Content-Length)
-    # or a Content-Length-lying client can't drive an unbounded allocation.
-    body_chunks: list[bytes] = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > cap:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Upload too large. Maximum size is {cap // (1024 * 1024)} MB",
-            )
-        body_chunks.append(chunk)
-    body = b"".join(body_chunks)
+    # The cap bounds peak allocation against a chunked or Content-Length-lying
+    # client (the helper does the cheap declared-length pre-check too).
+    body = await read_request_body_with_cap(request, settings.MAX_TRANSFER_PUSH_BYTES)
 
     upstream_url = container_files_url(payload.session_id, payload.path)
 

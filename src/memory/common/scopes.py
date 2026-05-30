@@ -50,6 +50,7 @@ SCOPE_NOTES = "notes"
 SCOPE_NOTES_WRITE = "notes:write"
 SCOPE_REPORTS = "reports"
 SCOPE_REPORTS_WRITE = "reports:write"
+SCOPE_INGEST = "ingest"
 
 # Integrations
 SCOPE_GITHUB = "github"
@@ -143,6 +144,12 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_REPORTS_WRITE,
         "label": "Reports (write)",
         "description": "Create and manage reports",
+        "category": "core",
+    },
+    {
+        "value": SCOPE_INGEST,
+        "label": "Ingest",
+        "description": "Add files, pages, and images to the knowledge base",
         "category": "core",
     },
     # Integrations

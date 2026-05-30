@@ -30,7 +30,7 @@ before issuing the next hop. ``stream_download_*`` use it transparently.
 
 import logging
 import pathlib
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, overload
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
@@ -310,6 +310,32 @@ def safe_get(
     )
 
 
+@overload
+def stream_download_to_bytes(
+    url: str,
+    max_bytes: int,
+    *,
+    headers: Mapping[str, str] | None = ...,
+    timeout: float = ...,
+    follow_redirects: bool = ...,
+    validate_url: bool = ...,
+    return_content_type: Literal[False] = False,
+) -> bytes | None: ...
+
+
+@overload
+def stream_download_to_bytes(
+    url: str,
+    max_bytes: int,
+    *,
+    headers: Mapping[str, str] | None = ...,
+    timeout: float = ...,
+    follow_redirects: bool = ...,
+    validate_url: bool = ...,
+    return_content_type: Literal[True],
+) -> tuple[str | None, bytes | None]: ...
+
+
 def stream_download_to_bytes(
     url: str,
     max_bytes: int,
@@ -318,13 +344,20 @@ def stream_download_to_bytes(
     timeout: float = 30.0,
     follow_redirects: bool = True,
     validate_url: bool = True,
-) -> bytes | None:
+    return_content_type: bool = False,
+) -> bytes | None | tuple[str | None, bytes | None]:
     """GET ``url`` and return the body, or None if it exceeds ``max_bytes``.
 
     Streams the response so peak RAM use is at most ``max_bytes`` plus
     one chunk. Pre-checks ``Content-Length`` so an obviously-too-big file
     is rejected before any body bytes are read. Redirects are followed
     manually with SSRF validation per hop — see :func:`safe_get`.
+
+    When ``return_content_type=True``, returns ``(content_type, body)``
+    where ``content_type`` is the value of the response ``Content-Type``
+    header (or ``None`` if absent), and ``body`` is the bytes (or ``None``
+    on failure). When ``return_content_type=False`` (default), returns
+    the body bytes or ``None`` on failure — the existing behaviour.
     """
     try:
         with safe_get(
@@ -337,8 +370,10 @@ def stream_download_to_bytes(
         ) as response:
             response.raise_for_status()
 
+            content_type: str | None = response.headers.get("content-type")
+
             if _content_length_exceeds_cap(response.headers, max_bytes, url):
-                return None
+                return (content_type, None) if return_content_type else None
 
             chunks: list[bytes] = []
             size = 0
@@ -352,15 +387,16 @@ def stream_download_to_bytes(
                         url,
                         max_bytes,
                     )
-                    return None
+                    return (content_type, None) if return_content_type else None
                 chunks.append(chunk)
-            return b"".join(chunks)
+            body = b"".join(chunks)
+            return (content_type, body) if return_content_type else body
     except UnsafeURLError as e:
         logger.warning("Refusing to download %s: %s", url, e)
-        return None
+        return (None, None) if return_content_type else None
     except requests.RequestException as e:
         logger.warning("Failed to download %s: %s", url, e)
-        return None
+        return (None, None) if return_content_type else None
 
 
 def stream_download_to_path(

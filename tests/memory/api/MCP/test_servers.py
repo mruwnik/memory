@@ -27,6 +27,7 @@ def test_all_servers_in_enum():
         "email",
         "forecast",
         "github",
+        "ingest",
         "journal",
         "meta",
         "notes",

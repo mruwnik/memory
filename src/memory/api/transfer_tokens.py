@@ -8,34 +8,36 @@ sizes.
 Format:  v1.<base64url(payload_json)>.<base64url(hmac_sha256(payload, secret))>
 """
 
-import base64
-import binascii
-import hmac
-import json
-import time
 from dataclasses import dataclass, asdict
-from hashlib import sha256
 from typing import Any, Literal
 
+from memory.api import signed_tokens
+from memory.api.signed_tokens import (
+    SignedTokenError,
+    SignedTokenExpiredError,
+)
 from memory.common import settings
 
-VERSION = "v1"
+VERSION = signed_tokens.VERSION
 DEFAULT_TTL_SECONDS = 60
 
+# Domain tag mixed into the HMAC message. Transfer tokens share
+# TRANSFER_TOKEN_SECRET and the v1.<seg>.<sig> wire format with ingest tokens,
+# so a domain tag makes the two families cryptographically non-interchangeable.
+_SIGN_DOMAIN = "transfer.v1"
 
-class TransferTokenError(Exception):
+
+class TransferTokenError(SignedTokenError):
     """Raised when a transfer token is malformed, tampered, or expired."""
 
 
-class TransferTokenExpiredError(TransferTokenError):
+class TransferTokenExpiredError(TransferTokenError, SignedTokenExpiredError):
     """Raised specifically when the token's ``exp`` is in the past.
 
-    Callers (notably ``cloud_claude.verify_transfer_token``) used to
-    distinguish the expired branch by string-matching ``"expired"`` in the
-    exception message, which is brittle: any future error message that
-    happens to mention ``expired`` (e.g. for a malformed payload that
-    contains the word) would be misclassified, and the substring sniff
-    leaked the inner reason via the response. Use ``isinstance`` instead.
+    Callers (notably ``cloud_claude.verify_transfer_token``) distinguish the
+    expired branch via ``isinstance`` rather than string-matching the message,
+    so a malformed-token error whose text happens to mention "expired" is not
+    misclassified.
     """
 
 
@@ -48,34 +50,6 @@ class TransferTokenPayload:
     exp: int | None  # unix timestamp; None means use default TTL on mint
 
 
-def _b64u_encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _b64u_decode(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
-
-
-def _sign(payload_segment: str, secret: str) -> str:
-    sig = hmac.new(
-        secret.encode("utf-8"),
-        payload_segment.encode("ascii"),
-        sha256,
-    ).digest()
-    return _b64u_encode(sig)
-
-
-def _require_secret() -> str:
-    secret = settings.TRANSFER_TOKEN_SECRET
-    if not secret:
-        raise TransferTokenError(
-            "Transfer token secret is not configured "
-            "(set TRANSFER_TOKEN_SECRET or SECRETS_ENCRYPTION_KEY)"
-        )
-    return secret
-
-
 def mint_token(
     payload: TransferTokenPayload,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
@@ -84,16 +58,14 @@ def mint_token(
 
     If ``payload.exp`` is None, set it to ``now + ttl_seconds``.
     """
-    secret = _require_secret()
-
-    data = asdict(payload)
-    if data["exp"] is None:
-        data["exp"] = int(time.time()) + ttl_seconds
-
-    payload_json = json.dumps(data, separators=(",", ":"), sort_keys=True)
-    payload_segment = _b64u_encode(payload_json.encode("utf-8"))
-    signature_segment = _sign(payload_segment, secret)
-    return f"{VERSION}.{payload_segment}.{signature_segment}"
+    try:
+        return signed_tokens.sign(
+            asdict(payload), domain=_SIGN_DOMAIN, ttl_seconds=ttl_seconds
+        )
+    except SignedTokenExpiredError as exc:
+        raise TransferTokenExpiredError(str(exc)) from exc
+    except SignedTokenError as exc:
+        raise TransferTokenError(str(exc)) from exc
 
 
 def verify_token(token: str) -> TransferTokenPayload:
@@ -104,47 +76,21 @@ def verify_token(token: str) -> TransferTokenPayload:
     case, not tampering). Raises ``TransferTokenError`` on any other
     validation failure.
     """
-    secret = _require_secret()
-
-    if not token or token.count(".") != 2:
-        raise TransferTokenError("malformed token")
-
-    version, payload_segment, signature_segment = token.split(".")
-
-    if version != VERSION:
-        raise TransferTokenError(f"unsupported token version: {version}")
-
-    # Anything that goes wrong inside `_sign` (e.g. the segment contains
-    # a non-ASCII char that survives a malformed token) should map to a
-    # malformed-token failure, not a 500.
     try:
-        expected = _sign(payload_segment, secret)
-    except (UnicodeEncodeError, ValueError):
-        raise TransferTokenError("malformed token")
-    if not hmac.compare_digest(expected, signature_segment):
-        raise TransferTokenError("invalid signature")
-
-    # `_b64u_decode` can raise `binascii.Error` for non-base64 garbage and
-    # `UnicodeDecodeError` if the bytes don't decode as utf-8. The previous
-    # `(ValueError, json.JSONDecodeError)` set caught the binascii case
-    # only because `binascii.Error` happens to be a ValueError subclass on
-    # current CPython — pin the contract explicitly so a future Python
-    # release that re-classifies doesn't surprise us with a 500.
-    try:
-        data = json.loads(_b64u_decode(payload_segment))
-    except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        raise TransferTokenError("malformed payload")
+        data = signed_tokens.verify(token, domain=_SIGN_DOMAIN)
+    except SignedTokenExpiredError as exc:
+        raise TransferTokenExpiredError(str(exc)) from exc
+    except SignedTokenError as exc:
+        raise TransferTokenError(str(exc)) from exc
 
     # Distinguish "no/garbage exp claim" (malformed payload, possibly
-    # tampering) from "exp is an int in the past" (genuinely expired).
-    # Conflating them defeats the purpose of having a dedicated
-    # TransferTokenExpiredError and gives an attacker probing token
+    # tampering) from "exp is an int in the past" (genuinely expired, already
+    # surfaced as TransferTokenExpiredError above). Conflating them defeats the
+    # purpose of the dedicated subclass and gives an attacker probing token
     # shape the same response as a benign expiry.
     exp = data.get("exp")
     if not isinstance(exp, int):
         raise TransferTokenError("malformed payload")
-    if exp < int(time.time()):
-        raise TransferTokenExpiredError("token expired")
 
     try:
         user_id = int(data["user_id"])

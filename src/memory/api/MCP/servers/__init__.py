@@ -23,6 +23,7 @@ class MCPServer(str, Enum):
     EMAIL = "email"
     FORECAST = "forecast"
     GITHUB = "github"
+    INGEST = "ingest"
     JOURNAL = "journal"
     META = "meta"
     NOTES = "notes"
@@ -89,6 +90,10 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.github import github_mcp
 
             return github_mcp
+        case MCPServer.INGEST:
+            from memory.api.MCP.servers.ingest import ingest_mcp
+
+            return ingest_mcp
         case MCPServer.JOURNAL:
             from memory.api.MCP.servers.journal import journal_mcp
 

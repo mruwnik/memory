@@ -1,8 +1,6 @@
 """Tests for short-lived HMAC tokens used by cloud-claude file transfer URLs."""
 
 import base64
-import hashlib
-import hmac
 import time
 from typing import Any
 from unittest.mock import patch
@@ -150,14 +148,14 @@ def test_secret_change_invalidates_existing_tokens():
 
 def test_empty_secret_refuses_to_mint():
     with patch("memory.common.settings.TRANSFER_TOKEN_SECRET", ""):
-        with pytest.raises(TransferTokenError, match="not configured"):
+        with pytest.raises(TransferTokenError, match="signing secret"):
             mint_token(make_payload())
 
 
 def test_empty_secret_refuses_to_verify():
     token = mint_token(make_payload())
     with patch("memory.common.settings.TRANSFER_TOKEN_SECRET", ""):
-        with pytest.raises(TransferTokenError, match="not configured"):
+        with pytest.raises(TransferTokenError, match="signing secret"):
             verify_token(token)
 
 
@@ -307,20 +305,17 @@ def _mint_with_raw_payload(raw_data: dict) -> str:
     type coercion that protects against future code paths writing junk.
     """
     import base64
-    import hmac
     import json as _json
-    from hashlib import sha256
 
-    from memory.api.transfer_tokens import VERSION
+    from memory.api import signed_tokens
     from memory.common import settings
 
     payload_json = _json.dumps(raw_data, separators=(",", ":"), sort_keys=True)
     seg = base64.urlsafe_b64encode(payload_json.encode()).rstrip(b"=").decode()
     secret = settings.TRANSFER_TOKEN_SECRET
     assert secret is not None, "autouse patch_secret fixture must set TRANSFER_TOKEN_SECRET"
-    sig = hmac.new(secret.encode(), seg.encode(), sha256).digest()
-    sig_seg = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
-    return f"{VERSION}.{seg}.{sig_seg}"
+    sig_seg = signed_tokens.sign_segment(seg, domain="transfer.v1", secret=secret)
+    return f"{signed_tokens.VERSION}.{seg}.{sig_seg}"
 
 
 def test_verify_rejects_non_int_user_id():
@@ -387,12 +382,15 @@ def test_non_base64_payload_segment_returns_malformed_not_500():
     as ``TransferTokenError("malformed payload")``, not propagate as a
     500-class exception. Pin the contract so a future Python release
     that re-classifies binascii.Error doesn't surprise us."""
-    secret_bytes = SECRET.encode("utf-8")
+    from memory.api import signed_tokens
+
     payload_segment = "!@#$"
-    # Sign the bogus segment with the live secret so we exercise the
-    # base64-decode branch (rather than tripping signature mismatch first).
-    sig = hmac.new(secret_bytes, payload_segment.encode("ascii"), hashlib.sha256).digest()
-    sig_segment = base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+    # Sign the bogus segment under the live secret AND transfer domain so we
+    # exercise the base64-decode branch (rather than tripping signature
+    # mismatch first).
+    sig_segment = signed_tokens.sign_segment(
+        payload_segment, domain="transfer.v1", secret=SECRET
+    )
     bad = f"v1.{payload_segment}.{sig_segment}"
 
     with pytest.raises(TransferTokenError, match="malformed payload"):

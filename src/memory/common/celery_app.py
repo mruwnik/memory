@@ -33,6 +33,7 @@ MEETINGS_ROOT = "memory.workers.tasks.meetings"
 TRANSCRIPTS_ROOT = "memory.workers.tasks.transcripts"
 REPORTS_ROOT = "memory.workers.tasks.reports"
 METRICS_ROOT = "memory.workers.tasks.metrics"
+MISC_ROOT = "memory.workers.tasks.misc"
 VERIFICATION_ROOT = "memory.workers.tasks.verification"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
@@ -133,6 +134,9 @@ RESCAN_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.rescan_transcript_account"
 
 # Report tasks
 SYNC_REPORT = f"{REPORTS_ROOT}.sync_report"
+
+# Misc doc tasks
+SYNC_MISC_DOC = f"{MISC_ROOT}.sync_misc_doc"
 
 # Metrics tasks
 COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
@@ -312,6 +316,7 @@ app.conf.update(
         f"{MEETINGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
         f"{TRANSCRIPTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-meetings"},
         f"{REPORTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-reports"},
+        f"{MISC_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-custom"},
         f"{METRICS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
         # Verification scans (orphan detection, batch source verification) can
         # be slow; route them to their own queue so they can be scaled

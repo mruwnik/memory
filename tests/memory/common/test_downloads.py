@@ -155,6 +155,48 @@ def test_stream_download_to_path_handles_request_exception(tmp_path: pathlib.Pat
     assert not dest.exists()
 
 
+def test_stream_download_to_bytes_return_content_type_surfaces_header():
+    """return_content_type=True returns (content_type, body) tuple."""
+    fake = _FakeChunkResponse([b"hello"], content_length=5)
+    fake.headers["content-type"] = "application/pdf"
+    with patch("memory.common.downloads.requests.get", return_value=fake):
+        result = stream_download_to_bytes(
+            "http://example.com/f", max_bytes=1024, return_content_type=True
+        )
+    assert result == ("application/pdf", b"hello")
+
+
+def test_stream_download_to_bytes_return_content_type_none_when_absent():
+    """return_content_type=True with no Content-Type header returns None for type."""
+    fake = _FakeChunkResponse([b"data"])
+    with patch("memory.common.downloads.requests.get", return_value=fake):
+        result = stream_download_to_bytes(
+            "http://example.com/f", max_bytes=1024, return_content_type=True
+        )
+    assert result == (None, b"data")
+
+
+def test_stream_download_to_bytes_return_content_type_none_on_failure():
+    """return_content_type=True returns (None, None) on network error."""
+    with patch(
+        "memory.common.downloads.requests.get",
+        side_effect=requests.RequestException("boom"),
+    ):
+        result = stream_download_to_bytes(
+            "http://example.com/f", max_bytes=1024, return_content_type=True
+        )
+    assert result == (None, None)
+
+
+def test_stream_download_to_bytes_default_false_unchanged():
+    """Default return_content_type=False keeps backward-compatible bytes return."""
+    fake = _FakeChunkResponse([b"body"])
+    fake.headers["content-type"] = "text/plain"
+    with patch("memory.common.downloads.requests.get", return_value=fake):
+        result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
+    assert result == b"body"
+
+
 @pytest.mark.parametrize("invalid_cl", ["not-a-number", "  "])
 def test_stream_download_to_bytes_ignores_unparseable_content_length(invalid_cl):
     """Garbage Content-Length doesn't crash; we just rely on the streaming cap."""

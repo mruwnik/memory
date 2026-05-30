@@ -111,6 +111,9 @@ SNAPSHOT_STORAGE_DIR = pathlib.Path(
 REPORT_STORAGE_DIR = pathlib.Path(
     os.getenv("REPORT_STORAGE_DIR", FILE_STORAGE_DIR / "reports")
 )
+MISC_STORAGE_DIR = pathlib.Path(
+    os.getenv("MISC_STORAGE_DIR", FILE_STORAGE_DIR / "misc")
+)
 # Host path for snapshots (used by orchestrator which runs on host, not in container)
 # In Docker, FILE_STORAGE_DIR is /app/memory_files but host path may differ
 HOST_STORAGE_DIR = pathlib.Path(
@@ -124,6 +127,7 @@ PRIVATE_DIRS = [
     NOTES_STORAGE_DIR,
     PHOTO_STORAGE_DIR,
     REPORT_STORAGE_DIR,
+    MISC_STORAGE_DIR,
 ]
 
 # Directories to backup - chunks excluded (derived data, can be regenerated)
@@ -137,6 +141,7 @@ storage_dirs = [
     DISCORD_STORAGE_DIR,
     SLACK_STORAGE_DIR,
     REPORT_STORAGE_DIR,
+    MISC_STORAGE_DIR,
 ]
 
 # All storage directories (including non-backed-up ones)
@@ -149,7 +154,7 @@ for dir in all_storage_dirs:
 # every Note/Report consumer (core_fetch_file, serve_file, paths.to_db_filename)
 # stores filenames as FILE_STORAGE_DIR-relative. An env-var override that
 # escaped FILE_STORAGE_DIR would silently break all those code paths.
-for storage_dir in (NOTES_STORAGE_DIR, REPORT_STORAGE_DIR):
+for storage_dir in (NOTES_STORAGE_DIR, REPORT_STORAGE_DIR, MISC_STORAGE_DIR):
     if not storage_dir.resolve().is_relative_to(FILE_STORAGE_DIR.resolve()):
         raise RuntimeError(
             f"{storage_dir} must be inside FILE_STORAGE_DIR={FILE_STORAGE_DIR}"
@@ -363,6 +368,15 @@ MAX_PHOTO_UPLOAD_BYTES = int(
 MAX_REPORT_UPLOAD_BYTES = int(
     os.getenv("MAX_REPORT_UPLOAD_BYTES", 25 * 1024 * 1024)
 )
+MAX_MISC_UPLOAD_BYTES = int(
+    os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
+)
+# Max decoded base64 accepted inline through the add_content MCP tool; above
+# this the caller is handed a one-time upload URL instead of inlining bytes
+# in the MCP payload.
+INGEST_INLINE_MAX_BYTES = int(
+    os.getenv("INGEST_INLINE_MAX_BYTES", 8 * 1024 * 1024)
+)
 
 DISABLE_AUTH = boolean_env("DISABLE_AUTH", False)
 # Paired confirmation flag for DISABLE_AUTH. The single-flag toggle is an
@@ -530,6 +544,7 @@ else:
 
 # Default lifetime (seconds) for cloud-claude file transfer URLs.
 TRANSFER_TOKEN_TTL_SECONDS = int(os.getenv("TRANSFER_TOKEN_TTL_SECONDS", 60))
+INGEST_TOKEN_TTL_SECONDS = int(os.getenv("INGEST_TOKEN_TTL_SECONDS", 300))
 
 # Base URL the API uses to proxy to the Claude session orchestrator. The host
 # part is consumed by ``httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)``
