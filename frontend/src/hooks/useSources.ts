@@ -89,10 +89,16 @@ export interface EmailAccountTestRequest {
   use_ssl?: boolean
 }
 
+export interface ImapFolder {
+  name: string
+  flags: string[]
+  selectable: boolean
+}
+
 export interface EmailAccountTestResult {
   status: 'success' | 'error'
   message: string
-  folders?: number
+  folders?: ImapFolder[]
 }
 
 // Types for Article Feeds

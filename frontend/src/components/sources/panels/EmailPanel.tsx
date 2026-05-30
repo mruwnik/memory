@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, EmailAccount, GoogleAccount } from '@/hooks/useSources'
+import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import {
   SourceCard,
@@ -149,6 +149,62 @@ export const EmailPanel = () => {
   )
 }
 
+// Sent-folder names to fall back on when a server doesn't advertise the
+// \Sent SPECIAL-USE flag (older Dovecot, Courier, many self-hosted setups).
+const SENT_FOLDER_NAMES = new Set(['sent', 'sent items', 'sent mail'])
+
+// A folder is a sensible default to sync if it's the inbox or the Sent mailbox.
+// The \Sent SPECIAL-USE flag is the primary signal; a name match is the
+// fallback for flag-less servers.
+const isDefaultSyncFolder = (folder: ImapFolder): boolean =>
+  folder.selectable &&
+  (folder.name.toUpperCase() === 'INBOX' ||
+    folder.flags.includes('\\Sent') ||
+    SENT_FOLDER_NAMES.has(folder.name.toLowerCase()))
+
+export const defaultSyncFolders = (folders: ImapFolder[]): string[] =>
+  folders.filter(isDefaultSyncFolder).map(f => f.name)
+
+interface FolderPickerProps {
+  folders: ImapFolder[]
+  selected: string[]
+  onChange: (selected: string[]) => void
+}
+
+const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
+  const toggle = (name: string) =>
+    onChange(
+      selected.includes(name)
+        ? selected.filter(n => n !== name)
+        : [...selected, name],
+    )
+
+  return (
+    <div className={styles.formGroup}>
+      <label className={styles.formLabel}>Folders to sync</label>
+      <p className={styles.formHint}>Leave all unchecked to sync only INBOX.</p>
+      <div className="max-h-48 overflow-y-auto border border-slate-200 rounded p-2 space-y-1">
+        {folders.map(folder => (
+          <label
+            key={folder.name}
+            className={`flex items-center gap-2 text-sm ${folder.selectable ? 'text-slate-700' : 'text-slate-400'}`}
+          >
+            <input
+              type="checkbox"
+              checked={selected.includes(folder.name)}
+              disabled={!folder.selectable}
+              onChange={() => toggle(folder.name)}
+              className="rounded border-slate-300"
+            />
+            <span>{folder.name}</span>
+            {!folder.selectable && <span className="text-xs italic">(not selectable)</span>}
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 interface EmailFormProps {
   account?: EmailAccount
   googleAccounts: GoogleAccount[]
@@ -179,6 +235,17 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
   const { testEmailAccount } = useSources()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [availableFolders, setAvailableFolders] = useState<ImapFolder[]>([])
+
+  const handleTestResult = (result: EmailAccountTestResult) => {
+    if (result.status !== 'success' || !result.folders) return
+    setAvailableFolders(result.folders)
+    // Pre-select sensible defaults (INBOX + Sent) only when the user hasn't
+    // already chosen folders, so editing an existing account is non-destructive.
+    if (formData.folders.length === 0) {
+      setFormData(fd => ({ ...fd, folders: defaultSyncFolders(result.folders!) }))
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -322,7 +389,16 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                 password: formData.password || undefined,
                 use_ssl: formData.use_ssl,
               })}
+              onResult={handleTestResult}
             />
+
+            {availableFolders.length > 0 && (
+              <FolderPicker
+                folders={availableFolders}
+                selected={formData.folders}
+                onChange={folders => setFormData({ ...formData, folders })}
+              />
+            )}
 
             <div className={styles.formCheckbox}>
               <input

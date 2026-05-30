@@ -15,20 +15,26 @@ from memory.common.db.models import (
 )
 from memory.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
+    FolderUidsError,
+    ImapFolder,
     create_mail_message,
+    decode_imap_utf7,
     delete_email_vectors,
     delete_emails,
+    delete_removed_emails,
     extract_email_uid,
     fetch_email,
     fetch_email_since,
-    fetch_gmail_messages_by_ids,
     fetch_gmail_message,
+    fetch_gmail_messages_by_ids,
     find_removed_emails,
     get_folder_uids,
     get_gmail_label_ids,
     get_gmail_message_ids,
     gmail_message_exists,
     imap_connection,
+    list_imap_folders,
+    parse_folder_line,
     process_attachment,
     process_attachments,
     process_folder,
@@ -211,6 +217,18 @@ def test_extract_email_uid_no_match():
     assert raw_email == b"raw email content"
 
 
+def test_extract_email_uid_in_later_part():
+    """The UID may be echoed in a part other than the first one."""
+    msg_data = [
+        (b"1 (BODY[] {1234}", b"raw email content"),
+        b"UID 4242)",
+    ]
+    uid, raw_email = extract_email_uid(msg_data)
+
+    assert uid == "4242"
+    assert raw_email == b"raw email content"
+
+
 def test_create_mail_message(db_session):
     raw_email = (
         "From: sender@example.com\n"
@@ -331,7 +349,7 @@ def test_process_folder(email_provider):
 def test_process_folder_no_emails(email_provider):
     account = MagicMock(spec=EmailAccount)
     account.id = 123
-    email_provider.search = MagicMock(return_value=("OK", [b""]))
+    # "Empty" is not in the provider's folders, so a UID SEARCH returns nothing.
 
     result = process_folder(
         email_provider, "Empty", account, datetime(1970, 1, 1), MagicMock()
@@ -348,7 +366,7 @@ def test_process_folder_error(email_provider):
     def raise_exception(*args):
         raise Exception("Test error")
 
-    email_provider.search = raise_exception
+    email_provider.uid = raise_exception
 
     result = process_folder(
         email_provider, "INBOX", account, datetime(1970, 1, 1), mock_processor
@@ -470,20 +488,168 @@ def test_get_folder_uids(email_provider):
 
 def test_get_folder_uids_empty_folder(email_provider):
     """Test getting UIDs from an empty folder."""
-    email_provider.search = MagicMock(return_value=("OK", [b""]))
-
+    # "Empty" is not in the provider's folders, so a UID SEARCH returns nothing.
     uids = get_folder_uids(email_provider, "Empty")
 
     assert uids == set()
 
 
 def test_get_folder_uids_error(email_provider):
-    """Test getting UIDs when folder selection fails."""
+    """A failed SELECT raises rather than returning an empty set, so callers
+    don't confuse an unreadable folder with an empty one."""
     email_provider.select = MagicMock(return_value=("NO", [b"Error"]))
 
-    uids = get_folder_uids(email_provider, "NonExistent")
+    with pytest.raises(FolderUidsError):
+        get_folder_uids(email_provider, "NonExistent")
 
-    assert uids == set()
+
+def test_get_folder_uids_search_error_raises(email_provider):
+    """A failed SEARCH also raises FolderUidsError."""
+    email_provider.uid = MagicMock(return_value=("NO", [b"Error"]))
+
+    with pytest.raises(FolderUidsError):
+        get_folder_uids(email_provider, "INBOX")
+
+
+def test_delete_removed_emails_skips_on_read_error(
+    db_session, gmail_account, email_provider
+):
+    """A folder read error must not delete any local mail."""
+    db_session.add(
+        MailMessage(
+            sha256=b"hash_err" + bytes(24),
+            tags=["test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="RAW",
+            message_id="<err@example.com>",
+            subject="err",
+            sender="alice@example.com",
+            recipients=["bob@example.com"],
+            content="err",
+            folder="INBOX",
+            modality="mail",
+            email_account_id=gmail_account.id,
+            imap_uid="999",
+        )
+    )
+    db_session.commit()
+
+    email_provider.select = MagicMock(return_value=("NO", [b"Error"]))
+    deleted = delete_removed_emails(
+        email_provider, db_session, gmail_account.id, "INBOX"
+    )
+
+    assert deleted == 0
+    remaining = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.email_account_id == gmail_account.id)
+        .count()
+    )
+    assert remaining == 1
+
+
+@pytest.mark.parametrize(
+    "line,name,flags,selectable",
+    [
+        (b'(\\HasNoChildren) "/" INBOX', "INBOX", ["\\HasNoChildren"], True),
+        (
+            b'(\\HasNoChildren \\Archive) "/" "Archive"',
+            "Archive",
+            ["\\HasNoChildren", "\\Archive"],
+            True,
+        ),
+        (b'(\\HasNoChildren) "/" "AI orgs"', "AI orgs", ["\\HasNoChildren"], True),
+        (
+            b'(\\HasNoChildren) "/" logs/Archives/2022',
+            "logs/Archives/2022",
+            ["\\HasNoChildren"],
+            True,
+        ),
+        (
+            b'(\\Noselect \\HasChildren) "/" virtual',
+            "virtual",
+            ["\\Noselect", "\\HasChildren"],
+            False,
+        ),
+        (
+            b'(\\NonExistent \\HasChildren) "/" placeholder',
+            "placeholder",
+            ["\\NonExistent", "\\HasChildren"],
+            False,
+        ),
+        (
+            b'(\\NOSELECT) "/" shouty',
+            "shouty",
+            ["\\NOSELECT"],
+            False,
+        ),
+        (
+            b'(\\HasNoChildren) "/" "weird \\"quoted\\" name"',
+            'weird "quoted" name',
+            ["\\HasNoChildren"],
+            True,
+        ),
+        (b"(\\HasNoChildren) NIL INBOX", "INBOX", ["\\HasNoChildren"], True),
+    ],
+)
+def test_parse_folder_line(line, name, flags, selectable):
+    folder = parse_folder_line(line)
+    assert folder == ImapFolder(name=name, flags=flags, selectable=selectable)
+
+
+@pytest.mark.parametrize("line", [b"", b"* OK noise", b"garbage"])
+def test_parse_folder_line_ignores_non_list_lines(line):
+    assert parse_folder_line(line) is None
+
+
+@pytest.mark.parametrize(
+    "encoded,decoded",
+    [
+        ("INBOX", "INBOX"),
+        ("Archive", "Archive"),
+        ("&-", "&"),  # literal ampersand
+        ("Sent &- Received", "Sent & Received"),
+        ("&AOQ-", "ä"),  # single non-ASCII char
+        ("Drafts &APY- test", "Drafts ö test"),
+    ],
+)
+def test_decode_imap_utf7(encoded, decoded):
+    assert decode_imap_utf7(encoded) == decoded
+
+
+def test_decode_imap_utf7_malformed_falls_back_to_raw():
+    # Unterminated shift sequence — keep the raw value rather than dropping it.
+    assert decode_imap_utf7("Broken &AOQ") == "Broken &AOQ"
+
+
+def test_list_imap_folders_parses_folder_names(email_provider):
+    folders = list_imap_folders(email_provider)
+
+    names = {f.name for f in folders}
+    assert names == {"INBOX", "Archive"}
+    assert all(f.selectable for f in folders)
+
+
+def test_list_imap_folders_raises_when_list_fails(email_provider):
+    email_provider.list = MagicMock(return_value=("NO", [b"error"]))
+    with pytest.raises(RuntimeError):
+        list_imap_folders(email_provider)
+
+
+def test_list_imap_folders_marks_noselect(email_provider):
+    email_provider.list = MagicMock(
+        return_value=(
+            "OK",
+            [
+                b'(\\HasNoChildren) "/" INBOX',
+                b'(\\Noselect \\HasChildren) "/" virtual',
+            ],
+        )
+    )
+    folders = {f.name: f for f in list_imap_folders(email_provider)}
+    assert folders["INBOX"].selectable is True
+    assert folders["virtual"].selectable is False
 
 
 def test_should_delete_email():
@@ -667,9 +833,7 @@ def test_fetch_gmail_message(mock_gmail_service):
     raw_email = "From: test@example.com\nSubject: Test\n\nBody"
     encoded = base64.urlsafe_b64encode(raw_email.encode()).decode()
 
-    mock_gmail_service.users().messages().get().execute.return_value = {
-        "raw": encoded
-    }
+    mock_gmail_service.users().messages().get().execute.return_value = {"raw": encoded}
 
     result = fetch_gmail_message(mock_gmail_service, "msg123", format="raw")
 
@@ -723,11 +887,57 @@ def test_find_and_delete_removed_emails(db_session, gmail_account, qdrant, mock_
     assert deleted == 1
 
     # Verify only 2 messages remain
-    remaining = db_session.query(MailMessage).filter(
-        MailMessage.email_account_id == gmail_account.id
-    ).all()
+    remaining = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.email_account_id == gmail_account.id)
+        .all()
+    )
     assert len(remaining) == 2
     assert all(m.imap_uid in server_message_ids for m in remaining)
+
+
+def test_delete_removed_emails_keeps_messages_with_high_uids(
+    db_session, gmail_account, qdrant, mock_uuid4, email_provider
+):
+    """Regression: deletion must compare real UIDs, not sequence numbers.
+
+    The email_provider's INBOX holds two messages with UIDs 101 and 102 but
+    only two messages, so their sequence numbers are 1 and 2. A reconciliation
+    that searched by sequence number would see ``{1, 2}``, judge the stored
+    rows (imap_uid 101/102) as "no longer on server", and delete live mail.
+    """
+    for uid in ("101", "102"):
+        db_session.add(
+            MailMessage(
+                sha256=f"hash_{uid}".encode() + bytes(24),
+                tags=["test"],
+                size=100,
+                mime_type="message/rfc822",
+                embed_status="RAW",
+                message_id=f"<test-{uid}@example.com>",
+                subject=f"Test {uid}",
+                sender="alice@example.com",
+                recipients=["bob@example.com"],
+                content=f"Test email {uid}",
+                folder="INBOX",
+                modality="mail",
+                email_account_id=gmail_account.id,
+                imap_uid=uid,
+            )
+        )
+    db_session.commit()
+
+    deleted = delete_removed_emails(
+        email_provider, db_session, gmail_account.id, "INBOX"
+    )
+
+    assert deleted == 0
+    remaining = (
+        db_session.query(MailMessage)
+        .filter(MailMessage.email_account_id == gmail_account.id)
+        .count()
+    )
+    assert remaining == 2
 
 
 def test_find_removed_emails_empty_server(db_session, gmail_account):
@@ -755,9 +965,12 @@ def test_find_removed_emails_empty_server(db_session, gmail_account):
     emails_to_delete = find_removed_emails(db_session, gmail_account.id, set())
 
     assert emails_to_delete == []
-    assert db_session.query(MailMessage).filter(
-        MailMessage.email_account_id == gmail_account.id
-    ).count() == 1
+    assert (
+        db_session.query(MailMessage)
+        .filter(MailMessage.email_account_id == gmail_account.id)
+        .count()
+        == 1
+    )
 
 
 def test_fetch_gmail_messages_by_ids(mock_gmail_service):
@@ -768,13 +981,9 @@ def test_fetch_gmail_messages_by_ids(mock_gmail_service):
     encoded = base64.urlsafe_b64encode(raw_email.encode()).decode()
 
     # Mock message get for raw content
-    mock_gmail_service.users().messages().get().execute.return_value = {
-        "raw": encoded
-    }
+    mock_gmail_service.users().messages().get().execute.return_value = {"raw": encoded}
 
-    messages = list(fetch_gmail_messages_by_ids(
-        mock_gmail_service, {"msg1", "msg2"}
-    ))
+    messages = list(fetch_gmail_messages_by_ids(mock_gmail_service, {"msg1", "msg2"}))
 
     assert len(messages) == 2
     assert all(content == raw_email for _, content in messages)
@@ -870,9 +1079,14 @@ def test_gmail_message_exists_api_error():
 @patch("memory.workers.email.imaplib")
 def test_imap_connection_uses_ssl_by_default(mock_imaplib):
     account = EmailAccount(
-        name="t", email_address="t@example.com", account_type="imap",
-        imap_server="imap.example.com", imap_port=993,
-        username="u", password="p", use_ssl=True,
+        name="t",
+        email_address="t@example.com",
+        account_type="imap",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="u",
+        password="p",
+        use_ssl=True,
     )
     with imap_connection(account):
         pass
@@ -883,9 +1097,14 @@ def test_imap_connection_uses_ssl_by_default(mock_imaplib):
 @patch("memory.workers.email.imaplib")
 def test_imap_connection_plain_when_ssl_disabled(mock_imaplib):
     account = EmailAccount(
-        name="t", email_address="t2@example.com", account_type="imap",
-        imap_server="imap.example.com", imap_port=143,
-        username="u", password="p", use_ssl=False,
+        name="t",
+        email_address="t2@example.com",
+        account_type="imap",
+        imap_server="imap.example.com",
+        imap_port=143,
+        username="u",
+        password="p",
+        use_ssl=False,
     )
     with imap_connection(account):
         pass

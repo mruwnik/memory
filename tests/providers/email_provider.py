@@ -1,6 +1,6 @@
 import email
 from datetime import datetime
-from typing import Any
+from typing import Any, List
 
 
 class MockEmailProvider:
@@ -93,62 +93,69 @@ class MockEmailProvider:
             folders.append(f'(\\HasNoChildren) "/" "{folder}"'.encode())
         return ("OK", folders)
 
-    def search(self, charset, criteria):
-        """
-        Handle SEARCH command to find email UIDs.
+    def _current_emails(self) -> List[dict[str, Any]]:
+        """Emails in the currently-selected folder (empty if none/unknown).
 
-        Args:
-            charset: Character set (ignored in mock)
-            criteria: Search criteria (ignored in mock, we return all emails)
-
-        Returns:
-            All email UIDs in the current folder
+        Annotated with ``typing.List`` rather than ``list[...]`` because the IMAP
+        ``list()`` method below shadows the builtin within this class body, so a
+        bare ``list[...]`` annotation here would resolve to the method.
         """
         if not self.current_folder or self.current_folder not in self.emails_by_folder:
-            return ("OK", [b""])
+            return []
+        return self.emails_by_folder[self.current_folder]
 
-        uids = [
-            str(email["uid"]).encode()
-            for email in self.emails_by_folder[self.current_folder]
-        ]
-        return ("OK", [b" ".join(uids) if uids else b""])
+    def _fetch_response(self, email_data: dict[str, Any], seqno: int):
+        """Build an IMAP FETCH response tuple for a single message.
+
+        The leading token is the message *sequence number*; ``UID <uid>`` carries
+        the real UID. This mirrors real IMAP, where the two are distinct and the
+        UID must be read from the ``UID`` data item, not the leading token.
+        """
+        email_string = self._generate_email_string(email_data)
+        uid = email_data["uid"]
+        flags = email_data.get("flags", "\\Seen")
+        date = email_data.get("date_internal", "01-Jan-2023 00:00:00 +0000")
+        header = (
+            f'{seqno} (UID {uid} FLAGS ({flags}) INTERNALDATE "{date}" RFC822 '
+            f"{{{len(email_string)}}}"
+        ).encode()
+        return ("OK", [(header, email_string.encode())])
+
+    def search(self, charset, *criteria):
+        """Sequence-number SEARCH: returns 1-based message positions.
+
+        Like ``imaplib.IMAP4.search``, this returns message *sequence numbers*,
+        NOT UIDs. Criteria are ignored (the mock returns the whole folder).
+        """
+        emails = self._current_emails()
+        seqs = [str(i + 1).encode() for i in range(len(emails))]
+        return ("OK", [b" ".join(seqs) if seqs else b""])
+
+    def uid(self, command: str, *args):
+        """UID command dispatch (``SEARCH`` / ``FETCH``) keyed on real UIDs.
+
+        Mirrors ``imaplib.IMAP4.uid``: ``SEARCH`` returns the messages' real
+        UIDs; ``FETCH`` selects the message whose UID matches the argument.
+        """
+        cmd = command.upper()
+        emails = self._current_emails()
+        if cmd == "SEARCH":
+            uids = [str(e["uid"]).encode() for e in emails]
+            return ("OK", [b" ".join(uids) if uids else b""])
+        if cmd == "FETCH":
+            target = int(args[0].decode() if isinstance(args[0], bytes) else args[0])
+            for seqno, email_data in enumerate(emails, start=1):
+                if email_data["uid"] == target:
+                    return self._fetch_response(email_data, seqno)
+            return ("NO", [b"Email not found"])
+        raise ValueError(f"Unsupported uid command: {command}")
 
     def fetch(self, message_set: bytes | str, message_parts: bytes | str):
-        """
-        Handle FETCH command to retrieve email data.
-
-        Args:
-            message_set: Message numbers/UIDs to fetch
-            message_parts: Parts of the message to fetch
-
-        Returns:
-            Email data in IMAP format
-        """
-        if not self.current_folder or self.current_folder not in self.emails_by_folder:
-            return ("OK", [None])
-
-        # For simplicity, we'll just match the UID with the ID provided
-        uid = int(
+        """Sequence-number FETCH: ``message_set`` is a 1-based position."""
+        emails = self._current_emails()
+        seq = int(
             message_set.decode() if isinstance(message_set, bytes) else message_set
         )
-
-        # Find the email with the matching UID
-        for email_data in self.emails_by_folder[self.current_folder]:
-            if email_data["uid"] == uid:
-                # Generate email content
-                email_string = self._generate_email_string(email_data)
-                flags = email_data.get("flags", "\\Seen")
-                date = email_data.get("date_internal", "01-Jan-2023 00:00:00 +0000")
-
-                # Format the response as expected by the IMAP client
-                response = [
-                    (
-                        f'{uid} (UID {uid} FLAGS ({flags}) INTERNALDATE "{date}" RFC822 '
-                        f"{{{len(email_string)}}}".encode(),
-                        email_string.encode(),
-                    )
-                ]
-                return ("OK", response)
-
-        # No matching email found
+        if 1 <= seq <= len(emails):
+            return self._fetch_response(emails[seq - 1], seq)
         return ("NO", [b"Email not found"])

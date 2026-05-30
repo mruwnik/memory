@@ -157,7 +157,11 @@ def test_create_imap_account_success(client, user, db_session):
     assert data["folders"] == ["INBOX", "Sent"]
 
     # Verify in database
-    account = db_session.query(EmailAccount).filter_by(email_address="test@example.com").first()
+    account = (
+        db_session.query(EmailAccount)
+        .filter_by(email_address="test@example.com")
+        .first()
+    )
     assert account is not None
     assert account.user_id == user.id
     assert account.password == "testpass"
@@ -523,7 +527,9 @@ def test_update_account_not_owned(regular_client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = regular_client.patch(f"/email-accounts/{other_account.id}", json={"name": "Hacked"})
+    response = regular_client.patch(
+        f"/email-accounts/{other_account.id}", json={"name": "Hacked"}
+    )
 
     assert response.status_code == 404
 
@@ -705,7 +711,14 @@ def test_connection_success(mock_imap, client, user, db_session):
     """Testing connection with valid credentials should succeed."""
     # Mock the IMAP connection context manager and list() method
     mock_conn = MagicMock()
-    mock_conn.list.return_value = ("OK", [b'folder1', b'folder2'])
+    mock_conn.list.return_value = (
+        "OK",
+        [
+            b'(\\HasNoChildren) "/" INBOX',
+            b'(\\HasNoChildren \\Sent) "/" Sent',
+            b'(\\Noselect \\HasChildren) "/" virtual',
+        ],
+    )
     mock_imap.return_value.__enter__.return_value = mock_conn
     mock_imap.return_value.__exit__.return_value = None
 
@@ -729,7 +742,11 @@ def test_connection_success(mock_imap, client, user, db_session):
     data = response.json()
     assert data["status"] == "success"
     assert "message" in data
-    assert data["folders"] == 2
+    assert [f["name"] for f in data["folders"]] == ["INBOX", "Sent", "virtual"]
+    by_name = {f["name"]: f for f in data["folders"]}
+    assert by_name["Sent"]["flags"] == ["\\HasNoChildren", "\\Sent"]
+    assert by_name["virtual"]["selectable"] is False
+    assert by_name["INBOX"]["selectable"] is True
 
     # Verify connection was attempted with the stored account's values
     mock_imap.assert_called_once()
@@ -790,7 +807,9 @@ def test_connection_not_owned(mock_imap, regular_client, user, db_session):
     db_session.add(other_account)
     db_session.commit()
 
-    response = regular_client.post("/email-accounts/test", json={"id": other_account.id})
+    response = regular_client.post(
+        "/email-accounts/test", json={"id": other_account.id}
+    )
 
     assert response.status_code == 404
     mock_imap.assert_not_called()
@@ -832,7 +851,7 @@ def test_connection_gmail_account(client, user, db_session):
 def test_connection_typed_credentials_no_id(mock_imap, client, user, db_session):
     """Posting full IMAP creds with no id should test them directly."""
     mock_conn = MagicMock()
-    mock_conn.list.return_value = ("OK", [b"INBOX"])
+    mock_conn.list.return_value = ("OK", [b'(\\HasNoChildren) "/" INBOX'])
     mock_imap.return_value.__enter__.return_value = mock_conn
     mock_imap.return_value.__exit__.return_value = None
 
@@ -854,10 +873,12 @@ def test_connection_typed_credentials_no_id(mock_imap, client, user, db_session)
 
 
 @patch("memory.api.email_accounts.imap_connection")
-def test_connection_provided_params_override_stored(mock_imap, client, user, db_session):
+def test_connection_provided_params_override_stored(
+    mock_imap, client, user, db_session
+):
     """A provided imap_server should override the stored one."""
     mock_conn = MagicMock()
-    mock_conn.list.return_value = ("OK", [b"INBOX"])
+    mock_conn.list.return_value = ("OK", [b'(\\HasNoChildren) "/" INBOX'])
     mock_imap.return_value.__enter__.return_value = mock_conn
     mock_imap.return_value.__exit__.return_value = None
 
@@ -890,7 +911,7 @@ def test_connection_provided_params_override_stored(mock_imap, client, user, db_
 def test_connection_blank_password_uses_stored(mock_imap, client, user, db_session):
     """A blank password with an id should fall back to the stored password."""
     mock_conn = MagicMock()
-    mock_conn.list.return_value = ("OK", [b"INBOX"])
+    mock_conn.list.return_value = ("OK", [b'(\\HasNoChildren) "/" INBOX'])
     mock_imap.return_value.__enter__.return_value = mock_conn
     mock_imap.return_value.__exit__.return_value = None
 

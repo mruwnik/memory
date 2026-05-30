@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { EmailPanel } from './EmailPanel'
+import { EmailPanel, defaultSyncFolders } from './EmailPanel'
+import type { ImapFolder } from '@/hooks/useSources'
 
 const imapAccount = {
   id: 1,
@@ -238,5 +239,42 @@ describe('EmailPanel edit flow', () => {
       expect(patch).toBeTruthy()
       expect(JSON.parse((patch![1] as RequestInit).body as string)).not.toHaveProperty('password')
     })
+  })
+})
+
+describe('defaultSyncFolders', () => {
+  const folder = (name: string, flags: string[] = [], selectable = true): ImapFolder => ({
+    name,
+    flags,
+    selectable,
+  })
+
+  it('selects INBOX (any case) and the \\Sent-flagged folder', () => {
+    const folders = [
+      folder('INBOX', ['\\HasNoChildren']),
+      folder('Sent', ['\\HasNoChildren', '\\Sent']),
+      folder('Archive', ['\\Archive']),
+      folder('logs'),
+    ]
+    expect(defaultSyncFolders(folders)).toEqual(['INBOX', 'Sent'])
+  })
+
+  it('matches INBOX case-insensitively and ignores a non-selectable inbox', () => {
+    expect(defaultSyncFolders([folder('inbox')])).toEqual(['inbox'])
+    expect(defaultSyncFolders([folder('INBOX', [], false)])).toEqual([])
+  })
+
+  it('falls back to a name match when the \\Sent flag is absent', () => {
+    expect(defaultSyncFolders([folder('Sent')])).toEqual(['Sent'])
+    expect(defaultSyncFolders([folder('Sent Items')])).toEqual(['Sent Items'])
+    expect(defaultSyncFolders([folder('sent mail')])).toEqual(['sent mail'])
+  })
+
+  it('does not name-match a non-selectable Sent folder', () => {
+    expect(defaultSyncFolders([folder('Sent', [], false)])).toEqual([])
+  })
+
+  it('returns an empty list when nothing matches', () => {
+    expect(defaultSyncFolders([folder('logs'), folder('Archive', ['\\Archive'])])).toEqual([])
   })
 })

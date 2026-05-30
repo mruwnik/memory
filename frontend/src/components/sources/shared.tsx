@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import type { EmailAccountTestResult } from '../../hooks/useSources'
 
 // Format relative time
 export const formatRelativeTime = (dateString: string | null): string => {
@@ -94,11 +95,12 @@ export const SyncButton = ({ onSync, disabled, label = 'Sync' }: SyncButtonProps
 
 // Test Connection Button (with inline result)
 interface TestConnectionButtonProps {
-  onTest: () => Promise<{ status: string; message: string }>
+  onTest: () => Promise<EmailAccountTestResult>
+  onResult?: (result: EmailAccountTestResult) => void
   disabled?: boolean
 }
 
-export const TestConnectionButton = ({ onTest, disabled }: TestConnectionButtonProps) => {
+export const TestConnectionButton = ({ onTest, onResult, disabled }: TestConnectionButtonProps) => {
   const [testing, setTesting] = useState(false)
   const [result, setResult] = useState<{ status: string; message: string } | null>(null)
 
@@ -106,7 +108,9 @@ export const TestConnectionButton = ({ onTest, disabled }: TestConnectionButtonP
     setTesting(true)
     setResult(null)
     try {
-      setResult(await onTest())
+      const res = await onTest()
+      setResult(res)
+      onResult?.(res)
     } catch (e) {
       setResult({ status: 'error', message: e instanceof Error ? e.message : 'Connection failed' })
     } finally {

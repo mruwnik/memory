@@ -5,6 +5,7 @@ import logging
 import re
 from collections import defaultdict
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Generator, Sequence, cast
 
@@ -13,17 +14,9 @@ from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, scoped_session
 
 from memory.common import collections, embedding, paths, qdrant, settings
-from memory.common.db.models import (
-    EmailAccount,
-    EmailAttachment,
-    MailMessage,
-)
+from memory.common.db.models import EmailAccount, EmailAttachment, MailMessage
 from memory.common.people import link_people
-from memory.parsers.email import (
-    Attachment,
-    EmailMessage,
-    RawEmailResponse,
-)
+from memory.parsers.email import Attachment, EmailMessage, RawEmailResponse
 from memory.parsers.google_drive import refresh_credentials
 
 logger = logging.getLogger(__name__)
@@ -155,29 +148,53 @@ def create_mail_message(
     return mail_message
 
 
+UID_PATTERN = re.compile(r"UID (\d+)")
+
+
 def extract_email_uid(
-    msg_data: Sequence[tuple[bytes, bytes]],
+    msg_data: Sequence[bytes | tuple[bytes, bytes]],
 ) -> tuple[str | None, bytes]:
     """
-    Extract the UID and raw email data from the message data.
+    Extract the UID and raw email data from a FETCH response.
+
+    ``msg_data`` is what ``imaplib``'s ``uid("FETCH", ...)`` returns: a list whose
+    literal/header bytes come back as bare ``bytes`` and whose body parts come
+    back as ``(header, payload)`` tuples. RFC 3501 does not guarantee the server
+    echoes data items in request order, so the ``UID`` token may land in any of
+    the string/tuple-header parts; scan them all rather than only the first.
     """
-    uid_pattern = re.compile(r"UID (\d+)")
-    uid_match = uid_pattern.search(msg_data[0][0].decode("utf-8", errors="replace"))
-    uid = uid_match.group(1) if uid_match else None
-    raw_email = msg_data[0][1]
+    uid: str | None = None
+    raw_email = b""
+    for part in msg_data:
+        header, payload = part if isinstance(part, tuple) else (part, None)
+        if uid is None and (match := UID_PATTERN.search(_as_text(header))):
+            uid = match.group(1)
+        if payload is not None and not raw_email:
+            raw_email = payload
+
+    if uid is None:
+        logger.warning(f"Could not extract UID from FETCH response: {msg_data!r}")
     return uid, raw_email
+
+
+def _as_text(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def fetch_email(conn: imaplib.IMAP4, uid: str) -> RawEmailResponse | None:
     try:
-        status, msg_data = conn.fetch(uid, "(UID BODY.PEEK[])")
+        status, msg_data = conn.uid("FETCH", uid, "(UID BODY.PEEK[])")
         if status != "OK" or not msg_data or not msg_data[0]:
-            logger.error(f"Error fetching message {uid}")
+            logger.error(f"Error fetching message {uid!r}")
             return None
 
-        return extract_email_uid(msg_data)  # type: ignore
+        return extract_email_uid(msg_data)
     except Exception as e:
-        logger.error(f"Error processing message {uid}: {str(e)}")
+        logger.error(f"Error processing message {uid!r}: {str(e)}")
         return None
 
 
@@ -205,7 +222,7 @@ def fetch_email_since(
 
         date_str = since_date.strftime("%d-%b-%Y")
 
-        status, data = conn.search(None, f'(SINCE "{date_str}")')
+        status, data = conn.uid("SEARCH", f'(SINCE "{date_str}")')
         if status != "OK":
             logger.error(f"Error searching folder {folder}: {data}")
             return []
@@ -216,7 +233,11 @@ def fetch_email_since(
     if not data or not data[0]:
         return []
 
-    return [email for uid in data[0].split() if (email := fetch_email(conn, uid))]
+    return [
+        email
+        for raw_uid in data[0].split()
+        if (email := fetch_email(conn, raw_uid.decode()))
+    ]
 
 
 def process_folder(
@@ -341,6 +362,15 @@ def vectorize_email(email: MailMessage):
     logger.info(f"Stored embedding for message {email.message_id}")
 
 
+class FolderUidsError(Exception):
+    """Raised when a folder's UIDs cannot be read (SELECT/SEARCH failed).
+
+    Distinct from a legitimately-empty folder, which returns an empty set, so
+    callers can avoid treating a transient read failure as "the folder is empty"
+    (which would mass-delete the local copies).
+    """
+
+
 def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
     """
     Get all message UIDs in a folder.
@@ -350,22 +380,127 @@ def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
         folder: Folder name to get UIDs from
 
     Returns:
-        Set of UID strings
+        Set of UID strings. Empty set means the folder is genuinely empty.
+
+    Raises:
+        FolderUidsError: if SELECT or SEARCH fails, or the connection errors.
+            A read failure is signalled by raising rather than returning an
+            empty set so callers don't confuse it with an empty folder.
     """
     try:
         status, _ = conn.select(folder)
         if status != "OK":
-            logger.error(f"Error selecting folder {folder}")
-            return set()
+            raise FolderUidsError(f"Error selecting folder {folder}")
 
-        status, data = conn.search(None, "ALL")
-        if status != "OK" or not data or not data[0]:
-            return set()
-
-        return {uid.decode() for uid in data[0].split()}
+        status, data = conn.uid("SEARCH", "ALL")
+        if status != "OK":
+            raise FolderUidsError(f"Error searching folder {folder}")
+    except FolderUidsError:
+        raise
     except Exception as e:
-        logger.error(f"Error getting UIDs from folder {folder}: {str(e)}")
+        raise FolderUidsError(
+            f"Error getting UIDs from folder {folder}: {str(e)}"
+        ) from e
+
+    if not data or not data[0]:
         return set()
+
+    return {uid.decode() for uid in data[0].split()}
+
+
+@dataclass
+class ImapFolder:
+    """A mailbox returned by an IMAP ``LIST``."""
+
+    name: str
+    flags: list[str]
+    selectable: bool
+
+
+def decode_imap_utf7(value: str) -> str:
+    """Decode an IMAP modified-UTF-7 folder name (RFC 3501 §5.1.3).
+
+    ``&`` shifts into modified BASE64 (``,`` for ``/``, UTF-16BE payload) until
+    ``-``; ``&-`` is a literal ``&``. Falls back to the raw value if a shifted
+    run is malformed, since a best-effort name is better than dropping a folder.
+    """
+    if "&" not in value:
+        return value
+
+    result: list[str] = []
+    i = 0
+    while i < len(value):
+        char = value[i]
+        if char != "&":
+            result.append(char)
+            i += 1
+            continue
+        end = value.find("-", i + 1)
+        if end == -1:
+            return value  # unterminated shift — give up, keep the raw name
+        chunk = value[i + 1 : end]
+        if chunk == "":
+            result.append("&")
+        else:
+            b64 = chunk.replace(",", "/")
+            b64 += "=" * (-len(b64) % 4)
+            try:
+                result.append(base64.b64decode(b64).decode("utf-16-be"))
+            except Exception:
+                return value
+        i = end + 1
+    return "".join(result)
+
+
+# (flags) "<delimiter>" <name>  — delimiter may be NIL; name may be quoted.
+LIST_RESPONSE_RE = re.compile(
+    rb'^\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+(?P<name>.+)$'
+)
+
+
+def parse_folder_line(line: bytes) -> ImapFolder | None:
+    """Parse one IMAP ``LIST`` response line into an ``ImapFolder``.
+
+    Returns ``None`` for lines that don't match (e.g. continuation noise), so
+    callers can filter them out.
+    """
+    match = LIST_RESPONSE_RE.match(line.strip())
+    if not match:
+        return None
+
+    flags = match.group("flags").decode("ascii", "replace").split()
+    name = match.group("name").decode("utf-8", "replace").strip()
+    if len(name) >= 2 and name.startswith('"') and name.endswith('"'):
+        # IMAP quoted-string: strip the surrounding quotes and unescape the only
+        # two characters a quoted-string may backslash-escape (RFC 3501 §4.3):
+        # \" and \\. Embedded escapes are rare but otherwise leak a literal
+        # backslash into the folder name.
+        name = re.sub(r"\\(.)", r"\1", name[1:-1])
+    name = decode_imap_utf7(name)
+    # RFC 3501 \Noselect and RFC 5258 \NonExistent both mark a mailbox that
+    # can't be SELECTed. Attribute names are case-insensitive per spec, so
+    # compare case-folded (\NOSELECT is valid too).
+    non_selectable = {"\\noselect", "\\nonexistent"}
+    selectable = not any(f.lower() in non_selectable for f in flags)
+    return ImapFolder(name=name, flags=flags, selectable=selectable)
+
+
+def list_imap_folders(conn: imaplib.IMAP4) -> list[ImapFolder]:
+    """Return all mailboxes on the server, parsed from ``LIST``.
+
+    Raises if the ``LIST`` command itself fails; individual unparseable lines
+    are skipped rather than aborting the whole listing.
+    """
+    status, data = conn.list()
+    if status != "OK":
+        raise RuntimeError(f"IMAP LIST failed: {status}")
+    folders = [
+        folder
+        for raw in (data or [])
+        if isinstance(raw, (bytes, bytearray))
+        and (folder := parse_folder_line(bytes(raw))) is not None
+    ]
+    return folders
 
 
 def should_delete_email(_email: MailMessage) -> bool:
@@ -402,10 +537,12 @@ def extract_vector_deletion_info(email: MailMessage) -> dict:
     }
     for attachment in email.attachments:
         if attachment.chunks:
-            info["attachments"].append({
-                "chunk_ids": [str(c.id) for c in attachment.chunks],
-                "modality": cast(str, attachment.modality),
-            })
+            info["attachments"].append(
+                {
+                    "chunk_ids": [str(c.id) for c in attachment.chunks],
+                    "modality": cast(str, attachment.modality),
+                }
+            )
     return info
 
 
@@ -473,10 +610,19 @@ def delete_removed_emails(
     Returns:
         Number of emails deleted
     """
-    server_uids = get_folder_uids(conn, folder)
-    if not server_uids:
+    try:
+        server_uids = get_folder_uids(conn, folder)
+    except FolderUidsError as e:
+        # Could not read the folder. Skip reconciliation rather than risk
+        # mass-deleting local mail on a transient SELECT/SEARCH failure.
+        logger.error(f"Skipping deletion for folder {folder}: {str(e)}")
         return 0
 
+    # Intentional safety asymmetry: a genuinely-empty folder (empty set) also
+    # returns 0 without deleting. find_removed_emails treats an empty
+    # server_uids as "delete nothing" (it can't tell empty-because-erased from
+    # empty-because-unreadable), so emptying a watched folder on the server
+    # leaves the local copies in the DB rather than wiping them.
     emails_to_delete = find_removed_emails(db_session, account_id, server_uids, folder)
     return delete_emails(emails_to_delete, db_session)
 
@@ -487,7 +633,13 @@ def delete_removed_emails(
 
 # Standard Gmail labels that match by name
 STANDARD_GMAIL_LABELS = {
-    "INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "STARRED", "IMPORTANT"
+    "INBOX",
+    "SENT",
+    "DRAFT",
+    "SPAM",
+    "TRASH",
+    "STARRED",
+    "IMPORTANT",
 }
 
 
@@ -532,9 +684,11 @@ def get_gmail_label_ids(service, folder_names: list[str]) -> list[str]:
         label_ids.add("SENT")
 
     # Custom folders need API lookup
-    custom_folders = {f.lower() for f in folder_names} - {
-        s.lower() for s in STANDARD_GMAIL_LABELS
-    } - {"sent"}
+    custom_folders = (
+        {f.lower() for f in folder_names}
+        - {s.lower() for s in STANDARD_GMAIL_LABELS}
+        - {"sent"}
+    )
 
     if not custom_folders:
         return list(label_ids)
@@ -547,9 +701,7 @@ def get_gmail_label_ids(service, folder_names: list[str]) -> list[str]:
             for label in labels_response.get("labels", [])
         }
         return list(label_ids) + [
-            label
-            for folder in custom_folders
-            if (label := api_labels.get(folder))
+            label for folder in custom_folders if (label := api_labels.get(folder))
         ]
     except Exception as e:
         logger.warning(f"Error fetching labels: {e}")
@@ -609,11 +761,15 @@ def iterate_gmail_messages(
         Tuples of (message_id, raw_email_content or None)
     """
     try:
-        request = service.users().messages().list(
-            userId="me",
-            q=query,
-            labelIds=label_ids if label_ids else None,
-            maxResults=500,
+        request = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                q=query,
+                labelIds=label_ids if label_ids else None,
+                maxResults=500,
+            )
         )
 
         while request:
@@ -754,7 +910,9 @@ def find_removed_emails(
     return query.all()
 
 
-def delete_emails(emails: list[MailMessage], db_session: Session | scoped_session) -> int:
+def delete_emails(
+    emails: list[MailMessage], db_session: Session | scoped_session
+) -> int:
     """
     Delete emails and their vectors from the database.
 

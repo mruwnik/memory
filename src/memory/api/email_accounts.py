@@ -13,7 +13,8 @@ from memory.api.auth import (
     get_user_account,
     resolve_user_filter,
 )
-from memory.common.celery_app import SYNC_ACCOUNT, app as celery_app
+from memory.common.celery_app import SYNC_ACCOUNT
+from memory.common.celery_app import app as celery_app
 from memory.common.data_source_access import (
     enqueue_access_control_propagation,
     mark_access_control_changed_if_needed,
@@ -22,7 +23,7 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
 from memory.common.ssrf import UnsafeURLError, validate_public_hostname
-from memory.workers.email import imap_connection
+from memory.workers.email import imap_connection, list_imap_folders
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,20 @@ class EmailAccountTest(BaseModel):
     use_ssl: bool | None = None
 
 
+class ImapFolderInfo(BaseModel):
+    """A mailbox surfaced by a connection test, for the folder picker."""
+
+    name: str
+    flags: list[str]
+    selectable: bool
+
+
+class EmailAccountTestResult(BaseModel):
+    status: Literal["success", "error"]
+    message: str
+    folders: list[ImapFolderInfo] = []
+
+
 class GoogleAccountInfo(BaseModel):
     id: int
     name: str
@@ -195,9 +210,7 @@ class EmailAccountResponse(BaseModel):
     sensitivity: str
 
 
-def account_to_response(
-    account: EmailAccount, db: Session
-) -> EmailAccountResponse:
+def account_to_response(account: EmailAccount, db: Session) -> EmailAccountResponse:
     """Convert an EmailAccount model to a response model."""
     google_account_info = None
     if account.google_account_id:
@@ -433,7 +446,7 @@ def test_connection(
     data: EmailAccountTest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
-):
+) -> EmailAccountTestResult:
     """Test an IMAP login against typed and/or stored credentials.
 
     When ``data.id`` is set the stored account supplies base values
@@ -443,9 +456,10 @@ def test_connection(
     ``imap_port`` are re-validated against the SSRF/port allowlist
     (``validate_public_hostname`` re-resolves DNS, defeating rebinding),
     then a transient account drives ``imap_connection`` -> ``conn.list()``.
-    Any connection failure returns a deliberately-generic message so the
-    connect/refuse/auth-failed differential can't enumerate internal
-    hosts/ports.
+    On success the parsed folder list is returned so the client can offer a
+    folder picker. Any connection failure returns a deliberately-generic
+    message so the connect/refuse/auth-failed differential can't enumerate
+    internal hosts/ports.
     """
     base = (
         get_user_account(db, EmailAccount, data.id, user)
@@ -454,10 +468,10 @@ def test_connection(
     )
 
     if base is not None and base.account_type != "imap":
-        return {
-            "status": "error",
-            "message": "Testing is only supported for IMAP accounts",
-        }
+        return EmailAccountTestResult(
+            status="error",
+            message="Testing is only supported for IMAP accounts",
+        )
 
     imap_server = data.imap_server or (base.imap_server if base else None)
     imap_port = data.imap_port or (base.imap_port if base else None) or 993
@@ -489,15 +503,7 @@ def test_connection(
 
     try:
         with imap_connection(probe) as conn:
-            status, folders = conn.list()
-            if status != "OK":
-                return {"status": "error", "message": "Failed to list folders"}
-            folder_count = len(folders) if folders else 0
-            return {
-                "status": "success",
-                "message": f"Connected successfully. Found {folder_count} folders.",
-                "folders": folder_count,
-            }
+            folders = list_imap_folders(conn)
     except Exception as e:
         logger.warning(
             "IMAP connection test failed (account id=%s): %s: %s",
@@ -505,4 +511,13 @@ def test_connection(
             type(e).__name__,
             e,
         )
-        return {"status": "error", "message": "Connection failed"}
+        return EmailAccountTestResult(status="error", message="Connection failed")
+
+    return EmailAccountTestResult(
+        status="success",
+        message=f"Connected successfully. Found {len(folders)} folders.",
+        folders=[
+            ImapFolderInfo(name=f.name, flags=f.flags, selectable=f.selectable)
+            for f in folders
+        ],
+    )
