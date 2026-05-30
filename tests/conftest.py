@@ -659,6 +659,8 @@ def mock_file_storage(tmp_path: Path):
     comic_storage_dir.mkdir(parents=True, exist_ok=True)
     report_storage_dir = tmp_path / "reports"
     report_storage_dir.mkdir(parents=True, exist_ok=True)
+    email_spool_dir = tmp_path / "email_spool"
+    email_spool_dir.mkdir(parents=True, exist_ok=True)
     with (
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "CHUNK_STORAGE_DIR", chunk_storage_dir),
@@ -667,6 +669,7 @@ def mock_file_storage(tmp_path: Path):
         patch.object(settings, "NOTES_STORAGE_DIR", notes_storage_dir),
         patch.object(settings, "COMIC_STORAGE_DIR", comic_storage_dir),
         patch.object(settings, "REPORT_STORAGE_DIR", report_storage_dir),
+        patch.object(settings, "EMAIL_SPOOL_DIR", email_spool_dir),
     ):
         yield
 

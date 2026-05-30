@@ -72,6 +72,14 @@ EBOOK_STORAGE_DIR = pathlib.Path(
 EMAIL_STORAGE_DIR = pathlib.Path(
     os.getenv("EMAIL_STORAGE_DIR", FILE_STORAGE_DIR / "emails")
 )
+# Raw emails are spooled here at enqueue time so only the file path — not the
+# multi-hundred-KB RFC822 body with attachments inline as base64 — travels
+# through the Celery broker. The worker reads the file and deletes it. This is
+# transient handoff storage, so it is created but deliberately excluded from
+# the backup set.
+EMAIL_SPOOL_DIR = pathlib.Path(
+    os.getenv("EMAIL_SPOOL_DIR", FILE_STORAGE_DIR / "email_spool")
+)
 CHUNK_STORAGE_DIR = pathlib.Path(
     os.getenv("CHUNK_STORAGE_DIR", FILE_STORAGE_DIR / "chunks")
 )
@@ -132,7 +140,7 @@ storage_dirs = [
 ]
 
 # All storage directories (including non-backed-up ones)
-all_storage_dirs = storage_dirs + [CHUNK_STORAGE_DIR]
+all_storage_dirs = storage_dirs + [CHUNK_STORAGE_DIR, EMAIL_SPOOL_DIR]
 
 for dir in all_storage_dirs:
     dir.mkdir(parents=True, exist_ok=True)

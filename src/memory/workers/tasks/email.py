@@ -1,13 +1,16 @@
 import contextlib
 import logging
+import pathlib
 from datetime import datetime
 from typing import Generator, cast
 
 from sqlalchemy.exc import IntegrityError
 
+from memory.common import settings
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import EmailAccount, MailMessage
+from memory.common.db.models.source_item import clean_filename
 from memory.common.redis_lock import Lock, distributed_lock
 from memory.parsers.email import parse_email_message
 from memory.workers.email import (
@@ -48,31 +51,66 @@ def email_sync_lock(account_id: int) -> Generator[Lock | None, None, None]:
         yield lock
 
 
-@app.task(name=PROCESS_EMAIL)
-@tracked_task
-def process_message(
+def spool_filename(account_id: int, message_id: str, sha256_hex: str) -> str:
+    """Deterministic spool filename for a raw email awaiting processing.
+
+    Keyed by account, server message id and content hash so re-enqueueing the
+    same message overwrites its own file instead of leaking a new one. Only this
+    bare filename (never an absolute path) crosses the Celery broker and the
+    PendingJob params, so its length stays bounded regardless of
+    ``FILE_STORAGE_DIR`` and it can't be truncated by the params snapshot's
+    200-char cap — which a long absolute path could, silently breaking retry.
+    """
+    return f"{account_id}-{clean_filename(message_id)}-{sha256_hex[:16]}.eml"
+
+
+def spool_path(filename: str) -> pathlib.Path:
+    """Resolve a spool filename to its path under EMAIL_SPOOL_DIR.
+
+    Uses only the basename so a crafted/garbled filename from job params can't
+    escape the spool directory via ``..`` segments.
+    """
+    return settings.EMAIL_SPOOL_DIR / pathlib.Path(filename).name
+
+
+def spool_raw_email(
+    account_id: int, message_id: str, raw_email: str, sha256_hex: str
+) -> str:
+    """Persist a raw email to the spool dir; return its (bare) filename.
+
+    A single RFC822 message carries its attachments inline as base64, so
+    passing ``raw_email`` straight to the broker put hundreds of KB per task
+    into Redis — a large backfill ballooned it to gigabytes and tripped
+    ``stop-writes-on-bgsave-error``. Spooling the body to disk and sending only
+    the filename keeps the broker message tiny.
+    """
+    name = spool_filename(account_id, message_id, sha256_hex)
+    path = spool_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Pin UTF-8 on both write and read: raw_email is a Unicode str (decoded
+    # upstream with errors="replace") that can hold arbitrary codepoints, and
+    # the enqueuing and worker processes may run under different/locale-default
+    # encodings (e.g. C/POSIX in a minimal container). An unpinned codec could
+    # raise UnicodeEncodeError or silently corrupt the body across a mismatch.
+    path.write_text(raw_email, encoding="utf-8")
+    return name
+
+
+def read_spooled_email(filename: str) -> str | None:
+    """Read a spooled raw email by filename, or None if it is no longer present."""
+    try:
+        return spool_path(filename).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
+def store_email_message(
     account_id: int,
     message_id: str,
     folder: str,
     raw_email: str,
 ) -> dict:
-    """
-    Process a single email message and store it in the database.
-
-    Args:
-        account_id: ID of the EmailAccount
-        message_id: UID of the message on the server
-        folder: Folder name where the message is stored
-        raw_email: Raw email content as string
-
-    Returns:
-        dict with processing result
-    """
-    logger.info(f"Processing message {message_id} for account {account_id}")
-    if not raw_email.strip():
-        logger.warning(f"Empty email message received for account {account_id}")
-        return {"status": "skipped", "reason": "empty_content"}
-
+    """Parse a raw email and persist it (with attachments and embeddings)."""
     try:
         with make_session() as db:
             account = db.get(EmailAccount, account_id)
@@ -122,6 +160,56 @@ def process_message(
         return {"status": "already_exists", "message_id": message_id}
 
 
+@app.task(name=PROCESS_EMAIL)
+@tracked_task
+def process_message(
+    account_id: int,
+    message_id: str,
+    folder: str,
+    spool_name: str,
+) -> dict:
+    """
+    Process a single email message and store it in the database.
+
+    Args:
+        account_id: ID of the EmailAccount
+        message_id: UID of the message on the server
+        folder: Folder name where the message is stored
+        spool_name: Filename of the spooled raw email under EMAIL_SPOOL_DIR
+            (written by ``queue_message``); read here and deleted once handled.
+
+    Returns:
+        dict with processing result
+    """
+    logger.info(f"Processing message {message_id} for account {account_id}")
+    raw_email = read_spooled_email(spool_name)
+    if raw_email is None:
+        # Spool file gone (e.g. a previous run already consumed it, or a hard
+        # crash between enqueue and processing). The next account sync re-fetches
+        # and re-spools the message, so this is a safe no-op rather than an error.
+        logger.warning(
+            f"Spool file missing for message {message_id} "
+            f"(account {account_id}): {spool_name}"
+        )
+        return {"status": "skipped", "reason": "spool_missing"}
+
+    if not raw_email.strip():
+        logger.warning(f"Empty email message received for account {account_id}")
+        spool_path(spool_name).unlink(missing_ok=True)
+        return {"status": "skipped", "reason": "empty_content"}
+
+    result = store_email_message(account_id, message_id, folder, raw_email)
+    # Delete only on a handled outcome. On an uncaught error this line is
+    # skipped so the spool file survives and recovery can re-read it two ways:
+    # the next account re-sync re-spools to the same deterministic filename (and
+    # deletes on success), and a manual retry of the FAILED job re-dispatches
+    # with the same spool_name — queue_message enqueues by keyword, so it's
+    # captured in the job params. A repeatedly-failing message thus leaves at
+    # most one stale file, so no separate orphan sweeper is needed.
+    spool_path(spool_name).unlink(missing_ok=True)
+    return result
+
+
 def queue_message(
     db: DBSession,
     account_id: int,
@@ -129,7 +217,7 @@ def queue_message(
     folder: str,
     raw_email: str,
 ) -> bool:
-    """Parse, dedup, and queue a single message for async processing.
+    """Parse, dedup, spool, and queue a single message for async processing.
 
     Returns True if the message was newly queued, False if it already
     exists (dedup hit). On any failure the shared session is rolled back
@@ -139,17 +227,33 @@ def queue_message(
     PendingRollbackError. pool_pre_ping then hands out a live connection
     on the next statement.
     """
+    spooled: str | None = None
     try:
         parsed_email = parse_email_message(raw_email, message_id)
         if check_content_exists(
             db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
         ):
             return False
+        spooled = spool_raw_email(
+            account_id, message_id, raw_email, parsed_email["hash"].hex()
+        )
+        # Enqueue by keyword (not positionally) so tracked_task's _build_job_params
+        # captures these in the PendingJob params — which is what lets a manual
+        # retry of a failed job reconstruct the call (including spool_name).
         process_message.delay(  # type: ignore[attr-defined]
-            account_id, message_id, folder, raw_email
+            account_id=account_id,
+            message_id=message_id,
+            folder=folder,
+            spool_name=spooled,
         )
         return True
     except Exception:
+        # If we spooled the body but never got it onto the queue (e.g. the
+        # broker is unreachable — the exact failure this change guards against),
+        # drop the orphaned file so a failing backfill can't litter the spool
+        # dir with one stale .eml per message.
+        if spooled is not None:
+            spool_path(spooled).unlink(missing_ok=True)
         db.rollback()
         raise
 

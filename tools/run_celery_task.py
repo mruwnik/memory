@@ -240,19 +240,26 @@ def email_sync_account(ctx, account_id, since_date):
 
 
 @email.command("process-message")
+@click.option("--account-id", required=True, type=int, help="Email account ID")
 @click.option("--message-id", required=True, help="Email message ID")
-@click.option("--folder", help="Email folder name")
-@click.option("--raw-email", help="Raw email content")
+@click.option("--folder", default="INBOX", show_default=True, help="Email folder name")
+@click.option("--raw-email", required=True, help="Raw email content")
 @click.pass_context
-def email_process_message(ctx, message_id, folder, raw_email):
+def email_process_message(ctx, account_id, message_id, folder, raw_email):
     """Process a specific email message."""
+    from memory.parsers.email import parse_email_message
+    from memory.workers.tasks.email import spool_raw_email
+
+    parsed = parse_email_message(raw_email, message_id)
+    spool_name = spool_raw_email(account_id, message_id, raw_email, parsed["hash"].hex())
     execute_task(
         ctx,
         "email",
         "process_message",
+        account_id=account_id,
         message_id=message_id,
         folder=folder,
-        raw_email=raw_email,
+        spool_name=spool_name,
     )
 
 

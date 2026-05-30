@@ -5,14 +5,20 @@ from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     EmailAccount,
     GoogleAccount,
+    JobStatus,
     MailMessage,
+    PendingJob,
     SourceItem,
     EmailAttachment,
 )
 from memory.common import embedding
+from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
     process_email_batch,
     process_message,
+    queue_message,
+    spool_path,
+    spool_raw_email,
     sync_account,
 )
 from sqlalchemy.exc import OperationalError, PendingRollbackError
@@ -49,6 +55,22 @@ VGhpcyBpcyBhIHRlc3QgYXR0YWNobWVudA==
 --boundary123--"""
 
 
+def run_process_message(account_id, message_id, folder, raw_email):
+    """Spool a raw email (as queue_message does) and run the worker task.
+
+    process_message now receives a spool-file path rather than the raw body,
+    so tests must put the email on disk first and pass its path.
+    """
+    parsed = parse_email_message(raw_email, message_id)
+    spool_name = spool_raw_email(account_id, message_id, raw_email, parsed["hash"].hex())
+    return process_message(
+        account_id=account_id,
+        message_id=message_id,
+        folder=folder,
+        spool_name=spool_name,
+    )
+
+
 @pytest.fixture(autouse=True)
 def mock_voyage_embed_text():
     with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
@@ -78,7 +100,7 @@ def test_email_account(db_session, test_user):
 
 def test_process_simple_email(db_session, test_email_account, qdrant):
     """Test processing a simple email message."""
-    res = process_message(
+    res = run_process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
@@ -110,7 +132,7 @@ def test_process_simple_email(db_session, test_email_account, qdrant):
 
 def test_process_email_with_attachment(db_session, test_email_account, qdrant):
     """Test processing a message with an attachment."""
-    mail_message_id = process_message(
+    mail_message_id = run_process_message(
         account_id=test_email_account.id,
         message_id="302",
         folder="Archive",
@@ -142,7 +164,7 @@ def test_process_email_with_attachment(db_session, test_email_account, qdrant):
 
 def test_process_empty_message(db_session, test_email_account, qdrant):
     """Test processing an empty/invalid message."""
-    res = process_message(
+    res = run_process_message(
         account_id=test_email_account.id,
         message_id="999",
         folder="Archive",
@@ -154,7 +176,7 @@ def test_process_empty_message(db_session, test_email_account, qdrant):
 def test_process_duplicate_message(db_session, test_email_account, qdrant):
     """Test that duplicate messages are detected and not stored again."""
     # First call should succeed and create records
-    res = process_message(
+    res = run_process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
@@ -169,7 +191,7 @@ def test_process_duplicate_message(db_session, test_email_account, qdrant):
     message_count_before = db_session.query(MailMessage).count()
 
     # Second call with same email should detect duplicate and return None
-    source_id_2 = process_message(
+    source_id_2 = run_process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
@@ -192,7 +214,7 @@ def test_process_duplicate_message(db_session, test_email_account, qdrant):
 
 def test_process_message_stores_account_and_uid(db_session, test_email_account, qdrant):
     """Test that process_message stores account_id and imap_uid."""
-    res = process_message(
+    res = run_process_message(
         account_id=test_email_account.id,
         message_id="12345",  # This is the IMAP UID
         folder="INBOX",
@@ -207,6 +229,149 @@ def test_process_message_stores_account_and_uid(db_session, test_email_account, 
     # Verify the new sync tracking fields are stored
     assert mail_message.email_account_id == test_email_account.id
     assert mail_message.imap_uid == "12345"
+
+
+def test_spool_file_removed_after_processing(db_session, test_email_account, qdrant):
+    """The spool file is deleted once the message is handled."""
+    parsed = parse_email_message(SIMPLE_EMAIL_RAW, "555")
+    name = spool_raw_email(
+        test_email_account.id, "555", SIMPLE_EMAIL_RAW, parsed["hash"].hex()
+    )
+    assert spool_path(name).exists()
+
+    process_message(
+        account_id=test_email_account.id,
+        message_id="555",
+        folder="INBOX",
+        spool_name=name,
+    )
+
+    assert not spool_path(name).exists()
+
+
+def test_process_message_missing_spool_file_is_noop(db_session, test_email_account):
+    """A vanished spool file is a safe skip, not an error or a crash."""
+    res = process_message(
+        account_id=test_email_account.id,
+        message_id="404",
+        folder="INBOX",
+        spool_name="does-not-exist.eml",
+    )
+    assert res == {"status": "skipped", "reason": "spool_missing"}
+
+
+def test_queue_message_spools_body_and_passes_only_filename(
+    db_session, test_email_account
+):
+    """queue_message must keep the raw RFC822 body out of the broker message,
+    passing only the bare spool filename."""
+    with patch("memory.workers.tasks.email.process_message") as mock_proc:
+        queued = queue_message(
+            db_session, test_email_account.id, "777", "INBOX", SIMPLE_EMAIL_RAW
+        )
+
+    assert queued is True
+    mock_proc.delay.assert_called_once()
+    # Enqueued by keyword so the args land in the PendingJob params (retry).
+    call = mock_proc.delay.call_args
+    assert call.args == ()
+    assert call.kwargs["account_id"] == test_email_account.id
+    assert call.kwargs["message_id"] == "777"
+    assert call.kwargs["folder"] == "INBOX"
+    name = call.kwargs["spool_name"]
+    # The broker carries a bare filename, never the body or an absolute path.
+    assert name.endswith(".eml")
+    assert "/" not in name
+    assert SIMPLE_EMAIL_RAW not in call.kwargs.values()
+    # And the body was actually written there for the worker to read.
+    assert spool_path(name).read_text(encoding="utf-8") == SIMPLE_EMAIL_RAW
+
+
+def test_spool_file_kept_when_processing_raises(db_session, test_email_account):
+    """On an unexpected processing error the spool file must survive so the
+    PendingJob's retry (which re-dispatches the same filename) can re-read it.
+    Only success and skip outcomes delete it."""
+    parsed = parse_email_message(SIMPLE_EMAIL_RAW, "666")
+    name = spool_raw_email(
+        test_email_account.id, "666", SIMPLE_EMAIL_RAW, parsed["hash"].hex()
+    )
+    assert spool_path(name).exists()
+
+    with (
+        patch(
+            "memory.workers.tasks.email.store_email_message",
+            side_effect=RuntimeError("boom"),
+        ),
+        patch("memory.common.content_processing.notify_task_failure"),
+        pytest.raises(RuntimeError),
+    ):
+        process_message(
+            account_id=test_email_account.id,
+            message_id="666",
+            folder="INBOX",
+            spool_name=name,
+        )
+
+    assert spool_path(name).exists()
+
+
+def test_failed_email_job_can_be_reprocessed_from_captured_params(
+    db_session, test_email_account, qdrant
+):
+    """End-to-end: a failed process_message keeps its spool file AND captures
+    its call args in the job params, so re-dispatching from those params (the
+    way retry_failed_job does) re-reads the surviving file and reprocesses.
+
+    Covers the whole retry chain — param capture, keep-on-error, re-read — that
+    the per-step tests only exercise in isolation.
+    """
+    parsed = parse_email_message(SIMPLE_EMAIL_RAW, "888")
+    name = spool_raw_email(
+        test_email_account.id, "888", SIMPLE_EMAIL_RAW, parsed["hash"].hex()
+    )
+
+    # First attempt fails mid-store → job FAILED, spool file kept.
+    with (
+        patch(
+            "memory.workers.tasks.email.store_email_message",
+            side_effect=RuntimeError("boom"),
+        ),
+        patch("memory.common.content_processing.notify_task_failure"),
+        pytest.raises(RuntimeError),
+    ):
+        process_message(
+            account_id=test_email_account.id,
+            message_id="888",
+            folder="INBOX",
+            spool_name=name,
+        )
+    assert spool_path(name).exists()
+
+    # tracked_task captured the call into the FAILED job's params.
+    job = (
+        db_session.query(PendingJob)
+        .filter(PendingJob.status == JobStatus.FAILED.value)
+        .order_by(PendingJob.created_at.desc())
+        .first()
+    )
+    assert job is not None
+    assert job.params["account_id"] == test_email_account.id
+    assert job.params["message_id"] == "888"
+    assert job.params["folder"] == "INBOX"
+    assert job.params["spool_name"] == name
+
+    # retry_failed_job reconstructs task_kwargs as the non-underscore params;
+    # re-dispatching those now succeeds and consumes the surviving spool file.
+    task_kwargs = {k: v for k, v in job.params.items() if not k.startswith("_")}
+    res = process_message(**task_kwargs)
+    assert res["status"] == "processed"
+    assert not spool_path(name).exists()
+    assert (
+        db_session.query(MailMessage)
+        .filter(MailMessage.imap_uid == "888")
+        .count()
+        == 1
+    )
 
 
 # -----------------------------------------------------------------------------
