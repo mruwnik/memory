@@ -134,7 +134,7 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
 ]
 
 
-def _get_available_modalities() -> list[str]:
+def get_available_modalities() -> list[str]:
     """Query database to find which modalities have indexed items."""
     searchable = set(ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS
     try:
@@ -157,7 +157,7 @@ def _get_available_modalities() -> list[str]:
         return sorted(searchable)
 
 
-def _build_filters_section() -> str:
+def build_filters_section() -> str:
     """Build the filters documentation section.
 
     Uses 8 spaces for bullet indent because .format() substitution
@@ -171,13 +171,13 @@ def _build_filters_section() -> str:
     return "\n".join(lines)
 
 
-def _build_list_items_description() -> str:
+def build_list_items_description() -> str:
     """Build dynamic description for the list_items tool.
 
-    Reuses :func:`_build_filters_section` (driven by SEARCH_FILTERS) so the
+    Reuses :func:`build_filters_section` (driven by SEARCH_FILTERS) so the
     accepted content-metadata filters are documented identically to
     search_knowledge_base instead of being hand-maintained. Mirrors how
-    _build_search_description injects the same section.
+    build_search_description injects the same section.
     """
     return textwrap.dedent(
         """
@@ -196,13 +196,13 @@ def _build_list_items_description() -> str:
             include_metadata: Include full as_payload() metadata (default True)
 
         Returns: {{items: [...], total: int, has_more: bool}}"""
-    ).format(filters_section=_build_filters_section())
+    ).format(filters_section=build_filters_section())
 
 
-def _build_count_items_description() -> str:
+def build_count_items_description() -> str:
     """Build dynamic description for the count_items tool.
 
-    Reuses :func:`_build_filters_section` so the documented filters always match
+    Reuses :func:`build_filters_section` so the documented filters always match
     list_items and search_knowledge_base (the three share the same filter set).
     """
     return textwrap.dedent(
@@ -218,12 +218,12 @@ def _build_count_items_description() -> str:
             list_items apply the identical filter set, so their totals always agree.
 
         Returns: {{total: int, by_modality: {{mail: 100, blog: 50, ...}}}}"""
-    ).format(filters_section=_build_filters_section())
+    ).format(filters_section=build_filters_section())
 
 
-def _build_search_description() -> str:
+def build_search_description() -> str:
     """Build dynamic description for search_knowledge_base tool."""
-    modalities = _get_available_modalities()
+    modalities = get_available_modalities()
     modalities_str = ", ".join(modalities) if modalities else "(none available)"
 
     return textwrap.dedent(
@@ -245,7 +245,7 @@ def _build_search_description() -> str:
 
         Returns: List of search results with id, score, chunks, content, filename
         Higher scores (>0.7) indicate strong matches."""
-    ).format(filters_section=_build_filters_section(), modalities_str=modalities_str)
+    ).format(filters_section=build_filters_section(), modalities_str=modalities_str)
 
 
 core_mcp = FastMCP("memory-core")
@@ -301,7 +301,7 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
     return source_ids
 
 
-@core_mcp.tool(description=_build_search_description())
+@core_mcp.tool(description=build_search_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def search(
     query: str,
@@ -836,7 +836,7 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     return query
 
 
-@core_mcp.tool(description=_build_list_items_description())
+@core_mcp.tool(description=build_list_items_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def list_items(
     modalities: set[str] = set(),
@@ -906,7 +906,7 @@ async def list_items(
         }
 
 
-@core_mcp.tool(description=_build_count_items_description())
+@core_mcp.tool(description=build_count_items_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def count_items(
     modalities: set[str] = set(),
