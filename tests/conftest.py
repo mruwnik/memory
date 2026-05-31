@@ -14,7 +14,7 @@ import pytest
 import qdrant_client
 import qdrant_client.models as qdrant_models
 import voyageai
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from testcontainers.qdrant import QdrantContainer
@@ -231,6 +231,20 @@ def validate_db_identifier(name: str) -> str:
     return name
 
 
+def url_with_db(db_name: str) -> str:
+    """Derive a connection URL for ``db_name`` from ``settings.DB_URL``.
+
+    ``settings.DB_URL`` is the single source of truth for where the database
+    server lives (it honors ``DATABASE_URL`` as well as the granular ``DB_*``
+    vars). Swapping only the database name keeps per-test URLs consistent with
+    the admin connection — deriving them from ``make_db_url`` instead would
+    ignore ``DATABASE_URL`` and silently fall back to the host defaults.
+    """
+    return make_url(settings.DB_URL).set(database=db_name).render_as_string(
+        hide_password=False
+    )
+
+
 def create_test_database(test_db_name: str) -> str:
     """
     Create a test database with a unique name.
@@ -264,7 +278,7 @@ def create_test_database(test_db_name: str) -> str:
 
     admin_engine.dispose()
 
-    return settings.make_db_url(db=test_db_name)
+    return url_with_db(test_db_name)
 
 
 def drop_test_database(test_db_name: str) -> None:
@@ -306,7 +320,7 @@ def run_alembic_migrations(db_name: str) -> None:
 
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "-c", str(alembic_ini), "upgrade", "head"],
-        env={**os.environ, "DATABASE_URL": settings.make_db_url(db=db_name)},
+        env={**os.environ, "DATABASE_URL": url_with_db(db_name)},
         capture_output=True,
         text=True,
     )
