@@ -315,7 +315,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
     with pymupdf.open(item.filename) as pdf:
-        expected = [
+        expected_images = [
             (
                 None,
                 [image_hash(page_to_image(page))],
@@ -329,25 +329,39 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
             for page in pdf.pages()
         ]
 
-    mock_voyage_client.embed = Mock(return_value=Mock(embeddings=[[0.1] * 1024] * 3))
+    mock_voyage_client.embed = Mock(return_value=Mock(embeddings=[[0.1] * 1024] * 5))
     mock_voyage_client.multimodal_embed = Mock(
-        return_value=Mock(embeddings=[[0.1] * 1024] * 3)
+        return_value=Mock(embeddings=[[0.1] * 1024] * 5)
     )
-    compare_chunks(item.data_chunks(), expected)
-    compare_chunks(embed_source_item(item), expected)
 
-    assert mock_voyage_client.embed.call_count == 0
+    chunks = item.data_chunks()
+    image_chunks = [c for c in chunks if c.images]
+    text_chunks = [c for c in chunks if c.content]
+
+    # One image chunk per page (unchanged multimodal behaviour)...
+    compare_chunks(image_chunks, expected_images)
+    # ...plus text chunks from the born-digital PDF's text layer, so the
+    # attachment is text-searchable instead of image-only.
+    assert text_chunks
+    for chunk in text_chunks:
+        assert chunk.content and not chunk.images
+        assert "page" in chunk.item_metadata
+
+    embed_source_item(item)
+
+    # Page images still go to the multimodal model...
     assert mock_voyage_client.multimodal_embed.call_count == 1
-
     assert mock_voyage_client.multimodal_embed.call_args == call(
         [[ANY], [ANY]],
         model=settings.MIXED_EMBEDDING_MODEL,
         input_type="document",
     )
-    assert [
-        [image_hash(a) for a in i]
-        for i in mock_voyage_client.multimodal_embed.call_args[0][0]
-    ] == [page for _, page, _ in expected]
+    # ...and the extracted text layer now goes to the text model.
+    assert mock_voyage_client.embed.call_count == 1
+    assert (
+        mock_voyage_client.embed.call_args.kwargs["model"]
+        == settings.TEXT_EMBEDDING_MODEL
+    )
 
 
 def test_embeddings_comic(mock_voyage_client):

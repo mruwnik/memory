@@ -153,24 +153,71 @@ def page_to_image(page: pymupdf.Page) -> Image.Image:
     return image
 
 
+def page_image_chunk(page: pymupdf.Page, modality: str = "doc") -> DataChunk:
+    """One multimodal image chunk for a PDF page, carrying its page geometry as
+    metadata. Shared by ``doc_to_images`` and ``extract_pdf`` so the two paths
+    can't drift."""
+    return DataChunk(
+        data=[page_to_image(page)],
+        metadata={
+            "page": page.number,
+            "width": page.rect.width,
+            "height": page.rect.height,
+        },
+        mime_type="image/jpeg",
+        modality=modality,
+    )
+
+
 def doc_to_images(
     content: bytes | str | pathlib.Path, modality: str = "doc"
 ) -> list[DataChunk]:
     with as_file(content) as file_path:
         with pymupdf.open(file_path) as pdf:
-            return [
-                DataChunk(
-                    data=[page_to_image(page)],
-                    metadata={
-                        "page": page.number,
-                        "width": page.rect.width,
-                        "height": page.rect.height,
-                    },
-                    mime_type="image/jpeg",
-                    modality=modality,
-                )
-                for page in pdf.pages()
-            ]
+            return [page_image_chunk(page, modality) for page in pdf.pages()]
+
+
+# A PDF page whose embedded text layer strips to fewer than this many characters
+# is treated as image-only (a scan, or a near-blank/figure page): below this a
+# get_text() chunk would just be noise (page numbers, stray ligatures, "").
+MIN_PDF_PAGE_TEXT_CHARS = 16
+
+
+def extract_pdf(
+    content: bytes | str | pathlib.Path, modality: str = "doc"
+) -> list[DataChunk]:
+    """Chunk a PDF into one image per page, plus a text chunk for every page
+    that has a real embedded text layer.
+
+    Born-digital PDFs become text-searchable (text-model embeddings + BM25) for
+    free and exactly, while scanned pages — whose ``get_text()`` is empty — fall
+    back to image-only multimodal chunks, preserving the previous behaviour.
+    The text and image chunks for a page share its ``page`` metadata.
+    """
+    chunks: list[DataChunk] = []
+    with as_file(content) as file_path:
+        with pymupdf.open(file_path) as pdf:
+            for page in pdf.pages():
+                image_chunk = page_image_chunk(page, modality)
+                chunks.append(image_chunk)
+                try:
+                    text = page.get_text().strip()
+                except Exception:
+                    logger.warning(
+                        "get_text failed for page %s; ingesting image-only",
+                        page.number,
+                    )
+                    text = ""
+                if len(text) >= MIN_PDF_PAGE_TEXT_CHARS:
+                    chunks.extend(
+                        extract_text(
+                            text,
+                            metadata=image_chunk.metadata,
+                            modality=modality,
+                            skip_summary=True,
+                        )
+                    )
+    return chunks
 
 
 def docx_to_pdf(
@@ -301,7 +348,7 @@ def extract_data_chunks(
     chunks = []
     logger.info(f"Extracting content from {mime_type}")
     if mime_type == "application/pdf":
-        chunks = doc_to_images(content)
+        chunks = extract_pdf(content)
     elif mime_type in [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
