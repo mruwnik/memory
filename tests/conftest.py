@@ -40,6 +40,11 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "db: marks tests that require database")
     config.addinivalue_line(
         "markers",
+        "qdrant: marks tests that require a qdrant container. Auto-applied to "
+        'tests using the qdrant fixtures; deselect with -m "not qdrant".',
+    )
+    config.addinivalue_line(
+        "markers",
         "transactional_db: opt out of the SAVEPOINT-based db_session pattern. "
         "Each test gets a real session that commits to the DB; teardown "
         "TRUNCATEs all tables. ~2 s slower per test but works with code "
@@ -48,19 +53,27 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark tests that use slow fixtures and skip them unless --run-slow is provided."""
-    if config.getoption("--run-slow"):
-        # --run-slow given: don't skip slow tests
-        return
+    """Auto-mark tests by the fixtures they use.
 
-    skip_slow = pytest.mark.skip(reason="need --run-slow option to run")
+    Tests touching slow fixtures get ``slow`` (and are skipped unless
+    ``--run-slow`` is given). Tests touching qdrant fixtures additionally get
+    ``qdrant`` so a qdrant-less run can deselect them with ``-m "not qdrant"``.
+    The qdrant marker is applied regardless of ``--run-slow`` so the filter
+    works whether or not slow tests are enabled.
+    """
     slow_fixtures = {"test_db", "db_engine", "db_session", "qdrant", "qdrant_container"}
+    qdrant_fixtures = {"qdrant", "qdrant_container"}
+    run_slow = config.getoption("--run-slow")
+    skip_slow = pytest.mark.skip(reason="need --run-slow option to run")
 
     for item in items:
-        # Check if test uses any slow fixtures
-        if slow_fixtures.intersection(set(getattr(item, "fixturenames", []))):
+        fixtures = set(getattr(item, "fixturenames", []))
+        if qdrant_fixtures.intersection(fixtures):
+            item.add_marker(pytest.mark.qdrant)
+        if slow_fixtures.intersection(fixtures):
             item.add_marker(pytest.mark.slow)
-            item.add_marker(skip_slow)
+            if not run_slow:
+                item.add_marker(skip_slow)
 
 
 class _MockRedisPipeline:
