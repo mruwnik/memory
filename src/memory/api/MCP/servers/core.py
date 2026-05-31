@@ -171,6 +171,56 @@ def _build_filters_section() -> str:
     return "\n".join(lines)
 
 
+def _build_list_items_description() -> str:
+    """Build dynamic description for the list_items tool.
+
+    Reuses :func:`_build_filters_section` (driven by SEARCH_FILTERS) so the
+    accepted content-metadata filters are documented identically to
+    search_knowledge_base instead of being hand-maintained. Mirrors how
+    _build_search_description injects the same section.
+    """
+    return textwrap.dedent(
+        """
+        List items without semantic search - for systematic enumeration.
+        Use for reviewing all items matching criteria, not finding best matches.
+
+        Args:
+            modalities: Filter by type: mail, blog, book, forum, photo, comic, etc. (empty = all)
+            {filters_section}
+            Observation-only filters (observation_types, min_confidences) are
+            rejected here - use search_observations for those.
+            limit: Max results per page (default 50, max 200)
+            offset: Skip first N results for pagination
+            sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
+            sort_order: "asc" or "desc" (default: desc)
+            include_metadata: Include full as_payload() metadata (default True)
+
+        Returns: {{items: [...], total: int, has_more: bool}}"""
+    ).format(filters_section=_build_filters_section())
+
+
+def _build_count_items_description() -> str:
+    """Build dynamic description for the count_items tool.
+
+    Reuses :func:`_build_filters_section` so the documented filters always match
+    list_items and search_knowledge_base (the three share the same filter set).
+    """
+    return textwrap.dedent(
+        """
+        Count items matching criteria without retrieving them.
+        Use to understand scope before systematic review.
+
+        Args:
+            modalities: Filter by type (empty = all)
+            {filters_section}
+            Observation-only filters (observation_types, min_confidences) are
+            rejected here - use search_observations for those. count_items and
+            list_items apply the identical filter set, so their totals always agree.
+
+        Returns: {{total: int, by_modality: {{mail: 100, blog: 50, ...}}}}"""
+    ).format(filters_section=_build_filters_section())
+
+
 def _build_search_description() -> str:
     """Build dynamic description for search_knowledge_base tool."""
     modalities = _get_available_modalities()
@@ -786,7 +836,7 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     return query
 
 
-@core_mcp.tool()
+@core_mcp.tool(description=_build_list_items_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def list_items(
     modalities: set[str] = set(),
@@ -797,24 +847,7 @@ async def list_items(
     sort_order: str = "desc",
     include_metadata: bool = True,
 ) -> dict:
-    """
-    List items without semantic search - for systematic enumeration.
-    Use for reviewing all items matching criteria, not finding best matches.
-
-    Args:
-        modalities: Filter by type: mail, blog, book, forum, photo, comic, etc. (empty = all)
-        filters: Same content-metadata filters as search_knowledge_base (tags,
-            min_size, max_size, sender, recipients, subject, sent_at, etc.).
-            Observation-only filters (observation_types, min_confidences) are
-            rejected here — use search_observations for those.
-        limit: Max results per page (default 50, max 200)
-        offset: Skip first N results for pagination
-        sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
-        sort_order: "asc" or "desc" (default: desc)
-        include_metadata: Include full as_payload() metadata (default True)
-
-    Returns: {items: [...], total: int, has_more: bool}
-    """
+    """List items without semantic search. See tool description for full parameter docs."""
     limit = min(limit, 200)
     if sort_by not in ("inserted_at", "size", "id"):
         sort_by = "inserted_at"
@@ -873,25 +906,13 @@ async def list_items(
         }
 
 
-@core_mcp.tool()
+@core_mcp.tool(description=_build_count_items_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def count_items(
     modalities: set[str] = set(),
     filters: MCPSearchFilters = {},
 ) -> dict:
-    """
-    Count items matching criteria without retrieving them.
-    Use to understand scope before systematic review.
-
-    Args:
-        modalities: Filter by type (empty = all)
-        filters: Same content-metadata filters as search_knowledge_base.
-            Observation-only filters (observation_types, min_confidences) are
-            rejected here — use search_observations for those. count_items and
-            list_items apply the identical filter set, so their totals always agree.
-
-    Returns: {total: int, by_modality: {mail: 100, blog: 50, ...}}
-    """
+    """Count items matching criteria. See tool description for full parameter docs."""
     # Get access filter for current user
     access_filter = get_current_user_access_filter()
 
