@@ -43,6 +43,10 @@ from memory.common import settings
         "/polls/respond/abc-123",
         "/claude/transfer/pull",
         "/claude/transfer/push",
+        # Generic content upload: authorized by the signed ingest token in
+        # the query string, not a session cookie. Must bypass the middleware
+        # or the minted upload_url is unusable from a non-browser client.
+        "/ingest/upload",
         # Slack push-events webhook authenticates via x-slack-signature
         # (HMAC over body), not session cookies. Without this carve-out
         # the AuthenticationMiddleware 401s every Slack POST before the
@@ -110,6 +114,12 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/slack/apps/123",
         "/slack/channels/456",
         "/slack/eventslog",  # prefix-overrun against /slack/events
+        # Prefix-overrun guards against the /ingest/upload carve-out: only
+        # the exact upload path is token-authed; siblings stay session-gated.
+        "/ingest",
+        "/ingest/uploads",  # overrun against /ingest/upload
+        "/ingest/upload-config",
+        "/ingestxxx",
         "",
     ],
 )
@@ -250,6 +260,13 @@ def test_claude_session_pattern_hex_floor_matches_token_hex_16():
         ("GET", "/.well-known/oauth-protected-resource"),
         ("GET", "/authorize"),
         ("POST", "/token"),
+        # The ingest upload endpoint authenticates via its signed ?token=,
+        # not a session — the middleware must pass both the documented PUT
+        # and the also-accepted POST through to the in-endpoint token check.
+        # A bad token reaches the handler and gets a 403 (not a 401 from the
+        # middleware); the point of this case is purely "not 401".
+        ("PUT", "/ingest/upload?token=v1.bad.sig"),
+        ("POST", "/ingest/upload?token=v1.bad.sig"),
     ],
 )
 def test_oauth_public_endpoints_bypass_auth_middleware(

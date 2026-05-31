@@ -60,6 +60,16 @@ WHITELIST = {
     # (query string for pull, Bearer header for push) inside the endpoints
     # themselves — must bypass OAuth or curl can't reach them.
     "/claude/transfer/",
+    # Generic content upload. The endpoint authenticates the request itself
+    # by verifying the signed ingest token in the ``?token=`` query string
+    # (ingest_tokens.verify_token: HMAC over a domain-tagged payload + exp +
+    # payload-schema check). The signed payload carries the user_id that
+    # scopes the write, so the token IS the authorization for this one
+    # upload — the add_content MCP tool mints it and hands the upload_url to
+    # a non-browser client that has no session cookie. Without this carve-out
+    # the middleware 401s the PUT before the in-endpoint token check fires,
+    # so the documented "PUT the bytes" step is impossible.
+    "/ingest/upload",
     # Slack push-events webhook. Slack POSTs ``event_callback`` payloads
     # here and authenticates via x-slack-signature (HMAC-SHA256 over the
     # body using the per-app signing secret) — it cannot present a

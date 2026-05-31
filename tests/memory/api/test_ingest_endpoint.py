@@ -68,11 +68,14 @@ def _make_dispatch_result(job_id=7, celery_task_id="abc", status="queued", is_ne
     return result
 
 
-def test_upload_lands_and_dispatches(client, user, tmp_path, monkeypatch):
+@pytest.mark.parametrize("method", ["PUT", "POST"])
+def test_upload_lands_and_dispatches(client, user, tmp_path, monkeypatch, method):
+    # PUT is the verb the add_content tool documents for the minted
+    # upload_url; POST is accepted too. Both must reach the handler.
     monkeypatch.setattr(settings, "MISC_STORAGE_DIR", tmp_path / "misc")
     token = _mint(user.id)
     with patch("memory.api.ingest.dispatch_job", return_value=_make_dispatch_result()) as dispatch:
-        resp = client.post(f"/ingest/upload?token={token}", content=b"%PDF-1.4 fake")
+        resp = client.request(method, f"/ingest/upload?token={token}", content=b"%PDF-1.4 fake")
     assert resp.status_code == 200
     body = resp.json()
     assert body["job_id"] == 7
@@ -81,6 +84,15 @@ def test_upload_lands_and_dispatches(client, user, tmp_path, monkeypatch):
     dispatched_kwargs = dispatch.call_args.kwargs["task_kwargs"]
     assert dispatched_kwargs["mime_type"] == "application/pdf"
     assert dispatched_kwargs["doc_metadata"] == {"src": "x"}
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE", "PATCH"])
+def test_upload_rejects_disallowed_methods(client, user, method):
+    # The route deliberately registers only PUT+POST. Pin the narrowing so a
+    # future widening of ``methods=`` has to update this test on purpose.
+    token = _mint(user.id)
+    resp = client.request(method, f"/ingest/upload?token={token}", content=b"x")
+    assert resp.status_code == 405
 
 
 def test_upload_rejects_bad_token(client):
