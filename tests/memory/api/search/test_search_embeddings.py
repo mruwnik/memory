@@ -54,30 +54,32 @@ def test_registry_combined_range_merges():
 
 
 @pytest.mark.parametrize(
-    "filter_key,filter_value",
+    "filter_key,filter_value,payload_key",
     [
-        ("tags", ["tag1", "tag2"]),
-        ("recipients", ["user1", "user2"]),
-        ("authors", ["author1"]),
+        ("tags", ["tag1", "tag2"], "tags"),
+        # recipients filters the derived bare-address payload key.
+        ("recipients", ["user1", "user2"], "recipient_emails"),
+        ("authors", ["author1"], "authors"),
     ],
 )
-def test_registry_list_filters(filter_key, filter_value):
+def test_registry_list_filters(filter_key, filter_value, payload_key):
     result = build_registry_qdrant_filters({filter_key: filter_value})
-    assert result == [{"key": filter_key, "match": {"any": filter_value}}]
+    assert result == [{"key": payload_key, "match": {"any": filter_value}}]
 
 
 @pytest.mark.parametrize(
-    "filter_key,filter_value",
+    "filter_key,filter_value,payload_key",
     [
-        ("folder_path", "My Drive/EquiStamp"),
-        ("sender", "user@example.com"),
-        ("domain", "example.com"),
-        ("author", "John Doe"),
+        ("folder_path", "My Drive/EquiStamp", "folder_path"),
+        # sender filters the derived bare-address payload key.
+        ("sender", "user@example.com", "sender_email"),
+        ("domain", "example.com", "domain"),
+        ("author", "John Doe", "author"),
     ],
 )
-def test_registry_string_filters(filter_key, filter_value):
+def test_registry_string_filters(filter_key, filter_value, payload_key):
     result = build_registry_qdrant_filters({filter_key: filter_value})
-    assert result == [{"key": filter_key, "match": {"value": filter_value}}]
+    assert result == [{"key": payload_key, "match": {"value": filter_value}}]
 
 
 def test_special_min_confidences():

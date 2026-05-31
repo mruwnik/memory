@@ -138,6 +138,8 @@ def test_mail_message_as_payload(sent_at, expected_date):
         "subject": "Test Subject",
         "sender": "sender@example.com",
         "recipients": ["recipient1@example.com", "recipient2@example.com"],
+        "sender_email": "sender@example.com",
+        "recipient_emails": ["recipient1@example.com", "recipient2@example.com"],
         "folder": "INBOX",
         "tags": [
             "tag1",
@@ -149,6 +151,33 @@ def test_mail_message_as_payload(sent_at, expected_date):
         "date": expected_date,
     }
     assert payload == expected
+
+
+def test_mail_message_as_payload_derives_bare_addresses():
+    """Derived address fields strip MIME-encoded display names and angle
+    brackets so a mailbox is exact-matchable regardless of header form."""
+    mail_message = MailMessage(
+        sha256=b"t",
+        content="t",
+        message_id="<m@example.com>",
+        # Mixed-case mailbox must be lowercased so the case-sensitive Qdrant
+        # exact-match arm agrees with the case-insensitive SQL arm.
+        sender="=?UTF-8?B?UmFkZWsgQnVkennFhHNraQ==?= <Radek@Example.COM>",
+        recipients=["mruwnik <GitHub@Ahiru.PL>", "plain@example.com"],
+        folder="INBOX",
+        size=1,
+    )
+    object.__setattr__(mail_message, "id", 7)
+    mail_message.people = []
+
+    payload = mail_message.as_payload()
+
+    assert payload["sender_email"] == "radek@example.com"
+    assert payload["recipient_emails"] == ["github@ahiru.pl", "plain@example.com"]
+    # The raw columns are preserved untouched (original case, display name) for
+    # display / attachment paths — only the derived *_email keys are normalized.
+    assert payload["sender"].startswith("=?UTF-8?B?")
+    assert payload["recipients"][0] == "mruwnik <GitHub@Ahiru.PL>"
 
 
 def test_mail_message_parsed_content():
@@ -215,6 +244,8 @@ Test Body Content"""
         "subject": "Test Subject",
         "sender": "sender@example.com",
         "recipients": ["recipient@example.com"],
+        "sender_email": "sender@example.com",
+        "recipient_emails": ["recipient@example.com"],
         "tags": None,
         "folder": None,
         "message_id": "<test@example.com>",

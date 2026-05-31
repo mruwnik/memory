@@ -4,7 +4,7 @@ import hashlib
 import logging
 import pathlib
 from datetime import datetime
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from typing import TypedDict
 
 from markdownify import markdownify
@@ -37,7 +37,13 @@ RawEmailResponse = tuple[str | None, bytes]
 
 def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     """
-    Extract email recipients from message headers.
+    Extract email recipient addresses from message headers.
+
+    Uses ``email.utils.getaddresses`` for RFC 5322-correct parsing: a naive
+    ``split(",")`` corrupts addresses whose display name contains a comma
+    (``"Doe, John" <j@x>`` becomes two bogus recipients). Returns the bare
+    address (``j@x``) so a mailbox is stored under one canonical form rather
+    than smeared across display-name variants.
 
     Args:
         msg: Email message object
@@ -45,13 +51,8 @@ def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     Returns:
         List of recipient email addresses
     """
-    return [
-        recipient
-        for field in ["To", "Cc", "Bcc"]
-        if (field_value := msg.get(field, ""))
-        for r in field_value.split(",")
-        if (recipient := r.strip())
-    ]
+    headers = [value for field in ["To", "Cc", "Bcc"] if (value := msg.get(field))]
+    return [addr for _name, addr in getaddresses(headers) if addr]
 
 
 def extract_date(msg: email.message.Message) -> datetime | None:  # type: ignore

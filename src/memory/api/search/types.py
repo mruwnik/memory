@@ -102,6 +102,7 @@ class MCPSearchFilters(TypedDict):
 
     # String match filters (exact match)
     folder_path: NotRequired[str]
+    folder: NotRequired[str]
     sender: NotRequired[str]
     domain: NotRequired[str]
     author: NotRequired[str]

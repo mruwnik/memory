@@ -105,6 +105,23 @@ def create_email_message(
         ),
         # Empty fields
         ("", "", "", []),
+        # Display name is stripped down to the bare address
+        ("Jane Doe <jane@example.com>", None, None, ["jane@example.com"]),
+        # Comma inside a quoted display name must NOT split into two bogus
+        # recipients (the bug a naive split(",") introduced).
+        (
+            '"Doe, Jane" <jane@example.com>',
+            None,
+            None,
+            ["jane@example.com"],
+        ),
+        # MIME-encoded display name still yields the plaintext address
+        (
+            "=?UTF-8?B?UmFkZWsgQnVkennFhHNraQ==?= <radek@example.com>",
+            None,
+            None,
+            ["radek@example.com"],
+        ),
     ],
 )
 def test_extract_recipients(to_addr, cc_addr, bcc_addr, expected):

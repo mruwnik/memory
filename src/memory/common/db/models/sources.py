@@ -85,7 +85,7 @@ class Book(Base):
     )
 
     def as_payload(self, sections: bool = False) -> dict:
-        data = {
+        data = (self.book_metadata or {}) | {
             "id": self.id,
             "isbn": self.isbn,
             "title": self.title,
@@ -96,7 +96,7 @@ class Book(Base):
             "edition": self.edition,
             "series": self.series,
             "series_number": self.series_number,
-        } | (self.book_metadata or {})
+        }
         if sections:
             data["sections"] = [section.as_payload() for section in self.sections]
         return data

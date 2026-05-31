@@ -29,6 +29,7 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import cast as sql_cast
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Text
 
@@ -45,6 +46,10 @@ class SqlOp(Enum):
     IN = "in"
     ARRAY_ANY = "array_any"  # Postgres ``&&`` overlap on an ARRAY column
     ILIKE_SUBSTR = "ilike_substr"  # case-insensitive substring match
+    # case-insensitive substring against any element of an ARRAY column, via
+    # array_to_string; matches if any of the (list-valued) filter values is a
+    # substring of any element.
+    ARRAY_ILIKE_SUBSTR = "array_ilike_substr"
 
 
 class QdrantOp(Enum):
@@ -93,6 +98,10 @@ class FilterSpec:
         qdrant_op: Qdrant operator, or :data:`QDRANT_UNSUPPORTED`.
         array_cast: When ``True`` the bound value is cast to ``ARRAY(Text)``
             before the SQL comparison (matches the ARRAY(Text) columns).
+        lowercase_value: When ``True`` the filter value is lowercased before the
+            Qdrant exact match. The SQL arm is case-insensitive already (ILIKE);
+            this keeps the case-sensitive Qdrant arm in agreement when the
+            payload key was stored lowercased (e.g. the derived email keys).
     """
 
     key: str
@@ -102,6 +111,7 @@ class FilterSpec:
     qdrant_key: str | None
     qdrant_op: QdrantOp | QdrantUnsupported
     array_cast: bool = False
+    lowercase_value: bool = False
 
     def target_model(self) -> type:
         return self.model or SourceItem
@@ -119,22 +129,46 @@ class FilterSpec:
 #   - "subject" exists in the mail payload but only supports exact match in
 #     Qdrant, so it is marked QDRANT_UNSUPPORTED (see QdrantUnsupported).
 #
-# WARNING: of these payload keys, only "tags" (and "people", used elsewhere)
-# have a Qdrant payload index (see qdrant.create_payload_index). Filtering an
-# unindexed payload key may silently match nothing in Qdrant. Adding the
-# indexes is a separate follow-up (a migration / reindex), deliberately out of
-# scope here.
+# WARNING: only "tags", "people" and the keys in qdrant.EXTRA_KEYWORD_INDEXES
+# ("sender_email", "recipient_emails", "folder") have a Qdrant payload index
+# (see qdrant.ensure_keyword_indexes / create_payload_index). Filtering an
+# unindexed payload key may silently match nothing in Qdrant, so any spec routed
+# to Qdrant must target an indexed key (add it to EXTRA_KEYWORD_INDEXES) or be
+# QDRANT_UNSUPPORTED.
 _SPECS: tuple[FilterSpec, ...] = (
     FilterSpec("tags", None, "tags", SqlOp.ARRAY_ANY, "tags", QdrantOp.MATCH_ANY, array_cast=True),
     FilterSpec("min_size", None, "size", SqlOp.GTE, "size", QdrantOp.RANGE_GTE),
     FilterSpec("max_size", None, "size", SqlOp.LTE, "size", QdrantOp.RANGE_LTE),
-    # Mail
-    FilterSpec("sender", MailMessage, "sender", SqlOp.EQ, "sender", QdrantOp.MATCH_VALUE),
+    # Mail.
+    #
+    # The stored ``sender``/``recipients`` columns hold raw header strings:
+    # MIME-encoded display names and inconsistent ``Name <addr>`` vs bare-addr
+    # forms, so the same mailbox is smeared across variants. SQL matches them
+    # with a case-insensitive substring (the bare address is always plaintext
+    # in the header, even when the display name is MIME-encoded), which finds
+    # a mailbox across every stored variant including legacy rows.
+    #
+    # Qdrant has no substring operator, so it instead filters the *derived*
+    # payload keys ``sender_email``/``recipient_emails`` (bare, lowercased
+    # addresses parsed in MailMessage.as_payload(), KEYWORD-indexed) with exact
+    # match — correct because the derived values are normalized. ``lowercase_value``
+    # lowercases the query so the case-sensitive Qdrant match agrees with the
+    # case-insensitive SQL ILIKE arm. The two arms use different operators on
+    # purpose; substring is a strict superset of the exact matches, so the RRF
+    # merge never leaks a non-matching mail (a full-address query agrees on both;
+    # a partial-substring query matches only on the SQL/BM25 arm).
     FilterSpec(
-        "recipients", MailMessage, "recipients", SqlOp.ARRAY_ANY,
-        "recipients", QdrantOp.MATCH_ANY, array_cast=True,
+        "sender", MailMessage, "sender", SqlOp.ILIKE_SUBSTR,
+        "sender_email", QdrantOp.MATCH_VALUE, lowercase_value=True,
+    ),
+    FilterSpec(
+        "recipients", MailMessage, "recipients", SqlOp.ARRAY_ILIKE_SUBSTR,
+        "recipient_emails", QdrantOp.MATCH_ANY, lowercase_value=True,
     ),
     FilterSpec("subject", MailMessage, "subject", SqlOp.ILIKE_SUBSTR, None, QDRANT_UNSUPPORTED),
+    # Mail folder is a discrete IMAP identifier ("INBOX", "[Gmail]/Sent Mail"),
+    # so exact match on both backends. Distinct from GoogleDoc.folder_path below.
+    FilterSpec("folder", MailMessage, "folder", SqlOp.EQ, "folder", QdrantOp.MATCH_VALUE),
     FilterSpec("min_sent_at", MailMessage, "sent_at", SqlOp.GTE, "date", QdrantOp.RANGE_GTE),
     FilterSpec("max_sent_at", MailMessage, "sent_at", SqlOp.LTE, "date", QdrantOp.RANGE_LTE),
     # Google Docs
@@ -280,7 +314,34 @@ def apply_spec_sql(query, spec: FilterSpec, value: Any, *, joined: set[type]):
         return query.filter(column.op("&&")(bound))
     if spec.sql_op is SqlOp.ILIKE_SUBSTR:
         return query.filter(column.ilike(f"%{escape_like(value)}%", escape="\\"))
+    if spec.sql_op is SqlOp.ARRAY_ILIKE_SUBSTR:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(
+                f"filter {spec.key!r} expects a list value, got {type(value).__name__}"
+            )
+        # Flatten the array to a single string so one ILIKE scans every element.
+        # The unit-separator (0x1f) can't occur in an email header, so a query
+        # value can't accidentally span two elements (and unlike NUL it is a
+        # legal Postgres string literal). Match if any value is a substring (OR).
+        flattened = func.array_to_string(column, "\x1f")
+        clauses = [
+            flattened.ilike(f"%{escape_like(v)}%", escape="\\") for v in value
+        ]
+        return query.filter(or_(*clauses)) if clauses else query
     raise ValueError(f"unhandled SQL op {spec.sql_op}")  # pragma: no cover
+
+
+def lowercase_filter_value(value: Any) -> Any:
+    """Lowercase a scalar or list filter value; pass anything else through.
+
+    Used for email-address filters so the case-sensitive Qdrant exact match
+    agrees with the lowercased payload (and the case-insensitive SQL arm).
+    """
+    if isinstance(value, str):
+        return value.lower()
+    if isinstance(value, (list, tuple)):
+        return [v.lower() if isinstance(v, str) else v for v in value]
+    return value
 
 
 def is_empty_value(value: Any) -> bool:
@@ -351,6 +412,8 @@ def build_registry_qdrant_filters(filters) -> list[dict[str, Any]]:
         # concrete payload key with its qdrant_op; the registry never leaves
         # qdrant_key None alongside a usable op.
         assert qkey is not None
+        if spec.lowercase_value:
+            value = lowercase_filter_value(value)
         if spec.qdrant_op is QdrantOp.MATCH_VALUE:
             result.append({"key": qkey, "match": {"value": value}})
         elif spec.qdrant_op is QdrantOp.MATCH_ANY:

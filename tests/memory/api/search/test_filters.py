@@ -90,7 +90,6 @@ def test_completeness_detects_registry_special_overlap(monkeypatch):
 @pytest.mark.parametrize(
     "filters, table, column, op",
     [
-        ({"sender": "a@b.com"}, "mail_message", "sender", "= 'a@b.com'"),
         ({"min_sent_at": "2024-01-01"}, "mail_message", "sent_at", ">= '2024-01-01'"),
         ({"max_sent_at": "2024-12-31"}, "mail_message", "sent_at", "<= '2024-12-31'"),
         ({"domain": "example.com"}, "blog_post", "domain", "= 'example.com'"),
@@ -123,17 +122,51 @@ def test_registry_sql_subject_uses_ilike():
     assert "%hello%" in sql
 
 
+def test_registry_sql_sender_uses_ilike_substring():
+    # sender is matched as a case-insensitive substring (the bare address is
+    # plaintext in the header even when the display name is MIME-encoded), not
+    # exact equality.
+    sql = compile_sql(registry_query({"sender": "notifications@github.com"}))
+    assert ".sender ILIKE" in sql
+    assert "%notifications@github.com%" in sql
+    assert "mail_message" in sql
+
+
+def test_registry_sql_recipients_substring_over_array():
+    # recipients is an ARRAY column matched by flattening to a string and
+    # substring-matching, so a bare address finds every display-name variant.
+    sql = compile_sql(registry_query({"recipients": ["github@ahiru.pl"]}))
+    assert "array_to_string" in sql
+    assert "ILIKE" in sql
+    assert "%github@ahiru.pl%" in sql
+
+
+def test_registry_sql_recipients_multiple_values_or():
+    sql = compile_sql(registry_query({"recipients": ["a@x.com", "b@y.com"]}))
+    assert "%a@x.com%" in sql
+    assert "%b@y.com%" in sql
+    assert " OR " in sql
+
+
 def test_registry_sql_folder_path_uses_ilike_on_google_doc():
     sql = compile_sql(registry_query({"folder_path": "Work"}))
     assert ".folder_path ILIKE" in sql
     assert "google_doc" in sql
 
 
-@pytest.mark.parametrize("array_key", ["tags", "recipients"])
-def test_registry_sql_array_overlap_cast_text(array_key):
-    sql = compile_sql(registry_query({array_key: ["x", "y"]}))
+def test_registry_sql_mail_folder_exact_match():
+    # Mail folder is distinct from GoogleDoc.folder_path: exact match on the
+    # mail_message subclass, not a substring on google_doc.
+    sql = compile_sql(registry_query({"folder": "INBOX"}))
+    assert ".folder = 'INBOX'" in sql
+    assert "mail_message" in sql
+    assert "google_doc" not in sql
+
+
+def test_registry_sql_tags_array_overlap_cast_text():
+    sql = compile_sql(registry_query({"tags": ["x", "y"]}))
     assert "&&" in sql
-    # Both tags and recipients are ARRAY(Text) columns, so the cast is TEXT[].
+    # tags is an ARRAY(Text) column, so the cast is TEXT[].
     assert "AS TEXT[]" in sql
 
 
@@ -165,17 +198,35 @@ def test_registry_sql_empty_values_skipped():
     "filters, expected",
     [
         ({"tags": ["x"]}, {"key": "tags", "match": {"any": ["x"]}}),
-        ({"recipients": ["a"]}, {"key": "recipients", "match": {"any": ["a"]}}),
+        # recipients/sender filter the derived clean-address payload keys.
+        ({"recipients": ["a"]}, {"key": "recipient_emails", "match": {"any": ["a"]}}),
         ({"authors": ["a"]}, {"key": "authors", "match": {"any": ["a"]}}),
-        ({"sender": "s"}, {"key": "sender", "match": {"value": "s"}}),
+        ({"sender": "s"}, {"key": "sender_email", "match": {"value": "s"}}),
         ({"domain": "d"}, {"key": "domain", "match": {"value": "d"}}),
         ({"author": "a"}, {"key": "author", "match": {"value": "a"}}),
         ({"folder_path": "p"}, {"key": "folder_path", "match": {"value": "p"}}),
+        ({"folder": "INBOX"}, {"key": "folder", "match": {"value": "INBOX"}}),
         ({"min_size": 5}, {"key": "size", "range": {"gte": 5}}),
         ({"max_size": 9}, {"key": "size", "range": {"lte": 9}}),
     ],
 )
 def test_qdrant_single_filter(filters, expected):
+    assert F.build_registry_qdrant_filters(filters) == [expected]
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({"sender": "John@X.COM"}, {"key": "sender_email", "match": {"value": "john@x.com"}}),
+        (
+            {"recipients": ["GitHub@Ahiru.PL", "Two@Y.com"]},
+            {"key": "recipient_emails", "match": {"any": ["github@ahiru.pl", "two@y.com"]}},
+        ),
+    ],
+)
+def test_qdrant_address_filters_lowercase_value(filters, expected):
+    # The Qdrant payload keys store lowercased addresses, so the query value is
+    # lowercased too — otherwise a mixed-case query exact-misses on the vector arm.
     assert F.build_registry_qdrant_filters(filters) == [expected]
 
 
@@ -289,5 +340,5 @@ def test_bm25_mail_filter_join_chain():
     # source_item and produce a cartesian product).
     assert sql.count("JOIN source_item") == 1
     assert "JOIN mail_message ON mail_message.id = source_item.id" in sql
-    assert "mail_message.sender = 'a@b.com'" in sql
-    assert "mail_message.recipients &&" in sql
+    assert "mail_message.sender ILIKE" in sql
+    assert "array_to_string(mail_message.recipients" in sql

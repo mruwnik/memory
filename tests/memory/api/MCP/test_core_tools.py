@@ -1840,7 +1840,9 @@ async def test_search_skips_logging_when_no_user(
 # ====== apply_item_filters + list/count parity (real DB) ======
 
 
-def make_mail(sha: bytes, *, sender, recipients, subject, sent_at, content="body"):
+def make_mail(
+    sha: bytes, *, sender, recipients, subject, sent_at, content="body", folder="INBOX"
+):
     """Build a STORED MailMessage row for enumeration tests."""
     from memory.common.db.models import MailMessage
 
@@ -1856,7 +1858,7 @@ def make_mail(sha: bytes, *, sender, recipients, subject, sent_at, content="body
         recipients=recipients,
         subject=subject,
         sent_at=sent_at,
-        folder="INBOX",
+        folder=folder,
     )
 
 
@@ -1935,3 +1937,85 @@ async def test_unsupported_filter_raises_value_error(db_session, admin_session, 
     with mcp_auth_context(admin_session.id):
         with pytest.raises(ValueError, match="Unsupported filter"):
             await tool.fn(filters={"observation_types": ["belief"]})
+
+
+@pytest.mark.asyncio
+async def test_recipients_substring_unifies_display_name_variants(
+    db_session, admin_session
+):
+    """A bare-address recipients filter finds the same mailbox whether it was
+    stored bare or with a display name — executes array_to_string on Postgres."""
+    bare = make_mail(
+        b"rcpt-bare", sender="s@x.com", recipients=["github@ahiru.pl"],
+        subject="bare", sent_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+    )
+    named = make_mail(
+        b"rcpt-named", sender="s@x.com", recipients=["mruwnik <github@ahiru.pl>"],
+        subject="named", sent_at=datetime(2021, 1, 2, tzinfo=timezone.utc),
+    )
+    other = make_mail(
+        b"rcpt-other", sender="s@x.com", recipients=["someone@else.com"],
+        subject="other", sent_at=datetime(2021, 1, 3, tzinfo=timezone.utc),
+    )
+    db_session.add_all([bare, named, other])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await list_items.fn(
+            modalities={"mail"}, filters={"recipients": ["github@ahiru.pl"]}
+        )
+
+    got = {item["metadata"]["subject"] for item in result["items"]}
+    assert got == {"bare", "named"}
+
+
+@pytest.mark.asyncio
+async def test_sender_substring_matches_mime_encoded_display_name(
+    db_session, admin_session
+):
+    """A bare-address sender filter matches even when the display name is
+    MIME-encoded (the address itself is plaintext in the header)."""
+    match = make_mail(
+        b"snd-mime",
+        sender="=?UTF-8?B?UmFkZWsgQnVkennFhHNraQ==?= <notifications@github.com>",
+        recipients=["r@x.com"], subject="match",
+        sent_at=datetime(2021, 2, 1, tzinfo=timezone.utc),
+    )
+    nomatch = make_mail(
+        b"snd-other", sender="Someone <other@example.com>",
+        recipients=["r@x.com"], subject="nomatch",
+        sent_at=datetime(2021, 2, 2, tzinfo=timezone.utc),
+    )
+    db_session.add_all([match, nomatch])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await list_items.fn(
+            modalities={"mail"}, filters={"sender": "notifications@github.com"}
+        )
+
+    got = {item["metadata"]["subject"] for item in result["items"]}
+    assert got == {"match"}
+
+
+@pytest.mark.asyncio
+async def test_folder_filter_exact_match(db_session, admin_session):
+    """The mail folder filter matches the stored folder value exactly."""
+    inbox = make_mail(
+        b"fld-inbox", sender="s@x.com", recipients=["r@x.com"], subject="inbox",
+        sent_at=datetime(2021, 3, 1, tzinfo=timezone.utc), folder="INBOX",
+    )
+    sent = make_mail(
+        b"fld-sent", sender="s@x.com", recipients=["r@x.com"], subject="sent",
+        sent_at=datetime(2021, 3, 2, tzinfo=timezone.utc), folder="[Gmail]/Sent Mail",
+    )
+    db_session.add_all([inbox, sent])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await list_items.fn(
+            modalities={"mail"}, filters={"folder": "INBOX"}
+        )
+
+    got = {item["metadata"]["subject"] for item in result["items"]}
+    assert got == {"inbox"}

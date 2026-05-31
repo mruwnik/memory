@@ -126,10 +126,21 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
     ("min_published", "minimum publication date, ISO format", "blog, forum"),
     ("max_published", "maximum publication date, ISO format", "blog, forum"),
     ("folder_path", "Google Drive folder path filter", "doc"),
-    ("sender", "exact match on email sender address", "mail"),
+    ("folder", "exact match on email folder name, e.g. INBOX", "mail"),
+    (
+        "sender",
+        "case-insensitive substring match on email sender address "
+        "(vector search needs the full address)",
+        "mail",
+    ),
     ("domain", "exact match on website domain", "blog"),
     ("author", "exact match on author name", None),
-    ("recipients", "list of email recipients to match", "mail"),
+    (
+        "recipients",
+        "match email recipients by address substring, case-insensitive "
+        "(vector search needs the full address)",
+        "mail",
+    ),
     ("authors", "list of authors to match", None),
 ]
 

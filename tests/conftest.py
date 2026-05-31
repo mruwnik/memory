@@ -538,11 +538,18 @@ def mcp_servers():
 
 
 @contextmanager
-def mcp_auth_context(session_token: str):
+def mcp_auth_context(session_token: str, scopes: list[str] | None = None):
     """Set up FastMCP auth context for testing.
 
     This sets the auth_context_var that FastMCP's get_access_token() reads from,
     allowing tests to run without mocking internal functions.
+
+    By default the access token carries the session user's real scopes, exactly
+    as production does for a frontend session (see
+    ``oauth_provider.resolve_session_scopes``): the user's scopes when the session
+    has no OAuth state, else the OAuth state's scopes. This makes an
+    ``admin_session`` actually authorize as admin at the data layer instead of
+    being silently treated as least-privilege. Pass ``scopes`` to override.
 
     Usage:
         with mcp_auth_context(admin_session.id):
@@ -551,11 +558,23 @@ def mcp_auth_context(session_token: str):
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
     from mcp.server.auth.provider import AccessToken
+    from memory.common.db.connection import make_session
+    from memory.common.db.models import UserSession
+
+    if scopes is None:
+        with make_session() as session:
+            user_session = session.get(UserSession, session_token)
+            if user_session and user_session.oauth_state is not None:
+                scopes = list(user_session.oauth_state.scopes or [])
+            elif user_session and user_session.user:
+                scopes = list(user_session.user.scopes or [])
+            else:
+                scopes = []
 
     access_token = AccessToken(
         token=session_token,
         client_id="test-client",
-        scopes=[],
+        scopes=scopes,
     )
     auth_user = AuthenticatedUser(access_token)
     token = auth_context_var.set(auth_user)

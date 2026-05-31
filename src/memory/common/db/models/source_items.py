@@ -7,6 +7,7 @@ from __future__ import annotations
 import pathlib
 import textwrap
 from datetime import datetime
+from email.utils import getaddresses
 from typing import TYPE_CHECKING, Any, Annotated, Sequence
 
 from PIL import Image
@@ -65,11 +66,30 @@ if TYPE_CHECKING:
     from memory.common.db.models.observations import ObservationContradiction
 
 
+def mail_addresses(values: Sequence[str]) -> list[str]:
+    """Bare, lowercased email addresses parsed from raw ``From``/``To`` headers.
+
+    Strips MIME-encoded display names and angle brackets so a mailbox is
+    reduced to one canonical form (``a@b`` from ``"Name" <A@B>``), and
+    lowercases it so the case-sensitive Qdrant exact-match arm agrees with the
+    case-insensitive SQL ``ILIKE`` arm (RFC 5321 domains are case-insensitive
+    and local parts are conventionally treated so). Idempotent on already-bare,
+    already-lowercased input. Used to derive Qdrant payload fields that support
+    exact-match address filtering despite the stored header columns being
+    display-name-smeared / MIME-encoded.
+    """
+    return [
+        addr.lower() for _name, addr in getaddresses([v for v in values if v]) if addr
+    ]
+
+
 class MailMessagePayload(SourceItemPayload):
     message_id: Annotated[str, "Unique email message identifier"]
     subject: Annotated[str, "Email subject line"]
     sender: Annotated[str, "Email sender address"]
     recipients: Annotated[list[str], "List of recipient email addresses"]
+    sender_email: Annotated[str, "Bare sender address (display name stripped)"]
+    recipient_emails: Annotated[list[str], "Bare recipient addresses"]
     folder: Annotated[str, "Email folder name"]
     date: Annotated[str | None, "Email sent date in ISO format"]
 
@@ -129,12 +149,15 @@ class MailMessage(SourceItem):
     def as_payload(self) -> MailMessagePayload:
         base = super().as_payload()
         base["tags"] = (self.tags or []) + [self.sender or ""] + (self.recipients or [])
+        sender_emails = mail_addresses([self.sender or ""])
         return MailMessagePayload(
             **base,
             message_id=self.message_id or "",  # type: ignore[arg-type]
             subject=self.subject or "",  # type: ignore[arg-type]
             sender=self.sender or "",  # type: ignore[arg-type]
             recipients=self.recipients or [],  # type: ignore[arg-type]
+            sender_email=sender_emails[0] if sender_emails else "",
+            recipient_emails=mail_addresses(self.recipients or []),
             folder=self.folder,  # type: ignore[arg-type]
             date=(self.sent_at and self.sent_at.isoformat() or None),
         )
