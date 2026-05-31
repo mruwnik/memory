@@ -21,7 +21,6 @@ from memory.api.MCP.servers.core import (
     filter_source_ids,
 )
 from memory.api.search.types import SearchFilters
-from memory.common import extract
 from memory.common.db.models.source_item import SourceItem
 from tests.conftest import mcp_auth_context
 

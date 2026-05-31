@@ -304,7 +304,6 @@ def _mint_with_raw_payload(raw_data: dict) -> str:
     Used to forge tokens with wrong types — exercises the verify-side
     type coercion that protects against future code paths writing junk.
     """
-    import base64
     import json as _json
 
     from memory.api import signed_tokens

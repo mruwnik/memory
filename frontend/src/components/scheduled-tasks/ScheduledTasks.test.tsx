@@ -232,7 +232,7 @@ describe('ScheduledTasks', () => {
     await waitFor(() => expect(screen.getByText('notif task')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.selectOptions(screen.getByRole('combobox'), 'email')
-    await user.type(screen.getByPlaceholderText('channel or email'), 'a@b.c')
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'a@b.c')
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(updateTask).toHaveBeenCalledWith('notif', expect.objectContaining({
