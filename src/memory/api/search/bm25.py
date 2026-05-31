@@ -12,12 +12,24 @@ import re
 from sqlalchemy import func, text, or_, exists, select
 
 from memory.api.search.embeddings import require_access_filter
+from memory.api.search.filters import (
+    FILTER_REGISTRY,
+    SPECIAL_FILTER_KEYS,
+    apply_registry_filters_sql,
+    is_empty_value,
+    reject_unknown_filter_keys,
+)
 from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 from memory.common.db.models.source_item import source_item_people
+
+# BM25 accepts every logical filter: the declarative registry plus the
+# hand-coded special keys (access/person/source_ids/confidence/observation +
+# the created_at divergence). Anything else is a programming error.
+BM25_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +102,7 @@ async def search_bm25(
             for the BM25 layer.
     """
     filters = require_access_filter(filters, "search_bm25")
+    reject_unknown_filter_keys(filters, allowed=BM25_ALLOWED_FILTER_KEYS)
     tsquery = build_tsquery(query)
     if not tsquery:
         return {}
@@ -111,16 +124,28 @@ async def search_bm25(
             Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
 
-        # Join with SourceItem if we need size filters, access control, or person filter
+        # Join with SourceItem if we need access control, person filter, or any
+        # registry filter (size/tags on SourceItem + mail/blog/doc subclass
+        # joins all hang off SourceItem.id).
         access_filter = filters.get("access_filter")
         person_id = filters.get("person_id")
+        # Use is_empty_value (not truthiness) so a legitimate 0 bound — e.g.
+        # min_size=0 — still triggers the join. Plain truthiness would skip the
+        # join while apply_registry_filters_sql still emits `source_item.size
+        # >= 0`, producing an uncorrelated cross join that also escapes the
+        # source-join-based access filter.
+        has_registry_filter = any(
+            not is_empty_value(filters.get(k)) for k in FILTER_REGISTRY
+        )
         needs_source_join = (
-            any(filters.get(k) for k in ["min_size", "max_size"])
+            has_registry_filter
             or access_filter is not None
             or person_id is not None
         )
 
-        # Date filters on Chunk.created_at
+        # created_at is scoped to Chunk.created_at here (NOT SourceItem.inserted_at
+        # — see SPECIAL_FILTER_KEYS in search.filters for why the two backends
+        # intentionally differ).
         if min_created_at := filters.get("min_created_at"):
             items_query = items_query.filter(Chunk.created_at >= min_created_at)
         if max_created_at := filters.get("max_created_at"):
@@ -135,6 +160,14 @@ async def search_bm25(
             items_query = apply_access_filter_to_query(
                 items_query, access_filter
             )
+
+        # Declarative content-metadata filters (tags/size/mail/blog/doc). The
+        # joins are 1:1 on id so rank/order is unaffected. SourceItem is
+        # already joined above; pass it as pre-joined so registry helper only
+        # adds the subclass joins.
+        items_query = apply_registry_filters_sql(
+            items_query, filters, joined={SourceItem}
+        )
 
         # Apply person filter (requires source join)
         # Include items where: no people associations exist OR person is associated
@@ -156,12 +189,6 @@ async def search_bm25(
 
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))
-
-        # Size filters
-        if min_size := filters.get("min_size"):
-            items_query = items_query.filter(SourceItem.size >= min_size)
-        if max_size := filters.get("max_size"):
-            items_query = items_query.filter(SourceItem.size <= max_size)
 
         # Observation type filter - restricts to specific collection types
         if observation_types := filters.get("observation_types"):

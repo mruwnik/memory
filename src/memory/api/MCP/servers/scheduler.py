@@ -379,7 +379,7 @@ async def upsert(
             task.notification_target = resolve_and_validate_target(
                 session, user_id, task.notification_channel, notification_target
             )
-        elif channel_changed and task.notification_target:
+        elif channel_changed and task.notification_target and task.notification_channel:
             # The stored target was validated for the OLD channel; a channel
             # change must re-resolve it (or surface a clear error) rather than
             # leave a target that silently breaks at dispatch.

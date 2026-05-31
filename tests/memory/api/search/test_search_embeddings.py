@@ -6,8 +6,7 @@ import copy
 import pickle
 
 from memory.api.search.embeddings import (
-    merge_range_filter,
-    merge_filters,
+    build_qdrant_special_filters,
     build_person_filter,
     build_access_qdrant_filter,
     NO_ACCESS,
@@ -16,67 +15,42 @@ from memory.api.search.embeddings import (
     search_chunks,
     search_chunks_embeddings,
 )
+from memory.api.search.filters import build_registry_qdrant_filters
 from memory.common.access_control import AccessFilter, AccessCondition
 from memory.common.extract import DataChunk
 
 
-def test_merge_range_filter_new_filter():
-    """Test adding new range filters"""
-    filters = []
-    result = merge_range_filter(filters, "min_size", 100)
-    assert result == [{"key": "size", "range": {"gte": 100}}]
-
-    filters = []
-    result = merge_range_filter(filters, "max_size", 1000)
-    assert result == [{"key": "size", "range": {"lte": 1000}}]
-
-
-def test_merge_range_filter_existing_field():
-    """Test adding to existing field"""
-    filters = [{"key": "size", "range": {"lte": 1000}}]
-    result = merge_range_filter(filters, "min_size", 100)
-    assert result == [{"key": "size", "range": {"lte": 1000, "gte": 100}}]
-
-
-def test_merge_range_filter_override_existing():
-    """Test overriding existing values"""
-    filters = [{"key": "size", "range": {"gte": 100}}]
-    result = merge_range_filter(filters, "min_size", 200)
-    assert result == [{"key": "size", "range": {"gte": 200}}]
-
-
-def test_merge_range_filter_with_other_filters():
-    """Test adding range filter alongside other filters"""
-    filters = [{"key": "tags", "match": {"any": ["tag1"]}}]
-    result = merge_range_filter(filters, "min_size", 100)
-
-    expected = [
-        {"key": "tags", "match": {"any": ["tag1"]}},
-        {"key": "size", "range": {"gte": 100}},
-    ]
-    assert result == expected
+# --- Qdrant filter translation (registry + special keys) ---
+#
+# The Qdrant filter dicts are now produced by the shared registry
+# (``build_registry_qdrant_filters``) plus the hand-coded special-key shapes
+# (``build_qdrant_special_filters``). These tests pin the translated output.
 
 
 @pytest.mark.parametrize(
-    "key,expected_direction,expected_field",
+    "key,value,expected_payload_key",
     [
-        ("min_sent_at", "min", "sent_at"),
-        ("max_sent_at", "max", "sent_at"),
-        ("min_published", "min", "published"),
-        ("max_published", "max", "published"),
-        ("min_size", "min", "size"),
-        ("max_size", "max", "size"),
+        ("min_size", 100, "size"),
+        ("max_size", 1000, "size"),
+        ("min_sent_at", "2024-01-01", "date"),  # payload stores email date as "date"
+        ("max_sent_at", "2024-12-31", "date"),
+        ("min_published", "2023-01-01", "published"),
+        ("max_published", "2023-12-31", "published"),
     ],
 )
-def test_merge_range_filter_key_parsing(key, expected_direction, expected_field):
-    """Test that field names are correctly extracted from keys"""
-    filters = []
-    result = merge_range_filter(filters, key, 100)
-
+def test_registry_range_filter_payload_key(key, value, expected_payload_key):
+    result = build_registry_qdrant_filters({key: value})
     assert len(result) == 1
-    assert result[0]["key"] == expected_field
-    range_key = "gte" if expected_direction == "min" else "lte"
-    assert result[0]["range"][range_key] == 100
+    assert result[0]["key"] == expected_payload_key
+    range_key = "gte" if key.startswith("min") else "lte"
+    assert result[0]["range"][range_key] == value
+
+
+def test_registry_combined_range_merges():
+    result = build_registry_qdrant_filters({"min_size": 100, "max_size": 1000})
+    size_filters = [f for f in result if f["key"] == "size"]
+    assert len(size_filters) == 1
+    assert size_filters[0]["range"] == {"gte": 100, "lte": 1000}
 
 
 @pytest.mark.parametrize(
@@ -84,37 +58,12 @@ def test_merge_range_filter_key_parsing(key, expected_direction, expected_field)
     [
         ("tags", ["tag1", "tag2"]),
         ("recipients", ["user1", "user2"]),
-        ("observation_types", ["belief", "preference"]),
         ("authors", ["author1"]),
     ],
 )
-def test_merge_filters_list_filters(filter_key, filter_value):
-    """Test list filters that use match any"""
-    filters = []
-    result = merge_filters(filters, filter_key, filter_value)
-    expected = [{"key": filter_key, "match": {"any": filter_value}}]
-    assert result == expected
-
-
-def test_merge_filters_min_confidences():
-    """Test min_confidences filter creates multiple range conditions"""
-    filters = []
-    confidences = {"observation_accuracy": 0.8, "source_reliability": 0.9}
-    result = merge_filters(filters, "min_confidences", confidences)
-
-    expected = [
-        {"key": "confidence.observation_accuracy", "range": {"gte": 0.8}},
-        {"key": "confidence.source_reliability", "range": {"gte": 0.9}},
-    ]
-    assert result == expected
-
-
-def test_merge_filters_source_ids():
-    """Test source_ids filter maps to source_id field in payload"""
-    filters = []
-    result = merge_filters(filters, "source_ids", ["id1", "id2"])
-    expected = [{"key": "source_id", "match": {"any": ["id1", "id2"]}}]
-    assert result == expected
+def test_registry_list_filters(filter_key, filter_value):
+    result = build_registry_qdrant_filters({filter_key: filter_value})
+    assert result == [{"key": filter_key, "match": {"any": filter_value}}]
 
 
 @pytest.mark.parametrize(
@@ -126,87 +75,60 @@ def test_merge_filters_source_ids():
         ("author", "John Doe"),
     ],
 )
-def test_merge_filters_string_filters(filter_key, filter_value):
-    """Test string filters create exact match conditions"""
-    filters = []
-    result = merge_filters(filters, filter_key, filter_value)
-    expected = [{"key": filter_key, "match": {"value": filter_value}}]
-    assert result == expected
+def test_registry_string_filters(filter_key, filter_value):
+    result = build_registry_qdrant_filters({filter_key: filter_value})
+    assert result == [{"key": filter_key, "match": {"value": filter_value}}]
 
 
-def test_merge_filters_range_delegation():
-    """Test range filters are properly delegated to merge_range_filter"""
-    filters = []
-    result = merge_filters(filters, "min_size", 100)
-
-    assert len(result) == 1
-    assert "range" in result[0]
-    assert result[0]["range"]["gte"] == 100
-
-
-def test_merge_filters_combined_range():
-    """Test that min/max range pairs merge into single filter"""
-    filters = []
-    filters = merge_filters(filters, "min_size", 100)
-    filters = merge_filters(filters, "max_size", 1000)
-
-    size_filters = [f for f in filters if f["key"] == "size"]
-    assert len(size_filters) == 1
-    assert size_filters[0]["range"]["gte"] == 100
-    assert size_filters[0]["range"]["lte"] == 1000
+def test_special_min_confidences():
+    confidences = {"observation_accuracy": 0.8, "source_reliability": 0.9}
+    result = build_qdrant_special_filters({"min_confidences": confidences})
+    assert result == [
+        {"key": "confidence.observation_accuracy", "range": {"gte": 0.8}},
+        {"key": "confidence.source_reliability", "range": {"gte": 0.9}},
+    ]
 
 
-def test_merge_filters_preserves_existing():
-    """Test that existing filters are preserved when adding new ones"""
-    existing_filters = [{"key": "existing", "match": "value"}]
-    result = merge_filters(existing_filters, "tags", ["new_tag"])
-
-    assert len(result) == 2
-    assert {"key": "existing", "match": "value"} in result
-    assert {"key": "tags", "match": {"any": ["new_tag"]}} in result
+def test_special_source_ids_maps_to_singular_payload_key():
+    result = build_qdrant_special_filters({"source_ids": [11, 22]})
+    assert result == [{"key": "source_id", "match": {"any": [11, 22]}}]
 
 
-def test_merge_filters_realistic_combination():
-    """Test a realistic filter combination for knowledge base search"""
-    filters = []
+def test_special_observation_types():
+    result = build_qdrant_special_filters({"observation_types": ["belief", "preference"]})
+    assert result == [
+        {"key": "observation_types", "match": {"any": ["belief", "preference"]}}
+    ]
 
-    # Add typical knowledge base filters
-    filters = merge_filters(filters, "tags", ["important", "work"])
-    filters = merge_filters(filters, "min_published", "2023-01-01")
-    filters = merge_filters(filters, "max_size", 1000000)  # 1MB max
-    filters = merge_filters(filters, "min_confidences", {"observation_accuracy": 0.8})
 
-    assert len(filters) == 4
+def test_registry_empty_min_confidences_is_special_not_registry():
+    # min_confidences is a special key; the registry never emits it.
+    assert build_registry_qdrant_filters({"min_confidences": {}}) == []
+    assert build_qdrant_special_filters({"min_confidences": {}}) == []
 
-    # Check each filter type
-    tag_filter = next(f for f in filters if f["key"] == "tags")
+
+def test_registry_realistic_combination():
+    filters = {
+        "tags": ["important", "work"],
+        "min_published": "2023-01-01",
+        "max_size": 1000000,
+    }
+    result = build_registry_qdrant_filters(filters)
+    result += build_qdrant_special_filters({"min_confidences": {"observation_accuracy": 0.8}})
+
+    tag_filter = next(f for f in result if f["key"] == "tags")
     assert tag_filter["match"]["any"] == ["important", "work"]
 
-    published_filter = next(f for f in filters if f["key"] == "published")
+    published_filter = next(f for f in result if f["key"] == "published")
     assert published_filter["range"]["gte"] == "2023-01-01"
 
-    size_filter = next(f for f in filters if f["key"] == "size")
+    size_filter = next(f for f in result if f["key"] == "size")
     assert size_filter["range"]["lte"] == 1000000
 
     confidence_filter = next(
-        f for f in filters if f["key"] == "confidence.observation_accuracy"
+        f for f in result if f["key"] == "confidence.observation_accuracy"
     )
     assert confidence_filter["range"]["gte"] == 0.8
-
-
-def test_merge_filters_unknown_key():
-    """Test that unknown filter keys are logged and ignored for security"""
-    filters = []
-    result = merge_filters(filters, "unknown_field", "unknown_value")
-    # Unknown keys should be ignored to prevent filter injection
-    assert result == []
-
-
-def test_merge_filters_empty_min_confidences():
-    """Test min_confidences with empty dict does nothing"""
-    filters = []
-    result = merge_filters(filters, "min_confidences", {})
-    assert result == []
 
 
 # --- Person Filter Tests ---
@@ -252,13 +174,12 @@ def test_build_person_filter_different_ids(person_id):
     assert match_condition["match"]["any"] == [person_id]
 
 
-def test_merge_filters_ignores_person_id():
-    """Test that merge_filters ignores person_id key (handled separately)"""
-    filters = []
-    result = merge_filters(filters, "person_id", 42)
-    # person_id is handled separately in search_chunks, so merge_filters should ignore it
-    # (it falls through to the unknown key case)
-    assert result == []
+def test_person_id_not_emitted_by_filter_builders():
+    """person_id is a special key: neither the registry nor the special-key
+    builder emits a payload condition for it (search_chunks builds the
+    compound person filter separately)."""
+    assert build_registry_qdrant_filters({"person_id": 42}) == []
+    assert build_qdrant_special_filters({"person_id": 42}) == []
 
 
 # --- Access Control Filter Tests ---

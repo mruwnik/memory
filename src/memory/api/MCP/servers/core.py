@@ -11,7 +11,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from pydantic import BaseModel
-from sqlalchemy import Text
+from sqlalchemy import Text, exists, func, or_, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
@@ -36,6 +36,11 @@ from memory.common.scopes import (
     SCOPE_READ,
 )
 from memory.api.auth import lookup_api_key
+from memory.api.search.filters import (
+    FILTER_REGISTRY,
+    apply_registry_filters_sql,
+    reject_unknown_filter_keys,
+)
 from memory.api.search.search import search as search_base
 from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
 from memory.common import extract, paths, settings
@@ -45,23 +50,15 @@ from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     AgentObservation,
-    BlogPost,
-    EmailAttachment,
-    GoogleDoc,
-    MailMessage,
     SourceItem,
     UserSession,
 )
+from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.formatters import observation
 
 
 logger = logging.getLogger(__name__)
-
-
-def escape_like(s: str) -> str:
-    """Escape ILIKE metacharacters to prevent pattern injection."""
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def get_current_user_access_filter() -> AccessFilter | None:
@@ -172,6 +169,56 @@ def _build_filters_section() -> str:
         scope = f"({modalities} only)" if modalities else "(all modalities)"
         lines.append(f"{bullet_indent}- {name}: {desc} {scope}")
     return "\n".join(lines)
+
+
+def _build_list_items_description() -> str:
+    """Build dynamic description for the list_items tool.
+
+    Reuses :func:`_build_filters_section` (driven by SEARCH_FILTERS) so the
+    accepted content-metadata filters are documented identically to
+    search_knowledge_base instead of being hand-maintained. Mirrors how
+    _build_search_description injects the same section.
+    """
+    return textwrap.dedent(
+        """
+        List items without semantic search - for systematic enumeration.
+        Use for reviewing all items matching criteria, not finding best matches.
+
+        Args:
+            modalities: Filter by type: mail, blog, book, forum, photo, comic, etc. (empty = all)
+            {filters_section}
+            Observation-only filters (observation_types, min_confidences) are
+            rejected here - use search_observations for those.
+            limit: Max results per page (default 50, max 200)
+            offset: Skip first N results for pagination
+            sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
+            sort_order: "asc" or "desc" (default: desc)
+            include_metadata: Include full as_payload() metadata (default True)
+
+        Returns: {{items: [...], total: int, has_more: bool}}"""
+    ).format(filters_section=_build_filters_section())
+
+
+def _build_count_items_description() -> str:
+    """Build dynamic description for the count_items tool.
+
+    Reuses :func:`_build_filters_section` so the documented filters always match
+    list_items and search_knowledge_base (the three share the same filter set).
+    """
+    return textwrap.dedent(
+        """
+        Count items matching criteria without retrieving them.
+        Use to understand scope before systematic review.
+
+        Args:
+            modalities: Filter by type (empty = all)
+            {filters_section}
+            Observation-only filters (observation_types, min_confidences) are
+            rejected here - use search_observations for those. count_items and
+            list_items apply the identical filter set, so their totals always agree.
+
+        Returns: {{total: int, by_modality: {{mail: 100, blog: 50, ...}}}}"""
+    ).format(filters_section=_build_filters_section())
 
 
 def _build_search_description() -> str:
@@ -725,7 +772,71 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
     return apply_access_filter_to_query(query, access_filter)
 
 
-@core_mcp.tool()
+# Special filter keys that item enumeration handles directly (not via the
+# shared FILTER_REGISTRY). created_at is scoped to SourceItem.inserted_at here
+# — distinct from BM25's Chunk.created_at, see SPECIAL_FILTER_KEYS in
+# search.filters. Everything else (registry keys) is folded on declaratively.
+ITEM_SPECIAL_FILTER_KEYS = frozenset(
+    {"source_ids", "min_created_at", "max_created_at", "person_id"}
+)
+
+# Keys accepted by item enumeration: the declarative registry plus the special
+# keys handled inline below. observation_types/min_confidences are observation-
+# search concepts (AgentObservation columns / ConfidenceScore), handled by
+# filter_observation_source_ids on its own query — they have no meaning for a
+# SourceItem enumeration, so they are NOT accepted here and reject loudly rather
+# than silently returning an unfiltered count. Any other non-empty key is
+# likewise rejected so list_items and count_items can never disagree about a
+# filter one of them forgot.
+ITEM_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | ITEM_SPECIAL_FILTER_KEYS
+
+
+def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
+    """Apply modality + MCPSearchFilters constraints to a SourceItem query.
+
+    Shared by list_items and count_items so the two can never drift. Registry
+    filters (mail/blog/doc metadata) are folded on via
+    :func:`apply_registry_filters_sql`, which joins each joined-inheritance
+    subclass table on ``SourceItem.id``. A query that combines filters from two
+    different subclasses can never match a row (an item is exactly one
+    subclass); that is the correct outcome.
+
+    Any provided filter key not in :data:`ITEM_ALLOWED_FILTER_KEYS` raises
+    ValueError instead of being silently dropped.
+    """
+    reject_unknown_filter_keys(filters, allowed=ITEM_ALLOWED_FILTER_KEYS)
+
+    if modalities:
+        query = query.filter(SourceItem.modality.in_(modalities))
+
+    # Special keys scoped to SourceItem itself.
+    if source_ids := filters.get("source_ids"):
+        query = query.filter(SourceItem.id.in_(source_ids))
+    if min_created_at := filters.get("min_created_at"):
+        query = query.filter(SourceItem.inserted_at >= min_created_at)
+    if max_created_at := filters.get("max_created_at"):
+        query = query.filter(SourceItem.inserted_at <= max_created_at)
+
+    # Declarative content-metadata filters (tags/size/mail/blog/doc).
+    query = apply_registry_filters_sql(query, filters)
+
+    if (person_id := filters.get("person_id")) is not None:
+        person_associated = exists(
+            select(source_item_people.c.source_item_id)
+            .where(source_item_people.c.source_item_id == SourceItem.id)
+            .where(source_item_people.c.person_id == person_id)
+        )
+        no_people = ~exists(
+            select(source_item_people.c.source_item_id).where(
+                source_item_people.c.source_item_id == SourceItem.id
+            )
+        )
+        query = query.filter(or_(no_people, person_associated))
+
+    return query
+
+
+@core_mcp.tool(description=_build_list_items_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def list_items(
     modalities: set[str] = set(),
@@ -736,21 +847,7 @@ async def list_items(
     sort_order: str = "desc",
     include_metadata: bool = True,
 ) -> dict:
-    """
-    List items without semantic search - for systematic enumeration.
-    Use for reviewing all items matching criteria, not finding best matches.
-
-    Args:
-        modalities: Filter by type: email, blog, book, forum, photo, comic, etc. (empty = all)
-        filters: Same filters as search_knowledge_base (tags, min_size, max_size, etc.)
-        limit: Max results per page (default 50, max 200)
-        offset: Skip first N results for pagination
-        sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
-        sort_order: "asc" or "desc" (default: desc)
-        include_metadata: Include full as_payload() metadata (default True)
-
-    Returns: {items: [...], total: int, has_more: bool}
-    """
+    """List items without semantic search. See tool description for full parameter docs."""
     limit = min(limit, 200)
     if sort_by not in ("inserted_at", "size", "id"):
         sort_by = "inserted_at"
@@ -762,42 +859,8 @@ async def list_items(
 
     with make_session() as session:
         query = session.query(SourceItem).filter(SourceItem.embed_status == "STORED")
-
-        # Apply access control filter
         query = apply_access_control_to_query(query, access_filter, session)
-
-        # Filter by modalities
-        if modalities:
-            query = query.filter(SourceItem.modality.in_(modalities))
-
-        # Apply filters
-        if tags := filters.get("tags"):
-            query = query.filter(SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text))))
-        if min_size := filters.get("min_size"):
-            query = query.filter(SourceItem.size >= min_size)
-        if max_size := filters.get("max_size"):
-            query = query.filter(SourceItem.size <= max_size)
-        if source_ids := filters.get("source_ids"):
-            query = query.filter(SourceItem.id.in_(source_ids))
-        if min_created_at := filters.get("min_created_at"):
-            query = query.filter(SourceItem.inserted_at >= min_created_at)
-        if max_created_at := filters.get("max_created_at"):
-            query = query.filter(SourceItem.inserted_at <= max_created_at)
-
-        # Metadata filters - require joining specific tables
-        if folder_path := filters.get("folder_path"):
-            escaped = escape_like(folder_path)
-            query = query.join(GoogleDoc).filter(
-                GoogleDoc.folder_path.ilike(f"%{escaped}%", escape="\\")
-            )
-        if sender := filters.get("sender"):
-            query = (
-                query.join(EmailAttachment)
-                .join(MailMessage, EmailAttachment.mail_message_id == MailMessage.id)
-                .filter(MailMessage.sender == sender)
-            )
-        if domain := filters.get("domain"):
-            query = query.join(BlogPost).filter(BlogPost.domain == domain)
+        query = apply_item_filters(query, modalities, filters)
 
         # Get total count
         total = query.count()
@@ -843,24 +906,13 @@ async def list_items(
         }
 
 
-@core_mcp.tool()
+@core_mcp.tool(description=_build_count_items_description())
 @visible_when(require_scopes(SCOPE_READ))
 async def count_items(
     modalities: set[str] = set(),
     filters: MCPSearchFilters = {},
 ) -> dict:
-    """
-    Count items matching criteria without retrieving them.
-    Use to understand scope before systematic review.
-
-    Args:
-        modalities: Filter by type (empty = all)
-        filters: Same filters as search_knowledge_base
-
-    Returns: {total: int, by_modality: {email: 100, blog: 50, ...}}
-    """
-    from sqlalchemy import func as sql_func
-
+    """Count items matching criteria. See tool description for full parameter docs."""
     # Get access filter for current user
     access_filter = get_current_user_access_filter()
 
@@ -868,34 +920,15 @@ async def count_items(
         base_query = session.query(SourceItem).filter(
             SourceItem.embed_status == "STORED"
         )
-
-        # Apply access control filter
         base_query = apply_access_control_to_query(base_query, access_filter, session)
-
-        # Apply filters
-        if modalities:
-            base_query = base_query.filter(SourceItem.modality.in_(modalities))
-        if tags := filters.get("tags"):
-            base_query = base_query.filter(
-                SourceItem.tags.op("&&")(sql_cast(tags, ARRAY(Text)))
-            )
-        if min_size := filters.get("min_size"):
-            base_query = base_query.filter(SourceItem.size >= min_size)
-        if max_size := filters.get("max_size"):
-            base_query = base_query.filter(SourceItem.size <= max_size)
-        if source_ids := filters.get("source_ids"):
-            base_query = base_query.filter(SourceItem.id.in_(source_ids))
-        if min_created_at := filters.get("min_created_at"):
-            base_query = base_query.filter(SourceItem.inserted_at >= min_created_at)
-        if max_created_at := filters.get("max_created_at"):
-            base_query = base_query.filter(SourceItem.inserted_at <= max_created_at)
+        base_query = apply_item_filters(base_query, modalities, filters)
 
         # Get total
         total = base_query.count()
 
-        # Get counts by modality
+        # Get counts by modality on the same filtered query
         by_modality_query = base_query.with_entities(
-            SourceItem.modality, sql_func.count(SourceItem.id)
+            SourceItem.modality, func.count(SourceItem.id)
         ).group_by(SourceItem.modality)
 
         by_modality = {row[0]: row[1] for row in by_modality_query.all()}
