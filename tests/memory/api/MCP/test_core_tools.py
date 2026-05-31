@@ -6,9 +6,9 @@ import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from PIL import Image
 
 from memory.api.MCP.servers.core import (
+    MAX_FETCH_FILE_BYTES,
     RawObservation,
     search,
     observe,
@@ -666,23 +666,23 @@ def test_fetch_file_text_type_detection(
 def test_fetch_file_image_type_detection(
     mock_settings, mock_paths, mock_extract, mime_type
 ):
-    """Fetch file correctly returns image content for image file types."""
+    """Image files come back as a single raw-bytes block typed 'image'."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
+    mock_path.read_bytes.return_value = b"\x89PNG raw image bytes"
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = mime_type
     mock_extract.is_text_file.return_value = False
-    img = Image.new("RGB", (10, 10))
-    chunk = extract.DataChunk(data=[img], mime_type=mime_type)
-    mock_extract.extract_data_chunks.return_value = [chunk]
 
     result = fetch_file.fn(filename="test.png")
 
     assert len(result["content"]) == 1
     assert result["content"][0]["type"] == "image"
     assert result["content"][0]["mime_type"] == mime_type
+    # The actual file bytes are returned, not the embedding-pipeline output.
+    mock_extract.extract_data_chunks.assert_not_called()
 
 
 @pytest.mark.usefixtures("mock_fetch_file_auth")
@@ -713,52 +713,70 @@ def test_fetch_file_text_content(mock_settings, mock_paths, mock_extract):
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
 def test_fetch_file_image_content_base64(mock_settings, mock_paths, mock_extract):
-    """Fetch file returns image content as base64."""
+    """Non-text fetches return the raw file bytes, base64-encoded verbatim."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
+    raw = b"\x89PNG\r\n\x1a\n raw file bytes"
+    mock_path.read_bytes.return_value = raw
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = "image/png"
     mock_extract.is_text_file.return_value = False
-    img = Image.new("RGB", (10, 10))
-    chunk = extract.DataChunk(data=[img], mime_type="image/png")
-    mock_extract.extract_data_chunks.return_value = [chunk]
 
     result = fetch_file.fn(filename="test.png")
 
     assert result["content"][0]["type"] == "image"
-    # Should be base64 encoded
     content = result["content"][0]["data"]
     assert isinstance(content, str)
-    # Verify it's valid base64
-    decoded = base64.b64decode(content)
-    assert isinstance(decoded, bytes)
+    # Round-trips to the exact file bytes (no re-encoding/extraction).
+    assert base64.b64decode(content) == raw
 
 
 @pytest.mark.usefixtures("mock_fetch_file_auth")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.paths")
 @patch("memory.api.MCP.servers.core.settings")
-def test_fetch_file_multiple_chunks(mock_settings, mock_paths, mock_extract):
-    """Fetch file handles multiple data chunks for non-text files."""
+def test_fetch_file_binary_returns_raw_bytes(mock_settings, mock_paths, mock_extract):
+    """A PDF (or any non-image binary) is returned verbatim as one 'blob' — not
+    rasterized into page images or run through the extraction pipeline."""
     mock_settings.FILE_STORAGE_DIR = Path("/storage")
     mock_path = MagicMock(spec=Path)
     mock_path.exists.return_value = True
+    raw = b"%PDF-1.7 actual pdf bytes \x00\x01\x02"
+    mock_path.read_bytes.return_value = raw
     mock_paths.validate_path_within_directory.return_value = mock_path
 
     mock_extract.get_mime_type.return_value = "application/pdf"
     mock_extract.is_text_file.return_value = False
-    chunk1 = extract.DataChunk(data=["chunk 1", "chunk 2"], mime_type="text/plain")
-    chunk2 = extract.DataChunk(data=["chunk 3"], mime_type="text/plain")
-    mock_extract.extract_data_chunks.return_value = [chunk1, chunk2]
 
     result = fetch_file.fn(filename="test.pdf")
 
-    assert len(result["content"]) == 3
-    assert result["content"][0]["data"] == "chunk 1"
-    assert result["content"][1]["data"] == "chunk 2"
-    assert result["content"][2]["data"] == "chunk 3"
+    assert len(result["content"]) == 1
+    assert result["content"][0]["type"] == "blob"
+    assert result["content"][0]["mime_type"] == "application/pdf"
+    assert base64.b64decode(result["content"][0]["data"]) == raw
+    mock_extract.extract_data_chunks.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_fetch_file_auth")
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.paths")
+@patch("memory.api.MCP.servers.core.settings")
+def test_fetch_file_rejects_oversize(mock_settings, mock_paths, mock_extract):
+    """Files past the inline cap fail loudly instead of overrunning the MCP
+    transport (the bug that surfaced as 'session expired' on large PDFs)."""
+    mock_settings.FILE_STORAGE_DIR = Path("/storage")
+    mock_path = MagicMock(spec=Path)
+    mock_path.exists.return_value = True
+    mock_path.read_bytes.return_value = b"x" * (MAX_FETCH_FILE_BYTES + 1)
+    mock_paths.validate_path_within_directory.return_value = mock_path
+
+    mock_extract.get_mime_type.return_value = "application/pdf"
+    mock_extract.is_text_file.return_value = False
+
+    with pytest.raises(ValueError, match="too large"):
+        fetch_file.fn(filename="big.pdf")
 
 
 @patch("memory.api.MCP.servers.core.paths")
@@ -880,28 +898,6 @@ def test_fetch_file_round_trip_for_note(db_session, admin_user, admin_session):
 
     assert result["content"][0]["data"] == "hello from a note"
     assert result["content"][0]["mime_type"] == "text/markdown"
-
-
-@pytest.mark.usefixtures("mock_fetch_file_auth")
-@patch("memory.api.MCP.servers.core.extract")
-@patch("memory.api.MCP.servers.core.paths")
-@patch("memory.api.MCP.servers.core.settings")
-def test_fetch_file_skip_summary(mock_settings, mock_paths, mock_extract):
-    """Fetch file calls extract with skip_summary=True for non-text files."""
-    mock_settings.FILE_STORAGE_DIR = Path("/storage")
-    mock_path = MagicMock(spec=Path)
-    mock_path.exists.return_value = True
-    mock_paths.validate_path_within_directory.return_value = mock_path
-
-    mock_extract.get_mime_type.return_value = "application/pdf"
-    mock_extract.is_text_file.return_value = False
-    chunk = extract.DataChunk(data=["content"], mime_type="text/plain")
-    mock_extract.extract_data_chunks.return_value = [chunk]
-
-    fetch_file.fn(filename="test.pdf")
-
-    call_kwargs = mock_extract.extract_data_chunks.call_args[1]
-    assert call_kwargs["skip_summary"] is True
 
 
 # ====== filter_observation_source_ids tests ======
