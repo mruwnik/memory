@@ -1840,3 +1840,103 @@ async def test_search_skips_logging_when_no_user(
 
     await search.fn(query="anonymous")
     mock_log_search.assert_not_called()
+
+
+# ====== apply_item_filters + list/count parity (real DB) ======
+
+
+def make_mail(sha: bytes, *, sender, recipients, subject, sent_at, content="body"):
+    """Build a STORED MailMessage row for enumeration tests."""
+    from memory.common.db.models import MailMessage
+
+    return MailMessage(
+        sha256=sha,
+        content=content,
+        size=len(content),
+        mime_type="message/rfc822",
+        modality="mail",
+        embed_status="STORED",
+        tags=[],
+        sender=sender,
+        recipients=recipients,
+        subject=subject,
+        sent_at=sent_at,
+        folder="INBOX",
+    )
+
+
+def seed_mail(db_session):
+    """Two mail messages differing on sender/recipients/subject/sent_at."""
+    a = make_mail(
+        b"mail-a",
+        sender="alice@example.com",
+        recipients=["bob@example.com"],
+        subject="Quarterly report",
+        sent_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    b = make_mail(
+        b"mail-b",
+        sender="carol@example.com",
+        recipients=["dave@example.com"],
+        subject="Lunch plans",
+        sent_at=datetime(2023, 6, 1, tzinfo=timezone.utc),
+    )
+    db_session.add_all([a, b])
+    db_session.commit()
+    return a, b
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {},
+        {"sender": "alice@example.com"},
+        {"recipients": ["bob@example.com"]},
+        {"subject": "report"},
+        {"min_sent_at": "2022-01-01T00:00:00+00:00"},
+    ],
+)
+async def test_list_and_count_agree_on_total(db_session, admin_session, filters):
+    """list_items total and count_items total never diverge for the same filters."""
+    seed_mail(db_session)
+    with mcp_auth_context(admin_session.id):
+        listed = await list_items.fn(modalities={"mail"}, filters=filters)
+        counted = await count_items.fn(modalities={"mail"}, filters=filters)
+    assert listed["total"] == counted["total"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filters, expected_subjects",
+    [
+        ({"sender": "alice@example.com"}, {"Quarterly report"}),
+        ({"recipients": ["bob@example.com"]}, {"Quarterly report"}),
+        ({"recipients": ["dave@example.com"]}, {"Lunch plans"}),
+        ({"subject": "lunch"}, {"Lunch plans"}),
+        ({"min_sent_at": "2022-01-01T00:00:00+00:00"}, {"Lunch plans"}),
+        ({"max_sent_at": "2022-01-01T00:00:00+00:00"}, {"Quarterly report"}),
+    ],
+)
+async def test_mail_filters_discriminate_on_both_tools(
+    db_session, admin_session, filters, expected_subjects
+):
+    """recipients/subject/sent_at actually filter, identically, on list and count."""
+    seed_mail(db_session)
+    with mcp_auth_context(admin_session.id):
+        listed = await list_items.fn(modalities={"mail"}, filters=filters)
+        counted = await count_items.fn(modalities={"mail"}, filters=filters)
+
+    got_subjects = {item["metadata"]["subject"] for item in listed["items"]}
+    assert got_subjects == expected_subjects
+    assert listed["total"] == len(expected_subjects)
+    assert counted["total"] == len(expected_subjects)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [list_items, count_items])
+async def test_unsupported_filter_raises_value_error(db_session, admin_session, tool):
+    """A filter key only meaningful for observation search is rejected, not ignored."""
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="Unsupported filter"):
+            await tool.fn(filters={"observation_types": ["belief"]})

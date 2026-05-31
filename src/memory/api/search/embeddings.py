@@ -10,7 +10,19 @@ from memory.common.collections import (
     MULTIMODAL_COLLECTIONS,
     TEXT_COLLECTIONS,
 )
+from memory.api.search.filters import (
+    FILTER_REGISTRY,
+    SPECIAL_FILTER_KEYS,
+    build_registry_qdrant_filters,
+    reject_unknown_filter_keys,
+)
 from memory.api.search.types import SearchFilters
+
+# Qdrant accepts every logical filter key. Registry filters become payload
+# conditions; the special keys are hand-coded (access/person compound
+# conditions, source_id/confidence/observation payload shapes, and created_at
+# which has no Qdrant equivalent). Anything else is rejected loudly.
+QDRANT_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 if TYPE_CHECKING:
     from memory.common.access_control import AccessFilter
@@ -219,69 +231,38 @@ async def query_chunks(
     return results_by_collection
 
 
-def merge_range_filter(
-    filters: list[dict[str, Any]], key: str, val: Any
-) -> list[dict[str, Any]]:
-    direction, field = key.split("_", maxsplit=1)
-    item = next((f for f in filters if f["key"] == field), None)
-    if not item:
-        item = {"key": field, "range": {}}
-        filters.append(item)
+def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any]]:
+    """Qdrant filters for keys hand-coded outside the shared registry.
 
-    if direction == "min":
-        item["range"]["gte"] = val
-    elif direction == "max":
-        item["range"]["lte"] = val
-    return filters
+    Covers the Qdrant-specific payload shapes:
+      - source_ids -> payload key "source_id" (singular) match.any
+      - min_confidences -> "confidence.{type}" range
+      - observation_types -> "observation_types" match.any
 
+    access_filter and person_id are NOT handled here — they build compound
+    conditions in :func:`search_chunks`.
 
-def merge_filters(
-    filters: list[dict[str, Any]], key: str, val: Any
-) -> list[dict[str, Any]]:
-    if not val and val != 0:
-        return filters
-
-    list_filters = ["tags", "recipients", "observation_types", "authors"]
-    range_filters = [
-        "min_sent_at",
-        "max_sent_at",
-        "min_published",
-        "max_published",
-        "min_size",
-        "max_size",
-        "min_created_at",
-        "max_created_at",
-    ]
-    # String match filters - exact match on metadata fields
-    string_filters = ["folder_path", "sender", "domain", "author"]
-
-    if key in list_filters:
-        filters.append({"key": key, "match": {"any": val}})
-
-    elif key in range_filters:
-        return merge_range_filter(filters, key, val)
-
-    elif key in string_filters:
-        filters.append({"key": key, "match": {"value": val}})
-
-    elif key == "min_confidences":
-        confidence_filters = [
-            {
-                "key": f"confidence.{confidence_type}",
-                "range": {"gte": min_confidence_score},
-            }
-            for confidence_type, min_confidence_score in cast(dict, val).items()
-        ]
-        filters.extend(confidence_filters)
-
-    elif key == "source_ids":
-        filters.append({"key": "source_id", "match": {"any": val}})
-
-    else:
-        # Log and ignore unknown filter keys to prevent injection
-        logger.warning(f"Unknown filter key ignored: {key}")
-
-    return filters
+    min/max_created_at are deliberately NOT emitted as Qdrant conditions: the
+    chunk payload (``item_metadata``, built from ``SourceItem.as_payload()``)
+    carries no created_at/inserted_at key, so a range on it would match zero
+    points and silently drop every vector hit on a dated search. The bound is
+    honored on the BM25/SQL arm (``Chunk.created_at``) instead, so created_at
+    stays in ``QDRANT_ALLOWED_FILTER_KEYS`` rather than raising. Known
+    limitation: because the two arms are RRF-fused, a vector hit outside the
+    range can still surface via the embedding arm; closing that needs a
+    created_at payload field + reindex (out of scope here).
+    """
+    result: list[dict[str, Any]] = []
+    if source_ids := filters.get("source_ids"):
+        result.append({"key": "source_id", "match": {"any": source_ids}})
+    if observation_types := filters.get("observation_types"):
+        result.append({"key": "observation_types", "match": {"any": observation_types}})
+    if min_confidences := filters.get("min_confidences"):
+        result.extend(
+            {"key": f"confidence.{ctype}", "range": {"gte": score}}
+            for ctype, score in cast(dict, min_confidences).items()
+        )
+    return result
 
 
 def require_access_filter(filters: "SearchFilters | None", caller: str) -> "SearchFilters":
@@ -343,14 +324,16 @@ async def search_chunks(
             ``access_filter`` cannot silently widen results).
     """
     filters = require_access_filter(filters, "search_chunks")
+    reject_unknown_filter_keys(filters, allowed=QDRANT_ALLOWED_FILTER_KEYS)
     if modalities is None:
         modalities = set()
-    search_filters: list[dict[str, Any]] = []
-    for key, val in filters.items():
-        if key in ("access_filter", "person_id"):
-            # Handle these filters separately (they create compound conditions)
-            continue
-        search_filters = merge_filters(search_filters, key, val)
+
+    # Registry filters (raises if an UNSUPPORTED filter like subject is passed,
+    # so it fails loudly instead of leaking unfiltered results) plus the
+    # Qdrant-specific special-key shapes. access_filter and person_id build
+    # compound conditions below.
+    search_filters = build_registry_qdrant_filters(filters)
+    search_filters.extend(build_qdrant_special_filters(filters))
 
     # Build the complete Qdrant filter
     qdrant_filter: dict[str, Any] = {}
