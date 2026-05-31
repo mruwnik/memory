@@ -15,6 +15,7 @@ from memory.api.search.embeddings import require_access_filter
 from memory.api.search.filters import (
     FILTER_REGISTRY,
     SPECIAL_FILTER_KEYS,
+    account_match_sql,
     apply_registry_filters_sql,
     is_empty_value,
     reject_unknown_filter_keys,
@@ -129,6 +130,7 @@ async def search_bm25(
         # joins all hang off SourceItem.id).
         access_filter = filters.get("access_filter")
         person_id = filters.get("person_id")
+        account = filters.get("account")
         # Use is_empty_value (not truthiness) so a legitimate 0 bound — e.g.
         # min_size=0 — still triggers the join. Plain truthiness would skip the
         # join while apply_registry_filters_sql still emits `source_item.size
@@ -141,6 +143,7 @@ async def search_bm25(
             has_registry_filter
             or access_filter is not None
             or person_id is not None
+            or not is_empty_value(account)
         )
 
         # created_at is scoped to Chunk.created_at here (NOT SourceItem.inserted_at
@@ -186,6 +189,11 @@ async def search_bm25(
                 .where(source_item_people.c.source_item_id == SourceItem.id)
             )
             items_query = items_query.filter(or_(no_people, person_associated))
+
+        # Mail account filter: SourceItem is joined above (needs_source_join),
+        # so the SourceItem.id subquery correlates correctly.
+        if account:
+            items_query = items_query.filter(account_match_sql(account))
 
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))

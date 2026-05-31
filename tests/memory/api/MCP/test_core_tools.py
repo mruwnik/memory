@@ -2019,3 +2019,98 @@ async def test_folder_filter_exact_match(db_session, admin_session):
 
     got = {item["metadata"]["subject"] for item in result["items"]}
     assert got == {"inbox"}
+
+
+@pytest.mark.asyncio
+async def test_account_filter_groups_aliases_and_both_directions(
+    db_session, admin_user, admin_session
+):
+    """The account filter returns everything the account ingested — incoming
+    under any alias AND sent — grouped by email_account_id, regardless of the
+    header address, and resolves the account address case-insensitively."""
+    from memory.common.db.models import EmailAccount
+
+    acct = EmailAccount(
+        user_id=admin_user.id, name="Ahiru",
+        email_address="me@ahiru.pl", account_type="imap",
+    )
+    other = EmailAccount(
+        user_id=admin_user.id, name="Other",
+        email_address="other@x.com", account_type="imap",
+    )
+    db_session.add_all([acct, other])
+    db_session.flush()
+
+    # Incoming addressed to a DIFFERENT alias than the account's canonical name.
+    incoming = make_mail(
+        b"acc-in", sender="someone@ext.com", recipients=["d.oconnell@ahiru.pl"],
+        subject="incoming-alias", sent_at=datetime(2022, 1, 1, tzinfo=timezone.utc),
+    )
+    sent = make_mail(
+        b"acc-sent", sender="d.oconnell@ahiru.pl", recipients=["dest@ext.com"],
+        subject="sent", sent_at=datetime(2022, 1, 2, tzinfo=timezone.utc),
+    )
+    foreign = make_mail(
+        b"acc-foreign", sender="x@x.com", recipients=["y@y.com"],
+        subject="foreign", sent_at=datetime(2022, 1, 3, tzinfo=timezone.utc),
+    )
+    incoming.email_account_id = acct.id
+    sent.email_account_id = acct.id
+    foreign.email_account_id = other.id
+    db_session.add_all([incoming, sent, foreign])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        # Mixed-case address still resolves the account.
+        result = await list_items.fn(
+            modalities={"mail"}, filters={"account": "ME@Ahiru.PL"}
+        )
+
+    got = {item["metadata"]["subject"] for item in result["items"]}
+    # Both directions, the alias-addressed incoming, and not the foreign account.
+    assert got == {"incoming-alias", "sent"}
+
+
+@pytest.mark.asyncio
+async def test_account_qdrant_filter_resolves_to_email_account_id(
+    db_session, admin_user
+):
+    """The Qdrant arm resolves the address to email_account_id(s) and matches the
+    indexed payload key (case-insensitively)."""
+    from memory.common.db.models import EmailAccount
+    from memory.api.search.embeddings import build_qdrant_special_filters
+
+    acct = EmailAccount(
+        user_id=admin_user.id, name="Ahiru",
+        email_address="me@ahiru.pl", account_type="imap",
+    )
+    db_session.add(acct)
+    db_session.commit()
+
+    result = build_qdrant_special_filters({"account": "ME@AHIRU.PL"})
+    assert result == [{"key": "email_account_id", "match": {"any": [acct.id]}}]
+
+    # Unknown address -> empty id set -> match nothing (not "match all").
+    assert build_qdrant_special_filters({"account": "nobody@x.test"}) == [
+        {"key": "email_account_id", "match": {"any": []}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_account_filter_unknown_address_returns_nothing(
+    db_session, admin_session
+):
+    """An address matching no account resolves to an empty id set -> no mail."""
+    m = make_mail(
+        b"acc-none", sender="a@b.com", recipients=["c@d.com"], subject="x",
+        sent_at=datetime(2022, 4, 1, tzinfo=timezone.utc),
+    )
+    db_session.add(m)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await list_items.fn(
+            modalities={"mail"}, filters={"account": "nobody@nowhere.test"}
+        )
+
+    assert result["items"] == []

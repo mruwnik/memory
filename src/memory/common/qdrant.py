@@ -10,35 +10,37 @@ from memory.common.collections import ALL_COLLECTIONS, Collection, DistanceType,
 logger = logging.getLogger(__name__)
 
 
-# Payload fields that need a keyword index for exact-match filtering, beyond
-# the always-present "tags"/"people". sender_email/recipient_emails are derived
+# Payload fields that need an index for exact-match filtering, beyond the
+# always-present "tags"/"people". sender_email/recipient_emails are derived
 # (bare addresses parsed from the raw headers) in MailMessage.as_payload();
-# "folder" is the mail folder. All are mail-only but indexed on every collection
-# for uniformity, the same way tags/people are. An unindexed payload key may
-# silently match nothing in Qdrant, so every key a FilterSpec routes to Qdrant
-# with an exact-match op must be listed here.
-EXTRA_KEYWORD_INDEXES: tuple[str, ...] = (
-    "sender_email",
-    "recipient_emails",
-    "folder",
-)
+# "folder" is the mail folder; "email_account_id" is the ingesting account.
+# All are mail-only but indexed on every collection for uniformity, the same way
+# tags/people are. An unindexed payload key may silently match nothing in
+# Qdrant, so every key a FilterSpec (or special filter) routes to Qdrant with an
+# exact-match op must be listed here with its schema.
+EXTRA_PAYLOAD_INDEXES: dict[str, "qdrant_models.PayloadSchemaType"] = {
+    "sender_email": qdrant_models.PayloadSchemaType.KEYWORD,
+    "recipient_emails": qdrant_models.PayloadSchemaType.KEYWORD,
+    "folder": qdrant_models.PayloadSchemaType.KEYWORD,
+    "email_account_id": qdrant_models.PayloadSchemaType.INTEGER,
+}
 
 
-def ensure_keyword_indexes(
+def ensure_payload_indexes(
     client: qdrant_client.QdrantClient, collection_name: str
 ) -> None:
-    """Create the EXTRA_KEYWORD_INDEXES payload indexes if absent.
+    """Create the EXTRA_PAYLOAD_INDEXES payload indexes if absent.
 
     ``create_payload_index`` is idempotent for an unchanged field schema, so
     this is safe to call on every startup; it brings existing collections up to
     date without recreating them.
     """
-    for field_name in EXTRA_KEYWORD_INDEXES:
+    for field_name, field_schema in EXTRA_PAYLOAD_INDEXES.items():
         try:
             client.create_payload_index(
                 collection_name=collection_name,
                 field_name=field_name,
-                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+                field_schema=field_schema,
             )
         except (UnexpectedResponse, ApiException) as e:
             logger.warning(
@@ -117,7 +119,7 @@ def ensure_collection_exists(
             field_name="people",
             field_schema=qdrant_models.PayloadSchemaType.INTEGER,
         )
-        ensure_keyword_indexes(client, collection_name)
+        ensure_payload_indexes(client, collection_name)
 
         return True
 
@@ -151,7 +153,7 @@ def initialize_collections(
         # Bring already-existing collections (created=False) up to date with
         # indexes added after their creation; new collections already have them.
         if not created:
-            ensure_keyword_indexes(client, name)
+            ensure_payload_indexes(client, name)
 
 
 def setup_qdrant() -> qdrant_client.QdrantClient:

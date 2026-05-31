@@ -91,6 +91,7 @@ class MailMessagePayload(SourceItemPayload):
     sender_email: Annotated[str, "Bare sender address (display name stripped)"]
     recipient_emails: Annotated[list[str], "Bare recipient addresses"]
     folder: Annotated[str, "Email folder name"]
+    email_account_id: Annotated[int | None, "Ingesting email account id"]
     date: Annotated[str | None, "Email sent date in ISO format"]
 
 
@@ -159,6 +160,7 @@ class MailMessage(SourceItem):
             sender_email=sender_emails[0] if sender_emails else "",
             recipient_emails=mail_addresses(self.recipients or []),
             folder=self.folder,  # type: ignore[arg-type]
+            email_account_id=self.email_account_id,
             date=(self.sent_at and self.sent_at.isoformat() or None),
         )
 

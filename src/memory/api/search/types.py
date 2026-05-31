@@ -103,6 +103,9 @@ class MCPSearchFilters(TypedDict):
     # String match filters (exact match)
     folder_path: NotRequired[str]
     folder: NotRequired[str]
+    # Mail ingested by the email account with this address (resolved to the
+    # account's email_account_id, so it groups every alias the account handled).
+    account: NotRequired[str]
     sender: NotRequired[str]
     domain: NotRequired[str]
     author: NotRequired[str]

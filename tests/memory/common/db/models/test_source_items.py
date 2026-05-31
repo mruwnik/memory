@@ -140,6 +140,7 @@ def test_mail_message_as_payload(sent_at, expected_date):
         "recipients": ["recipient1@example.com", "recipient2@example.com"],
         "sender_email": "sender@example.com",
         "recipient_emails": ["recipient1@example.com", "recipient2@example.com"],
+        "email_account_id": None,
         "folder": "INBOX",
         "tags": [
             "tag1",
@@ -246,6 +247,7 @@ Test Body Content"""
         "recipients": ["recipient@example.com"],
         "sender_email": "sender@example.com",
         "recipient_emails": ["recipient@example.com"],
+        "email_account_id": None,
         "tags": None,
         "folder": None,
         "message_id": "<test@example.com>",

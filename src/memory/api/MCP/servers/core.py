@@ -38,6 +38,7 @@ from memory.common.scopes import (
 from memory.api.auth import lookup_api_key
 from memory.api.search.filters import (
     FILTER_REGISTRY,
+    account_match_sql,
     apply_registry_filters_sql,
     reject_unknown_filter_keys,
 )
@@ -139,6 +140,12 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
         "recipients",
         "match email recipients by address substring, case-insensitive "
         "(vector search needs the full address)",
+        "mail",
+    ),
+    (
+        "account",
+        "filter to mail ingested by the email account with this address "
+        "(groups all aliases the account handled, incoming and sent)",
         "mail",
     ),
     ("authors", "list of authors to match", None),
@@ -788,7 +795,7 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
 # — distinct from BM25's Chunk.created_at, see SPECIAL_FILTER_KEYS in
 # search.filters. Everything else (registry keys) is folded on declaratively.
 ITEM_SPECIAL_FILTER_KEYS = frozenset(
-    {"source_ids", "min_created_at", "max_created_at", "person_id"}
+    {"source_ids", "min_created_at", "max_created_at", "person_id", "account"}
 )
 
 # Keys accepted by item enumeration: the declarative registry plus the special
@@ -843,6 +850,9 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
             )
         )
         query = query.filter(or_(no_people, person_associated))
+
+    if account := filters.get("account"):
+        query = query.filter(account_match_sql(account))
 
     return query
 

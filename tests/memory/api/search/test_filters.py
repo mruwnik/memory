@@ -154,6 +154,21 @@ def test_registry_sql_folder_path_uses_ilike_on_google_doc():
     assert "google_doc" in sql
 
 
+def test_account_match_sql_is_outer_subquery():
+    # account constrains the outer query as `source_item.id IN (subquery)`, so it
+    # composes with the registry's mail-subclass join without double-joining the
+    # outer query (the inner subquery's source_item<->mail_message join is JTI
+    # mechanics, scoped to the subquery).
+    clause = F.account_match_sql("ME@Ahiru.PL")
+    sql = str(clause.compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+    ))
+    assert sql.startswith("source_item.id IN (SELECT")
+    assert "email_accounts" in sql
+    # case-insensitive exact match on the account address (lowered both sides)
+    assert "lower(email_accounts.email_address) = 'me@ahiru.pl'" in sql
+
+
 def test_registry_sql_mail_folder_exact_match():
     # Mail folder is distinct from GoogleDoc.folder_path: exact match on the
     # mail_message subclass, not a substring on google_doc.

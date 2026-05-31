@@ -15,8 +15,10 @@ from memory.api.search.filters import (
     SPECIAL_FILTER_KEYS,
     build_registry_qdrant_filters,
     reject_unknown_filter_keys,
+    resolve_account_ids,
 )
 from memory.api.search.types import SearchFilters
+from memory.common.db.connection import make_session
 
 # Qdrant accepts every logical filter key. Registry filters become payload
 # conditions; the special keys are hand-coded (access/person compound
@@ -255,6 +257,13 @@ def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any
     result: list[dict[str, Any]] = []
     if source_ids := filters.get("source_ids"):
         result.append({"key": "source_id", "match": {"any": source_ids}})
+    if account := filters.get("account"):
+        # Qdrant has no join, so resolve the address to account id(s) and match
+        # the indexed email_account_id payload key. No match -> [] -> matches
+        # nothing, which is correct for an unknown account address.
+        with make_session() as session:
+            account_ids = resolve_account_ids(account, session)
+        result.append({"key": "email_account_id", "match": {"any": account_ids}})
     if observation_types := filters.get("observation_types"):
         result.append({"key": "observation_types", "match": {"any": observation_types}})
     if min_confidences := filters.get("min_confidences"):

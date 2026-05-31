@@ -29,11 +29,18 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import cast as sql_cast
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Text
+from sqlalchemy.orm import Session
 
-from memory.common.db.models import BlogPost, GoogleDoc, MailMessage, SourceItem
+from memory.common.db.models import (
+    BlogPost,
+    EmailAccount,
+    GoogleDoc,
+    MailMessage,
+    SourceItem,
+)
 from memory.api.search.types import MCPSearchFilters, SearchFilters
 
 
@@ -129,12 +136,12 @@ class FilterSpec:
 #   - "subject" exists in the mail payload but only supports exact match in
 #     Qdrant, so it is marked QDRANT_UNSUPPORTED (see QdrantUnsupported).
 #
-# WARNING: only "tags", "people" and the keys in qdrant.EXTRA_KEYWORD_INDEXES
-# ("sender_email", "recipient_emails", "folder") have a Qdrant payload index
-# (see qdrant.ensure_keyword_indexes / create_payload_index). Filtering an
-# unindexed payload key may silently match nothing in Qdrant, so any spec routed
-# to Qdrant must target an indexed key (add it to EXTRA_KEYWORD_INDEXES) or be
-# QDRANT_UNSUPPORTED.
+# WARNING: only "tags", "people" and the keys in qdrant.EXTRA_PAYLOAD_INDEXES
+# ("sender_email", "recipient_emails", "folder", "email_account_id") have a
+# Qdrant payload index (see qdrant.ensure_payload_indexes / create_payload_index).
+# Filtering an unindexed payload key may silently match nothing in Qdrant, so any
+# spec routed to Qdrant must target an indexed key (add it to
+# EXTRA_PAYLOAD_INDEXES) or be QDRANT_UNSUPPORTED.
 _SPECS: tuple[FilterSpec, ...] = (
     FilterSpec("tags", None, "tags", SqlOp.ARRAY_ANY, "tags", QdrantOp.MATCH_ANY, array_cast=True),
     FilterSpec("min_size", None, "size", SqlOp.GTE, "size", QdrantOp.RANGE_GTE),
@@ -198,10 +205,16 @@ FILTER_REGISTRY: dict[str, FilterSpec] = {spec.key: spec for spec in _SPECS}
 # These are not interchangeable (a chunk can be re-derived after the item was
 # first inserted), so they are intentionally NOT unified into one registry
 # spec. If a future change makes them provably identical, fold them in.
+# ``account`` is special because the user supplies an email *address* but the
+# filter constrains ``MailMessage.email_account_id`` (an FK). The address must be
+# resolved to account id(s) first, which the registry's value->column mapping
+# can't express. SQL resolves it inline via a subquery; Qdrant resolves to ids
+# in Python (it has no join), so the two arms are hand-coded per backend.
 SPECIAL_FILTER_KEYS: frozenset[str] = frozenset(
     {
         "access_filter",
         "person_id",
+        "account",
         "source_ids",
         "min_confidences",
         "observation_types",
@@ -209,6 +222,40 @@ SPECIAL_FILTER_KEYS: frozenset[str] = frozenset(
         "max_created_at",
     }
 )
+
+
+def account_match_sql(value: str):
+    """SQL clause selecting SourceItem rows that are mail ingested by an account
+    whose address equals ``value`` (case-insensitive).
+
+    A nested subquery on ``SourceItem.id`` keeps this join-free, so it composes
+    with the registry's mail-subclass join without any double-join coordination,
+    and works identically over the list/count query (on SourceItem) and the BM25
+    query (Chunk joined to SourceItem). An address matching no account yields an
+    empty inner set -> matches nothing, which is correct.
+    """
+    account_ids = select(EmailAccount.id).where(
+        func.lower(EmailAccount.email_address) == value.lower()
+    )
+    mail_ids = select(MailMessage.id).where(
+        MailMessage.email_account_id.in_(account_ids)
+    )
+    return SourceItem.id.in_(mail_ids)
+
+
+def resolve_account_ids(value: str, session: Session) -> list[int]:
+    """Account ids whose address equals ``value`` (case-insensitive).
+
+    The Qdrant arm has no subquery/join, so it filters the indexed
+    ``email_account_id`` payload key against this resolved id list.
+    """
+    return list(
+        session.scalars(
+            select(EmailAccount.id).where(
+                func.lower(EmailAccount.email_address) == value.lower()
+            )
+        )
+    )
 
 
 def mcp_filter_keys() -> set[str]:
