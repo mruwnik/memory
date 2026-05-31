@@ -106,7 +106,9 @@ def build_task_kwargs(
     }
 
 
-@router.post("/ingest/upload", response_model=IngestResponse)
+@router.api_route(
+    "/ingest/upload", methods=["PUT", "POST"], response_model=IngestResponse
+)
 async def ingest_upload(
     request: Request,
     token: str,
@@ -114,10 +116,16 @@ async def ingest_upload(
 ) -> IngestResponse:
     """Token-authenticated upload endpoint.
 
-    The signed token encodes the declared MIME, filename, tags, metadata, and
-    the user who minted it. The raw request body is read under a generous cap
-    (the bucket and its specific cap are resolved from the bytes in
-    ``land_and_dispatch``), then dispatched as a Celery task.
+    The signed token in the ``?token=`` query string is the sole
+    authorization (verified here, not by the session middleware — the path
+    is whitelisted), so a non-browser client following the minted
+    ``upload_url`` can upload with no session cookie. The token encodes the
+    declared MIME, filename, tags, metadata, and the user who minted it.
+
+    The add_content tool documents the call as a PUT; POST is accepted too so
+    either verb reaches the same handler. The raw request body is read under a
+    generous cap (the bucket and its specific cap are resolved from the bytes
+    in ``land_and_dispatch``), then dispatched as a Celery task.
     """
     try:
         intent = ingest_tokens.verify_token(token)
