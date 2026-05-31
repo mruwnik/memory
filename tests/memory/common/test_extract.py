@@ -12,9 +12,11 @@ from memory.common.extract import (
     extract_docx,
     extract_docx_text,
     doc_to_images,
+    extract_pdf,
     extract_image,
     docx_to_pdf,
     merge_metadata,
+    MIN_PDF_PAGE_TEXT_CHARS,
     DataChunk,
 )
 
@@ -86,6 +88,52 @@ def test_doc_to_images():
                 "width": pdf_page.rect.width,
                 "height": pdf_page.rect.height,
             }
+
+
+def test_extract_pdf_born_digital_includes_text():
+    """A born-digital PDF yields one image chunk per page PLUS text chunks from
+    its embedded text layer (so it is text-searchable, not image-only)."""
+    result = extract_pdf(REGULAMIN)
+
+    images = [c for c in result if any(isinstance(d, Image.Image) for d in c.data)]
+    texts = [c for c in result if any(isinstance(d, str) for d in c.data)]
+
+    assert len(images) == 2  # one per page, same as doc_to_images
+    assert texts  # the text layer is extracted
+    for t in texts:
+        assert isinstance(t.data[0], str) and t.data[0].strip()
+        assert t.modality == "doc"
+        assert "page" in t.metadata
+
+
+def test_extract_pdf_image_only_when_no_text_layer():
+    """A page with no embedded text (a scan / blank page) falls back to an
+    image-only chunk — no empty/noise text chunk."""
+    doc = pymupdf.open()
+    doc.new_page(width=200, height=200)  # blank page, no text layer
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    result = extract_pdf(pdf_bytes)
+
+    assert len(result) == 1
+    assert any(isinstance(d, Image.Image) for d in result[0].data)
+    assert not any(isinstance(d, str) for d in result[0].data)
+
+
+def test_extract_pdf_short_text_below_threshold_is_skipped():
+    """A page whose text strips to under the threshold stays image-only."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=200, height=200)
+    page.insert_text((50, 50), "x" * (MIN_PDF_PAGE_TEXT_CHARS - 1))
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    result = extract_pdf(pdf_bytes)
+
+    assert not any(
+        isinstance(d, str) for c in result for d in c.data
+    )
 
 
 def test_extract_image_with_path(tmp_path):

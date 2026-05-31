@@ -1030,10 +1030,13 @@ class MiscDoc(SourceItem):
         chunks = list(extract.extract_data_chunks(self.mime_type or "", contents))
 
         # Emit a text chunk carrying the bibliographic metadata so the doc is
-        # findable by title/author/etc. PDFs chunk into page *images* only, which
-        # have no text for BM25 or the reranker; without this, bibliographic
-        # queries can't surface them. The text lands in the (text-capable) "doc"
-        # collection so it's matched whether or not the search is doc-scoped.
+        # findable by title/author/etc. Born-digital PDFs now extract per-page
+        # text, but scanned PDFs (and any page with no extractable text layer)
+        # still chunk into images only, which carry no text for BM25 or the
+        # reranker; and title/author/filename live in metadata, not the page
+        # body, regardless. Without this chunk those bibliographic queries can't
+        # surface the doc. The text lands in the (text-capable) "doc" collection
+        # so it's matched whether or not the search is doc-scoped.
         if bib := self.bibliographic_chunk():
             chunks.append(bib)
         return chunks
