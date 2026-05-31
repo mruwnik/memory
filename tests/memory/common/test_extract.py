@@ -1,3 +1,6 @@
+# pyright: reportAttributeAccessIssue=false
+# PyMuPDF's `pymupdf.open` (== Document) ships incomplete stubs that omit
+# Document.new_page; the methods exist at runtime.
 import pathlib
 import pytest
 import pymupdf
