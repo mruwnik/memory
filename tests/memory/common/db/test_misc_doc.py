@@ -33,7 +33,9 @@ def test_misc_doc_chunks_text_file(db_session):
     chunks = doc._chunk_contents()
     assert chunks  # non-empty
 
-    payload = doc.as_payload()
+    # dict view: as_payload() merges arbitrary doc_metadata keys that the
+    # MiscDocPayload TypedDict cannot statically declare.
+    payload = dict(doc.as_payload())
     assert payload["source"] == "unit-test"
     assert payload["pages"] == 1
     assert payload["content_type"] == "text/plain"
@@ -59,7 +61,7 @@ def test_misc_doc_as_payload_metadata_collision(db_session):
     db_session.flush()
 
     # Must not raise despite metadata keys colliding with typed/base fields.
-    payload = doc.as_payload()
+    payload = dict(doc.as_payload())
     assert payload["filename"] == filename
     assert payload["tags"] == ["t"]
     assert payload["source"] == "x"

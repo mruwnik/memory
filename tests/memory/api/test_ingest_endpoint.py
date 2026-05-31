@@ -1,6 +1,7 @@
 """Tests for the /ingest/upload endpoint and land_and_dispatch helper."""
 
 import pathlib
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,7 +13,7 @@ from memory.common import settings
 
 
 def _intent(**kw):
-    base = dict(
+    base: dict[str, Any] = dict(
         user_id=42, type="application/pdf", filename="f", tags=["t"],
         doc_metadata={"title": "Tt", "author": "Aa", "k": "v"},
         project_id=9, exp=None,
