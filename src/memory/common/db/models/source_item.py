@@ -228,6 +228,10 @@ class Chunk(Base):
     item_metadata: dict[str, Any]
     images: list[Image.Image]
     relevance_score: float
+    # Raw embedding similarity (max cosine across collections) from the vector
+    # search, preserved through fusion so reranking can fall back to it for
+    # chunks the text cross-encoder cannot score (e.g. image/page chunks).
+    embedding_score: float
 
     def __init__(self, **kwargs: Any) -> None:
         # Initialize transient mutable attributes per-instance
@@ -235,6 +239,7 @@ class Chunk(Base):
         self.item_metadata = kwargs.pop("item_metadata", {})
         self.images = kwargs.pop("images", [])
         self.relevance_score = kwargs.pop("relevance_score", 0.0)
+        self.embedding_score = kwargs.pop("embedding_score", 0.0)
         super().__init__(**kwargs)
 
     @orm.reconstructor
@@ -248,6 +253,7 @@ class Chunk(Base):
         self.item_metadata = {}
         self.images = []
         self.relevance_score = 0.0
+        self.embedding_score = 0.0
 
     # One of file_path or content must be populated
     __table_args__ = (
