@@ -432,9 +432,14 @@ async def _run_searches(
     timeout: int,
     use_bm25: bool,
     recalled_titles: list[str] | None = None,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], dict[str, float]]:
     """
-    Run embedding and optionally BM25 searches in parallel, returning fused scores.
+    Run embedding and optionally BM25 searches in parallel.
+
+    Returns ``(fused_scores, embedding_scores)``: the RRF-fused scores used
+    for candidate selection, plus the raw per-chunk embedding similarities
+    (max cosine across collections) so reranking can fall back to them for
+    chunks the text cross-encoder cannot score.
     """
     # Build tasks to run in parallel
     embedding_task = search_chunks_embeddings(
@@ -473,16 +478,20 @@ async def _run_searches(
             if chunk_id not in fused:
                 fused[chunk_id] = score
 
-    return fused
+    return fused, embedding_scores
 
 
 def _fetch_chunks(
     fused_scores: dict[str, float],
+    embedding_scores: dict[str, float],
     limit: int,
     use_reranking: bool,
 ) -> list[Chunk]:
     """
     Fetch chunk objects from database and set their relevance scores.
+
+    ``embedding_scores`` carries the raw per-chunk embedding similarity, stashed
+    on each chunk so reranking can fall back to it for content-less chunks.
     """
     if not fused_scores:
         return []
@@ -505,9 +514,11 @@ def _fetch_chunks(
             .all()
         )
 
-        # Set relevance_score on each chunk from the fused scores
+        # Set relevance_score on each chunk from the fused scores, and stash
+        # the raw embedding similarity for rerank's content-less fallback.
         for chunk in chunks:
             chunk.relevance_score = fused_scores.get(str(chunk.id), 0.0)
+            chunk.embedding_score = embedding_scores.get(str(chunk.id), 0.0)
 
         db.expunge_all()
 
@@ -632,13 +643,13 @@ async def search_chunks(
     search_data = _build_search_data(data, hyde_doc, query_variants, recalled_content, query_text)
 
     # Run searches and fuse scores
-    fused_scores = await _run_searches(
+    fused_scores, embedding_scores = await _run_searches(
         search_data, modalities, internal_limit, filters, timeout, use_bm25,
         recalled_titles=recalled_content,
     )
 
     # Fetch chunks from database
-    chunks = _fetch_chunks(fused_scores, limit, use_reranking)
+    chunks = _fetch_chunks(fused_scores, embedding_scores, limit, use_reranking)
 
     # Apply various boosts including recalled content title matching
     _apply_boosts(chunks, data, recalled_content)

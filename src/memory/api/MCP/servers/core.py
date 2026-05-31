@@ -10,7 +10,6 @@ from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import Text, exists, func, or_, select
 from sqlalchemy import cast as sql_cast
@@ -496,6 +495,12 @@ async def search_observations(
     ]
 
 
+# Cap on inline file fetches. A base64'd response much larger than this
+# overruns the MCP transport and drops the client session, so reject oversize
+# files with a clear error instead of silently killing the connection.
+MAX_FETCH_FILE_BYTES = 10 * 1024 * 1024
+
+
 @core_mcp.tool()
 @visible_when(require_scopes(SCOPE_READ))
 def fetch_file(filename: str) -> dict:
@@ -546,27 +551,24 @@ def fetch_file(filename: str) -> dict:
             "content": [{"type": "text", "mime_type": mime_type, "data": text}]
         }
 
-    # Non-text files: use the extraction pipeline
-    chunks = extract.extract_data_chunks(mime_type, path, skip_summary=True)
-
-    def serialize_chunk(
-        chunk: extract.DataChunk, data: extract.MulitmodalChunk
-    ) -> dict:
-        contents: str | bytes = data  # type: ignore[assignment]
-        if isinstance(data, Image.Image):
-            contents = data.tobytes()  # type: ignore[union-attr]
-        if isinstance(contents, bytes):
-            contents = base64.b64encode(contents).decode("ascii")
-
-        return {
-            "type": "text" if isinstance(data, str) else "image",
-            "mime_type": chunk.mime_type,
-            "data": contents,
-        }
-
+    # Non-text files: return the actual file bytes. Serving the stored file is
+    # this tool's job; extracting or rasterizing content (the domain of
+    # extract.extract_data_chunks) belongs to the embedding pipeline and would
+    # hand back a derived representation rather than the file the caller asked
+    # for.
+    raw = path.read_bytes()
+    if len(raw) > MAX_FETCH_FILE_BYTES:
+        raise ValueError(
+            f"File too large to fetch inline: {len(raw)} bytes "
+            f"(limit {MAX_FETCH_FILE_BYTES})."
+        )
     return {
         "content": [
-            serialize_chunk(chunk, data) for chunk in chunks for data in chunk.data
+            {
+                "type": "image" if mime_type.startswith("image/") else "blob",
+                "mime_type": mime_type,
+                "data": base64.b64encode(raw).decode("ascii"),
+            }
         ]
     }
 

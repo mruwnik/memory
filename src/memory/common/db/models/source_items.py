@@ -1027,7 +1027,32 @@ class MiscDoc(SourceItem):
             contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
         else:
             contents = self.content or ""
-        return extract.extract_data_chunks(self.mime_type or "", contents)
+        chunks = list(extract.extract_data_chunks(self.mime_type or "", contents))
+
+        # Emit a text chunk carrying the bibliographic metadata so the doc is
+        # findable by title/author/etc. PDFs chunk into page *images* only, which
+        # have no text for BM25 or the reranker; without this, bibliographic
+        # queries can't surface them. The text lands in the (text-capable) "doc"
+        # collection so it's matched whether or not the search is doc-scoped.
+        if bib := self.bibliographic_chunk():
+            chunks.append(bib)
+        return chunks
+
+    def bibliographic_chunk(self) -> extract.DataChunk | None:
+        meta = self.doc_metadata or {}
+        parts = [
+            str(meta[key])
+            for key in ("title", "author", "year", "source")
+            if meta.get(key)
+        ]
+        if self.filename:
+            parts.append(pathlib.Path(self.filename).stem)
+        text = "\n".join(parts).strip()
+        if not text:
+            return None
+        return extract.DataChunk(
+            data=[text], modality="doc", metadata={"kind": "bibliographic"}
+        )
 
     def as_payload(self) -> MiscDocPayload:
         # Caller metadata is merged at lowest precedence so the authoritative
