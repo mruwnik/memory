@@ -5,7 +5,6 @@ clean_books
 scripts
 custom_tasks
 
-CLAUDE.md
 memory_files
 venv
 .env
@@ -34,3 +33,10 @@ team-logs/
 *-secret.json
 google-secret.json
 local-secret.json
+
+# Local Claude Code workspace — ignore everything except committed project skills
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/deploy/
+!.claude/skills/diagnose/
