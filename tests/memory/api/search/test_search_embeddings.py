@@ -585,7 +585,7 @@ async def test_search_chunks_superadmin_no_access_filter():
 
 # --- require_access_filter — three-layer fail-closed regression ---
 #
-# The codebase claims (db/CLAUDE.md, search.py docstrings) that access
+# The codebase documents (AGENTS.md § Access Control, search.py docstrings) that access
 # filters are applied at three layers — Qdrant payload, BM25 SQL, and
 # final source merge. Pre-fix only the third layer raised on missing
 # ``access_filter``; the first two silently fell through to "no filter".

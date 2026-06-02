@@ -277,7 +277,7 @@ def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any
 def require_access_filter(filters: "SearchFilters | None", caller: str) -> "SearchFilters":
     """Fail-closed gate on the documented three-layer access invariant.
 
-    The codebase claims (db/CLAUDE.md, search.py docstrings) that access
+    The codebase documents (AGENTS.md § Access Control, search.py docstrings) that access
     filters are applied at three layers — Qdrant payload, BM25 SQL, and
     final source merge. Pre-fix only the third layer raised on missing
     ``access_filter``; the first two silently fell through to "no filter"

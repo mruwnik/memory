@@ -1,19 +1,12 @@
 # Memory — Personal Knowledge Base
 
-A self-hosted, privacy-first knowledge base for personal and collaborative use. It ingests, indexes, and provides semantic search across your digital life — emails, documents, notes, web pages, ebooks, Discord messages, photos — while keeping all data self-hosted. AI assistants reach it via the Model Context Protocol (MCP); Teams & Projects provide role-based collaborative access; an observation system lets assistants record and recall patterns about your preferences.
+A self-hosted, privacy-first knowledge base: it ingests, indexes, and provides semantic search across your digital life — emails, documents, notes, web pages, ebooks, Discord messages, photos — with MCP access for AI assistants and Team/Project-based access control. **See [README.md](README.md) for the feature overview, install/run instructions, and operator docs** (reverse proxy, security, troubleshooting, custom tasks).
+
+This file — auto-loaded by Claude Code via the `CLAUDE.md` symlink — is the **contributor + AI-assistant guide**: how the code is laid out and the conventions to follow. It points at README for operator-facing material rather than duplicating it.
 
 ## Architecture
 
-| Component | Purpose |
-|-----------|---------|
-| **FastAPI** (`src/memory/api/`) | REST API + MCP server for AI assistants |
-| **PostgreSQL** | Metadata, users, teams, projects, content, observations |
-| **Qdrant** | Vector database for semantic similarity search |
-| **Celery** (`src/memory/workers/`) | Async background processing for content ingestion |
-| **Redis** | Celery broker, session cache, LLM usage tracking |
-| **React 19 frontend** (`frontend/`) | Search interface and dashboard |
-
-Flow: Frontend → FastAPI → PostgreSQL, with FastAPI also writing Qdrant and dispatching to Celery (via Redis) for ingestion.
+Component table and purposes: **[README.md § Architecture](README.md#architecture)**. In short: React frontend → FastAPI (REST + MCP server) → PostgreSQL, with FastAPI also writing Qdrant and dispatching ingestion to Celery workers over Redis (the broker; also session cache + rate-limit buckets).
 
 ## Project Structure
 
@@ -23,6 +16,7 @@ src/memory/
 │   ├── app.py              # Main entry point
 │   ├── search/             # Search (embeddings, BM25, HyDE, rerank, scorer)
 │   ├── MCP/                # MCP server + per-domain subservers (under MCP/servers/)
+│   ├── check/              # Check job queue HTTP router
 │   ├── auth.py             # Sessions, API keys, OAuth
 │   └── ...                 # Other route modules
 ├── common/                 # Shared code
@@ -53,13 +47,13 @@ workon memory                       # or: ~/.virtualenvs/memory/bin/python
 ~/.virtualenvs/memory/bin/pytest    # run tests
 ```
 
-### Service Ports
+### Host-side dev & service ports
 
-Only the API publishes a host port by default (`${API_PORT:-8000}:8000`); Postgres, Redis, and Qdrant stay on the internal `kbnet` network. To reach them from the host, create a gitignored `docker-compose.override.yml` that publishes them. Conventional ports (written into `.env` by `tools/install.sh`): **Postgres 15432→5432, Redis 16379→6379, Qdrant 6333→6333, API 8000→8000**.
+To run the API/workers on the host while infra stays in Docker, publish the data-service ports via a gitignored `docker-compose.override.yml` — full instructions in **[README.md § Local development](README.md#local-development-without-docker-for-the-app)** (conventional ports: Postgres 15432, Redis 16379, Qdrant 6333, API 8000; only the API publishes a host port by default).
 
 ### Deployment
 
-Manage the production server via `tools/deploy.sh`:
+Manage the production server via `tools/deploy.sh` (not covered in README):
 
 ```bash
 ./tools/deploy.sh deploy           # git pull + restart services (most common)
@@ -69,35 +63,23 @@ Manage the production server via `tools/deploy.sh`:
 ./tools/deploy.sh session ...      # manage Claude sessions on the server
 ```
 
-### Common Commands
+### Common commands
 
-Run via the deployment tool on the server:
+Install, user creation, health checks, and migrations are in **[README.md](README.md)** (Quick Start, User management). Server-side operations go through `tools/deploy.sh` (above). One-off Celery task:
 
 ```bash
-docker-compose up -d --build                              # start services
-docker-compose logs -f api | worker                       # logs
-python tools/run_celery_task.py <queue> <task-name> [args]  # run a task
-python tools/add_user.py --email a@b.com --password pw --name "Name"
-alembic upgrade head                                      # migrations
-alembic revision --autogenerate -m "description"
+python tools/run_celery_task.py <queue> <task-name> [args]
 ```
 
 ## Search Pipeline
 
-Combines multiple strategies, each toggleable via an `ENABLE_*` setting:
+Hybrid search combining vector (Voyage `voyage-3-large` 1024d text / `voyage-multimodal-3` mixed, in Qdrant) and PostgreSQL BM25, merged via Reciprocal Rank Fusion (`fuse_scores_rrf`, `RRF_K=60`), with optional query analysis, HyDE expansion, `rerank-2-lite` reranking, and recency/popularity/title-match scoring around the fusion. Each stage is toggleable via an `ENABLE_*` setting. **Authoritative, current detail (stages, files, toggles): [docs/SEARCH_INVESTIGATION.md](docs/SEARCH_INVESTIGATION.md).**
 
-1. **Vector** — Voyage embeddings (`voyage-3-large` 1024d text; `voyage-multimodal-3` mixed) in Qdrant
-2. **BM25** — PostgreSQL tsvector keyword match (`ENABLE_BM25_SEARCH`)
-3. **HyDE** — Hypothetical Document Embeddings query expansion (`ENABLE_HYDE_EXPANSION`)
-4. **Query Analysis** — LLM understands search intent (`ENABLE_QUERY_ANALYSIS`)
-5. **Reranking** — Voyage `rerank-2-lite` cross-encoder reorders candidates (`ENABLE_RERANKING`)
-6. **Scoring** — recency / popularity / title-match boosts (`ENABLE_SEARCH_SCORING`)
-
-Vector and BM25 lists merge via Reciprocal Rank Fusion (`fuse_scores_rrf`, `RRF_K=60`); HyDE, query analysis, reranking, and scoring are stages around that fusion, not inputs to it. **Access control** is enforced at every layer (Qdrant, BM25, and the final merge) for defense in depth — users only see content their team/project memberships permit.
+**Access control** is enforced at every layer (Qdrant, BM25, and the final merge) for defense in depth — users only see content their team/project memberships permit. The fail-closed gate is `require_access_filter` in `search/embeddings.py`.
 
 ## MCP Tools
 
-The full tool list is available via `tools/list` on the MCP server. Tools are organized by domain (core, teams, projects, check, etc.) and respect access control based on the authenticated user's permissions.
+The full tool list is available via `tools/list` on the MCP server; tools are organized by domain (core, teams, projects, check, …) and respect access control per authenticated user. Client setup (OAuth / DCR): [README.md § Connecting an MCP client](README.md#connecting-an-mcp-client).
 
 ## Content Types
 
@@ -109,7 +91,7 @@ The parser turns raw content into items; the Celery task module drives ingestion
 | Ebooks (EPUB/PDF) | `parsers/ebook.py` | `workers/tasks/ebook.py` | `ebooks` |
 | Blog/Web | `parsers/blogs.py` | `workers/tasks/blogs.py` | `blogs` |
 | Comics (SMBC, XKCD) | `parsers/comics.py` | `workers/tasks/comic.py` | `comic` |
-| Discord | — | `workers/tasks/discord.py` | `discord` |
+| Discord | — | `workers/tasks/discord.py`, `discord_backfill.py` | `discord` |
 | Forum posts | `parsers/lesswrong.py` | `workers/tasks/forums.py` | `forums` |
 | Notes | — | `workers/tasks/notes.py` | `notes` |
 | Photos/Images | — | `workers/tasks/photo.py` | `photos` |
@@ -123,7 +105,7 @@ Full queue list: the worker `QUEUES` env var in `docker-compose.yaml`.
 3. **Export** by importing the module in `src/memory/workers/tasks/__init__.py`.
 4. **Add the queue** to the worker `QUEUES` env var in both `docker-compose.yaml` and `docker/workers/Dockerfile`.
 
-To avoid queue proliferation, prefer reusing an existing queue: `maintenance` (cleanup/metrics/admin), `scheduler` (timed tasks), or `generic` (catch-all).
+To avoid queue proliferation, prefer reusing an existing queue: `maintenance` (cleanup/metrics/admin), `scheduler` (timed tasks), or `generic` (catch-all). For *deployment-specific* tasks loaded at runtime (not committed to the repo), use the `CUSTOM_TASKS_DIR` mechanism instead — see [README.md § Custom tasks](README.md#custom-tasks-deployment-specific).
 
 ## Database Models
 
@@ -133,16 +115,16 @@ Key models in `src/memory/common/db/models/`:
 - `source_items.py` — specific types (MailMessage, BlogPost, Book, …)
 - `sources.py` — Person, Team, Project + membership relationships
 - `observations.py` — AgentObservation
-- `users.py` — User, HumanUser, BotUser, UserSession, APIKey
+- `users.py` — User, HumanUser, BotUser, UserSession, APIKey (+ the `APIKeyType` enum)
 - `sessions.py` — Claude session records (distinct from `UserSession` auth sessions)
 
 More files exist (`deadlines.py`, `discord.py`, `journal.py`, `mcp.py`, `people.py`, `polls.py`, `slack.py`, …) — list the directory for the full set.
 
 ## Environment Variables
 
-See `src/memory/common/settings.py`:
+Full config table with defaults: **[README.md § Configuration](README.md#configuration)**; source of truth is `src/memory/common/settings.py`. The keys you'll touch most in development:
 
-- `VOYAGE_API_KEY` — all embeddings (`voyage-3-large` / `voyage-multimodal-3`) and reranking (`rerank-2-lite`)
+- `VOYAGE_API_KEY` — all embeddings + reranking
 - `ANTHROPIC_API_KEY` — query analysis, HyDE, summarization
 - `OPENAI_API_KEY` — misc LLM features (notes, observation extraction)
 - `FILE_STORAGE_DIR` — uploaded file storage
@@ -184,7 +166,6 @@ from tests.conftest import mcp_auth_context
 async def test_some_tool(db_session, admin_session):
     with mcp_auth_context(admin_session.id):
         result = await some_tool.fn(arg="value")
-    assert result["authenticated"] is True
 ```
 
 ## Access Control
@@ -214,10 +195,10 @@ User (auth) ──1:0..1── Person (identity) ──M:N── Team ──M:N�
 
 - **Sessions**: UUID tokens via cookie or `Authorization: Bearer`
 - **API keys**: type-prefixed (`mcp_`, `discord_`, `github_`, …) for integrations
-- **Key types**: `internal`, `discord`, `google`, `github`, `mcp`, `one_time`
+- **Key types** (`APIKeyType` enum in `common/db/models/users.py`): `internal`, `discord`, `google`, `github`, `mcp`, `one_time`
 - **Scopes**: keys inherit user scopes unless overridden; one-time keys auto-delete after first use
 
-Key file: `src/memory/api/auth.py`.
+Key file: `src/memory/api/auth.py`. Operator-facing security notes (OAuth, reverse proxy, secrets): [README.md § Security notes](README.md#security-notes).
 
 ## Check Job Queue
 
