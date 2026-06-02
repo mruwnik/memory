@@ -1,4 +1,4 @@
-from memory.api.check import redis_client as rc
+from memory.common.check import redis_client as rc
 
 
 def test_key_helpers():

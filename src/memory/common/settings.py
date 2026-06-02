@@ -375,6 +375,9 @@ CHECK_RATE_LIMIT_PER_MIN = int(os.getenv("CHECK_RATE_LIMIT_PER_MIN", "60"))
 # SSRF guard: callbacks to private/loopback/link-local addresses are blocked
 # unless explicitly allowed (e.g. for a localhost dev callback receiver).
 CHECK_ALLOW_PRIVATE_CALLBACKS = boolean_env("CHECK_ALLOW_PRIVATE_CALLBACKS", False)
+CHECK_DEFAULT_WAIT_SEC = int(os.getenv("CHECK_DEFAULT_WAIT_SEC", "60"))
+CHECK_MAX_WAIT_SEC = int(os.getenv("CHECK_MAX_WAIT_SEC", "300"))
+CHECK_WAIT_POLL_INTERVAL_SEC = float(os.getenv("CHECK_WAIT_POLL_INTERVAL_SEC", "2"))
 
 MAX_PHOTO_UPLOAD_BYTES = int(
     os.getenv("MAX_PHOTO_UPLOAD_BYTES", 50 * 1024 * 1024)

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from memory.api.check.schemas import CallbackPayload, JobRecord
+from memory.common.check.schemas import CallbackPayload, JobRecord
 from memory.common import settings
 
 logger = logging.getLogger(__name__)

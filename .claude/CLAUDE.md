@@ -454,17 +454,27 @@ Key file: `src/memory/api/auth.py`
 
 ## Check Job Queue
 
-An async fire-and-forget "check" queue (`src/memory/api/check/`) lets callers
-submit text to verify/research/link and remote worker sessions resolve it.
-Pure-Redis, **no Celery, no Postgres**.
+An async fire-and-forget "check" queue lets callers submit text to
+verify/research/link and remote worker sessions resolve it. Pure-Redis, **no
+Celery, no Postgres**. The core logic lives in **`src/memory/common/check/`**
+(store, schemas, keys, callbacks, `wait_for_answer`); the HTTP router
+(`src/memory/api/check/`) and the MCP subserver
+(`src/memory/api/MCP/servers/check.py`) are **thin wrappers** over it.
 
-- **Scope**: `check` gates all endpoints (submit, read own, and work jobs).
-  Per-user: `GET /check/next` pulls only the caller's own queue (always, even
-  admins); `GET /check/{id}` is owner-or-admin.
-- **Endpoints**: `POST /check` (submit → `chk_<uuid4>`), `GET /check` (list own),
-  `GET /check/next?wait=` (worker long-poll, ≤30s), `GET /check/{id}` (poll),
-  `POST /check/{id}/result` (worker completes, must echo `lease_id`),
-  `DELETE /check/{id}` (owner-or-admin hard-delete; doesn't stop an in-flight worker).
+- **Scope**: the single `check` scope gates every surface (admin `*` also passes).
+  Per-user throughout: `GET /check/next` pulls only the caller's own queue (always,
+  even admins); reads/list/delete are owner-or-admin (404/"unknown job" for a
+  non-owner — no existence leak; ownership is checked *before* any wait).
+- **MCP tools** (UI + assistants; this is the primary surface, DRY):
+  `check_ask` (submit; optional bounded `wait`), `check_wait_for_answer`
+  (poll a job up to `seconds`, default 60, capped at `CHECK_MAX_WAIT_SEC`),
+  `check_list_jobs`, `check_delete`. A bounded wait is intentional — re-call if
+  still pending rather than hold one long blocking call.
+- **HTTP endpoints** (external non-MCP consumers + the worker): `POST /check`
+  (ask → `chk_<uuid4>`), `GET /check/{id}?wait=` (get answer; bounded poll),
+  `GET /check/next?wait=` (worker long-poll, ≤30s), `POST /check/{id}/result`
+  (worker completes, must echo `lease_id`). **No HTTP list/delete** — those are
+  MCP-only.
 - **Redis keys**: `check:job:{id}` HASH (record incl. result/callback/lease_id),
   `check:open:{uid}` ZSET (claimable job ids, FIFO by submit time),
   `check:lease:{id}` STRING with TTL (in-flight marker; value = fencing token),
@@ -482,7 +492,7 @@ Pure-Redis, **no Celery, no Postgres**.
   the caller's `lease_id` (mismatch/expiry → 410) so an expired-then-reassigned
   job can't be clobbered by the old worker.
 - **Config**: `CHECK_*` settings (lease 1h, retention 14d, queue depth,
-  rate limit, callback attempts) in `settings.py`.
+  rate limit, callback attempts, wait default 60 / max 300) in `settings.py`.
 
 ## Key Design Decisions
 

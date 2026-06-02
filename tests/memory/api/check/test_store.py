@@ -7,17 +7,29 @@ import json
 
 import pytest
 
-from memory.api.check import store
-from memory.api.check.redis_client import (
+from memory.common.check import store
+from memory.common.check.redis_client import (
     job_key,
     jobs_index_key,
     lease_key,
     open_key,
     wake_key,
 )
-from memory.api.check.schemas import SubmitRequest, QueueFull, JobGone, JobAlreadyComplete
+from memory.common.check.schemas import (
+    SubmitRequest,
+    QueueFull,
+    JobGone,
+    JobAlreadyComplete,
+    PayloadTooLarge,
+)
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_submit_rejects_oversized_text(r):
+    big = "a" * (64 * 1024 + 1)
+    with pytest.raises(PayloadTooLarge):
+        await store.submit_job(r, user_id=5, req=SubmitRequest(text=big))
 
 
 async def test_submit_creates_job_and_indexes(r):
@@ -265,6 +277,39 @@ async def test_list_jobs_tombstone_in_window_does_not_shorten_page(r):
     # must still return 2 LIVE jobs: ids[4] then ids[2] (ids[3] skipped+pruned)
     assert [j["job_id"] for j in page] == [ids[4], ids[2]]
     assert await r.zscore(jobs_index_key(5), ids[3]) is None  # pruned
+
+
+async def test_wait_for_answer_returns_terminal(r):
+    job_id, lease = await _claim(r)
+    await store.complete_job(r, job_id, lease, status="ok",
+                             result={"v": 1}, error=None)
+    rec = await store.wait_for_answer(r, job_id, timeout=0)
+    assert rec is not None
+    assert rec["status"] == "ok"
+    assert json.loads(rec["result"]) == {"v": 1}
+
+
+async def test_wait_for_answer_unknown_returns_none(r):
+    assert await store.wait_for_answer(r, "chk_missing", timeout=0) is None
+
+
+async def test_wait_for_answer_times_out_pending(r, monkeypatch):
+    # never let a real sleep run; just exercise the poll-until-deadline path
+    async def no_sleep(*_a, **_k):
+        return None
+    monkeypatch.setattr("memory.common.check.store.asyncio.sleep", no_sleep)
+    job_id = await store.submit_job(r, user_id=5, req=SubmitRequest(text="x"))
+    rec = await store.wait_for_answer(r, job_id, timeout=0.05, interval=0.01)
+    assert rec is not None
+    assert rec["status"] == "queued"  # still pending, returned not-None
+
+
+async def test_wait_for_answer_clamped_to_max(r, monkeypatch):
+    monkeypatch.setattr("memory.common.settings.CHECK_MAX_WAIT_SEC", 0)
+    job_id = await store.submit_job(r, user_id=5, req=SubmitRequest(text="x"))
+    # timeout requested huge but clamped to 0 -> single read, returns pending
+    rec = await store.wait_for_answer(r, job_id, timeout=9999)
+    assert rec is not None and rec["status"] == "queued"
 
 
 async def test_delete_job_removes_all_structures(r):

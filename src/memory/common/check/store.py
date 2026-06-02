@@ -19,6 +19,7 @@ trivially testable with fakeredis. No Lua, no reaper, no Celery:
 # ships separate async stubs.
 # pyright: reportGeneralTypeIssues=false, reportArgumentType=false
 
+import asyncio
 import json
 import logging
 import time
@@ -28,27 +29,36 @@ from typing import Any, cast
 
 import redis.asyncio as aioredis
 
-from memory.api.check.redis_client import (
+from memory.common.check.redis_client import (
     job_key,
     jobs_index_key,
     lease_key,
     open_key,
     wake_key,
 )
-from memory.api.check.schemas import (
+from memory.common.check.schemas import (
     JobAlreadyComplete,
     JobGone,
     JobRecord,
     NextJob,
+    PayloadTooLarge,
     QueueFull,
     SubmitRequest,
 )
 from memory.common import settings
+from memory.common.rate_limit import check_rate_limit_spec
 
 logger = logging.getLogger(__name__)
 
 _WAKE_LIST_MAX = 16
 _MAX_TX_RETRIES = 5
+
+
+def submit_rate_limit_ok(user_id: int) -> bool:
+    """True if this user is under the per-minute submit rate limit."""
+    return check_rate_limit_spec(
+        f"check_submit:{user_id}", f"{settings.CHECK_RATE_LIMIT_PER_MIN}/minute"
+    )
 
 
 def _now() -> float:
@@ -64,6 +74,14 @@ def new_job_id() -> str:
 
 
 async def submit_job(r: aioredis.Redis, user_id: int, req: SubmitRequest) -> str:
+    # text and context share the same byte cap: context is stored verbatim and
+    # echoed back on /check/next, so without this a caller could sidestep the
+    # text limit by stuffing the payload into context.
+    if len(req.text.encode("utf-8")) > settings.CHECK_MAX_TEXT_BYTES:
+        raise PayloadTooLarge("text exceeds CHECK_MAX_TEXT_BYTES")
+    if len(json.dumps(req.context).encode("utf-8")) > settings.CHECK_MAX_TEXT_BYTES:
+        raise PayloadTooLarge("context exceeds CHECK_MAX_TEXT_BYTES")
+
     # Soft cap: the ZCARD/ZADD aren't atomic, so concurrent submits from one
     # user can transiently exceed CHECK_QUEUE_MAX_DEPTH. Accepted — this bounds
     # runaway growth, it isn't a hard quota. Depth = claimable jobs in the open
@@ -108,6 +126,38 @@ async def submit_job(r: aioredis.Redis, user_id: int, req: SubmitRequest) -> str
 async def get_job(r: aioredis.Redis, job_id: str) -> JobRecord | None:
     job = await r.hgetall(job_key(job_id))
     return cast(JobRecord, job) if job else None
+
+
+TERMINAL_STATUSES = ("ok", "error", "expired")
+
+
+async def wait_for_answer(
+    r: aioredis.Redis,
+    job_id: str,
+    timeout: float,
+    interval: float | None = None,
+) -> JobRecord | None:
+    """Poll a job until it reaches a terminal status or ``timeout`` elapses.
+
+    Returns the job record (terminal, or still-pending if the wait ran out), or
+    None if the job doesn't exist. ``timeout`` is clamped to
+    [0, CHECK_MAX_WAIT_SEC]; ``timeout=0`` means a single immediate read. The
+    caller inspects ``status`` to tell answered (ok/error) from pending. A
+    bounded wait is intentional — callers re-invoke if still pending rather than
+    hold one long blocking call."""
+    interval = interval if interval is not None else settings.CHECK_WAIT_POLL_INTERVAL_SEC
+    timeout = max(0.0, min(float(timeout), float(settings.CHECK_MAX_WAIT_SEC)))
+    deadline = _now() + timeout
+    while True:
+        rec = await get_job(r, job_id)
+        if rec is None:
+            return None
+        if rec.get("status") in TERMINAL_STATUSES:
+            return rec
+        remaining = deadline - _now()
+        if remaining <= 0:
+            return rec  # still pending; caller may re-wait
+        await asyncio.sleep(min(interval, remaining))
 
 
 async def _try_claim_one(r: aioredis.Redis, user_id: int) -> NextJob | None:

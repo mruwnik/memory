@@ -2,8 +2,8 @@ from typing import cast
 
 import pytest
 
-from memory.api.check import callbacks
-from memory.api.check.schemas import JobRecord
+from memory.common.check import callbacks
+from memory.common.check.schemas import JobRecord
 
 pytestmark = pytest.mark.asyncio
 

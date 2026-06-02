@@ -128,6 +128,10 @@ class QueueFull(Exception):
     """Raised when a user's pending queue is at CHECK_QUEUE_MAX_DEPTH."""
 
 
+class PayloadTooLarge(Exception):
+    """Raised when text or context exceeds CHECK_MAX_TEXT_BYTES."""
+
+
 class JobGone(Exception):
     """Raised on a result submission whose lease is no longer valid (410)."""
 

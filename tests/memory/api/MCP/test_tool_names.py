@@ -9,6 +9,7 @@ import pytest
 
 from memory.api.MCP.base import SUBSERVER_PREFIXES
 from memory.api.MCP.servers.books import books_mcp
+from memory.api.MCP.servers.check import check_mcp
 from memory.api.MCP.servers.claude import claude_mcp
 from memory.api.MCP.servers.core import core_mcp
 from memory.api.MCP.servers.deadlines import deadlines_mcp
@@ -33,6 +34,7 @@ from memory.api.MCP.servers.teams import teams_mcp
 # Map prefixes to their FastMCP instances
 SUBSERVERS = {
     "books": books_mcp,
+    "check": check_mcp,
     "claude": claude_mcp,
     "core": core_mcp,
     "deadlines": deadlines_mcp,

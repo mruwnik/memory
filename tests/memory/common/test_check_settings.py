@@ -12,3 +12,6 @@ def test_check_defaults():
     assert settings.CHECK_MAX_REQUEUE_ATTEMPTS == 3
     assert settings.CHECK_RATE_LIMIT_PER_MIN == 60
     assert settings.CHECK_ALLOW_PRIVATE_CALLBACKS is False
+    assert settings.CHECK_DEFAULT_WAIT_SEC == 60
+    assert settings.CHECK_MAX_WAIT_SEC == 300
+    assert settings.CHECK_WAIT_POLL_INTERVAL_SEC == 2.0

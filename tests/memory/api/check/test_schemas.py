@@ -5,7 +5,7 @@
 import pytest
 from pydantic import ValidationError
 
-from memory.api.check.schemas import SubmitRequest, ResultRequest
+from memory.common.check.schemas import SubmitRequest, ResultRequest
 
 
 def test_mode_defaults_to_research():
