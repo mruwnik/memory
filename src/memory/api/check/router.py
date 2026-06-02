@@ -139,3 +139,21 @@ async def submit_result(
         raise HTTPException(status_code=410, detail="job lease expired or unknown")
     _spawn_callback(rec)
     return {"ok": True}
+
+
+@router.delete("/{job_id}", status_code=204)
+async def delete_check(
+    job_id: str,
+    user: User = require_scope(SCOPE_CHECK),
+    r: aioredis.Redis = Depends(get_check_redis),
+):
+    # Owner-or-admin, 404 (not 403) for a non-owner so job existence isn't
+    # leaked. Hard-deletes the record; an in-flight worker isn't stopped — its
+    # later result submission just 410s.
+    job = await store.get_job(r, job_id)
+    if job is None or (
+        job.get("user_id") != str(user.id) and not has_admin_scope(user)
+    ):
+        raise HTTPException(status_code=404, detail="unknown job")
+    await store.delete_job(r, job)
+    return Response(status_code=204)

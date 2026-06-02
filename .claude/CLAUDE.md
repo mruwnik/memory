@@ -463,7 +463,8 @@ Pure-Redis, **no Celery, no Postgres**.
   admins); `GET /check/{id}` is owner-or-admin.
 - **Endpoints**: `POST /check` (submit → `chk_<uuid4>`), `GET /check` (list own),
   `GET /check/next?wait=` (worker long-poll, ≤30s), `GET /check/{id}` (poll),
-  `POST /check/{id}/result` (worker completes, must echo `lease_id`).
+  `POST /check/{id}/result` (worker completes, must echo `lease_id`),
+  `DELETE /check/{id}` (owner-or-admin hard-delete; doesn't stop an in-flight worker).
 - **Redis keys**: `check:job:{id}` HASH (record incl. result/callback/lease_id),
   `check:open:{uid}` ZSET (claimable job ids, FIFO by submit time),
   `check:lease:{id}` STRING with TTL (in-flight marker; value = fencing token),

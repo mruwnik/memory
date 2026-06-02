@@ -287,3 +287,19 @@ async def list_jobs(
             continue
         out.append(cast(JobRecord, job))
     return out
+
+
+async def delete_job(r: aioredis.Redis, job: JobRecord) -> None:
+    """Hard-delete a job from every structure: hash, open set, index, lease.
+
+    Idempotent on the set/index/lease members. Does NOT abort a worker already
+    running the job — its later complete_job sees the hash/lease gone and raises
+    JobGone."""
+    job_id = job["job_id"]
+    user_id = job["user_id"]
+    pipe = r.pipeline(transaction=True)
+    pipe.delete(job_key(job_id))
+    pipe.delete(lease_key(job_id))
+    pipe.zrem(open_key(user_id), job_id)
+    pipe.zrem(jobs_index_key(user_id), job_id)
+    await pipe.execute()

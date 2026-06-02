@@ -265,3 +265,15 @@ async def test_list_jobs_tombstone_in_window_does_not_shorten_page(r):
     # must still return 2 LIVE jobs: ids[4] then ids[2] (ids[3] skipped+pruned)
     assert [j["job_id"] for j in page] == [ids[4], ids[2]]
     assert await r.zscore(jobs_index_key(5), ids[3]) is None  # pruned
+
+
+async def test_delete_job_removes_all_structures(r):
+    job_id = await store.submit_job(r, user_id=5, req=SubmitRequest(text="x"))
+    await store.claim_next(r, user_id=5, wait=0)  # leased + in open + index
+    job = await store.get_job(r, job_id)
+    assert job is not None
+    await store.delete_job(r, job)
+    assert await store.get_job(r, job_id) is None
+    assert await r.zscore(open_key(5), job_id) is None
+    assert await r.zscore(jobs_index_key(5), job_id) is None
+    assert await r.get(lease_key(job_id)) is None

@@ -150,3 +150,29 @@ def test_next_requires_check_scope(check_client, app_client):
     _override_user(app, uid=1, scopes=["read"])  # lacks check scope
     resp = check_client.get("/check/next?wait=0")
     assert resp.status_code == 403
+
+
+def test_delete_own_job_204_then_gone(check_client):
+    job_id = check_client.post("/check", json={"text": "x"}).json()["job_id"]
+    assert check_client.delete(f"/check/{job_id}").status_code == 204
+    assert check_client.get(f"/check/{job_id}").status_code == 404
+
+
+def test_delete_unknown_404(check_client):
+    assert check_client.delete("/check/chk_missing").status_code == 404
+
+
+def test_delete_other_user_404_and_job_survives(check_client, app_client):
+    _test_client, app = app_client
+    job_id = check_client.post("/check", json={"text": "secret"}).json()["job_id"]
+    _override_user(app, uid=999, scopes=["check"])  # different, non-admin
+    assert check_client.delete(f"/check/{job_id}").status_code == 404
+    _override_user(app, uid=1, scopes=["check"])  # back to owner
+    assert check_client.get(f"/check/{job_id}").status_code == 200  # not deleted
+
+
+def test_admin_can_delete_any_job(check_client, app_client):
+    _test_client, app = app_client
+    job_id = check_client.post("/check", json={"text": "secret"}).json()["job_id"]
+    _override_user(app, uid=999, scopes=["*"])  # admin
+    assert check_client.delete(f"/check/{job_id}").status_code == 204
