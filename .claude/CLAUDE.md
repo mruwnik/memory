@@ -452,6 +452,37 @@ Key file: `src/memory/common/access_control.py`
 
 Key file: `src/memory/api/auth.py`
 
+## Check Job Queue
+
+An async fire-and-forget "check" queue (`src/memory/api/check/`) lets callers
+submit text to verify/research/link and remote worker sessions resolve it.
+Pure-Redis, **no Celery, no Postgres**.
+
+- **Scope**: `check` gates all endpoints (submit, read own, and work jobs).
+  Per-user: `GET /check/next` pulls only the caller's own queue (always, even
+  admins); `GET /check/{id}` is owner-or-admin.
+- **Endpoints**: `POST /check` (submit → `chk_<uuid4>`), `GET /check` (list own),
+  `GET /check/next?wait=` (worker long-poll, ≤30s), `GET /check/{id}` (poll),
+  `POST /check/{id}/result` (worker completes, must echo `lease_id`).
+- **Redis keys**: `check:job:{id}` HASH (record incl. result/callback/lease_id),
+  `check:open:{uid}` ZSET (claimable job ids, FIFO by submit time),
+  `check:lease:{id}` STRING with TTL (in-flight marker; value = fencing token),
+  `check:wake:{uid}` LIST (doorbell), `check:jobs:{uid}` ZSET (per-user index
+  for listing).
+- **No Celery, no reaper**: claiming = scan `check:open`, `SET NX EX` a lease on
+  the first free id; the lease TTL auto-expires to make a stuck job claimable
+  again (no background sweep). `/check/next` blocks via BLPOP on the doorbell,
+  which `submit` RPUSHes into; the woken claimer re-scans (the token is just a
+  wake signal). A job claimed more than `CHECK_MAX_REQUEUE_ATTEMPTS` times is
+  marked `expired`. Callbacks are best-effort in-process `asyncio` tasks
+  (SSRF-guarded), with polling as the durable fallback.
+- **Fencing**: claiming mints a `lease_id` stored as the `check:lease:{id}`
+  value; `complete_job` accepts the result only if the held lease still equals
+  the caller's `lease_id` (mismatch/expiry → 410) so an expired-then-reassigned
+  job can't be clobbered by the old worker.
+- **Config**: `CHECK_*` settings (lease 1h, retention 14d, queue depth,
+  rate limit, callback attempts) in `settings.py`.
+
 ## Key Design Decisions
 
 1. **Multi-user with privacy** - Supports collaboration while keeping data self-hosted

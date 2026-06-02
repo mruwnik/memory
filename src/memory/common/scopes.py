@@ -85,6 +85,9 @@ SCOPE_PROJECTS_WRITE = "projects:write"
 # AI
 SCOPE_CLAUDE_AI = "claudeai"
 
+# Check (async verify/research/link job queue)
+SCOPE_CHECK = "check"        # submit, read, and work check jobs
+
 # ---------------------------------------------------------------------------
 # Metadata for UI display — grouped by category.
 # ---------------------------------------------------------------------------
@@ -305,6 +308,13 @@ VALID_SCOPES: list[ScopeInfo] = [
         "label": "Claude AI",
         "description": "Access Claude AI features",
         "category": "ai",
+    },
+    # Research (check job queue)
+    {
+        "value": SCOPE_CHECK,
+        "label": "Check",
+        "description": "Submit, read, and resolve async check (verify/research/link) jobs",
+        "category": "research",
     },
 ]
 
