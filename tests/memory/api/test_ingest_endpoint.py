@@ -88,11 +88,15 @@ def test_upload_lands_and_dispatches(client, user, tmp_path, monkeypatch, method
 
 @pytest.mark.parametrize("method", ["GET", "DELETE", "PATCH"])
 def test_upload_rejects_disallowed_methods(client, user, method):
-    # The route deliberately registers only PUT+POST. Pin the narrowing so a
+    # The route deliberately registers only PUT+POST. A disallowed method is
+    # rejected without uploading. Note the app mounts the MCP sub-app at "/"
+    # (app.py), which matches all paths/methods, so a method that doesn't match
+    # an earlier router route falls through to that mount and returns 404 rather
+    # than a synthesized 405 — both mean "not accepted". Pin the narrowing so a
     # future widening of ``methods=`` has to update this test on purpose.
     token = _mint(user.id)
     resp = client.request(method, f"/ingest/upload?token={token}", content=b"x")
-    assert resp.status_code == 405
+    assert resp.status_code in (404, 405)
 
 
 def test_upload_rejects_bad_token(client):
