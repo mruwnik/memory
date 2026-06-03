@@ -36,14 +36,134 @@ const MODES: CheckMode[] = ['research', 'verify', 'link']
 const inputClass = 'w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary'
 const labelClass = 'block text-xs font-medium text-slate-500 mb-1'
 
-// Pull a human-readable answer out of an arbitrary result dict: prefer a
-// top-level `answer` string, otherwise pretty-print the whole object.
-function renderAnswer(result: Record<string, unknown> | null): string | null {
-  if (!result || Object.keys(result).length === 0) return null
-  const answer = result.answer
-  if (typeof answer === 'string') return answer
-  return JSON.stringify(result, null, 2)
+// --- Answer rendering ---
+//
+// The remote worker that resolves a check job isn't bound to a strict schema,
+// but in practice answers carry a known shape: a `verdict` (optionally with a
+// `confidence` and a short `verdict_reason`), a prose `summary`/`answer`, and
+// for link-mode a list of `sources`/`links`. We render those nicely and fall
+// back to JSON for anything we don't recognise, so an answer is never hidden.
+
+const VERDICT_COLORS: { match: string; cls: string }[] = [
+  { match: 'true', cls: 'bg-green-100 text-green-700' },
+  { match: 'false', cls: 'bg-red-100 text-red-700' },
+  { match: 'mixed', cls: 'bg-yellow-100 text-yellow-700' },
+  { match: 'partial', cls: 'bg-yellow-100 text-yellow-700' },
+  { match: 'uncertain', cls: 'bg-slate-100 text-slate-600' },
+]
+
+function verdictColor(verdict: string): string {
+  const key = verdict.toLowerCase().trim()
+  // `true` is checked before `false` so "likely true" doesn't fall through.
+  const hit = VERDICT_COLORS.find(({ match }) => key.includes(match))
+  return hit?.cls ?? 'bg-slate-100 text-slate-500'
 }
+
+function formatConfidence(c: unknown): string | null {
+  // Accept either a 0–1 fraction or an already-percentage number.
+  if (typeof c === 'number') return `${Math.round(c <= 1 ? c * 100 : c)}%`
+  if (typeof c === 'string' && c.trim()) return c.trim()
+  return null
+}
+
+interface AnswerSource {
+  url: string | null
+  label: string
+}
+
+function pickString(o: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    if (typeof o[k] === 'string' && o[k]) return o[k] as string
+  }
+  return undefined
+}
+
+function extractSources(raw: unknown): AnswerSource[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item): AnswerSource => {
+    if (typeof item === 'string') {
+      const isUrl = /^https?:\/\//i.test(item.trim())
+      return { url: isUrl ? item.trim() : null, label: item }
+    }
+    if (item && typeof item === 'object') {
+      const o = item as Record<string, unknown>
+      const url = pickString(o, ['url', 'href', 'link'])
+      const label = pickString(o, ['title', 'name', 'label'])
+      return { url: url ?? null, label: label ?? url ?? JSON.stringify(item) }
+    }
+    return { url: null, label: String(item) }
+  })
+}
+
+const KNOWN_ANSWER_KEYS = new Set([
+  'verdict', 'verdict_reason', 'confidence', 'summary', 'answer', 'sources', 'links',
+])
+
+interface AnswerViewProps {
+  result: Record<string, unknown>
+}
+
+const AnswerView = ({ result }: AnswerViewProps) => {
+  const verdict = typeof result.verdict === 'string' ? result.verdict : null
+  const verdictReason = typeof result.verdict_reason === 'string' ? result.verdict_reason : null
+  const confidence = formatConfidence(result.confidence)
+  const summary =
+    typeof result.summary === 'string' ? result.summary :
+    typeof result.answer === 'string' ? result.answer : null
+  const sources = extractSources(result.sources ?? result.links)
+
+  const extra = Object.fromEntries(
+    Object.entries(result).filter(([k]) => !KNOWN_ANSWER_KEYS.has(k)),
+  )
+  const hasExtra = Object.keys(extra).length > 0
+
+  // Nothing recognised — show the raw object rather than an empty Answer block.
+  if (!verdict && !summary && sources.length === 0 && !hasExtra) {
+    return <PreJson value={result} />
+  }
+
+  return (
+    <div className="space-y-2">
+      {(verdict || confidence || verdictReason) && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {verdict && (
+            <span className={`px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wide ${verdictColor(verdict)}`}>
+              {verdict}
+            </span>
+          )}
+          {confidence && <span className="text-xs text-slate-500">{confidence} confidence</span>}
+          {verdictReason && <span className="text-xs text-slate-400 italic">{verdictReason}</span>}
+        </div>
+      )}
+      {summary && <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{summary}</p>}
+      {sources.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-slate-400 mb-1">Sources</p>
+          <ul className="space-y-0.5">
+            {sources.map((s, i) => (
+              <li key={i} className="text-xs break-words">
+                {s.url ? (
+                  <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
+                    {s.label}
+                  </a>
+                ) : (
+                  <span className="text-slate-600">{s.label}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {hasExtra && <PreJson value={extra} />}
+    </div>
+  )
+}
+
+const PreJson = ({ value }: { value: unknown }) => (
+  <pre className="text-xs bg-slate-50 rounded p-2 overflow-x-auto text-slate-600 whitespace-pre-wrap break-words">
+    {JSON.stringify(value, null, 2)}
+  </pre>
+)
 
 // --- Ask Form ---
 
@@ -130,7 +250,8 @@ const JobCard = ({ job, onDelete }: JobCardProps) => {
 
   // Only surface the answer for a successful job: an errored job can carry a
   // partial result, and showing both an Answer and the red error line is confusing.
-  const answer = job.status === 'ok' ? renderAnswer(job.result) : null
+  const result =
+    job.status === 'ok' && job.result && Object.keys(job.result).length > 0 ? job.result : null
 
   return (
     <li className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-slate-200">
@@ -147,10 +268,10 @@ const JobCard = ({ job, onDelete }: JobCardProps) => {
 
           <p className="text-sm font-medium text-slate-800 whitespace-pre-wrap break-words">{job.text}</p>
 
-          {answer && (
+          {result && (
             <div className="mt-2 border-t border-slate-100 pt-2">
               <p className="text-xs font-medium text-slate-400 mb-1">Answer</p>
-              <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{answer}</p>
+              <AnswerView result={result} />
             </div>
           )}
 
@@ -215,20 +336,28 @@ const Check = () => {
 
   // Always fetch the full list; filtering happens client-side for display so
   // the header counts stay accurate and switching tabs doesn't refetch/flash.
-  const loadJobs = useCallback(async () => {
-    setLoading(true)
+  // A background load (the 5s poll) skips the loading spinner and swallows
+  // transient errors so the list updates in place without flashing or banners.
+  const loadJobs = useCallback(async (background = false) => {
+    if (!background) setLoading(true)
     try {
       const data = await listJobs()
       setJobs(data)
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load questions')
+      if (!background) setError(e instanceof Error ? e.message : 'Failed to load questions')
     } finally {
-      setLoading(false)
+      if (!background) setLoading(false)
     }
   }, [listJobs])
 
   useEffect(() => { loadJobs() }, [loadJobs])
+
+  // Poll every 5s so answers and status changes appear without a manual refresh.
+  useEffect(() => {
+    const id = setInterval(() => loadJobs(true), 5000)
+    return () => clearInterval(id)
+  }, [loadJobs])
 
   const handleAsk = async (body: AskBody) => {
     setAsking(true)

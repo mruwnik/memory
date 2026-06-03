@@ -54,6 +54,55 @@ describe('Check', () => {
     expect(screen.getByText('1 answered')).toBeInTheDocument()
   })
 
+  it('renders a structured verdict answer instead of raw JSON', async () => {
+    listJobs.mockResolvedValue([
+      makeJob({
+        mode: 'verify',
+        text: 'is the sky blue?',
+        result: {
+          verdict: 'true',
+          confidence: 0.9,
+          verdict_reason: 'well established',
+          summary: 'Rayleigh scattering makes the sky appear blue.',
+        },
+      }),
+    ])
+    renderWithRouter(<Check />)
+    await waitFor(() =>
+      expect(screen.getByText('Rayleigh scattering makes the sky appear blue.')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('true')).toBeInTheDocument()
+    expect(screen.getByText('90% confidence')).toBeInTheDocument()
+    expect(screen.getByText('well established')).toBeInTheDocument()
+    // The raw JSON braces should not be shown.
+    expect(screen.queryByText(/"verdict"/)).not.toBeInTheDocument()
+  })
+
+  it('renders link-mode sources as anchors', async () => {
+    listJobs.mockResolvedValue([
+      makeJob({
+        mode: 'link',
+        result: {
+          summary: 'Found two references.',
+          sources: ['https://example.com/a', { url: 'https://example.com/b', title: 'Ref B' }],
+        },
+      }),
+    ])
+    renderWithRouter(<Check />)
+    await waitFor(() => expect(screen.getByText('Ref B')).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'Ref B' })).toHaveAttribute('href', 'https://example.com/b')
+    expect(screen.getByRole('link', { name: 'https://example.com/a' })).toHaveAttribute(
+      'href',
+      'https://example.com/a',
+    )
+  })
+
+  it('falls back to JSON for an unrecognised answer shape', async () => {
+    listJobs.mockResolvedValue([makeJob({ result: { weird_field: 42 } })])
+    renderWithRouter(<Check />)
+    await waitFor(() => expect(screen.getByText(/weird_field/)).toBeInTheDocument())
+  })
+
   it('shows the error message for a failed job', async () => {
     listJobs.mockResolvedValue([makeJob({ status: 'error', result: null, error: 'worker exploded' })])
     renderWithRouter(<Check />)
