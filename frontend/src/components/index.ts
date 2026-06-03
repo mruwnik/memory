@@ -13,6 +13,7 @@ export { default as AuthError } from './auth/AuthError'
 
 export { CeleryOverview } from './celery'
 export { ScheduledTasks } from './scheduled-tasks'
+export { Check } from './check'
 export { ReportsPage } from './reports'
 
 // Note: Metrics, Telemetry, ClaudeSessions are lazy-loaded in App.tsx
