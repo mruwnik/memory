@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
@@ -219,6 +219,16 @@ const AuthWrapper = () => {
       <Route path="/ui/scheduled-tasks" element={
         isAuthenticated ? (
           <ScheduledTasks />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/check" element={
+        isAuthenticated && hasScope('check') ? (
+          <Check />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
         ) : (
           <Navigate to="/ui/login" replace />
         )

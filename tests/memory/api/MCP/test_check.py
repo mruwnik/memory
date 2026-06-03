@@ -111,6 +111,28 @@ async def test_list_jobs_returns_own(db_session, fake_redis, check_user):
         await ask.fn(text="two")
         result = await list_jobs.fn()
     assert len(result["jobs"]) == 2
+    # The UI lists question text directly, so it must round-trip through the summary.
+    assert {j["text"] for j in result["jobs"]} == {"one", "two"}
+
+
+async def test_list_jobs_includes_answer(db_session, fake_redis, check_user):
+    user, session = check_user
+    job_id = await store.submit_job(
+        fake_redis, user_id=user.id, req=SubmitRequest(text="claim me")
+    )
+    nxt = await store.claim_next(fake_redis, user_id=user.id, wait=0)
+    assert nxt is not None
+    await store.complete_job(
+        fake_redis, job_id, nxt.lease_id, status="ok",
+        result={"answer": "yes"}, error=None,
+    )
+    with mcp_auth_context(session.id):
+        result = await list_jobs.fn()
+    (job,) = result["jobs"]
+    assert job["text"] == "claim me"
+    assert job["status"] == "ok"
+    assert job["result"] == {"answer": "yes"}
+    assert job["error"] is None
 
 
 async def test_delete_removes(db_session, fake_redis, check_user):

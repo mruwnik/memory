@@ -43,6 +43,7 @@ vi.mock('@/components', () => ({
   ConfigSources: () => <div>SNAPSHOTS</div>,
   CeleryOverview: () => <div>CELERY</div>,
   ScheduledTasks: () => <div>SCHEDULED</div>,
+  Check: () => <div>CHECK</div>,
   ReportsPage: () => <div>REPORTS</div>,
 }))
 vi.mock('@/components/polls', () => ({
@@ -163,6 +164,23 @@ describe('App routing & auth', () => {
     setPath('/ui/celery')
     render(<App />)
     expect(screen.getByText('CELERY')).toBeInTheDocument()
+  })
+
+  it('gates the check route behind the check scope (redirects without it)', async () => {
+    authState.isAuthenticated = true
+    authState.hasScope = vi.fn((s) => s !== 'check')
+    setPath('/ui/check')
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
+    expect(screen.queryByText('CHECK')).not.toBeInTheDocument()
+  })
+
+  it('renders check for a user with the check scope', () => {
+    authState.isAuthenticated = true
+    authState.hasScope = vi.fn(() => true)
+    setPath('/ui/check')
+    render(<App />)
+    expect(screen.getByText('CHECK')).toBeInTheDocument()
   })
 
   it('lazily renders ClaudeSessions for an authenticated user', async () => {

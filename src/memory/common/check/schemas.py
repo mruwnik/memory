@@ -73,6 +73,9 @@ class JobSummary(BaseModel):
     job_id: str
     status: JobStatus
     mode: Mode
+    text: str
+    result: dict[str, Any] | None = None
+    error: str | None = None
     submitted_at: str
     completed_at: str | None = None
 
@@ -82,6 +85,9 @@ class JobSummary(BaseModel):
             job_id=rec["job_id"],
             status=cast(JobStatus, rec["status"]),
             mode=cast(Mode, rec["mode"]),
+            text=rec["text"],
+            result=json.loads(rec["result"]) if rec.get("result") else None,
+            error=rec.get("error") or None,
             submitted_at=rec["submitted_at"],
             completed_at=rec.get("completed_at") or None,
         )

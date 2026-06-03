@@ -130,7 +130,8 @@ async def list_jobs(
         limit: Maximum jobs to return (default 50, clamped to 1..200).
         offset: Number of matching jobs to skip (default 0).
 
-    Returns: {"jobs": [...]} where each entry has job_id, status, mode, and times.
+    Returns: {"jobs": [...]} where each entry has job_id, status, mode, the
+    original question text, result/error if answered, and times.
     """
     user = get_mcp_current_user()
     if not user or user.id is None:
