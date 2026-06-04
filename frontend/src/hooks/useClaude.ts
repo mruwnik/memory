@@ -151,6 +151,7 @@ export interface SpawnRequest {
   custom_env?: Record<string, string>
   initial_prompt?: string
   run_id?: string // Custom run ID for branch naming (defaults to session_id)
+  dev_channels_server?: string // Load Claude development channels from this server
 }
 
 export interface ScheduleResponse {

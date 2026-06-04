@@ -130,6 +130,7 @@ const ClaudeSessions = () => {
   const [selectedConfig, setSelectedConfig] = useState<ConfigSelection>(null)
   const [selectedRepoUrl, setSelectedRepoUrl] = useState<string>('')
   const [enablePlaywright, setEnablePlaywright] = useState<boolean>(false)
+  const [devChannelsServer, setDevChannelsServer] = useState<string>('')
   const [allowedTools, setAllowedTools] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(ALLOWED_TOOLS_STORAGE_KEY)
@@ -436,6 +437,7 @@ const ClaudeSessions = () => {
       custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
       initial_prompt: initialPrompt || undefined,
       run_id: runId || undefined,
+      dev_channels_server: devChannelsServer.trim() || undefined,
     }
   }
 
@@ -744,6 +746,21 @@ const ClaudeSessions = () => {
                       Enable Playwright
                     </label>
                     <span className="text-xs text-slate-500">(headless browser automation via MCP)</span>
+                  </div>
+
+                  {/* Dev channels server */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Dev Channels Server (optional)</label>
+                    <input
+                      type="text"
+                      value={devChannelsServer}
+                      onChange={(e) => setDevChannelsServer(e.target.value)}
+                      placeholder="http://channels.internal:3000"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Launches Claude with --dangerously-load-development-channels. Leave blank to disable.
+                    </p>
                   </div>
 
                   {/* Pre-approved Tools */}

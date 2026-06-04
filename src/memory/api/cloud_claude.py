@@ -31,7 +31,7 @@ from fastapi import (
     Query,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user, get_user_from_token
@@ -425,6 +425,27 @@ class SpawnRequest(BaseModel):
     custom_env: dict[str, str] | None = None  # Custom environment variables
     initial_prompt: str | None = None  # Prompt to start Claude with immediately
     run_id: str | None = None  # Custom run ID for branch naming (defaults to session_id)
+    dev_channels_server: str | None = None  # Load Claude development channels from this server
+
+    @field_validator("dev_channels_server")
+    @classmethod
+    def check_dev_channels_server(cls, value: str | None) -> str | None:
+        """Restrict to characters valid for a hostname, host:port, or URL.
+
+        The value is passed verbatim to the orchestrator, which appends it to
+        the claude command line. Allow only an unambiguous charset so it can't
+        carry shell metacharacters or whitespace, and forbid a leading '-' so
+        it can never be mistaken for a flag (no hostname/host:port/URL starts
+        with one).
+        """
+        if value is None:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._:/][A-Za-z0-9._:/-]*", value):
+            raise ValueError(
+                "dev_channels_server may only contain letters, digits, and "
+                ". _ : / - and may not start with '-'"
+            )
+        return value
 
     @model_validator(mode="after")
     def check_source_mutual_exclusivity(self) -> "SpawnRequest":
@@ -759,6 +780,7 @@ async def spawn_session(
             volume=volume_name,
             env=env,
             networks=networks,
+            dev_channels_server=request.dev_channels_server,
         )
     except OrchestratorError as e:
         logger.error(f"Failed to create session: {e}")

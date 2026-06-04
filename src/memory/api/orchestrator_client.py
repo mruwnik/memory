@@ -339,11 +339,15 @@ class OrchestratorClient:
         memory: str | None = None,
         cpus: int | None = None,
         networks: list[str] | None = None,
+        dev_channels_server: str | None = None,
     ) -> SessionInfo:
         """Create a new session container.
 
         Idempotent: returns existing container if already running.
         Raises OrchestratorError on resource limit exceeded (409) or other errors.
+
+        When dev_channels_server is set, the orchestrator launches Claude with
+        --dangerously-load-development-channels <server>.
         """
         body: dict[str, Any] = {"id": session_id}
         if image is not None:
@@ -358,6 +362,8 @@ class OrchestratorClient:
             body["cpus"] = cpus
         if networks:
             body["networks"] = networks
+        if dev_channels_server is not None:
+            body["dev_channels_server"] = dev_channels_server
 
         status, data = await self._request("POST", "/containers", body)
 
