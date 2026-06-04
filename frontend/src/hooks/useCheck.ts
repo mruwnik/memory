@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useMCP } from './useMCP'
 
-export type CheckMode = 'verify' | 'research' | 'link'
+export type CheckMode = 'verify' | 'research' | 'link' | 'deep-dive' | 'investigation-team'
 export type CheckStatus = 'queued' | 'in_flight' | 'ok' | 'error' | 'expired'
 
 export interface CheckJob {

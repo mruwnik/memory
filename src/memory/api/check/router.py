@@ -19,6 +19,7 @@ from memory.common.check.schemas import (
     JobGone,
     JobRecord,
     JobStatusResponse,
+    Mode,
     NextJob,
     PayloadTooLarge,
     QueueFull,
@@ -72,11 +73,17 @@ async def submit_check(
 @router.get("/next", response_model=NextJob)
 async def next_check(
     wait: int = Query(default=30),
+    mode: list[Mode] | None = Query(
+        default=None,
+        description="Repeat to claim any of these check types (?mode=a&mode=b); "
+        "omit to claim any.",
+    ),
     user: User = require_scope(SCOPE_CHECK),
     r: aioredis.Redis = Depends(get_check_redis),
 ):
     wait = max(0, min(wait, settings.CHECK_MAX_LONG_POLL_SEC))
-    job = await store.claim_next(r, user_id=user.id, wait=wait)
+    modes = frozenset(mode) if mode else None
+    job = await store.claim_next(r, user_id=user.id, wait=wait, modes=modes)
     if job is None:
         return Response(status_code=204)
     return job

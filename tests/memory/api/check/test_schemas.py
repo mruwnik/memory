@@ -14,7 +14,9 @@ def test_mode_defaults_to_research():
     assert req.context == {}
 
 
-@pytest.mark.parametrize("mode", ["verify", "research", "link"])
+@pytest.mark.parametrize(
+    "mode", ["verify", "research", "link", "deep-dive", "investigation-team"]
+)
 def test_valid_modes(mode):
     assert SubmitRequest(text="x", mode=mode).mode == mode
 

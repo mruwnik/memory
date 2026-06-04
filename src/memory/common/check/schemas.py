@@ -5,7 +5,7 @@ from typing import Any, Literal, TypedDict, cast
 
 from pydantic import BaseModel, Field
 
-Mode = Literal["verify", "research", "link"]
+Mode = Literal["verify", "research", "link", "deep-dive", "investigation-team"]
 ResultStatus = Literal["ok", "error"]
 JobStatus = Literal["queued", "in_flight", "ok", "error", "expired"]
 

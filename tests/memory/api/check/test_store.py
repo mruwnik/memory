@@ -3,6 +3,7 @@
 # just created or claimed, so the None case is covered by dedicated tests, not
 # here.
 # pyright: reportOptionalSubscript=false, reportOptionalMemberAccess=false
+import asyncio
 import json
 
 import pytest
@@ -146,6 +147,78 @@ async def test_claim_cleans_tombstone(r):
     assert await store.claim_next(r, user_id=5, wait=0) is None
     assert await r.zrange(open_key(5), 0, -1) == []
     assert await r.get(lease_key(job_id)) is None
+
+
+async def test_claim_mode_filter_picks_matching(r):
+    await store.submit_job(r, user_id=5, req=SubmitRequest(text="r", mode="research"))
+    dd = await store.submit_job(
+        r, user_id=5, req=SubmitRequest(text="d", mode="deep-dive")
+    )
+    claimed = await store.claim_next(r, user_id=5, wait=0, modes=frozenset({"deep-dive"}))
+    assert claimed.job_id == dd
+    assert claimed.mode == "deep-dive"
+
+
+async def test_claim_mode_filter_set_matches_any_member(r):
+    # Oldest-first: the research job is scanned first but excluded; the claimer
+    # walks past it to the deep-dive job because both filter modes are allowed.
+    await store.submit_job(r, user_id=5, req=SubmitRequest(text="v", mode="verify"))
+    dd = await store.submit_job(
+        r, user_id=5, req=SubmitRequest(text="d", mode="deep-dive")
+    )
+    claimed = await store.claim_next(
+        r, user_id=5, wait=0, modes=frozenset({"deep-dive", "investigation-team"})
+    )
+    assert claimed.job_id == dd
+
+
+async def test_claim_mode_filter_skips_nonmatching_without_leasing(r):
+    research = await store.submit_job(
+        r, user_id=5, req=SubmitRequest(text="r", mode="research")
+    )
+    # No deep-dive job available -> a deep-dive claimer gets nothing...
+    assert await store.claim_next(
+        r, user_id=5, wait=0, modes=frozenset({"deep-dive"})
+    ) is None
+    # ...and crucially never touched the research job: no lease, attempts still 0,
+    # so a matching claimer can still take it cleanly.
+    assert await r.get(lease_key(research)) is None
+    job = await store.get_job(r, research)
+    assert job["attempts"] == "0"
+    claimed = await store.claim_next(r, user_id=5, wait=0, modes=frozenset({"research"}))
+    assert claimed.job_id == research
+
+
+async def test_claim_mode_filter_cleans_tombstone(r):
+    job_id = await store.submit_job(
+        r, user_id=5, req=SubmitRequest(text="d", mode="deep-dive")
+    )
+    await r.delete(job_key(job_id))  # hash TTL-expired but still in open zset
+    assert await store.claim_next(
+        r, user_id=5, wait=0, modes=frozenset({"deep-dive"})
+    ) is None
+    assert await r.zrange(open_key(5), 0, -1) == []
+
+
+async def test_claim_mode_filter_picks_up_later_matching_submit(r):
+    # Doorbell-looseness guarantee: a filtered claimer that parks on an empty
+    # queue still picks up a *matching* job submitted after it parked. It claims
+    # via a re-scan that re-applies the mode filter on each pass — whether woken
+    # immediately by the submit's doorbell RPUSH or, in the worst case, when its
+    # BLPOP times out. wait_for caps the test so a never-returning claim fails
+    # loudly instead of hanging the suite.
+    claim = asyncio.create_task(
+        store.claim_next(r, user_id=5, wait=2, modes=frozenset({"deep-dive"}))
+    )
+    await asyncio.sleep(0.1)  # let the claimer reach its first empty scan + block
+    # A non-matching submit must NOT satisfy the deep-dive claimer...
+    await store.submit_job(r, user_id=5, req=SubmitRequest(text="r", mode="research"))
+    dd = await store.submit_job(
+        r, user_id=5, req=SubmitRequest(text="d", mode="deep-dive")
+    )
+    claimed = await asyncio.wait_for(claim, timeout=6)
+    assert claimed is not None
+    assert claimed.job_id == dd
 
 
 async def _claim(r, user_id=5, text="hi"):

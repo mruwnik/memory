@@ -86,6 +86,32 @@ def test_next_empty_returns_204(check_client):
     assert check_client.get("/check/next?wait=0").status_code == 204
 
 
+def test_next_mode_filter_claims_matching(check_client):
+    check_client.post("/check", json={"text": "r", "mode": "research"})
+    dd = check_client.post("/check", json={"text": "d", "mode": "deep-dive"}).json()["job_id"]
+    nxt = check_client.get("/check/next?wait=0&mode=deep-dive")
+    assert nxt.status_code == 200
+    assert nxt.json()["job_id"] == dd
+
+
+def test_next_mode_filter_set_claims_any_member(check_client):
+    check_client.post("/check", json={"text": "v", "mode": "verify"})
+    dd = check_client.post("/check", json={"text": "d", "mode": "deep-dive"}).json()["job_id"]
+    # repeated ?mode= -> claim any of the listed types
+    nxt = check_client.get("/check/next?wait=0&mode=deep-dive&mode=investigation-team")
+    assert nxt.status_code == 200
+    assert nxt.json()["job_id"] == dd
+
+
+def test_next_mode_filter_no_match_returns_204(check_client):
+    check_client.post("/check", json={"text": "r", "mode": "research"})
+    assert check_client.get("/check/next?wait=0&mode=investigation-team").status_code == 204
+
+
+def test_next_unknown_mode_422(check_client):
+    assert check_client.get("/check/next?wait=0&mode=bogus").status_code == 422
+
+
 def test_result_stale_lease_410(check_client):
     job_id = check_client.post("/check", json={"text": "x"}).json()["job_id"]
     check_client.get("/check/next?wait=0")

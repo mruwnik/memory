@@ -15,6 +15,8 @@ const MODE_COLORS: Record<CheckMode, string> = {
   verify: 'bg-purple-100 text-purple-700',
   research: 'bg-indigo-100 text-indigo-700',
   link: 'bg-teal-100 text-teal-700',
+  'deep-dive': 'bg-amber-100 text-amber-700',
+  'investigation-team': 'bg-rose-100 text-rose-700',
 }
 
 const STATUS_LABELS: Record<CheckStatus, string> = {
@@ -25,7 +27,7 @@ const STATUS_LABELS: Record<CheckStatus, string> = {
   expired: 'Expired',
 }
 
-const MODES: CheckMode[] = ['research', 'verify', 'link']
+const MODES: CheckMode[] = ['research', 'verify', 'link', 'deep-dive', 'investigation-team']
 
 // `listJobs` fetches a single PAGE_LIMIT-sized page (see useCheck); the UI has no
 // pagination. With CHECK retention at 14 days, that cap is assumed to comfortably

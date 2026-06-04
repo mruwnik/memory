@@ -160,14 +160,33 @@ async def wait_for_answer(
         await asyncio.sleep(min(interval, remaining))
 
 
-async def _try_claim_one(r: aioredis.Redis, user_id: int) -> NextJob | None:
+async def _try_claim_one(
+    r: aioredis.Redis, user_id: int, modes: frozenset[str] | None = None
+) -> NextJob | None:
     """Scan the open zset oldest-first and lease the first free job.
 
     The lease is acquired with ``SET NX EX``, so among concurrent claimers
     exactly one creates the key and proceeds; the rest skip to the next id.
+
+    ``modes`` restricts the claim to jobs whose mode is in the set, so distinct
+    worker pools can each pull their own check type(s); ``None``/empty claims
+    any. The mode is read (cheap HGET) and compared *before* the lease, never
+    after: leasing a non-matching job would churn its lease and, worse, bump its
+    ``attempts`` toward the poison threshold for work this worker was never
+    going to do. Mode is immutable after submit, so there's no TOCTOU between
+    the HGET and the lease.
     """
     ids = await r.zrange(open_key(user_id), 0, -1)  # oldest-first
     for job_id in ids:
+        if modes:
+            job_mode = await r.hget(job_key(job_id), "mode")
+            if job_mode is None:
+                # Tombstone: hash TTL-expired but id lingered in open. Clean up.
+                await r.zrem(open_key(user_id), job_id)
+                continue
+            if job_mode not in modes:
+                continue
+
         lease_id = uuid.uuid4().hex
         ok = await r.set(
             lease_key(job_id), lease_id, nx=True, ex=settings.CHECK_LEASE_TTL_SEC
@@ -212,7 +231,9 @@ async def _try_claim_one(r: aioredis.Redis, user_id: int) -> NextJob | None:
     return None
 
 
-async def claim_next(r: aioredis.Redis, user_id: int, wait: int) -> NextJob | None:
+async def claim_next(
+    r: aioredis.Redis, user_id: int, wait: int, modes: frozenset[str] | None = None
+) -> NextJob | None:
     """Claim the next free job for ``user_id``, blocking up to ``wait`` seconds.
 
     Each pass scans the open zset and tries to ``SET NX`` a lease on the first
@@ -220,10 +241,24 @@ async def claim_next(r: aioredis.Redis, user_id: int, wait: int) -> NextJob | No
     submit RPUSHes into; that wakes us to re-scan. The re-scan is the source of
     truth — the woken job may already have been taken by another worker, so we
     never trust the doorbell token itself.
+
+    ``modes`` filters the claim to a set of check types (see ``_try_claim_one``).
+
+    Doorbell looseness under mode filtering, accepted deliberately: the doorbell
+    is per-user, not per-mode, and a submit RPUSHes a single token that wakes
+    exactly one BLPOP'd claimer. With several workers parked on different modes,
+    that token can land on one whose filter excludes the new job; it re-scans,
+    finds nothing for its modes, and re-blocks — while the worker that *could*
+    take the job wasn't the one woken. The job is still picked up, just not
+    until a matching worker's own BLPOP times out and it re-scans (bounded by
+    ``wait``). We tolerate this extra latency rather than add a per-mode
+    doorbell or a re-wake handshake: the re-scan is already the durable path
+    (the doorbell is only an optimization), and a re-wake between two workers
+    that both reject a job risks a token ping-pong / busy spin.
     """
     deadline = _now() + wait
     while True:
-        job = await _try_claim_one(r, user_id)
+        job = await _try_claim_one(r, user_id, modes)
         if job is not None:
             return job
         remaining = deadline - _now()

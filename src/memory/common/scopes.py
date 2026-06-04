@@ -85,7 +85,7 @@ SCOPE_PROJECTS_WRITE = "projects:write"
 # AI
 SCOPE_CLAUDE_AI = "claudeai"
 
-# Check (async verify/research/link job queue)
+# Check (async verify/research/link/deep-dive/investigation-team job queue)
 SCOPE_CHECK = "check"        # submit, read, and work check jobs
 
 # ---------------------------------------------------------------------------
@@ -313,7 +313,7 @@ VALID_SCOPES: list[ScopeInfo] = [
     {
         "value": SCOPE_CHECK,
         "label": "Check",
-        "description": "Submit, read, and resolve async check (verify/research/link) jobs",
+        "description": "Submit, read, and resolve async check (verify/research/link/deep-dive/investigation-team) jobs",
         "category": "research",
     },
 ]

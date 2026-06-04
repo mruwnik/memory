@@ -36,7 +36,7 @@ async def ask(
     callback_token: str | None = None,
     wait: int = 0,
 ) -> dict:
-    """Submit a question to the check queue (verify/research/link).
+    """Submit a question to the check queue (verify/research/link/deep-dive/investigation-team).
 
     Returns the job id and status; if wait>0, polls up to that many seconds
     (capped at CHECK_MAX_WAIT_SEC) for the answer before returning — re-call
@@ -44,7 +44,7 @@ async def ask(
 
     Args:
         text: The question or claim to check.
-        mode: One of "verify", "research", or "link".
+        mode: One of "verify", "research", "link", "deep-dive", or "investigation-team".
         context: Optional structured context passed through to the worker.
         callback_url: Optional URL to POST the result to when answered.
         callback_token: Optional token echoed back in the callback for auth.

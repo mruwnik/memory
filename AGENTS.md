@@ -202,11 +202,11 @@ Key file: `src/memory/api/auth.py`. Operator-facing security notes (OAuth, rever
 
 ## Check Job Queue
 
-Async fire-and-forget queue: callers submit text to verify/research/link; remote worker sessions resolve it. **Pure-Redis — no Celery, no Postgres.** Core logic in `src/memory/common/check/`; the HTTP router (`src/memory/api/check/`) and MCP subserver (`src/memory/api/MCP/servers/check.py`) are thin wrappers.
+Async fire-and-forget queue: callers submit text to verify/research/link/deep-dive/investigation-team; remote worker sessions resolve it. **Pure-Redis — no Celery, no Postgres.** Core logic in `src/memory/common/check/`; the HTTP router (`src/memory/api/check/`) and MCP subserver (`src/memory/api/MCP/servers/check.py`) are thin wrappers.
 
 - **Scope/ownership**: a single `check` scope gates everything (`*` also passes). Per-user: `GET /check/next` pulls only the caller's queue; reads/list/delete are owner-or-admin (404 "unknown job" for a non-owner — no existence leak; ownership checked *before* any wait).
 - **MCP tools** (primary surface): `check_ask`, `check_wait_for_answer` (bounded poll, default 60s, cap `CHECK_MAX_WAIT_SEC`), `check_list_jobs`, `check_delete`. Bounded waits by design — re-call if still pending.
-- **HTTP** (external consumers + worker): `POST /check`, `GET /check/{id}?wait=`, `GET /check/next?wait=` (worker long-poll ≤30s), `POST /check/{id}/result` (must echo `lease_id`). No HTTP list/delete.
+- **HTTP** (external consumers + worker): `POST /check`, `GET /check/{id}?wait=`, `GET /check/next?wait=[&mode=…&mode=…]` (worker long-poll ≤30s; repeat `mode` to claim any of those check types so distinct worker pools each pull their own — the doorbell stays per-user, so a mode-filtered claimer just re-scans on its own poll timeout), `POST /check/{id}/result` (must echo `lease_id`). No HTTP list/delete.
 - **Redis keys**: `check:job:{id}` (HASH), `check:open:{uid}` (claimable ZSET, FIFO), `check:lease:{id}` (TTL fencing token), `check:wake:{uid}` (doorbell LIST), `check:jobs:{uid}` (per-user index).
 - **Claiming/fencing, no reaper**: claim = scan `check:open`, `SET NX EX` a lease (minting a `lease_id`) on the first free id; the TTL auto-expires to reclaim stuck jobs. `/check/next` BLPOPs the doorbell that `submit` RPUSHes. `complete_job` accepts a result only if the held lease still equals the caller's `lease_id` (else 410). Over `CHECK_MAX_REQUEUE_ATTEMPTS` claims → `expired`. Callbacks are best-effort in-process asyncio (SSRF-guarded); polling is the durable fallback.
 - **Config**: `CHECK_*` in `settings.py` (lease 1h, retention 14d, queue depth, rate limit, callback attempts, wait 60 / max 300).
