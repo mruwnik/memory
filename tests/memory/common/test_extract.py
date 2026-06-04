@@ -8,6 +8,7 @@ from PIL import Image
 import io
 import shutil
 from unittest.mock import patch
+from memory.common import settings
 from memory.common.extract import (
     HAS_PANDOC,
     as_file,
@@ -17,6 +18,7 @@ from memory.common.extract import (
     doc_to_images,
     extract_pdf,
     extract_image,
+    safe_image_open,
     docx_to_pdf,
     merge_metadata,
     MIN_PDF_PAGE_TEXT_CHARS,
@@ -163,6 +165,52 @@ def test_extract_image_with_bytes():
 def test_extract_image_with_str():
     with pytest.raises(ValueError):
         extract_image("test")
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    img = Image.new("RGB", (width, height), color="green")
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_safe_image_open_allows_image_at_pixel_limit():
+    # 100x100 == 10_000 pixels, exactly the cap, must be allowed (only strictly
+    # over the limit is rejected).
+    with patch.object(settings, "MAX_IMAGE_PIXELS", 10_000):
+        img = safe_image_open(_png_bytes(100, 100))
+    assert img.size == (100, 100)
+
+
+def test_safe_image_open_rejects_oversized_image_before_decode():
+    # 100x100 == 10_000 pixels, one over the cap -> reject at header time.
+    with patch.object(settings, "MAX_IMAGE_PIXELS", 9_999):
+        with pytest.raises(Image.DecompressionBombError):
+            safe_image_open(_png_bytes(100, 100))
+
+
+def test_plain_image_open_raises_hard_error_above_cap():
+    # Backstop for Image.open sites not routed through safe_image_open: a bomb
+    # must raise a real (filter-independent) DecompressionBombError, not merely
+    # warn-and-decode. PIL's error threshold is 2x its MAX_IMAGE_PIXELS, so a
+    # knob of 4_999 puts a 10_000px image (100x100) over the 9_998 error line.
+    with patch.object(Image, "MAX_IMAGE_PIXELS", 4_999):
+        with pytest.raises(Image.DecompressionBombError):
+            Image.open(io.BytesIO(_png_bytes(100, 100)))
+
+
+def test_extract_image_rejects_decompression_bomb_bytes():
+    with patch.object(settings, "MAX_IMAGE_PIXELS", 9_999):
+        with pytest.raises(Image.DecompressionBombError):
+            extract_image(_png_bytes(100, 100))
+
+
+def test_extract_image_rejects_decompression_bomb_path(tmp_path):
+    bomb = tmp_path / "bomb.png"
+    bomb.write_bytes(_png_bytes(100, 100))
+    with patch.object(settings, "MAX_IMAGE_PIXELS", 9_999):
+        with pytest.raises(Image.DecompressionBombError):
+            extract_image(bomb)
 
 
 @pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")

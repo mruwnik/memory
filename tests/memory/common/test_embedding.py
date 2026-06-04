@@ -122,6 +122,24 @@ def test_embed_chunks_empty_list(mock_embed):
     assert result == []
 
 
+def test_embed_chunks_does_not_retry_decompression_bomb(mock_voyage_client, monkeypatch):
+    # A decompression bomb is deterministic: retrying it just burns backoff
+    # sleeps before the inevitable failure. It must propagate on the first try.
+    import memory.common.embedding as emb
+
+    mock_voyage_client.multimodal_embed = Mock(
+        side_effect=Image.DecompressionBombError("boom")
+    )
+    slept = Mock()
+    monkeypatch.setattr(emb.time, "sleep", slept)
+
+    with pytest.raises(Image.DecompressionBombError):
+        embed_chunks([["x"]], model=settings.MIXED_EMBEDDING_MODEL)
+
+    mock_voyage_client.multimodal_embed.assert_called_once()
+    slept.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "data, chunk_size, expected_result",
     [

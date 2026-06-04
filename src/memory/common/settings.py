@@ -379,6 +379,13 @@ CHECK_DEFAULT_WAIT_SEC = int(os.getenv("CHECK_DEFAULT_WAIT_SEC", "60"))
 CHECK_MAX_WAIT_SEC = int(os.getenv("CHECK_MAX_WAIT_SEC", "300"))
 CHECK_WAIT_POLL_INTERVAL_SEC = float(os.getenv("CHECK_WAIT_POLL_INTERVAL_SEC", "2"))
 
+# Reject images whose pixel count exceeds this before decoding them. PIL knows
+# the dimensions from the header at open time, so an oversized image (a
+# decompression bomb) is rejected without ever decoding the raster into memory —
+# decoding a 161MP PNG into RGBA is ~640MB raw and SIGKILLs a worker at its
+# memory cap, which (with acks_late) gets the poison item redelivered forever.
+MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", 100_000_000))
+
 MAX_PHOTO_UPLOAD_BYTES = int(
     os.getenv("MAX_PHOTO_UPLOAD_BYTES", 50 * 1024 * 1024)
 )

@@ -1,7 +1,9 @@
 import io
 import zipfile
+from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 from memory.common import ingest_routing as ir
 from memory.common import settings
@@ -42,8 +44,6 @@ def _minimal_epub() -> bytes:
 
 
 def _png() -> bytes:
-    from PIL import Image
-
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (1, 2, 3)).save(buf, format="PNG")
     return buf.getvalue()
@@ -96,6 +96,19 @@ def test_unrecognized_routes_to_misc(content):
 
 def test_declared_image_type_routes_to_image():
     spec = ir.detect_bucket("image/png", _png())
+    assert spec.name == "image"
+
+
+def test_oversized_image_routes_to_photo_not_book():
+    # A decompression-bomb image is still an image: it must route to the Photo
+    # task (which guards the decode and fails the item) rather than fall through
+    # to the book parser because PIL refused to decode it.
+    buf = io.BytesIO()
+    Image.new("RGB", (100, 100), (1, 2, 3)).save(buf, format="PNG")  # 10_000 px
+    big_png = buf.getvalue()
+
+    with patch.object(Image, "MAX_IMAGE_PIXELS", 4_999):  # error above 9_998 px
+        spec = ir.detect_bucket("application/octet-stream", big_png)
     assert spec.name == "image"
 
 

@@ -4,6 +4,7 @@ import time
 from typing import Literal, cast
 
 import voyageai
+from PIL import Image
 
 from memory.common import extract, settings
 from memory.common.chunker import (
@@ -119,6 +120,10 @@ def embed_chunks(
                 list[Vector],
                 vo.embed(texts, model=model, input_type=input_type).embeddings,
             )
+        except Image.DecompressionBombError:
+            # Deterministic: an oversized image fails identically every time.
+            # Don't burn retry backoff on it — let it propagate to FAILED now.
+            raise
         except Exception as e:
             last_error = e
             if attempt < max_retries - 1:

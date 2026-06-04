@@ -58,10 +58,18 @@ def normalize_mime(mime: str) -> str:
 
 
 def is_image_bytes(content: bytes) -> bool:
-    """True if PIL can decode the bytes as an image."""
+    """True if PIL can decode the bytes as an image.
+
+    An oversized image (decompression bomb) is still an image: report it as
+    one so it routes to the Photo task rather than falling through to the book
+    parser. The decode itself is guarded downstream (it fails the item instead
+    of OOM-ing the worker).
+    """
     try:
         with Image.open(io.BytesIO(content)) as im:
             im.verify()
+        return True
+    except Image.DecompressionBombError:
         return True
     except Exception:
         return False

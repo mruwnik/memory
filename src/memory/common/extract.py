@@ -8,10 +8,23 @@ import tempfile
 from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
-from memory.common import chunker, summarizer
+from memory.common import chunker, settings, summarizer
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 from PIL import Image
+
+# Backstop for every Image.open in the process. PIL only *warns* (and still
+# decodes) between MAX_IMAGE_PIXELS and 2x it — the band a worker OOMs in — and
+# raises DecompressionBombError (a real, filter-independent exception) only
+# above 2x. Set PIL's knob to half our cap so that hard error fires once an
+# image exceeds settings.MAX_IMAGE_PIXELS, at any call site.
+#
+# This is load-bearing, not belt-and-suspenders: the Photo path chunks via
+# Photo._chunk_contents -> bare Image.open (NOT safe_image_open), so for a
+# photo this backstop is the *only* thing stopping the OOM. safe_image_open()
+# below additionally guards the generic extract() path (image/* docs, email
+# attachments) with a clearer message. Don't remove this knob.
+Image.MAX_IMAGE_PIXELS = max(1, settings.MAX_IMAGE_PIXELS // 2)
 
 try:
     import pypandoc
@@ -284,13 +297,30 @@ def extract_docx(docx_path: pathlib.Path | bytes | str) -> list[DataChunk]:
             return extract_docx_text(file_path)
 
 
+def safe_image_open(content: bytes | pathlib.Path) -> Image.Image:
+    """Open an image, rejecting decompression bombs before decoding pixels.
+
+    PIL fills in ``.size`` from the header at open time, so the pixel-count
+    check happens before any raster is decoded into memory. An oversized image
+    therefore raises here instead of being fully decoded — which at a worker's
+    memory cap would SIGKILL the process and, with acks_late, redeliver the
+    poison item forever. The raised error is catchable, so the embed path can
+    record it as FAILED.
+    """
+    image = Image.open(io.BytesIO(content) if isinstance(content, bytes) else content)
+    pixels = image.width * image.height
+    if pixels > settings.MAX_IMAGE_PIXELS:
+        image.close()
+        raise Image.DecompressionBombError(
+            f"Image has {pixels} pixels, over the {settings.MAX_IMAGE_PIXELS} limit"
+        )
+    return image
+
+
 def extract_image(content: bytes | str | pathlib.Path) -> list[DataChunk]:
-    if isinstance(content, pathlib.Path):
-        image = Image.open(content)
-    elif isinstance(content, bytes):
-        image = Image.open(io.BytesIO(content))
-    else:
+    if not isinstance(content, (bytes, pathlib.Path)):
         raise ValueError(f"Unsupported content type: {type(content)}")
+    image = safe_image_open(content)
     image_format = image.format or "jpeg"
     return [DataChunk(data=[image], mime_type=f"image/{image_format.lower()}")]
 
