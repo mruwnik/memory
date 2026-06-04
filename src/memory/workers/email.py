@@ -336,7 +336,17 @@ def vectorize_email(email: MailMessage):
 
     embeds = defaultdict(list)
     for attachment in email.attachments:
-        chunks = embedding.embed_source_item(attachment)
+        try:
+            chunks = embedding.embed_source_item(attachment)
+        except Exception:
+            # One undecodable attachment (e.g. a decompression-bomb image) must
+            # not abort the whole email: marking it FAILED and continuing lets
+            # the message commit, so it isn't re-spooled into an endless retry.
+            logger.exception(
+                f"Failed to embed attachment {attachment.id}; marking FAILED"
+            )
+            attachment.embed_status = "FAILED"  # type: ignore
+            continue
         if not chunks:
             continue
 
@@ -357,7 +367,8 @@ def vectorize_email(email: MailMessage):
 
     email.embed_status = "STORED"  # type: ignore
     for attachment in email.attachments:
-        attachment.embed_status = "STORED"
+        if cast(str, attachment.embed_status) != "FAILED":
+            attachment.embed_status = "STORED"
 
     logger.info(f"Stored embedding for message {email.message_id}")
 

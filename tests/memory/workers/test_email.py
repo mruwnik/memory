@@ -477,6 +477,70 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
     assert cast(str, attachment2.embed_status) == "STORED"
 
 
+def test_vectorize_email_marks_failed_attachment_and_continues(
+    db_session, qdrant, mock_uuid4
+):
+    # A poison attachment (e.g. a decompression-bomb image whose decode raises)
+    # must not abort the whole email: it's marked FAILED, the body and the other
+    # attachments still embed, and the email commits — so it isn't re-spooled.
+    from PIL import Image
+
+    mail_message = MailMessage(
+        sha256=b"bomb_msg_hash" + bytes(19),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+        message_id="<bomb-attach@example.com>",
+        subject="Email with a poison attachment",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Body that embeds fine",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(mail_message)
+    db_session.flush()
+
+    good = EmailAttachment(
+        mail_message_id=mail_message.id,
+        size=100,
+        content=base64.b64encode(b"fine attachment"),
+        filename=None,
+        modality="doc",
+        sha256=b"good_att_hash" + bytes(19),
+        tags=["test"],
+        mime_type="text/plain",
+        embed_status="RAW",
+    )
+    poison = EmailAttachment(
+        mail_message_id=mail_message.id,
+        size=200,
+        content=base64.b64encode(b"poison"),
+        filename=None,
+        modality="photo",
+        sha256=b"bomb_att_hash" + bytes(19),
+        tags=["test"],
+        mime_type="image/png",
+        embed_status="RAW",
+    )
+    db_session.add_all([good, poison])
+    db_session.flush()
+
+    def fake_embed(item):
+        if item is poison:
+            raise Image.DecompressionBombError("161MP boom")
+        return []
+
+    with patch.object(embedding, "embed_source_item", side_effect=fake_embed):
+        vectorize_email(mail_message)  # must not raise
+
+    db_session.commit()
+    assert cast(str, poison.embed_status) == "FAILED"
+    assert cast(str, mail_message.embed_status) == "STORED"
+    assert cast(str, good.embed_status) == "STORED"
+
+
 def test_get_folder_uids(email_provider):
     """Test getting all UIDs from a folder."""
     # Get UIDs from INBOX
