@@ -23,6 +23,7 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import EmailAccount, GoogleAccount
 from memory.common.ssrf import UnsafeURLError, validate_public_hostname
+from memory.common.scopes import StorableSensitivityLiteral
 from memory.workers.email import imap_connection, list_imap_folders
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,12 @@ class EmailAccountCreate(BaseModel):
     send_enabled: bool = True
     # Access control
     project_id: int | None = None
-    sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
+    # StorableSensitivityLiteral includes the "hidden" tombstone, which excludes
+    # the account's mail from search/visibility entirely (even for admins). This
+    # API is the one surface allowed to set it — "hidden" is deliberately kept
+    # out of the role-granted ladder (SensitivityLevelLiteral) so generic
+    # content-create paths can't.
+    sensitivity: StorableSensitivityLiteral = "basic"
 
     @model_validator(mode="after")
     def validate_account_type_fields(self):
@@ -141,7 +147,9 @@ class EmailAccountUpdate(BaseModel):
     send_enabled: bool | None = None
     # Access control
     project_id: int | None = None
-    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
+    # See EmailAccountCreate.sensitivity — "hidden" tombstones the account's
+    # mail. Reversible: messages re-inherit a normal level when changed back.
+    sensitivity: StorableSensitivityLiteral | None = None
 
 
 class EmailAccountTest(BaseModel):

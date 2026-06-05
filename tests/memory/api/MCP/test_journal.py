@@ -170,6 +170,55 @@ async def test_list_all(db_session, admin_user, admin_session, sample_item):
     assert result["total"] == 3
 
 
+@pytest.fixture
+def hidden_item(db_session, sample_project):
+    """A source item with the "hidden" tombstone sensitivity."""
+    item = SourceItem(
+        modality="text",
+        sha256=create_content_hash("hidden item content"),
+        content="hidden item content",
+        project_id=sample_project.id,
+        sensitivity="hidden",
+    )
+    db_session.add(item)
+    db_session.commit()
+    return item
+
+
+@pytest.mark.asyncio
+async def test_list_all_denies_hidden_item_for_admin(
+    db_session, admin_user, admin_session, hidden_item
+):
+    """Journal entries on a "hidden" source_item are denied even to admins.
+
+    The tombstone guard runs before the admin bypass in
+    can_access_journal_target, so list_all can't read a hidden item's entries.
+    """
+    entry = JournalEntry(
+        target_type="source_item",
+        target_id=hidden_item.id,
+        creator_id=admin_user.id,
+        content="should be invisible",
+        project_id=hidden_item.project_id,
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(list_all)(target_id=hidden_item.id)
+
+
+@pytest.mark.asyncio
+async def test_add_denies_hidden_item_for_admin(
+    db_session, admin_user, admin_session, hidden_item
+):
+    """Admins can't plant journal entries on a "hidden" source_item either."""
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(add)(target_id=hidden_item.id, content="nope")
+
+
 @pytest.mark.asyncio
 async def test_list_all_empty(db_session, admin_user, admin_session, sample_item):
     """Test listing journal entries when there are none."""

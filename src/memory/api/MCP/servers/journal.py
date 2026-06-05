@@ -14,6 +14,7 @@ from memory.api.MCP.access import (
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import (
     has_admin_scope,
+    normalize_sensitivity,
     user_can_access,
     user_can_access_project,
     user_can_access_team,
@@ -63,6 +64,15 @@ def can_access_journal_target(
     ``person`` relationship; if a UserProxy is passed in, we hydrate it
     from ``session`` for those branches.
     """
+    # "hidden" tombstone: a hidden source_item is invisible to EVERYONE,
+    # including admins — checked before the admin bypass so journal entries on a
+    # hidden item can't be read (via list_all) or planted (via add) by anyone.
+    # Mirrors user_can_access / the search exclusions.
+    if target_type == "source_item" and normalize_sensitivity(
+        getattr(target, "sensitivity", None) or "basic"
+    ) == "hidden":
+        return False
+
     if has_admin_scope(user):
         return True
 

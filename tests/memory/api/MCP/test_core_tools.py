@@ -21,6 +21,7 @@ from memory.api.MCP.servers.core import (
     filter_source_ids,
 )
 from memory.api.search.types import SearchFilters
+from memory.common.access_control import AccessFilter
 from memory.common.db.models.source_item import SourceItem
 from tests.conftest import mcp_auth_context
 
@@ -1035,6 +1036,22 @@ def test_filter_source_ids_by_modalities(mock_make_session):
 # ====== fetch tests ======
 
 
+def mock_source_item_query(mock_session, items):
+    """Self-returning SourceItem query mock for the unit-level fetch tests.
+
+    fetch() now routes its item load through fetch_accessible_source_items, so
+    the builder chain (options/filter × N) varies with the access gate. Making
+    query()/options()/filter() return the same mock keeps these tests focused on
+    fetch's result-shaping, not the exact call sequence; .all() yields `items`.
+    """
+    q = MagicMock()
+    mock_session.query.return_value = q
+    q.options.return_value = q
+    q.filter.return_value = q
+    q.all.return_value = items
+    return q
+
+
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
@@ -1055,7 +1072,7 @@ async def test_fetch_returns_full_details(mock_make_session, mock_access_filter)
     mock_item.content = "Article content here"
     mock_item.as_payload.return_value = {"author": "Test Author"}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=True)
 
@@ -1087,7 +1104,7 @@ async def test_fetch_without_content(mock_make_session, mock_access_filter):
     mock_item.content = "Should not be included"
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=False)
 
@@ -1102,7 +1119,7 @@ async def test_fetch_not_found(mock_make_session, mock_access_filter):
     """Get source item raises error when not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = []
+    mock_source_item_query(mock_session, [])
 
     with pytest.raises(ValueError, match="Item 999 not found"):
         await fetch.fn(id=999)
@@ -1127,7 +1144,7 @@ async def test_fetch_handles_null_inserted_at(mock_make_session, mock_access_fil
     mock_item.inserted_at = None
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=False)
 
@@ -1210,11 +1227,37 @@ async def test_fetch_without_journal_entries(mock_make_session, mock_access_filt
     mock_item.inserted_at = None
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=False)
 
     assert "journal_entries" not in result
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=None)
+@patch(
+    "memory.api.MCP.servers.core.get_current_user_access_filter",
+    return_value=AccessFilter(conditions=[]),
+)
+@patch("memory.api.MCP.servers.core.make_session")
+async def test_fetch_unidentifiable_nonadmin_user_fails_closed(
+    mock_make_session, mock_access_filter, mock_user
+):
+    """A non-admin token whose data-layer user lookup returns None gets nothing.
+
+    Without the guard, the empty (public-allowing) AccessFilter would surface
+    `public` items by id to an expired/deleted-session caller. Single-id raises
+    not-found; bulk omits.
+    """
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__.return_value = mock_session
+    # Even if the DB would return a public item, the user=None guard short-circuits.
+    mock_source_item_query(mock_session, [MagicMock(id=1)])
+
+    with pytest.raises(ValueError, match="not found"):
+        await fetch.fn(id=1)
+    assert await fetch.fn(ids=[1, 2]) == []
 
 
 # ====== bulk fetch tests ======
@@ -1304,6 +1347,25 @@ async def test_fetch_bulk_skips_missing_items(db_session, admin_session):
     assert isinstance(result, list)
     assert len(result) == 1
     assert result[0]["id"] == item.id
+
+
+@pytest.mark.asyncio
+async def test_fetch_excludes_hidden_even_for_admin(db_session, admin_session):
+    """fetch (single id and bulk) drops "hidden"-tombstoned items for admins.
+
+    The hidden exclusion is in the base query, not the admin-gated
+    user_can_access, so a superadmin cannot fetch hidden content by id — mirroring
+    the search / fetch_file exclusions.
+    """
+    visible = make_source_item(db_session, 1, sensitivity="basic")
+    hidden = make_source_item(db_session, 2, sensitivity="hidden")
+
+    with mcp_auth_context(admin_session.id):
+        bulk = await fetch.fn(ids=[visible.id, hidden.id])
+        with pytest.raises(ValueError, match="not found"):
+            await fetch.fn(id=hidden.id)
+
+    assert [r["id"] for r in bulk] == [visible.id]
 
 
 @pytest.mark.asyncio

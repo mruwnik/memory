@@ -465,6 +465,28 @@ async def test_search_chunks_passes_person_filter_to_query():
 
 
 @pytest.mark.asyncio
+async def test_search_chunks_always_excludes_hidden_even_for_admin():
+    """search_chunks emits the 'hidden' must_not even on the admin/no-filter path.
+
+    access_filter=None is the superadmin path (build_access_qdrant_filter
+    returns [] -> no access conditions), yet the tombstone exclusion must
+    still be present so no hidden chunk surfaces for anyone.
+    """
+    with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock) as mock_query:
+        mock_qdrant.get_qdrant_client.return_value = "mock_client"
+        mock_query.return_value = {}
+
+        data = [DataChunk(data=["test query"])]
+        await search_chunks(data, modalities={"text"}, filters={"access_filter": None})
+
+        mock_query.assert_called_once()
+        filters = mock_query.call_args[1].get("filters")
+        assert filters is not None
+        assert {"key": "sensitivity", "match": {"value": "hidden"}} in filters["must_not"]
+
+
+@pytest.mark.asyncio
 async def test_search_chunks_passes_access_filter_to_query():
     """Test that search_chunks correctly passes access_filter to query_chunks."""
     with patch("memory.api.search.embeddings.qdrant") as mock_qdrant, \

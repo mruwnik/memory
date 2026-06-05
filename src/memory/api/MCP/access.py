@@ -5,6 +5,7 @@ Provides functions to build access filters and log access from MCP tool context.
 """
 
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, Protocol, overload
 
 if TYPE_CHECKING:
@@ -16,13 +17,14 @@ from memory.api.auth import handle_api_key_use, is_expired, lookup_api_key
 from memory.common.access_control import (
     AccessFilter,
     SensitivityLevel,
+    apply_access_filter_to_query,
     build_access_filter,
     get_user_project_roles,
     has_admin_scope,
     user_can_create_in_project,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import User, UserSession
+from memory.common.db.models import SourceItem, User, UserSession
 from memory.common.db.models.access import log_access
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,66 @@ def get_project_roles_by_user_id(
             logger.warning("get_project_roles_by_user_id: user %s not found", user_id)
             return {}
         return get_user_project_roles(db, user)
+
+
+def build_mcp_user_access_filter(
+    session: "Session | scoped_session[Session]",
+    user: Any,
+) -> AccessFilter | None:
+    """Build the access filter for an MCP ``UserProxy`` using the *given* session.
+
+    Mirrors ``build_user_access_filter`` but (a) resolves project roles by id —
+    so it works with a lightweight ``UserProxy`` that lacks ``user.person`` — and
+    (b) reuses the caller's session instead of opening its own, avoiding nested
+    sessions. ``None`` ⇒ superadmin (no filtering). Scope source is the user's
+    own scopes; for token-scope semantics (API-key overrides) use
+    ``get_current_user_access_filter`` instead.
+    """
+    if user is None:
+        # Authenticated-but-unidentifiable ⇒ public-only, matching the empty
+        # filter the search paths use for the same case.
+        return AccessFilter(conditions=[])
+    if has_admin_scope(user):
+        return None
+    project_roles = get_project_roles_by_user_id(getattr(user, "id", None), session)
+    return build_access_filter(user, project_roles)
+
+
+def fetch_accessible_source_items(
+    session: "Session | scoped_session[Session]",
+    ids: Sequence[int],
+    access_filter: AccessFilter | None,
+    *,
+    base_query: Any = None,
+) -> list[SourceItem]:
+    """Load SourceItems by id, gated by ``access_filter`` — the single fetch path.
+
+    The one choke point for "fetch these items for this caller": it applies the
+    caller's ``AccessFilter`` via ``apply_access_filter_to_query`` — the same
+    canonical SQL gate used by search, BM25, and ``list_items`` / ``count_items``
+    — so the creator / person / public / project-role rules AND the ``hidden``
+    tombstone exclusion (enforced even on the admin / ``access_filter is None``
+    path) are applied in one place. Fetch-by-id surfaces call this instead of
+    re-deriving access rules, so they can't drift apart.
+
+    Args:
+        session: Active DB session.
+        ids: SourceItem ids to load. Empty ⇒ ``[]`` (no query).
+        access_filter: The caller's filter (``None`` ⇒ superadmin). Build it from
+            the request token via ``get_current_user_access_filter`` (honours
+            API-key scope overrides) or from a ``UserProxy`` via
+            ``build_mcp_user_access_filter``.
+        base_query: Optional pre-built ``session.query(SourceItem)`` carrying
+            caller-specific options/filters (e.g. ``selectinload(people)`` or
+            ``embed_status == "STORED"``). The id filter and access filter are
+            applied on top. Defaults to a bare ``SourceItem`` query.
+    """
+    if not ids:
+        return []
+    query = base_query if base_query is not None else session.query(SourceItem)
+    query = query.filter(SourceItem.id.in_(list(ids)))
+    query = apply_access_filter_to_query(query, access_filter)
+    return query.all()
 
 
 def build_user_access_filter(user: "User") -> AccessFilter | None:

@@ -36,10 +36,12 @@ class MockSourceItem:
         project_id: int | None,
         sensitivity: str | None,
         id: int | None = None,
+        creator_id: int | None = None,
     ):
         self.id = id
         self.project_id = project_id
         self.sensitivity = sensitivity
+        self.creator_id = creator_id
 
 
 # --- Role and Sensitivity Tests ---
@@ -139,6 +141,20 @@ def test_user_can_access_superadmin():
     user = MockUser(scopes=["*"])
     item = MockSourceItem(project_id=None, sensitivity="confidential")
     assert user_can_access(user, item) is True
+
+
+def test_user_can_access_hidden_denied_for_admin():
+    """The 'hidden' tombstone is excluded even for superadmins, before any bypass."""
+    user = MockUser(scopes=["*"])
+    item = MockSourceItem(project_id=None, sensitivity="hidden")
+    assert user_can_access(user, item) is False
+
+
+def test_user_can_access_hidden_denied_for_creator():
+    """A hidden item is invisible even to its creator (read guard, no bypass)."""
+    user = MockUser(id=7, scopes=[])
+    item = MockSourceItem(project_id=1, sensitivity="hidden", creator_id=7)
+    assert user_can_access(user, item) is False
 
 
 def test_user_can_access_null_project_denied():
@@ -522,6 +538,38 @@ def test_get_accessible_source_item_returns_item_for_admin(
         db_session, admin_user, "someone/else.txt"
     )
     assert result.id == item.id
+
+
+def test_get_accessible_source_item_denies_hidden_for_admin(
+    db_session, admin_user
+):
+    """A 'hidden' item is denied file-serving even to an admin.
+
+    File-serving is a read, so it must mirror the search / user_can_access
+    tombstone exclusion — the hidden guard runs before the admin short-circuit.
+    """
+    import pytest
+
+    from memory.common.access_control import (
+        get_accessible_source_item_by_filename,
+    )
+    from memory.common.db.models import SourceItem
+
+    item = SourceItem(
+        sha256=b"d" * 32,
+        filename="hidden/attachment.txt",
+        mime_type="text/plain",
+        modality="text",
+        sensitivity="hidden",
+        size=10,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    with pytest.raises(PermissionError):
+        get_accessible_source_item_by_filename(
+            db_session, admin_user, "hidden/attachment.txt"
+        )
 
 
 # --- Admin bypass audit logging ---

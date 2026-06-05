@@ -34,6 +34,7 @@ from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validat
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common import settings
+from memory.common.scopes import STORABLE_SENSITIVITY_CHECK_SQL
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordUser
@@ -265,7 +266,7 @@ class EmailAccount(Base):
     __table_args__ = (
         CheckConstraint("account_type IN ('imap', 'gmail')"),
         CheckConstraint(
-            "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
+            STORABLE_SENSITIVITY_CHECK_SQL,
             name="valid_email_account_sensitivity",
         ),
         Index("email_accounts_address_idx", "email_address", unique=True),

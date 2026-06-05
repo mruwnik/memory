@@ -344,8 +344,13 @@ async def search_chunks(
     search_filters = build_registry_qdrant_filters(filters)
     search_filters.extend(build_qdrant_special_filters(filters))
 
-    # Build the complete Qdrant filter
-    qdrant_filter: dict[str, Any] = {}
+    # Build the complete Qdrant filter. The "hidden" tombstone sensitivity is
+    # excluded for EVERYONE, including the admin / access_filter-None path: an
+    # always-present must_not guarantees no hidden chunk surfaces regardless of
+    # the access conditions built below.
+    qdrant_filter: dict[str, Any] = {
+        "must_not": [{"key": "sensitivity", "match": {"value": "hidden"}}],
+    }
 
     if search_filters:
         qdrant_filter["must"] = search_filters

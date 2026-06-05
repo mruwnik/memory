@@ -23,6 +23,23 @@ from memory.common.access_control import (
 SUPERADMIN_FILTERS: SearchFilters = {"access_filter": None}
 
 
+def chained_query_mock(items: list) -> MagicMock:
+    """A query MagicMock whose builder methods return itself.
+
+    ``search_bm25`` chains ``query -> filter -> join -> filter -> order_by ->
+    limit -> all``. Encoding that exact sequence in each test makes them brittle
+    (e.g. the unconditional SourceItem join + hidden-tombstone filter shifted it).
+    Making filter/join/order_by/limit self-returning keeps these unit tests
+    focused on score normalization, not on the precise call order. ``.all()``
+    yields ``items``.
+    """
+    q = MagicMock()
+    for method in ("filter", "join", "order_by", "limit"):
+        getattr(q, method).return_value = q
+    q.all.return_value = items
+    return q
+
+
 class TestBuildTsquery:
     """Tests for build_tsquery function."""
 
@@ -126,10 +143,7 @@ class TestSearchBm25:
         mock_item2.id = "chunk2"
         mock_item2.rank = 0.4
 
-        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
-            mock_item1,
-            mock_item2,
-        ]
+        mock_db.query.return_value = chained_query_mock([mock_item1, mock_item2])
 
         result = await bm25.search_bm25(
             "test query", {"text"}, limit=10, filters=SUPERADMIN_FILTERS
@@ -155,10 +169,7 @@ class TestSearchBm25:
         mock_item2.id = "chunk2"
         mock_item2.rank = 0.5
 
-        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
-            mock_item1,
-            mock_item2,
-        ]
+        mock_db.query.return_value = chained_query_mock([mock_item1, mock_item2])
 
         result = await bm25.search_bm25("test", {"text"}, filters=SUPERADMIN_FILTERS)
 
@@ -219,17 +230,15 @@ class TestSearchBm25:
     async def test_limit_parameter(self, mock_make_session):
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db
-        mock_query = mock_db.query.return_value
-        # Chain: single filter (initial)
-        mock_limit = mock_query.filter.return_value.order_by.return_value.limit
-        mock_limit.return_value.all.return_value = []
+        mock_query = chained_query_mock([])
+        mock_db.query.return_value = mock_query
 
         await bm25.search_bm25(
             "test", {"text"}, limit=20, filters=SUPERADMIN_FILTERS
         )
 
         # Verify limit was called with 20
-        mock_limit.assert_called_once_with(20)
+        mock_query.limit.assert_called_once_with(20)
 
     @patch("memory.api.search.bm25.make_session")
     async def test_zero_rank_items_excluded(self, mock_make_session):
@@ -245,10 +254,7 @@ class TestSearchBm25:
         mock_item2.id = "chunk2"
         mock_item2.rank = 0  # Zero rank, should be excluded
 
-        mock_db.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
-            mock_item1,
-            mock_item2,
-        ]
+        mock_db.query.return_value = chained_query_mock([mock_item1, mock_item2])
 
         result = await bm25.search_bm25("test", {"text"}, filters=SUPERADMIN_FILTERS)
 
@@ -437,12 +443,18 @@ class TestSearchBm25Chunks:
         assert call_args[0][1] == modalities
 
 
-def test_apply_access_filter_superadmin_returns_unchanged_query():
-    """Test that None filter (superadmin) returns query unchanged."""
+def test_apply_access_filter_superadmin_applies_only_hidden_exclusion():
+    """None filter (superadmin) applies exactly the hidden-tombstone exclusion.
+
+    The admin path no longer returns the query untouched: the hidden filter runs
+    before the access_filter-None early-out, so even superadmins drop hidden
+    rows. It should be the single filter applied (no access conditions).
+    """
     mock_query = MagicMock()
     result = apply_access_filter(mock_query, None)
-    assert result is mock_query
-    assert not mock_query.filter.called
+    # One filter call (sensitivity != "hidden"), then the early-out returns it.
+    mock_query.filter.assert_called_once()
+    assert result is mock_query.filter.return_value
 
 
 def test_apply_access_filter_empty_matches_nothing():
@@ -664,6 +676,97 @@ def test_apply_access_filter_single_project_sensitivity(
     for item in results:
         assert item.project_id == project.id
         assert item.sensitivity in sensitivities
+
+
+def test_apply_access_filter_excludes_hidden_even_for_admin(db_session, project):
+    """A 'hidden' row is dropped even with access_filter=None (superadmin path).
+
+    The tombstone exclusion runs before the admin early-out, so no SQL
+    search/listing path surfaces hidden content regardless of privilege.
+    """
+    from tests.conftest import unique_sha256
+
+    from memory.common.db.models import Note, SourceItem
+
+    visible = Note(
+        content="visible basic item",
+        modality="text",
+        sha256=unique_sha256("hidden-test-visible"),
+        project_id=project.id,
+        sensitivity="basic",
+    )
+    hidden = Note(
+        content="hidden item",
+        modality="text",
+        sha256=unique_sha256("hidden-test-hidden"),
+        project_id=project.id,
+        sensitivity="hidden",
+    )
+    db_session.add_all([visible, hidden])
+    db_session.commit()
+
+    # access_filter=None is the superadmin / no-filter path.
+    query = db_session.query(SourceItem).filter(
+        SourceItem.id.in_([visible.id, hidden.id])
+    )
+    results = apply_access_filter(query, None).all()
+
+    result_ids = {item.id for item in results}
+    assert visible.id in result_ids
+    assert hidden.id not in result_ids
+
+
+@pytest.mark.asyncio
+async def test_search_bm25_excludes_hidden_even_for_admin(db_session, project):
+    """End-to-end: search_bm25 with access_filter=None (admin) drops hidden chunks.
+
+    Exercises the real search_bm25 entry point, not just the helper, so it
+    covers the admin path where access_filter is None — the path that used to
+    skip apply_access_filter_to_query entirely and leak hidden content.
+    """
+    from sqlalchemy import func
+
+    from tests.conftest import unique_sha256
+
+    from memory.common.db.models import Chunk, Note
+
+    term = "zqxhiddenbm25term"
+    visible = Note(
+        content=f"visible note {term}",
+        modality="text",
+        sha256=unique_sha256("bm25-hidden-visible"),
+        project_id=project.id,
+        sensitivity="basic",
+    )
+    hidden = Note(
+        content=f"hidden note {term}",
+        modality="text",
+        sha256=unique_sha256("bm25-hidden-hidden"),
+        project_id=project.id,
+        sensitivity="hidden",
+    )
+    db_session.add_all([visible, hidden])
+    db_session.flush()
+
+    chunks = {}
+    for label, note in (("visible", visible), ("hidden", hidden)):
+        chunk = Chunk(
+            source_id=note.id,
+            content=f"{label} {term}",
+            collection_name="text",
+            embedding_model="test",
+            search_vector=func.to_tsvector("english", f"{label} {term}"),
+        )
+        db_session.add(chunk)
+        chunks[label] = chunk
+    db_session.commit()
+    visible_id, hidden_id = str(chunks["visible"].id), str(chunks["hidden"].id)
+
+    # access_filter=None is the superadmin / no-filter path.
+    result = await bm25.search_bm25(term, {"text"}, filters={"access_filter": None})
+
+    assert visible_id in result
+    assert hidden_id not in result
 
 
 def test_apply_access_filter_multiple_projects(

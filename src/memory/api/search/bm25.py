@@ -17,7 +17,6 @@ from memory.api.search.filters import (
     SPECIAL_FILTER_KEYS,
     account_match_sql,
     apply_registry_filters_sql,
-    is_empty_value,
     reject_unknown_filter_keys,
 )
 from memory.api.search.types import SearchFilters
@@ -125,26 +124,9 @@ async def search_bm25(
             Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
 
-        # Join with SourceItem if we need access control, person filter, or any
-        # registry filter (size/tags on SourceItem + mail/blog/doc subclass
-        # joins all hang off SourceItem.id).
         access_filter = filters.get("access_filter")
         person_id = filters.get("person_id")
         account = filters.get("account")
-        # Use is_empty_value (not truthiness) so a legitimate 0 bound — e.g.
-        # min_size=0 — still triggers the join. Plain truthiness would skip the
-        # join while apply_registry_filters_sql still emits `source_item.size
-        # >= 0`, producing an uncorrelated cross join that also escapes the
-        # source-join-based access filter.
-        has_registry_filter = any(
-            not is_empty_value(filters.get(k)) for k in FILTER_REGISTRY
-        )
-        needs_source_join = (
-            has_registry_filter
-            or access_filter is not None
-            or person_id is not None
-            or not is_empty_value(account)
-        )
 
         # created_at is scoped to Chunk.created_at here (NOT SourceItem.inserted_at
         # — see SPECIAL_FILTER_KEYS in search.filters for why the two backends
@@ -153,16 +135,21 @@ async def search_bm25(
             items_query = items_query.filter(Chunk.created_at >= min_created_at)
         if max_created_at := filters.get("max_created_at"):
             items_query = items_query.filter(Chunk.created_at <= max_created_at)
-        if needs_source_join:
-            items_query = items_query.join(
-                SourceItem, SourceItem.id == Chunk.source_id
-            )
 
-        # Apply access control filter (requires source join)
-        if access_filter is not None:
-            items_query = apply_access_filter_to_query(
-                items_query, access_filter
-            )
+        # SourceItem is joined unconditionally. The hidden-tombstone exclusion in
+        # apply_access_filter_to_query filters on SourceItem.sensitivity and must
+        # apply for EVERYONE — including the admin / access_filter=None path,
+        # mirroring the always-on Qdrant must_not — so the join can't be gated on
+        # the other filters. The access/person/account/registry filters below
+        # also rely on it. (Joining always also removes the old min_size=0
+        # uncorrelated-cross-join hazard: the join is never conditionally skipped
+        # while a registry filter still emits a SourceItem predicate.)
+        items_query = items_query.join(SourceItem, SourceItem.id == Chunk.source_id)
+
+        # Apply access control. Called even when access_filter is None so the
+        # hidden-tombstone exclusion runs on the admin path too — the helper
+        # short-circuits to "hidden filter only" for None.
+        items_query = apply_access_filter_to_query(items_query, access_filter)
 
         # Declarative content-metadata filters (tags/size/mail/blog/doc). The
         # joins are 1:1 on id so rank/order is unaffected. SourceItem is
@@ -190,8 +177,8 @@ async def search_bm25(
             )
             items_query = items_query.filter(or_(no_people, person_associated))
 
-        # Mail account filter: SourceItem is joined above (needs_source_join),
-        # so the SourceItem.id subquery correlates correctly.
+        # Mail account filter: SourceItem is joined above, so the SourceItem.id
+        # subquery correlates correctly.
         if account:
             items_query = items_query.filter(account_match_sql(account))
 

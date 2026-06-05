@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memory.api import email_accounts
+from memory.api.email_accounts import EmailAccountCreate, EmailAccountUpdate
 from memory.common.db.models import EmailAccount, GoogleAccount, HumanUser
 
 
@@ -1075,3 +1076,60 @@ def test_account_to_response_with_google_account(db_session, user):
     assert result.google_account is not None
     assert result.google_account.name == "My Google"
     assert result.google_account.email == "google@example.com"
+
+
+# Test "hidden" tombstone sensitivity
+
+
+def test_email_account_update_accepts_hidden_sensitivity():
+    """EmailAccountUpdate explicitly allows 'hidden' (Literal widened)."""
+    assert EmailAccountUpdate(sensitivity="hidden").sensitivity == "hidden"
+
+
+def test_email_account_create_accepts_hidden_sensitivity():
+    """EmailAccountCreate explicitly allows 'hidden' (Literal widened)."""
+    model = EmailAccountCreate(
+        name="Acct",
+        email_address="hidden@example.com",
+        imap_server="imap.example.com",
+        username="user",
+        password="pass",
+        sensitivity="hidden",
+    )
+    assert model.sensitivity == "hidden"
+
+
+def test_email_account_commits_with_hidden_sensitivity(user, db_session):
+    """valid_email_account_sensitivity constraint permits 'hidden'."""
+    account = EmailAccount(
+        user_id=user.id,
+        name="Hidden",
+        email_address="hidden-commit@example.com",
+        account_type="imap",
+        imap_server="imap.example.com",
+        username="user",
+        password="pass",
+        sensitivity="hidden",
+    )
+    db_session.add(account)
+    db_session.commit()
+    db_session.refresh(account)
+    assert account.sensitivity == "hidden"
+
+
+def test_content_item_commits_with_hidden_sensitivity(db_session):
+    """valid_sensitivity_level constraint on source_item permits 'hidden'."""
+    from tests.conftest import unique_sha256
+
+    from memory.common.db.models import Note
+
+    note = Note(
+        content="hidden content row",
+        modality="text",
+        sha256=unique_sha256("hidden-source-item"),
+        sensitivity="hidden",
+    )
+    db_session.add(note)
+    db_session.commit()
+    db_session.refresh(note)
+    assert note.sensitivity == "hidden"

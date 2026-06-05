@@ -16,10 +16,30 @@ Usage:
         print(f"{scope['value']}: {scope['label']}")
 """
 
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, get_args
 
-# Sensitivity levels for content access control
+# Sensitivity levels for content access control.
+#
+# SensitivityLevelLiteral is the role-granted ladder (what a project role can
+# read/create — see ROLE_SENSITIVITY). StorableSensitivityLiteral additionally
+# includes "hidden", a tombstone that NO role grants (deliberately kept out of
+# the ladder so generic create paths can't set it) but is a legal stored value:
+# content marked "hidden" is filtered out of every read, even for admins. Use
+# the storable set for column CHECK constraints and for the email-account API
+# (the one surface allowed to set "hidden"); use the role ladder everywhere a
+# value is granted by a role. STORABLE_SENSITIVITIES is derived from the literal
+# so the allowed set lives in exactly one place.
 SensitivityLevelLiteral = Literal["public", "basic", "internal", "confidential"]
+StorableSensitivityLiteral = Literal[
+    "public", "basic", "internal", "confidential", "hidden"
+]
+STORABLE_SENSITIVITIES: tuple[str, ...] = get_args(StorableSensitivityLiteral)
+# CHECK-constraint SQL shared by the tables whose sensitivity column may hold
+# the "hidden" tombstone (source_item + email_accounts). Other sensitivity
+# columns stay on the 4-value role ladder.
+STORABLE_SENSITIVITY_CHECK_SQL = "sensitivity IN ({})".format(
+    ", ".join(f"'{value}'" for value in STORABLE_SENSITIVITIES)
+)
 
 # Priority levels for tasks and deadlines.
 TaskPriorityLiteral = Literal["low", "medium", "high", "urgent"]

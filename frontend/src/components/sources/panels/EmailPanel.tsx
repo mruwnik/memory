@@ -230,7 +230,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
     tags: account?.tags || [],
     send_enabled: account?.send_enabled ?? true,
     project_id: account?.project_id || undefined as number | undefined,
-    sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
+    sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden',
   })
   const { testEmailAccount } = useSources()
   const [submitting, setSubmitting] = useState(false)
@@ -501,13 +501,14 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             <label className={styles.formLabel}>Sensitivity</label>
             <select
               value={formData.sensitivity}
-              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
+              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden' })}
               className={styles.formSelect}
             >
               <option value="public">Public</option>
               <option value="basic">Basic</option>
               <option value="internal">Internal</option>
               <option value="confidential">Confidential</option>
+              <option value="hidden">Hidden (excluded from search)</option>
             </select>
             <p className={styles.formHint}>Visibility level for emails from this account</p>
           </div>
