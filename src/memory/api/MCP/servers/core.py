@@ -685,19 +685,29 @@ async def fetch(
     user_id: int | None = getattr(user, "id", None) if user else None
 
     with make_session() as session:
-        # Single canonical fetch path: fetch_accessible_source_items applies the
-        # access_filter (creator / person / public / project-role) AND the
-        # "hidden" tombstone via the same gate as search / list / count, even on
-        # the admin (access_filter is None) path — so fetch-by-id can't drift.
-        # Eager-load 'people' since as_payload() reads it.
-        base_query = (
-            session.query(SourceItem)
-            .options(selectinload(SourceItem.people))
-            .filter(SourceItem.embed_status == "STORED")
-        )
-        items = fetch_accessible_source_items(
-            session, fetch_ids, access_filter, base_query=base_query
-        )
+        items: list[SourceItem]
+        if access_filter is not None and user is None:
+            # Fail closed: a non-admin token passed the SCOPE_READ gate but the
+            # data-layer user lookup returned None (e.g. an expired/deleted
+            # UserSession). Return nothing rather than the public-by-id fallback
+            # that the empty AccessFilter would otherwise allow — preserving the
+            # prior explicit guard. (Admins, access_filter is None, are
+            # unaffected and still resolve via the gate below.)
+            items = []
+        else:
+            # Single canonical fetch path: fetch_accessible_source_items applies
+            # the access_filter (creator / person / public / project-role) AND
+            # the "hidden" tombstone via the same gate as search / list / count,
+            # even on the admin (access_filter is None) path — so fetch-by-id
+            # can't drift. Eager-load 'people' since as_payload() reads it.
+            base_query = (
+                session.query(SourceItem)
+                .options(selectinload(SourceItem.people))
+                .filter(SourceItem.embed_status == "STORED")
+            )
+            items = fetch_accessible_source_items(
+                session, fetch_ids, access_filter, base_query=base_query
+            )
 
         # Bulk fetch journal entries in one query if requested
         journal_by_item: dict[int, list[dict]] = {}

@@ -21,6 +21,7 @@ from memory.api.MCP.servers.core import (
     filter_source_ids,
 )
 from memory.api.search.types import SearchFilters
+from memory.common.access_control import AccessFilter
 from memory.common.db.models.source_item import SourceItem
 from tests.conftest import mcp_auth_context
 
@@ -1231,6 +1232,32 @@ async def test_fetch_without_journal_entries(mock_make_session, mock_access_filt
     result = await fetch.fn(id=123, include_content=False)
 
     assert "journal_entries" not in result
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=None)
+@patch(
+    "memory.api.MCP.servers.core.get_current_user_access_filter",
+    return_value=AccessFilter(conditions=[]),
+)
+@patch("memory.api.MCP.servers.core.make_session")
+async def test_fetch_unidentifiable_nonadmin_user_fails_closed(
+    mock_make_session, mock_access_filter, mock_user
+):
+    """A non-admin token whose data-layer user lookup returns None gets nothing.
+
+    Without the guard, the empty (public-allowing) AccessFilter would surface
+    `public` items by id to an expired/deleted-session caller. Single-id raises
+    not-found; bulk omits.
+    """
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__.return_value = mock_session
+    # Even if the DB would return a public item, the user=None guard short-circuits.
+    mock_source_item_query(mock_session, [MagicMock(id=1)])
+
+    with pytest.raises(ValueError, match="not found"):
+        await fetch.fn(id=1)
+    assert await fetch.fn(ids=[1, 2]) == []
 
 
 # ====== bulk fetch tests ======
