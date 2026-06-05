@@ -19,6 +19,8 @@ from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
     ALLOWED_SENSITIVITIES,
+    build_mcp_user_access_filter,
+    fetch_accessible_source_items,
     get_mcp_current_user,
     get_project_roles_by_user_id,
     require_can_write_at_sensitivity,
@@ -33,7 +35,7 @@ from memory.common.access_control import (
     user_can_edit,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import Deadline, DeadlinePayload, SourceItem
+from memory.common.db.models import Deadline, DeadlinePayload
 from memory.common.scopes import (
     SCOPE_ORGANIZER,
     SCOPE_ORGANIZER_WRITE,
@@ -365,7 +367,10 @@ def _create_deadline(
 
         denied_attachments: list[int] = []
         if attachment_ids:
-            attachments = accessible_source_items(session, user, attachment_ids)
+            access_filter = build_mcp_user_access_filter(session, user)
+            attachments = fetch_accessible_source_items(
+                session, attachment_ids, access_filter
+            )
             deadline.attachments = attachments
             attached_ids = {a.id for a in attachments}
             # Dedupe inputs and surface dropped IDs so the caller knows
@@ -497,7 +502,10 @@ async def attach(deadline_id: int, source_item_ids: list[int]) -> dict:
         if deadline is None or not user_can_edit(user, deadline):
             raise ValueError(f"Deadline {deadline_id} not found")
 
-        accessible = accessible_source_items(session, user, source_item_ids)
+        access_filter = build_mcp_user_access_filter(session, user)
+        accessible = fetch_accessible_source_items(
+            session, source_item_ids, access_filter
+        )
         existing_ids = {a.id for a in deadline.attachments}
 
         added = 0
@@ -551,24 +559,3 @@ async def detach(deadline_id: int, source_item_ids: list[int]) -> dict:
         return {"detached": removed}
 
 
-def accessible_source_items(
-    session, user, source_item_ids: list[int]
-) -> list[SourceItem]:
-    """Load SourceItems by ID, filtered to those the user can access."""
-    if not source_item_ids:
-        return []
-
-    # "hidden" tombstone excluded for EVERYONE (incl. admins) in the base query,
-    # so neither the returned items nor the accessible/denied counts leak the
-    # existence of hidden content. Mirrors the search / fetch exclusions.
-    items = (
-        session.query(SourceItem)
-        .filter(SourceItem.id.in_(source_item_ids), SourceItem.sensitivity != "hidden")
-        .all()
-    )
-
-    if has_admin_scope(user):
-        return items
-
-    project_roles = get_project_roles_by_user_id(user.id, session)
-    return [item for item in items if user_can_access(user, item, project_roles)]

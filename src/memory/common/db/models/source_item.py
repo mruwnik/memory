@@ -43,6 +43,7 @@ import memory.common.collections as collections
 import memory.common.chunker as chunker
 import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
+from memory.common.scopes import STORABLE_SENSITIVITY_CHECK_SQL
 from memory.common.scopes import SensitivityLevelLiteral as SensitivityLevel
 
 logger = logging.getLogger(__name__)
@@ -488,7 +489,7 @@ class SourceItem(AccessControlMixin, Base):
             "verification_failures >= 0", name="verification_failures_non_negative"
         ),
         CheckConstraint(
-            "sensitivity IN ('public', 'basic', 'internal', 'confidential', 'hidden')",
+            STORABLE_SENSITIVITY_CHECK_SQL,
             name="valid_sensitivity_level",
         ),
         Index("source_modality_idx", "modality"),

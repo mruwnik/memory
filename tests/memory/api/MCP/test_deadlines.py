@@ -4,8 +4,11 @@ from datetime import date, timedelta
 
 import pytest
 
+from memory.api.MCP.access import (
+    build_mcp_user_access_filter,
+    fetch_accessible_source_items,
+)
 from memory.api.MCP.servers.deadlines import (
-    accessible_source_items,
     attach,
     delete,
     detach,
@@ -79,8 +82,8 @@ def two_source_items(db_session):
     return items
 
 
-def test_accessible_source_items_excludes_hidden_for_admin(db_session, admin_user):
-    """accessible_source_items drops "hidden" items even for admins.
+def test_fetch_accessible_source_items_excludes_hidden_for_admin(db_session, admin_user):
+    """The shared fetch-accessible helper drops "hidden" items even for admins.
 
     Keeps the deadline attach/upsert paths from leaking the existence of hidden
     content (the accessible/denied counts) to an admin.
@@ -100,7 +103,12 @@ def test_accessible_source_items_excludes_hidden_for_admin(db_session, admin_use
     db_session.add_all([visible, hidden])
     db_session.commit()
 
-    result = accessible_source_items(db_session, admin_user, [visible.id, hidden.id])
+    # Admin ⇒ access_filter None; the helper still drops hidden via the gate.
+    access_filter = build_mcp_user_access_filter(db_session, admin_user)
+    assert access_filter is None
+    result = fetch_accessible_source_items(
+        db_session, [visible.id, hidden.id], access_filter
+    )
 
     assert [item.id for item in result] == [visible.id]
 

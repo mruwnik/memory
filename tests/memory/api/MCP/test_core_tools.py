@@ -1035,6 +1035,22 @@ def test_filter_source_ids_by_modalities(mock_make_session):
 # ====== fetch tests ======
 
 
+def mock_source_item_query(mock_session, items):
+    """Self-returning SourceItem query mock for the unit-level fetch tests.
+
+    fetch() now routes its item load through fetch_accessible_source_items, so
+    the builder chain (options/filter × N) varies with the access gate. Making
+    query()/options()/filter() return the same mock keeps these tests focused on
+    fetch's result-shaping, not the exact call sequence; .all() yields `items`.
+    """
+    q = MagicMock()
+    mock_session.query.return_value = q
+    q.options.return_value = q
+    q.filter.return_value = q
+    q.all.return_value = items
+    return q
+
+
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.get_current_user_access_filter", return_value=None)
 @patch("memory.api.MCP.servers.core.make_session")
@@ -1055,7 +1071,7 @@ async def test_fetch_returns_full_details(mock_make_session, mock_access_filter)
     mock_item.content = "Article content here"
     mock_item.as_payload.return_value = {"author": "Test Author"}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=True)
 
@@ -1087,7 +1103,7 @@ async def test_fetch_without_content(mock_make_session, mock_access_filter):
     mock_item.content = "Should not be included"
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=False)
 
@@ -1102,7 +1118,7 @@ async def test_fetch_not_found(mock_make_session, mock_access_filter):
     """Get source item raises error when not found."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__.return_value = mock_session
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = []
+    mock_source_item_query(mock_session, [])
 
     with pytest.raises(ValueError, match="Item 999 not found"):
         await fetch.fn(id=999)
@@ -1127,7 +1143,7 @@ async def test_fetch_handles_null_inserted_at(mock_make_session, mock_access_fil
     mock_item.inserted_at = None
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=False)
 
@@ -1210,7 +1226,7 @@ async def test_fetch_without_journal_entries(mock_make_session, mock_access_filt
     mock_item.inserted_at = None
     mock_item.as_payload.return_value = {}
 
-    mock_session.query.return_value.options.return_value.filter.return_value.all.return_value = [mock_item]
+    mock_source_item_query(mock_session, [mock_item])
 
     result = await fetch.fn(id=123, include_content=False)
 

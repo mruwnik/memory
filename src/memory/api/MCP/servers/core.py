@@ -18,8 +18,8 @@ from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
     build_user_access_filter_from_dict,
+    fetch_accessible_source_items,
     get_mcp_current_user,
-    get_project_roles_by_user_id,
     log_item_access,
     log_search_access,
 )
@@ -28,7 +28,6 @@ from memory.common.access_control import (
     AccessFilter,
     apply_access_filter_to_query,
     get_accessible_source_item_by_filename,
-    user_can_access,
 )
 from memory.common.scopes import (
     SCOPE_OBSERVE,
@@ -673,43 +672,32 @@ async def fetch(
     if id is None and ids is None:
         raise ValueError("Must provide either 'id' or 'ids'")
 
-    fetch_ids = list(dict.fromkeys(ids if ids is not None else [id]))  # dedup, preserving order
+    # dedup, preserving order; the `is not None` filter is a no-op given the
+    # guards above but narrows the type to list[int] for the access helper.
+    fetch_ids = [i for i in dict.fromkeys(ids if ids is not None else [id]) if i is not None]
     if len(fetch_ids) > 200:
         raise ValueError(f"Cannot fetch more than 200 items at once (got {len(fetch_ids)})")
 
-    # Get access filter and user info BEFORE opening session to avoid nested session issues
+    # Token-derived access filter (honours API-key scope overrides) + user info,
+    # computed before the session opens to avoid nested sessions.
     access_filter = get_current_user_access_filter()
     user = get_mcp_current_user()
     user_id: int | None = getattr(user, "id", None) if user else None
 
-    # Fetch project_roles before opening main session (creates its own session)
-    project_roles: dict[int, str] | None = None
-    if access_filter is not None and user_id is not None:
-        project_roles = get_project_roles_by_user_id(user_id)
-
     with make_session() as session:
-        # Eager load 'people' relationship since as_payload() accesses it
-        items = (
+        # Single canonical fetch path: fetch_accessible_source_items applies the
+        # access_filter (creator / person / public / project-role) AND the
+        # "hidden" tombstone via the same gate as search / list / count, even on
+        # the admin (access_filter is None) path — so fetch-by-id can't drift.
+        # Eager-load 'people' since as_payload() reads it.
+        base_query = (
             session.query(SourceItem)
             .options(selectinload(SourceItem.people))
-            .filter(
-                SourceItem.id.in_(fetch_ids),
-                SourceItem.embed_status == "STORED",
-                # "hidden" tombstone: excluded for EVERYONE, including admins
-                # (access_filter is None). Applied in the base query — not via
-                # the admin-gated user_can_access below — so fetch-by-id mirrors
-                # the search / fetch_file exclusions on the superadmin path.
-                SourceItem.sensitivity != "hidden",
-            )
-            .all()
+            .filter(SourceItem.embed_status == "STORED")
         )
-
-        # Apply access control
-        if access_filter is not None:
-            if user is None or user_id is None:
-                items = []
-            else:
-                items = [i for i in items if user_can_access(user, i, project_roles)]
+        items = fetch_accessible_source_items(
+            session, fetch_ids, access_filter, base_query=base_query
+        )
 
         # Bulk fetch journal entries in one query if requested
         journal_by_item: dict[int, list[dict]] = {}
