@@ -29,7 +29,9 @@ export interface EmailAccount {
   updated_at: string
   // Access control
   project_id: number | null
-  sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  // 'hidden' is a tombstone level (email accounts only) that excludes the
+  // account's mail from search/visibility entirely — even for admins.
+  sensitivity: 'public' | 'basic' | 'internal' | 'confidential' | 'hidden'
 }
 
 export interface EmailAccountCreate {
@@ -53,7 +55,7 @@ export interface EmailAccountCreate {
   send_enabled?: boolean
   // Access control
   project_id?: number
-  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential' | 'hidden'
 }
 
 export interface EmailAccountUpdate {
@@ -77,7 +79,7 @@ export interface EmailAccountUpdate {
   send_enabled?: boolean
   // Access control
   project_id?: number
-  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  sensitivity?: 'public' | 'basic' | 'internal' | 'confidential' | 'hidden'
 }
 
 export interface EmailAccountTestRequest {

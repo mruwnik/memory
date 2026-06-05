@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from memory.api.MCP.servers.deadlines import (
+    accessible_source_items,
     attach,
     delete,
     detach,
@@ -76,6 +77,32 @@ def two_source_items(db_session):
     for item in items:
         db_session.refresh(item)
     return items
+
+
+def test_accessible_source_items_excludes_hidden_for_admin(db_session, admin_user):
+    """accessible_source_items drops "hidden" items even for admins.
+
+    Keeps the deadline attach/upsert paths from leaking the existence of hidden
+    content (the accessible/denied counts) to an admin.
+    """
+    visible = SourceItem(
+        modality="text",
+        sha256=create_content_hash("deadline-visible"),
+        content="visible",
+        sensitivity="basic",
+    )
+    hidden = SourceItem(
+        modality="text",
+        sha256=create_content_hash("deadline-hidden"),
+        content="hidden",
+        sensitivity="hidden",
+    )
+    db_session.add_all([visible, hidden])
+    db_session.commit()
+
+    result = accessible_source_items(db_session, admin_user, [visible.id, hidden.id])
+
+    assert [item.id for item in result] == [visible.id]
 
 
 @pytest.fixture

@@ -488,7 +488,7 @@ class SourceItem(AccessControlMixin, Base):
             "verification_failures >= 0", name="verification_failures_non_negative"
         ),
         CheckConstraint(
-            "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
+            "sensitivity IN ('public', 'basic', 'internal', 'confidential', 'hidden')",
             name="valid_sensitivity_level",
         ),
         Index("source_modality_idx", "modality"),

@@ -251,11 +251,18 @@ def apply_access_filter_to_query(
     from memory.common.db.models import SourceItem
     from memory.common.db.models.source_item import source_item_people
 
-    if access_filter is None:
-        return query
-
     if model is None:
         model = SourceItem
+
+    # "hidden" is a tombstone sensitivity: excluded for EVERYONE, including
+    # superadmins (access_filter is None). Applied BEFORE the admin early-out so
+    # no SQL search/listing path — however privileged — can surface a hidden
+    # row. The only deliberate escape hatch is direct edit/delete (see
+    # user_can_edit), so an admin can still un-hide or remove the content.
+    query = query.filter(model.sensitivity != "hidden")
+
+    if access_filter is None:
+        return query
 
     conditions = []
 
@@ -318,6 +325,14 @@ def get_accessible_source_item_by_filename(
     if item is None:
         raise FileNotFoundError(filename)
 
+    # "hidden" tombstone: deny the read for EVERYONE, including admins, before
+    # the admin short-circuit. File-serving is a read, so it must mirror the
+    # search / user_can_access exclusions; otherwise an admin could fetch a
+    # hidden email's attachment by filename even though the email is invisible
+    # everywhere else. (Non-admins are already covered via user_can_access.)
+    if normalize_sensitivity(getattr(item, "sensitivity", None) or "basic") == "hidden":
+        raise PermissionError(filename)
+
     if has_admin_scope(user):
         return item
 
@@ -351,6 +366,13 @@ def user_can_access(
     Returns:
         True if user can access the item, False otherwise
     """
+    # "hidden" tombstone: read access denied for EVERYONE, including admins,
+    # before any bypass. Mirrors the SQL/Qdrant exclusion. user_can_edit /
+    # user_can_delete are intentionally left permissive so an admin can still
+    # un-hide or remove the content.
+    if normalize_sensitivity(getattr(item, "sensitivity", None) or "basic") == "hidden":
+        return False
+
     # Superadmins see everything. Logged at DEBUG, not INFO: user_can_access
     # is called per-item inside bulk filter comprehensions, so an admin
     # listing 100 items would emit 100 lines. The once-per-query INFO line in

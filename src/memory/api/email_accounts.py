@@ -104,7 +104,11 @@ class EmailAccountCreate(BaseModel):
     send_enabled: bool = True
     # Access control
     project_id: int | None = None
-    sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
+    # "hidden" is a tombstone level that excludes the account's mail from
+    # search/visibility entirely (even for admins). Settable only here, never
+    # via generic content-create paths — it is deliberately kept out of the
+    # SensitivityLevel enum / ALLOWED_SENSITIVITIES role ladder.
+    sensitivity: Literal["public", "basic", "internal", "confidential", "hidden"] = "basic"
 
     @model_validator(mode="after")
     def validate_account_type_fields(self):
@@ -141,7 +145,9 @@ class EmailAccountUpdate(BaseModel):
     send_enabled: bool | None = None
     # Access control
     project_id: int | None = None
-    sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
+    # See EmailAccountCreate.sensitivity — "hidden" tombstones the account's
+    # mail. Reversible: messages re-inherit a normal level when changed back.
+    sensitivity: Literal["public", "basic", "internal", "confidential", "hidden"] | None = None
 
 
 class EmailAccountTest(BaseModel):

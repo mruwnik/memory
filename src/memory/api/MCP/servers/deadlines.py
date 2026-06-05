@@ -558,7 +558,14 @@ def accessible_source_items(
     if not source_item_ids:
         return []
 
-    items = session.query(SourceItem).filter(SourceItem.id.in_(source_item_ids)).all()
+    # "hidden" tombstone excluded for EVERYONE (incl. admins) in the base query,
+    # so neither the returned items nor the accessible/denied counts leak the
+    # existence of hidden content. Mirrors the search / fetch exclusions.
+    items = (
+        session.query(SourceItem)
+        .filter(SourceItem.id.in_(source_item_ids), SourceItem.sensitivity != "hidden")
+        .all()
+    )
 
     if has_admin_scope(user):
         return items

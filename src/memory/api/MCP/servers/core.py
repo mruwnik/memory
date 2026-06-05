@@ -695,6 +695,11 @@ async def fetch(
             .filter(
                 SourceItem.id.in_(fetch_ids),
                 SourceItem.embed_status == "STORED",
+                # "hidden" tombstone: excluded for EVERYONE, including admins
+                # (access_filter is None). Applied in the base query — not via
+                # the admin-gated user_can_access below — so fetch-by-id mirrors
+                # the search / fetch_file exclusions on the superadmin path.
+                SourceItem.sensitivity != "hidden",
             )
             .all()
         )

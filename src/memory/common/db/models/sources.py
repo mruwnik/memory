@@ -265,7 +265,7 @@ class EmailAccount(Base):
     __table_args__ = (
         CheckConstraint("account_type IN ('imap', 'gmail')"),
         CheckConstraint(
-            "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
+            "sensitivity IN ('public', 'basic', 'internal', 'confidential', 'hidden')",
             name="valid_email_account_sensitivity",
         ),
         Index("email_accounts_address_idx", "email_address", unique=True),

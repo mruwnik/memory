@@ -1307,6 +1307,25 @@ async def test_fetch_bulk_skips_missing_items(db_session, admin_session):
 
 
 @pytest.mark.asyncio
+async def test_fetch_excludes_hidden_even_for_admin(db_session, admin_session):
+    """fetch (single id and bulk) drops "hidden"-tombstoned items for admins.
+
+    The hidden exclusion is in the base query, not the admin-gated
+    user_can_access, so a superadmin cannot fetch hidden content by id — mirroring
+    the search / fetch_file exclusions.
+    """
+    visible = make_source_item(db_session, 1, sensitivity="basic")
+    hidden = make_source_item(db_session, 2, sensitivity="hidden")
+
+    with mcp_auth_context(admin_session.id):
+        bulk = await fetch.fn(ids=[visible.id, hidden.id])
+        with pytest.raises(ValueError, match="not found"):
+            await fetch.fn(id=hidden.id)
+
+    assert [r["id"] for r in bulk] == [visible.id]
+
+
+@pytest.mark.asyncio
 async def test_fetch_bulk_skips_inaccessible_items(db_session, user_session, admin_user):
     """Bulk fetch filters out items the user cannot access.
 
