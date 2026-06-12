@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from memory.common.db.models.discord import DiscordUser
 from memory.common.db.models.users import (
     hash_password,
     verify_password,
@@ -169,6 +170,24 @@ def test_user_serialization_human(db_session):
     assert serialized["email"] == "serialize@example.com"
     assert serialized["user_type"] == "human"
     assert "password_hash" not in serialized  # Should not expose password hash
+
+
+def test_user_serialization_discord_keys_are_str(db_session):
+    # Discord snowflakes are int columns, but JSON object keys are always
+    # strings — serialize() must coerce so in-process consumers see the same
+    # shape clients get after the JSON-RPC boundary.
+    user = HumanUser.create_with_password(
+        email="ds@example.com", name="DS", password="password123"
+    )
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(
+        DiscordUser(id=123456789, username="someuser", system_user_id=user.id)
+    )
+    db_session.commit()
+
+    serialized = user.serialize()
+    assert serialized["discord_accounts"] == {"123456789": "someuser"}
 
 
 def test_user_serialization_bot(db_session):

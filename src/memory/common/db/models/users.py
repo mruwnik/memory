@@ -156,7 +156,10 @@ class User(Base):
             "user_type": self.user_type,
             "scopes": self.scopes or [],
             "discord_accounts": {
-                account.id: account.username for account in self.discord_accounts
+                # str keys: Discord ids are int snowflakes, but JSON object keys
+                # are always strings — coerce here so in-process consumers see the
+                # same shape clients get after the JSON-RPC boundary.
+                str(account.id): account.username for account in self.discord_accounts
             },
             "discord_bots": [bot.id for bot in self.discord_bots],
         }

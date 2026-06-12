@@ -104,6 +104,9 @@ def send_via_discord(params: NotificationParams) -> bool:
     if not target:
         logger.error("No Discord target for notification")
         return False
+    # Snowflake ids can arrive as int across the celery boundary; the collector
+    # API and classification both want a str.
+    target = str(target)
 
     with make_session() as session:
         bot_id = resolve_discord_bot_id(session, params)
