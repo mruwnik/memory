@@ -261,8 +261,9 @@ async def test_get_user_person_discord_fallback(db_session, admin_user, admin_se
 
     assert result["authenticated"] is True
     # User.serialize() returns empty discord_accounts (none linked to user directly)
-    # so Person's discord accounts should be used as fallback
-    assert result["user"]["discord_accounts"] == {999: "person_discord"}
+    # so Person's discord accounts should be used as fallback. Keys are str:
+    # Discord snowflakes are ints, but JSON object keys are always strings.
+    assert result["user"]["discord_accounts"] == {"999": "person_discord"}
 
 
 @pytest.mark.asyncio

@@ -24,20 +24,23 @@ from memory.common.db.models import (
 
 
 def discord_channel_for_target(
-    session: DBSession, target: str
+    session: DBSession, target: str | int
 ) -> DiscordChannel | None:
     """Return the DiscordChannel a target id refers to, or None.
 
     Discord channel and user ids are indistinguishable snowflakes, so a target
     is a channel iff it's a known DiscordChannel row. Shared by upsert-time
     validation and dispatch so the two never classify the same id differently.
+    Accepts str or int: a raw snowflake from a celery JSON boundary stays int,
+    and this is the one place that classifies it.
     """
+    target = str(target)
     if not target.isdigit():
         return None
     return session.get(DiscordChannel, int(target))
 
 
-def discord_target_is_channel(session: DBSession, target: str) -> bool:
+def discord_target_is_channel(session: DBSession, target: str | int) -> bool:
     """True if the target id is a known Discord channel (else a user DM)."""
     return discord_channel_for_target(session, target) is not None
 

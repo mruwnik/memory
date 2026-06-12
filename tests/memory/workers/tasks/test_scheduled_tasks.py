@@ -49,7 +49,9 @@ def test_slack_target_is_dm(target, is_dm):
     "target,is_channel",
     [
         ("424242", True),  # known channel id (created below)
+        (424242, True),  # int snowflake (celery JSON boundary) ⇒ same answer
         ("999999", False),  # unknown id ⇒ treated as user DM
+        (999999, False),  # int unknown id ⇒ user DM, not a crash
         ("not-a-number", False),
     ],
 )
@@ -109,6 +111,27 @@ def test_send_via_discord_routes_to_dm(monkeypatch):
     )
     assert calls["dm"] == (7, "778899", "hello")
     assert "channel" not in calls
+
+
+def test_send_via_discord_normalizes_int_target(monkeypatch):
+    # An int snowflake target (raw from serialize() across the celery JSON
+    # boundary) must not crash and must reach the collector API as a str.
+    calls = {}
+    monkeypatch.setattr(scheduled_tasks, "make_session", null_session)
+    monkeypatch.setattr(scheduled_tasks, "resolve_discord_bot_id", lambda s, p: 7)
+    monkeypatch.setattr(
+        scheduled_tasks, "discord_target_is_channel", lambda s, t: False
+    )
+    monkeypatch.setattr(
+        scheduled_tasks.discord_utils,
+        "send_dm",
+        lambda bot, target, msg: calls.update(dm=(bot, target, msg)) or True,
+    )
+    assert (
+        scheduled_tasks.send_via_discord(make_notification_params("discord", 778899))
+        is True
+    )
+    assert calls["dm"] == (7, "778899", "hello")
 
 
 @pytest.mark.parametrize(

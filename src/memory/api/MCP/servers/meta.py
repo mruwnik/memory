@@ -165,7 +165,8 @@ def _get_current_user(session: DBSession) -> dict:
         # Add Discord from Person if not already on User
         if not user_info.get("discord_accounts") and person.discord_accounts:
             user_info["discord_accounts"] = {
-                acct.id: acct.username for acct in person.discord_accounts
+                # str keys to match User.serialize() and the JSON-RPC wire shape.
+                str(acct.id): acct.username for acct in person.discord_accounts
             }
 
         # Add Slack from Person contact_info if no credentials found
@@ -337,7 +338,11 @@ def get_notification_channel(user_info: dict, preferred: str | None) -> tuple[st
     if discord_accounts and discord_bots:
         discord_id = next(iter(discord_accounts.keys()), None)
         if discord_id:
-            channels.append(("discord", discord_id, {"discord_bot_id": discord_bots[0]}))
+            # Discord ids are int snowflakes in serialize(); coerce to str so the
+            # identifier survives the celery JSON boundary as the str the
+            # downstream .isdigit() classification expects (slack/email are
+            # already strings here).
+            channels.append(("discord", str(discord_id), {"discord_bot_id": discord_bots[0]}))
 
     # Slack
     slack_accounts = user.get("slack_accounts", {})
@@ -439,7 +444,11 @@ async def notify_user(
                        If None, sends immediately. If set, schedules for later.
 
     Returns:
-        Dict with success status and delivery details
+        For a scheduled send: ``{"success": True, "scheduled": True, ...}`` — a
+        notification row is durably committed.
+        For an immediate send: ``{"queued": True, "scheduled": False, ...}`` —
+        the delivery task is enqueued but NOT confirmed delivered (fire-and-forget,
+        no row/metric to read back).
     """
     if not subject:
         raise ValueError("Subject is required")
@@ -502,8 +511,11 @@ async def notify_user(
         SEND_NOTIFICATION,
         args=[channel_type, channel_identifier, full_message, user_id, subject, extra_data],
     )
+    # "queued", not "success": the celery task is enqueued but delivery is not
+    # confirmed here. There is no row/metric to read back, so the caller can't
+    # learn whether the send actually landed — don't imply it did.
     return {
-        "success": True,
+        "queued": True,
         "scheduled": False,
         "notification_id": None,
         "channel_type": channel_type,
