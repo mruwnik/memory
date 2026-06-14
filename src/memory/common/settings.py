@@ -28,6 +28,32 @@ def secret_env(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
+# Loopback origins are always permitted: RFC 8252 native-app clients
+# (Claude Code/Desktop, Cursor, mcp-inspector) bind an ephemeral localhost
+# port for the OAuth redirect, so the port is unknowable at config time and
+# the matcher relaxes loopback to (scheme, host). These must survive any
+# operator config — see build_redirect_allowlist.
+OAUTH_LOOPBACK_DEFAULTS = ["http://localhost", "http://127.0.0.1"]
+
+
+def build_redirect_allowlist(env_value: str) -> list[str]:
+    """Layer operator-configured redirect origins on top of the loopback defaults.
+
+    Configured entries are *added* to the defaults, never replace them — this
+    matches the "expand the default allowlist" contract documented in
+    SimpleOAuthProvider.register_client. A ``*`` anywhere in the config is the
+    disable-all escape hatch: it short-circuits to ``["*"]`` regardless of any
+    other entries, so loopback can only be forbidden via ``*``, never by an
+    innocent web-origin config that would otherwise lock out every native-app
+    client. Order is preserved and duplicates collapsed so an operator who also
+    lists localhost doesn't get a repeated entry.
+    """
+    configured = [p.strip() for p in env_value.split(",") if p.strip()]
+    if "*" in configured:
+        return ["*"]
+    return list(dict.fromkeys(OAUTH_LOOPBACK_DEFAULTS + configured))
+
+
 # Database settings
 DB_USER = os.getenv("DB_USER", "kb")
 DB_PASSWORD = secret_env("POSTGRES_PASSWORD") or secret_env("DB_PASSWORD", "kb")
@@ -268,15 +294,14 @@ MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 
 MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 
 # OAuth settings
-# Comma-separated list of URI prefixes permitted in dynamic client registration.
-# Defaults to localhost only, which covers Claude Desktop and Cursor.
-# Set to "*" to allow any redirect_uri (not recommended for production).
-# Example: "http://localhost,https://app.example.com"
-OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = [
-    p.strip()
-    for p in os.getenv("OAUTH_REDIRECT_URI_ALLOWLIST", "http://localhost,http://127.0.0.1").split(",")
-    if p.strip()
-]
+# Comma-separated list of redirect-URI origins permitted in dynamic client
+# registration, ADDED to the always-present loopback defaults (see
+# OAUTH_LOOPBACK_DEFAULTS) so adding a web origin can't lock out native-app
+# clients. Set to "*" to allow any redirect_uri (not recommended for production).
+# Example: "https://app.example.com"
+OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = build_redirect_allowlist(
+    os.getenv("OAUTH_REDIRECT_URI_ALLOWLIST", "")
+)
 
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")

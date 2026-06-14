@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
 
+from mcp.shared.auth import OAuthClientInformationFull
 from sqlalchemy.pool import QueuePool
 
 from memory.api.MCP.oauth_provider import (
@@ -13,6 +14,8 @@ from memory.api.MCP.oauth_provider import (
     resolve_session_scopes,
     make_token,
 )
+from memory.common import settings as common_settings
+from memory.common.settings import build_redirect_allowlist
 from memory.common.db.models.users import (
     APIKey,
     APIKeyType,
@@ -1027,6 +1030,37 @@ async def test_register_client_rejects_non_loopback_or_lookalikes(redirect_uri):
     # standard OAuth error-response body. Raising plain ValueError became
     # an unhandled 500.
     assert exc_info.value.error == "invalid_redirect_uri"
+
+
+@pytest.mark.asyncio
+async def test_register_client_web_origin_config_still_allows_loopback():
+    """A non-loopback operator config must not lock out native-app clients.
+
+    Regression: ``OAUTH_REDIRECT_URI_ALLOWLIST`` used to *replace* the
+    loopback defaults, so setting a single web origin (the natural way to let
+    the web app register) silently dropped localhost and rejected every
+    RFC 8252 native-app client on its ephemeral port. The allowlist is now
+    additive — build it from the operator value and a loopback redirect must
+    still register.
+    """
+    provider = SimpleOAuthProvider()
+    payload = OAuthClientInformationFull(
+        client_id="native-app-client",
+        client_secret="s",
+        redirect_uris=cast(list, ["http://localhost:54321/callback"]),
+        scope="read",
+    )
+
+    with patch.object(
+        common_settings,
+        "OAUTH_REDIRECT_URI_ALLOWLIST",
+        build_redirect_allowlist("https://app.example.com"),
+    ), patch(
+        "memory.api.MCP.oauth_provider.make_session",
+        return_value=_fake_session_no_existing_client(),
+    ):
+        # Must NOT raise — loopback survives the operator's web-origin config.
+        await provider.register_client(payload)
 
 
 # ====== Authorization-code expiry — hermetic (no DB) ======
