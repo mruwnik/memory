@@ -1132,6 +1132,9 @@ class GithubItem(SourceItem):
     title: Mapped[str | None] = mapped_column(Text)  # type: ignore[assignment]
     labels: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     author: Mapped[str | None] = mapped_column(Text)
+    author_person_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1174,6 +1177,11 @@ class GithubItem(SourceItem):
         cascade="all, delete-orphan",
     )
 
+    # Resolved author identity (the Person behind the `author` login)
+    author_person: Mapped["Person | None"] = relationship(
+        "Person", foreign_keys=[author_person_id]
+    )
+
     __mapper_args__ = {
         "polymorphic_identity": "github_item",
     }
@@ -1186,6 +1194,7 @@ class GithubItem(SourceItem):
         Index("gh_github_updated_at_idx", "github_updated_at"),
         Index("gh_repo_id_idx", "repo_id"),
         Index("gh_milestone_id_idx", "milestone_id"),
+        Index("gh_author_person_id_idx", "author_person_id"),
     )
 
     @classmethod

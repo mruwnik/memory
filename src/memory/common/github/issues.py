@@ -69,7 +69,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         title
         body
         state
-        author { login }
+        author { login ... on User { databaseId } }
         labels(first: 100) { nodes { name } }
         assignees(first: 50) { nodes { login } }
         milestone { number }
@@ -94,7 +94,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         title
         body
         state
-        author { login }
+        author { login ... on User { databaseId } }
         labels(first: 100) { nodes { name } }
         assignees(first: 50) { nodes { login } }
         milestone { number }
@@ -338,6 +338,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             body=body,
             state=issue["state"].lower(),  # GraphQL returns OPEN/CLOSED
             author=self._extract_nested(issue, "author", "login", default="ghost"),
+            author_id=self._extract_nested(issue, "author", "databaseId"),
             labels=[
                 label["name"]
                 for label in self._extract_nested(issue, "labels", "nodes", default=[])
@@ -1123,6 +1124,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             body=body,
             state=issue["state"].lower(),  # GraphQL returns OPEN/CLOSED
             author=self._extract_nested(issue, "author", "login", default="ghost"),
+            author_id=self._extract_nested(issue, "author", "databaseId"),
             labels=[
                 label["name"]
                 for label in self._extract_nested(issue, "labels", "nodes", default=[])

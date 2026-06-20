@@ -531,6 +531,9 @@ def test_sync_github_item_new_issue(mock_issue_data, github_repo, db_session, qd
     assert item.kind == "issue"
     assert item.state == "open"
     assert item.author == "testuser"
+    # Author was resolved to a Person end-to-end (ingest wiring).
+    assert item.author_person_id is not None
+    assert item.author_person.contact_info["github"] == "testuser"
     assert "bug" in item.labels
     assert "github" in item.tags  # From repo tags
     assert "bug" in item.tags  # From issue labels

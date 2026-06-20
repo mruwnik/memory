@@ -15,6 +15,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.orm import Session, scoped_session
 
 from memory.common.db.models import Person
+from memory.common.db.models.sources import GithubUser
 
 if TYPE_CHECKING:
     from memory.common.db.models.source_item import SourceItem
@@ -144,6 +145,98 @@ def find_person_by_slack_id(
             return person
 
     return None
+
+
+def find_person_by_github(session: DBSession, login: str | None) -> Person | None:
+    """Find a Person by their GitHub login.
+
+    Checks the relational link (``GithubUser`` keyed on username) first, then
+    falls back to ``contact_info["github"]`` for People whose handle was set
+    manually before a ``GithubUser`` row existed.
+
+    Args:
+        session: Database session
+        login: GitHub username
+
+    Returns:
+        Matching Person or None
+    """
+    if not login:
+        return None
+
+    github_user = (
+        session.query(GithubUser).filter(GithubUser.username == login).one_or_none()
+    )
+    if github_user and github_user.person is not None:
+        return github_user.person
+
+    # order_by keeps the pick deterministic across re-syncs if two People
+    # happen to carry the same handle (no DB uniqueness on the JSONB field).
+    return (
+        session.query(Person)
+        .filter(Person.contact_info["github"].astext == login)
+        .order_by(Person.id)
+        .first()
+    )
+
+
+def link_github_user_to_person(
+    session: DBSession,
+    person: Person,
+    github_id: int,
+    login: str,
+    display_name: str | None = None,
+    avatar_url: str | None = None,
+    email: str | None = None,
+) -> GithubUser:
+    """Link a GitHub account to a Person, upserting the ``GithubUser`` row.
+
+    Also records the login in ``contact_info["github"]`` so the fallback
+    readers (e.g. ``PersonSyncInfo``) stay consistent with the relational link.
+
+    Args:
+        session: Database session
+        person: Person to link
+        github_id: GitHub's numeric user id (the ``GithubUser`` primary key)
+        login: GitHub username
+        display_name: Optional GitHub display name
+        avatar_url: Optional avatar URL
+        email: Optional public email
+
+    Returns:
+        The linked GithubUser row.
+    """
+    github_user = session.get(GithubUser, github_id)
+
+    # The login may currently be held by a *different* id — a recycled GitHub
+    # username. ``username`` is unique, so drop that stale row first or the
+    # insert/update below would raise an IntegrityError and never converge.
+    stale = (
+        session.query(GithubUser)
+        .filter(GithubUser.username == login, GithubUser.id != github_id)
+        .one_or_none()
+    )
+    if stale is not None:
+        session.delete(stale)
+        session.flush()
+
+    if github_user is None:
+        github_user = GithubUser(id=github_id, username=login)
+        session.add(github_user)
+
+    github_user.username = login
+    github_user.person_id = person.id
+    if display_name is not None:
+        github_user.display_name = display_name
+    if avatar_url is not None:
+        github_user.avatar_url = avatar_url
+    if email is not None:
+        github_user.email = email
+
+    person.contact_info = {**(person.contact_info or {}), "github": login}
+    session.flush()
+    logger.info(f"Linked GitHub user {login} to person '{person.identifier}'")
+    return github_user
 
 
 def find_or_create_person(

@@ -3,7 +3,7 @@
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from memory.common.dates import parse_iso_datetime
 
@@ -166,6 +166,9 @@ class GithubIssueData(TypedDict):
     body: str
     state: str
     author: str
+    # GitHub numeric user id (None for bots/orgs/ghosts). NotRequired so older
+    # serialized payloads and manually-built test data stay valid.
+    author_id: NotRequired[int | None]
     labels: list[str]
     assignees: list[str]
     milestone_number: int | None  # For FK lookup during sync

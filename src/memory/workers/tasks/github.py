@@ -14,7 +14,13 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import GithubItem, GithubPRData, Project, GithubProject
-from memory.common.db.models.sources import GithubAccount, GithubRepo
+from memory.common.db.models.sources import (
+    GithubAccount,
+    GithubRepo,
+    GithubUser,
+    Person,
+)
+from memory.common.people import find_person_by_github, link_github_user_to_person
 from memory.common.github import (
     GithubClient,
     GithubCredentials,
@@ -348,6 +354,7 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         body=data["body"],
         state=data["state"],
         author=data["author"],
+        author_id=data.get("author_id"),
         labels=data["labels"],
         assignees=data["assignees"],
         milestone_number=data.get("milestone_number"),
@@ -419,6 +426,71 @@ def _lookup_milestone_id(
         return None
 
 
+def _resolve_author_person(
+    session: Any, login: str | None, github_id: int | None
+) -> int | None:
+    """Resolve a GitHub author login to a Person id, creating records as needed.
+
+    Returns the linked Person id, or None for bot accounts / unresolvable
+    logins. On first sighting of a login we find-or-create a Person and, when
+    the numeric id is known (carried from the GraphQL sync — no extra API
+    call), record the relational ``GithubUser`` link. Duplicate People are
+    expected to be consolidated later via the people-merge tooling.
+    """
+    # "ghost" is GitHub's sentinel login for deleted accounts (the parser's
+    # default when author is null); bots aren't real people. Neither should
+    # collapse every such item onto one shared Person.
+    if not login or login == "ghost" or login.endswith("[bot]"):
+        return None
+
+    # Lookup is by login, which GitHub can recycle: if an old account's link
+    # still holds a since-reclaimed login, that author is attributed to the old
+    # Person. We accept that rare mis-attribution rather than treat every numeric
+    # id change as a new identity — people-merge is the correction path, and the
+    # reconcile in link_github_user_to_person already prevents a hard failure.
+    github_user = (
+        session.query(GithubUser).filter(GithubUser.username == login).one_or_none()
+    )
+    if github_user is not None and github_user.person_id is not None:
+        return github_user.person_id
+
+    # No usable link yet — either no GithubUser row, or an orphaned one whose
+    # Person was deleted (person_id went NULL via SET NULL). Find-or-create a
+    # Person and (re)link below.
+    person = find_person_by_github(session, login)
+    if person is None:
+        # Two concurrent first-sighting syncs for the same login can both reach
+        # here and both insert; the unique constraints on people.identifier and
+        # github_users.username make the second one fail the task rather than
+        # create a duplicate. That's intentional — a later sync (or retry) finds
+        # the now-existing row. The constraints protect integrity; the race only
+        # costs one task a re-run.
+        person = Person(
+            identifier=f"github:{login}",
+            display_name=login,
+            aliases=[login],
+            contact_info={"github": login},
+        )
+        session.add(person)
+        session.flush()
+
+    link_id = github_id or (github_user.id if github_user else None)
+    if link_id:
+        link_github_user_to_person(session, person, link_id, login)
+    return person.id
+
+
+def _apply_author_person(
+    session: Any, item: GithubItem, issue_data: GithubIssueData
+) -> None:
+    """Set ``item.author_person_id`` when not already resolved."""
+    if item.author_person_id is not None:
+        return
+    item.author_person_id = _resolve_author_person(
+        session, issue_data.get("author"), issue_data.get("author_id")
+    )
+
+
 @app.task(name=SYNC_GITHUB_ITEM)
 @tracked_task
 def sync_github_item(
@@ -472,12 +544,14 @@ def sync_github_item(
         )
 
         if existing:
+            _apply_author_person(session, existing, issue_data)
             return _update_existing_item(
                 session, existing, repo, issue_data, milestone_id, project_id
             )
 
         # Create new item
         github_item = _create_github_item(repo, issue_data, milestone_id, project_id)
+        _apply_author_person(session, github_item, issue_data)
         return process_content_item(github_item, session)
 
 
