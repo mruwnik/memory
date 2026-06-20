@@ -4,6 +4,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Generator, TYPE_CHECKING
 
+import requests
+
+from .errors import describe_github_error, is_already_member_error, parse_json_body
 from .types import (
     GITHUB_API_URL,
     GithubTeamData,
@@ -278,22 +281,22 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
             username: GitHub username to check
 
         Returns:
-            Membership state: 'active', 'pending', or None if not a member
+            Membership state: 'active' or 'pending'; None only when GitHub
+            confirms the user is not a member (404).
+
+        Raises:
+            requests.RequestException: if membership could not be determined
+            (network error or non-404 HTTP status). Callers must not treat a
+            failure here as "not a member".
         """
-        try:
-            response = self.session.get(
-                f"{GITHUB_API_URL}/orgs/{org}/memberships/{username}",
-                timeout=30,
-            )
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return response.json().get("state")
-        except Exception as e:
-            logger.warning(
-                f"Failed to check org membership for {username} in {org}: {e}"
-            )
+        response = self.session.get(
+            f"{GITHUB_API_URL}/orgs/{org}/memberships/{username}",
+            timeout=30,
+        )
+        if response.status_code == 404:
             return None
+        response.raise_for_status()
+        return response.json().get("state")
 
     def invite_to_org(
         self,
@@ -301,7 +304,7 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
         username: str,
         role: str = "direct_member",
         team_ids: list[int] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Invite a user to an organization.
 
         Args:
@@ -311,18 +314,31 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
             team_ids: Optional list of team IDs to add user to upon acceptance
 
         Returns:
-            Invitation data on success, None on failure
+            Invitation data on success, or a dict with an ``error`` key
+            describing the failure (e.g. a missing OAuth scope).
         """
         # First get the user's ID
-        user_response = self.session.get(
-            f"{GITHUB_API_URL}/users/{username}",
-            timeout=30,
-        )
+        try:
+            user_response = self.session.get(
+                f"{GITHUB_API_URL}/users/{username}",
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            logger.warning(f"Failed to look up {username}: {e}")
+            return {"error": f"Looking up GitHub user '{username}' failed: {e}"}
+
         if user_response.status_code == 404:
             logger.warning(f"User '{username}' not found")
-            return None
-        user_response.raise_for_status()
-        invitee_id = user_response.json()["id"]
+            return {"error": f"GitHub user '{username}' not found"}
+        if not user_response.ok:
+            message = describe_github_error(
+                user_response, f"Looking up GitHub user '{username}'"
+            )
+            logger.warning(message)
+            return {"error": message, "status_code": user_response.status_code}
+        invitee_id = parse_json_body(user_response).get("id")
+        if invitee_id is None:
+            return {"error": f"GitHub user lookup for '{username}' returned no id"}
 
         # Create invitation
         payload: dict[str, Any] = {
@@ -338,17 +354,29 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
                 json=payload,
                 timeout=30,
             )
-            if response.status_code == 422:
-                # User may already be a member or have pending invite
-                error_data = response.json()
-                logger.info(f"Invitation issue for {username} to {org}: {error_data}")
-                return {"status": "already_invited_or_member", "details": error_data}
-            response.raise_for_status()
-            self._handle_rate_limit(response)
-            return response.json()
-        except Exception as e:
+        except requests.RequestException as e:
             logger.warning(f"Failed to invite {username} to {org}: {e}")
-            return None
+            return {"error": f"Inviting '{username}' to {org} failed: {e}"}
+
+        if response.status_code == 422:
+            # 422 covers both "already a member / already invited" (a no-op
+            # success) and genuine rejections like "over invitation rate
+            # limit" — distinguish them rather than reporting every 422 as a
+            # successful invite.
+            error_data = parse_json_body(response)
+            logger.info(f"Invitation issue for {username} to {org}: {error_data}")
+            if is_already_member_error(error_data):
+                return {"status": "already_invited_or_member", "details": error_data}
+            detail = error_data.get("message") or "validation failed"
+            message = f"Inviting '{username}' to {org} failed: {detail} (HTTP 422)."
+            logger.warning(message)
+            return {"error": message, "status_code": 422, "details": error_data}
+        if not response.ok:
+            message = describe_github_error(response, f"Inviting '{username}' to {org}")
+            logger.warning(message)
+            return {"error": message, "status_code": response.status_code}
+        self._handle_rate_limit(response)
+        return parse_json_body(response)
 
     def add_team_member(
         self,
@@ -371,8 +399,25 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
             Dict with 'success', 'action' ('added', 'invited', 'already_member'),
             and optional 'invitation' data
         """
-        # Check current org membership
-        membership_state = self.check_org_membership(org, username)
+        # Check current org membership. A failure here means "unknown", not
+        # "not a member" — don't fall through to inviting someone who may
+        # already be in the org.
+        try:
+            membership_state = self.check_org_membership(org, username)
+        except requests.RequestException as e:
+            action = f"Checking org membership for '{username}' in {org}"
+            response = getattr(e, "response", None)
+            error = (
+                describe_github_error(response, action)
+                if response is not None
+                else f"{action} failed: {e}"
+            )
+            return {
+                "success": False,
+                "action": None,
+                "org_membership": None,
+                "error": error,
+            }
 
         result: dict[str, Any] = {
             "success": False,
@@ -391,14 +436,15 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
             invitation = self.invite_to_org(
                 org, username, role="direct_member", team_ids=[team["github_id"]]
             )
-            if invitation:
+            if invitation and not invitation.get("error"):
                 result["success"] = True
                 result["action"] = "invited"
                 result["invitation"] = invitation
                 return result
-            else:
-                result["error"] = "Failed to send org invitation"
-                return result
+            result["error"] = (invitation or {}).get(
+                "error", "Failed to send org invitation"
+            )
+            return result
 
         # If pending invitation, we can still try to add to team
         if membership_state == "pending":
@@ -411,30 +457,33 @@ class TeamsMixin(GithubClientCore if TYPE_CHECKING else object):
                 json={"role": role},
                 timeout=30,
             )
-            if response.status_code == 404:
-                result["error"] = f"Team {org}/{team_slug} not found"
-                return result
-
-            response.raise_for_status()
-            self._handle_rate_limit(response)
-
-            membership_data = response.json()
-            state = membership_data.get("state", "unknown")
-
-            if state == "active":
-                result["success"] = True
-                result["action"] = "added"
-            elif state == "pending":
-                result["success"] = True
-                result["action"] = "pending"
-                result["note"] = "User must accept team invitation"
-
-            result["membership"] = membership_data
+        except requests.RequestException as e:
+            result["error"] = f"Adding '{username}' to {org}/{team_slug} failed: {e}"
             return result
 
-        except Exception as e:
-            result["error"] = f"Failed to add to team: {e}"
+        if response.status_code == 404:
+            result["error"] = f"Team {org}/{team_slug} not found"
             return result
+        if not response.ok:
+            result["error"] = describe_github_error(
+                response, f"Adding '{username}' to {org}/{team_slug}"
+            )
+            return result
+        self._handle_rate_limit(response)
+
+        membership_data = response.json()
+        state = membership_data.get("state", "unknown")
+
+        if state == "active":
+            result["success"] = True
+            result["action"] = "added"
+        elif state == "pending":
+            result["success"] = True
+            result["action"] = "pending"
+            result["note"] = "User must accept team invitation"
+
+        result["membership"] = membership_data
+        return result
 
     def remove_team_member(
         self,

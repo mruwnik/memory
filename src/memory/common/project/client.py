@@ -8,7 +8,6 @@ database and return an authenticated `GithubClient`, optionally ensuring a
 import logging
 from typing import Any
 
-from memory.common.db.models import GithubTeam
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials
 
@@ -97,7 +96,9 @@ def get_github_client_for_org(
 ) -> GithubClient | None:
     """Get authenticated GithubClient for an organization.
 
-    Finds a GitHub account that has access to the specified org.
+    Returns the first active GitHub account belonging to the user. The ``org``
+    is accepted for interface symmetry with other lookups but does not narrow
+    the choice — account-to-org affinity is not tracked.
 
     Args:
         session: Database session
@@ -107,30 +108,14 @@ def get_github_client_for_org(
     Returns:
         GithubClient or None if no suitable account found
     """
-    # Find an account that has teams in this org, or just any active account
-    team_with_org = (
-        session.query(GithubTeam)
-        .join(GithubAccount)
+    account = (
+        session.query(GithubAccount)
         .filter(
-            GithubTeam.org_login.ilike(org),
             GithubAccount.user_id == user_id,
             GithubAccount.active == True,  # noqa: E712
         )
         .first()
     )
-
-    if team_with_org:
-        account = team_with_org.account
-    else:
-        # Fall back to any active account
-        account = (
-            session.query(GithubAccount)
-            .filter(
-                GithubAccount.user_id == user_id,
-                GithubAccount.active == True,  # noqa: E712
-            )
-            .first()
-        )
 
     if not account:
         return None
