@@ -432,7 +432,10 @@ async def upsert(
         if linked_user:
             result["linked_user_id"] = linked_user
         if linked_discord:
-            result["linked_discord_users"] = linked_discord
+            # Discord snowflakes are 64-bit and exceed JS's 2**53 safe-integer
+            # range; serialize as strings so double-based JSON parsers don't
+            # silently round them.
+            result["linked_discord_users"] = [str(d) for d in linked_discord]
 
     # If content provided, queue a tidbit creation task
     if content:

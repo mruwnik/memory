@@ -190,6 +190,32 @@ async def test_upsert_create_success(db_session, admin_session):
 
 
 @pytest.mark.asyncio
+async def test_upsert_returns_discord_ids_as_strings(db_session, admin_session):
+    """Discord snowflake IDs must be returned as strings.
+
+    Snowflakes are 64-bit and exceed JS's 2^53 safe-integer range; a JSON
+    number would be silently rounded by any double-based parser. The response
+    must serialize them as strings so the exact ID round-trips.
+    """
+    from memory.common.db.models.discord import DiscordUser
+
+    snowflake = 1480984810137714778  # > 2**53, not exactly representable as float
+    db_session.add(DiscordUser(id=snowflake, username="honor", display_name="Honor"))
+    db_session.commit()
+
+    upsert_fn = get_fn(upsert)
+    with mcp_auth_context(admin_session.id):
+        result = await upsert_fn(
+            identifier="honor",
+            display_name="Honor",
+            contact_info={"discord": str(snowflake)},
+        )
+
+    assert result["linked_discord_users"] == [str(snowflake)]
+    assert all(isinstance(x, str) for x in result["linked_discord_users"])
+
+
+@pytest.mark.asyncio
 async def test_upsert_existing_updates(db_session, admin_session, sample_people):
     """Test that upserting an existing person updates instead of erroring."""
     upsert_fn = get_fn(upsert)
