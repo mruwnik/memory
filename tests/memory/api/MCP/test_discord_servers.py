@@ -15,8 +15,10 @@ import pytest
 from pydantic import ValidationError
 
 from memory.api.MCP.servers.discord import (
+    _get_user_and_bots,
     create_role,
     ensure_channel_record,
+    has_discord_bots,
     perms,
     set_perms,
     upsert_channel,
@@ -24,6 +26,7 @@ from memory.api.MCP.servers.discord import (
 from memory.api.MCP.servers.teams import team_to_dict
 from memory.common.db import connection as db_connection
 from memory.common.db.models import (
+    APIKey,
     DiscordBot,
     DiscordChannel,
     DiscordServer,
@@ -96,6 +99,50 @@ def discord_server(db_session, discord_bot):
     db_session.add(server)
     db_session.commit()
     return server
+
+
+# =============================================================================
+# API-key auth resolves the user (not only session tokens)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_kind", ["session", "api_key"])
+async def test_has_discord_bots_resolves_both_token_kinds(
+    db_session, admin_user_with_session, discord_bot, token_kind
+):
+    """API-key auth puts the raw key (not a UserSession id) in the token.
+
+    The visibility checker must resolve it via ``fetch_user_by_token`` or every
+    API-key/service account is wrongly hidden from the Discord tools.
+    """
+    user, session = admin_user_with_session
+    if token_kind == "session":
+        token = session.id
+    else:
+        api_key = APIKey.create(user_id=user.id, key_type="mcp")
+        db_session.add(api_key)
+        db_session.commit()
+        token = api_key.key
+
+    assert await has_discord_bots({"token": token}, None) is True
+
+
+def test_get_user_and_bots_resolves_api_key(
+    db_session, admin_user_with_session, discord_bot
+):
+    """The tool-body resolver must also accept API keys, else the tool fails
+    after visibility passes."""
+    user, _ = admin_user_with_session
+    api_key = APIKey.create(user_id=user.id, key_type="mcp")
+    db_session.add(api_key)
+    db_session.commit()
+
+    with mcp_auth_context(api_key.key, scopes=["*"]):
+        user_id, bots = _get_user_and_bots(db_session)
+
+    assert user_id == user.id
+    assert [b.id for b in bots] == [int(BOT_ID)]
 
 
 # =============================================================================

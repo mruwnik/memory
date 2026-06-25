@@ -7,11 +7,10 @@ from typing import Any, Literal
 
 from fastmcp import FastMCP
 
-from memory.api.MCP.access import get_mcp_current_user
+from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_GITHUB, SCOPE_GITHUB_WRITE
-from memory.common.db.models import UserSession
 from memory.common.db.models.sources import GithubAccount
 
 from memory.api.MCP.servers.github_helpers import (
@@ -48,13 +47,13 @@ async def has_github_account(user_info: dict, session: DBSession | None) -> bool
     def _check() -> bool:
         # Create our own session to avoid threading issues with passed session
         with make_session() as local_session:
-            user_session = local_session.get(UserSession, token)
-            if not user_session or not user_session.user:
+            user = fetch_user_by_token(local_session, token)
+            if not user:
                 return False
             return (
                 local_session.query(GithubAccount)
                 .filter(
-                    GithubAccount.user_id == user_session.user.id,
+                    GithubAccount.user_id == user.id,
                     GithubAccount.active == True,  # noqa: E712
                 )
                 .first()

@@ -7,10 +7,10 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 
+from memory.api.MCP.access import fetch_user_by_token
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_SLACK, SCOPE_SLACK_WRITE
-from memory.common.db.models import UserSession
 from memory.common.db.models.slack import (
     SlackChannel,
     SlackUserCredentials,
@@ -35,11 +35,11 @@ async def has_slack_workspaces(user_info: dict, session: DBSession | None) -> bo
     def _check() -> bool:
         # Create our own session to avoid threading issues with passed session
         with make_session() as local_session:
-            user_session = local_session.get(UserSession, token)
-            if not user_session or not user_session.user:
+            user = fetch_user_by_token(local_session, token)
+            if not user:
                 return False
             # Check if user has any Slack credentials
-            return len(user_session.user.slack_credentials) > 0
+            return len(user.slack_credentials) > 0
 
     return await asyncio.to_thread(_check)
 
@@ -49,10 +49,10 @@ async def has_slack_workspaces(user_info: dict, session: DBSession | None) -> bo
 
 def _get_user_credentials(session: DBSession, token: str) -> list[SlackUserCredentials]:
     """Get the current user's Slack credentials."""
-    user_session = session.get(UserSession, token)
-    if not user_session or not user_session.user:
+    user = fetch_user_by_token(session, token)
+    if not user:
         raise ValueError("User not found")
-    return list(user_session.user.slack_credentials)
+    return list(user.slack_credentials)
 
 
 def _get_default_credentials(session: DBSession, token: str) -> SlackUserCredentials:

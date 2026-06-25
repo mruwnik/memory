@@ -10,6 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from fastmcp.server.dependencies import get_access_token
 
+from memory.api.MCP.access import fetch_user_by_token
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import discord as discord_client
 from memory.common.dates import parse_iso_datetime
@@ -25,7 +26,6 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordUser,
     Team,
-    UserSession,
 )
 from memory.common.people import find_person
 from memory.common.discord_data import (
@@ -47,11 +47,11 @@ async def has_discord_bots(user_info: dict, session: DBSession | None) -> bool:
     def _check() -> bool:
         # Create our own session to avoid threading issues with passed session
         with make_session() as local_session:
-            user_session = local_session.get(UserSession, token)
-            if not user_session or not user_session.user:
+            user = fetch_user_by_token(local_session, token)
+            if not user:
                 return False
             # Check if user has any authorized Discord bots
-            return len(user_session.user.discord_bots) > 0
+            return len(user.discord_bots) > 0
 
     return await asyncio.to_thread(_check)
 
@@ -62,11 +62,11 @@ def _get_user_and_bots(session: DBSession) -> tuple[int, list[DiscordBot]]:
     if not access_token:
         raise ValueError("Not authenticated")
 
-    user_session = session.get(UserSession, access_token.token)
-    if not user_session or not user_session.user:
+    user = fetch_user_by_token(session, access_token.token)
+    if not user:
         raise ValueError("User not found")
 
-    return user_session.user.id, list(user_session.user.discord_bots)
+    return user.id, list(user.discord_bots)
 
 
 def _get_default_bot(session: DBSession) -> DiscordBot:

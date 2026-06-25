@@ -4,8 +4,15 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from memory.api.MCP.servers.github import fetch, list_entities, upsert_issue
-from memory.common.db.models import GithubItem
+from memory.api.MCP.servers.github import (
+    fetch,
+    has_github_account,
+    list_entities,
+    upsert_issue,
+)
+from memory.common.db.models import GithubItem, UserSession
+from memory.common.db.models.sources import GithubAccount
+from memory.common.db.models.users import APIKey
 from memory.common.db import connection as db_connection
 
 
@@ -421,6 +428,61 @@ def test_list_issues_url_construction(db_session, sample_issues):
         pr_results = list_issues(kind="pr")
 
     assert "/pull/" in pr_results[0]["url"]
+
+
+# =============================================================================
+# Tests for has_github_account (visibility checker)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_kind", ["session", "api_key"])
+async def test_has_github_account_resolves_both_token_kinds(
+    db_session, regular_user, token_kind
+):
+    """The visibility checker must accept API-key tokens, not just session tokens.
+
+    API-key auth puts the raw key string (e.g. ``bot_...``) in the access
+    token, which is not a ``UserSession`` id. The checker must resolve it via
+    ``fetch_user_by_token`` or every API-key/service account is wrongly hidden
+    from the GitHub write tools.
+    """
+    db_session.add(
+        GithubAccount(
+            user_id=regular_user.id,
+            name="acct",
+            auth_type="pat",
+            access_token="ghp_secret",
+            active=True,
+        )
+    )
+
+    if token_kind == "session":
+        session = UserSession(
+            id="gh-session-token",
+            user_id=regular_user.id,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        db_session.add(session)
+        db_session.commit()
+        token = session.id
+    else:
+        api_key = APIKey.create(user_id=regular_user.id, key_type="mcp")
+        db_session.add(api_key)
+        db_session.commit()
+        token = api_key.key
+
+    assert await has_github_account({"token": token}, None) is True
+
+
+@pytest.mark.asyncio
+async def test_has_github_account_false_without_account(db_session, regular_user):
+    """No GitHub account => tool stays hidden, even for a valid API key."""
+    api_key = APIKey.create(user_id=regular_user.id, key_type="mcp")
+    db_session.add(api_key)
+    db_session.commit()
+
+    assert await has_github_account({"token": api_key.key}, None) is False
 
 
 # =============================================================================

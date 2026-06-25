@@ -9,11 +9,12 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 
+from memory.api.MCP.access import fetch_user_by_token
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
 from memory.common.access_control import get_accessible_source_item_by_filename
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import User, UserSession
+from memory.common.db.models import User
 from memory.common.scopes import SCOPE_EMAIL_WRITE
 from memory.common.email_sender import (
     EmailAttachmentData,
@@ -37,11 +38,11 @@ async def has_send_accounts(user_info: dict, session: DBSession | None) -> bool:
     def _check() -> bool:
         # Create our own session to avoid threading issues with passed session
         with make_session() as local_session:
-            user_session = local_session.get(UserSession, token)
-            if not user_session or not user_session.user:
+            user = fetch_user_by_token(local_session, token)
+            if not user:
                 return False
             accounts = get_user_email_accounts(
-                local_session, user_session.user.id, send_enabled_only=True
+                local_session, user.id, send_enabled_only=True
             )
             return len(accounts) > 0
 
@@ -54,11 +55,11 @@ def _get_user_id(session: DBSession) -> int:
     if not access_token:
         raise ValueError("Not authenticated")
 
-    user_session = session.get(UserSession, access_token.token)
-    if not user_session or not user_session.user:
+    user = fetch_user_by_token(session, access_token.token)
+    if not user:
         raise ValueError("User not found")
 
-    return user_session.user.id
+    return user.id
 
 
 def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | None:
