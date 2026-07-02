@@ -1,12 +1,18 @@
 """Tests for MCP claude (cloud-claude session files) server."""
 # pyright: reportFunctionMemberAccess=false
 
+import json
+import uuid as uuid_lib
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from memory.api.orchestrator_client import SessionInfo as OrchSessionInfo
+from memory.api.search.types import SearchResult
 from memory.api.transfer_tokens import verify_token
+from memory.common import settings as settings_module
+from memory.common.db.models import Session as CodingSession
+from memory.common.db.models import CodingProject, SessionSegment
 from tests.conftest import mcp_auth_context
 
 
@@ -372,14 +378,6 @@ async def test_session_push_url_rejects_traversal(
 
 
 # -- archived transcript search ----------------------------------------------
-
-import json
-import uuid as uuid_lib
-
-from memory.api.search.types import SearchResult
-from memory.common import settings as settings_module
-from memory.common.db.models import Session as CodingSession
-from memory.common.db.models import CodingProject, SessionSegment
 
 
 @pytest.fixture
