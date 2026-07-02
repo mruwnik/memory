@@ -24,6 +24,8 @@ RUN chmod +x entry.sh
 RUN mkdir -p /app/memory_files
 
 COPY docker/ingest_hub/supervisor.conf /etc/supervisor/conf.d/supervisor.conf
+COPY docker/ingest_hub/entry.sh ./supervisord_entry.sh
+RUN chmod +x supervisord_entry.sh
 
 # Create required tmpfs directories for supervisor
 RUN mkdir -p /var/log/supervisor /var/run/supervisor
@@ -34,4 +36,6 @@ USER kb
 
 ENV PYTHONPATH="/app"
 
-ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisor.conf"]
+# Validate-then-exec wrapper that runs supervisord with fd 2 on /dev/null so
+# a dead conmon pipe can't kill it — rationale in the script itself.
+ENTRYPOINT ["/app/supervisord_entry.sh"]
