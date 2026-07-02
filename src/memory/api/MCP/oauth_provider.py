@@ -11,7 +11,6 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from fastmcp.server.auth import OAuthProvider
 from fastmcp.server.auth.auth import AccessToken as FastMCPAccessToken  # type: ignore[reportPrivateImportUsage]
 from mcp.server.auth.provider import (
-    AccessToken,
     AuthorizationCode,
     AuthorizationParams,
     RefreshToken,
@@ -607,7 +606,7 @@ class SimpleOAuthProvider(OAuthProvider):
             )
         else:
             allowed_origins = {redirect_uri_origin(p) for p in allowlist}
-            for uri in client_info.redirect_uris:
+            for uri in client_info.redirect_uris or []:
                 uri_str = str(uri)
                 if not is_redirect_uri_allowed(
                     redirect_uri_origin(uri_str), allowed_origins
@@ -941,14 +940,13 @@ class SimpleOAuthProvider(OAuthProvider):
 
             return token
 
-    async def load_access_token(self, token: str) -> Optional[AccessToken]:
+    async def load_access_token(self, token: str) -> Optional[FastMCPAccessToken]:
         """Load and validate an access token (or bot API key).
 
         Companion to :meth:`verify_token`; both share lookup + expiry +
         one-time-key consumption via :func:`lookup_principal`. This
         method differs only in projecting OAuth-grant scopes (via
-        :func:`resolve_session_scopes`) instead of system scopes, and
-        returning an ``AccessToken`` rather than ``FastMCPAccessToken``.
+        :func:`resolve_session_scopes`) instead of system scopes.
         """
         with make_session() as session:
             principal = lookup_principal(token, session)
@@ -962,7 +960,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 client_id, scopes = resolve_session_scopes(
                     principal.user_session
                 )
-                return AccessToken(
+                return FastMCPAccessToken(
                     token=token,
                     client_id=client_id,
                     scopes=scopes,
@@ -981,7 +979,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 f"User {principal.user.name} (id={principal.user.id}) "
                 f"authenticated via API key"
             )
-            return AccessToken(
+            return FastMCPAccessToken(
                 token=token,
                 client_id=cast(
                     str, principal.user.name or principal.user.email
@@ -994,6 +992,11 @@ class SimpleOAuthProvider(OAuthProvider):
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> Optional[RefreshToken]:
         """Load and validate a refresh token."""
+        # client_id is optional on OAuthClientInformationFull (URL-based
+        # client IDs may omit it); a client without one has no tokens.
+        if client.client_id is None:
+            return None
+
         with make_session() as session:
             now = now_naive_utc()
 

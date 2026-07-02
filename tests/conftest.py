@@ -555,9 +555,9 @@ def mcp_auth_context(session_token: str, scopes: list[str] | None = None):
         with mcp_auth_context(admin_session.id):
             result = await some_mcp_tool(...)
     """
+    from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
-    from mcp.server.auth.provider import AccessToken
     from memory.common.db.connection import make_session
     from memory.common.db.models import UserSession
 
@@ -571,6 +571,9 @@ def mcp_auth_context(session_token: str, scopes: list[str] | None = None):
             else:
                 scopes = []
 
+    # fastmcp's AccessToken (what verify_token returns in production), not the
+    # bare SDK one: fastmcp's get_access_token() converts foreign token types
+    # with claims=None, which its own model rejects.
     access_token = AccessToken(
         token=session_token,
         client_id="test-client",

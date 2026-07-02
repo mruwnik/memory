@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import selectinload
+from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
-from mcp.server.auth.provider import AccessToken
 
 from memory.common.db.models import (
     DiscordUser,

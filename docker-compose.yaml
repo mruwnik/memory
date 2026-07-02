@@ -49,6 +49,9 @@ x-worker-base: &worker-base
   env_file: [.env]
   environment: &worker-env
     <<: *env
+    # Same arena cap as the api service (#96): workers hold large transient
+    # ingest payloads (ebooks, photos) that otherwise pin RSS at its peak.
+    MALLOC_ARENA_MAX: 2
     POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     # DSNs are built in worker entrypoint from user + pw files
     QDRANT_URL: http://qdrant:6333
@@ -214,6 +217,11 @@ services:
     depends_on: [postgres, redis, qdrant]
     environment:
       <<: *env
+      # Cap glibc malloc arenas: with the default (8 × cores) freed transient
+      # search working sets scatter across arenas and never return to the OS,
+      # so RSS ratchets to the historical peak (#96). 2 arenas is the standard
+      # server setting; contention is negligible on a single uvicorn worker.
+      MALLOC_ARENA_MAX: 2
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       QDRANT_URL: http://qdrant:6333
       SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
