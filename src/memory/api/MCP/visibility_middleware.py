@@ -13,7 +13,7 @@ A user can access a tool if:
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import mcp.types as mt
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -106,8 +106,8 @@ class VisibilityMiddleware(Middleware):
     async def on_list_tools(
         self,
         context: MiddlewareContext[mt.ListToolsRequest],
-        call_next: CallNext[mt.ListToolsRequest, list[Tool]],
-    ) -> list[Tool]:
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
         """Filter tool list to only show tools the user can access."""
         tools = await call_next(context)
         user_info = self.get_user_info()
