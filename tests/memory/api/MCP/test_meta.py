@@ -457,9 +457,9 @@ def _mcp_auth_context_with_scopes(session_token: str, scopes: list[str]):
     access token reflects only the scopes the user consented to at the OAuth
     consent screen.
     """
+    from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
-    from mcp.server.auth.provider import AccessToken
 
     access_token = AccessToken(
         token=session_token,

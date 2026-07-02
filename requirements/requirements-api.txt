@@ -6,8 +6,14 @@ fastapi>=0.115.12
 # [standard] includes websockets support.
 uvicorn[standard]>=0.34,<1.0
 python-multipart==0.0.9
-mcp==1.10.0
-fastmcp>=2.10.0
+# mcp must stay >=1.12 — earlier versions leak one server session per
+# stateless HTTP request (no transport.terminate() in
+# _handle_stateless_request), ratcheting api-container RSS to its limit (#96).
+# fastmcp is pinned exactly because its minor releases break APIs and add
+# heavy deps (2.14 requires fakeredis, conflicting with our dev pin); it pins
+# a narrow mcp range, so bump both together.
+mcp==1.22.0
+fastmcp==2.13.3
 slowapi==0.1.9
 cachetools>=5.3.0  # TTL-based caching for prediction market tools
 jinja2>=3.1.0  # Required by starlette Jinja2Templates (MCP OAuth login page)
