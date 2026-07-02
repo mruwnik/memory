@@ -95,6 +95,7 @@ The parser turns raw content into items; the Celery task module drives ingestion
 | Forum posts | `parsers/lesswrong.py` | `workers/tasks/forums.py` | `forums` |
 | Notes | — | `workers/tasks/notes.py` | `notes` |
 | Photos/Images | — | `workers/tasks/photo.py` | `photos` |
+| Claude sessions | `parsers/claude_sessions.py` | `workers/tasks/sessions.py` | `maintenance` |
 
 Full queue list: the worker `QUEUES` env var in `docker-compose.yaml`.
 

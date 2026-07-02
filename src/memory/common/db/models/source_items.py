@@ -27,8 +27,10 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from uuid import UUID as PyUUID
 
 from memory.common import paths, settings
 import memory.common.extract as extract
@@ -64,6 +66,7 @@ if TYPE_CHECKING:
         TranscriptAccount,
     )
     from memory.common.db.models.observations import ObservationContradiction
+    from memory.common.db.models.sessions import Session
 
 
 def mail_addresses(values: Sequence[str]) -> list[str]:
@@ -2107,3 +2110,94 @@ class Meeting(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["meeting"]
+
+
+class SessionSegmentPayload(SourceItemPayload):
+    session_id: Annotated[str, "UUID of the Claude Code session"]
+    start_index: Annotated[int, "Transcript line index of the first message (inclusive)"]
+    end_index: Annotated[int, "Transcript line index of the last message (inclusive)"]
+    start_time: Annotated[str | None, "Timestamp of the first message (ISO format)"]
+    end_time: Annotated[str | None, "Timestamp of the last message (ISO format)"]
+    roles: Annotated[list[str], "Roles present in the segment (user/assistant)"]
+    models: Annotated[list[str], "Assistant models seen in the segment"]
+
+
+class SessionSegment(SourceItem):
+    """A run of consecutive messages from a Claude Code session transcript.
+
+    Segments are the searchable unit for archived session transcripts:
+    conversational text only (tool traffic stripped), sized to roughly one
+    embedding chunk, with line indices pointing back into the JSONL file so
+    claude_session_fetch can pull the surrounding context.
+
+    Owner-only by construction: ``creator_id`` is the session owner and
+    ``project_id`` is an explicit NULL, so nobody but the creator (and
+    superadmins) can ever see a segment.
+    """
+
+    __tablename__ = "session_segment"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    session_id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Transcript line indices covered by this segment, both inclusive.
+    # Lines in between that aren't conversational (tool traffic, meta
+    # events) are simply not part of the segment text.
+    start_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # postgresql.ARRAY (not the generic sqlalchemy.ARRAY) so the search
+    # prefilter can use .contains() for role filtering
+    roles: Mapped[list[str]] = mapped_column(
+        postgresql.ARRAY(Text), nullable=False, server_default="{}"
+    )
+    models: Mapped[list[str]] = mapped_column(
+        postgresql.ARRAY(Text), nullable=False, server_default="{}"
+    )
+
+    session: Mapped[Session] = relationship("Session", foreign_keys=[session_id])
+
+    __mapper_args__ = {
+        "polymorphic_identity": "session_segment",
+    }
+
+    __table_args__ = (
+        Index("session_segment_session_idx", "session_id", "start_index", unique=True),
+        Index("session_segment_time_idx", "start_time"),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        if not kwargs.get("modality"):
+            kwargs["modality"] = "session"
+        super().__init__(**kwargs)
+
+    def as_payload(self) -> SessionSegmentPayload:
+        return SessionSegmentPayload(
+            **super().as_payload(),
+            session_id=str(self.session_id),
+            start_index=self.start_index,
+            end_index=self.end_index,
+            start_time=(self.start_time and self.start_time.isoformat() or None),
+            end_time=(self.end_time and self.end_time.isoformat() or None),
+            roles=self.roles,
+            models=self.models,
+        )
+
+    @property
+    def title(self) -> str:
+        return f"Claude session {self.session_id} [{self.start_index}-{self.end_index}]"
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        if not self.content:
+            return []
+        return extract.extract_text(self.content, modality="session", skip_summary=True)
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["session"]

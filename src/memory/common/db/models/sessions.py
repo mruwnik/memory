@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -167,6 +168,14 @@ class Session(Base):
     # AI-generated summary of what was done in this session
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Search-indexing watermark: transcript line index up to which
+    # SessionSegments have been created (exclusive), and when the indexer
+    # last ran. See memory.workers.tasks.sessions.index_session.
+    indexed_up_to: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("idx_sessions_user", "user_id"),

@@ -50,6 +50,7 @@ from memory.common.db.models.source_items import (
     GoogleDoc,
     MailMessage,
     Meeting,
+    SessionSegment,
     SlackMessage,
 )
 from memory.common.content_processing import (
@@ -640,6 +641,21 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
             .filter(Session.started_at < cutoff)
             .all()
         )
+
+        # Delete search-index segments via their source_item parent rows.
+        # The sessions FK cascade would only remove the session_segment
+        # subtype rows, leaving orphaned source_item bases (and their
+        # chunks/vectors) behind. Deleting the parent rows cascades to
+        # segments and chunks; the clean-all-collections sweep then GCs
+        # the Qdrant points.
+        if old_sessions:
+            old_ids = [s.id for s in old_sessions]
+            segment_ids = select(SessionSegment.id).where(
+                SessionSegment.session_id.in_(old_ids)
+            )
+            db_session.query(SourceItem).filter(
+                SourceItem.id.in_(segment_ids)
+            ).delete(synchronize_session=False)
 
         for coding_session in old_sessions:
             # Delete transcript file if it exists

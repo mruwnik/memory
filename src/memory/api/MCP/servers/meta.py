@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import qdrant
+from memory.common.collections import SESSION_COLLECTIONS
 from memory.common.dates import parse_iso_datetime
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
@@ -277,7 +278,10 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
     return {
         collection: CollectionMetadata(schema=schema, size=size)
         for collection, schema in schemas.items()
-        if (size := sizes.get(collection))
+        # Session transcripts are owner-only-even-for-admins and only
+        # reachable via claude_session_search; don't advertise their
+        # schema or the cross-user point count here.
+        if collection not in SESSION_COLLECTIONS and (size := sizes.get(collection))
     }
 
 

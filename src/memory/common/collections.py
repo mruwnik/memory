@@ -131,6 +131,14 @@ ALL_COLLECTIONS: dict[str, Collection] = {
         "text": True,
         "multimodal": False,
     },
+    # Claude Code session transcripts (owner-only; searched via the
+    # dedicated claude_session_search MCP tool, not generic search)
+    "session": {
+        "dimension": 1024,
+        "distance": "Cosine",
+        "text": True,
+        "multimodal": False,
+    },
 }
 TEXT_COLLECTIONS = {
     coll for coll, params in ALL_COLLECTIONS.items() if params.get("text")
@@ -139,6 +147,7 @@ MULTIMODAL_COLLECTIONS = {
     coll for coll, params in ALL_COLLECTIONS.items() if params.get("multimodal")
 }
 OBSERVATION_COLLECTIONS = {"semantic", "temporal"}
+SESSION_COLLECTIONS = {"session"}
 
 TYPES = {
     "doc": ["application/pdf", "application/docx", "application/msword"],

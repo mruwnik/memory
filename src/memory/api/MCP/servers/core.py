@@ -46,7 +46,11 @@ from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilter
 from memory.common import extract, paths, settings
 from memory.common.celery_app import SYNC_OBSERVATION
 from memory.common.celery_app import app as celery_app
-from memory.common.collections import ALL_COLLECTIONS, OBSERVATION_COLLECTIONS
+from memory.common.collections import (
+    ALL_COLLECTIONS,
+    OBSERVATION_COLLECTIONS,
+    SESSION_COLLECTIONS,
+)
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     AgentObservation,
@@ -153,7 +157,7 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
 
 def _get_available_modalities() -> list[str]:
     """Query database to find which modalities have indexed items."""
-    searchable = set(ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS
+    searchable = set(ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS - SESSION_COLLECTIONS
     try:
         with make_session() as session:
             from sqlalchemy import func as sql_func
@@ -335,7 +339,14 @@ async def search(
 
     if not modalities:
         modalities = set(ALL_COLLECTIONS.keys())
-    modalities = (set(modalities) & ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS
+    # Observations and session transcripts have dedicated tools
+    # (search_observations, claude_session_search) with their own access
+    # semantics — generic search never touches them.
+    modalities = (
+        (set(modalities) & ALL_COLLECTIONS.keys())
+        - OBSERVATION_COLLECTIONS
+        - SESSION_COLLECTIONS
+    )
 
     search_filters = SearchFilters(**filters)
     search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
@@ -704,6 +715,9 @@ async def fetch(
                 session.query(SourceItem)
                 .options(selectinload(SourceItem.people))
                 .filter(SourceItem.embed_status == "STORED")
+                # Session transcripts are owner-only-even-for-admins;
+                # only claude_session_fetch may read them.
+                .filter(SourceItem.modality.notin_(SESSION_COLLECTIONS))
             )
             items = fetch_accessible_source_items(
                 session, fetch_ids, access_filter, base_query=base_query
@@ -826,6 +840,13 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     ValueError instead of being silently dropped.
     """
     reject_unknown_filter_keys(filters, allowed=ITEM_ALLOWED_FILTER_KEYS)
+
+    # Session transcripts are owner-only-even-for-admins by contract
+    # (claude_session_search/_fetch enforce ownership); the generic
+    # enumeration tools never expose them — an admin's access_filter is
+    # None, so without this exclusion list_items would return other
+    # users' private conversations.
+    query = query.filter(SourceItem.modality.notin_(SESSION_COLLECTIONS))
 
     if modalities:
         query = query.filter(SourceItem.modality.in_(modalities))

@@ -527,6 +527,12 @@ VERIFICATION_SYNC_INTERVAL = int(
 # Session retention settings
 SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 365 * 2))
 
+# How long a session transcript must be idle (no writes) before its trailing
+# partial segment is indexed for search. Complete segments are indexed
+# immediately; the tail is held back so a still-running session doesn't
+# produce overlapping segments as it grows.
+SESSION_INDEX_MIN_IDLE_SECONDS = int(os.getenv("SESSION_INDEX_MIN_IDLE_SECONDS", 3600))
+
 # SSH key encryption secret for encrypting private keys at rest
 # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
 # This should be unique per deployment - if the same secret is used across
