@@ -1,6 +1,5 @@
 #!/bin/sh
-# Two-phase start for supervisord (2026-07-02 zombie incident, see
-# docs/incidents/2026-07-02-ingest-hub-zombie.md).
+# Two-phase start for supervisord.
 #
 # Phase 2 runs supervisord with fd 2 on /dev/null: its logger's handleError()
 # prints failed-write tracebacks to stderr and raises out of PID 1 if that
