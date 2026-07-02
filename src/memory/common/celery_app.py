@@ -155,6 +155,8 @@ RECONCILE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.reconcile_access_control"
 SESSIONS_ROOT = "memory.workers.tasks.sessions"
 SUMMARIZE_SESSION = f"{SESSIONS_ROOT}.summarize_session"
 SUMMARIZE_STALE_SESSIONS = f"{SESSIONS_ROOT}.summarize_stale_sessions"
+INDEX_SESSION = f"{SESSIONS_ROOT}.index_session"
+INDEX_STALE_SESSIONS = f"{SESSIONS_ROOT}.index_stale_sessions"
 
 # Custom tasks (deployment-specific, loaded from CUSTOM_TASKS_DIR)
 CUSTOM_TASKS_PREFIX = "custom_tasks"
@@ -460,6 +462,10 @@ def build_beat_schedule() -> dict:
         "summarize-stale-sessions": {
             "task": SUMMARIZE_STALE_SESSIONS,
             "schedule": crontab(minute="30"),
+        },
+        "index-stale-sessions": {
+            "task": INDEX_STALE_SESSIONS,
+            "schedule": crontab(minute="50"),
         },
     }
     if settings.LESSWRONG_SYNC_INTERVAL > 0:

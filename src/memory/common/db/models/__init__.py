@@ -40,6 +40,8 @@ from memory.common.db.models.source_items import (
     CalendarEventPayload,
     MeetingPayload,
     Meeting,
+    SessionSegment,
+    SessionSegmentPayload,
     ReportPayload,
 )
 from memory.common.db.models.discord import (
@@ -226,6 +228,8 @@ __all__ = [
     "CalendarEventPayload",
     "Meeting",
     "MeetingPayload",
+    "SessionSegment",
+    "SessionSegmentPayload",
     "Report",
     "ReportPayload",
     # Observations

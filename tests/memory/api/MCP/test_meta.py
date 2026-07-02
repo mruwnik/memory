@@ -1895,3 +1895,24 @@ async def test_unwatch_market_success(mock_scope):
     assert result["market_id"] == "m1"
     mock_db_session.delete.assert_called_once_with(mock_watched)
     mock_db_session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.meta.get_schema")
+@patch("memory.api.MCP.servers.meta.qdrant")
+async def test_get_metadata_schemas_excludes_session_collections(
+    mock_qdrant, mock_get_schema
+):
+    """Session transcript collections are owner-only and never advertised."""
+    mock_client = MagicMock()
+    mock_qdrant.get_qdrant_client.return_value = mock_client
+    mock_qdrant.get_collection_sizes.return_value = {
+        "mail": 75,
+        "session": 1234,
+    }
+    mock_get_schema.return_value = {}
+
+    result = await get_metadata_schemas.fn()
+
+    assert "session" not in result
+    assert "mail" in result
