@@ -525,7 +525,7 @@ VERIFICATION_SYNC_INTERVAL = int(
 )  # 6 hours
 
 # Session retention settings
-SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 30))
+SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 365 * 2))
 
 # SSH key encryption secret for encrypting private keys at rest
 # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
