@@ -9,9 +9,10 @@ python-multipart==0.0.9
 # mcp must stay >=1.12 — earlier versions leak one server session per
 # stateless HTTP request (no transport.terminate() in
 # _handle_stateless_request), ratcheting api-container RSS to its limit (#96).
-# fastmcp is pinned exactly because its minor releases break APIs and add
-# heavy deps (2.14 requires fakeredis, conflicting with our dev pin); it pins
-# a narrow mcp range, so bump both together.
+# fastmcp is pinned exactly because its minor releases break APIs and pin
+# narrow mcp ranges (2.14 needs mcp>=1.23.1, untested here; 2.14.7 also adds
+# a runtime fakeredis<2.35 dep that conflicts with our dev fakeredis pin).
+# Bump both together.
 mcp==1.22.0
 fastmcp==2.13.3
 slowapi==0.1.9
