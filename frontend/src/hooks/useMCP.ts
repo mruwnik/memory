@@ -101,7 +101,9 @@ export const useMCP = () => {
   const { apiCall, checkAuth } = useAuth()
 
   const mcpCall = useCallback(async (method: string, params: any = {}) => {
-    const response = await apiCall(`/mcp/${method}`, {
+    // Always POST to exactly /mcp — the tool is named in the JSON-RPC body.
+    // fastmcp registers /mcp as an exact route, so subpaths 404.
+    const response = await apiCall('/mcp', {
       method: 'POST',
       headers: {
         'Accept': 'application/json, text/event-stream',

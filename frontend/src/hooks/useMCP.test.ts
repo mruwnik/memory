@@ -10,6 +10,18 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
+/** Find the fetch call that invoked the given tool. All MCP calls POST to
+ * exactly /mcp; the tool is identified by params.name in the JSON-RPC body. */
+const findToolCall = (
+  fetchMock: ReturnType<typeof mockFetch>,
+  tool: string,
+) =>
+  fetchMock.mock.calls.find(([u, init]) => {
+    if (!u.toString().endsWith('/mcp')) return false
+    const body = (init as RequestInit | undefined)?.body
+    return typeof body === 'string' && JSON.parse(body).params?.name === tool
+  })
+
 /** Build a JSON (non-SSE) MCP response with a tool result. */
 const jsonRpcResult = (content: unknown[], isError = false) =>
   mockResponse({
@@ -41,7 +53,7 @@ const sseResponse = (raw: string) => {
 }
 
 describe('mcpCall', () => {
-  it('sends a tools/call JSON-RPC envelope to /mcp/<method>', async () => {
+  it('sends a tools/call JSON-RPC envelope to exactly /mcp', async () => {
     const fetchMock = mockFetch(async () =>
       jsonRpcResult([{ text: '{"ok":true}' }]),
     )
@@ -49,9 +61,7 @@ describe('mcpCall', () => {
     await act(async () => {
       await result.current.mcpCall('some_tool', { a: 1 })
     })
-    const call = fetchMock.mock.calls.find(([u]) =>
-      u.toString().includes('/mcp/some_tool'),
-    )!
+    const call = findToolCall(fetchMock, 'some_tool')!
     const body = JSON.parse((call[1] as RequestInit).body as string)
     expect(body.method).toBe('tools/call')
     expect(body.params).toEqual({ name: 'some_tool', arguments: { a: 1 } })
@@ -181,9 +191,8 @@ describe('convenience wrappers', () => {
       await result.current.listNotes('/sub')
     })
     const body = JSON.parse(
-      (fetchMock.mock.calls.find(([u]) =>
-        u.toString().includes('/mcp/notes_note_files'),
-      )![1] as RequestInit).body as string,
+      (findToolCall(fetchMock, 'notes_note_files')![1] as RequestInit)
+        .body as string,
     )
     expect(body.params.arguments).toEqual({ path: '/sub' })
   })
@@ -195,9 +204,8 @@ describe('convenience wrappers', () => {
       await result.current.fetchFile('a.md')
     })
     const body = JSON.parse(
-      (fetchMock.mock.calls.find(([u]) =>
-        u.toString().includes('/mcp/core_fetch_file'),
-      )![1] as RequestInit).body as string,
+      (findToolCall(fetchMock, 'core_fetch_file')![1] as RequestInit)
+        .body as string,
     )
     expect(body.params.arguments).toEqual({ filename: 'a.md' })
   })
@@ -209,9 +217,8 @@ describe('convenience wrappers', () => {
       await result.current.saveNote('dir/MyNote.md', 'body')
     })
     const body = JSON.parse(
-      (fetchMock.mock.calls.find(([u]) =>
-        u.toString().includes('/mcp/notes_upsert'),
-      )![1] as RequestInit).body as string,
+      (findToolCall(fetchMock, 'notes_upsert')![1] as RequestInit)
+        .body as string,
     )
     expect(body.params.arguments).toEqual({
       filename: 'dir/MyNote.md',
@@ -227,9 +234,8 @@ describe('convenience wrappers', () => {
       await result.current.saveNote('n.md', 'body', 'Custom')
     })
     const body = JSON.parse(
-      (fetchMock.mock.calls.find(([u]) =>
-        u.toString().includes('/mcp/notes_upsert'),
-      )![1] as RequestInit).body as string,
+      (findToolCall(fetchMock, 'notes_upsert')![1] as RequestInit)
+        .body as string,
     )
     expect(body.params.arguments.subject).toBe('Custom')
   })
@@ -246,9 +252,9 @@ describe('convenience wrappers', () => {
       out = await (result.current as any)[name]()
     })
     expect(out).toEqual([[]])
-    // The hook's effect hits /auth/me, but no /mcp/ endpoint should be called.
+    // The hook's effect hits /auth/me, but no MCP call should be made.
     const mcpCalls = fetchMock.mock.calls.filter(([u]) =>
-      u.toString().includes('/mcp/'),
+      u.toString().endsWith('/mcp'),
     )
     expect(mcpCalls).toHaveLength(0)
   })
@@ -272,9 +278,8 @@ describe('convenience wrappers', () => {
       await result.current.searchKnowledgeBase('hello')
     })
     const body = JSON.parse(
-      (fetchMock.mock.calls.find(([u]) =>
-        u.toString().includes('/mcp/core_search'),
-      )![1] as RequestInit).body as string,
+      (findToolCall(fetchMock, 'core_search')![1] as RequestInit)
+        .body as string,
     )
     expect(body.params.arguments).toEqual({
       query: 'hello',
@@ -298,9 +303,8 @@ describe('convenience wrappers', () => {
       )
     })
     const body = JSON.parse(
-      (fetchMock.mock.calls.find(([u]) =>
-        u.toString().includes('/mcp/core_search'),
-      )![1] as RequestInit).body as string,
+      (findToolCall(fetchMock, 'core_search')![1] as RequestInit)
+        .body as string,
     )
     expect(body.params.arguments).toEqual({
       query: 'q',
