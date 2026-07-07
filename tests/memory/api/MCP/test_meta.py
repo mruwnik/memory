@@ -641,6 +641,38 @@ async def test_create_one_time_key_rate_limited(db_session, admin_session, monke
 
 
 @pytest.mark.asyncio
+async def test_create_one_time_key_reports_remaining_quota(
+    db_session, admin_session, monkeypatch
+):
+    """The response tells the caller how much mint quota is left — the tool
+    description can't, beyond the deployment default, since callers only see
+    text, not settings."""
+    from memory.common import settings
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "2/hour")
+
+    with mcp_auth_context(admin_session.id):
+        first = await create_one_time_key.fn()
+        second = await create_one_time_key.fn()
+
+    assert first["mints_remaining"] == 1
+    assert first["rate_limit"] == "2/hour"
+    assert first["expires_at"] is not None
+    assert second["mints_remaining"] == 0
+
+
+def test_create_one_time_key_description_embeds_configured_limits():
+    """MCP callers see only the tool description — it must carry the actual
+    configured limit values, not unresolvable setting names."""
+    from memory.common import settings
+
+    description = create_one_time_key.description or ""
+    assert settings.ONE_TIME_KEY_RATE_LIMIT in description
+    assert str(settings.ONE_TIME_KEY_TTL_SECONDS) in description
+    assert "ONE_TIME_KEY_RATE_LIMIT" not in description
+
+
+@pytest.mark.asyncio
 async def test_create_one_time_key_sets_expiry(db_session, admin_session, monkeypatch):
     """Minted keys carry ONE_TIME_KEY_TTL_SECONDS of life, so an unused
     key self-expires instead of remaining a permanent credential."""

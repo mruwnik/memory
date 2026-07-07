@@ -47,10 +47,11 @@ def _get_user_session_from_token(session: DBSession) -> UserSession | None:
     return user_session
 
 
-def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
+def _create_one_time_key(session: DBSession, user_session: UserSession) -> APIKey:
     """Create a one-time API key for the user.
 
-    Returns the key string (only available at creation time).
+    Returns the committed APIKey row; ``.key`` holds the secret (only
+    available at creation time).
 
     The issued key carries ``user.scopes ∩ access_token.scopes`` (with a
     short-circuit for either side carrying admin — see the conditional
@@ -94,7 +95,7 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> str:
     )
     session.add(one_time_key)
     session.commit()
-    return one_time_key.key
+    return one_time_key
 
 
 def _get_current_user(session: DBSession) -> dict:
@@ -338,18 +339,22 @@ def count_one_time_keys_in_window(
     )
 
 
-@meta_mcp.tool()
+# Tool descriptions are all MCP callers ever see — bake the deployment's
+# actual configured limits in (settings are import-time constants), never
+# setting *names* the caller can't resolve.
+@meta_mcp.tool(
+    description=(
+        "Mint a one-time API key for client operations.\n\n"
+        "The key stops working after its first use, and expires unused after "
+        f"{settings.ONE_TIME_KEY_TTL_SECONDS} seconds. It carries the caller's "
+        "own scopes capped to the OAuth grant — it can never hold more scope "
+        "than the caller already had.\n\n"
+        f"Minting is rate limited per user to {settings.ONE_TIME_KEY_RATE_LIMIT} "
+        "over a rolling window; the response reports how many mints remain."
+    )
+)
 @visible_when(require_scopes(SCOPE_WRITE))
 async def create_one_time_key() -> dict:
-    """Mint a one-time API key for client operations.
-
-    The key stops working after its first use. It carries the caller's own
-    scopes capped to the OAuth grant — it can never hold more scope than
-    the caller already had.
-
-    Minting is rate limited per user over a rolling window
-    (ONE_TIME_KEY_RATE_LIMIT, default 10/hour).
-    """
     with make_session() as session:
         # FIXME(security): non-admin callers can mint a one-time key here.
         # `_create_one_time_key` still caps the issued scopes to
@@ -372,13 +377,20 @@ async def create_one_time_key() -> dict:
         session.execute(
             sa.select(sa.func.pg_advisory_xact_lock(ONE_TIME_KEY_LOCK_CLASS, user_id))
         )
-        if count_one_time_keys_in_window(session, user_id, window_seconds) >= limit:
+        minted = count_one_time_keys_in_window(session, user_id, window_seconds)
+        if minted >= limit:
             raise ValueError(
                 "One-time key rate limit exceeded "
                 f"({settings.ONE_TIME_KEY_RATE_LIMIT}, rolling window); try again later"
             )
 
-        return {"one_time_key": _create_one_time_key(session, user_session)}
+        key = _create_one_time_key(session, user_session)
+        return {
+            "one_time_key": key.key,
+            "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+            "mints_remaining": max(0, limit - minted - 1),
+            "rate_limit": settings.ONE_TIME_KEY_RATE_LIMIT,
+        }
 
 
 # --- Notification tools ---
