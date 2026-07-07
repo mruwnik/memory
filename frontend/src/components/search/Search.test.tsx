@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
-import { renderWithRouter, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mcpToolFromRequest, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import Search from './Search'
 
@@ -15,15 +15,16 @@ const schemas = {
 }
 
 const installFetch = (opts: { results?: unknown[]; searchFails?: boolean } = {}) =>
-  mockFetch(async (input) => {
+  mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
+    const tool = mcpToolFromRequest(input, init)
     if (url.includes('/auth/me')) {
       return mockResponse({ json: { user_id: 1, name: 'T', email: 't@e.com', user_type: 'human', scopes: ['*'] } })
     }
-    if (url.includes('/mcp/meta_get_metadata_schemas')) {
+    if (tool === 'meta_get_metadata_schemas') {
       return mockResponse({ json: mcpEnvelopeJson(schemas) })
     }
-    if (url.includes('/mcp/core_search')) {
+    if (tool === 'core_search') {
       if (opts.searchFails) return mockResponse({ status: 500, json: { detail: 'boom' } })
       return mockResponse({ json: mcpEnvelopeJson(...(opts.results ?? [])) })
     }
@@ -110,8 +111,8 @@ describe('Search', () => {
     // but handleSearch early-returns on a trimmed-empty query.
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), '   ')
     await user.click(screen.getByRole('button', { name: 'Search' }))
-    const searchCalls = fetchMock.mock.calls.filter(([u]) =>
-      String(u).includes('/mcp/core_search'),
+    const searchCalls = fetchMock.mock.calls.filter(
+      ([u, init]) => mcpToolFromRequest(u, init) === 'core_search',
     )
     expect(searchCalls).toHaveLength(0)
   })

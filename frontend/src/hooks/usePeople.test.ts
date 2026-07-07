@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { usePeople } from './usePeople'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpToolError, mcpRpcError, mcpArgsAt, mcpUrlAt, mcpCalls } from './mcpEnvelope.testhelper'
+import { mcpResult, mcpToolError, mcpRpcError, mcpArgsAt, mcpToolAt, mcpCalls } from './mcpEnvelope.testhelper'
 
 const setup = () => renderHook(() => usePeople()).result.current
 
@@ -24,7 +24,7 @@ describe('usePeople.listPeople', () => {
     expect(args).toMatchObject({ limit: 50, offset: 0 })
     expect(args.tags).toBeUndefined()
     expect(args.search).toBeUndefined()
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/people_list_all')
+    expect(mcpToolAt(fetchMock)).toBe('people_list_all')
     expect(mcpCalls(fetchMock).at(-1)?.[1].method).toBe('POST')
   })
 

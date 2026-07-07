@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useDiscord } from './useDiscord'
-import { setAuthCookies, clearCookies, mockFetch, mockResponse } from '@/test/utils'
+import { mcpToolFromRequest, setAuthCookies, clearCookies, mockFetch, mockResponse } from '@/test/utils'
 import { mcpEnvelopeJson } from './mcpEnvelope.testhelper'
 
 // Build a full Response wrapping the JSON-RPC tools/call envelope that
@@ -250,8 +250,8 @@ describe('useDiscord channels (MCP-backed list)', () => {
   it('listChannels passes server_id and server_name as MCP arguments', async () => {
     const fetchMock = mockFetch(async () => mcpResponse({ channels: [] }))
     await setup().listChannels('999', 'My Server')
-    const { init } = callTo(fetchMock, '/mcp/discord_list_channels')
-    const body = JSON.parse(init?.body as string)
+    const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === 'discord_list_channels')
+    const body = JSON.parse(call?.[1]?.body as string)
     expect(body.params.arguments).toEqual({ server_id: '999', server_name: 'My Server' })
   })
 

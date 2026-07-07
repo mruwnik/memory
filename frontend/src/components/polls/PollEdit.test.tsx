@@ -7,6 +7,7 @@ import {
   userEvent,
   setAuthCookies,
   clearCookies,
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
 } from '@/test/utils'
@@ -39,12 +40,12 @@ interface EditMocks {
 }
 
 function mockEdit({ loadResult = makePoll(), updateResult = {} }: EditMocks = {}) {
-  return mockFetch(async (input) => {
+  return mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/auth/me')) {
       return mockResponse({ json: { user_id: 1, scopes: ['*'] } })
     }
-    if (url.includes('polling_upsert_poll')) {
+    if (mcpToolFromRequest(input, init) === 'polling_upsert_poll') {
       if (updateResult instanceof Error) {
         return mockResponse({ status: 500, json: { detail: updateResult.message } })
       }
@@ -163,8 +164,8 @@ describe('PollEdit - submission', () => {
     await user.type(title, 'Patched Title')
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([u]) =>
-        String(u).includes('polling_upsert_poll'),
+      const call = fetchMock.mock.calls.find(
+        ([u, init]) => mcpToolFromRequest(u, init) === 'polling_upsert_poll',
       )
       expect(call).toBeTruthy()
       const body = String(call?.[1]?.body)

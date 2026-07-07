@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useTeams } from './useTeams'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpArgsAt, mcpUrlAt, mcpCalls } from './mcpEnvelope.testhelper'
+import { mcpResult, mcpArgsAt, mcpToolAt, mcpCallsTo } from './mcpEnvelope.testhelper'
 
 const setup = () => renderHook(() => useTeams()).result.current
 
@@ -27,7 +27,7 @@ describe('useTeams.listTeams', () => {
     const out = await listTeams()
 
     expect(out).toEqual(teams)
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/teams_list_all')
+    expect(mcpToolAt(fetchMock)).toBe('teams_list_all')
     expect(mcpArgsAt(fetchMock)).toMatchObject({ include_inactive: false, include_projects: false })
   })
 
@@ -156,7 +156,7 @@ describe('useTeams.updateTeam', () => {
     const out = await updateTeam('ghost', { description: 'x' })
 
     expect(out).toEqual({ success: false, error: 'Team not found' })
-    const upsertCalls = mcpCalls(fetchMock).filter((c) => String(c[0]).includes('teams_upsert'))
+    const upsertCalls = mcpCallsTo(fetchMock, 'teams_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
 })
@@ -270,7 +270,7 @@ describe('useTeams.assignTeamToProject', () => {
     const out = await assignTeamToProject(3, 9)
 
     expect(out).toEqual({ success: true })
-    const upsertCalls = mcpCalls(fetchMock).filter((c) => String(c[0]).includes('projects_upsert'))
+    const upsertCalls = mcpCallsTo(fetchMock, 'projects_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
 
@@ -301,7 +301,7 @@ describe('useTeams.unassignTeamFromProject', () => {
     const out = await unassignTeamFromProject(3, 99)
 
     expect(out).toEqual({ success: true })
-    const upsertCalls = mcpCalls(fetchMock).filter((c) => String(c[0]).includes('projects_upsert'))
+    const upsertCalls = mcpCallsTo(fetchMock, 'projects_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
 
@@ -319,7 +319,7 @@ describe('useTeams.unassignTeamFromProject', () => {
       success: false,
       error: 'Cannot remove the last team - projects require at least one team',
     })
-    const upsertCalls = mcpCalls(fetchMock).filter((c) => String(c[0]).includes('projects_upsert'))
+    const upsertCalls = mcpCallsTo(fetchMock, 'projects_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
 

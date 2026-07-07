@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useClaude, getDifferUrl, getLogStreamUrl } from './useClaude'
-import { setAuthCookies, clearCookies, mockFetch, mockResponse } from '@/test/utils'
+import { mcpToolFromRequest, setAuthCookies, clearCookies, mockFetch, mockResponse } from '@/test/utils'
 
 beforeEach(() => {
   clearCookies()
@@ -14,6 +14,12 @@ function setup() {
 
 function callTo(fetchMock: ReturnType<typeof mockFetch>, substr: string) {
   const call = fetchMock.mock.calls.find((c) => String(c[0]).includes(substr))
+  return { url: String(call?.[0]), init: call?.[1] }
+}
+
+// Locate the fetch call that invoked the given MCP tool (params.name in the body).
+function mcpCallTo(fetchMock: ReturnType<typeof mockFetch>, tool: string) {
+  const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === tool)
   return { url: String(call?.[0]), init: call?.[1] }
 }
 
@@ -111,8 +117,8 @@ describe('useClaude sessions', () => {
       next_scheduled_time: '2024',
       topic: 'tp',
     }
-    const fetchMock = mockFetch(async (input) => {
-      if (String(input).includes('/mcp/scheduler_upsert')) {
+    const fetchMock = mockFetch(async (input, init) => {
+      if (mcpToolFromRequest(input, init) === 'scheduler_upsert') {
         return mockResponse({
           json: { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify(task) }] } },
         })
@@ -130,7 +136,7 @@ describe('useClaude sessions', () => {
       topic: 'tp',
     })
     // initial_prompt is forwarded as `message`; the rest becomes spawn_config.
-    const { init } = callTo(fetchMock, '/mcp/scheduler_upsert')
+    const { init } = mcpCallTo(fetchMock, 'scheduler_upsert')
     expect(init?.method).toBe('POST')
     expect(JSON.parse(init?.body as string).params.arguments).toEqual({
       task_type: 'claude_session',
@@ -141,8 +147,8 @@ describe('useClaude sessions', () => {
   })
 
   it('scheduleSession drops empty/undefined spawn_config fields', async () => {
-    const fetchMock = mockFetch(async (input) => {
-      if (String(input).includes('/mcp/scheduler_upsert')) {
+    const fetchMock = mockFetch(async (input, init) => {
+      if (mcpToolFromRequest(input, init) === 'scheduler_upsert') {
         return mockResponse({
           json: { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ id: 't2' }) }] } },
         })
@@ -153,7 +159,7 @@ describe('useClaude sessions', () => {
       cron_expression: '0 9 * * *',
       spawn_config: { repo_url: 'r', branch: '', enable_playwright: undefined },
     })
-    expect(JSON.parse(callTo(fetchMock, '/mcp/scheduler_upsert').init?.body as string).params.arguments.spawn_config).toEqual({
+    expect(JSON.parse(mcpCallTo(fetchMock, 'scheduler_upsert').init?.body as string).params.arguments.spawn_config).toEqual({
       repo_url: 'r',
     })
   })
@@ -166,8 +172,8 @@ describe('useClaude sessions', () => {
   })
 
   it('scheduleSession throws an MCP error carrying the HTTP status when the call fails', async () => {
-    mockFetch(async (input) => {
-      if (String(input).includes('/mcp/scheduler_upsert')) {
+    mockFetch(async (input, init) => {
+      if (mcpToolFromRequest(input, init) === 'scheduler_upsert') {
         return mockResponse({ status: 500, text: 'proxy boom', json: undefined })
       }
       return mockResponse({ json: {} })

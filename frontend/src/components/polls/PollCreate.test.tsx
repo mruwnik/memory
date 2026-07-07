@@ -7,6 +7,7 @@ import {
   userEvent,
   setAuthCookies,
   clearCookies,
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
 } from '@/test/utils'
@@ -15,12 +16,12 @@ import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 
 // upsert -> error toggle. Auth's /auth/me answered generically.
 function mockMcp(upsertResult: unknown | Error) {
-  return mockFetch(async (input) => {
+  return mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/auth/me')) {
       return mockResponse({ json: { user_id: 1, scopes: ['*'] } })
     }
-    if (url.includes('polling_upsert_poll')) {
+    if (mcpToolFromRequest(input, init) === 'polling_upsert_poll') {
       if (upsertResult instanceof Error) {
         return mockResponse({ status: 500, json: { detail: upsertResult.message } })
       }
@@ -87,8 +88,8 @@ describe('PollCreate - submission', () => {
     await user.type(screen.getByLabelText(/Poll Title/), 'Quarterly Review')
     await user.click(screen.getByRole('button', { name: 'Create Poll' }))
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([u]) =>
-        String(u).includes('polling_upsert_poll'),
+      const call = fetchMock.mock.calls.find(
+        ([u, init]) => mcpToolFromRequest(u, init) === 'polling_upsert_poll',
       )
       expect(call).toBeTruthy()
       expect(String(call?.[1]?.body)).toContain('Quarterly Review')

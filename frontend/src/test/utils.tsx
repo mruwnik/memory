@@ -79,18 +79,44 @@ export function mockFetch(
 }
 
 /**
+ * The MCP tool a mocked fetch call invokes, or null for non-MCP requests.
+ * All MCP tool calls POST a JSON-RPC envelope to exactly `/mcp`; the tool is
+ * identified by `params.name` in the body. Useful in hand-rolled mockFetch
+ * impls and call assertions.
+ */
+export function mcpToolFromRequest(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): string | null {
+  const url = typeof input === 'string' ? input : input.toString()
+  if (!url.endsWith('/mcp')) return null
+  const body = init?.body
+  if (typeof body !== 'string') return null
+  try {
+    return JSON.parse(body).params?.name ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Route fetch calls by URL substring. Each key is matched with `includes`
- * against the request URL; the first match wins. Use `__default` for a
- * fallback. Values are MockResponseInit objects.
+ * against the request URL; the first match wins. MCP tool calls all POST to
+ * exactly `/mcp` with the tool in the JSON-RPC body, so for them the tool
+ * name is appended to the URL before matching — keys like `core_search` or
+ * `/mcp/core_search` route by tool. Use `__default` for a fallback. Values
+ * are MockResponseInit objects.
  */
 export function mockFetchRoutes(
   routes: Record<string, MockResponseInit>,
 ): ReturnType<typeof mockFetch> {
-  return mockFetch(async (input) => {
+  return mockFetch(async (input, requestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
+    const tool = mcpToolFromRequest(input, requestInit)
+    const matchTarget = tool === null ? url : `${url}/${tool}`
     for (const [pattern, init] of Object.entries(routes)) {
       if (pattern === '__default') continue
-      if (url.includes(pattern)) return mockResponse(init)
+      if (matchTarget.includes(pattern)) return mockResponse(init)
     }
     if (routes.__default) return mockResponse(routes.__default)
     return mockResponse({ status: 404, json: { detail: 'not found' } })

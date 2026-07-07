@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useJournal } from './useJournal'
 import {
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
   MockResponseInit,
@@ -23,7 +24,7 @@ function routeMcp(resp: MockResponseInit) {
 }
 
 function args(fetchMock: ReturnType<typeof mockFetch>) {
-  const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('/mcp/journal_add'))
+  const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === 'journal_add')
   return JSON.parse(call?.[1]?.body as string).params.arguments
 }
 
