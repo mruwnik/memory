@@ -254,6 +254,8 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `FILE_STORAGE_DIR`                | `/tmp/memory_files`  | Where uploaded content is stored                               |
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|
 | `RATE_LIMIT_TRUSTED_PROXIES`      | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for the rate-limit bucket key          |
+| `ONE_TIME_KEY_RATE_LIMIT`         | `10/hour`            | Rolling-window cap on one-time keys minted per user (MCP)      |
+| `ONE_TIME_KEY_TTL_SECONDS`        | `3600`               | Seconds until an unused one-time key expires                   |
 | `ENABLE_BM25_SEARCH`              | `true`               | Postgres BM25 alongside vector search                          |
 | `ENABLE_HYDE_EXPANSION`           | `true`               | Hypothetical Document Embeddings query expansion               |
 | `ENABLE_QUERY_ANALYSIS`           | `true`               | LLM intent extraction from queries                             |

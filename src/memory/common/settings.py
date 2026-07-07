@@ -344,6 +344,16 @@ API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
 RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
     "RATE_LIMIT_TRUSTED_PROXIES", "127.0.0.1,::1"
 )
+# Rolling-window cap on one-time API keys minted per user via the MCP
+# `create_one_time_key` tool. Enforced by counting api_keys rows created in
+# the window — consumed keys are soft-deleted (revoked) rather than removed
+# so they still count; a maintenance task purges them once they age out.
+ONE_TIME_KEY_RATE_LIMIT = os.getenv("ONE_TIME_KEY_RATE_LIMIT", "10/hour")
+# TTL on minted one-time keys: an unused key self-expires after this many
+# seconds (APIKey.is_valid rejects it), so a never-consumed ot_* token is not
+# a permanent credential. The cleanup task hard-deletes it once it is both
+# expired and outside the mint window above.
+ONE_TIME_KEY_TTL_SECONDS = int(os.getenv("ONE_TIME_KEY_TTL_SECONDS", 3600))
 
 # Claude scheduled tasks limits
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))

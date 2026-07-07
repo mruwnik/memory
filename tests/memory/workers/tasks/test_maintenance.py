@@ -1657,3 +1657,58 @@ def test_cleanup_old_task_executions_deletes_old_terminal(db_session, sample_use
     assert old_id not in remaining
     assert recent_id in remaining
     assert running_id in remaining  # never delete un-finished executions
+
+
+# ====== cleanup_used_one_time_keys ======
+
+
+def test_cleanup_used_one_time_keys(db_session, admin_user, monkeypatch):
+    """Purge dead one-time keys (consumed or expired) that left the window.
+
+    Five rows pin the fates: revoked+aged-out and expired+aged-out are
+    purged; revoked-in-window and expired-in-window are kept (they must
+    keep counting toward the mint limit); an aged-out unconsumed key with
+    no expiry is still a live credential and never purged.
+    """
+    from memory.common.db.models import APIKey, APIKeyType
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "10/hour")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    used_old = APIKey.create(user_id=admin_user.id, key_type=APIKeyType.ONE_TIME)
+    used_old.revoked = True
+    used_old.created_at = now - timedelta(hours=2)
+
+    used_fresh = APIKey.create(user_id=admin_user.id, key_type=APIKeyType.ONE_TIME)
+    used_fresh.revoked = True
+    used_fresh.created_at = now - timedelta(minutes=5)
+
+    expired_old = APIKey.create(
+        user_id=admin_user.id,
+        key_type=APIKeyType.ONE_TIME,
+        expires_at=now - timedelta(hours=1),
+    )
+    expired_old.created_at = now - timedelta(hours=2)
+
+    expired_fresh = APIKey.create(
+        user_id=admin_user.id,
+        key_type=APIKeyType.ONE_TIME,
+        expires_at=now - timedelta(minutes=1),
+    )
+    expired_fresh.created_at = now - timedelta(minutes=5)
+
+    unused_old = APIKey.create(user_id=admin_user.id, key_type=APIKeyType.ONE_TIME)
+    unused_old.created_at = now - timedelta(hours=2)
+
+    db_session.add_all([used_old, used_fresh, expired_old, expired_fresh, unused_old])
+    db_session.commit()
+    kept_ids = {used_fresh.id, expired_fresh.id, unused_old.id}
+    purged_ids = {used_old.id, expired_old.id}
+
+    result = maintenance_module.cleanup_used_one_time_keys()
+
+    assert result["deleted"] == 2
+    db_session.expire_all()
+    remaining = {k.id for k in db_session.query(APIKey).all()}
+    assert purged_ids & remaining == set()
+    assert kept_ids <= remaining

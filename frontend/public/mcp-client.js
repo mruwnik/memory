@@ -295,6 +295,7 @@
       getMetadataSchemas: () => call('meta_get_metadata_schemas', {}),
       getCurrentTime: () => call('meta_get_current_time', {}),
       getUser: (params) => call('meta_get_user', params),
+      createOneTimeKey: () => call('meta_create_one_time_key', {}),
       notifyUser: (params) => call('meta_notify_user', params),
     },
 
