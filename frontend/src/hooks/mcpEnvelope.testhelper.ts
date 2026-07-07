@@ -1,4 +1,4 @@
-import type { MockResponseInit } from '@/test/utils'
+import { mcpToolFromRequest, type MockResponseInit } from '@/test/utils'
 
 // `useMCP`'s `parseJsonResponse` (used by useTelemetry/useDiscord and others)
 // throws unless the response advertises a JSON content-type, so every
@@ -61,13 +61,18 @@ export function mcpRpcError(message: string, code = -32000): MockResponseInit {
   return { status: 200, headers: JSON_HEADERS, json: mcpRpcErrorJson(message, code) }
 }
 
-/** The fetch calls that target an `/mcp/<method>` endpoint, in order. */
+/** The fetch calls that target the `/mcp` endpoint, in order. */
 export function mcpCalls(fetchMock: { mock: { calls: any[][] } }) {
-  return fetchMock.mock.calls.filter((c) => String(c[0]).includes('/mcp/'))
+  return fetchMock.mock.calls.filter((c) => mcpToolFromRequest(c[0], c[1]) !== null)
+}
+
+/** The MCP calls that invoke the given tool (`params.name`), in order. */
+export function mcpCallsTo(fetchMock: { mock: { calls: any[][] } }, tool: string) {
+  return fetchMock.mock.calls.filter((c) => mcpToolFromRequest(c[0], c[1]) === tool)
 }
 
 /**
- * Extract the parsed JSON-RPC arguments of the Nth `/mcp/` fetch call
+ * Extract the parsed JSON-RPC arguments of the Nth MCP fetch call
  * (default: the last MCP call). The hook (via `useMCP`) also issues a
  * `/auth/me` request from `checkAuth`, so this filters to MCP calls only.
  * Tool args live under `params.arguments`.
@@ -79,7 +84,8 @@ export function mcpArgsAt(fetchMock: { mock: { calls: any[][] } }, callIndex = -
   return body.params.arguments as Record<string, any>
 }
 
-/** The URL string of the Nth `/mcp/` fetch call (default last). */
-export function mcpUrlAt(fetchMock: { mock: { calls: any[][] } }, callIndex = -1): string {
-  return String(mcpCalls(fetchMock).at(callIndex)?.[0])
+/** The tool name (`params.name`) of the Nth MCP fetch call (default last). */
+export function mcpToolAt(fetchMock: { mock: { calls: any[][] } }, callIndex = -1): string | null {
+  const call = mcpCalls(fetchMock).at(callIndex)
+  return call ? mcpToolFromRequest(call[0], call[1]) : null
 }

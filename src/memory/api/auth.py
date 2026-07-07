@@ -6,7 +6,7 @@ from typing import TypeVar, cast
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import delete, update
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -276,9 +276,10 @@ def authenticate_by_api_key(
 
     Uses constant-time comparison to prevent timing attacks.
 
-    For one-time keys, consumes the key atomically (DELETE ... RETURNING):
-    if two concurrent requests present the same ot_* token, only one wins.
-    The race-loser gets ``(None, None)`` instead of double-authenticating.
+    For one-time keys, consumes the key atomically (UPDATE ... RETURNING,
+    marking it revoked): if two concurrent requests present the same ot_*
+    token, only one wins. The race-loser gets ``(None, None)`` instead of
+    double-authenticating.
 
     Args:
         api_key: The API key to authenticate.
@@ -296,8 +297,8 @@ def authenticate_by_api_key(
     if allowed_key_types and matched_key.key_type not in allowed_key_types:
         return None, None
 
-    # Eagerly load user before handle_api_key_use, which may delete/commit
-    # (for one-time keys). This prevents DetachedInstanceError on lazy load.
+    # Eagerly load user before handle_api_key_use, which commits (and for
+    # one-time keys revokes). This prevents DetachedInstanceError on lazy load.
     user = matched_key.user
     if not handle_api_key_use(matched_key, db):
         # Concurrent request consumed the one-time key first. Debug-level
@@ -312,27 +313,28 @@ def authenticate_by_api_key(
 
 
 def handle_api_key_use(key_record: APIKey, db: DBSession) -> bool:
-    """Handle API key usage: update last_used_at and delete one-time keys.
+    """Handle API key usage: update last_used_at and consume one-time keys.
 
     Warning: This function commits the database session. This is intentional
-    to ensure one-time keys are deleted before request processing begins,
+    to ensure one-time keys are consumed before request processing begins,
     preventing replay attacks. For regular keys, this updates the last_used_at
     timestamp immediately.
 
-    For one-time keys: uses an atomic ``DELETE ... WHERE id=:id RETURNING id``
-    so concurrent requests cannot both succeed. Returns False if another
-    request already consumed the key (race-loser); True otherwise.
+    For one-time keys: soft-deletes via an atomic
+    ``UPDATE ... SET revoked WHERE id=:id AND NOT revoked RETURNING id`` so
+    concurrent requests cannot both succeed. Returns False if another request
+    already consumed the key (race-loser); True otherwise. The row is kept
+    (rather than hard-deleted) so the mint rate limit in
+    ``MCP.servers.meta.create_one_time_key`` can count keys issued in its
+    rolling window; a maintenance task purges rows once they age out.
 
     For regular keys: updates last_used_at and returns True.
     """
     if key_record.is_one_time:
-        # Detach the in-memory row from this session so SQLAlchemy doesn't
-        # also queue an ORM-level delete that would conflict with the
-        # explicit DELETE we issue below.
-        db.expunge(key_record)
         result = db.execute(
-            delete(APIKey)
-            .where(APIKey.id == key_record.id)
+            update(APIKey)
+            .where(APIKey.id == key_record.id, APIKey.revoked.is_(False))
+            .values(revoked=True, last_used_at=datetime.now(timezone.utc))
             .returning(APIKey.id)
         )
         won = result.scalar_one_or_none() is not None
@@ -393,7 +395,7 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
 
     First checks if user was already authenticated by middleware (stored in
     request.state.authenticated_user_id). This is important for one-time keys,
-    which are deleted after first use - the middleware authenticates and deletes
+    which are consumed on first use - the middleware authenticates and revokes
     the key, then stores the user_id so endpoints don't try to re-authenticate.
     """
     # Check if middleware already authenticated this request
@@ -867,7 +869,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 )
 
             # Store auth info in request state so endpoints don't re-authenticate
-            # (important for one-time keys which are deleted after first use)
+            # (important for one-time keys which are consumed on first use)
             request.state.authenticated_user_id = user.id
             request.state.authenticated_key_type = key_type  # None for session tokens
 

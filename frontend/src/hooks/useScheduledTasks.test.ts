@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useScheduledTasks } from './useScheduledTasks'
 import {
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
   MockResponseInit,
@@ -40,8 +41,8 @@ const task = {
   updated_at: null,
 }
 
-function bodyArgs(fetchMock: ReturnType<typeof mockFetch>, methodSubstr: string) {
-  const call = fetchMock.mock.calls.find((c) => String(c[0]).includes(`/mcp/${methodSubstr}`))
+function bodyArgs(fetchMock: ReturnType<typeof mockFetch>, tool: string) {
+  const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === tool)
   return JSON.parse(call?.[1]?.body as string).params.arguments
 }
 

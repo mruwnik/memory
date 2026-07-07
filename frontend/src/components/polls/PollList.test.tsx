@@ -5,6 +5,7 @@ import {
   waitFor,
   setAuthCookies,
   clearCookies,
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
 } from '@/test/utils'
@@ -31,16 +32,18 @@ function makePoll(overrides: Partial<Poll> = {}): Poll {
   }
 }
 
-// Route MCP calls by method substring. Each entry maps method-name -> payload
-// (or an Error to simulate failure). Auth's /auth/me is answered generically.
+// Route MCP calls by tool name (params.name in the JSON-RPC body). Each entry
+// maps tool -> payload (or an Error to simulate failure). Auth's /auth/me is
+// answered generically.
 function mockMcp(handlers: Record<string, unknown | Error>) {
-  return mockFetch(async (input) => {
+  return mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/auth/me')) {
       return mockResponse({ json: { user_id: 1, scopes: ['*'] } })
     }
+    const tool = mcpToolFromRequest(input, init)
     for (const [method, payload] of Object.entries(handlers)) {
-      if (!url.includes(method)) continue
+      if (tool !== method) continue
       if (payload instanceof Error) {
         return mockResponse({ status: 500, json: { detail: payload.message } })
       }
@@ -142,8 +145,8 @@ describe('PollList - status filter', () => {
     await user.selectOptions(screen.getByRole('combobox'), 'closed')
     expect(await screen.findByText('No closed polls found.')).toBeInTheDocument()
     // The most recent list call carried the chosen status filter.
-    const listCall = fetchMock.mock.calls.find(([u]) =>
-      String(u).includes('polling_list_polls'),
+    const listCall = fetchMock.mock.calls.find(
+      ([u, init]) => mcpToolFromRequest(u, init) === 'polling_list_polls',
     )
     expect(listCall).toBeTruthy()
   })

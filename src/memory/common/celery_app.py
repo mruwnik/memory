@@ -84,6 +84,7 @@ UPDATE_METADATA_FOR_SOURCE_ITEMS = (
 UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 CLEANUP_EXPIRED_OAUTH_STATES = f"{MAINTENANCE_ROOT}.cleanup_expired_oauth_states"
 CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
+CLEANUP_USED_ONE_TIME_KEYS = f"{MAINTENANCE_ROOT}.cleanup_used_one_time_keys"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
 CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
@@ -443,6 +444,10 @@ def build_beat_schedule() -> dict:
         "cleanup-expired-oauth-states": {
             "task": CLEANUP_EXPIRED_OAUTH_STATES,
             "schedule": crontab(minute="15"),
+        },
+        "cleanup-used-one-time-keys": {
+            "task": CLEANUP_USED_ONE_TIME_KEYS,
+            "schedule": crontab(hour="4", minute="30"),
         },
         "cleanup-stuck-meetings": {
             "task": CLEANUP_STUCK_MEETINGS,

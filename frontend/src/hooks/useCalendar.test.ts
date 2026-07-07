@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useCalendar, CalendarEvent } from './useCalendar'
 import {
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
   setAuthCookies,
@@ -17,9 +18,12 @@ function routeMcpDynamic(makeEvents: () => CalendarEvent[]) {
   })
 }
 
+function upcomingCalls(fetchMock: ReturnType<typeof mockFetch>) {
+  return fetchMock.mock.calls.filter((c) => mcpToolFromRequest(c[0], c[1]) === 'organizer_upcoming')
+}
+
 function mcpArgs(fetchMock: ReturnType<typeof mockFetch>, idx = 0) {
-  const calls = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/mcp/organizer_upcoming'))
-  return JSON.parse(calls[idx]?.[1]?.body as string).params.arguments
+  return JSON.parse(upcomingCalls(fetchMock)[idx]?.[1]?.body as string).params.arguments
 }
 
 const ev = (id: number, start: string): CalendarEvent => ({
@@ -104,10 +108,7 @@ describe('useCalendar.getMonthEvents (caching)', () => {
     const first = await result.current.getMonthEvents(2024, 4)
     const second = await result.current.getMonthEvents(2024, 4)
     expect(second).toBe(first)
-    const monthCalls = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).includes('/mcp/organizer_upcoming'),
-    )
-    expect(monthCalls).toHaveLength(1)
+    expect(upcomingCalls(fetchMock)).toHaveLength(1)
   })
 
   it('uses distinct cache keys for different user id sets', async () => {
@@ -115,10 +116,7 @@ describe('useCalendar.getMonthEvents (caching)', () => {
     const { result } = renderHook(() => useCalendar())
     await result.current.getMonthEvents(2024, 5, [1])
     await result.current.getMonthEvents(2024, 5, [2])
-    const monthCalls = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).includes('/mcp/organizer_upcoming'),
-    )
-    expect(monthCalls).toHaveLength(2)
+    expect(upcomingCalls(fetchMock)).toHaveLength(2)
   })
 
   it('clearCache forces a re-fetch', async () => {
@@ -127,10 +125,7 @@ describe('useCalendar.getMonthEvents (caching)', () => {
     await result.current.getMonthEvents(2024, 6)
     result.current.clearCache()
     await result.current.getMonthEvents(2024, 6)
-    const monthCalls = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).includes('/mcp/organizer_upcoming'),
-    )
-    expect(monthCalls).toHaveLength(2)
+    expect(upcomingCalls(fetchMock)).toHaveLength(2)
   })
 })
 
@@ -147,10 +142,7 @@ describe('useCalendar.getEventsForMonths', () => {
     })
     const { result } = renderHook(() => useCalendar())
     const events = await result.current.getEventsForMonths(2024, 1) // Feb
-    const monthCalls = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).includes('/mcp/organizer_upcoming'),
-    )
-    expect(monthCalls).toHaveLength(3)
+    expect(upcomingCalls(fetchMock)).toHaveLength(3)
     // dup (id 1) appears once; 3 unique => 4 total
     expect(events).toHaveLength(4)
     const sorted = [...events].sort(

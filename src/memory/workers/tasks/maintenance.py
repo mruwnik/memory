@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
-from sqlalchemy import delete, inspect as sa_inspect
+from sqlalchemy import delete, func, inspect as sa_inspect, or_
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -18,6 +18,7 @@ from memory.common.celery_app import (
     CLEAN_COLLECTION,
     CLEANUP_EXPIRED_OAUTH_STATES,
     CLEANUP_EXPIRED_SESSIONS,
+    CLEANUP_USED_ONE_TIME_KEYS,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_DONE_ONEOFF_TASKS,
     CLEANUP_OLD_TASK_EXECUTIONS,
@@ -613,6 +614,42 @@ def cleanup_expired_sessions():
         session.commit()
 
     logger.info(f"Deleted {deleted} expired user sessions")
+    return {"deleted": deleted}
+
+
+@app.task(name=CLEANUP_USED_ONE_TIME_KEYS)
+@tracked_task
+def cleanup_used_one_time_keys():
+    """Purge dead one-time API keys that have aged out of the mint window.
+
+    A one-time key is dead once it is consumed (soft-deleted with
+    ``revoked=True``) or its mint TTL has elapsed (``expires_at`` in the
+    past). Dead rows are kept while ``created_at`` is inside the rolling
+    window so the mint rate limit in ``MCP.servers.meta.create_one_time_key``
+    still counts them; once outside the window they can be hard-deleted.
+
+    The window cutoff is computed from ``func.now()`` in-query because
+    ``created_at`` is stamped by the Postgres clock — both sides of the
+    comparison must share one clock.
+    """
+    from memory.common.db.models import APIKey, APIKeyType
+    from memory.common.rate_limit import parse_limit
+
+    _, window_seconds = parse_limit(settings.ONE_TIME_KEY_RATE_LIMIT)
+
+    with make_session() as session:
+        deleted = (
+            session.query(APIKey)
+            .filter(
+                APIKey.key_type == APIKeyType.ONE_TIME,
+                APIKey.created_at < func.now() - timedelta(seconds=window_seconds),
+                or_(APIKey.revoked.is_(True), APIKey.expires_at < func.now()),
+            )
+            .delete()
+        )
+        session.commit()
+
+    logger.info(f"Deleted {deleted} dead one-time API keys")
     return {"deleted": deleted}
 
 

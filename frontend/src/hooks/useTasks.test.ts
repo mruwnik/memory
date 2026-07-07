@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useTasks } from './useTasks'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpArgsAt, mcpUrlAt } from './mcpEnvelope.testhelper'
+import { mcpResult, mcpArgsAt, mcpToolAt } from './mcpEnvelope.testhelper'
 
 const setup = () => renderHook(() => useTasks()).result.current
 
@@ -21,7 +21,7 @@ describe('useTasks.listTasks', () => {
     const out = await listTasks()
 
     expect(out).toEqual([sampleTask])
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/organizer_list_tasks')
+    expect(mcpToolAt(fetchMock)).toBe('organizer_list_tasks')
     expect(mcpArgsAt(fetchMock)).toMatchObject({ include_completed: false, limit: 50, offset: 0 })
   })
 
@@ -64,7 +64,7 @@ describe('useTasks.getTask', () => {
     const out = await getTask(1)
 
     expect(out).toEqual(sampleTask)
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/organizer_fetch')
+    expect(mcpToolAt(fetchMock)).toBe('organizer_fetch')
     expect(mcpArgsAt(fetchMock)).toEqual({ task_id: 1 })
   })
 
@@ -103,7 +103,7 @@ describe('useTasks.createTask', () => {
       recurrence: 'weekly',
       tags: ['x'],
     })
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/organizer_create_task')
+    expect(mcpToolAt(fetchMock)).toBe('organizer_create_task')
   })
 })
 
@@ -147,6 +147,6 @@ describe('useTasks.deleteTask', () => {
 
     expect(out).toEqual({ deleted: true })
     expect(mcpArgsAt(fetchMock)).toEqual({ task_id: 1, status: 'cancelled' })
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/organizer_update_task')
+    expect(mcpToolAt(fetchMock)).toBe('organizer_update_task')
   })
 })

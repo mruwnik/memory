@@ -257,8 +257,8 @@ def lookup_principal(token: str, session: Session) -> TokenLookup | None:
     * For UserSession matches: none — the caller decides whether to refresh
       anything based on its own scope/return-type contract.
     * For APIKey matches: ``handle_api_key_use`` is called *here* so the
-      last_used_at bump and one-time-key delete happen atomically with the
-      lookup. Centralising it means both callers run it exactly once, and
+      last_used_at bump and one-time-key consumption happen atomically with
+      the lookup. Centralising it means both callers run it exactly once, and
       a future revocation column / audit hook / key-was-used webhook
       added to ``handle_api_key_use`` reaches both call sites for free.
 
@@ -291,9 +291,13 @@ def lookup_principal(token: str, session: Session) -> TokenLookup | None:
             # detached-row bug shouldn't escalate to 500.
             return None
         # Side effect: bumps last_used_at; for one-time keys, atomically
-        # deletes the row. Doing it here means every caller of
+        # revokes the row. Doing it here means every caller of
         # lookup_principal runs it exactly once — never twice, never zero.
-        handle_api_key_use(api_key_record, session)
+        # False = a concurrent request consumed the one-time key first;
+        # the race-loser must not authenticate (CWE-367, same contract as
+        # the REST path in authenticate_by_api_key).
+        if not handle_api_key_use(api_key_record, session):
+            return None
         return TokenLookup(user=api_key_record.user, api_key_record=api_key_record)
 
     return None

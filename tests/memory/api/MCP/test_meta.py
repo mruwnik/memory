@@ -2,7 +2,7 @@
 # pyright: reportFunctionMemberAccess=false
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +10,7 @@ from memory.api.MCP.servers.meta import (
     get_metadata_schemas,
     get_current_time,
     get_user,
+    create_one_time_key,
     from_annotation,
     get_schema,
 )
@@ -425,7 +426,7 @@ def test_create_one_time_key_scope_intersection(user_scopes, granted_scopes, exp
     class FakeKey:
         key = "ot_fake"
 
-    def fake_create(user_id, key_type, name, scopes):
+    def fake_create(user_id, key_type, name, scopes, expires_at):
         captured["scopes"] = scopes
         return FakeKey()
 
@@ -492,9 +493,8 @@ async def test_one_time_key_pins_intersection_for_narrow_token(
     granted = ["read", "write", "claudeai"]
 
     with _mcp_auth_context_with_scopes(admin_session.id, granted):
-        result = await get_user.fn(generate_one_time_key=True)
+        result = await create_one_time_key.fn()
 
-    assert result["authenticated"] is True
     assert result.get("one_time_key") is not None
 
     stored = (
@@ -514,9 +514,9 @@ async def test_one_time_key_allowed_for_non_admin_but_capped_to_grant(
 
     The admin gate that previously refused non-admin callers outright
     has been removed (see the ``# FIXME(security)`` block in
-    ``meta.get_user``) to unblock client workflows. The remaining
-    defence is the intersection cap in ``_create_one_time_key`` —
-    ``user.scopes ∩ granted_scopes`` — which means a non-admin caller
+    ``meta.create_one_time_key``) to unblock client workflows. The
+    remaining defence is the intersection cap in ``_create_one_time_key``
+    — ``user.scopes ∩ granted_scopes`` — which means a non-admin caller
     can mint a key, but only one carrying scopes the caller already
     had. This test pins both halves: the call now succeeds, and the
     minted key carries no scope beyond the user's nor the grant's.
@@ -537,9 +537,8 @@ async def test_one_time_key_allowed_for_non_admin_but_capped_to_grant(
 
     granted = ["read", "write", "teams", "claudeai"]
     with _mcp_auth_context_with_scopes(sess.id, granted):
-        result = await get_user.fn(generate_one_time_key=True)
+        result = await create_one_time_key.fn()
 
-    assert result["authenticated"] is True
     assert result.get("one_time_key") is not None
 
     stored = (
@@ -578,7 +577,7 @@ async def test_one_time_key_admin_grant_via_oauth(
 
     granted = ["*", "read", "write"]
     with _mcp_auth_context_with_scopes(sess.id, granted):
-        result = await get_user.fn(generate_one_time_key=True)
+        result = await create_one_time_key.fn()
 
     assert result.get("one_time_key") is not None
     stored = (
@@ -592,8 +591,8 @@ async def test_one_time_key_admin_user_with_narrow_grant_caps_to_grant(
     db_session, admin_session
 ):
     """REGRESSION GUARD on the intersection cap: an admin user (``user.scopes
-    = ["*"]``) who reaches ``get_user(generate_one_time_key=True)`` via an
-    OAuth grant of exactly ``["read"]`` MUST receive a minted key with
+    = ["*"]``) who reaches ``create_one_time_key`` via an OAuth grant of
+    exactly ``["read"]`` MUST receive a minted key with
     scopes = ``["read"]`` — never the user's ``["*"]``. This pins the
     ``elif "*" in user_scopes: effective = granted_scopes`` branch in
     ``_create_one_time_key`` so a future "simplification" that drops the
@@ -603,9 +602,8 @@ async def test_one_time_key_admin_user_with_narrow_grant_caps_to_grant(
 
     granted = ["read"]
     with _mcp_auth_context_with_scopes(admin_session.id, granted):
-        result = await get_user.fn(generate_one_time_key=True)
+        result = await create_one_time_key.fn()
 
-    assert result["authenticated"] is True
     assert result.get("one_time_key") is not None
 
     stored = (
@@ -621,6 +619,205 @@ async def test_one_time_key_admin_user_with_narrow_grant_caps_to_grant(
     )
     # Most important shape: the wildcard must NOT have leaked through.
     assert "*" not in stored.scopes
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_rate_limited(db_session, admin_session, monkeypatch):
+    """Once the rolling window is full, minting fails and nothing new is stored."""
+    from memory.common import settings
+    from memory.common.db.models import APIKey
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "1/hour")
+
+    with mcp_auth_context(admin_session.id):
+        await create_one_time_key.fn()
+        with pytest.raises(ValueError, match="rate limit"):
+            await create_one_time_key.fn()
+
+    stored = (
+        db_session.query(APIKey).filter(APIKey.user_id == admin_session.user_id).count()
+    )
+    assert stored == 1
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_reports_remaining_quota(
+    db_session, admin_session, monkeypatch
+):
+    """The response tells the caller how much mint quota is left — the tool
+    description can't, beyond the deployment default, since callers only see
+    text, not settings."""
+    from memory.common import settings
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "2/hour")
+
+    with mcp_auth_context(admin_session.id):
+        first = await create_one_time_key.fn()
+        second = await create_one_time_key.fn()
+
+    assert first["mints_remaining"] == 1
+    assert first["rate_limit"] == "2/hour"
+    assert first["expires_at"] is not None
+    assert second["mints_remaining"] == 0
+
+
+def test_create_one_time_key_description_embeds_configured_limits():
+    """MCP callers see only the tool description — it must carry the actual
+    configured limit values, not unresolvable setting names."""
+    from memory.common import settings
+
+    description = create_one_time_key.description or ""
+    assert settings.ONE_TIME_KEY_RATE_LIMIT in description
+    assert str(settings.ONE_TIME_KEY_TTL_SECONDS) in description
+    assert "ONE_TIME_KEY_RATE_LIMIT" not in description
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_sets_expiry(db_session, admin_session, monkeypatch):
+    """Minted keys carry ONE_TIME_KEY_TTL_SECONDS of life, so an unused
+    key self-expires instead of remaining a permanent credential."""
+    from memory.common import settings
+    from memory.common.db.models import APIKey
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_TTL_SECONDS", 123)
+
+    before = datetime.now(timezone.utc).replace(tzinfo=None)
+    with mcp_auth_context(admin_session.id):
+        await create_one_time_key.fn()
+    after = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    stored = (
+        db_session.query(APIKey).filter(APIKey.user_id == admin_session.user_id).one()
+    )
+    assert stored.expires_at is not None
+    assert before + timedelta(seconds=123) <= stored.expires_at
+    assert stored.expires_at <= after + timedelta(seconds=123)
+    assert stored.is_valid()
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_expired_unused_key_is_invalid(
+    db_session, admin_session, monkeypatch
+):
+    """A key that outlives its TTL without being consumed is rejected by
+    is_valid() even though it was never revoked."""
+    from memory.common import settings
+    from memory.common.db.models import APIKey
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_TTL_SECONDS", -1)
+
+    with mcp_auth_context(admin_session.id):
+        await create_one_time_key.fn()
+
+    stored = (
+        db_session.query(APIKey).filter(APIKey.user_id == admin_session.user_id).one()
+    )
+    assert stored.revoked is False
+    assert not stored.is_valid()
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_used_keys_still_count(
+    db_session, admin_session, monkeypatch
+):
+    """REGRESSION GUARD on the soft-delete design: keys consumed on first use
+    are revoked, not removed, so they still occupy mint quota. If consumption
+    ever goes back to hard DELETE, the rolling window silently stops counting
+    used keys — mint, use, mint, use would bypass the limit entirely."""
+    from memory.common import settings
+    from memory.common.db.models import APIKey, APIKeyType
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "1/hour")
+
+    used_key = APIKey.create(
+        user_id=admin_session.user_id, key_type=APIKeyType.ONE_TIME
+    )
+    used_key.revoked = True
+    db_session.add(used_key)
+    db_session.commit()
+
+    with (
+        mcp_auth_context(admin_session.id),
+        pytest.raises(ValueError, match="rate limit"),
+    ):
+        await create_one_time_key.fn()
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_window_slides(
+    db_session, admin_session, monkeypatch
+):
+    """Keys older than the window free up quota — the cap is rolling, not
+    a lifetime total."""
+    from datetime import datetime, timedelta, timezone
+    from memory.common import settings
+    from memory.common.db.models import APIKey, APIKeyType
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "1/hour")
+
+    old_key = APIKey.create(
+        user_id=admin_session.user_id, key_type=APIKeyType.ONE_TIME
+    )
+    old_key.revoked = True
+    old_key.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        hours=2
+    )
+    db_session.add(old_key)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await create_one_time_key.fn()
+
+    assert result.get("one_time_key") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_buckets_per_user(
+    db_session, admin_session, user_session, monkeypatch
+):
+    """The window is counted per user — one user exhausting their quota
+    must not block anyone else's minting."""
+    from memory.common import settings
+
+    monkeypatch.setattr(settings, "ONE_TIME_KEY_RATE_LIMIT", "1/hour")
+
+    with mcp_auth_context(admin_session.id):
+        await create_one_time_key.fn()
+        with pytest.raises(ValueError, match="rate limit"):
+            await create_one_time_key.fn()
+
+    with mcp_auth_context(user_session.id):
+        result = await create_one_time_key.fn()
+
+    assert result.get("one_time_key") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_one_time_key_requires_auth(db_session):
+    """No auth context → no key material."""
+    with pytest.raises(ValueError, match="Not authenticated"):
+        await create_one_time_key.fn()
+
+
+@pytest.mark.asyncio
+async def test_get_user_does_not_mint_keys(db_session, admin_session):
+    """Minting moved to create_one_time_key; get_user is read-only again.
+
+    Pins both halves of the split: the old parameter is gone (TypeError,
+    not silently ignored) and the plain call returns no key material."""
+    from memory.common.db.models import APIKey
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_user.fn()
+
+    assert "one_time_key" not in result
+    stored = (
+        db_session.query(APIKey).filter(APIKey.user_id == admin_session.user_id).first()
+    )
+    assert stored is None
+
+    with mcp_auth_context(admin_session.id), pytest.raises(TypeError):
+        await get_user.fn(generate_one_time_key=True)
 
 
 # ====== get_forecasts tests ======

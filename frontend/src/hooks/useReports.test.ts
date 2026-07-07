@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useReports } from './useReports'
 import {
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
   MockResponseInit,
@@ -22,8 +23,8 @@ function routeMcp(resp: MockResponseInit) {
   })
 }
 
-function mcpArgs(fetchMock: ReturnType<typeof mockFetch>, method: string) {
-  const call = fetchMock.mock.calls.find((c) => String(c[0]).includes(`/mcp/${method}`))
+function mcpArgs(fetchMock: ReturnType<typeof mockFetch>, tool: string) {
+  const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === tool)
   return JSON.parse(call?.[1]?.body as string).params.arguments
 }
 

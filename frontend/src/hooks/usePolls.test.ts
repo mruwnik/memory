@@ -9,7 +9,7 @@ import {
   getPollResults,
 } from './usePolls'
 import { mockFetchRoutes, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpArgsAt, mcpUrlAt } from './mcpEnvelope.testhelper'
+import { mcpResult, mcpArgsAt, mcpToolAt } from './mcpEnvelope.testhelper'
 
 const setup = () => renderHook(() => usePolls()).result.current
 
@@ -38,7 +38,7 @@ describe('usePolls.createPoll', () => {
     })
 
     expect(out).toEqual(created)
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/polling_upsert_poll')
+    expect(mcpToolAt(fetchMock)).toBe('polling_upsert_poll')
     expect(mcpArgsAt(fetchMock)).toMatchObject({
       title: 'T',
       description: 'd',
@@ -78,7 +78,7 @@ describe('usePolls.getPoll', () => {
     const out = await getPoll(7)
 
     expect(out).toEqual(results)
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/polling_fetch')
+    expect(mcpToolAt(fetchMock)).toBe('polling_fetch')
     expect(mcpArgsAt(fetchMock)).toEqual({ poll_id: 7 })
   })
 })

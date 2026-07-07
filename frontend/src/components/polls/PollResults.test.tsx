@@ -6,6 +6,7 @@ import {
   userEvent,
   setAuthCookies,
   clearCookies,
+  mcpToolFromRequest,
   mockFetch,
   mockResponse,
 } from '@/test/utils'
@@ -66,13 +67,13 @@ function mockResults({
   authed = false,
 }: ResultsMocks = {}) {
   const jsonHeaders = { 'content-type': 'application/json' }
-  return mockFetch(async (input) => {
+  return mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url.includes('/auth/me')) {
       if (!authed) return mockResponse({ status: 401, json: { detail: 'no' } })
       return mockResponse({ json: { user_id: 1, scopes: ['*'] }, headers: jsonHeaders })
     }
-    if (url.includes('polling_upsert_poll')) {
+    if (mcpToolFromRequest(input, init) === 'polling_upsert_poll') {
       if (upsertResult instanceof Error) {
         return mockResponse({ status: 500, json: { detail: upsertResult.message } })
       }

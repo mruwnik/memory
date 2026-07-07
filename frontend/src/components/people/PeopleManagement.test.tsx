@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult } from '../../hooks/mcpEnvelope.testhelper'
+import { mcpResult, mcpCallsTo } from '../../hooks/mcpEnvelope.testhelper'
 import PeopleManagement from './PeopleManagement'
 
 const authMe = {
@@ -87,7 +87,7 @@ describe('PeopleManagement create flow', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Add Person' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    const upsert = fetchMock.mock.calls.find((c) => String(c[0]).includes('people_upsert'))
+    const upsert = mcpCallsTo(fetchMock, 'people_upsert')[0]
     expect(upsert).toBeTruthy()
   })
 
@@ -127,7 +127,7 @@ describe('PeopleManagement edit flow', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save Changes' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    const upsert = fetchMock.mock.calls.find((c) => String(c[0]).includes('people_upsert'))
+    const upsert = mcpCallsTo(fetchMock, 'people_upsert')[0]
     expect(upsert).toBeTruthy()
   })
 })
@@ -148,7 +148,7 @@ describe('PeopleManagement delete flow', () => {
     await user.click(screen.getByRole('button', { name: 'Delete Person' }))
 
     await waitFor(() => {
-      const del = fetchMock.mock.calls.find((c) => String(c[0]).includes('people_delete'))
+      const del = mcpCallsTo(fetchMock, 'people_delete')[0]
       expect(del).toBeTruthy()
     })
   })
@@ -169,7 +169,7 @@ describe('PeopleManagement delete flow', () => {
     await waitFor(() =>
       expect(screen.queryByRole('heading', { name: 'Delete Person' })).not.toBeInTheDocument(),
     )
-    const del = fetchMock.mock.calls.find((c) => String(c[0]).includes('people_delete'))
+    const del = mcpCallsTo(fetchMock, 'people_delete')[0]
     expect(del).toBeFalsy()
   })
 })
@@ -187,11 +187,9 @@ describe('PeopleManagement search and tag filtering', () => {
     await user.type(screen.getByPlaceholderText(/Search by name/), 'bob')
 
     await waitFor(() => {
-      const searchCall = fetchMock.mock.calls.find((c) => {
-        if (!String(c[0]).includes('people_list_all')) return false
-        const body = JSON.parse(c[1].body)
-        return body.params.arguments.search === 'bob'
-      })
+      const searchCall = mcpCallsTo(fetchMock, 'people_list_all').find(
+        (c) => JSON.parse(c[1].body).params.arguments.search === 'bob',
+      )
       expect(searchCall).toBeTruthy()
     })
   })
@@ -209,10 +207,9 @@ describe('PeopleManagement search and tag filtering', () => {
     await user.click(screen.getByRole('button', { name: 'vip' }))
 
     await waitFor(() => {
-      const tagCall = fetchMock.mock.calls.find((c) => {
-        if (!String(c[0]).includes('people_list_all')) return false
-        const body = JSON.parse(c[1].body)
-        return Array.isArray(body.params.arguments.tags) && body.params.arguments.tags.includes('vip')
+      const tagCall = mcpCallsTo(fetchMock, 'people_list_all').find((c) => {
+        const { tags } = JSON.parse(c[1].body).params.arguments
+        return Array.isArray(tags) && tags.includes('vip')
       })
       expect(tagCall).toBeTruthy()
     })
@@ -248,7 +245,7 @@ describe('PeopleManagement team filter', () => {
     // Only Alice (a member of team 7) remains after the team filter
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Bob' })).not.toBeInTheDocument())
     expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument()
-    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('teams_fetch'))).toBe(true)
+    expect(mcpCallsTo(fetchMock, 'teams_fetch').length > 0).toBe(true)
   })
 })
 
@@ -276,7 +273,7 @@ describe('PeopleManagement merge flow', () => {
     await user.click(screen.getByRole('button', { name: 'Merge People' }))
 
     await waitFor(() => {
-      const merge = fetchMock.mock.calls.find((c) => String(c[0]).includes('people_merge'))
+      const merge = mcpCallsTo(fetchMock, 'people_merge')[0]
       expect(merge).toBeTruthy()
     })
   })
@@ -312,7 +309,7 @@ describe('PeopleManagement expand', () => {
     await user.click(screen.getByText('@alice'))
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('people_fetch'))).toBe(true)
+      expect(mcpCallsTo(fetchMock, 'people_fetch').length > 0).toBe(true)
     })
   })
 })

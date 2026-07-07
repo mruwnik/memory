@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useProjects } from './useProjects'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpArgsAt, mcpUrlAt } from './mcpEnvelope.testhelper'
+import { mcpResult, mcpArgsAt, mcpToolAt } from './mcpEnvelope.testhelper'
 
 const setup = () => renderHook(() => useProjects()).result.current
 
@@ -20,7 +20,7 @@ describe('useProjects.listProjects', () => {
     const out = await listProjects()
 
     expect(out).toEqual(projects)
-    expect(mcpUrlAt(fetchMock)).toContain('/mcp/projects_list_all')
+    expect(mcpToolAt(fetchMock)).toBe('projects_list_all')
     expect(mcpArgsAt(fetchMock)).toMatchObject({ include_teams: false })
   })
 

@@ -668,15 +668,17 @@ def test_handle_api_key_use_updates_last_used():
     db.delete.assert_not_called()
 
 
-def test_handle_api_key_use_deletes_one_time_key():
-    """Test handle_api_key_use atomically deletes one-time keys after use.
+def test_handle_api_key_use_consumes_one_time_key():
+    """Test handle_api_key_use atomically consumes one-time keys after use.
 
-    The delete uses ``DELETE ... WHERE id=:id RETURNING id`` (SQLAlchemy core)
-    rather than ``db.delete(record)`` so concurrent consumers can't both
-    succeed — see CWE-367 / task 45825913.
+    Consumption is a soft delete: ``UPDATE ... SET revoked WHERE id=:id AND
+    NOT revoked RETURNING id`` (SQLAlchemy core) rather than an ORM mutation,
+    so concurrent consumers can't both succeed — see CWE-367 / task 45825913.
+    The row is kept so the mint rate limit can count keys issued in its
+    rolling window.
     """
     db = MagicMock()
-    # The atomic DELETE...RETURNING returns the deleted row's id
+    # The atomic UPDATE...RETURNING returns the consumed row's id
     result = MagicMock()
     result.scalar_one_or_none.return_value = 1
     db.execute.return_value = result
@@ -688,9 +690,9 @@ def test_handle_api_key_use_deletes_one_time_key():
     won = auth.handle_api_key_use(key_record, db)
 
     assert won is True
-    # ORM-level delete is NOT used (it would non-atomic and racy)
+    # The row must survive as a tombstone — no delete of any kind
     db.delete.assert_not_called()
-    # Atomic SQL DELETE was issued exactly once
+    # Atomic SQL UPDATE was issued exactly once
     db.execute.assert_called_once()
     db.commit.assert_called_once()
 
@@ -861,19 +863,20 @@ def _one_time_key_fixture(key_id: int = 99) -> MagicMock:
     return record
 
 
-def _make_db_for_atomic_delete(rows_returned: int) -> MagicMock:
-    """Mock SQLAlchemy DB whose execute(delete()) returns one row, then None.
+def _make_db_for_atomic_consume(rows_returned: int) -> MagicMock:
+    """Mock SQLAlchemy DB whose execute(update()) returns one row, then None.
 
-    Models the real Postgres semantics: the first DELETE...RETURNING wins
-    and gets back the row id; the second sees zero rows.
+    Models the real Postgres semantics of the consuming
+    ``UPDATE ... WHERE NOT revoked RETURNING id``: the first caller wins and
+    gets back the row id; the second matches zero rows (already revoked).
     """
     db = MagicMock()
     results = []
     for _ in range(rows_returned):
         result = MagicMock()
-        result.scalar_one_or_none.return_value = 99  # id of the deleted row
+        result.scalar_one_or_none.return_value = 99  # id of the consumed row
         results.append(result)
-    # Subsequent calls return "no rows" — the row is already gone.
+    # Subsequent calls return "no rows" — the key is already revoked.
     no_row = MagicMock()
     no_row.scalar_one_or_none.return_value = None
     db.execute.side_effect = results + [no_row, no_row, no_row]
@@ -883,11 +886,11 @@ def _make_db_for_atomic_delete(rows_returned: int) -> MagicMock:
 @patch("memory.api.auth.lookup_api_key")
 def test_one_time_key_race_only_one_winner(mock_lookup):
     """Two concurrent authentications with the same ot_* key must not both succeed."""
-    db = _make_db_for_atomic_delete(rows_returned=1)
+    db = _make_db_for_atomic_consume(rows_returned=1)
     record = _one_time_key_fixture()
     mock_lookup.return_value = record
 
-    # First call wins the atomic delete.
+    # First call wins the atomic consume.
     user1, key1 = auth.authenticate_by_api_key("ot_secret", db)
     # Second concurrent call: the row is gone, RETURNING yields nothing.
     user2, key2 = auth.authenticate_by_api_key("ot_secret", db)
@@ -898,9 +901,9 @@ def test_one_time_key_race_only_one_winner(mock_lookup):
     )
 
 
-def test_handle_api_key_use_one_time_atomic_delete():
-    """handle_api_key_use uses DELETE...RETURNING for one-time keys."""
-    db = _make_db_for_atomic_delete(rows_returned=1)
+def test_handle_api_key_use_one_time_atomic_consume():
+    """handle_api_key_use uses UPDATE...RETURNING for one-time keys."""
+    db = _make_db_for_atomic_consume(rows_returned=1)
     record = _one_time_key_fixture()
 
     won = auth.handle_api_key_use(record, db)
@@ -930,7 +933,7 @@ def test_handle_api_key_use_regular_key_no_delete():
 
 def test_handle_api_key_use_one_time_loser_returns_false():
     """If the row is already gone (race-loser), handle_api_key_use returns False."""
-    db = _make_db_for_atomic_delete(rows_returned=0)  # delete returns no row
+    db = _make_db_for_atomic_consume(rows_returned=0)  # delete returns no row
     record = _one_time_key_fixture()
 
     won = auth.handle_api_key_use(record, db)

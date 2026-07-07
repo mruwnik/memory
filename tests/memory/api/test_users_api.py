@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import APIKey, HumanUser
+from memory.common.db.models import APIKey, APIKeyType, HumanUser
 
 
 @pytest.fixture
@@ -55,17 +55,16 @@ def test_create_my_api_key(client: TestClient, admin_user, db_session):
     assert data["is_one_time"] is False
 
 
-def test_create_my_api_key_one_time(client: TestClient, admin_user, db_session):
-    """Test creating a one-time API key."""
+def test_create_my_api_key_one_time_rejected(client: TestClient, admin_user, db_session):
+    """One-time keys must be minted via the MCP tool (TTL + rate limit),
+    not this endpoint."""
     response = client.post(
         f"/users/{admin_user.id}/api-keys",
-        json={"name": "One Time Key", "key_type": "one_time", "is_one_time": True},
+        json={"name": "One Time Key", "key_type": "one_time"},
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["is_one_time"] is True
-    assert data["key"].startswith("ot_")
+    assert response.status_code == 422
+    assert "create_one_time_key" in response.text
 
 
 def test_create_my_api_key_with_expiration(client: TestClient, admin_user, db_session):
@@ -132,6 +131,29 @@ def test_revoke_my_api_key(client: TestClient, admin_user, db_session):
     assert revoked_key["revoked"] is True
 
 
+def test_list_api_keys_hides_consumed_one_time_tombstones(
+    client: TestClient, admin_user, db_session
+):
+    """Consumed one-time keys are revoked tombstones kept only for the mint
+    rate limit — listings must hide them. Unconsumed one-time keys and
+    revoked regular keys stay visible."""
+    tombstone = APIKey.create(user_id=admin_user.id, key_type=APIKeyType.ONE_TIME)
+    tombstone.revoked = True
+    live_one_time = APIKey.create(user_id=admin_user.id, key_type=APIKeyType.ONE_TIME)
+    revoked_regular = APIKey.create(user_id=admin_user.id, name="Revoked Regular")
+    revoked_regular.revoked = True
+    db_session.add_all([tombstone, live_one_time, revoked_regular])
+    db_session.commit()
+
+    response = client.get(f"/users/{admin_user.id}/api-keys")
+
+    assert response.status_code == 200
+    listed_ids = {k["id"] for k in response.json()}
+    assert tombstone.id not in listed_ids
+    assert live_one_time.id in listed_ids
+    assert revoked_regular.id in listed_ids
+
+
 def test_delete_my_api_key_permanent(client: TestClient, admin_user, db_session):
     """Test permanently deleting an API key."""
     # Create a key first
@@ -154,6 +176,20 @@ def test_delete_my_api_key_permanent(client: TestClient, admin_user, db_session)
     assert key_id not in key_ids
 
 
+def test_delete_one_time_key_permanent_rejected(client: TestClient, admin_user, db_session):
+    """One-time keys (including revoked tombstones) must stay countable for
+    the mint rate limit — permanent deletion is refused."""
+    tombstone = APIKey.create(user_id=admin_user.id, key_type=APIKeyType.ONE_TIME)
+    tombstone.revoked = True
+    db_session.add(tombstone)
+    db_session.commit()
+
+    response = client.delete(f"/users/{admin_user.id}/api-keys/{tombstone.id}/permanent")
+
+    assert response.status_code == 400
+    assert db_session.get(APIKey, tombstone.id) is not None
+
+
 def test_revoke_nonexistent_key(client: TestClient, admin_user):
     """Test revoking a non-existent key returns 404."""
     response = client.delete(f"/users/{admin_user.id}/api-keys/99999")
@@ -174,10 +210,9 @@ def test_delete_nonexistent_key(client: TestClient, admin_user):
     "google",
     "github",
     "mcp",
-    "one_time",
 ])
 def test_create_api_key_all_types(client: TestClient, admin_user, db_session, key_type):
-    """Test creating API keys with all valid types."""
+    """Test creating API keys with all valid types (one_time is MCP-only)."""
     response = client.post(
         f"/users/{admin_user.id}/api-keys",
         json={"name": f"{key_type} key", "key_type": key_type},

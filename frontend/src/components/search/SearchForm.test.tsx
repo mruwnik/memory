@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
-import { renderWithUser, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithUser, mcpToolFromRequest, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import SearchForm from './SearchForm'
 
@@ -8,17 +8,18 @@ const schemas = {
   blog: { schema: { author: { type: 'string', description: 'Author' } }, size: 0 },
 }
 
-// Route fetch: /auth/me for useAuth, /mcp/<method> for MCP calls.
+// Route fetch: /auth/me for useAuth, MCP calls by tool name in the JSON-RPC body.
 const installFetch = (searchResults: unknown[] = []) =>
-  mockFetch(async (input) => {
+  mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
+    const tool = mcpToolFromRequest(input, init)
     if (url.includes('/auth/me')) {
       return mockResponse({ json: { user_id: 1, name: 'T', email: 't@e.com', user_type: 'human', scopes: ['*'] } })
     }
-    if (url.includes('/mcp/meta_get_metadata_schemas')) {
+    if (tool === 'meta_get_metadata_schemas') {
       return mockResponse({ json: mcpEnvelopeJson(schemas) })
     }
-    if (url.includes('/mcp/core_search')) {
+    if (tool === 'core_search') {
       return mockResponse({ json: mcpEnvelopeJson(...searchResults) })
     }
     return mockResponse({ status: 404, json: { detail: 'nope' } })

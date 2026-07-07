@@ -8,7 +8,7 @@ Subservers are mounted with prefixes. Tool names after mounting:
 - email: email_send
 - forecast: forecast_get_forecasts, forecast_clear_cache, forecast_history, forecast_get_market_depth, forecast_compare_forecasts, forecast_resolved, forecast_watch_market, forecast_get_watchlist, forecast_unwatch_market
 - github: github_list_entities, github_fetch, github_upsert_issue, github_add_team_member, github_remove_team_member, github_comment_on_issue
-- meta: meta_get_metadata_schemas, meta_get_current_time, meta_get_user, meta_notify_user
+- meta: meta_get_metadata_schemas, meta_get_current_time, meta_get_user, meta_create_one_time_key, meta_notify_user
 - organizer: organizer_upcoming, organizer_list_tasks, organizer_get_task, organizer_create_task, organizer_update_task
 - people: people_add, people_update, people_get_person, people_list_people, people_delete, people_add_tidbit, people_update_tidbit, people_delete_tidbit, people_list_tidbits
 - polling: polling_upsert_poll, polling_list_polls, polling_delete_poll, polling_get_poll

@@ -549,7 +549,7 @@ async def test_verify_token_handles_tz_aware_expires_at(db_session):
 # tests below pin the symmetric fail-closed: an APIKey whose ``.user`` is
 # None must produce ``lookup_principal -> None`` AND must NOT have its
 # ``handle_api_key_use`` side effect run (which would bump last_used_at /
-# delete a one-time row for a key the caller can't actually use).
+# revoke a one-time row for a key the caller can't actually use).
 
 
 def _orphan_api_key_stub():
@@ -614,8 +614,12 @@ def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_verify_token_deletes_one_time_api_key_after_use(db_session):
-    """Test that verify_token deletes one-time API keys after successful verification."""
+async def test_verify_token_consumes_one_time_api_key_after_use(db_session):
+    """verify_token soft-deletes one-time API keys after successful verification.
+
+    The row must survive as a revoked tombstone (not be hard-deleted) so the
+    mint rate limit in ``meta.create_one_time_key`` can count keys issued in
+    its rolling window."""
     user = create_test_user(db_session)
 
     api_key = APIKey.create(
@@ -629,7 +633,7 @@ async def test_verify_token_deletes_one_time_api_key_after_use(db_session):
     key_value = api_key.key
     key_id = api_key.id
 
-    assert db_session.get(APIKey, key_id) is not None
+    assert api_key.revoked is False
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(key_value)
@@ -640,7 +644,9 @@ async def test_verify_token_deletes_one_time_api_key_after_use(db_session):
 
     # Refresh to see changes from verify_token's session
     db_session.expire_all()
-    assert db_session.get(APIKey, key_id) is None
+    stored = db_session.get(APIKey, key_id)
+    assert stored is not None
+    assert stored.revoked is True
 
 
 @pytest.mark.asyncio
@@ -664,7 +670,7 @@ async def test_verify_token_one_time_key_fails_on_second_use(db_session):
     result1 = await provider.verify_token(key_value)
     assert result1 is not None
 
-    # Second use should fail (key was deleted)
+    # Second use should fail (key was revoked on first use)
     result2 = await provider.verify_token(key_value)
     assert result2 is None
 

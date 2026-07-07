@@ -202,8 +202,8 @@ def fetch_user_by_token(
     if api_key_record is None or not api_key_record.is_valid():
         return None
 
-    # Eagerly load user before handle_api_key_use, which may delete the key
-    # (for one-time keys). This prevents DetachedInstanceError on lazy load.
+    # Eagerly load user before handle_api_key_use, which commits (and for
+    # one-time keys revokes). This prevents DetachedInstanceError on lazy load.
     user = api_key_record.user
     if user is None:
         return None
