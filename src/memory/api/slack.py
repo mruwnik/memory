@@ -433,7 +433,10 @@ def _persist_oauth_credentials(
 
     creds.access_token = authed_user["access_token"]
     creds.refresh_token = authed_user.get("refresh_token")
-    creds.scopes = authed_user.get("scope", "").split()
+    # Slack returns granted scopes comma-separated (e.g. "channels:history,users:read").
+    # Splitting on whitespace collapsed them into a single bogus element, so any
+    # per-scope check (e.g. "channels:history" in creds.scopes) always failed.
+    creds.scopes = [s for s in authed_user.get("scope", "").split(",") if s]
     creds.token_expires_at = token_expires_at
     creds.slack_user_id = authed_user.get("id")
 

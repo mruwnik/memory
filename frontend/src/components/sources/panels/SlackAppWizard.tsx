@@ -36,12 +36,27 @@ const SETUP_STATE_TO_STEP: Record<string, Step> = {
   degraded: 'done',
 }
 
+// Resume an existing app at the first UNFINISHED step. Keying off setup_state
+// alone is wrong for a reopened `draft` app: the client secret may already be
+// set and OAuth already completed (e.g. reopened via "Finish setup"), so
+// restarting at client-secret re-triggers a redundant OAuth and loops the user.
+// The per-secret / auth flags say what's actually left to do.
+const resumeStep = (app: SlackAppResponse): Step => {
+  if (app.setup_state === 'live' || app.setup_state === 'degraded') return 'done'
+  if (app.setup_state === 'signing_verified') return 'test-message'
+  if (!app.client_secret_configured) return 'client-secret'
+  if (!app.is_authorized) return 'oauth'
+  if (!app.signing_secret_configured) return 'signing-secret'
+  return 'events-url'
+}
+
 const POLL_INTERVAL_MS = 3000
 
-// OAuth scopes requested for both bot and user tokens. Read-only across
-// the workspace surface (channels/groups/im/mpim history + read), users +
-// emails for mention resolution, reactions/files for the existing message
-// processing pipeline. Keep aligned with the backend's expectations.
+// User token scopes requested during OAuth (sent as `user_scope`; the app
+// authenticates as the user, not a bot). Read-only by design: the integration
+// ingests Slack content and never posts. Covers channel/group/im/mpim history +
+// read, users/emails for mention resolution, and reactions/files for the
+// message pipeline. Keep aligned with the README Slack section.
 const SLACK_OAUTH_SCOPES = [
   'channels:history',
   'groups:history',
@@ -79,7 +94,7 @@ export const SlackAppWizard = ({
   const [app, setApp] = useState<SlackAppResponse | null>(initialApp)
   const [step, setStep] = useState<Step>(() => {
     if (!initialApp) return 'register'
-    return SETUP_STATE_TO_STEP[initialApp.setup_state] ?? 'client-secret'
+    return resumeStep(initialApp)
   })
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -155,6 +170,24 @@ export const SlackAppWizard = ({
     return () => channel.close()
   }, [app, step, wizard, authUser])
 
+  // The wizard nonce (callback + events URLs) is normally issued in the
+  // client-secret step. When resuming an app past that point (via resumeStep),
+  // fetch it so the oauth/signing-secret/events-url steps aren't left blank.
+  useEffect(() => {
+    if (!app || nonceData) return
+    if (step !== 'oauth' && step !== 'signing-secret' && step !== 'events-url') return
+    let cancelled = false
+    wizard
+      .issueWizardNonce(app.id)
+      .then(n => {
+        if (!cancelled) setNonceData(n)
+      })
+      .catch(e => console.warn('Wizard nonce fetch failed:', e))
+    return () => {
+      cancelled = true
+    }
+  }, [app, step, nonceData, wizard])
+
   const handleError = (e: unknown) => setError((e as Error).message)
   const clearError = () => setError(null)
 
@@ -213,7 +246,10 @@ export const SlackAppWizard = ({
       const state = await wizard.issueOAuthState(app.id)
       const params = new URLSearchParams({
         client_id: app.client_id,
-        scope: SLACK_OAUTH_SCOPES,
+        // User-token-only install: the backend stores and uses only the
+        // authed_user token (see slack.py oauth exchange + SlackUserCredentials);
+        // requesting bot `scope` would force a bot user the app never uses and
+        // breaks install with "no bot user to install".
         user_scope: SLACK_OAUTH_SCOPES,
         redirect_uri: callbackUrl,
         state,

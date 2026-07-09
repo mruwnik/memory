@@ -158,6 +158,12 @@ describe('SlackAppWizard - oauth redirect', () => {
     expect(url).toContain('https://slack.com/oauth/v2/authorize?')
     expect(url).toContain('client_id=cid-123')
     expect(url).toContain('state=signed-state')
+    // User-token-only install: scopes ride on user_scope, and there must be NO
+    // bot `scope` param — requesting it makes Slack demand a bot user the app
+    // never uses and fails the install with "doesn't have a bot user".
+    const params = new URLSearchParams(url.split('?')[1])
+    expect(params.get('user_scope')).toContain('channels:history')
+    expect(params.has('scope')).toBe(false)
     openSpy.mockRestore()
   })
 })
