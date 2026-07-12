@@ -244,7 +244,7 @@ def test_google_callback_parses_scopes_from_url(
     from memory.api.google_drive import google_callback
 
     # Setup mocks
-    mock_state.validate.return_value = 1  # user_id
+    mock_state.validate.return_value = (1, "test-code-verifier")  # (user_id, PKCE verifier)
 
     mock_config = Mock()
     mock_config.redirect_uris = ["http://localhost/callback"]
