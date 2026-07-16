@@ -6,7 +6,7 @@ import subprocess
 import tarfile
 import tempfile
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 import boto3
@@ -22,6 +22,68 @@ logger = logging.getLogger(__name__)
 
 # Backup lock timeout (30 minutes max for backup to complete)
 BACKUP_LOCK_TIMEOUT = 30 * 60
+
+
+class BackupError(Exception):
+    """Raised when a backup could not be performed (fully or partially).
+
+    Deliberately *not* a subclass of ``RuntimeError``: the lock-contention
+    path in ``backup_all_to_s3`` catches ``RuntimeError`` and downgrades it
+    to a benign "skipped", and a real backup failure must not be swallowed
+    that way.
+
+    We raise rather than return a ``{"status": "failed"}`` dict because
+    ``@tracked_task`` marks the PendingJob *complete* on any normal return.
+    A returned failure status would therefore still be recorded as a
+    successful job — which is exactly the silent-outage bug this fixes.
+    Raising routes through failure metrics, task-failure notifications, and
+    ``_mark_job_failed`` so every layer (logs, metrics, pending_jobs,
+    notifications) reflects that the backup did not happen.
+    """
+
+
+def aws_credentials_available() -> bool:
+    """Whether boto3 can resolve AWS credentials in the worker environment.
+
+    ``S3_BACKUP_ENABLED`` is inferred purely from ``BACKUP_ENCRYPTION_KEY``
+    being set — it says nothing about whether AWS credentials are actually
+    present. Without this preflight a worker with a valid encryption key but
+    no credentials uploads nothing on every run while reporting success.
+    Resolving credentials up front turns that silent outage into an
+    immediate, loud failure.
+    """
+    try:
+        return boto3.Session().get_credentials() is not None
+    except Exception:
+        # Credential probing (env vars, shared config, instance metadata)
+        # should not raise, but a broken config must fail closed.
+        logger.warning("AWS credential resolution raised", exc_info=True)
+        return False
+
+
+def _dir_succeeded(result: dict) -> bool:
+    """A per-directory result counts as a success if it uploaded or synced."""
+    return bool(result.get("uploaded") or result.get("synced"))
+
+
+# Reasons that mark a per-directory result as a benign skip rather than a
+# failure: the directory simply had nothing to back up.
+_BENIGN_SKIP_REASONS = ("directory_not_found", "empty_directory")
+
+
+def _dir_failed(result: dict) -> bool:
+    """A per-directory result is a failure unless it succeeded or benignly skipped.
+
+    Fail-closed: anything that neither succeeded (``uploaded``/``synced``) nor
+    carries a recognized benign ``reason`` (``directory_not_found``,
+    ``empty_directory``) is a hard failure — including a malformed or empty
+    result dict. This keeps the fail-loudly contract from depending on the
+    exact return shapes of helpers two layers away; an unrecognized result
+    can never silently drop out of both the failed and succeeded buckets.
+    """
+    if _dir_succeeded(result):
+        return False
+    return result.get("reason") not in _BENIGN_SKIP_REASONS
 
 
 @contextmanager
@@ -196,7 +258,13 @@ def sync_unencrypted_directory(path: Path) -> dict:
         return {"synced": False, "directory": path, "error": "timeout"}
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to sync {path}: {e.stderr}")
-        return {"synced": False, "directory": path, "error": str(e)}
+        # Include stderr in the returned error so the failure surfaced to the
+        # operator (via BackupError) carries the actual S3/AWS reason, not just
+        # the bare non-zero-exit message.
+        error = str(e)
+        if e.stderr:
+            error = f"{error}: {e.stderr.strip()}"
+        return {"synced": False, "directory": path, "error": error}
 
 
 def backup_encrypted_directory(path: Path) -> dict:
@@ -316,21 +384,70 @@ def backup_all_to_s3():
         logger.info("S3 backup is disabled")
         return {"status": "disabled"}
 
+    # Preflight: fail loudly if credentials can't be resolved rather than
+    # letting every directory fail one by one with "Unable to locate
+    # credentials" while the task still reports success.
+    if not aws_credentials_available():
+        raise BackupError(
+            "S3 backup is enabled (BACKUP_ENCRYPTION_KEY is set) but AWS "
+            "credentials could not be resolved. Set AWS_ACCESS_KEY_ID and "
+            "AWS_SECRET_ACCESS_KEY (or attach an instance role) in the worker "
+            "environment."
+        )
+
+    # Acquire the lock in its own try/except so that ONLY lock contention is
+    # downgraded to a benign "skipped". The backup work must run outside this
+    # handler: a RuntimeError raised by real backup work has to propagate (fail
+    # the task), not be misclassified as "skipped" — that would reintroduce the
+    # silent-outage bug this task guards against.
     try:
-        with backup_lock():
-            logger.info("Starting S3 backup...")
-
-            results = []
-            for dir_name in settings.storage_dirs:
-                # Run synchronously within lock to prevent concurrent backups
-                result = backup_to_s3((settings.FILE_STORAGE_DIR / dir_name).as_posix())
-                results.append({"dir": dir_name, **result})
-
-            return {
-                "status": "success",
-                "directories": len(results),
-                "results": results,
-            }
+        stack = ExitStack()
+        stack.enter_context(backup_lock())
     except RuntimeError as e:
+        # backup_lock() raises RuntimeError only when another backup already
+        # holds the lock — a benign skip, not a failure.
         logger.warning(str(e))
         return {"status": "skipped", "reason": str(e)}
+
+    # `with stack:` forwards the real exc-info to backup_lock()'s __exit__ if
+    # backup work raises, honoring the context-manager protocol, while keeping
+    # the lock-acquisition try/except above scoped to lock contention only.
+    with stack:
+        logger.info("Starting S3 backup...")
+
+        results = []
+        for dir_name in settings.storage_dirs:
+            # Run synchronously within lock to prevent concurrent backups
+            result = backup_to_s3((settings.FILE_STORAGE_DIR / dir_name).as_posix())
+            results.append({"dir": dir_name, **result})
+
+    failed = [r for r in results if _dir_failed(r)]
+    succeeded = [r for r in results if _dir_succeeded(r)]
+    skipped = [r for r in results if not _dir_failed(r) and not _dir_succeeded(r)]
+
+    if failed:
+        summary = ", ".join(
+            f"{r.get('dir')}: {r.get('error') or 'unrecognized result'}"
+            for r in failed
+        )
+        status = "failed" if not succeeded else "partial"
+        logger.error(
+            "S3 backup %s — %d failed, %d succeeded, %d skipped of %d: %s",
+            status,
+            len(failed),
+            len(succeeded),
+            len(skipped),
+            len(results),
+            summary,
+        )
+        raise BackupError(
+            f"S3 backup {status}: {len(failed)}/{len(results)} directories "
+            f"failed: {summary}"
+        )
+
+    logger.info("S3 backup succeeded for all %d directories", len(results))
+    return {
+        "status": "success",
+        "directories": len(results),
+        "results": results,
+    }

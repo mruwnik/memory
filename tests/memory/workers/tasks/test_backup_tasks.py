@@ -1,6 +1,7 @@
 import io
 import subprocess
 import tarfile
+from contextlib import contextmanager
 from unittest.mock import Mock, patch, MagicMock
 
 import pytest
@@ -420,15 +421,23 @@ def test_backup_disabled():
     assert result["status"] == "disabled"
 
 
+@contextmanager
+def _lock_noop():
+    """Patch backup_lock to a no-op context manager."""
+    with patch.object(backup, "backup_lock") as mock_lock:
+        mock_lock.return_value.__enter__ = Mock()
+        mock_lock.return_value.__exit__ = Mock(return_value=None)
+        yield mock_lock
+
+
 def test_backup_full_execution(sample_files, mock_s3_client, backup_settings):
     """Test full backup execution processes all directories."""
     with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
         patch.object(backup, "backup_to_s3") as mock_task,
-        patch.object(backup, "backup_lock") as mock_lock,
+        _lock_noop(),
     ):
         mock_task.return_value = {"uploaded": True}
-        mock_lock.return_value.__enter__ = Mock()
-        mock_lock.return_value.__exit__ = Mock(return_value=None)
 
         result = backup.backup_all_to_s3()
 
@@ -438,6 +447,184 @@ def test_backup_full_execution(sample_files, mock_s3_client, backup_settings):
 
     # Verify task was called for each storage directory (runs synchronously now)
     assert mock_task.call_count == len(settings.storage_dirs)
+
+
+# --- Fail-loudly regression tests ------------------------------------------
+#
+# A production deployment lost its AWS credentials and every daily backup
+# failed for 4.5 months while backup_all_to_s3 returned status "success" and
+# the PendingJob recorded complete. These tests pin the contract that a backup
+# which cannot back up must NEVER report success: it raises (so @tracked_task
+# marks the job failed + failure metrics + notifications fire) instead of
+# returning a success-shaped dict.
+
+
+def test_backup_preflight_missing_credentials_raises(backup_settings):
+    """Enabled backup with unresolvable AWS credentials raises, never runs."""
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=False),
+        patch.object(backup, "backup_to_s3") as mock_task,
+    ):
+        with pytest.raises(backup.BackupError, match="credentials could not be"):
+            backup.backup_all_to_s3()
+
+    # Preflight must abort before touching any directory.
+    mock_task.assert_not_called()
+
+
+def test_backup_all_total_failure_raises(backup_settings):
+    """Every directory failing raises BackupError (status would be 'failed')."""
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(backup, "backup_to_s3") as mock_task,
+        _lock_noop(),
+    ):
+        mock_task.return_value = {"uploaded": False, "error": "Unable to locate credentials"}
+
+        with pytest.raises(backup.BackupError, match="failed"):
+            backup.backup_all_to_s3()
+
+
+def test_backup_all_partial_failure_raises(backup_settings):
+    """A single failing directory among successes still raises (no silent partial)."""
+    outcomes = (
+        [{"uploaded": True}]
+        + [{"synced": False, "error": "boom"}]
+        + [{"uploaded": True}] * len(settings.storage_dirs)
+    )
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(backup, "backup_to_s3", side_effect=outcomes),
+        _lock_noop(),
+    ):
+        # A success mixed with a failure must be classified "partial", not "failed".
+        with pytest.raises(backup.BackupError, match="partial"):
+            backup.backup_all_to_s3()
+
+
+def test_backup_all_benign_skips_are_success(backup_settings):
+    """Missing/empty directories (reason, no error) do not fail the backup."""
+    outcomes = (
+        [{"synced": True}]
+        + [{"uploaded": False, "reason": "directory_not_found"}]
+        + [{"uploaded": False, "reason": "empty_directory"}]
+        + [{"uploaded": True}] * len(settings.storage_dirs)
+    )
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(backup, "backup_to_s3", side_effect=outcomes),
+        _lock_noop(),
+    ):
+        result = backup.backup_all_to_s3()
+
+    assert result["status"] == "success"
+
+
+def test_backup_all_malformed_result_is_failure(backup_settings):
+    """A malformed/empty result dict (no success, no benign reason) must fail.
+
+    Fail-closed: an unrecognized per-directory result — e.g. ``{}`` or
+    ``{"uploaded": False}`` with no error/reason — must not silently drop out
+    of both the failed and succeeded buckets and let the backup report success.
+    """
+    outcomes = (
+        [{"uploaded": True}]
+        + [{}]  # malformed: neither success, nor error, nor benign reason
+        + [{"uploaded": True}] * len(settings.storage_dirs)
+    )
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(backup, "backup_to_s3", side_effect=outcomes),
+        _lock_noop(),
+    ):
+        with pytest.raises(backup.BackupError, match="partial"):
+            backup.backup_all_to_s3()
+
+
+def test_backup_all_lock_contention_returns_skipped(backup_settings):
+    """Lock contention returns status 'skipped' and does NOT raise."""
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(backup, "backup_to_s3") as mock_task,
+        patch.object(
+            backup,
+            "backup_lock",
+            side_effect=RuntimeError("backup already in progress"),
+        ),
+    ):
+        result = backup.backup_all_to_s3()
+
+    assert result["status"] == "skipped"
+    assert "already in progress" in result["reason"]
+    # A skipped backup must never touch any directory.
+    mock_task.assert_not_called()
+
+
+def test_backup_all_directory_runtimeerror_does_not_masquerade_as_skip(backup_settings):
+    """A non-lock RuntimeError from the loop propagates, is NOT swallowed as skip.
+
+    Only genuine lock contention may become "skipped"; a RuntimeError raised by
+    real backup work (e.g. ``openssl encryption failed``) must propagate and
+    fail the task — the exact silent-success failure mode this change targets.
+    """
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(
+            backup,
+            "backup_to_s3",
+            side_effect=RuntimeError("openssl encryption failed"),
+        ),
+        _lock_noop(),
+    ):
+        with pytest.raises(RuntimeError) as ei:
+            backup.backup_all_to_s3()
+
+    # Must NOT be swallowed as a benign lock-contention skip.
+    assert "already in progress" not in str(ei.value)
+
+
+def test_backup_all_releases_real_lock_when_work_raises(backup_settings):
+    """The REAL backup_lock releases the Redis lock when work raises mid-loop.
+
+    The other tests use ``_lock_noop`` and therefore never exercise
+    ``backup_lock``'s ``finally`` (the atomic release). This one drives the real
+    context manager against a fakeredis backend: it asserts the exception
+    propagates AND that the lock key is gone afterwards, so a future refactor
+    that leaks the lock on the exception path is caught.
+    """
+    import fakeredis
+
+    lock_key = "memory:lock:backup_all"
+    fake = fakeredis.FakeRedis()
+
+    with (
+        patch.object(backup, "aws_credentials_available", return_value=True),
+        patch.object(backup.redis, "from_url", return_value=fake),
+        patch.object(
+            backup,
+            "backup_to_s3",
+            side_effect=RuntimeError("openssl encryption failed"),
+        ),
+    ):
+        # Sanity: the lock does not exist before the run.
+        assert fake.get(lock_key) is None
+
+        with pytest.raises(RuntimeError, match="openssl encryption failed"):
+            backup.backup_all_to_s3()
+
+    # The atomic release must have fired: the lock key no longer exists, so a
+    # subsequent backup could re-acquire it.
+    assert fake.get(lock_key) is None
+
+
+def test_aws_credentials_available_reflects_boto3():
+    """aws_credentials_available mirrors whether boto3 resolves credentials."""
+    with patch("boto3.Session") as mock_session:
+        mock_session.return_value.get_credentials.return_value = object()
+        assert backup.aws_credentials_available() is True
+
+        mock_session.return_value.get_credentials.return_value = None
+        assert backup.aws_credentials_available() is False
 
 
 def test_backup_handles_partial_failures(

@@ -61,6 +61,22 @@ x-worker-base: &worker-base
     VOYAGE_API_KEY_FILE: /run/secrets/voyage_key
     DISCORD_COLLECTOR_SERVER_URL: ingest-hub
     DISCORD_COLLECTOR_PORT: 8003
+    # --- S3 backup credentials ------------------------------------------
+    # The backup task (queue: backup) and tools/backup_databases.sh upload to
+    # S3 with the AWS CLI / boto3, which need AWS credentials. S3_BACKUP_ENABLED
+    # defaults ON as soon as BACKUP_ENCRYPTION_KEY is set, so if you set that
+    # key you MUST also supply credentials here — backup_all_to_s3 preflights
+    # them (boto3.Session().get_credentials()) and fails loudly instead of
+    # silently uploading nothing. Prefer setting these in .env (loaded via
+    # env_file above) so secrets stay out of compose; uncomment to pass through:
+    #   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    #   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    # The backup region is driven by S3_BACKUP_REGION (used by
+    # sync_unencrypted_directory's --region, boto3.client(region_name=...),
+    # and backup_databases.sh). AWS_DEFAULT_REGION only serves as a fallback
+    # for other AWS SDK calls and does NOT set the backup region — set
+    # S3_BACKUP_REGION for that.
+    #   S3_BACKUP_REGION: ${S3_BACKUP_REGION:-eu-central-1}
   secrets:
     [
       postgres_password,
