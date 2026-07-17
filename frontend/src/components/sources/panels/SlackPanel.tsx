@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSlack, SlackWorkspace, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
+import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
 import {
   EmptyState,
@@ -24,6 +25,7 @@ export const SlackPanel = () => {
     updateChannel,
   } = useSlack()
   const { listProjects } = useProjects()
+  const { listApps } = useSlackWizard()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[]>>({})
@@ -33,23 +35,32 @@ export const SlackPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [disconnecting, setDisconnecting] = useState<SlackWorkspace | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  // Apps that haven't finished the setup wizard (still draft/signing_verified).
+  // The panel otherwise only lists connected workspaces, which strands a
+  // half-configured app with no way back into the wizard to reach 'live'.
+  const [unfinishedApps, setUnfinishedApps] = useState<SlackAppResponse[]>([])
+  const [wizardInitialApp, setWizardInitialApp] = useState<SlackAppResponse | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [workspacesData, projectsData] = await Promise.all([
+      const [workspacesData, projectsData, appsData] = await Promise.all([
         listWorkspaces(userId),
-        listProjects()
+        listProjects(),
+        listApps(),
       ])
       setWorkspaces(workspacesData)
       setProjects(projectsData)
+      setUnfinishedApps(
+        appsData.filter(a => a.setup_state !== 'live' && a.setup_state !== 'degraded')
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load workspaces')
     } finally {
       setLoading(false)
     }
-  }, [listWorkspaces, listProjects, userId])
+  }, [listWorkspaces, listProjects, listApps, userId])
 
   useEffect(() => {
     loadData()
@@ -83,11 +94,20 @@ export const SlackPanel = () => {
   const handleConnect = () => {
     // Per-app wizard flow: register a SlackApp first, then OAuth into it.
     // No env-var single-app `/slack/authorize` endpoint anymore.
+    setWizardInitialApp(null)
+    setWizardOpen(true)
+  }
+
+  const handleResumeSetup = (appToResume: SlackAppResponse) => {
+    // Reopen the wizard on an existing, half-configured app so the remaining
+    // steps (signing-secret, events-url, test-message) can flip it to 'live'.
+    setWizardInitialApp(appToResume)
     setWizardOpen(true)
   }
 
   const handleWizardComplete = () => {
     setWizardOpen(false)
+    setWizardInitialApp(null)
     loadData()
   }
 
@@ -152,10 +172,33 @@ export const SlackPanel = () => {
         </button>
       </div>
 
+      {unfinishedApps.length > 0 && !wizardOpen && (
+        <div className={styles.sourceList}>
+          {unfinishedApps.map(app => (
+            <div
+              key={app.id}
+              className="flex items-center justify-between gap-3 rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900"
+            >
+              <span>
+                Slack app "{app.name}" setup is incomplete ({app.setup_state}) — finish
+                it to enable automatic sync and real-time updates.
+              </span>
+              <button className={styles.btnAdd} onClick={() => handleResumeSetup(app)}>
+                Finish setup
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {wizardOpen && (
         <SlackAppWizard
+          initialApp={wizardInitialApp}
           onComplete={handleWizardComplete}
-          onCancel={() => setWizardOpen(false)}
+          onCancel={() => {
+            setWizardOpen(false)
+            setWizardInitialApp(null)
+          }}
         />
       )}
 

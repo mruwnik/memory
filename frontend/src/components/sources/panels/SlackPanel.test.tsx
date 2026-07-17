@@ -8,6 +8,7 @@ const triggerSync = vi.fn()
 const listChannels = vi.fn()
 const updateChannel = vi.fn()
 const listProjects = vi.fn()
+const listApps = vi.fn()
 
 vi.mock('@/hooks/useSlack', () => ({
   useSlack: () => ({
@@ -22,6 +23,12 @@ vi.mock('@/hooks/useSlack', () => ({
 
 vi.mock('@/hooks/useProjects', () => ({
   useProjects: () => ({ listProjects }),
+}))
+
+// The panel loads apps (for the "Finish setup" resume banner) alongside
+// workspaces; stub it so the real useAuth().apiCall isn't hit.
+vi.mock('@/hooks/useSlackWizard', () => ({
+  useSlackWizard: () => ({ listApps }),
 }))
 
 vi.mock('../Sources', () => ({
@@ -73,6 +80,7 @@ const channel = (over: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks()
   listWorkspaces.mockResolvedValue([])
+  listApps.mockResolvedValue([])
   listProjects.mockResolvedValue([{ id: 9, title: 'Proj', repo_path: 'o/r' }])
   listChannels.mockResolvedValue([channel()])
   updateWorkspace.mockResolvedValue(workspace())

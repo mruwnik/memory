@@ -188,6 +188,26 @@ python tools/discord_setup.py generate-invite --bot-token <your bot token>
 
 That returns an invite URL for adding the bot to your server.
 
+### Slack integration
+
+Set up through the web UI: Sources -> Slack -> Connect Workspace. Slack must reach this instance over public HTTPS for the OAuth callback and the events webhook, so `SERVER_URL` must be a public URL. For a local instance, expose it with a tunnel (e.g. Cloudflare Tunnel) and set `SERVER_URL` to the tunnel hostname.
+
+The app authenticates as a Slack **user**, not a bot. It reads only channels and DMs that user is in, and stores per-user credentials. Do not add bot scopes: requesting bot `scope` fails the install with "doesn't have a bot user to install".
+
+Steps:
+
+1. Create an app at [api.slack.com/apps](https://api.slack.com/apps) (From scratch). Note the Client ID, Client Secret, and Signing Secret from Basic Information.
+2. In the wizard, enter the Client ID, then the Client Secret. The wizard shows the exact redirect URL and events Request URL to paste into Slack.
+3. Under OAuth & Permissions, add User Token Scopes: `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `users:read`, `users:read.email`, `team:read`, `reactions:read`, `files:read`. The wizard requests exactly this set.
+4. Authorize the workspace.
+5. Paste the Signing Secret into the wizard.
+6. Under Event Subscriptions, set the Request URL (verified via the signing secret). Then under "Subscribe to events on behalf of users" add `message.channels`, `message.groups`, `message.im`, `message.mpim`. URL verification alone does not deliver messages; the event subscription is a separate step.
+7. Post the wizard's test token in any channel or DM you are in. Receiving that message event flips the app to `live`.
+
+Syncing runs only when `setup_state` is `live` or `degraded` and message collection is enabled. Enable collection per workspace; channels inherit the workspace setting unless overridden per channel. A large workspace backfills slowly because Slack rate-limits history reads. Ingested messages are searchable under the `message` modality.
+
+Setup state is held in the API process memory during the wizard (`_wizard_nonces`, `_test_message_tokens`), so restarting the API mid-setup drops the current nonce and test token; re-issue them from the wizard if that happens.
+
 ### Manually triggering Celery tasks
 
 ```bash

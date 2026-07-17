@@ -614,7 +614,7 @@ def test_callback_happy_path_creates_credentials_with_slack_app_id(
             team_id="T0123ABCDE",
             access_token="xoxp-test-access",
             refresh_token="xoxr-test-refresh",
-            scope="channels:history,chat:write",
+            scope="channels:history,users:read",
             id="U_TESTUSER",
             expires_in=3600,
         )
@@ -636,6 +636,10 @@ def test_callback_happy_path_creates_credentials_with_slack_app_id(
     assert creds is not None
     assert creds.access_token == "xoxp-test-access"
     assert creds.slack_app_id == authorized_slack_app.id
+    # Slack comma-separates granted scopes; they must be stored as distinct
+    # elements (a whitespace split collapsed them into one bogus string, so
+    # `"channels:history" in creds.scopes` was always False).
+    assert creds.scopes == ["channels:history", "users:read"]
 
 
 def test_callback_html_response_uses_json_dumps_for_slack_app_id(
