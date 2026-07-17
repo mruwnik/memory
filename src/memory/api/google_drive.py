@@ -363,6 +363,10 @@ def google_authorize(
         scopes=requested_scopes,
         redirect_uri=redirect_uri,
     )
+    # Disable PKCE: the callback rebuilds a fresh Flow with no code_verifier, so a
+    # code_challenge here would fail token exchange ("invalid_grant: Missing code
+    # verifier"). This is a confidential client (has client_secret), so PKCE is optional.
+    flow.autogenerate_code_verifier = False
 
     # Generate state token with user ID
     state = GoogleOAuthState.create(user.id)
@@ -887,6 +891,8 @@ def reauthorize_account(
         scopes=requested_scopes,
         redirect_uri=redirect_uri,
     )
+    # Disable PKCE — see google_authorize; the callback has no stored code_verifier.
+    flow.autogenerate_code_verifier = False
 
     state = GoogleOAuthState.create(user.id)
 

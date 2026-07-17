@@ -83,6 +83,29 @@ def test_google_authorize_with_specific_scopes(mock_state, mock_flow_class, mock
 @patch("memory.api.google_drive.get_oauth_config")
 @patch("google_auth_oauthlib.flow.Flow")
 @patch("memory.api.google_drive.GoogleOAuthState")
+def test_google_authorize_disables_pkce(mock_state, mock_flow_class, mock_get_config):
+    """PKCE must be off: the callback builds a fresh Flow with no code_verifier,
+    so a code_challenge in the auth URL would fail token exchange with
+    'invalid_grant: Missing code verifier'."""
+    mock_config = Mock()
+    mock_config.redirect_uris = ["http://localhost/callback"]
+    mock_config.to_client_config.return_value = {"web": {}}
+    mock_get_config.return_value = mock_config
+
+    mock_flow = Mock()
+    mock_flow.authorization_url.return_value = ("https://auth.url", None)
+    mock_flow_class.from_client_config.return_value = mock_flow
+
+    mock_state.create.return_value = "state123"
+
+    google_authorize(scopes=["drive"], user=Mock(id=1), db=Mock())
+
+    assert mock_flow.autogenerate_code_verifier is False
+
+
+@patch("memory.api.google_drive.get_oauth_config")
+@patch("google_auth_oauthlib.flow.Flow")
+@patch("memory.api.google_drive.GoogleOAuthState")
 def test_google_authorize_without_scopes_uses_defaults(mock_state, mock_flow_class, mock_get_config):
     """Test that authorize endpoint uses default scopes when none specified."""
     mock_config = Mock()
@@ -170,6 +193,35 @@ def test_reauthorize_with_specific_scopes(mock_state, mock_flow_class, mock_get_
     assert auth_url_call[1]["login_hint"] == "test@example.com"
 
     assert "authorization_url" in result
+
+
+@patch("memory.api.google_drive.get_oauth_config")
+@patch("memory.api.google_drive.get_user_account")
+@patch("google_auth_oauthlib.flow.Flow")
+@patch("memory.api.google_drive.GoogleOAuthState")
+def test_reauthorize_disables_pkce(mock_state, mock_flow_class, mock_get_account, mock_get_config):
+    """Reauthorize must also disable PKCE (same callback-has-no-verifier reason)."""
+    mock_config = Mock()
+    mock_config.redirect_uris = ["http://localhost/callback"]
+    mock_config.to_client_config.return_value = {"web": {}}
+    mock_get_config.return_value = mock_config
+
+    mock_get_account.return_value = Mock(email="test@example.com")
+
+    mock_flow = Mock()
+    mock_flow.authorization_url.return_value = ("https://auth.url", None)
+    mock_flow_class.from_client_config.return_value = mock_flow
+
+    mock_state.create.return_value = "state123"
+
+    reauthorize_account(
+        account_id=123,
+        request=ReauthorizeRequest(scopes=["drive"]),
+        user=Mock(id=1),
+        db=Mock(),
+    )
+
+    assert mock_flow.autogenerate_code_verifier is False
 
 
 @patch("memory.api.google_drive.get_oauth_config")
