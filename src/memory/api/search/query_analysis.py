@@ -304,7 +304,7 @@ async def analyze_query(
 
         llm_settings = LLMSettings(
             temperature=0.1,  # Low temperature for consistent structured output
-            max_tokens=300,
+            max_tokens=1024,  # headroom for thinking tokens
         )
 
         response = await asyncio.wait_for(

@@ -124,7 +124,7 @@ Do not start with "The user" or "In this session" - just describe what was done.
         )
     ]
 
-    llm_settings = LLMSettings(temperature=0.3, max_tokens=150)
+    llm_settings = LLMSettings(temperature=0.3, max_tokens=1024)
 
     try:
         response = provider.generate(

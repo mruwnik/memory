@@ -31,17 +31,15 @@ class MCPServer:
     url: str
     token: str
     allowed_tools: list[str] | None = None
+    disabled_tools: list[str] | None = None
 
     @classmethod
     def from_model(cls, model) -> "MCPServer":
-        allowed_tools = None
-        if model.disabled_tools:
-            allowed_tools = list(set(model.available_tools) - set(model.disabled_tools))
         return cls(
             name=model.name,
             url=model.mcp_server_url,
             token=model.access_token,
-            allowed_tools=allowed_tools,
+            disabled_tools=model.disabled_tools or None,
         )
 
 

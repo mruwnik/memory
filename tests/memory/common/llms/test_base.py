@@ -211,11 +211,11 @@ def test_llm_settings_custom():
 
 def test_create_provider_anthropic():
     provider = create_provider(
-        model="anthropic/claude-3-opus-20240229",
+        model="anthropic/claude-haiku-5-5",
         api_key="test-key",
     )
     assert isinstance(provider, AnthropicProvider)
-    assert provider.model == "claude-3-opus-20240229"
+    assert provider.model == "claude-haiku-5-5"
 
 
 def test_create_provider_openai():
@@ -241,7 +241,7 @@ def test_create_provider_uses_default_model():
 
 def test_create_provider_anthropic_with_thinking():
     provider = create_provider(
-        model="anthropic/claude-opus-4",
+        model="anthropic/claude-opus-5-5",
         api_key="test-key",
         enable_thinking=True,
     )
@@ -255,7 +255,7 @@ def test_create_provider_missing_anthropic_key():
     try:
         settings.ANTHROPIC_API_KEY = ""
         with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
-            create_provider(model="anthropic/claude-3-opus-20240229")
+            create_provider(model="anthropic/claude-haiku-5-5")
     finally:
         settings.ANTHROPIC_API_KEY = original_key
 

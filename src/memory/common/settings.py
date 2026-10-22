@@ -265,8 +265,8 @@ OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", 50))
 # LLM settings
 OPENAI_API_KEY = secret_env("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = secret_env("ANTHROPIC_API_KEY")
-SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-4-5")
-RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-3-haiku-20240307")
+SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-5-5")
+RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-haiku-5-5")
 
 DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES = int(
     os.getenv("DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES", 30)
@@ -466,7 +466,7 @@ DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", f"{APP_NAME}-chat")
 # Enable Discord notifications if bot token is set
 DISCORD_NOTIFICATIONS_ENABLED = boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True)
 DISCORD_PROCESS_MESSAGES = boolean_env("DISCORD_PROCESS_MESSAGES", True)
-DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-haiku-4-5")
+DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-haiku-5-5")
 DISCORD_MAX_TOOL_CALLS = int(os.getenv("DISCORD_MAX_TOOL_CALLS", 10))
 
 

@@ -8,7 +8,7 @@ from memory.common.llms.anthropic_provider import AnthropicProvider
 
 @pytest.fixture
 def provider():
-    return AnthropicProvider(api_key="test-key", model="claude-3-opus-20240229")
+    return AnthropicProvider(api_key="test-key", model="claude-haiku-5-5")
 
 
 # Content Block Start Tests

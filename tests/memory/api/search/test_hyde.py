@@ -173,7 +173,7 @@ class TestExpandQueryHyde:
         await hyde.expand_query_hyde("test")
 
         call_kwargs = mock_provider.agenerate.call_args[1]
-        assert call_kwargs["settings"].max_tokens == 200
+        assert call_kwargs["settings"].max_tokens == 1024
 
     @patch("memory.api.search.hyde.create_provider")
     async def test_system_prompt_passed(self, mock_create):

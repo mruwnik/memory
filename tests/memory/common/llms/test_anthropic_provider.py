@@ -12,24 +12,17 @@ from memory.common.llms.base import (
     ThinkingContent,
     LLMSettings,
 )
-from memory.common.llms.tools import ToolDefinition
+from memory.common.llms.tools import MCPServer, ToolDefinition
 
 
 @pytest.fixture
 def provider():
-    return AnthropicProvider(api_key="test-key", model="claude-3-opus-20240229")
-
-
-@pytest.fixture
-def thinking_provider():
-    return AnthropicProvider(
-        api_key="test-key", model="claude-opus-4", enable_thinking=True
-    )
+    return AnthropicProvider(api_key="test-key", model="claude-haiku-5-5")
 
 
 def test_initialization(provider):
     assert provider.api_key == "test-key"
-    assert provider.model == "claude-3-opus-20240229"
+    assert provider.model == "claude-haiku-5-5"
     assert provider.enable_thinking is False
 
 
@@ -47,24 +40,6 @@ def test_async_client_lazy_loading(provider):
     client = provider.async_client
     assert client is not None
     assert provider._async_client is not None
-
-
-@pytest.mark.parametrize(
-    "model, expected",
-    [
-        ("claude-opus-4", True),
-        ("claude-opus-4-1", True),
-        ("claude-sonnet-4-0", True),
-        ("claude-sonnet-3-7", True),
-        ("claude-sonnet-4-5", True),
-        ("claude-3-opus-20240229", False),
-        ("claude-3-sonnet-20240229", False),
-        ("gpt-4", False),
-    ],
-)
-def test_supports_thinking(model, expected):
-    provider = AnthropicProvider(api_key="test-key", model=model)
-    assert provider._supports_thinking() == expected
 
 
 def test_convert_text_content(provider):
@@ -127,14 +102,23 @@ def test_convert_tool(provider):
 
 def test_build_request_kwargs_basic(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
-    settings = LLMSettings(temperature=0.5, max_tokens=1000)
+    settings = LLMSettings(max_tokens=1000)
 
     kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
 
-    assert kwargs["model"] == "claude-3-opus-20240229"
-    assert kwargs["temperature"] == 0.5
+    assert kwargs["model"] == "claude-haiku-5-5"
     assert kwargs["max_tokens"] == 1000
     assert len(kwargs["messages"]) == 1
+
+
+def test_build_request_kwargs_never_sends_sampling_params(provider):
+    """API version 2026-10-21 rejects temperature/top_p/top_k, even at defaults."""
+    messages = [Message(role=MessageRole.USER, content="test")]
+    settings = LLMSettings(temperature=0.2, top_p=0.9)
+
+    kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
+
+    assert {"temperature", "top_p", "top_k"}.isdisjoint(kwargs)
 
 
 def test_build_request_kwargs_with_system_prompt(provider):
@@ -166,31 +150,114 @@ def test_build_request_kwargs_with_tools(provider):
     assert len(kwargs["tools"]) == 1
 
 
-def test_build_request_kwargs_with_thinking(thinking_provider):
+@pytest.mark.parametrize(
+    "model, enable_thinking, expected_thinking, expected_output_config",
+    [
+        ("claude-sonnet-5-5", True, {"type": "adaptive", "display": "summarized"}, None),
+        ("claude-sonnet-5-5", False, None, {"effort": "low"}),
+        ("claude-haiku-5-5", False, None, {"effort": "low"}),
+        ("claude-opus-4-6", True, {"type": "adaptive", "display": "summarized"}, None),
+        # Legacy models 400 on both adaptive thinking and effort
+        ("claude-haiku-4-5", True, None, None),
+        ("claude-haiku-4-5", False, None, None),
+        ("claude-sonnet-4-5-20250929", False, None, None),
+        ("claude-opus-4-1", True, None, None),
+        ("claude-3-haiku-20240307", False, None, None),
+    ],
+)
+def test_build_request_kwargs_thinking(
+    model, enable_thinking, expected_thinking, expected_output_config
+):
+    provider = AnthropicProvider(
+        api_key="test-key", model=model, enable_thinking=enable_thinking
+    )
     messages = [Message(role=MessageRole.USER, content="test")]
-    settings = LLMSettings(max_tokens=5000)
 
-    kwargs = thinking_provider._build_request_kwargs(
-        messages, None, None, None, settings
+    kwargs = provider._build_request_kwargs(messages, None, None, None, LLMSettings())
+
+    assert kwargs.get("thinking") == expected_thinking
+    assert kwargs.get("output_config") == expected_output_config
+
+
+@pytest.mark.parametrize(
+    "server, expected_toolset",
+    [
+        (
+            MCPServer(name="srv", url="https://mcp.example", token="tok"),
+            {"type": "mcp_toolset", "mcp_server_name": "srv"},
+        ),
+        (
+            MCPServer(
+                name="srv",
+                url="https://mcp.example",
+                token="tok",
+                allowed_tools=["a", "b"],
+            ),
+            {
+                "type": "mcp_toolset",
+                "mcp_server_name": "srv",
+                "default_config": {"enabled": False},
+                "configs": {"a": {"enabled": True}, "b": {"enabled": True}},
+            },
+        ),
+        (
+            MCPServer(
+                name="srv",
+                url="https://mcp.example",
+                token="tok",
+                disabled_tools=["c"],
+            ),
+            {
+                "type": "mcp_toolset",
+                "mcp_server_name": "srv",
+                "configs": {"c": {"enabled": False}},
+            },
+        ),
+        (
+            MCPServer(
+                name="srv",
+                url="https://mcp.example",
+                token="tok",
+                allowed_tools=["a", "c"],
+                disabled_tools=["c"],
+            ),
+            {
+                "type": "mcp_toolset",
+                "mcp_server_name": "srv",
+                "default_config": {"enabled": False},
+                "configs": {"a": {"enabled": True}, "c": {"enabled": False}},
+            },
+        ),
+    ],
+)
+def test_build_request_kwargs_mcp_servers(provider, server, expected_toolset):
+    messages = [Message(role=MessageRole.USER, content="test")]
+
+    kwargs = provider._build_request_kwargs(
+        messages, None, None, [server], LLMSettings()
     )
 
-    assert "thinking" in kwargs
-    assert kwargs["thinking"]["type"] == "enabled"
-    assert kwargs["thinking"]["budget_tokens"] == 3976
-    assert kwargs["temperature"] == 1.0
-    assert "top_p" not in kwargs
+    assert kwargs["extra_headers"] == {"anthropic-beta": "mcp-client-2025-11-20"}
+    assert kwargs["extra_body"] == {
+        "mcp_servers": [
+            {
+                "type": "url",
+                "url": "https://mcp.example",
+                "name": "srv",
+                "authorization_token": "tok",
+            }
+        ]
+    }
+    assert kwargs["tools"] == [expected_toolset]
 
 
-def test_build_request_kwargs_thinking_insufficient_tokens(thinking_provider):
+def test_build_request_kwargs_without_mcp_sends_no_beta(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
-    settings = LLMSettings(max_tokens=1000)
 
-    kwargs = thinking_provider._build_request_kwargs(
-        messages, None, None, None, settings
-    )
+    kwargs = provider._build_request_kwargs(messages, None, None, None, LLMSettings())
 
-    # Shouldn't enable thinking if not enough tokens
-    assert "thinking" not in kwargs
+    assert "extra_headers" not in kwargs
+    assert "extra_body" not in kwargs
 
 
 def test_handle_stream_event_text_delta(provider):

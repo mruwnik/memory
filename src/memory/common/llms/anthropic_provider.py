@@ -20,20 +20,25 @@ from memory.common.llms.base import (
 
 logger = logging.getLogger(__name__)
 
+# Models older than the 4.6 generation reject both `output_config.effort` and
+# adaptive thinking with a 400; a denylist keeps new models working by default.
+LEGACY_MODEL_PREFIXES = (
+    "claude-3",
+    "claude-opus-4-0",
+    "claude-opus-4-1",
+    "claude-opus-4-5",
+    "claude-opus-4-2025",
+    "claude-sonnet-4-0",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-2025",
+    "claude-haiku-4-5",
+)
+
 
 class AnthropicProvider(BaseLLMProvider):
-    """Anthropic LLM provider with streaming, tool support, and extended thinking."""
+    """Anthropic LLM provider with streaming, tool support, and adaptive thinking."""
 
     provider = "anthropic"
-
-    # Models that support extended thinking
-    THINKING_MODELS = {
-        "claude-opus-4",
-        "claude-opus-4-1",
-        "claude-sonnet-4-0",
-        "claude-sonnet-3-7",
-        "claude-sonnet-4-5",
-    }
 
     def __init__(self, api_key: str, model: str, enable_thinking: bool = False):
         """
@@ -42,7 +47,9 @@ class AnthropicProvider(BaseLLMProvider):
         Args:
             api_key: Anthropic API key
             model: Model identifier
-            enable_thinking: Enable extended thinking for supported models
+            enable_thinking: Request adaptive thinking with summarized output.
+                When off, effort is lowered instead, since current models think
+                by default and some cannot disable it.
         """
         super().__init__(api_key, model)
         self.enable_thinking = enable_thinking
@@ -96,10 +103,26 @@ class AnthropicProvider(BaseLLMProvider):
         """Filter out system messages (handled separately in Anthropic)."""
         return message.role != MessageRole.SYSTEM
 
-    def _supports_thinking(self) -> bool:
-        """Check if the current model supports extended thinking."""
-        model_lower = self.model.lower()
-        return any(supported in model_lower for supported in self.THINKING_MODELS)
+    @staticmethod
+    def format_mcp_server(server: MCPServer) -> dict[str, Any]:
+        return {
+            "type": "url",
+            "url": server.url,
+            "name": server.name,
+            "authorization_token": server.token,
+        }
+
+    @staticmethod
+    def format_mcp_toolset(server: MCPServer) -> dict[str, Any]:
+        toolset: dict[str, Any] = {"type": "mcp_toolset", "mcp_server_name": server.name}
+        configs = {t: {"enabled": True} for t in server.allowed_tools or []} | {
+            t: {"enabled": False} for t in server.disabled_tools or []
+        }
+        if server.allowed_tools:
+            toolset["default_config"] = {"enabled": False}
+        if configs:
+            toolset["configs"] = configs
+        return toolset
 
     def _build_request_kwargs(
         self,
@@ -112,19 +135,13 @@ class AnthropicProvider(BaseLLMProvider):
         """Build common request kwargs for API calls."""
         anthropic_messages = self._convert_messages(messages)
 
+        # Current models reject non-default temperature/top_p/top_k, so the
+        # sampling fields of LLMSettings are not forwarded.
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": anthropic_messages,
-            "temperature": settings.temperature,
             "max_tokens": settings.max_tokens,
-            "extra_headers": {
-                "anthropic-beta": "web-fetch-2025-09-10,mcp-client-2025-04-04"
-            },
         }
-
-        # Only include top_p if explicitly set
-        if settings.top_p is not None:
-            kwargs["top_p"] = settings.top_p
 
         if system_prompt:
             kwargs["system"] = system_prompt
@@ -132,39 +149,24 @@ class AnthropicProvider(BaseLLMProvider):
         if settings.stop_sequences:
             kwargs["stop_sequences"] = settings.stop_sequences
 
-        if tools:
-            kwargs["tools"] = self._convert_tools(tools)
-
+        tool_defs = self._convert_tools(tools) or []
         if mcp_servers:
-
-            def format_server(server: MCPServer) -> dict[str, Any]:
-                conf: dict[str, Any] = {
-                    "type": "url",
-                    "url": server.url,
-                    "name": server.name,
-                    "authorization_token": server.token,
-                }
-                if server.allowed_tools:
-                    conf["tool_configuration"] = {
-                        "allowed_tools": server.allowed_tools,
-                    }
-                return conf
-
+            kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-11-20"}
             kwargs["extra_body"] = {
-                "mcp_servers": [format_server(server) for server in mcp_servers]
+                "mcp_servers": [self.format_mcp_server(s) for s in mcp_servers]
             }
+            tool_defs += [self.format_mcp_toolset(s) for s in mcp_servers]
+        if tool_defs:
+            kwargs["tools"] = tool_defs
 
-        # Enable extended thinking if requested and model supports it
-        if self.enable_thinking and self._supports_thinking():
-            thinking_budget = min(10000, settings.max_tokens - 1024)
-            if thinking_budget >= 1024:
-                kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget,
-                }
-                # When thinking is enabled: temperature must be 1, can't use top_p
-                kwargs["temperature"] = 1.0
-                kwargs.pop("top_p", None)
+        # Thinking tokens count toward max_tokens, so callers that don't ask
+        # for thinking get low effort to keep short-output budgets usable.
+        if self.model.startswith(LEGACY_MODEL_PREFIXES):
+            return kwargs
+        if self.enable_thinking:
+            kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+        else:
+            kwargs["output_config"] = {"effort": "low"}
 
         return kwargs
 

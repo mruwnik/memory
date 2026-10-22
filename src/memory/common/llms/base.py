@@ -722,10 +722,10 @@ def create_provider(
     Create an LLM provider based on the model name.
 
     Args:
-        model: Model identifier (e.g., "claude-3-opus-20240229", "gpt-4").
+        model: Model identifier (e.g., "claude-opus-5-5", "gpt-4").
                If not provided, uses SUMMARIZER_MODEL from settings.
         api_key: Optional API key. If not provided, uses keys from settings.
-        enable_thinking: Enable extended thinking for supported models (Claude Opus 4+, Sonnet 4+, Sonnet 3.7)
+        enable_thinking: Request adaptive thinking (Anthropic only)
 
     Returns:
         An initialized LLM provider

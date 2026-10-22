@@ -80,7 +80,7 @@ async def expand_query_hyde(
 
         llm_settings = LLMSettings(
             temperature=0.3,  # Lower temperature for more focused output
-            max_tokens=200,   # Short passages only
+            max_tokens=1024,  # headroom for thinking; the prompt keeps passages short
         )
 
         # Run with timeout
