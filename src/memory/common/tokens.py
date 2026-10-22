@@ -92,7 +92,7 @@ def estimate_image_tokens(image: Image.Image, model: str, detail: str = "high") 
 
     Args:
         image: PIL Image
-        model: Model string (e.g., "openai/gpt-4-vision-preview", "anthropic/claude-sonnet-5-5")
+        model: Model string (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-5-5")
         detail: Detail level for OpenAI models ("high" or "low")
 
     Returns:
