@@ -8,6 +8,7 @@ from memory.api.search.query_analysis import (
     ModalityInfo,
     QueryAnalysis,
     _build_prompt,
+    _build_schema,
     _get_available_modalities,
     _get_modality_domains,
     _is_valid_sql_identifier,
@@ -105,7 +106,6 @@ class TestBuildPrompt:
         assert "20,000 items from: lesswrong.com" in prompt
         assert "400 sources (22,000 sections)" in prompt
         assert "modalities" in prompt
-        assert "cleaned_query" in prompt
 
     def test_builds_prompt_empty_modalities(self):
         """Prompt handles no modalities gracefully."""
@@ -117,18 +117,16 @@ class TestBuildPrompt:
 
         assert "no content indexed yet" in prompt
 
-    def test_prompt_contains_json_structure(self):
-        """Prompt includes expected JSON structure."""
-        with patch(
-            "memory.api.search.query_analysis._get_available_modalities",
-            return_value={"test": ModalityInfo(name="test", count=100)},
-        ):
-            prompt = _build_prompt()
+    def test_schema_restricts_modalities_to_available(self):
+        schema = _build_schema(["forum", "book"])
 
-        assert '"modalities": []' in prompt
-        assert '"sources": []' in prompt
-        assert '"cleaned_query": ""' in prompt
-        assert '"query_variants": []' in prompt
+        assert schema["properties"]["modalities"]["items"]["enum"] == ["forum", "book"]
+        assert set(schema["required"]) == set(schema["properties"])
+
+    def test_schema_without_modalities_has_no_empty_enum(self):
+        schema = _build_schema([])
+
+        assert schema["properties"]["modalities"]["items"] == {"type": "string"}
 
     def test_prompt_contains_guidelines(self):
         """Prompt includes usage guidelines."""
@@ -139,7 +137,6 @@ class TestBuildPrompt:
             prompt = _build_prompt()
 
         assert "Remove meta-language" in prompt
-        assert "Return ONLY valid JSON" in prompt
         assert "recalled_content" in prompt
 
 
@@ -155,6 +152,7 @@ class TestAnalyzeQuery:
                 "sources": ["lesswrong.com"],
                 "cleaned_query": "rationality concepts",
                 "query_variants": ["rational thinking", "epistemic rationality"],
+                "recalled_content": [],
             }
         )
 
@@ -180,37 +178,9 @@ class TestAnalyzeQuery:
         assert result.sources == ["lesswrong.com"]
         assert result.cleaned_query == "rationality concepts"
         assert "rational thinking" in result.query_variants
-
-    @pytest.mark.asyncio
-    async def test_handles_markdown_code_blocks(self):
-        """Strips markdown code blocks from response."""
-        mock_response = """```json
-{
-    "modalities": ["book"],
-    "sources": [],
-    "cleaned_query": "test query",
-    "query_variants": []
-}
-```"""
-
-        mock_provider = Mock()
-        mock_provider.agenerate = AsyncMock(return_value=mock_response)
-
-        with patch(
-            "memory.api.search.query_analysis.create_provider",
-            return_value=mock_provider,
-        ):
-            with patch(
-                "memory.api.search.query_analysis._get_available_modalities",
-                return_value={"book": ModalityInfo(name="book", count=100)},
-            ):
-                from memory.api.search import query_analysis
-                query_analysis._analysis_cache = {}
-
-                result = await analyze_query("find something in a book")
-
-        assert result.success is True
-        assert result.modalities == {"book"}
+        llm_settings = mock_provider.agenerate.call_args.kwargs["settings"]
+        assert llm_settings.json_schema == _build_schema(["forum"])
+        assert llm_settings.cache_system_prompt is True
 
     @pytest.mark.asyncio
     async def test_handles_invalid_json(self):
@@ -271,6 +241,7 @@ class TestAnalyzeQuery:
                 "sources": [],
                 "cleaned_query": "cached query",
                 "query_variants": [],
+                "recalled_content": [],
             }
         )
 
@@ -306,6 +277,7 @@ class TestAnalyzeQuery:
                 "sources": [],
                 "cleaned_query": "test",
                 "query_variants": [],
+                "recalled_content": [],
             }
         )
 

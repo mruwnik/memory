@@ -208,8 +208,6 @@ def _build_prompt() -> str:
             lines.append(f"  - {info.name}: {info.description}")
         modality_section = "\n".join(lines)
 
-    modality_names = list(modalities.keys()) if modalities else []
-
     return (
         textwrap.dedent("""
         Analyze this search query and extract structured information.
@@ -217,30 +215,49 @@ def _build_prompt() -> str:
         The user is searching a personal knowledge base containing:
         {modality_section}
 
-        Return a JSON object:
-        {{
-          "modalities": [],  // From: {modality_names} (empty = search all)
-          "sources": [],  // Specific sources/authors mentioned
-          "cleaned_query": "",  // Query with meta-language removed
-          "query_variants": [],  // 1-3 alternative phrasings
-          "recalled_content": []  // Specific titles/essays/concepts you recall that match
-        }}
-
         Guidelines:
         - Only restrict modalities when VERY confident about content type
         - When unsure, return empty modalities to search all
         - Remove meta-language like "there was something about", "I remember reading"
         - For recalled_content: if you recognize the topic, suggest specific titles/essays
           that might be relevant (e.g., "predetermined conclusions" -> "The Bottom Line")
-
-        Return ONLY valid JSON.
     """)
         .strip()
-        .format(
-            modality_section=modality_section,
-            modality_names=modality_names,
-        )
+        .format(modality_section=modality_section)
     )
+
+
+def _build_schema(modality_names: list[str]) -> dict:
+    def strings(description: str) -> dict:
+        return {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": description,
+        }
+
+    modalities = strings("Content types to search (empty = search all)")
+    # An empty enum is an invalid schema
+    if modality_names:
+        modalities["items"]["enum"] = modality_names
+
+    properties = {
+        "modalities": modalities,
+        "sources": strings("Specific sources/authors mentioned"),
+        "cleaned_query": {
+            "type": "string",
+            "description": "Query with meta-language removed",
+        },
+        "query_variants": strings("1-3 alternative phrasings"),
+        "recalled_content": strings(
+            "Specific titles/essays/concepts you recall that match"
+        ),
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
 
 
 @dataclass
@@ -303,8 +320,11 @@ async def analyze_query(
         messages = [Message.user(text=f"Query: {query}")]
 
         llm_settings = LLMSettings(
-            temperature=0.1,  # Low temperature for consistent structured output
             max_tokens=1024,  # headroom for thinking tokens
+            json_schema=_build_schema(sorted(_get_available_modalities())),
+            # Prompt + schema is ~800-1000 tokens and stable for an hour
+            # (modality cache TTL); searches come in bursts.
+            cache_system_prompt=True,
         )
 
         response = await asyncio.wait_for(
@@ -317,23 +337,15 @@ async def analyze_query(
         )
 
         if response:
-            # Parse JSON response
-            response = response.strip()
-            # Handle markdown code blocks
-            if response.startswith("```"):
-                response = response.split("```")[1]
-                if response.startswith("json"):
-                    response = response[4:]
-                response = response.strip()
-
+            # A refusal can come back as non-JSON text
             try:
                 data = json.loads(response)
 
-                result.modalities = set(data.get("modalities", []))
-                result.sources = data.get("sources", [])
-                result.cleaned_query = data.get("cleaned_query", query)
-                result.query_variants = data.get("query_variants", [])
-                result.recalled_content = data.get("recalled_content", [])
+                result.modalities = set(data["modalities"])
+                result.sources = data["sources"]
+                result.cleaned_query = data["cleaned_query"]
+                result.query_variants = data["query_variants"]
+                result.recalled_content = data["recalled_content"]
                 result.success = True
 
                 logger.debug(
@@ -345,7 +357,6 @@ async def analyze_query(
 
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse query analysis JSON: {e}")
-                result.cleaned_query = query
 
         # Cache the result (evicts oldest entries first - LRU since we move on access)
         async with _get_cache_lock():

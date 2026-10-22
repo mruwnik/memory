@@ -143,7 +143,15 @@ class AnthropicProvider(BaseLLMProvider):
             "max_tokens": settings.max_tokens,
         }
 
-        if system_prompt:
+        if system_prompt and settings.cache_system_prompt:
+            kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        elif system_prompt:
             kwargs["system"] = system_prompt
 
         if settings.stop_sequences:
@@ -159,15 +167,23 @@ class AnthropicProvider(BaseLLMProvider):
         if tool_defs:
             kwargs["tools"] = tool_defs
 
+        output_config: dict[str, Any] = {}
+        if settings.json_schema:
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": settings.json_schema,
+            }
         # Thinking tokens count toward max_tokens, so callers that don't ask
         # for thinking get low effort to keep short-output budgets usable.
         if self.model.startswith(LEGACY_MODEL_PREFIXES):
-            return kwargs
-        if self.enable_thinking:
+            pass
+        elif self.enable_thinking:
             kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
         else:
-            kwargs["output_config"] = {"effort": "low"}
+            output_config["effort"] = "low"
 
+        if output_config:
+            kwargs["output_config"] = output_config
         return kwargs
 
     def _handle_stream_event(

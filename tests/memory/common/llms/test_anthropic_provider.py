@@ -1,8 +1,12 @@
 import pytest
 from typing import Any, cast
 from unittest.mock import Mock
+from anthropic import transform_schema
 from PIL import Image
 
+from memory.api.search.query_analysis import _build_schema
+from memory.api.search.scorer import SCORE_SCHEMA
+from memory.common.summarizer import SUMMARY_SCHEMA
 from memory.common.llms.anthropic_provider import AnthropicProvider
 from memory.common.llms.base import (
     Message,
@@ -13,6 +17,7 @@ from memory.common.llms.base import (
     LLMSettings,
 )
 from memory.common.llms.tools import MCPServer, ToolDefinition
+from memory.workers.tasks.meetings import EXTRACTION_SCHEMA
 
 
 @pytest.fixture
@@ -132,6 +137,22 @@ def test_build_request_kwargs_with_system_prompt(provider):
     assert kwargs["system"] == "system prompt"
 
 
+def test_build_request_kwargs_caches_system_prompt(provider):
+    messages = [Message(role=MessageRole.USER, content="test")]
+
+    kwargs = provider._build_request_kwargs(
+        messages, "system prompt", None, None, LLMSettings(cache_system_prompt=True)
+    )
+
+    assert kwargs["system"] == [
+        {
+            "type": "text",
+            "text": "system prompt",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
 def test_build_request_kwargs_with_tools(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     tools = [
@@ -177,6 +198,52 @@ def test_build_request_kwargs_thinking(
 
     assert kwargs.get("thinking") == expected_thinking
     assert kwargs.get("output_config") == expected_output_config
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {"x": {"type": "string"}},
+    "required": ["x"],
+    "additionalProperties": False,
+}
+FORMAT = {"type": "json_schema", "schema": SCHEMA}
+
+
+@pytest.mark.parametrize(
+    "model, enable_thinking, expected_output_config",
+    [
+        ("claude-haiku-5-5", False, {"effort": "low", "format": FORMAT}),
+        ("claude-sonnet-5-5", True, {"format": FORMAT}),
+        # Legacy models reject effort but support structured outputs
+        ("claude-haiku-4-5", False, {"format": FORMAT}),
+    ],
+)
+def test_build_request_kwargs_json_schema(model, enable_thinking, expected_output_config):
+    provider = AnthropicProvider(
+        api_key="test-key", model=model, enable_thinking=enable_thinking
+    )
+    messages = [Message(role=MessageRole.USER, content="test")]
+
+    kwargs = provider._build_request_kwargs(
+        messages, None, None, None, LLMSettings(json_schema=SCHEMA)
+    )
+
+    assert kwargs["output_config"] == expected_output_config
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        SUMMARY_SCHEMA,
+        SCORE_SCHEMA,
+        EXTRACTION_SCHEMA,
+        _build_schema(["forum", "book"]),
+        _build_schema([]),
+    ],
+)
+def test_json_schemas_are_already_strict(schema):
+    # The SDK's strict-mode normaliser leaves a schema the API accepts untouched
+    assert transform_schema(schema) == schema
 
 
 @pytest.mark.parametrize(
@@ -397,7 +464,7 @@ async def test_agenerate_basic(provider, mock_anthropic_client):
 
     result = await provider.agenerate(messages)
 
-    assert "<summary>test summary</summary>" in result
+    assert "test summary" in result
     provider.async_client.messages.create.assert_called_once()
 
 

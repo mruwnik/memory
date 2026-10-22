@@ -1,8 +1,8 @@
 import asyncio
+import json
 import logging
 from collections.abc import Sequence
 
-from bs4 import BeautifulSoup
 from PIL import Image
 
 from memory.common.db.models.source_item import Chunk
@@ -25,12 +25,19 @@ Here is the chunk:
 <chunk>
     {chunk}
 </chunk>
-
-Please return your score as a number between 0 and 1 formatted as:
-<score>your score</score>
-
-Please always return a summary of any images provided.
 """
+
+SCORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {
+            "type": "number",
+            "description": "Probability between 0 and 1 that the chunk is relevant",
+        }
+    },
+    "required": ["score"],
+    "additionalProperties": False,
+}
 
 
 async def score_chunk(query: str, chunk: Chunk) -> Chunk:
@@ -50,24 +57,14 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
             settings.RANKER_MODEL,
             images=images,
             system_prompt=SCORE_CHUNK_SYSTEM_PROMPT,
+            json_schema=SCORE_SCHEMA,
         )
+        score = json.loads(response)["score"] if response else 0.0
     except Exception as e:
         logger.error(f"Error scoring chunk: {e}")
-        return chunk
+        score = 0.0
 
-    if not response:
-        chunk.relevance_score = 0.0
-        return chunk
-
-    soup = BeautifulSoup(response, "html.parser")
-    if not (score := soup.find("score")):
-        chunk.relevance_score = 0.0
-    else:
-        try:
-            chunk.relevance_score = float(score.text.strip())
-        except ValueError:
-            chunk.relevance_score = 0.0
-
+    chunk.relevance_score = float(score)
     return chunk
 
 

@@ -2,6 +2,7 @@
 
 # Legacy imports for backwards compatibility
 import logging
+from typing import Any
 
 from PIL import Image
 
@@ -51,8 +52,8 @@ SUMMARY_SYSTEM_PROMPT = (
 )
 
 
-def summary_settings() -> LLMSettings:
-    return LLMSettings(temperature=0.3, max_tokens=2048)
+def summary_settings(json_schema: dict[str, Any] | None = None) -> LLMSettings:
+    return LLMSettings(temperature=0.3, max_tokens=2048, json_schema=json_schema)
 
 
 def summarize(
@@ -60,7 +61,9 @@ def summarize(
     model: str,
     images: list[Image.Image] = [],
     system_prompt: str = "",
+    json_schema: dict[str, Any] | None = None,
 ) -> str:
+    """The response text; with `json_schema`, JSON guaranteed to match it."""
     provider = create_provider(model=model)
     try:
         # Build message content
@@ -72,7 +75,7 @@ def summarize(
         res = provider.run_with_tools(
             messages=messages,
             system_prompt=system_prompt or SUMMARY_SYSTEM_PROMPT,
-            settings=summary_settings(),
+            settings=summary_settings(json_schema),
             tools={},
         )
         return res.response or ""

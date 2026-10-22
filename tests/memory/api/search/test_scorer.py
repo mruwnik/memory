@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from memory.api.search.scorer import score_chunk, rank_chunks
+from memory.api.search.scorer import SCORE_SCHEMA, score_chunk, rank_chunks
 
 
 @pytest.fixture
@@ -21,17 +21,18 @@ def mock_chunk():
     [
         (None, 0.0),  # Null response
         ("", 0.0),  # Empty response
-        ("<score>0.75</score>", 0.75),  # Valid score
-        ("Some response without score tag", 0.0),  # Missing score tag
-        ("<score>not a number</score>", 0.0),  # Invalid score value
+        ('{"score": 0.75}', 0.75),
     ],
 )
 async def test_score_chunk_llm_responses(mock_chunk, llm_response, expected_score):
     """Tests score_chunk handling of various LLM responses."""
-    with patch("memory.api.search.scorer.llms.summarize", return_value=llm_response):
+    with patch(
+        "memory.api.search.scorer.llms.summarize", return_value=llm_response
+    ) as llm:
         result = await score_chunk("test query", mock_chunk)
 
     assert result.relevance_score == expected_score
+    assert llm.call_args.kwargs["json_schema"] == SCORE_SCHEMA
 
 
 @pytest.mark.asyncio

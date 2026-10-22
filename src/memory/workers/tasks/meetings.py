@@ -34,59 +34,47 @@ DEFAULT_EXTRACTION_PROMPT = """You are analyzing a meeting transcript. Extract t
 2. Key discussion points, decisions made, and important information (as bullet points)
 3. Action items - tasks that were assigned or need to be done, with assignee, due date, and priority if mentioned
 
-Return your analysis as JSON with this exact structure:
-{{
-    "summary": "Brief summary of the meeting",
-    "notes": "- Key point 1\\n- Key point 2\\n- Decision made\\n- etc.",
-    "action_items": [
-        {{
-            "description": "Task description",
-            "assignee": "Person name or null if not specified",
-            "due_date": "YYYY-MM-DD or null if not specified",
-            "priority": "low, medium, high, or urgent based on context, or null if unclear"
-        }}
-    ]
-}}
-
-IMPORTANT: Return ONLY valid JSON, no markdown formatting or extra text.
-
 Meeting transcript:
 {transcript}
 """
 
-DEFAULT_SYSTEM_PROMPT = "You are an expert at analyzing meeting transcripts and extracting actionable information. Always return valid JSON."
+DEFAULT_SYSTEM_PROMPT = "You are an expert at analyzing meeting transcripts and extracting actionable information."
 
-
-def parse_extraction_response(response: str) -> dict:
-    """Parse the JSON response from the LLM."""
-    response = response.strip()
-    if not response.startswith("```"):
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse extraction response: {e}")
-            logger.error(f"Response was: {response[:500]}")
-            return {"summary": "", "notes": "", "action_items": []}
-
-    # Remove markdown code block
-    lines = response.split("\n")
-    json_lines = []
-    in_block = False
-    for line in lines:
-        if line.startswith("```") and not in_block:
-            in_block = True
-            continue
-        if line.startswith("```") and in_block:
-            break
-        if in_block:
-            json_lines.append(line)
-
-    try:
-        return json.loads("\n".join(json_lines))
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse extraction response: {e}")
-        logger.error(f"Response was: {response[:500]}")
-        return {"summary": "", "notes": "", "action_items": []}
+NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "2-3 sentence summary"},
+        "notes": {
+            "type": "string",
+            "description": "Markdown bullet list of key points and decisions",
+        },
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "assignee": NULLABLE_STRING | {"description": "Person name"},
+                    "due_date": NULLABLE_STRING | {"description": "YYYY-MM-DD"},
+                    "priority": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "enum": ["low", "medium", "high", "urgent"],
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                },
+                "required": ["description", "assignee", "due_date", "priority"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "notes", "action_items"],
+    "additionalProperties": False,
+}
 
 
 def parse_due_date(date_str: str | None) -> datetime | None:
@@ -118,8 +106,13 @@ def call_extraction_llm(
 
     prompt = prompt_template.format(transcript=transcript)
     logger.info(f"Calling LLM for meeting extraction using {llm_model}")
-    response = llms.summarize(prompt, model=llm_model, system_prompt=sys_prompt)
-    return parse_extraction_response(response)
+    response = llms.summarize(
+        prompt,
+        model=llm_model,
+        system_prompt=sys_prompt,
+        json_schema=EXTRACTION_SCHEMA,
+    )
+    return json.loads(response)
 
 
 def normalize_attendee_names(attendee_names: Sequence[str | None]) -> list[str]:

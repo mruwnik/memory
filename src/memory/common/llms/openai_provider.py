@@ -246,6 +246,16 @@ class OpenAIProvider(BaseLLMProvider):
             kwargs["tools"] = self._convert_tools(tools)
             kwargs["tool_choice"] = "auto"
 
+        if settings.json_schema:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": settings.json_schema,
+                    "strict": True,
+                },
+            }
+
         return kwargs
 
     def _parse_and_finalize_tool_call(

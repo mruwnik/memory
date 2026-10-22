@@ -42,7 +42,7 @@ def batch_request(provider: AnthropicProvider, request: SummaryRequest) -> dict[
         str(request.id),
         [Message(role=MessageRole.USER, content=[TextContent(text=request.prompt)])],
         llms.SUMMARY_SYSTEM_PROMPT,
-        llms.summary_settings(),
+        llms.summary_settings(summarizer.SUMMARY_SCHEMA),
     )
 
 

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -21,6 +22,8 @@ from testcontainers.qdrant import QdrantContainer
 
 from memory.common import settings
 from tests.providers.email_provider import MockEmailProvider
+
+MOCK_SUMMARY_RESPONSE = json.dumps({"summary": "test summary", "tags": ["tag1", "tag2"]})
 
 
 def pytest_addoption(parser):
@@ -910,7 +913,7 @@ def mock_openai_client():
                 choices=[
                     Mock(
                         message=Mock(
-                            content="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
+                            content=MOCK_SUMMARY_RESPONSE
                         ),
                         finish_reason=None,
                     )
@@ -951,7 +954,7 @@ def mock_openai_client():
                     choices=[
                         Mock(
                             message=Mock(
-                                content="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
+                                content=MOCK_SUMMARY_RESPONSE
                             ),
                             finish_reason=None,
                         )
@@ -981,7 +984,7 @@ def mock_anthropic_client():
                             type="content_block_delta",
                             delta=Mock(
                                 type="text_delta",
-                                text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>",
+                                text=MOCK_SUMMARY_RESPONSE,
                             ),
                         )
                     ]
@@ -995,7 +998,7 @@ def mock_anthropic_client():
             return_value=Mock(
                 content=[
                     Mock(
-                        text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>"
+                        text=MOCK_SUMMARY_RESPONSE
                     )
                 ]
             )
@@ -1009,7 +1012,7 @@ def mock_anthropic_client():
                 content=[
                     Mock(
                         type="text",
-                        text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>",
+                        text=MOCK_SUMMARY_RESPONSE,
                     )
                 ]
             )
@@ -1022,7 +1025,7 @@ def mock_anthropic_client():
                     type="content_block_delta",
                     delta=Mock(
                         type="text_delta",
-                        text="<summary>test summary</summary><tags><tag>tag1</tag><tag>tag2</tag></tags>",
+                        text=MOCK_SUMMARY_RESPONSE,
                     ),
                 )
 

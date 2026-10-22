@@ -1,5 +1,6 @@
 """Tests for meeting Celery tasks."""
 
+import json
 import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -84,88 +85,6 @@ def sample_extraction_response():
             },
         ],
     }
-
-
-# ============================================================================
-# Tests for parse_extraction_response
-# ============================================================================
-
-
-def test_parse_extraction_response_valid_json():
-    """Test parsing valid JSON response."""
-    response = '{"summary": "Test summary", "notes": "Test notes", "action_items": []}'
-    result = meetings.parse_extraction_response(response)
-    assert result == {"summary": "Test summary", "notes": "Test notes", "action_items": []}
-
-
-def test_parse_extraction_response_with_markdown_code_block():
-    """Test parsing JSON wrapped in markdown code blocks."""
-    response = """```json
-{"summary": "Test summary", "notes": "Test notes", "action_items": []}
-```"""
-    result = meetings.parse_extraction_response(response)
-    assert result == {"summary": "Test summary", "notes": "Test notes", "action_items": []}
-
-
-def test_parse_extraction_response_with_plain_code_block():
-    """Test parsing JSON wrapped in plain code blocks."""
-    response = """```
-{"summary": "Test", "notes": "Notes", "action_items": []}
-```"""
-    result = meetings.parse_extraction_response(response)
-    assert result == {"summary": "Test", "notes": "Notes", "action_items": []}
-
-
-def test_parse_extraction_response_with_whitespace():
-    """Test parsing JSON with surrounding whitespace."""
-    response = """
-    {"summary": "Test", "notes": "Notes", "action_items": []}
-    """
-    result = meetings.parse_extraction_response(response)
-    assert result["summary"] == "Test"
-
-
-def test_parse_extraction_response_invalid_json():
-    """Test parsing invalid JSON returns empty defaults."""
-    response = "This is not valid JSON at all"
-    result = meetings.parse_extraction_response(response)
-    assert result == {"summary": "", "notes": "", "action_items": []}
-
-
-def test_parse_extraction_response_with_action_items():
-    """Test parsing response with action items."""
-    response = """{
-        "summary": "Meeting summary",
-        "notes": "Key points",
-        "action_items": [
-            {"description": "Task 1", "assignee": "Alice", "due_date": "2024-01-15", "priority": "high"}
-        ]
-    }"""
-    result = meetings.parse_extraction_response(response)
-    assert len(result["action_items"]) == 1
-    assert result["action_items"][0]["description"] == "Task 1"
-    assert result["action_items"][0]["assignee"] == "Alice"
-
-
-def test_parse_extraction_response_multiline_code_block():
-    """Test parsing multiline JSON in code block."""
-    response = """```json
-{
-    "summary": "Multi-line summary",
-    "notes": "- Point 1\\n- Point 2",
-    "action_items": [
-        {
-            "description": "Do something",
-            "assignee": null,
-            "due_date": null,
-            "priority": null
-        }
-    ]
-}
-```"""
-    result = meetings.parse_extraction_response(response)
-    assert result["summary"] == "Multi-line summary"
-    assert len(result["action_items"]) == 1
 
 
 # ============================================================================
@@ -847,8 +766,15 @@ def test_call_extraction_llm_success(mock_summarize):
 
     result = meetings.call_extraction_llm("Test transcript")
 
-    assert result["summary"] == "Test"
-    mock_summarize.assert_called_once()
+    assert result == {"summary": "Test", "notes": "Notes", "action_items": []}
+    assert mock_summarize.call_args.kwargs["json_schema"] == meetings.EXTRACTION_SCHEMA
+
+
+@patch("memory.workers.tasks.meetings.llms.summarize", return_value="I can't help")
+def test_call_extraction_llm_raises_on_non_json(mock_summarize):
+    """A refusal surfaces as an error so the meeting is marked failed."""
+    with pytest.raises(json.JSONDecodeError):
+        meetings.call_extraction_llm("Test transcript")
 
 
 @patch("memory.workers.tasks.meetings.llms.summarize")

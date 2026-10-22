@@ -212,6 +212,13 @@ class LLMSettings:
     top_p: float | None = None
     stop_sequences: list[str] | None = None
     stream: bool = False
+    # Constrains the response text to JSON matching this schema; every object
+    # needs `additionalProperties: false` and all its properties `required`.
+    json_schema: dict[str, Any] | None = None
+    # Only pays off when the system prompt is reused within minutes and is,
+    # together with any json_schema (which counts toward the cached prefix),
+    # above the model's minimum cacheable length; shorter ones silently don't cache.
+    cache_system_prompt: bool = False
 
 
 class BaseLLMProvider(ABC):

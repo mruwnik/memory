@@ -275,6 +275,20 @@ def test_build_request_kwargs_with_tools(provider):
     assert kwargs["tool_choice"] == "auto"
 
 
+def test_build_request_kwargs_with_json_schema(provider):
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    messages = [Message(role=MessageRole.USER, content="test")]
+
+    kwargs = provider._build_request_kwargs(
+        messages, None, None, None, LLMSettings(json_schema=schema)
+    )
+
+    assert kwargs["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "response", "schema": schema, "strict": True},
+    }
+
+
 def test_build_request_kwargs_with_stream(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings()

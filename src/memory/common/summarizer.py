@@ -1,11 +1,10 @@
+import json
 import logging
 import traceback
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Iterator
-
-from bs4 import BeautifulSoup
 
 from memory.common import settings, tokens, llms
 
@@ -17,13 +16,8 @@ The following text is already concise. Please identify 3-5 relevant tags that ca
 
 Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
 
-Return your response as XML with this format:
-<summary>{summary}</summary>
-<tags>
-    <tag>tag1</tag>
-    <tag>tag2</tag>
-    <tag>tag3</tag>
-</tags>
+Use this as the summary, verbatim:
+{summary}
 
 Text:
 {content}
@@ -35,37 +29,20 @@ Also provide 3-5 relevant tags that capture the main topics or themes.
 
 Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
 
-Return your response as XML with this format:
-
-<summary>your summary here</summary>
-<tags>
-    <tag>tag1</tag>
-    <tag>tag2</tag>
-    <tag>tag3</tag>
-</tags>
-
 Text to summarize:
 {content}
 """
 
 
-def parse_response(response: str) -> dict[str, Any]:
-    """Parse the response from the summarizer."""
-    if not response or not response.strip():
-        return {"summary": "", "tags": []}
-
-    # Use html.parser instead of xml parser for better compatibility
-    soup = BeautifulSoup(response, "html.parser")
-
-    # Safely extract summary
-    summary_element = soup.find("summary")
-    summary = summary_element.text if summary_element else ""
-
-    # Safely extract tags
-    tag_elements = soup.find_all("tag")
-    tags = [tag.text for tag in tag_elements if tag.text is not None]
-
-    return {"summary": summary, "tags": tags}
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "tags"],
+    "additionalProperties": False,
+}
 
 
 @dataclass
@@ -141,8 +118,8 @@ def summarize_or_defer(
 
 
 def parse_summary(response: str) -> tuple[str, list[str]]:
-    """(summary, tags) from a response to a `build_prompt` prompt, capping overlong summaries."""
-    result = parse_response(response)
+    """(summary, tags) from a `SUMMARY_SCHEMA` response, capping overlong summaries; ValueError if unparseable."""
+    result = json.loads(response)
     summary = result["summary"]
     target_tokens = settings.DEFAULT_CHUNK_TOKENS
     if tokens.approx_token_count(summary) > target_tokens * 1.5:
@@ -171,11 +148,11 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
     prompt = build_prompt(content, target_tokens)
 
     try:
-        response = llms.summarize(prompt, settings.SUMMARIZER_MODEL)
-        result = parse_response(response)
-
-        summary = result.get("summary", "")
-        tags = result.get("tags", [])
+        response = llms.summarize(
+            prompt, settings.SUMMARIZER_MODEL, json_schema=SUMMARY_SCHEMA
+        )
+        result = json.loads(response)
+        summary, tags = result["summary"], result["tags"]
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Summarization failed: {e}")

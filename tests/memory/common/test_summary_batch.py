@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
@@ -12,7 +13,7 @@ from memory.common.content_processing import push_chunks_to_qdrant
 from memory.common.db.models import SourceItem, SummaryRequest
 
 LONG_TEXT = "Some interesting sentence about things. " * 200
-RESPONSE = "<summary>the summary</summary><tags><tag>t1</tag><tag>t2</tag></tags>"
+RESPONSE = json.dumps({"summary": "the summary", "tags": ["t1", "t2"]})
 
 
 def make_item(db_session, content: str = LONG_TEXT) -> SourceItem:
@@ -101,6 +102,10 @@ def test_submit_pending_creates_batch_and_persists_id(db_session, batches):
     params = requests[0]["params"]
     assert params["model"] == "claude-haiku-4-5"
     assert params["system"] == summary_batch.llms.SUMMARY_SYSTEM_PROMPT
+    assert params["output_config"]["format"] == {
+        "type": "json_schema",
+        "schema": summary_batch.summarizer.SUMMARY_SCHEMA,
+    }
     assert params["messages"][0]["role"] == "user"
     assert "extra_headers" not in params
     assert f"prompt for {item.id}" in str(params["messages"][0]["content"])
@@ -189,6 +194,20 @@ def test_collect_retries_failed_results_a_bounded_number_of_times(
 
     db_session.expire_all()
     assert (request.status, request.batch_id) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["", "<summary>s</summary>", '{"summary": "s", "tags": ["a']
+)
+def test_collect_retries_unparseable_results(db_session, batches, text):
+    item = make_item(db_session)
+    request = add_request(db_session, item, status="submitted", batch_id="batch_1")
+    batches.results.return_value = [batch_result(request.id, "succeeded", text)]
+
+    assert summary_batch.collect_finished(db_session) == {"apply_failed": 1}
+
+    db_session.expire_all()
+    assert (request.status, request.batch_id) == ("pending", None)
 
 
 def test_collect_requeues_requests_missing_from_results(db_session, batches):
