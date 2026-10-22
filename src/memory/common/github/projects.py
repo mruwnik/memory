@@ -28,9 +28,7 @@ def extract_status_priority(
     milestone field values come through as nested dicts), and stringifying
     those would write the dict's repr into the database column.
 
-    Single source of truth used by both the MCP fetch path
-    (``api/MCP/servers/github_helpers.py``) and the worker ingest path
-    (``workers/tasks/github.py``).
+    Used by the worker ingest path (``workers/tasks/github.py``).
     """
     status: str | None = None
     priority: str | None = None

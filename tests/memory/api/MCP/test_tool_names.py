@@ -16,7 +16,6 @@ from memory.api.MCP.servers.deadlines import deadlines_mcp
 from memory.api.MCP.servers.discord import discord_mcp
 from memory.api.MCP.servers.email import email_mcp
 from memory.api.MCP.servers.forecast import forecast_mcp
-from memory.api.MCP.servers.github import github_mcp
 from memory.api.MCP.servers.ingest import ingest_mcp
 from memory.api.MCP.servers.journal import journal_mcp
 from memory.api.MCP.servers.meta import meta_mcp
@@ -41,7 +40,6 @@ SUBSERVERS = {
     "discord": discord_mcp,
     "email": email_mcp,
     "forecast": forecast_mcp,
-    "github": github_mcp,
     "ingest": ingest_mcp,
     "journal": journal_mcp,
     "meta": meta_mcp,

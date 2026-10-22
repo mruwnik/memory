@@ -229,8 +229,8 @@ MCP.call('method_name', { params })
 
 MCP.batch([
   { method: 'people_list_all', params: { limit: 10 } },
-  { method: 'github_list_entities', params: { type: 'issue', limit: 5 } }
-]).then(([people, issues]) => { /* … */ });
+  { method: 'core_list_items', params: { limit: 5 } }
+]).then(([people, items]) => { /* … */ });
 ```
 
 Reports must be created with `allow_scripts=True` for this to load (set via the UI / API on the report record). The library uses the `access_token` cookie for auth, so reports inherit the viewing user's permissions.

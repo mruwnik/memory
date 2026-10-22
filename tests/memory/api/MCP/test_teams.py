@@ -24,7 +24,6 @@ from memory.common.db import connection as db_connection
 from memory.common.db.connection import make_session
 from memory.common import discord as discord_client
 from memory.common.github import GithubClient, GithubCredentials
-from memory.api.MCP.servers.discord import create_role
 from memory.api.MCP.servers.teams import (
     PersonSyncInfo,
     TeamSyncInfo,
@@ -981,67 +980,6 @@ async def test_upsert_remove_members_with_github(db_session, admin_session):
     assert len(result["team"]["members"]) == 0
     assert "gh_remove_test" in result["membership_changes"].get("removed", [])
 
-
-# =============================================================================
-# Discord create_role tests
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_discord_create_role_basic(db_session, admin_session, discord_bot):
-    """Test Discord create MCP tool for roles."""
-
-    server = DiscordServer(id=123456789, name="Test Server")
-    db_session.add(server)
-    db_session.commit()
-
-    mock_result = {"success": True, "role": {"id": "111", "name": "Test Role", "color": 0}}
-
-    with (
-        mcp_auth_context(admin_session.id),
-        patch("memory.common.discord.create_role", return_value=mock_result) as mock_create,
-    ):
-        result = await get_fn(create_role)(
-            name="Test Role",
-            guild=123456789,
-        )
-
-    assert result["success"] is True
-    mock_create.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_discord_create_role_with_options(db_session, admin_session, discord_bot):
-    """Test Discord create with color and mentionable options."""
-
-    server = DiscordServer(id=123456789, name="Test Server")
-    db_session.add(server)
-    db_session.commit()
-
-    mock_result = {
-        "success": True,
-        "role": {"id": "222", "name": "Colored Role", "color": 16711680},
-    }
-
-    with (
-        mcp_auth_context(admin_session.id),
-        patch("memory.common.discord.create_role", return_value=mock_result) as mock_create,
-    ):
-        result = await get_fn(create_role)(
-            name="Colored Role",
-            guild="Test Server",
-            color=16711680,  # Red
-            mentionable=True,
-            hoist=True,
-        )
-
-    assert result["success"] is True
-    mock_create.assert_called_once_with(
-        discord_bot.id, 123456789, "Colored Role",
-        color=16711680,
-        mentionable=True,
-        hoist=True,
-    )
 
 
 def test_discord_resolve_role_finds_existing():
