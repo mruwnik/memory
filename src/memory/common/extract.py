@@ -331,6 +331,7 @@ def extract_text(
     metadata: dict[str, Any] = {},
     modality: str = "text",
     skip_summary: bool = False,
+    summary_metadata: dict[str, Any] = {},
 ) -> list[DataChunk]:
     if isinstance(content, pathlib.Path):
         content = content.read_text()
@@ -342,12 +343,16 @@ def extract_text(
         DataChunk(data=[c], modality=modality, metadata=metadata)
         for c in chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
     ]
-    if not skip_summary and content and len(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
-        summary, tags = summarizer.summarize(content)
+    if skip_summary or not content or len(content) <= chunker.DEFAULT_CHUNK_TOKENS * 2:
+        return chunks
+
+    summary_meta = merge_metadata(metadata, summary_metadata)
+    if result := summarizer.summarize_or_defer(content, summary_meta, modality):
+        summary, tags = result
         chunks.append(
             DataChunk(
                 data=[summary],
-                metadata=merge_metadata(metadata, {"tags": tags}),
+                metadata=merge_metadata(summary_meta, {"tags": tags}),
                 modality=modality,
             )
         )

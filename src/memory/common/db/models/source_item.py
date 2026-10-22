@@ -32,7 +32,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
-from sqlalchemy.dialects.postgresql import BYTEA
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy import orm
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from sqlalchemy.types import Numeric
@@ -177,17 +177,20 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
 
     images = [Image.open(settings.FILE_STORAGE_DIR / image) for image in image_paths]
 
-    summary, tags = summarizer.summarize(content)
+    is_long = tokens.approx_token_count(content) > chunker.DEFAULT_CHUNK_TOKENS * 2
+    result = summarizer.summarize_or_defer(content, {} if is_long else None)
+    summary, tags = result or ("", [])
     full_text: extract.DataChunk = extract.DataChunk(
         data=[content.strip(), *images], metadata={"tags": tags}
     )
 
     chunks: list[extract.DataChunk] = [full_text]
-    if tokens.approx_token_count(content) > chunker.DEFAULT_CHUNK_TOKENS * 2:
+    if is_long:
         chunks += [
             extract.DataChunk(data=add_pics(c, images), metadata={"tags": tags})
             for c in chunker.chunk_text(content)
         ]
+    if is_long and summary:
         chunks.append(extract.DataChunk(data=[summary], metadata={"tags": tags}))
 
     return [c for c in chunks if c.data]
@@ -295,6 +298,50 @@ class Chunk(Base):
             else:
                 items.append(file_path.read_text())
         return items
+
+
+class SummaryRequest(Base):
+    """A summary+tags LLM call for a source item, resolved via the Message Batches API.
+
+    Rows are created at embed time (pending), stamped with the batch id on
+    submission (submitted), and deleted once the result has been applied.
+    ``failed`` rows are kept for inspection after exhausting their attempts.
+    """
+
+    __tablename__ = "summary_request"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), nullable=False
+    )
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # Metadata of the summary chunk to create; NULL = only the tags are wanted
+    chunk_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    modality: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    batch_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    source: Mapped["SourceItem"] = relationship(
+        "SourceItem", back_populates="summary_requests"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','submitted','failed')",
+            name="summary_request_status_check",
+        ),
+        Index("summary_request_status_idx", "status"),
+        Index("summary_request_batch_idx", "batch_id"),
+        Index("summary_request_source_idx", "source_id"),
+    )
 
 
 class ConfidenceScore(Base):
@@ -437,6 +484,13 @@ class SourceItem(AccessControlMixin, Base):
         "Chunk", backref="source", cascade="all, delete-orphan"
     )
 
+    summary_requests: Mapped[list[SummaryRequest]] = relationship(
+        "SummaryRequest",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     # Confidence scores relationship
     confidence_scores: Mapped[list[ConfidenceScore]] = relationship(
         "ConfidenceScore", back_populates="source_item", cascade="all, delete-orphan"
@@ -549,7 +603,7 @@ class SourceItem(AccessControlMixin, Base):
             chunks.append(extract.DataChunk(data=[Image.open(self.filename)]))
         return chunks
 
-    def _make_chunk(
+    def make_chunk(
         self, data: extract.DataChunk, metadata: dict[str, Any] | None = None
     ) -> Chunk:
         metadata = metadata or {}
@@ -575,7 +629,7 @@ class SourceItem(AccessControlMixin, Base):
 
     def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
         metadata = metadata or {}
-        return [self._make_chunk(data, metadata) for data in self._chunk_contents()]
+        return [self.make_chunk(data, metadata) for data in self._chunk_contents()]
 
     def as_payload(self) -> SourceItemPayload:
         """

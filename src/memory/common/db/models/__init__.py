@@ -3,6 +3,7 @@ from memory.common.db.models.source_item import (
     Chunk,
     SourceItem,
     ConfidenceScore,
+    SummaryRequest,
     clean_filename,
     SourceItemPayload,
 )
@@ -202,6 +203,7 @@ __all__ = [
     "ACCESS_CONTROLLED_SOURCE_MODELS",
     "Base",
     "Chunk",
+    "SummaryRequest",
     "clean_filename",
     "SourceItem",
     "ConfidenceScore",

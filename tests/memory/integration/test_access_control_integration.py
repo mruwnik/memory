@@ -231,9 +231,9 @@ def test_chunk_metadata_includes_people(db_session, person_alice, person_bob):
     db_session.add(note)
     db_session.commit()
 
-    # Create a chunk via the source item's _make_chunk method
+    # Create a chunk via the source item's make_chunk method
     data_chunk = DataChunk(data=["Test content"])
-    chunk = note._make_chunk(data_chunk, {})
+    chunk = note.make_chunk(data_chunk, {})
 
     # Verify chunk metadata includes people
     assert "people" in chunk.item_metadata
@@ -254,7 +254,7 @@ def test_chunk_metadata_empty_people(db_session):
     db_session.commit()
 
     data_chunk = DataChunk(data=["Test content"])
-    chunk = note._make_chunk(data_chunk, {})
+    chunk = note.make_chunk(data_chunk, {})
 
     assert "people" in chunk.item_metadata
     assert chunk.item_metadata["people"] == []

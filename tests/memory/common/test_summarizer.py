@@ -1,5 +1,8 @@
-from memory.common import summarizer
+from unittest.mock import patch
+
 import pytest
+
+from memory.common import settings, summarizer
 
 
 @pytest.mark.parametrize(
@@ -149,3 +152,64 @@ import pytest
 )
 def test_parse_response(response, expected):
     assert summarizer.parse_response(response) == expected
+
+
+LONG_TEXT = "word " * 2000
+
+
+def test_summarize_or_defer_outside_deferral_summarizes_inline():
+    with patch.object(summarizer, "summarize", return_value=("s", ["t"])) as summarize:
+        assert summarizer.summarize_or_defer(LONG_TEXT, {"type": "x"}) == ("s", ["t"])
+    summarize.assert_called_once_with(LONG_TEXT)
+
+
+@pytest.mark.parametrize("chunk_metadata", [{"type": "summary"}, None])
+@pytest.mark.parametrize("modality", ["book", None])
+def test_summarize_or_defer_records_request_without_calling_llm(chunk_metadata, modality):
+    with (
+        patch.object(summarizer.llms, "summarize") as llm,
+        summarizer.deferring(True) as deferred,
+    ):
+        assert summarizer.summarize_or_defer(LONG_TEXT, chunk_metadata, modality) is None
+
+    llm.assert_not_called()
+    assert deferred == [
+        summarizer.DeferredSummary(
+            prompt=summarizer.build_prompt(LONG_TEXT, settings.DEFAULT_CHUNK_TOKENS),
+            chunk_metadata=chunk_metadata,
+            modality=modality,
+        )
+    ]
+    assert "Text to summarize" in deferred[0].prompt
+
+
+def test_deferring_disabled_summarizes_inline():
+    with (
+        patch.object(summarizer, "summarize", return_value=("s", [])),
+        summarizer.deferring(False) as deferred,
+    ):
+        assert summarizer.summarize_or_defer(LONG_TEXT, {}) == ("s", [])
+    assert deferred == []
+
+
+def test_deferring_resets_after_block():
+    with summarizer.deferring(True):
+        pass
+    with patch.object(summarizer, "summarize", return_value=("s", [])):
+        assert summarizer.summarize_or_defer(LONG_TEXT, {}) == ("s", [])
+
+
+@pytest.mark.parametrize(
+    "use_batch, model, expected",
+    [
+        (True, "anthropic/claude-haiku-4-5", True),
+        (False, "anthropic/claude-haiku-4-5", False),
+        (True, "openai/gpt-4o-mini", False),
+    ],
+)
+def test_batch_enabled(use_batch, model, expected):
+    with (
+        patch.object(settings, "SUMMARIZER_USE_BATCH", use_batch),
+        patch.object(settings, "SUMMARIZER_MODEL", model),
+    ):
+        assert summarizer.batch_enabled() is expected

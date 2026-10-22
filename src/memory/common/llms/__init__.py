@@ -46,6 +46,14 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+SUMMARY_SYSTEM_PROMPT = (
+    "You are a helpful assistant that creates concise summaries and identifies key topics."
+)
+
+
+def summary_settings() -> LLMSettings:
+    return LLMSettings(temperature=0.3, max_tokens=2048)
+
 
 def summarize(
     prompt: str,
@@ -61,13 +69,10 @@ def summarize(
             content.append(ImageContent(image=image))
 
         messages = [Message(role=MessageRole.USER, content=content)]
-        settings_obj = LLMSettings(temperature=0.3, max_tokens=2048)
-
         res = provider.run_with_tools(
             messages=messages,
-            system_prompt=system_prompt
-            or "You are a helpful assistant that creates concise summaries and identifies key topics.",
-            settings=settings_obj,
+            system_prompt=system_prompt or SUMMARY_SYSTEM_PROMPT,
+            settings=summary_settings(),
             tools={},
         )
         return res.response or ""

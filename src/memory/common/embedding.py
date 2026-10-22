@@ -6,14 +6,14 @@ from typing import Literal, cast
 import voyageai
 from PIL import Image
 
-from memory.common import extract, settings
+from memory.common import extract, settings, summarizer
 from memory.common.chunker import (
     DEFAULT_CHUNK_TOKENS,
     OVERLAP_TOKENS,
     chunk_text,
 )
 from memory.common.collections import Vector
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk, SourceItem, SummaryRequest
 
 logger = logging.getLogger(__name__)
 
@@ -224,10 +224,23 @@ def embed_by_model(chunks: list[Chunk], model: str) -> list[Chunk]:
 
 
 def embed_source_item(item: SourceItem) -> list[Chunk]:
-    chunks = list(item.data_chunks())
-    if not chunks:
-        return []
+    batching = summarizer.batch_enabled()
+    with summarizer.deferring(batching) as deferred:
+        chunks = list(item.data_chunks())
+    if chunks:
+        text_chunks = embed_by_model(chunks, settings.TEXT_EMBEDDING_MODEL)
+        mixed_chunks = embed_by_model(chunks, settings.MIXED_EMBEDDING_MODEL)
+        chunks = text_chunks + mixed_chunks
 
-    text_chunks = embed_by_model(chunks, settings.TEXT_EMBEDDING_MODEL)
-    mixed_chunks = embed_by_model(chunks, settings.MIXED_EMBEDDING_MODEL)
-    return text_chunks + mixed_chunks
+    # Only after a successful embed, so a failed item doesn't later gain a lone
+    # summary chunk (which would also hide it from the empty-item reingest).
+    # Assigning replaces, and so deletes, requests left over from an earlier embed.
+    if batching:
+        requests = [
+            SummaryRequest(
+                prompt=d.prompt, chunk_metadata=d.chunk_metadata, modality=d.modality
+            )
+            for d in deferred
+        ]
+        item.summary_requests = requests if chunks else []
+    return chunks

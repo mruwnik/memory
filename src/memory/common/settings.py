@@ -636,3 +636,14 @@ DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")
 
 # Custom tasks directory for deployment-specific periodic tasks
 CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None
+
+# Ingestion summaries go through the Anthropic Message Batches API (50% cheaper,
+# results usually within the hour) instead of one synchronous call per item.
+# Only applies when SUMMARIZER_MODEL is an anthropic/ model.
+SUMMARIZER_USE_BATCH = boolean_env("SUMMARIZER_USE_BATCH", True)
+SUMMARIZER_BATCH_MAX_REQUESTS = int(os.getenv("SUMMARIZER_BATCH_MAX_REQUESTS", 2000))
+# Batches API caps a batch at 256MB; stay well under it.
+SUMMARIZER_BATCH_MAX_BYTES = int(os.getenv("SUMMARIZER_BATCH_MAX_BYTES", 100_000_000))
+SUMMARIZER_BATCH_MAX_ATTEMPTS = int(os.getenv("SUMMARIZER_BATCH_MAX_ATTEMPTS", 3))
+SUMMARIZER_BATCH_SUBMIT_INTERVAL = int(os.getenv("SUMMARIZER_BATCH_SUBMIT_INTERVAL", 600))
+SUMMARIZER_BATCH_POLL_INTERVAL = int(os.getenv("SUMMARIZER_BATCH_POLL_INTERVAL", 300))

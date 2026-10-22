@@ -285,7 +285,7 @@ def test_source_item_chunk_contents_mixed(tmp_path):
     ),
 )
 def test_source_item_make_chunk(tmp_path, texts, expected_content):
-    """Test SourceItem._make_chunk method"""
+    """Test SourceItem.make_chunk method"""
     source = SourceItem(
         sha256=b"test123",
         content="test",
@@ -305,7 +305,7 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
     data = [*texts, img]
     metadata = {"extra": "data"}
 
-    chunk = source._make_chunk(extract.DataChunk(data=data), metadata)
+    chunk = source.make_chunk(extract.DataChunk(data=data), metadata)
 
     assert chunk.id is not None
     assert chunk.source == source

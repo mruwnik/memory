@@ -892,6 +892,13 @@ def mock_api_keys():
 
 
 @pytest.fixture(autouse=True)
+def sync_summarizer():
+    """Summarize inline, as most tests assert on the summary chunk directly."""
+    with patch.object(settings, "SUMMARIZER_USE_BATCH", False):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def mock_openai_client():
     with patch.object(openai, "OpenAI") as mock_client:
         client = mock_client()

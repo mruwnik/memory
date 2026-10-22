@@ -152,6 +152,10 @@ VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
 RECONCILE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.reconcile_access_control"
 
+# Batched ingestion summaries
+SUBMIT_SUMMARY_BATCH = f"{MAINTENANCE_ROOT}.submit_summary_batch"
+COLLECT_SUMMARY_BATCHES = f"{MAINTENANCE_ROOT}.collect_summary_batches"
+
 # Session tasks
 SESSIONS_ROOT = "memory.workers.tasks.sessions"
 SUMMARIZE_SESSION = f"{SESSIONS_ROOT}.summarize_session"
@@ -376,6 +380,14 @@ def build_beat_schedule() -> dict:
         "reingest-missing-chunks": {
             "task": REINGEST_MISSING_CHUNKS,
             "schedule": settings.CHUNK_REINGEST_INTERVAL,
+        },
+        "submit-summary-batch": {
+            "task": SUBMIT_SUMMARY_BATCH,
+            "schedule": settings.SUMMARIZER_BATCH_SUBMIT_INTERVAL,
+        },
+        "collect-summary-batches": {
+            "task": COLLECT_SUMMARY_BATCHES,
+            "schedule": settings.SUMMARIZER_BATCH_POLL_INTERVAL,
         },
         "sync-mail-all": {
             "task": SYNC_ALL_ACCOUNTS,

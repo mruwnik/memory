@@ -342,9 +342,9 @@ def test_email_attachment_data_chunks(
             mail_message_id=123,
         )
 
-    # Mock _make_chunk to return a simple chunk
+    # Mock make_chunk to return a simple chunk
     mock_chunk = Mock()
-    with patch.object(attachment, "_make_chunk", return_value=mock_chunk) as mock_make:
+    with patch.object(attachment, "make_chunk", return_value=mock_chunk) as mock_make:
         result = attachment.data_chunks({"extra": "metadata"})
 
     # Verify the method calls

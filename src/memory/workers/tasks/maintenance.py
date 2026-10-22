@@ -9,7 +9,15 @@ from sqlalchemy import delete, func, inspect as sa_inspect, or_
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
-from memory.common import collections, embedding, extract, qdrant, settings
+from memory.common import (
+    collections,
+    embedding,
+    extract,
+    qdrant,
+    settings,
+    summarizer,
+    summary_batch,
+)
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
 from memory.common.celery_app import (
@@ -33,6 +41,8 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_SOURCE_ACCESS_CONTROL,
     RECONCILE_ACCESS_CONTROL,
+    SUBMIT_SUMMARY_BATCH,
+    COLLECT_SUMMARY_BATCHES,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
@@ -1177,3 +1187,20 @@ def cleanup_old_done_oneoff_tasks(retention_days: int | None = None) -> dict:
 
     logger.info(f"Deleted {deleted} fired one-off tasks older than {retention_days} days")
     return {"deleted": deleted, "retention_days": retention_days}
+
+
+@app.task(name=SUBMIT_SUMMARY_BATCH)
+@tracked_task
+def submit_summary_batch() -> dict:
+    if not summarizer.batch_enabled():
+        return {"status": "disabled"}
+    with make_session() as session:
+        return {"status": "success", "batch_id": summary_batch.submit_pending(session)}
+
+
+@app.task(name=COLLECT_SUMMARY_BATCHES)
+@tracked_task
+def collect_summary_batches() -> dict:
+    # Runs even with batching disabled, to drain batches already in flight
+    with make_session() as session:
+        return {"status": "success", **summary_batch.collect_finished(session)}
