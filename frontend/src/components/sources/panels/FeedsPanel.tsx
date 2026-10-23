@@ -1,15 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, ArticleFeed } from '@/hooks/useSources'
-import {
-  SourceCard,
-  Modal,
-  TagsInput,
-  IntervalInput,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-} from '../shared'
-import { styles } from '../styles'
+import { SourceCard, TagsInput, IntervalInput } from '../shared'
+import { Button, Card, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, Textarea } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const FeedsPanel = () => {
@@ -89,12 +81,7 @@ export const FeedsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadFeeds} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>RSS Feeds</h3>
-        <button className={styles.btnAdd} onClick={() => setShowForm(true)}>Add Feed</button>
-      </div>
-
+    <Card title="RSS Feeds" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Feed</Button></>}>
       {feeds.length === 0 ? (
         <EmptyState
           message="No RSS feeds configured"
@@ -102,7 +89,7 @@ export const FeedsPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {feeds.map(feed => (
             <SourceCard
               key={feed.id}
@@ -137,7 +124,7 @@ export const FeedsPanel = () => {
           onCancel={() => setEditingFeed(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -174,41 +161,35 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
 
   return (
     <Modal title={feed ? 'Edit RSS Feed' : 'Add RSS Feed'} onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Feed URL</label>
-          <input
+        <Field label="Feed URL">
+          <Input
             type="url"
             value={formData.url}
             onChange={e => setFormData({ ...formData, url: e.target.value })}
             required
             disabled={!!feed}
             placeholder="https://example.com/feed.xml"
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Title (optional)</label>
-          <input
+        <Field label="Title (optional)">
+          <Input
             type="text"
             value={formData.title}
             onChange={e => setFormData({ ...formData, title: e.target.value })}
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Description (optional)</label>
-          <textarea
+        <Field label="Description (optional)">
+          <Textarea
             value={formData.description}
             onChange={e => setFormData({ ...formData, description: e.target.value })}
             rows={2}
-            className={styles.formTextarea}
           />
-        </div>
+        </Field>
 
         <IntervalInput
           value={formData.check_interval}
@@ -216,20 +197,19 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
           label="Check interval"
         />
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Tags</label>
+        <Field label="Tags">
           <TagsInput
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

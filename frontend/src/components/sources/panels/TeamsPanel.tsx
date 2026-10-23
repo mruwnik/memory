@@ -2,14 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
-import {
-  Modal,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  ConfirmDialog,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { Badge, Button, Card, Checkbox, ConfirmDialog, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select, Textarea, cx } from '@/components/shared/ui'
 
 // Owner selector dropdown for teams
 interface OwnerSelectorPopoverProps {
@@ -46,12 +39,12 @@ const OwnerSelectorPopover = ({ currentOwnerId, availablePeople, onSelect, onClo
       ref={popoverRef}
       className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 min-w-56 max-w-72"
     >
-      <input
+      <Input
         type="text"
         placeholder="Search people..."
         value={search}
         onChange={e => setSearch(e.target.value)}
-        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:border-primary"
+        className="mb-2"
         autoFocus
       />
       <div className="max-h-48 overflow-y-auto">
@@ -183,24 +176,12 @@ export const TeamsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadTeams} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Teams</h3>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-sm text-slate-600">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={e => setShowInactive(e.target.checked)}
-              className="rounded border-slate-300"
-            />
-            Show archived
-          </label>
-          <button className={styles.btnAdd} onClick={() => setShowCreateModal(true)}>
+    <Card actions={<><div className="flex items-center gap-2">
+          <Checkbox checked={showInactive} onChange={e => setShowInactive(e.target.checked)} label="Show archived" />
+          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
             New Team
-          </button>
-        </div>
-      </div>
+          </Button>
+        </div></>}>
 
       {teams.length === 0 ? (
         <EmptyState
@@ -293,7 +274,7 @@ export const TeamsPanel = () => {
           unassignTeam={unassignTeamFromProject}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -341,7 +322,7 @@ const TeamCard = ({
           <div className="flex items-center gap-2 flex-wrap">
             <h4 className="font-semibold text-slate-800 truncate">{team.name}</h4>
             {!team.is_active && (
-              <span className={cx(styles.badge, styles.badgeInactive)}>Archived</span>
+              <Badge>Archived</Badge>
             )}
           </div>
           <p className="text-xs text-slate-500">@{team.slug}</p>
@@ -592,66 +573,54 @@ const TeamFormModal = ({
 
   return (
     <Modal title={isEditing ? 'Edit Team' : 'Create Team'} onClose={onClose}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Name *</label>
-          <input
+        <Field label="Name *">
+          <Input
             type="text"
-            className={styles.formInput}
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Engineering Core"
             required
           />
-        </div>
+        </Field>
 
         {!isEditing && (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Slug *</label>
-            <input
+          <Field label="Slug *" hint="URL-safe identifier, auto-generated from name">
+            <Input
               type="text"
-              className={styles.formInput}
               value={slug}
               onChange={e => setSlug(e.target.value)}
               placeholder="engineering-core"
               pattern="[a-z0-9-]+"
               required
             />
-            <p className={styles.formHint}>URL-safe identifier, auto-generated from name</p>
-          </div>
+          </Field>
         )}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Description</label>
-          <textarea
-            className={styles.formTextarea}
+        <Field label="Description">
+          <Textarea
             value={description}
             onChange={e => setDescription(e.target.value)}
             placeholder="Core engineering team responsible for..."
             rows={2}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Tags</label>
-          <input
+        <Field label="Tags" hint="Comma-separated tags for filtering">
+          <Input
             type="text"
-            className={styles.formInput}
             value={tags}
             onChange={e => setTags(e.target.value)}
             placeholder="engineering, core, platform"
           />
-          <p className={styles.formHint}>Comma-separated tags for filtering</p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Owner</label>
-          <select
+        <Field label="Owner" hint="Assign someone responsible for this team">
+          <Select
             value={ownerId ?? ''}
             onChange={e => setOwnerId(e.target.value ? Number(e.target.value) : null)}
-            className={styles.formSelect}
           >
             <option value="">No owner</option>
             {availablePeople.map(person => (
@@ -659,17 +628,15 @@ const TeamFormModal = ({
                 {person.display_name || person.identifier}
               </option>
             ))}
-          </select>
-          <p className={styles.formHint}>Assign someone responsible for this team</p>
-        </div>
+          </Select>
+        </Field>
 
         {/* Member selection for new teams */}
         {!isEditing && (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Initial Members</label>
-            <input
+          <Field>
+            <Label>Initial Members</Label>
+            <Input
               type="text"
-              className={styles.formInput}
               value={memberSearch}
               onChange={e => setMemberSearch(e.target.value)}
               placeholder="Search for people to add..."
@@ -712,92 +679,70 @@ const TeamFormModal = ({
                 ))}
               </div>
             )}
-            <p className={styles.formHint}>
+            <Hint>
               You can add more members after creation via the Members button
-            </p>
-          </div>
+            </Hint>
+          </Field>
         )}
 
-        <details className={styles.detailsSection}>
-          <summary className={styles.detailsSummary}>Discord Integration</summary>
-          <div className={cx(styles.detailsContent, 'space-y-3')}>
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Role ID</label>
-                <input
+        <details className="border border-slate-200 rounded-lg">
+          <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">Discord Integration</summary>
+          <div className="p-4 pt-0 space-y-3">
+            <FieldRow>
+              <Field label="Role ID">
+                <Input
                   type="text"
-                  className={styles.formInput}
                   value={discordRoleId}
                   onChange={e => setDiscordRoleId(e.target.value)}
                   placeholder="123456789"
                 />
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Guild ID</label>
-                <input
+              </Field>
+              <Field label="Guild ID">
+                <Input
                   type="text"
-                  className={styles.formInput}
                   value={discordGuildId}
                   onChange={e => setDiscordGuildId(e.target.value)}
                   placeholder="987654321"
                 />
-              </div>
-            </div>
-            <label className={styles.formCheckbox}>
-              <input
-                type="checkbox"
-                checked={autoSyncDiscord}
-                onChange={e => setAutoSyncDiscord(e.target.checked)}
-              />
-              <span className="text-sm">Auto-sync membership changes to Discord</span>
-            </label>
+              </Field>
+            </FieldRow>
+            <Checkbox checked={autoSyncDiscord} onChange={e => setAutoSyncDiscord(e.target.checked)} label="Auto-sync membership changes to Discord" />
           </div>
         </details>
 
-        <details className={styles.detailsSection}>
-          <summary className={styles.detailsSummary}>GitHub Integration</summary>
-          <div className={cx(styles.detailsContent, 'space-y-3')}>
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Team ID</label>
-                <input
+        <details className="border border-slate-200 rounded-lg">
+          <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">GitHub Integration</summary>
+          <div className="p-4 pt-0 space-y-3">
+            <FieldRow>
+              <Field label="Team ID">
+                <Input
                   type="text"
-                  className={styles.formInput}
                   value={githubTeamId}
                   onChange={e => setGithubTeamId(e.target.value)}
                   placeholder="42"
                 />
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Organization</label>
-                <input
+              </Field>
+              <Field label="Organization">
+                <Input
                   type="text"
-                  className={styles.formInput}
                   value={githubOrg}
                   onChange={e => setGithubOrg(e.target.value)}
                   placeholder="myorg"
                 />
-              </div>
-            </div>
-            <label className={styles.formCheckbox}>
-              <input
-                type="checkbox"
-                checked={autoSyncGithub}
-                onChange={e => setAutoSyncGithub(e.target.checked)}
-              />
-              <span className="text-sm">Auto-sync membership changes to GitHub</span>
-            </label>
+              </Field>
+            </FieldRow>
+            <Checkbox checked={autoSyncGithub} onChange={e => setAutoSyncGithub(e.target.checked)} label="Auto-sync membership changes to GitHub" />
           </div>
         </details>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onClose}>
+        <FormActions>
+          <Button type="button" onClick={onClose}>
             Cancel
-          </button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+          </Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Team'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )
@@ -907,14 +852,13 @@ const MembersModal = ({
   return (
     <Modal title={`Members of ${team.name}`} onClose={handleClose}>
       <div className="space-y-4">
-        {error && <div className={styles.formError}>{error}</div>}
+        {error && <Notice tone="error">{error}</Notice>}
 
         {/* Search to add */}
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Add Member</label>
-          <input
+        <Field>
+          <Label>Add Member</Label>
+          <Input
             type="text"
-            className={styles.formInput}
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             placeholder="Search for people..."
@@ -938,7 +882,7 @@ const MembersModal = ({
               ))}
             </div>
           )}
-        </div>
+        </Field>
 
         {/* Current members */}
         <div>
@@ -985,35 +929,17 @@ const MembersModal = ({
           )}
         </div>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnPrimary} onClick={handleClose}>
+        <FormActions>
+          <Button variant="primary" type="button" onClick={handleClose}>
             Done
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </div>
 
       {/* Person Details Popup */}
       {selectedMember && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
-          onClick={() => setSelectedMember(null)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[80vh] overflow-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between p-4 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-800">
-                {selectedMember.person?.display_name || selectedMember.identifier}
-              </h3>
-              <button
-                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
-                onClick={() => setSelectedMember(null)}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="p-4">
+        <Modal title={selectedMember.person?.display_name || selectedMember.identifier} onClose={() => setSelectedMember(null)} size="md">
+          <div>
               {selectedMember.loading ? (
                 <div className="text-center py-4 text-slate-500">Loading...</div>
               ) : selectedMember.person ? (
@@ -1088,9 +1014,9 @@ const MembersModal = ({
                             {tidbit.tags && tidbit.tags.length > 0 && (
                               <div className="flex flex-wrap gap-1 mt-1">
                                 {tidbit.tags.map((tag, i) => (
-                                  <span key={i} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">
+                                  <Badge tone="info" key={i}>
                                     {tag}
-                                  </span>
+                                  </Badge>
                                 ))}
                               </div>
                             )}
@@ -1106,8 +1032,7 @@ const MembersModal = ({
                 </div>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </Modal>
   )
@@ -1190,7 +1115,7 @@ const TeamProjectsModal = ({
   return (
     <Modal title={`Projects for ${team.name}`} onClose={handleClose}>
       <div className="space-y-4">
-        {error && <div className={styles.formError}>{error}</div>}
+        {error && <Notice tone="error">{error}</Notice>}
 
         {loading ? (
           <p className="text-sm text-slate-500">Loading...</p>
@@ -1262,11 +1187,11 @@ const TeamProjectsModal = ({
           </>
         )}
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnPrimary} onClick={handleClose}>
+        <FormActions>
+          <Button variant="primary" type="button" onClick={handleClose}>
             Done
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </div>
     </Modal>
   )

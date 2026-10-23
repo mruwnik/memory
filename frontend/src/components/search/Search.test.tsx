@@ -4,12 +4,6 @@ import { renderWithRouter, mcpToolFromRequest, mockFetch, mockResponse, setAuthC
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import Search from './Search'
 
-const navigateSpy = vi.fn()
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>()
-  return { ...actual, useNavigate: () => navigateSpy }
-})
-
 const schemas = {
   blog: { schema: { author: { type: 'string', description: 'Author' } }, size: 0 },
 }
@@ -44,21 +38,12 @@ describe('Search', () => {
   beforeEach(() => {
     clearCookies()
     setAuthCookies()
-    navigateSpy.mockReset()
   })
 
-  it('renders the header and back button', () => {
+  it('renders the header', () => {
     installFetch()
     renderWithRouter(<Search />)
     expect(screen.getByRole('heading', { name: /Search Knowledge Base/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Back to Dashboard/ })).toBeInTheDocument()
-  })
-
-  it('navigates to the dashboard when Back is clicked', async () => {
-    installFetch()
-    const { user } = renderWithRouter(<Search />)
-    await user.click(screen.getByRole('button', { name: /Back to Dashboard/ }))
-    expect(navigateSpy).toHaveBeenCalledWith('/ui/dashboard')
   })
 
   it('shows the empty state initially', () => {

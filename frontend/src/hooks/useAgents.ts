@@ -172,6 +172,7 @@ export interface TriggerConfig {
   filter: IngestFilter
   delivery: Delivery
   template: string
+  on_edit?: boolean
 }
 
 export interface AgentTrigger {
@@ -193,6 +194,7 @@ export const emptyTriggerConfig = (): TriggerConfig => ({
   filter: { source_types: [], tags_any: [], channel_ids: [], text_contains: [], regex: null, exclude_authors: [] },
   delivery: { mode: 'per_item' },
   template: DEFAULT_TRIGGER_TEMPLATE,
+  on_edit: false,
 })
 
 export interface AgentSchedule {

@@ -4,6 +4,7 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
+import { Button, Card, LoadingState, Modal, Notice, Page } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -276,14 +277,9 @@ const Calendar = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">
-          {MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}
-        </h1>
+    <Page
+      title={<>{MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}</>}
+      actions={<>
         <div className="flex gap-2">
           {/* User Filter Dropdown (Admin only) */}
           {isAdmin && users.length > 0 && (
@@ -305,18 +301,18 @@ const Calendar = () => {
                   />
                   <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64 max-h-80 overflow-auto">
                     <div className="p-2 border-b border-slate-100 flex gap-2">
-                      <button
+                      <Button variant="link"
                         onClick={selectAllUsers}
-                        className="text-xs text-primary hover:underline"
+
                       >
                         Select all
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="link"
                         onClick={selectNoUsers}
-                        className="text-xs text-primary hover:underline"
+
                       >
                         Select none
-                      </button>
+                      </Button>
                     </div>
                     <div className="p-2 space-y-1">
                       {users.map(user => (
@@ -328,7 +324,7 @@ const Calendar = () => {
                             type="checkbox"
                             checked={enabledUsers.has(user.id)}
                             onChange={() => toggleUser(user.id)}
-                            className="rounded border-slate-300 text-primary focus:ring-primary"
+
                           />
                           <span className="text-sm text-slate-700 truncate">
                             {user.name}
@@ -344,7 +340,6 @@ const Calendar = () => {
               )}
             </div>
           )}
-
           {/* Calendar Filter Dropdown */}
           <div className="relative">
             <button
@@ -364,18 +359,18 @@ const Calendar = () => {
                 />
                 <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-72 max-h-80 overflow-auto">
                   <div className="p-2 border-b border-slate-100 flex gap-2">
-                    <button
+                    <Button variant="link"
                       onClick={selectAllCalendars}
-                      className="text-xs text-primary hover:underline"
+
                     >
                       Select all
-                    </button>
-                    <button
+                    </Button>
+                    <Button variant="link"
                       onClick={selectNoCalendars}
-                      className="text-xs text-primary hover:underline"
+
                     >
                       Select none
-                    </button>
+                    </Button>
                   </div>
                   <div className="p-2 space-y-1">
                     {calendarNames.map(name => (
@@ -387,7 +382,7 @@ const Calendar = () => {
                           type="checkbox"
                           checked={enabledCalendars.has(name)}
                           onChange={() => toggleCalendar(name)}
-                          className="rounded border-slate-300 text-primary focus:ring-primary"
+
                         />
                         <span className="text-sm text-slate-700 truncate">{name}</span>
                       </label>
@@ -397,20 +392,18 @@ const Calendar = () => {
               </>
             )}
           </div>
-          <button onClick={goToPreviousMonth} className="w-9 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50">&lt;</button>
+          <Button size="icon" onClick={goToPreviousMonth}>&lt;</Button>
           <button onClick={goToToday} className="px-4 h-9 bg-primary text-white rounded-md hover:bg-primary-dark">Today</button>
-          <button onClick={goToNextMonth} className="w-9 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50">&gt;</button>
+          <Button size="icon" onClick={goToNextMonth}>&gt;</Button>
         </div>
-      </header>
-
+      </>}
+      width="wide"
+    >
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-4 flex justify-between items-center">
-          <p>{error}</p>
-          <button onClick={() => loadEvents(currentDate, selectedUserIds)} className="text-primary hover:underline">Retry</button>
-        </div>
+        <Notice tone="error" onRetry={() => loadEvents(currentDate, selectedUserIds)}>{error}</Notice>
       )}
 
-      <div className="grid grid-cols-7 bg-white rounded-xl shadow-md overflow-hidden">
+      <Card flush className="relative grid grid-cols-7 overflow-hidden">
         {/* Day headers */}
         {DAYS_OF_WEEK.map(day => (
           <div key={day} className="py-3 text-center text-sm font-semibold text-slate-600 bg-slate-50 border-b border-slate-200">
@@ -459,49 +452,30 @@ const Calendar = () => {
                 </div>
               ))}
               {day.events.length > 4 && (
-                <button
-                  className="text-xs text-slate-500 pl-1 hover:text-primary hover:underline cursor-pointer"
+                <Button variant="link"
+                  className="pl-1"
                   onClick={(e) => {
                     e.stopPropagation()
                     setSelectedDayEvents({ date: day.date, events: day.events })
                   }}
                 >
                   +{day.events.length - 4} more
-                </button>
+                </Button>
               )}
             </div>
           </div>
         ))}
-      </div>
-
-      {loading && (
-        <div className="fixed inset-0 bg-white/80 flex items-center justify-center z-10">
-          <div className="text-slate-600">Loading events...</div>
-        </div>
-      )}
+        {loading && (
+          <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-10">
+            <LoadingState message="Loading events..." />
+          </div>
+        )}
+      </Card>
 
       {/* Day Events Modal (for +N more) */}
       {selectedDayEvents && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedDayEvents(null)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between p-6 border-b border-slate-100 sticky top-0 bg-white">
-              <h2 className="text-lg font-semibold text-slate-800">
-                {formatDateHeader(selectedDayEvents.date)}
-              </h2>
-              <button
-                className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
-                onClick={() => setSelectedDayEvents(null)}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="p-4 space-y-2">
+        <Modal title={formatDateHeader(selectedDayEvents.date)} onClose={() => setSelectedDayEvents(null)}>
+          <div className="space-y-2">
               {selectedDayEvents.events.map((event) => (
                 <div
                   key={`${event.id}-${event.start_time}`}
@@ -536,30 +510,13 @@ const Calendar = () => {
                 </div>
               ))}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Event Detail Modal */}
       {selectedEvent && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedEvent(null)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[80vh] overflow-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between p-6 border-b border-slate-100">
-              <h2 className="text-xl font-semibold text-slate-800 pr-4">{selectedEvent.event_title}</h2>
-              <button
-                className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
-                onClick={() => setSelectedEvent(null)}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
+        <Modal title={selectedEvent.event_title} onClose={() => setSelectedEvent(null)} size="md">
+          <div className="space-y-4">
               <div className="flex">
                 <span className="w-24 text-sm text-slate-500 shrink-0">Date</span>
                 <span className="text-sm text-slate-800">
@@ -632,42 +589,24 @@ const Calendar = () => {
                   <span className="w-24 text-sm text-slate-500 shrink-0">Attendees</span>
                   <div className="flex flex-wrap gap-1">
                     {selectedEvent.attendees.map((email, i) => (
-                      <button
+                      <Button size="sm"
                         key={i}
                         onClick={() => handleAttendeeClick(email)}
-                        className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded hover:bg-slate-200 hover:text-slate-800 transition-colors cursor-pointer"
                       >
                         {email}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 </div>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Attendee Person Popup */}
       {selectedAttendee && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
-          onClick={() => setSelectedAttendee(null)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-xl max-w-sm w-full"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between p-4 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-800">{selectedAttendee.email}</h3>
-              <button
-                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
-                onClick={() => setSelectedAttendee(null)}
-              >
-                &times;
-              </button>
-            </div>
-            <div className="p-4">
+        <Modal title={selectedAttendee.email} onClose={() => setSelectedAttendee(null)} size="sm">
+          <div>
               {selectedAttendee.loading ? (
                 <div className="text-center py-4 text-slate-500">Loading...</div>
               ) : selectedAttendee.person ? (
@@ -731,8 +670,7 @@ const Calendar = () => {
                 </div>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       <footer className="mt-6 text-center">
@@ -740,7 +678,7 @@ const Calendar = () => {
           Configure calendar accounts
         </Link>
       </footer>
-    </div>
+    </Page>
   )
 }
 

@@ -1,171 +1,23 @@
 import { Link } from 'react-router-dom'
-import UserMenu from './common/UserMenu'
-import type { AuthUser } from '../hooks/useAuth'
+import { Page, Section } from '@/components/shared/ui'
+import { visibleSections } from '@/components/shared/nav'
 
-interface DashboardProps {
-    onLogout: () => void;
-    user: AuthUser | null;
-    hasScope: (scope: string) => boolean;
-}
-
-const Dashboard = ({ onLogout, user, hasScope }: DashboardProps) => {
-    return (
-        <div className="min-h-screen flex flex-col">
-            <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm">
-                <h1 className="text-primary text-2xl font-semibold">Memory App</h1>
-                {user && <UserMenu user={user} onLogout={onLogout} hasScope={hasScope} />}
-            </header>
-
-            <main className="flex-1 p-8 mx-auto w-full max-w-6xl">
-                <div className="text-center mb-12 p-8 bg-white rounded-xl shadow-md">
-                    <h2 className="text-slate-800 text-3xl mb-4 font-semibold">Welcome to your Memory Database!</h2>
-                    <p className="text-gray-600 text-base">You are successfully authenticated.</p>
-                </div>
-
-                {/* Knowledge & Content */}
-                <section className="mt-8">
-                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">Knowledge & Content</h2>
-                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
-                        <Link to="/ui/search" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Search</h3>
-                            <p className="text-gray-600 text-base">Search through your knowledge base</p>
-                        </Link>
-
-                        <Link to="/ui/sources" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Sources</h3>
-                            <p className="text-gray-600 text-base">Manage email, GitHub, RSS feeds, and Google Drive</p>
-                        </Link>
-
-                        <Link to="/ui/notes" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Notes</h3>
-                            <p className="text-gray-600 text-base">Browse and view your notes</p>
-                        </Link>
-
-                        <Link to="/ui/reports" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Reports</h3>
-                            <p className="text-gray-600 text-base">View and create rich HTML and PDF reports</p>
-                        </Link>
-
-                        <Link to="/ui/people" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">People</h3>
-                            <p className="text-gray-600 text-base">Track and manage people you know</p>
-                        </Link>
-
-                        <Link to="/ui/teams" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Teams</h3>
-                            <p className="text-gray-600 text-base">Manage teams and their members</p>
-                        </Link>
-
-                        <Link to="/ui/projects" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Projects</h3>
-                            <p className="text-gray-600 text-base">Track projects and milestones</p>
-                        </Link>
-                    </div>
-                </section>
-
-                {/* Productivity */}
-                <section className="mt-8">
-                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">Productivity</h2>
-                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
-                        <Link to="/ui/calendar" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Calendar</h3>
-                            <p className="text-gray-600 text-base">View upcoming events from your calendars</p>
-                        </Link>
-
-                        <Link to="/ui/tasks" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Tasks</h3>
-                            <p className="text-gray-600 text-base">Manage your todos and tasks</p>
-                        </Link>
-
-                        <Link to="/ui/polls" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Polls</h3>
-                            <p className="text-gray-600 text-base">Schedule meetings with availability polls</p>
-                        </Link>
-
-                        {hasScope('check') && (
-                            <Link to="/ui/check" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">Check Questions</h3>
-                                <p className="text-gray-600 text-base">Submit questions to verify, research, or link, and see answers</p>
-                            </Link>
-                        )}
-
-                        {hasScope('agents') && (
-                            <Link to="/ui/agents" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">Agents</h3>
-                                <p className="text-gray-600 text-base">Define and run agents over your memory</p>
-                            </Link>
-                        )}
-                    </div>
-                </section>
-
-                {/* AI */}
-                <section className="mt-8">
-                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">AI</h2>
-                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
-                        <Link to="/ui/claude" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Claude Sessions</h3>
-                            <p className="text-gray-600 text-base">Spawn and manage Claude Code containers</p>
-                        </Link>
-
-                        <Link to="/ui/snapshots" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Claude Configurations</h3>
-                            <p className="text-gray-600 text-base">Manage Claude Code configurations</p>
-                        </Link>
-                    </div>
-                </section>
-
-                {/* System Operations */}
-                <section className="mt-8">
-                    <h2 className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-4">System Operations</h2>
-                    <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-6">
-                        <Link to="/ui/metrics" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Metrics</h3>
-                            <p className="text-gray-600 text-base">System health, task performance, and API usage</p>
-                        </Link>
-
-                        <Link to="/ui/telemetry" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Telemetry</h3>
-                            <p className="text-gray-600 text-base">Claude Code usage, tokens, costs, and sessions</p>
-                        </Link>
-
-                        <Link to="/ui/jobs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Jobs</h3>
-                            <p className="text-gray-600 text-base">View background job status and retry failed jobs</p>
-                        </Link>
-
-                        <Link to="/ui/scheduled-tasks" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Scheduled Tasks</h3>
-                            <p className="text-gray-600 text-base">Manage automated notifications and Claude sessions</p>
-                        </Link>
-
-                        <Link to="/ui/logs" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Docker Logs</h3>
-                            <p className="text-gray-600 text-base">View API and worker container logs</p>
-                        </Link>
-
-                        {hasScope('admin') && (
-                            <Link to="/ui/celery" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">Celery Tasks</h3>
-                                <p className="text-gray-600 text-base">Beat schedule status and ingestion overview</p>
-                            </Link>
-                        )}
-
-                        <Link to="/ui/sources?tab=secrets" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                            <h3 className="text-slate-800 text-xl mb-2 font-semibold">Secrets</h3>
-                            <p className="text-gray-600 text-base">Manage encrypted API keys and tokens</p>
-                        </Link>
-
-                        {hasScope('admin:users') && (
-                            <Link to="/ui/users" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
-                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">User Management</h3>
-                                <p className="text-gray-600 text-base">Manage users, permissions, and API keys</p>
-                            </Link>
-                        )}
-                    </div>
-                </section>
-            </main>
+const Dashboard = ({ hasScope }: { hasScope: (scope: string) => boolean }) => (
+  <Page title="Memory" description="Your self-hosted knowledge base." width="wide">
+    {visibleSections(hasScope).map(section => (
+      <Section key={section.title} title={section.title}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {section.items.map(t => (
+            <Link key={t.to} to={t.to}
+              className="block bg-white rounded-xl border border-slate-200 shadow-sm p-5 transition hover:border-primary hover:shadow-md">
+              <h3 className="font-semibold text-slate-800">{t.title}</h3>
+              <p className="text-sm text-slate-600 mt-1">{t.description}</p>
+            </Link>
+          ))}
         </div>
-    )
-}
+      </Section>
+    ))}
+  </Page>
+)
 
 export default Dashboard

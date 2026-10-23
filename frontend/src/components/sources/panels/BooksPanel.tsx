@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useBooks, Book } from '@/hooks/useBooks'
-import { EmptyState, LoadingState, ErrorState } from '../shared'
-import { styles } from '../styles'
+import { Card, EmptyState, ErrorState, LoadingState, Notice, buttonClass } from '@/components/shared/ui'
 
 export const BooksPanel = () => {
   const { listBooks, uploadBook } = useBooks()
@@ -56,12 +55,9 @@ export const BooksPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadBooks} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Books</h3>
-        <div className="flex items-center gap-3">
+    <Card title="Books" actions={<><div className="flex items-center gap-3">
           <span className="text-sm text-slate-500">{books.length} books</span>
-          <label className={`${styles.btnUpload} ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+          <label className={buttonClass('secondary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
             {uploading ? 'Uploading...' : 'Upload Books'}
             <input
               ref={fileInputRef}
@@ -73,11 +69,10 @@ export const BooksPanel = () => {
               className="hidden"
             />
           </label>
-        </div>
-      </div>
+        </div></>}>
 
-      {uploadError && <div className={styles.errorBanner}>{uploadError}</div>}
-      {uploadSuccess && <div className={styles.successBanner}>{uploadSuccess}</div>}
+      {uploadError && <Notice tone="error">{uploadError}</Notice>}
+      {uploadSuccess && <Notice tone="success">{uploadSuccess}</Notice>}
 
       {books.length === 0 ? (
         <EmptyState
@@ -86,12 +81,12 @@ export const BooksPanel = () => {
           onAction={() => fileInputRef.current?.click()}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {books.map(book => (
-            <div key={book.id} className={styles.card}>
-              <div className={styles.cardHeader}>
-                <div className={styles.cardInfo}>
-                  <h4 className={styles.cardTitle}>
+            <div key={book.id} className="border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition-colors">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-medium text-slate-800 truncate">
                     {book.file_path ? (
                       <a
                         href={`/files/${book.file_path}?download=true`}
@@ -105,7 +100,7 @@ export const BooksPanel = () => {
                     )}
                   </h4>
                   {book.author && (
-                    <p className={styles.cardSubtitle}>by {book.author}</p>
+                    <p className="text-sm text-slate-600 truncate">by {book.author}</p>
                   )}
                 </div>
               </div>
@@ -128,7 +123,7 @@ export const BooksPanel = () => {
           ))}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 

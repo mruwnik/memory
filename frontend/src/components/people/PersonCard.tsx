@@ -1,5 +1,6 @@
 import type { Person, Tidbit } from '../../hooks/usePeople'
 import type { Team } from '../../hooks/useTeams'
+import { Badge, Button, Card } from '@/components/shared/ui'
 
 interface PersonCardProps {
   person: Person
@@ -31,7 +32,7 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-md overflow-hidden">
+    <Card flush className="overflow-hidden">
       {/* Main content - clickable to expand if has details */}
       <div
         className={`p-6 ${hasDetails ? 'cursor-pointer hover:bg-slate-50/50 transition-colors' : ''}`}
@@ -82,18 +83,16 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            <button
+            <Button size="sm"
               onClick={onEdit}
-              className="text-sm text-primary hover:text-primary/80 px-3 py-1 rounded hover:bg-primary/10 transition-colors"
             >
               Edit
-            </button>
-            <button
+            </Button>
+            <Button variant="danger" size="sm"
               onClick={onDelete}
-              className="text-sm text-red-600 hover:text-red-700 px-3 py-1 rounded hover:bg-red-50 transition-colors"
             >
               Delete
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -232,9 +231,9 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
                     {tidbit.tags && tidbit.tags.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {tidbit.tags.map((tag, i) => (
-                          <span key={i} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">
+                          <Badge tone="info" key={i}>
                             {tag}
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                     )}
@@ -254,7 +253,7 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 

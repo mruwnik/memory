@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { emptyTriggerConfig, useAgents, type AgentTrigger, type TriggerConfig } from '@/hooks/useAgents'
-
-const inputClass = 'w-full px-3 py-1.5 border rounded text-sm'
-const labelClass = 'block text-xs font-medium text-slate-600 mb-1'
+import { Badge, Button, Checkbox, Field, FieldRow, Input, List, ListItem, MultiSelect, Notice, Section, Textarea } from '@/components/shared/ui'
 
 const splitList = (text: string) => text.split(',').map(s => s.trim()).filter(Boolean)
 
@@ -19,7 +17,7 @@ export const describeTrigger = (config: TriggerConfig): string => {
   const delivery = config.delivery.mode === 'batch'
     ? `batched (${config.delivery.max_items} items or ${config.delivery.window_sec}s)`
     : 'one run per item'
-  return `${parts.join('; ')} · ${delivery}`
+  return `${parts.join('; ')} · ${delivery}${config.on_edit ? ' · also on edits' : ''}`
 }
 
 function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
@@ -38,8 +36,8 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
   const [windowSec, setWindowSec] = useState(initial.delivery.mode === 'batch' ? initial.delivery.window_sec : 3600)
   const [maxItems, setMaxItems] = useState(initial.delivery.mode === 'batch' ? initial.delivery.max_items : 50)
   const [template, setTemplate] = useState(initial.template)
+  const [onEdit, setOnEdit] = useState(initial.on_edit ?? false)
 
-  const toggleType = (t: string) => setTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])
 
   const save = () => onSave({
     filter: {
@@ -52,64 +50,41 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
     },
     delivery: batched ? { mode: 'batch', window_sec: windowSec, max_items: maxItems } : { mode: 'per_item' },
     template,
+    on_edit: onEdit,
   })
 
   return (
-    <div className="space-y-3 p-3 border rounded bg-slate-50">
-      <fieldset>
-        <legend className={labelClass}>Source types (none = any type; at least one filter below or here is required)</legend>
-        <div className="flex flex-wrap gap-2">
-          {sourceTypes.map(t => (
-            <label key={t} className="text-xs flex items-center gap-1">
-              <input type="checkbox" checked={types.includes(t)} onChange={() => toggleType(t)} /> {t}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className={labelClass} htmlFor="trigger-tags">Any of these tags (comma-separated)</label>
-          <input id="trigger-tags" className={inputClass} value={tags} onChange={e => setTags(e.target.value)} />
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="trigger-channels">Channel ids (Discord/Slack)</label>
-          <input id="trigger-channels" className={inputClass} value={channels} onChange={e => setChannels(e.target.value)} />
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="trigger-text">Text contains any of</label>
-          <input id="trigger-text" className={inputClass} value={text} onChange={e => setText(e.target.value)} />
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="trigger-regex">Regex (optional)</label>
-          <input id="trigger-regex" className={`${inputClass} font-mono`} value={regex} onChange={e => setRegex(e.target.value)} />
-        </div>
-        <div>
-          <label className={labelClass} htmlFor="trigger-excluded">Ignore authors (ids, names or emails)</label>
-          <input id="trigger-excluded" className={inputClass} value={excluded} onChange={e => setExcluded(e.target.value)} />
-        </div>
-        <div className="flex items-end gap-2 text-sm">
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={batched} onChange={e => setBatched(e.target.checked)} /> Batch
-          </label>
+    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-4">
+      <Field label="Source types" hint="None means any type. At least one filter, here or below, is required.">
+        <MultiSelect options={sourceTypes} value={types} onChange={setTypes} placeholder="Any type" />
+      </Field>
+      <FieldRow>
+        <Field label="Any of these tags (comma-separated)"><Input value={tags} onChange={e => setTags(e.target.value)} /></Field>
+        <Field label="Channel ids (Discord/Slack)"><Input value={channels} onChange={e => setChannels(e.target.value)} /></Field>
+        <Field label="Text contains any of"><Input value={text} onChange={e => setText(e.target.value)} /></Field>
+        <Field label="Regex (optional)"><Input className="font-mono" value={regex} onChange={e => setRegex(e.target.value)} /></Field>
+        <Field label="Ignore authors (ids, names or emails)"><Input value={excluded} onChange={e => setExcluded(e.target.value)} /></Field>
+        <div className="flex flex-wrap items-end gap-2 text-sm">
+          <Checkbox label="Batch" checked={batched} onChange={e => setBatched(e.target.checked)} />
           {batched && (
             <>
-              <input aria-label="Window seconds" type="number" min="60" max="86400" className="w-24 px-2 py-1 border rounded"
+              <Input aria-label="Window seconds" type="number" min="60" max="86400" className="w-24"
                 value={windowSec} onChange={e => setWindowSec(Number(e.target.value))} />
-              <span className="text-xs text-slate-500">s or</span>
-              <input aria-label="Max items" type="number" min="1" max="200" className="w-20 px-2 py-1 border rounded"
+              <span className="text-xs text-slate-600">s or</span>
+              <Input aria-label="Max items" type="number" min="1" max="200" className="w-20"
                 value={maxItems} onChange={e => setMaxItems(Number(e.target.value))} />
-              <span className="text-xs text-slate-500">items</span>
+              <span className="text-xs text-slate-600">items</span>
             </>
           )}
         </div>
-      </div>
-      <div>
-        <label className={labelClass} htmlFor="trigger-template">Run input ({'{items}'} becomes one line per item)</label>
-        <textarea id="trigger-template" className={`${inputClass} h-20`} value={template} onChange={e => setTemplate(e.target.value)} />
-      </div>
+      </FieldRow>
+      <Field label={<>Run input ({'{items}'} becomes one line per item)</>}>
+        <Textarea className="h-20" value={template} onChange={e => setTemplate(e.target.value)} />
+      </Field>
+      <Checkbox label="Also fire when a matching item is edited" checked={onEdit} onChange={e => setOnEdit(e.target.checked)} />
       <div className="flex gap-2">
-        <button className="px-3 py-1.5 bg-primary text-white rounded text-sm" onClick={save}>Save trigger</button>
-        <button className="px-3 py-1.5 border rounded text-sm" onClick={onCancel}>Cancel</button>
+        <Button variant="primary" onClick={save}>Save trigger</Button>
+        <Button onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   )
@@ -145,20 +120,17 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
   }
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Triggers</h2>
-        {editing === null && (
-          <button className="px-3 py-1.5 border rounded text-sm" onClick={() => { setWarnings([]); setEditing('new') }}>New trigger</button>
-        )}
-      </div>
-      <p className="text-xs text-slate-500">
+    <Section
+      title="Triggers"
+      actions={editing === null && <Button onClick={() => { setWarnings([]); setEditing('new') }}>New trigger</Button>}
+      description={<>
         Runs this agent when newly stored items match, once per item. Only items you can read match. Posts by our own
         Discord bots and your Slack user never do; anything else the agent writes that comes back in (email, GitHub,
         bot-token Slack) is only stopped by the caps. A trigger that hits a cap pauses itself and notifies you.
-      </p>
-      {error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm whitespace-pre-wrap">{error}</div>}
-      {warnings.map(w => <div key={w} className="p-3 bg-amber-50 text-amber-800 rounded text-sm">{w}</div>)}
+      </>}
+    >
+      {error && <Notice tone="error">{error}</Notice>}
+      {warnings.map(w => <Notice key={w} tone="warning">{w}</Notice>)}
       {editing !== null && (
         <TriggerForm
           initial={editing === 'new' ? emptyTriggerConfig() : editing.config}
@@ -174,33 +146,30 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
           })}
         />
       )}
-      {triggers === null && !error && <p className="text-sm text-slate-500">Loading triggers...</p>}
-      {triggers?.length === 0 && <p className="text-sm text-slate-500">No triggers.</p>}
+      {triggers === null && !error && <p className="text-sm text-slate-600">Loading triggers...</p>}
+      {triggers?.length === 0 && <p className="text-sm text-slate-600">No triggers.</p>}
       {!!triggers?.length && (
-        <ul className="divide-y bg-white rounded-xl shadow-sm">
+        <List>
           {triggers.map(t => (
-            <li key={t.id} className="p-3 flex justify-between items-start gap-3 text-sm">
+            <ListItem key={t.id} className="items-start">
               <span className="min-w-0">
                 <span className="text-slate-700">{describeTrigger(t.config)}</span>
                 {t.state.tripped && (
-                  <span className="block mt-1 text-xs text-amber-800 bg-amber-50 rounded px-2 py-1">
-                    Tripped: {t.state.tripped.reason}
-                  </span>
+                  <Badge tone="warning" className="mt-1 whitespace-normal">Tripped: {t.state.tripped.reason}</Badge>
                 )}
-                {!t.enabled && !t.state.tripped && <span className="block text-xs text-slate-400">paused</span>}
+                {!t.enabled && !t.state.tripped && <span className="block text-xs text-slate-600">paused</span>}
               </span>
               <span className="flex gap-2 shrink-0">
-                <button className="px-2 py-1 border rounded text-xs"
-                  onClick={() => act(() => saveTrigger({ definitionId, enabled: !t.enabled, triggerId: t.id }))}>
+                <Button size="sm" onClick={() => act(() => saveTrigger({ definitionId, enabled: !t.enabled, triggerId: t.id }))}>
                   {t.enabled ? 'Pause' : 'Enable'}
-                </button>
-                <button className="px-2 py-1 border rounded text-xs" onClick={() => { setWarnings([]); setEditing(t) }}>Edit</button>
-                <button className="px-2 py-1 border border-red-300 text-red-700 rounded text-xs" onClick={() => remove(t)}>Delete</button>
+                </Button>
+                <Button size="sm" onClick={() => { setWarnings([]); setEditing(t) }}>Edit</Button>
+                <Button variant="danger" size="sm" onClick={() => remove(t)}>Delete</Button>
               </span>
-            </li>
+            </ListItem>
           ))}
-        </ul>
+        </List>
       )}
-    </section>
+    </Section>
   )
 }

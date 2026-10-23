@@ -1,16 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import {
-  SourceCard,
-  Modal,
-  TagsInput,
-  TestConnectionButton,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-} from '../shared'
-import { styles } from '../styles'
+import { SourceCard, TagsInput, TestConnectionButton } from '../shared'
+import { Button, Card, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
@@ -80,12 +72,7 @@ export const EmailPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Email Accounts</h3>
-        <button className={styles.btnAdd} onClick={() => setShowForm(true)}>Add Account</button>
-      </div>
-
+    <Card title="Email Accounts" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button></>}>
       {accounts.length === 0 ? (
         <EmptyState
           message="No email accounts configured"
@@ -93,7 +80,7 @@ export const EmailPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {accounts.map(account => (
             <SourceCard
               key={account.id}
@@ -120,7 +107,7 @@ export const EmailPanel = () => {
                 <TestConnectionButton onTest={() => testEmailAccount({ id: account.id })} />
               )}
               {account.sync_error && (
-                <div className={styles.errorBanner}>{account.sync_error}</div>
+                <Notice tone="error">{account.sync_error}</Notice>
               )}
             </SourceCard>
           ))}
@@ -145,7 +132,7 @@ export const EmailPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -180,9 +167,9 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
     )
 
   return (
-    <div className={styles.formGroup}>
-      <label className={styles.formLabel}>Folders to sync</label>
-      <p className={styles.formHint}>Leave all unchecked to sync only INBOX.</p>
+    <Field>
+      <Label>Folders to sync</Label>
+      <Hint>Leave all unchecked to sync only INBOX.</Hint>
       <div className="max-h-48 overflow-y-auto border border-slate-200 rounded p-2 space-y-1">
         {folders.map(folder => (
           <label
@@ -194,14 +181,13 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
               checked={selected.includes(folder.name)}
               disabled={!folder.selectable}
               onChange={() => toggle(folder.name)}
-              className="rounded border-slate-300"
             />
             <span>{folder.name}</span>
             {!folder.selectable && <span className="text-xs italic">(not selectable)</span>}
           </label>
         ))}
       </div>
-    </div>
+    </Field>
   )
 }
 
@@ -291,94 +277,79 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
 
   return (
     <Modal title={account ? 'Edit Email Account' : 'Add Email Account'} onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Name</label>
-          <input
+        <Field label="Name">
+          <Input
             type="text"
             value={formData.name}
             onChange={e => setFormData({ ...formData, name: e.target.value })}
             required
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Account Type</label>
-          <select
+        <Field label="Account Type">
+          <Select
             value={formData.account_type}
             onChange={e => setFormData({ ...formData, account_type: e.target.value as 'imap' | 'gmail' })}
             disabled={!!account}
-            className={styles.formSelect}
           >
             <option value="imap">IMAP (Standard Email)</option>
             <option value="gmail">Gmail (OAuth)</option>
-          </select>
-        </div>
+          </Select>
+        </Field>
 
         {formData.account_type === 'imap' ? (
           <>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Email Address</label>
-              <input
+            <Field label="Email Address">
+              <Input
                 type="email"
                 value={formData.email_address}
                 onChange={e => setFormData({ ...formData, email_address: e.target.value })}
                 required
                 disabled={!!account}
-                className={styles.formInput}
               />
-            </div>
+            </Field>
 
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>IMAP Server</label>
-                <input
+            <FieldRow>
+              <Field label="IMAP Server">
+                <Input
                   type="text"
                   value={formData.imap_server}
                   onChange={e => setFormData({ ...formData, imap_server: e.target.value })}
                   required
                   placeholder="imap.example.com"
-                  className={styles.formInput}
                 />
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Port</label>
-                <input
+              </Field>
+              <Field label="Port">
+                <Input
                   type="number"
                   value={formData.imap_port}
                   onChange={e => setFormData({ ...formData, imap_port: parseInt(e.target.value) })}
                   required
-                  className={styles.formInput}
                 />
-              </div>
-            </div>
+              </Field>
+            </FieldRow>
 
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Username</label>
-              <input
+            <Field label="Username">
+              <Input
                 type="text"
                 value={formData.username}
                 onChange={e => setFormData({ ...formData, username: e.target.value })}
                 required
-                className={styles.formInput}
               />
-            </div>
+            </Field>
 
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>
-                Password {account && <span className="text-slate-400">(leave blank to keep current)</span>}
-              </label>
-              <input
+            <Field label={<>
+                Password {account && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+              <Input
                 type="password"
                 value={formData.password}
                 onChange={e => setFormData({ ...formData, password: e.target.value })}
                 required={!account}
-                className={styles.formInput}
               />
-            </div>
+            </Field>
 
             <TestConnectionButton
               onTest={() => testEmailAccount({
@@ -400,52 +371,46 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
               />
             )}
 
-            <div className={styles.formCheckbox}>
+            <div className="flex items-center gap-2">
               <input
                 type="checkbox"
                 id="use-ssl"
                 checked={formData.use_ssl}
                 onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })}
-                className="rounded border-slate-300"
               />
               <label htmlFor="use-ssl" className="text-sm text-slate-700">Use SSL</label>
             </div>
 
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>
-                  SMTP Server <span className="text-slate-400">(optional)</span>
-                </label>
-                <input
+            <FieldRow>
+              <Field label={<>
+                  SMTP Server <span className="text-slate-400">(optional)</span></>}>
+                <Input
                   type="text"
                   value={formData.smtp_server}
                   onChange={e => setFormData({ ...formData, smtp_server: e.target.value })}
                   placeholder="smtp.example.com"
-                  className={styles.formInput}
                 />
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>SMTP Port</label>
-                <input
+              </Field>
+              <Field label="SMTP Port">
+                <Input
                   type="number"
                   value={formData.smtp_port}
                   onChange={e => setFormData({ ...formData, smtp_port: parseInt(e.target.value) || 587 })}
-                  className={styles.formInput}
                 />
-              </div>
-            </div>
-            <p className={styles.formHint}>SMTP settings for sending email. If not set, will be inferred from IMAP server.</p>
+              </Field>
+            </FieldRow>
+            <Hint>SMTP settings for sending email. If not set, will be inferred from IMAP server.</Hint>
           </>
         ) : (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Google Account</label>
+          <Field>
+            <Label>Google Account</Label>
             {googleAccounts.length === 0 ? (
-              <p className={styles.formHint}>
+              <Hint>
                 No Google accounts connected. Add a Google account in the Accounts tab first.
-              </p>
+              </Hint>
             ) : (
               <>
-                <select
+                <Select
                   value={formData.google_account_id || ''}
                   onChange={e => {
                     const googleAccountId = parseInt(e.target.value) || undefined
@@ -457,36 +422,32 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                     })
                   }}
                   required
-                  className={styles.formSelect}
                 >
                   <option value="">Select a Google account...</option>
                   {googleAccounts.map(ga => (
                     <option key={ga.id} value={ga.id}>{ga.email}</option>
                   ))}
-                </select>
-                <p className={styles.formHint}>
+                </Select>
+                <Hint>
                   Gmail uses OAuth for secure access. The email address will be set automatically.
-                </p>
+                </Hint>
               </>
             )}
-          </div>
+          </Field>
         )}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Tags</label>
+        <Field label="Tags">
           <TagsInput
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formRow}>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Project</label>
-            <select
+        <FieldRow>
+          <Field label="Project" hint="Project for access control (from GitHub milestones)">
+            <Select
               value={formData.project_id || ''}
               onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-              className={styles.formSelect}
             >
               <option value="">None</option>
               {projects.map(project => (
@@ -494,49 +455,43 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                   {project.title} ({project.repo_path})
                 </option>
               ))}
-            </select>
-            <p className={styles.formHint}>Project for access control (from GitHub milestones)</p>
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Sensitivity</label>
-            <select
+            </Select>
+          </Field>
+          <Field label="Sensitivity" hint="Visibility level for emails from this account">
+            <Select
               value={formData.sensitivity}
               onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden' })}
-              className={styles.formSelect}
             >
               <option value="public">Public</option>
               <option value="basic">Basic</option>
               <option value="internal">Internal</option>
               <option value="confidential">Confidential</option>
               <option value="hidden">Hidden (excluded from search)</option>
-            </select>
-            <p className={styles.formHint}>Visibility level for emails from this account</p>
-          </div>
-        </div>
+            </Select>
+          </Field>
+        </FieldRow>
 
-        <div className={styles.formCheckbox}>
+        <div className="flex items-center gap-2">
           <input
             type="checkbox"
             id="send-enabled"
             checked={formData.send_enabled}
             onChange={e => setFormData({ ...formData, send_enabled: e.target.checked })}
-            className="rounded border-slate-300"
           />
           <label htmlFor="send-enabled" className="text-sm text-slate-700">
             Enable sending emails from this account
           </label>
         </div>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary"
             type="submit"
-            className={styles.btnSubmit}
             disabled={submitting || (formData.account_type === 'gmail' && googleAccounts.length === 0)}
           >
             {submitting ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

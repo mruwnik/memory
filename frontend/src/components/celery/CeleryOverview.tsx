@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import {
   useCelery,
   BeatScheduleEntry,
   TaskActivity,
   TaskActivityEntry,
 } from '@/hooks/useCelery'
+import { Card, Page } from '@/components/shared/ui'
 
 const STATUS_COLORS: Record<string, string> = {
   success: 'bg-green-100 text-green-700 border-green-200',
@@ -132,60 +132,33 @@ const CeleryOverview = () => {
       .finally(() => setLoading(false))
   }, [getBeatSchedule, getTaskActivity])
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-500 text-lg">Loading Celery overview...</div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-red-600 text-lg">Error: {error}</div>
-      </div>
-    )
-  }
-
   const totals = activity?.totals
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center gap-4 shadow-sm">
-        <Link
-          to="/ui/dashboard"
-          className="text-slate-500 hover:text-slate-700 no-underline"
-        >
-          &larr; Dashboard
-        </Link>
-        <h1 className="text-primary text-2xl font-semibold">Celery Tasks</h1>
-      </header>
-
-      <main className="flex-1 p-8 mx-auto w-full max-w-6xl space-y-8">
+    <Page title="Celery Tasks" width="wide" loading={loading && 'Loading Celery overview...'} error={error && `Error: ${error}`}>
         {/* Task Metrics Summary Cards */}
         {totals && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <Card className="text-center">
               <div className="text-3xl font-bold text-slate-800">{totals.total}</div>
               <div className="text-sm text-gray-500 mt-1">Tasks ({activity?.hours || 24}h)</div>
-            </div>
-            <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            </Card>
+            <Card className="text-center">
               <div className="text-3xl font-bold text-green-600">{totals.success}</div>
               <div className="text-sm text-gray-500 mt-1">Succeeded</div>
-            </div>
-            <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            </Card>
+            <Card className="text-center">
               <div className="text-3xl font-bold text-red-600">{totals.failure}</div>
               <div className="text-sm text-gray-500 mt-1">Failed</div>
-            </div>
-            <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            </Card>
+            <Card className="text-center">
               <div className="text-3xl font-bold text-slate-800">
                 {totals.avg_duration_ms !== null
                   ? formatDuration(totals.avg_duration_ms)
                   : '-'}
               </div>
               <div className="text-sm text-gray-500 mt-1">Avg Duration</div>
-            </div>
+            </Card>
           </div>
         )}
 
@@ -194,7 +167,7 @@ const CeleryOverview = () => {
           <h2 className="text-slate-800 text-xl font-semibold mb-4">
             Beat Schedule ({schedule.length} tasks)
           </h2>
-          <div className="bg-white rounded-xl shadow-md overflow-hidden">
+          <Card flush className="overflow-hidden">
             <table className="w-full text-left">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
@@ -239,7 +212,7 @@ const CeleryOverview = () => {
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
         </section>
 
         {/* Task Activity */}
@@ -250,7 +223,7 @@ const CeleryOverview = () => {
             </h2>
 
             {activity.by_task.length > 0 && (
-              <div className="bg-white rounded-xl shadow-md overflow-hidden mb-6">
+              <Card flush className="overflow-hidden mb-6">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
@@ -290,7 +263,7 @@ const CeleryOverview = () => {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </Card>
             )}
 
             {activity.recent_failures.length > 0 && (
@@ -300,9 +273,9 @@ const CeleryOverview = () => {
                 </h3>
                 <div className="space-y-2">
                   {activity.recent_failures.map((failure, idx) => (
-                    <div
+                    <Card
                       key={`${failure.task}-${failure.timestamp}`}
-                      className="bg-white rounded-lg shadow-sm border border-red-100 p-4 cursor-pointer"
+                      className="border-red-100 cursor-pointer"
                       onClick={() =>
                         setExpandedFailure(expandedFailure === idx ? null : idx)
                       }
@@ -339,15 +312,14 @@ const CeleryOverview = () => {
                           )}
                         </div>
                       )}
-                    </div>
+                    </Card>
                   ))}
                 </div>
               </div>
             )}
           </section>
         )}
-      </main>
-    </div>
+    </Page>
   )
 }
 

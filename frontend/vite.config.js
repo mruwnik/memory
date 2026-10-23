@@ -41,23 +41,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // Proxy API requests to backend during development
-      '/register': 'http://localhost:8000',
-      '/authorize': 'http://localhost:8000',
-      '/token': 'http://localhost:8000',
-      '/auth': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
-      '/email-accounts': 'http://localhost:8000',
-      '/calendar-accounts': 'http://localhost:8000',
-      '/article-feeds': 'http://localhost:8000',
-      '/github': 'http://localhost:8000',
-      '/google-drive': 'http://localhost:8000',
-      "/books": "http://localhost:8000",
-      "/photos": "http://localhost:8000",
-      "/forum-posts": "http://localhost:8000",
-      "/jobs": "http://localhost:8000",
-      "/polls": "http://localhost:8000",
-      "/mcp": "http://localhost:8000",
+      // Everything outside the app's own /ui/ base is the API
+      '^/(?!ui(/|$))': 'http://localhost:8000',
     },
   },
 })

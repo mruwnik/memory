@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
-/* Custom CSS variables for theming */
+/* Design tokens. Components use these through Tailwind classes (bg-primary, text-danger, ...); see STYLE.md. */
 @theme {
-  --color-primary: #667eea;
-  --color-primary-dark: #5a67d8;
+  --color-primary: #5a67d8;
+  --color-primary-dark: #4c51bf;
   --color-secondary: #764ba2;
   --color-success: #16a34a;
   --color-warning: #ca8a04;
@@ -14,9 +14,11 @@
   --color-low: #16a34a;
 }
 
-/* Base styles */
 @layer base {
   body {
-    @apply font-sans leading-relaxed text-gray-800 bg-slate-50;
+    @apply font-sans leading-relaxed text-slate-800 bg-slate-50;
+  }
+  input[type="checkbox"], input[type="radio"] {
+    accent-color: var(--color-primary);
   }
 }

@@ -102,7 +102,7 @@ describe('PollEdit - loading and error states', () => {
     mockEdit({ loadResult: new Error('Poll vanished') })
     renderEdit()
     expect(await screen.findByText('Poll vanished')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Back to Polls' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Polls' })).toHaveAttribute(
       'href',
       '/ui/polls',
     )

@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import {
   useUsers,
   type User,
@@ -8,6 +7,7 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
+import { Button, Card, Input, Label, Modal, Notice, Page, Select } from '@/components/shared/ui'
 
 interface UserFormData {
   name: string
@@ -180,55 +180,41 @@ const UserManagement = () => {
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-8 flex items-center justify-center">
-        <p className="text-slate-500">Loading...</p>
-      </div>
-    )
+    return <Page title="User Management" width="narrow" loading />
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <header className="flex items-center gap-4 mb-8 pb-4 border-b border-slate-200">
-          <Link
-            to="/ui/dashboard"
-            className="bg-slate-100 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-200 transition-colors"
-          >
-            &larr; Back
-          </Link>
-          <h1 className="text-2xl font-semibold text-slate-800 flex-1">User Management</h1>
-          <button
+    <>
+      <Page
+        title="User Management"
+        actions={<>
+          <Button variant="primary"
             onClick={() => setShowCreateModal(true)}
-            className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
+
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
             Add User
-          </button>
-        </header>
+          </Button>
+        </>}
+        width="narrow"
+      >
 
         {/* Error message */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg">
-            {error}
-            <button onClick={() => setError(null)} className="ml-4 underline">
-              Dismiss
-            </button>
-          </div>
+          <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
         )}
 
         {/* User list */}
         <div className="space-y-4">
           {users.length === 0 ? (
-            <div className="bg-white rounded-xl shadow-md p-8 text-center text-slate-500">
+            <Card className="text-center text-slate-500">
               No users found. Create your first user above.
-            </div>
+            </Card>
           ) : (
             users.map((user) => (
-              <div key={user.id} className="bg-white rounded-xl shadow-md p-6">
+              <Card key={user.id}>
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-4">
                     {/* User type badge */}
@@ -273,14 +259,13 @@ const UserManagement = () => {
                   {/* Actions */}
                   <div className="flex items-center gap-2">
                     {user.user_type === 'bot' && (
-                      <button
+                      <Button size="sm"
                         onClick={() => setApiKeyUser(user)}
-                        className="text-sm text-slate-600 hover:text-slate-800 px-3 py-1 rounded hover:bg-slate-100 transition-colors"
                       >
                         {user.api_key_count > 0 ? 'Regenerate Key' : 'Generate Key'}
-                      </button>
+                      </Button>
                     )}
-                    <button
+                    <Button size="sm"
                       onClick={() => {
                         setEditingUser(user)
                         setEditForm({
@@ -289,85 +274,80 @@ const UserManagement = () => {
                           scopes: [...user.scopes],
                         })
                       }}
-                      className="text-sm text-primary hover:text-primary/80 px-3 py-1 rounded hover:bg-primary/10 transition-colors"
                     >
                       Edit
-                    </button>
+                    </Button>
                     {user.id !== currentUser?.id && (
-                      <button
+                      <Button variant="danger" size="sm"
                         onClick={() => setDeletingUser(user)}
-                        className="text-sm text-red-600 hover:text-red-700 px-3 py-1 rounded hover:bg-red-50 transition-colors"
                       >
                         Delete
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
-              </div>
+              </Card>
             ))
           )}
         </div>
-      </div>
+      </Page>
 
       {/* Create User Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Create New User</h3>
-
-            {createError && (
-              <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{createError}</div>
+        <Modal title="Create New User" onClose={() => {
+                  setShowCreateModal(false)
+                  setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
+                  setCreateError(null)
+                }} size="md">
+          {createError && (
+              <Notice tone="error" className="mb-4">{createError}</Notice>
             )}
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">User Type</label>
-                <select
+                <Label className="mb-1">User Type</Label>
+                <Select
                   value={createForm.user_type}
                   onChange={(e) =>
                     setCreateForm({ ...createForm, user_type: e.target.value as 'human' | 'bot' })
                   }
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 >
                   <option value="human">Human</option>
                   <option value="bot">Bot</option>
-                </select>
+                </Select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
-                <input
+                <Label className="mb-1">Name</Label>
+                <Input
                   type="text"
                   value={createForm.name}
                   onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-                <input
+                <Label className="mb-1">Email</Label>
+                <Input
                   type="email"
                   value={createForm.email}
                   onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               {createForm.user_type === 'human' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-                  <input
+                  <Label className="mb-1">Password</Label>
+                  <Input
                     type="password"
                     value={createForm.password}
                     onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                    className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Scopes</label>
+                <Label className="mb-2">Scopes</Label>
                 <div className="space-y-2">
                   {availableScopes.map((scope) => (
                     <label key={scope.value} className="flex items-start gap-2 cursor-pointer">
@@ -393,61 +373,57 @@ const UserManagement = () => {
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <button
+              <Button
                 onClick={() => {
                   setShowCreateModal(false)
                   setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
                   setCreateError(null)
                 }}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="primary"
                 onClick={handleCreate}
                 disabled={createLoading}
-                className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
               >
                 {createLoading ? 'Creating...' : 'Create User'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Edit User Modal */}
       {editingUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Edit User</h3>
-
-            {editError && (
-              <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{editError}</div>
+        <Modal title="Edit User" onClose={() => {
+                  setEditingUser(null)
+                  setEditForm({})
+                  setEditError(null)
+                }} size="md">
+          {editError && (
+              <Notice tone="error" className="mb-4">{editError}</Notice>
             )}
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
-                <input
+                <Label className="mb-1">Name</Label>
+                <Input
                   type="text"
                   value={editForm.name || ''}
                   onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-                <input
+                <Label className="mb-1">Email</Label>
+                <Input
                   type="email"
                   value={editForm.email || ''}
                   onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Scopes</label>
+                <Label className="mb-2">Scopes</Label>
                 <div className="space-y-2">
                   {availableScopes.map((scope) => (
                     <label key={scope.value} className="flex items-start gap-2 cursor-pointer">
@@ -473,56 +449,47 @@ const UserManagement = () => {
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <button
+              <Button
                 onClick={() => {
                   setEditingUser(null)
                   setEditForm({})
                   setEditError(null)
                 }}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="primary"
                 onClick={handleEdit}
                 disabled={editLoading}
-                className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
               >
                 {editLoading ? 'Saving...' : 'Save Changes'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Delete Confirmation Modal */}
       {deletingUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Delete User</h3>
-
-            <p className="text-sm text-slate-600 mb-4">
+        <Modal title="Delete User" onClose={() => setDeletingUser(null)} size="md">
+          <p className="text-sm text-slate-600 mb-4">
               Are you sure you want to delete <strong>{deletingUser.name}</strong>? This action cannot
               be undone.
             </p>
 
             <div className="flex justify-end gap-3">
-              <button
+              <Button
                 onClick={() => setDeletingUser(null)}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="dangerSolid"
                 onClick={handleDelete}
                 disabled={deleteLoading}
-                className="bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 disabled:bg-slate-400 transition-colors"
               >
                 {deleteLoading ? 'Deleting...' : 'Delete User'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* API Key Modal */}
@@ -542,19 +509,17 @@ const UserManagement = () => {
                 </p>
 
                 <div className="flex justify-end gap-3">
-                  <button
+                  <Button
                     onClick={() => setApiKeyUser(null)}
-                    className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
                   >
                     Cancel
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="primary"
                     onClick={handleRegenerateApiKey}
                     disabled={apiKeyLoading}
-                    className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
                   >
                     {apiKeyLoading ? 'Generating...' : apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'}
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : (
@@ -570,28 +535,26 @@ const UserManagement = () => {
                 </div>
 
                 <div className="flex justify-end gap-3">
-                  <button
+                  <Button
                     onClick={() => copyToClipboard(newApiKey)}
-                    className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
                   >
                     Copy
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="primary"
                     onClick={() => {
                       setApiKeyUser(null)
                       setNewApiKey(null)
                     }}
-                    className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 transition-colors"
                   >
                     Done
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
 

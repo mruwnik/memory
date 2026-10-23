@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { useCheck, PAGE_LIMIT, CheckJob, CheckMode, CheckStatus, AskBody } from '@/hooks/useCheck'
 import { formatRelativeTime } from '@/components/sources/shared'
+import { Button, EmptyState, Label, LoadingState, Notice, Page, Select, Textarea, ToggleGroup } from '@/components/shared/ui'
 
 const STATUS_COLORS: Record<CheckStatus, string> = {
   queued: 'bg-yellow-100 text-yellow-700',
@@ -35,8 +35,6 @@ const MODES: CheckMode[] = ['research', 'verify', 'link', 'deep-dive', 'investig
 // do hit the cap the header counts and filter tabs only reflect the most-recent
 // page, so we flag them as approximate instead of silently undercounting.
 
-const inputClass = 'w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary'
-const labelClass = 'block text-xs font-medium text-slate-500 mb-1'
 
 // --- Answer rendering ---
 //
@@ -189,41 +187,38 @@ const AskForm = ({ onAsk, onCancel, saving, error }: AskFormProps) => {
   return (
     <form onSubmit={handleSubmit} className="space-y-3 border border-slate-200 rounded-lg p-4 bg-slate-50">
       <div>
-        <label className={labelClass}>Question</label>
-        <textarea
+        <Label>Question</Label>
+        <Textarea
           value={text}
           onChange={e => setText(e.target.value)}
           rows={3}
           placeholder="What would you like to verify, research, or link?"
-          className={inputClass}
           autoFocus
         />
       </div>
       <div>
-        <label className={labelClass}>Mode</label>
-        <select value={mode} onChange={e => setMode(e.target.value as CheckMode)} className={inputClass}>
+        <Label>Mode</Label>
+        <Select value={mode} onChange={e => setMode(e.target.value as CheckMode)}>
           {MODES.map(m => (
             <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>
           ))}
-        </select>
+        </Select>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <div className="flex gap-2 pt-1">
-        <button
+        <Button variant="primary" size="sm"
           type="submit"
           disabled={saving || !text.trim()}
-          className="bg-primary text-white py-1.5 px-4 rounded text-sm hover:bg-primary-dark disabled:bg-slate-300"
         >
           {saving ? 'Submitting...' : 'Ask'}
-        </button>
-        <button
+        </Button>
+        <Button size="sm"
           type="button"
           onClick={onCancel}
           disabled={saving}
-          className="bg-slate-100 text-slate-700 py-1.5 px-4 rounded text-sm hover:bg-slate-200"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -299,12 +294,11 @@ const JobCard = ({ job, onDelete }: JobCardProps) => {
               </button>
             </span>
           ) : (
-            <button
+            <Button variant="danger" size="sm"
               onClick={() => setConfirmDelete(true)}
-              className="bg-red-50 text-red-600 py-1.5 px-3 rounded text-sm hover:bg-red-100"
             >
               Delete
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -392,51 +386,34 @@ const Check = () => {
   const countSuffix = atCap ? '+' : ''
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Check Questions</h1>
+    <Page
+      title="Check Questions"
+      description={<>
         <div className="flex gap-3 text-sm">
           {pendingCount > 0 && <span className="text-blue-600 font-medium">{pendingCount}{countSuffix} pending</span>}
           <span className="text-green-600 font-medium">{answeredCount}{countSuffix} answered</span>
         </div>
-      </header>
-
+      </>}
+      width="wide"
+    >
       <div className="space-y-4">
         <div className="flex gap-2 items-center flex-wrap">
-          {FILTERS.map(f => (
-            <button
-              key={f.value}
-              className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
-                statusFilter === f.value
-                  ? 'bg-primary text-white'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-              }`}
-              onClick={() => setStatusFilter(f.value)}
-            >
-              {f.label}
-            </button>
-          ))}
-          <button
+          <ToggleGroup label="Filter" options={FILTERS} value={statusFilter} onChange={setStatusFilter} />
+          <Button size="icon"
             onClick={() => loadJobs()}
-            className="w-9 h-9 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-lg"
+                
             title="Refresh"
             aria-label="Refresh question list"
           >
             &#8635;
-          </button>
-          <button onClick={() => setShowAsk(v => !v)} className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark">
+          </Button>
+          <Button variant="primary" onClick={() => setShowAsk(v => !v)}>
             {showAsk ? 'Close' : '+ New question'}
-          </button>
+          </Button>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{error}</p>
-            <button onClick={() => loadJobs()} className="text-primary hover:underline">Retry</button>
-          </div>
+          <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>
         )}
 
         {showAsk && (
@@ -451,12 +428,10 @@ const Check = () => {
           </p>
         )}
 
-        {loading && <div className="text-center py-8 text-slate-500">Loading questions...</div>}
+        {loading && <LoadingState message="Loading questions..." />}
 
         {!loading && visibleJobs.length === 0 && (
-          <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
-            {statusFilter === 'all' ? 'No questions yet' : `No ${statusFilter} questions`}
-          </div>
+          <EmptyState message={statusFilter === 'all' ? 'No questions yet' : `No ${statusFilter} questions`} />
         )}
 
         {!loading && visibleJobs.length > 0 && (
@@ -467,7 +442,7 @@ const Check = () => {
           </ul>
         )}
       </div>
-    </div>
+    </Page>
   )
 }
 

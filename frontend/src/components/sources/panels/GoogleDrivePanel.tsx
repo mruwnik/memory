@@ -1,18 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import {
-  Modal,
-  TagsInput,
-  IntervalInput,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  StatusBadge,
-  SyncStatus,
-  SyncButton,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { TagsInput, IntervalInput, StatusBadge, SyncStatus, SyncButton } from '../shared'
+import { Button, Card, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, LoadingState, Modal, Notice, Select, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
@@ -94,45 +84,38 @@ export const GoogleDrivePanel = () => {
   // Show message if no accounts connected
   if (accounts.length === 0) {
     return (
-      <div className={styles.panel}>
-        <div className={styles.panelHeader}>
-          <h3 className={styles.panelTitle}>Google Drive</h3>
-        </div>
+      <Card title="Google Drive">
         <EmptyState
           message="No Google accounts connected. Add a Google account in the Accounts tab first."
         />
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Google Drive Folders</h3>
-      </div>
-
-      <div className={styles.sourceList}>
+    <Card title="Google Drive Folders">
+      <div className="space-y-3">
         {accounts.map(account => (
           <div key={account.id} className="border border-slate-200 rounded-lg p-4">
-            <div className={styles.cardHeader}>
-              <div className={styles.cardInfo}>
-                <h4 className={styles.cardTitle}>{account.email}</h4>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <h4 className="font-medium text-slate-800 truncate">{account.email}</h4>
               </div>
-              <div className={styles.cardActions}>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <StatusBadge active={account.active} />
               </div>
             </div>
 
             {account.sync_error && (
-              <div className={styles.errorBanner}>{account.sync_error}</div>
+              <Notice tone="error">{account.sync_error}</Notice>
             )}
 
             <div className="mt-4 pt-4 border-t border-slate-100">
               <div className="flex items-center justify-between mb-3">
                 <h5 className="text-sm font-medium text-slate-700">Synced Folders ({account.folders.length})</h5>
                 <div className="flex gap-2">
-                  <button className={cx(styles.btnAdd, 'text-xs py-1 px-2')} onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</button>
-                  <button className={cx(styles.btnSecondary, 'text-xs py-1 px-2')} onClick={() => setAddingFolderTo(account.id)}>Add by ID</button>
+                  <Button variant="primary" className="text-xs py-1 px-2" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</Button>
+                  <Button className="text-xs py-1 px-2" onClick={() => setAddingFolderTo(account.id)}>Add by ID</Button>
                 </div>
               </div>
 
@@ -173,25 +156,22 @@ export const GoogleDrivePanel = () => {
                           label="Sync"
                         />
                         {folder.recursive && (
-                          <button
-                            className={styles.btnEdit}
+                          <Button size="sm"
                             onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}
                           >
                             Exclusions
-                          </button>
+                          </Button>
                         )}
-                        <button
-                          className={styles.btnEdit}
+                        <Button size="sm"
                           onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}
                         >
                           {folder.active ? 'Disable' : 'Enable'}
-                        </button>
-                        <button
-                          className={styles.btnDelete}
+                        </Button>
+                        <Button variant="danger" size="sm"
                           onClick={() => handleDeleteFolder(account.id, folder.id)}
                         >
                           Remove
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   ))}
@@ -227,7 +207,7 @@ export const GoogleDrivePanel = () => {
           onCancel={() => setManagingExclusionsFor(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -337,7 +317,7 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
         </div>
 
         {/* Content */}
-        {error && <div className={styles.formError}>{error}</div>}
+        {error && <Notice tone="error">{error}</Notice>}
 
         {loading ? (
           <div className="text-sm text-slate-500 py-8 text-center">Loading...</div>
@@ -354,7 +334,6 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
                   type="checkbox"
                   checked={selected.has(item.id)}
                   onChange={() => toggleSelect(item)}
-                  className="rounded border-slate-300"
                 />
                 <span className="text-lg">{item.is_folder ? '📁' : '📄'}</span>
                 {item.id === 'shared' ? (
@@ -374,24 +353,15 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
                   </a>
                 )}
                 {item.is_folder && selected.has(item.id) && (
-                  <label className="flex items-center gap-1 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={selected.get(item.id)?.recursive ?? true}
-                      onChange={() => toggleRecursive(item.id)}
-                      className="rounded border-slate-300"
-                    />
-                    Recursive
-                  </label>
+                  <Checkbox checked={selected.get(item.id)?.recursive ?? true} onChange={() => toggleRecursive(item.id)} label="Recursive" />
                 )}
                 {item.is_folder && (
-                  <button
-                    className="text-primary hover:bg-primary/10 px-2 py-1 rounded text-sm"
+                  <Button size="sm"
                     onClick={() => navigateToFolder(item)}
                     title="Browse folder"
                   >
                     →
-                  </button>
+                  </Button>
                 )}
               </div>
             ))}
@@ -404,15 +374,14 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
             {selected.size} item{selected.size !== 1 ? 's' : ''} selected
           </span>
           <div className="flex gap-3">
-            <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-            <button
+            <Button type="button" onClick={onCancel}>Cancel</Button>
+            <Button variant="primary"
               type="button"
-              className={styles.btnSubmit}
               onClick={handleAdd}
               disabled={selected.size === 0}
             >
               Add Selected
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -508,7 +477,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
       <div className="space-y-4">
         {/* Current exclusions */}
         {excluded.size > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <Notice tone="warning">
             <h5 className="text-sm font-medium text-amber-800 mb-2">Excluded Folders ({excluded.size})</h5>
             <div className="flex flex-wrap gap-2">
               {Array.from(excluded.values()).map(item => (
@@ -524,7 +493,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
                 </span>
               ))}
             </div>
-          </div>
+          </Notice>
         )}
 
         {/* Breadcrumb */}
@@ -547,7 +516,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
         </div>
 
         {/* Content */}
-        {error && <div className={styles.formError}>{error}</div>}
+        {error && <Notice tone="error">{error}</Notice>}
 
         {loading ? (
           <div className="text-sm text-slate-500 py-8 text-center">Loading...</div>
@@ -564,7 +533,6 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
                   type="checkbox"
                   checked={excluded.has(item.id)}
                   onChange={() => toggleExclude(item)}
-                  className="rounded border-slate-300"
                 />
                 <span className="text-lg">📁</span>
                 <a
@@ -579,13 +547,12 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
                 {excluded.has(item.id) && (
                   <span className="px-2 py-0.5 bg-amber-200 text-amber-800 text-xs rounded">Excluded</span>
                 )}
-                <button
-                  className="text-primary hover:bg-primary/10 px-2 py-1 rounded text-sm"
+                <Button size="sm"
                   onClick={() => navigateToFolder(item)}
                   title="Browse subfolder"
                 >
                   →
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -597,14 +564,13 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
             {excluded.size} folder{excluded.size !== 1 ? 's' : ''} excluded
           </span>
           <div className="flex gap-3">
-            <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-            <button
+            <Button type="button" onClick={onCancel}>Cancel</Button>
+            <Button variant="primary"
               type="button"
-              className={styles.btnSubmit}
               onClick={handleSave}
             >
               Save Exclusions
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -650,56 +616,35 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
 
   return (
     <Modal title="Add Google Drive Folder" onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Folder ID</label>
-          <input
+        <Field label="Folder ID" hint="Find this in the folder URL after /folders/">
+          <Input
             type="text"
             value={formData.folder_id}
             onChange={e => setFormData({ ...formData, folder_id: e.target.value })}
             required
             placeholder="From Google Drive URL"
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>Find this in the folder URL after /folders/</p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Folder Name</label>
-          <input
+        <Field label="Folder Name">
+          <Input
             type="text"
             value={formData.folder_name}
             onChange={e => setFormData({ ...formData, folder_name: e.target.value })}
             required
             placeholder="My Documents"
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
+        <Field>
           <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={formData.recursive}
-                onChange={e => setFormData({ ...formData, recursive: e.target.checked })}
-                className="rounded border-slate-300"
-              />
-              Include subfolders
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={formData.include_shared}
-                onChange={e => setFormData({ ...formData, include_shared: e.target.checked })}
-                className="rounded border-slate-300"
-              />
-              Include shared files
-            </label>
+            <Checkbox checked={formData.recursive} onChange={e => setFormData({ ...formData, recursive: e.target.checked })} label="Include subfolders" />
+            <Checkbox checked={formData.include_shared} onChange={e => setFormData({ ...formData, include_shared: e.target.checked })} label="Include shared files" />
           </div>
-        </div>
+        </Field>
 
         <IntervalInput
           value={formData.check_interval}
@@ -707,21 +652,18 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
           label="Check interval"
         />
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Tags</label>
+        <Field label="Tags">
           <TagsInput
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formRow}>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Project</label>
-            <select
+        <FieldRow>
+          <Field label="Project" hint="Project for access control">
+            <Select
               value={formData.project_id || ''}
               onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-              className={styles.formSelect}
             >
               <option value="">None</option>
               {projects.map(project => (
@@ -729,31 +671,27 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
                   {project.title} ({project.repo_path})
                 </option>
               ))}
-            </select>
-            <p className={styles.formHint}>Project for access control</p>
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Sensitivity</label>
-            <select
+            </Select>
+          </Field>
+          <Field label="Sensitivity" hint="Visibility level for files from this folder">
+            <Select
               value={formData.sensitivity}
               onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
-              className={styles.formSelect}
             >
               <option value="public">Public</option>
               <option value="basic">Basic</option>
               <option value="internal">Internal</option>
               <option value="confidential">Confidential</option>
-            </select>
-            <p className={styles.formHint}>Visibility level for files from this folder</p>
-          </div>
-        </div>
+            </Select>
+          </Field>
+        </FieldRow>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Adding...' : 'Add Folder'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

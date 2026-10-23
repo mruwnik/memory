@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { styles } from '../styles'
+import { Button, Card, Field, Input, Notice } from '@/components/shared/ui'
 
 export const ForumsPanel = () => {
   const { apiCall } = useAuth()
@@ -51,61 +51,49 @@ export const ForumsPanel = () => {
   }
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Forums (LessWrong)</h3>
-      </div>
-
-      <div className={styles.configBox}>
+    <Card title="Forums (LessWrong)">
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
         <h4 className="font-medium text-slate-800 mb-2">Sync Settings</h4>
         <p className="text-sm text-slate-600 mb-4">
           Configure and trigger synchronization of posts from LessWrong. Posts matching your criteria will be indexed for search.
         </p>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Days Back</label>
-            <input
+          <Field label="Days Back">
+            <Input
               type="number"
               value={daysBack}
               onChange={e => setDaysBack(parseInt(e.target.value) || 30)}
               min={1}
               max={365}
-              className={styles.formInput}
             />
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Min Karma</label>
-            <input
+          </Field>
+          <Field label="Min Karma">
+            <Input
               type="number"
               value={minKarma}
               onChange={e => setMinKarma(parseInt(e.target.value) || 0)}
               min={0}
-              className={styles.formInput}
             />
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Posts per request</label>
-            <input
+          </Field>
+          <Field label="Posts per request">
+            <Input
               type="number"
               value={limit}
               onChange={e => setLimit(parseInt(e.target.value) || 50)}
               min={1}
               max={100}
-              className={styles.formInput}
             />
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Max Items</label>
-            <input
+          </Field>
+          <Field label="Max Items">
+            <Input
               type="number"
               value={maxItems}
               onChange={e => setMaxItems(parseInt(e.target.value) || 1000)}
               min={1}
               max={10000}
-              className={styles.formInput}
             />
-          </div>
+          </Field>
         </div>
 
         <div className="flex items-center gap-2 mb-4">
@@ -114,25 +102,23 @@ export const ForumsPanel = () => {
             id="af-only"
             checked={af}
             onChange={e => setAf(e.target.checked)}
-            className="rounded border-slate-300"
           />
           <label htmlFor="af-only" className="text-sm text-slate-700">
             Alignment Forum only
           </label>
         </div>
 
-        <button
-          className={styles.btnPrimary}
+        <Button variant="primary"
           onClick={handleSync}
           disabled={syncing}
         >
           {syncing ? 'Syncing...' : 'Sync LessWrong'}
-        </button>
+        </Button>
 
-        {syncError && <div className={`${styles.errorBanner} mt-4`}>{syncError}</div>}
-        {syncSuccess && <div className={`${styles.successBanner} mt-4`}>{syncSuccess}</div>}
+        {syncError && <Notice tone="error">{syncError}</Notice>}
+        {syncSuccess && <Notice tone="success">{syncSuccess}</Notice>}
       </div>
-    </div>
+    </Card>
   )
 }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import UserSelector, { SelectedUser, useUserSelection } from '../common/UserSelector'
 import { useAuth } from '../../hooks/useAuth'
 
@@ -30,15 +30,31 @@ import { PhotosPanel } from './panels/PhotosPanel'
 import { SecretsPanel } from './panels/SecretsPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
-type TabType = 'accounts' | 'email' | 'feeds' | 'github' | 'drive' | 'calendar' | 'transcripts' | 'books' | 'forums' | 'photos' | 'discord' | 'slack' | 'secrets'
+import { Page, Tabs } from '@/components/shared/ui'
 
-const validTabs: TabType[] = ['accounts', 'email', 'feeds', 'github', 'drive', 'calendar', 'transcripts', 'books', 'forums', 'photos', 'discord', 'slack', 'secrets']
+const TABS = [
+  { value: 'accounts', label: 'Accounts', panel: AccountsPanel },
+  { value: 'email', label: 'Email', panel: EmailPanel },
+  { value: 'feeds', label: 'RSS Feeds', panel: FeedsPanel },
+  { value: 'github', label: 'GitHub', panel: GitHubPanel },
+  { value: 'drive', label: 'Drive', panel: GoogleDrivePanel },
+  { value: 'calendar', label: 'Calendar', panel: CalendarPanel },
+  { value: 'transcripts', label: 'Transcripts', panel: TranscriptsPanel },
+  { value: 'books', label: 'Books', panel: BooksPanel },
+  { value: 'forums', label: 'Forums', panel: ForumsPanel },
+  { value: 'photos', label: 'Photos', panel: PhotosPanel },
+  { value: 'discord', label: 'Discord', panel: DiscordPanel },
+  { value: 'slack', label: 'Slack', panel: SlackPanel },
+  { value: 'secrets', label: 'Secrets', panel: SecretsPanel },
+] as const
+type TabType = typeof TABS[number]['value']
 
 const Sources = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
-  const initialTab = validTabs.includes(tabParam as TabType) ? (tabParam as TabType) : 'accounts'
+  const initialTab = TABS.find(t => t.value === tabParam)?.value ?? 'accounts'
   const [activeTab, setActiveTab] = useState<TabType>(initialTab)
+  const ActivePanel = TABS.find(t => t.value === activeTab)!.panel
   const [selectedUser, setSelectedUser] = useUserSelection('sourcesSelectedUser')
   const { hasScope } = useAuth()
 
@@ -57,82 +73,16 @@ const Sources = () => {
     }
   }, [activeTab, setSearchParams])
 
-  const tabClass = (tab: TabType) =>
-    `py-2 px-4 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
-      activeTab === tab
-        ? 'border-primary text-primary bg-white'
-        : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
-    }`
-
   return (
     <SourcesContext.Provider value={{ selectedUser, userId }}>
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-        <div className="flex items-center gap-4 mb-6">
-          <Link to="/ui/dashboard" className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg text-sm hover:bg-slate-200">Back</Link>
-          <h2 className="text-2xl font-semibold text-slate-800 flex-1">Manage Sources</h2>
-          {isAdmin && (
-            <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />
-          )}
-        </div>
-
-      <div className="flex flex-wrap gap-1 border-b border-slate-200 mb-6">
-        <button className={tabClass('accounts')} onClick={() => setActiveTab('accounts')}>
-          Accounts
-        </button>
-        <button className={tabClass('email')} onClick={() => setActiveTab('email')}>
-          Email
-        </button>
-        <button className={tabClass('feeds')} onClick={() => setActiveTab('feeds')}>
-          RSS Feeds
-        </button>
-        <button className={tabClass('github')} onClick={() => setActiveTab('github')}>
-          GitHub
-        </button>
-        <button className={tabClass('drive')} onClick={() => setActiveTab('drive')}>
-          Drive
-        </button>
-        <button className={tabClass('calendar')} onClick={() => setActiveTab('calendar')}>
-          Calendar
-        </button>
-        <button className={tabClass('transcripts')} onClick={() => setActiveTab('transcripts')}>
-          Transcripts
-        </button>
-        <button className={tabClass('books')} onClick={() => setActiveTab('books')}>
-          Books
-        </button>
-        <button className={tabClass('forums')} onClick={() => setActiveTab('forums')}>
-          Forums
-        </button>
-        <button className={tabClass('photos')} onClick={() => setActiveTab('photos')}>
-          Photos
-        </button>
-        <button className={tabClass('discord')} onClick={() => setActiveTab('discord')}>
-          Discord
-        </button>
-        <button className={tabClass('slack')} onClick={() => setActiveTab('slack')}>
-          Slack
-        </button>
-        <button className={tabClass('secrets')} onClick={() => setActiveTab('secrets')}>
-          Secrets
-        </button>
-      </div>
-
-      <div className="space-y-6">
-        {activeTab === 'accounts' && <AccountsPanel />}
-        {activeTab === 'email' && <EmailPanel />}
-        {activeTab === 'feeds' && <FeedsPanel />}
-        {activeTab === 'github' && <GitHubPanel />}
-        {activeTab === 'drive' && <GoogleDrivePanel />}
-        {activeTab === 'calendar' && <CalendarPanel />}
-        {activeTab === 'transcripts' && <TranscriptsPanel />}
-        {activeTab === 'books' && <BooksPanel />}
-        {activeTab === 'forums' && <ForumsPanel />}
-        {activeTab === 'photos' && <PhotosPanel />}
-        {activeTab === 'discord' && <DiscordPanel />}
-        {activeTab === 'slack' && <SlackPanel />}
-        {activeTab === 'secrets' && <SecretsPanel />}
-      </div>
-      </div>
+      <Page
+        title="Manage Sources"
+        actions={isAdmin && <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />}
+        width="wide"
+      >
+        <Tabs label="Source types" options={[...TABS]} value={activeTab} onChange={setActiveTab} />
+        <ActivePanel />
+      </Page>
     </SourcesContext.Provider>
   )
 }

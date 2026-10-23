@@ -10,6 +10,7 @@ import {
   Cell,
 } from 'recharts'
 import { ToolUsageResponse, ToolCallStats } from '@/hooks/useTelemetry'
+import { Select } from '@/components/shared/ui'
 
 type MetricType = 'total' | 'median' | 'p75' | 'p90' | 'p99' | 'min' | 'max'
 
@@ -70,17 +71,16 @@ export const ToolBreakdownChart: React.FC<ToolBreakdownChartProps> = ({ data }) 
   return (
     <div>
       <div className="flex justify-end mb-3">
-        <select
+        <Select
           value={metric}
           onChange={(e) => setMetric(e.target.value as MetricType)}
-          className="text-sm border border-slate-200 rounded-md px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/50"
         >
           {(Object.keys(metricLabels) as MetricType[]).map((key) => (
             <option key={key} value={key}>
               {metricLabels[key]}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
       <ResponsiveContainer width="100%" height={Math.max(250, chartData.length * 32)}>
       <BarChart

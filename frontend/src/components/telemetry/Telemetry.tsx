@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import {
   useTelemetry,
   TelemetryMetricsResponse,
@@ -16,6 +15,7 @@ import { RecentEventsTable } from './RecentEventsTable'
 import { ToolBreakdownChart } from './ToolBreakdownChart'
 import { SessionBreakdownChart } from './SessionBreakdownChart'
 import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
+import { Button, Card, Notice, Page, ToggleGroup } from '@/components/shared/ui'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 
@@ -106,35 +106,30 @@ const Telemetry: React.FC = () => {
   const eventCount = recentEvents?.total ?? 0
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex flex-wrap items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <div className="flex items-center gap-4 flex-1">
-          <Link to="/ui/dashboard" className="text-primary hover:underline">&larr; Dashboard</Link>
-          <h1 className="text-2xl font-semibold text-slate-800">Claude Code Telemetry</h1>
-        </div>
+    <Page
+      title="Claude Code Telemetry"
+      actions={<>
         <div className="flex flex-wrap items-center gap-3">
           <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithTelemetry} />
           <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-          <button
+          <Button variant="primary"
             onClick={loadData}
-            className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary-dark disabled:bg-slate-400"
+
             disabled={loading}
           >
             {loading ? 'Loading...' : 'Refresh'}
-          </button>
+          </Button>
           {lastRefresh && (
             <span className="text-sm text-slate-500">
               Updated {formatTimestamp(lastRefresh.toISOString())}
             </span>
           )}
         </div>
-      </header>
-
+      </>}
+      width="wide"
+    >
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-6 flex justify-between items-center">
-          <p>{error}</p>
-          <button onClick={loadData} className="text-primary hover:underline">Retry</button>
-        </div>
+        <Notice tone="error" onRetry={loadData}>{error}</Notice>
       )}
 
       {loading && !tokenUsage && (
@@ -155,49 +150,43 @@ const Telemetry: React.FC = () => {
           </section>
 
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Token Usage</h3>
+            <Card title="Token Usage">
               <TokenUsageChart data={tokenUsage} />
-            </div>
+            </Card>
 
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Cost Over Time</h3>
+            <Card title="Cost Over Time">
               <CostChart data={costUsage} />
-            </div>
+            </Card>
           </section>
 
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Session Activity</h3>
+            <Card title="Session Activity">
               <SessionActivityChart data={sessionActivity} />
-            </div>
+            </Card>
 
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Recent Events</h3>
+            <Card title="Recent Events">
               <RecentEventsTable events={recentEvents?.events ?? []} />
-            </div>
+            </Card>
           </section>
 
           <section className="mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Token Usage by Tool</h3>
+            <Card title="Token Usage by Tool">
               <ToolBreakdownChart data={toolUsage} />
-            </div>
+            </Card>
           </section>
 
           <section className="mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Session Breakdown</h3>
+            <Card title="Session Breakdown">
               <p className="text-sm text-slate-500 mb-4">
                 Token consumption by individual session. Sessions are categorized by usage volume:
                 high (top 20%), medium (next 30%), and low (bottom 50%).
               </p>
               <SessionBreakdownChart data={sessionStats} />
-            </div>
+            </Card>
           </section>
         </>
       )}
-    </div>
+    </Page>
   )
 }
 
@@ -214,23 +203,7 @@ const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({ value, onChange }
     { value: '7d', label: '7 Days' },
   ]
 
-  return (
-    <div className="flex gap-1">
-      {ranges.map(range => (
-        <button
-          key={range.value}
-          className={`py-1.5 px-3 rounded text-sm font-medium transition-colors ${
-            value === range.value
-              ? 'bg-primary text-white'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
-          onClick={() => onChange(range.value)}
-        >
-          {range.label}
-        </button>
-      ))}
-    </div>
-  )
+  return <ToggleGroup label="Time range" options={ranges} value={value} onChange={onChange} />
 }
 
 const formatTimestamp = (isoString: string): string => {

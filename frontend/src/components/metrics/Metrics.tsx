@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import {
   useMetrics,
   MetricsSummaryResponse,
@@ -13,6 +12,7 @@ import { SummaryCards } from './SummaryCards'
 import { SystemHealthChart } from './SystemHealthChart'
 import { TaskDurationChart } from './TaskDurationChart'
 import { McpUsageChart } from './McpUsageChart'
+import { Button, Card, Notice, Page, ToggleGroup } from '@/components/shared/ui'
 
 // System metrics are sampled minutely - 7 days max keeps memory reasonable
 const SYSTEM_METRICS_MAX_HOURS = 168
@@ -100,35 +100,30 @@ const Metrics: React.FC = () => {
     : 0
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex flex-wrap items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <div className="flex items-center gap-4 flex-1">
-          <Link to="/ui/dashboard" className="text-primary hover:underline">&larr; Dashboard</Link>
-          <h1 className="text-2xl font-semibold text-slate-800">System Metrics</h1>
-        </div>
+    <Page
+      title="System Metrics"
+      actions={<>
         <div className="flex flex-wrap items-center gap-3">
           <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
           <RefreshIntervalSelector value={refreshInterval} onChange={setRefreshInterval} />
-          <button
+          <Button variant="primary"
             onClick={loadData}
-            className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary-dark disabled:bg-slate-400"
+
             disabled={loading}
           >
             {loading ? 'Loading...' : 'Refresh'}
-          </button>
+          </Button>
           {lastRefresh && (
             <span className="text-sm text-slate-500">
               Updated {formatTimestamp(lastRefresh.toISOString())}
             </span>
           )}
         </div>
-      </header>
-
+      </>}
+      width="wide"
+    >
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-6 flex justify-between items-center">
-          <p>{error}</p>
-          <button onClick={loadData} className="text-primary hover:underline">Retry</button>
-        </div>
+        <Notice tone="error" onRetry={loadData}>{error}</Notice>
       )}
 
       {loading && !summary && (
@@ -149,36 +144,31 @@ const Metrics: React.FC = () => {
           </section>
 
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-md lg:col-span-2">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">System Health</h3>
+            <Card title="System Health" className="lg:col-span-2">
               {systemData && <SystemHealthChart data={systemData} />}
-            </div>
+            </Card>
 
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Task Performance</h3>
+            <Card title="Task Performance">
               {summary && <TaskDurationChart data={summary.metrics.filter(m => m.metric_type === 'task')} />}
-            </div>
+            </Card>
 
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">MCP Tool Usage</h3>
+            <Card title="MCP Tool Usage">
               {summary && <McpUsageChart data={summary.metrics.filter(m => m.metric_type === 'mcp_call')} />}
-            </div>
+            </Card>
           </section>
 
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Recent Task Executions</h3>
+            <Card title="Recent Task Executions">
               <TaskTable events={taskData?.events ?? []} />
-            </div>
+            </Card>
 
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Recent MCP Calls</h3>
+            <Card title="Recent MCP Calls">
               <McpTable events={mcpData?.events ?? []} />
-            </div>
+            </Card>
           </section>
         </>
       )}
-    </div>
+    </Page>
   )
 }
 
@@ -196,23 +186,7 @@ const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({ value, onChange }
     { value: '7d', label: '7 Days' },
   ]
 
-  return (
-    <div className="flex gap-1">
-      {ranges.map(range => (
-        <button
-          key={range.value}
-          className={`py-1.5 px-3 rounded text-sm font-medium transition-colors ${
-            value === range.value
-              ? 'bg-primary text-white'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
-          onClick={() => onChange(range.value)}
-        >
-          {range.label}
-        </button>
-      ))}
-    </div>
-  )
+  return <ToggleGroup label="Time range" options={ranges} value={value} onChange={onChange} />
 }
 
 // Refresh interval selector component
@@ -231,21 +205,9 @@ const RefreshIntervalSelector: React.FC<RefreshIntervalSelectorProps> = ({ value
   ]
 
   return (
-    <div className="flex items-center gap-1">
-      <span className="text-sm text-slate-500 mr-1">Auto:</span>
-      {intervals.map(interval => (
-        <button
-          key={interval.value}
-          className={`py-1.5 px-2 rounded text-sm font-medium transition-colors ${
-            value === interval.value
-              ? 'bg-primary text-white'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-          }`}
-          onClick={() => onChange(interval.value)}
-        >
-          {interval.label}
-        </button>
-      ))}
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-slate-600">Auto:</span>
+      <ToggleGroup label="Auto refresh" options={intervals} value={value} onChange={onChange} />
     </div>
   )
 }

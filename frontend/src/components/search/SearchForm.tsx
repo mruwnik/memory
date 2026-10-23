@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { DynamicFilters } from './DynamicFilters'
 import { SelectableTags } from './SelectableTags'
 import { CollectionMetadata } from '@/types/mcp'
+import { Button, Checkbox, Field, Input, MultiSelect } from '@/components/shared/ui'
 
 type Filter = {
     tags?: string[]
@@ -101,82 +102,33 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     return (
         <form onSubmit={handleSubmit} className="bg-white p-8 rounded-xl shadow-md mb-8">
             <div className="flex gap-4 items-center mb-6">
-                <input
+                <Input
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search your knowledge base..."
-                    className="flex-1 py-3 px-4 border border-slate-200 rounded-lg text-base transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    className="flex-1 text-base"
                     required
                 />
-                <button
+                <Button variant="primary"
                     type="submit"
                     disabled={isLoading}
-                    className="bg-primary text-white border-none py-3 px-6 rounded-lg text-base font-medium cursor-pointer transition-colors hover:bg-primary-dark disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
                     {isLoading ? 'Searching...' : 'Search'}
-                </button>
+                </Button>
             </div>
 
             <div className="space-y-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={previews}
-                        onChange={(e) => setPreviews(e.target.checked)}
-                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                    />
-                    Include content previews
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={useScores}
-                        onChange={(e) => setUseScores(e.target.checked)}
-                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                    />
-                    Score results with a LLM before returning
-                </label>
+                <Checkbox checked={previews} onChange={(e) => setPreviews(e.target.checked)} label="Include content previews" />
+                <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with a LLM before returning" />
 
                 <details className="border border-slate-200 rounded-lg p-4">
                     <summary className="cursor-pointer font-medium text-slate-700">Search Enhancements</summary>
                     <div className="mt-4 space-y-3 pl-4">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useBm25}
-                                onChange={(e) => setUseBm25(e.target.checked)}
-                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                            />
-                            BM25 keyword search
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useHyde}
-                                onChange={(e) => setUseHyde(e.target.checked)}
-                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                            />
-                            HyDE (hypothetical document expansion)
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useReranking}
-                                onChange={(e) => setUseReranking(e.target.checked)}
-                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                            />
-                            Reranking (cross-encoder)
-                        </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={useQueryAnalysis}
-                                onChange={(e) => setUseQueryAnalysis(e.target.checked)}
-                                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-                            />
-                            Query analysis (LLM-based)
-                        </label>
+                        <Checkbox checked={useBm25} onChange={(e) => setUseBm25(e.target.checked)} label="BM25 keyword search" />
+                        <Checkbox checked={useHyde} onChange={(e) => setUseHyde(e.target.checked)} label="HyDE (hypothetical document expansion)" />
+                        <Checkbox checked={useReranking} onChange={(e) => setUseReranking(e.target.checked)} label="Reranking (cross-encoder)" />
+                        <Checkbox checked={useQueryAnalysis} onChange={(e) => setUseQueryAnalysis(e.target.checked)} label="Query analysis (LLM-based)" />
                     </div>
                 </details>
 
@@ -187,13 +139,14 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                     onBatchUpdate={(updates) => setModalities(updates)}
                 />
 
-                <SelectableTags
-                    title="Tags"
-                    tags={tags}
-                    onSelect={(tag, selected) => setTags({ ...tags, [tag]: selected })}
-                    onBatchUpdate={(updates) => setTags(updates)}
-                    searchable={true}
-                />
+                <Field label="Tags">
+                    <MultiSelect
+                        options={Object.keys(tags)}
+                        value={Object.keys(tags).filter(t => tags[t])}
+                        onChange={selected => setTags(Object.fromEntries(Object.keys(tags).map(t => [t, selected.includes(t)])))}
+                        placeholder="Any tag"
+                    />
+                </Field>
 
                 <DynamicFilters
                     schemas={schemas}
@@ -202,9 +155,8 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                     onFilterChange={handleFilterChange}
                 />
 
-                <label className="flex items-center gap-2">
-                    Max Results:
-                    <input
+                <Field label="Max results">
+                    <Input
                         type="number"
                         value={limit}
                         onChange={(e) => {
@@ -217,9 +169,9 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                         onFocus={(e) => e.target.select()}
                         min={1}
                         max={100}
-                        className="w-20 py-1 px-2 border border-slate-200 rounded text-sm"
+                        className="w-24"
                     />
-                </label>
+                </Field>
             </div>
         </form>
     )

@@ -3,13 +3,8 @@ import { Link } from 'react-router-dom'
 import { usePolls } from '../../hooks/usePolls'
 import type { Poll, PollStatus } from '../../hooks/usePolls'
 import { formatShortDate } from '../../utils/timezones'
-
-const STATUS_COLORS: Record<string, string> = {
-  open: 'bg-green-100 text-green-700',
-  closed: 'bg-slate-100 text-slate-600',
-  finalized: 'bg-blue-100 text-blue-700',
-  cancelled: 'bg-red-100 text-red-600',
-}
+import { Button, ButtonLink, Card, LoadingState, Notice, Page, Select } from '@/components/shared/ui'
+import { PollStatusBadge } from './PollStatusBadge'
 
 export const PollList: React.FC = () => {
   const { listPolls, deletePoll } = usePolls()
@@ -51,59 +46,53 @@ export const PollList: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-semibold text-slate-800">Availability Polls</h1>
-          <Link
-            to="/ui/polls/new"
-            className="bg-primary text-white py-2 px-4 rounded-lg font-medium hover:bg-primary-dark"
-          >
-            Create New Poll
-          </Link>
-        </div>
-
+    <Page
+      title="Availability Polls"
+      actions={<ButtonLink variant="primary" to="/ui/polls/new">Create New Poll</ButtonLink>}
+      width="narrow"
+    >
         <div className="mb-6">
-          <select
+          <Select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as PollStatus | '')}
-            className="py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white min-w-[140px]"
+            className="w-auto"
+            aria-label="Status"
           >
-            <option value="">All Status</option>
+            <option value="">All statuses</option>
             <option value="open">Open</option>
             <option value="closed">Closed</option>
             <option value="finalized">Finalized</option>
-          </select>
+          </Select>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-4">
+          <Notice tone="error" className="mb-4">
             {error}
-          </div>
+          </Notice>
         )}
 
         {loading ? (
-          <div className="text-center py-8 text-slate-500">Loading polls...</div>
+          <LoadingState message="Loading polls..." />
         ) : polls.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-xl shadow-sm">
+          <Card flush className="text-center py-12">
             <p className="text-slate-500 mb-4">
               {statusFilter ? `No ${statusFilter} polls found.` : "You haven't created any polls yet."}
             </p>
             {!statusFilter && (
-              <Link
+              <ButtonLink variant="primary"
                 to="/ui/polls/new"
-                className="inline-block bg-primary text-white py-2 px-4 rounded-lg font-medium hover:bg-primary-dark"
+                className="inline-block"
               >
                 Create Your First Poll
-              </Link>
+              </ButtonLink>
             )}
-          </div>
+          </Card>
         ) : (
           <div className="space-y-4">
             {polls.map((poll) => (
-              <div
+              <Card flush
                 key={poll.id}
-                className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow"
+                className="p-5 hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between mb-2">
                   <h3 className="font-semibold text-slate-800">
@@ -114,9 +103,7 @@ export const PollList: React.FC = () => {
                       {poll.title}
                     </Link>
                   </h3>
-                  <span className={`px-2 py-1 rounded text-xs font-medium capitalize ${STATUS_COLORS[poll.status] || 'bg-slate-100 text-slate-600'}`}>
-                    {poll.status}
-                  </span>
+                  <PollStatusBadge status={poll.status} />
                 </div>
 
                 {poll.description && (
@@ -139,61 +126,55 @@ export const PollList: React.FC = () => {
                 )}
 
                 <div className="flex gap-2 flex-wrap">
-                  <Link
+                  <ButtonLink size="sm"
                     to={`/ui/polls/results/${poll.slug}`}
-                    className="py-1.5 px-3 bg-slate-100 text-slate-700 rounded text-sm hover:bg-slate-200"
                   >
                     View Results
-                  </Link>
-                  <Link
+                  </ButtonLink>
+                  <ButtonLink size="sm"
                     to={`/ui/polls/edit/${poll.slug}`}
-                    className="py-1.5 px-3 border border-slate-200 text-slate-600 rounded text-sm hover:bg-slate-50"
                   >
                     Edit
-                  </Link>
-                  <Link
+                  </ButtonLink>
+                  <ButtonLink size="sm"
                     to={`/ui/polls/respond/${poll.slug}`}
-                    className="py-1.5 px-3 border border-slate-200 text-slate-600 rounded text-sm hover:bg-slate-50"
                   >
                     Share
-                  </Link>
+                  </ButtonLink>
 
                   {deleteConfirmId === poll.id ? (
                     <div className="flex items-center gap-2 ml-auto">
                       <span className="text-sm text-slate-600">Delete?</span>
-                      <button
+                      <Button variant="dangerSolid" size="sm"
                         type="button"
-                        className="py-1.5 px-3 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:bg-slate-300"
                         onClick={() => handleDelete(poll.id)}
                         disabled={actionLoading === poll.id}
                       >
                         {actionLoading === poll.id ? '...' : 'Yes'}
-                      </button>
-                      <button
+                      </Button>
+                      <Button size="sm"
                         type="button"
-                        className="py-1.5 px-3 bg-slate-100 text-slate-700 rounded text-sm hover:bg-slate-200"
                         onClick={() => setDeleteConfirmId(null)}
                       >
                         No
-                      </button>
+                      </Button>
                     </div>
                   ) : (
-                    <button
+                    <Button variant="danger" size="sm"
                       type="button"
-                      className="py-1.5 px-3 border border-red-200 text-red-600 rounded text-sm hover:bg-red-50 ml-auto"
+                      className="ml-auto"
                       onClick={() => setDeleteConfirmId(poll.id)}
                       title="Delete poll"
                     >
                       Delete
-                    </button>
+                    </Button>
                   )}
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
         )}
-      </div>
-    </div>
+      </Page>
   )
 }
 

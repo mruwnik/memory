@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import { usePeople, type Person, type PersonCreate, type PersonUpdate, type Tidbit } from '../../hooks/usePeople'
 import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
+import { Button, Card, Field, Input, Label, Modal, MultiSelect, Notice, Page } from '@/components/shared/ui'
 
 const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople } = usePeople()
@@ -159,14 +159,6 @@ const PeopleManagement = () => {
     }
   }
 
-  const toggleTagFilter = (tag: string) => {
-    setTagFilter(prev =>
-      prev.includes(tag)
-        ? prev.filter(t => t !== tag)
-        : [...prev, tag]
-    )
-  }
-
   const toggleMergeSelection = (identifier: string) => {
     setSelectedForMerge(prev => {
       const next = new Set(prev)
@@ -244,26 +236,14 @@ const PeopleManagement = () => {
   }
 
   if (loading && people.length === 0) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-8 flex items-center justify-center">
-        <p className="text-slate-500">Loading...</p>
-      </div>
-    )
+    return <Page title="People" width="narrow" loading />
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <header className="flex items-center gap-4 mb-8 pb-4 border-b border-slate-200">
-          <Link
-            to="/ui/dashboard"
-            className="bg-slate-100 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-200 transition-colors"
-          >
-            &larr; Back
-          </Link>
-          <h1 className="text-2xl font-semibold text-slate-800 flex-1">People</h1>
-
+    <>
+      <Page
+        title="People"
+        actions={<>
           {/* Merge controls */}
           {selectedForMerge.size > 0 && (
             <div className="flex items-center gap-2">
@@ -292,38 +272,33 @@ const PeopleManagement = () => {
               )}
             </div>
           )}
-
-          <button
+          <Button variant="primary"
             onClick={() => setShowCreateModal(true)}
-            className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
+
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
             Add Person
-          </button>
-        </header>
+          </Button>
+        </>}
+        width="narrow"
+      >
 
         {/* Error message */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg">
-            {error}
-            <button onClick={() => setError(null)} className="ml-4 underline">
-              Dismiss
-            </button>
-          </div>
+          <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
         )}
 
         {/* Search and filters */}
         <div className="mb-6 space-y-4">
           <div className="flex gap-4">
             <div className="flex-1">
-              <input
+              <Input
                 type="text"
                 placeholder="Search by name, alias, or notes..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full py-2 px-4 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
 
@@ -391,71 +366,29 @@ const PeopleManagement = () => {
               </div>
             )}
 
-            <button
+            <Button
               onClick={loadPeople}
               disabled={loading}
-              className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors disabled:opacity-50"
             >
               {loading ? 'Loading...' : 'Refresh'}
-            </button>
+            </Button>
           </div>
 
-          {/* Tag filters - collapsible */}
           {allTags.length > 0 && (
-            <details className="group">
-              <summary className="text-sm text-slate-500 cursor-pointer hover:text-slate-700 select-none list-none flex items-center gap-2">
-                <svg
-                  className="w-4 h-4 transition-transform group-open:rotate-90"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-                <span className="flex items-center gap-2">
-                  Filter by tag
-                  {tagFilter.length > 0 && (
-                    <span className="bg-primary text-white text-xs px-2 py-0.5 rounded-full">
-                      {tagFilter.length} selected
-                    </span>
-                  )}
-                </span>
-              </summary>
-              <div className="flex flex-wrap gap-2 mt-3 pl-6">
-                {allTags.map(tag => (
-                  <button
-                    key={tag}
-                    onClick={() => toggleTagFilter(tag)}
-                    className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                      tagFilter.includes(tag)
-                        ? 'bg-primary text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    {tag}
-                  </button>
-                ))}
-                {tagFilter.length > 0 && (
-                  <button
-                    onClick={() => setTagFilter([])}
-                    className="px-3 py-1 rounded-full text-sm text-slate-500 hover:text-slate-700 underline"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </details>
+            <Field label="Filter by tag" className="max-w-md">
+              <MultiSelect options={allTags} value={tagFilter} onChange={setTagFilter} placeholder="Any tag" />
+            </Field>
           )}
         </div>
 
         {/* People list */}
         <div className="space-y-4">
           {people.length === 0 ? (
-            <div className="bg-white rounded-xl shadow-md p-8 text-center text-slate-500">
+            <Card className="text-center text-slate-500">
               {searchTerm || tagFilter.length > 0
                 ? 'No people found matching your search.'
                 : 'No people tracked yet. Add your first person above.'}
-            </div>
+            </Card>
           ) : (
             people.map((person) => (
               <div key={person.identifier} className="flex items-start gap-3">
@@ -465,7 +398,7 @@ const PeopleManagement = () => {
                     type="checkbox"
                     checked={selectedForMerge.has(person.identifier)}
                     onChange={() => toggleMergeSelection(person.identifier)}
-                    className="w-4 h-4 rounded border-slate-300 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                    className="text-purple-600 cursor-pointer"
                     title="Select for merge"
                   />
                 </div>
@@ -493,7 +426,7 @@ const PeopleManagement = () => {
             Showing {people.length} {people.length === 1 ? 'person' : 'people'}
           </div>
         )}
-      </div>
+      </Page>
 
       {/* Create Person Modal */}
       {showCreateModal && (
@@ -529,49 +462,40 @@ const PeopleManagement = () => {
 
       {/* Delete Confirmation Modal */}
       {deletingPerson && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Delete Person</h3>
-
-            <p className="text-sm text-slate-600 mb-4">
+        <Modal title="Delete Person" onClose={() => setDeletingPerson(null)} size="md">
+          <p className="text-sm text-slate-600 mb-4">
               Are you sure you want to delete <strong>{deletingPerson.display_name}</strong>? This action cannot
               be undone.
             </p>
 
             <div className="flex justify-end gap-3">
-              <button
+              <Button
                 onClick={() => setDeletingPerson(null)}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="dangerSolid"
                 onClick={handleDelete}
                 disabled={deleteLoading}
-                className="bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 disabled:bg-slate-400 transition-colors"
               >
                 {deleteLoading ? 'Deleting...' : 'Delete Person'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Merge Modal */}
       {showMergeModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg m-4">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Merge People</h3>
-
-            <p className="text-sm text-slate-600 mb-4">
+        <Modal title="Merge People" onClose={() => setShowMergeModal(false)}>
+          <p className="text-sm text-slate-600 mb-4">
               Merge {selectedForMerge.size} people into one. All tidbits, team memberships, and other
               associations will be moved to the primary person. The other records will be deleted.
             </p>
 
             <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <Label className="mb-2">
                 Select primary person (to keep):
-              </label>
+              </Label>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {Array.from(selectedForMerge).map(identifier => {
                   const person = people.find(p => p.identifier === identifier)
@@ -589,7 +513,7 @@ const PeopleManagement = () => {
                         name="primary"
                         checked={mergePrimaryId === identifier}
                         onChange={() => setMergePrimaryId(identifier)}
-                        className="text-purple-600 focus:ring-purple-500"
+                        className="text-purple-600"
                       />
                       <div>
                         <div className="font-medium text-slate-800">
@@ -603,7 +527,7 @@ const PeopleManagement = () => {
               </div>
             </div>
 
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+            <Notice tone="warning" className="mb-4">
               <div className="flex items-start gap-2">
                 <svg className="w-5 h-5 text-amber-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -613,27 +537,24 @@ const PeopleManagement = () => {
                   Their identifiers and names will be preserved as aliases on the primary person.
                 </div>
               </div>
-            </div>
+            </Notice>
 
             <div className="flex justify-end gap-3">
-              <button
+              <Button
                 onClick={() => setShowMergeModal(false)}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 onClick={handleMerge}
                 disabled={mergeLoading || !mergePrimaryId}
-                className="bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 disabled:bg-slate-400 transition-colors"
               >
                 {mergeLoading ? 'Merging...' : 'Merge People'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
-    </div>
+    </>
   )
 }
 

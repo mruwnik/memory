@@ -88,7 +88,7 @@ describe('UserSettings load states', () => {
     })
     renderWithRouter(<UserSettings />)
     expect(await screen.findByText('Failed to fetch current user')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })
 

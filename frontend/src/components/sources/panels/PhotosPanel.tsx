@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useSources } from '@/hooks/useSources'
-import { EmptyState, LoadingState, ErrorState, ConfirmDialog } from '../shared'
-import { styles } from '../styles'
+import { Button, Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, buttonClass } from '@/components/shared/ui'
 
 interface Photo {
   id: number
@@ -106,12 +105,9 @@ export const PhotosPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadPhotos} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Photos</h3>
-        <div className="flex items-center gap-3">
+    <Card title="Photos" actions={<><div className="flex items-center gap-3">
           <span className="text-sm text-slate-500">{photos.length} photos</span>
-          <label className={`${styles.btnUpload} ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+          <label className={buttonClass('secondary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
             {uploading ? 'Uploading...' : 'Upload Photos'}
             <input
               ref={fileInputRef}
@@ -123,11 +119,10 @@ export const PhotosPanel = () => {
               className="hidden"
             />
           </label>
-        </div>
-      </div>
+        </div></>}>
 
-      {uploadError && <div className={styles.errorBanner}>{uploadError}</div>}
-      {uploadSuccess && <div className={styles.successBanner}>{uploadSuccess}</div>}
+      {uploadError && <Notice tone="error">{uploadError}</Notice>}
+      {uploadSuccess && <Notice tone="success">{uploadSuccess}</Notice>}
 
       {photos.length === 0 ? (
         <EmptyState
@@ -149,16 +144,16 @@ export const PhotosPanel = () => {
                   />
                 </div>
               )}
-              <button
+              <Button variant="dangerSolid"
                 onClick={() => setPhotoToDelete(photo)}
-                className="absolute top-1 right-1 p-1 bg-black/50 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                className="absolute top-1 right-1 group-hover:opacity-100"
                 title="Delete photo"
                 aria-label="Delete photo"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </Button>
               <div className="p-2">
                 <span className="text-xs text-slate-700 truncate block" title={photo.filename}>
                   {photo.filename}
@@ -180,7 +175,7 @@ export const PhotosPanel = () => {
           onCancel={() => setPhotoToDelete(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { renderWithUser, screen } from '@/test/utils'
+import { renderWithRouter, screen, within } from '@/test/utils'
 import { SpecEditor } from './SpecEditor'
 import { defaultSpec, type Catalog, type ExternalServer } from '@/hooks/useAgents'
 
@@ -44,30 +44,30 @@ const withServer = (s: ExternalServer): Catalog => ({ ...catalog, mcp_servers: [
 
 describe('SpecEditor', () => {
   it('only offers the reasoning levels the model supports', () => {
-    renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-opus-5-5')} catalog={catalog} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-opus-5-5')} catalog={catalog} onChange={vi.fn()} />)
     const options = Array.from(screen.getByLabelText('Reasoning').querySelectorAll('option')).map(o => o.textContent)
     expect(options).toEqual(['low', 'medium', 'high'])
   })
 
   it('disables temperature when the model forbids sampling', () => {
-    renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.getByLabelText('Temperature')).toBeDisabled()
   })
 
   it('leaves max output tokens to the run by default', () => {
-    renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.getByLabelText('Max output tokens')).toHaveValue(null)
   })
 
   it('marks tools with side effects', () => {
-    renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.getByText('discord_send_message').closest('label')).toHaveTextContent('side effects')
     expect(screen.getByText('core_search').closest('label')).not.toHaveTextContent('side effects')
   })
 
   it('adds a selected tool to the spec', async () => {
     const onChange = vi.fn()
-    const { user } = renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={onChange} />)
+    const { user } = renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={onChange} />)
     await user.click(screen.getByLabelText(/core_search/))
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ tools: ['core_search'] }))
   })
@@ -75,14 +75,14 @@ describe('SpecEditor', () => {
   it('fits reasoning to the new model when the model changes', async () => {
     const onChange = vi.fn()
     const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), reasoning: 'off' as const }
-    const { user } = renderWithUser(<SpecEditor value={spec} catalog={catalog} onChange={onChange} />)
+    const { user } = renderWithRouter(<SpecEditor value={spec} catalog={catalog} onChange={onChange} />)
     await user.selectOptions(screen.getByLabelText('Model'), 'anthropic/claude-opus-5-5')
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'anthropic/claude-opus-5-5', reasoning: 'medium' }))
   })
 
   it('reports JSON that does not parse', async () => {
     const onValidityChange = vi.fn()
-    const { user } = renderWithUser(
+    const { user } = renderWithRouter(
       <SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} onValidityChange={onValidityChange} />,
     )
     await user.type(screen.getByLabelText('Result schema (JSON, optional)'), '{{{{')
@@ -92,7 +92,7 @@ describe('SpecEditor', () => {
 
   it('adds an external tool under its server', async () => {
     const onChange = vi.fn()
-    const { user } = renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={onChange} />)
+    const { user } = renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={onChange} />)
     await user.click(screen.getByLabelText(/list_issues/))
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ mcp_servers: [{ server_id: 3, tools: ['list_issues'] }] }))
   })
@@ -100,19 +100,19 @@ describe('SpecEditor', () => {
   it('drops a server once none of its tools are selected', async () => {
     const onChange = vi.fn()
     const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), mcp_servers: [{ server_id: 3, tools: ['list_issues'] }] }
-    const { user } = renderWithUser(<SpecEditor value={spec} catalog={catalog} onChange={onChange} />)
+    const { user } = renderWithRouter(<SpecEditor value={spec} catalog={catalog} onChange={onChange} />)
     await user.click(screen.getByLabelText(/list_issues/))
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ mcp_servers: [] }))
   })
 
   it('never offers agent_* tools', () => {
-    renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.getByLabelText(/agent_spawn/)).toBeDisabled()
   })
 
   it('warns when a selected server is not connected', () => {
     const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), mcp_servers: [{ server_id: 3, tools: ['list_issues'] }] }
-    renderWithUser(<SpecEditor value={spec} catalog={withServer(server({ status: 'needs_reauth' }))} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={spec} catalog={withServer(server({ status: 'needs_reauth' }))} onChange={vi.fn()} />)
     expect(screen.getByText(/fail until it is connected/)).toBeInTheDocument()
   })
 
@@ -123,7 +123,42 @@ describe('SpecEditor', () => {
     [['web_fetch'], ['list_issues'], false],
   ])('warns about exfiltration only with private data and a way out (%j, %j)', (tools, external, warned) => {
     const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), tools, mcp_servers: [{ server_id: 3, tools: external }] }
-    renderWithUser(<SpecEditor value={spec} catalog={catalog} onChange={vi.fn()} />)
+    renderWithRouter(<SpecEditor value={spec} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.queryByRole('alert') !== null).toBe(warned)
+  })
+
+  const finishSpec = (finish: { mode: 'answer' | 'tool'; tools: string[] }) => ({
+    ...defaultSpec('anthropic/claude-sonnet-5-5'),
+    tools: ['core_search', 'web_fetch'],
+    mcp_servers: [{ server_id: 3, tools: ['list_issues'] }],
+    finish,
+  })
+
+  it('shows finish tools only when a finish tool ends the run', () => {
+    renderWithRouter(<SpecEditor value={finishSpec({ mode: 'answer', tools: [] })} catalog={catalog} onChange={vi.fn()} />)
+    expect(screen.queryByRole('combobox', { name: 'Finish tools' })).not.toBeInTheDocument()
+  })
+
+  it('offers only the allowed non-builtin tools, including external ones, as finish tools', async () => {
+    const { user } = renderWithRouter(<SpecEditor value={finishSpec({ mode: 'tool', tools: [] })} catalog={catalog} onChange={vi.fn()} />)
+    await user.click(screen.getByRole('combobox', { name: 'Finish tools' }))
+    const offered = within(screen.getByRole('listbox')).getAllByRole('option').map(o => o.textContent)
+    expect(offered).toEqual(['core_search', 'list_issues (linear)'])
+  })
+
+  it('picks a finish tool by its exposed name', async () => {
+    const onChange = vi.fn()
+    const { user } = renderWithRouter(<SpecEditor value={finishSpec({ mode: 'tool', tools: [] })} catalog={catalog} onChange={onChange} />)
+    await user.click(screen.getByRole('combobox', { name: 'Finish tools' }))
+    await user.click(screen.getByRole('option', { name: 'list_issues (linear)' }))
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ finish: { mode: 'tool', tools: ['mcp_3_list_issues'] } }))
+  })
+
+  it('drops a finish tool when it is no longer allowed', async () => {
+    const onChange = vi.fn()
+    const spec = finishSpec({ mode: 'tool', tools: ['core_search', 'mcp_3_list_issues'] })
+    const { user } = renderWithRouter(<SpecEditor value={spec} catalog={catalog} onChange={onChange} />)
+    await user.click(screen.getByLabelText(/list_issues/, { selector: 'input[type=checkbox]' }))
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ finish: { mode: 'tool', tools: ['core_search'] } }))
   })
 })

@@ -2,18 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
-import {
-  Modal,
-  TagsInput,
-  IntervalInput,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  StatusBadge,
-  SyncStatus,
-  SyncButton,
-} from '../shared'
-import { styles } from '../styles'
+import { TagsInput, IntervalInput, StatusBadge, SyncStatus, SyncButton } from '../shared'
+import { Button, Card, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 interface GroupedEvents {
@@ -136,12 +126,7 @@ export const CalendarPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Calendar Accounts</h3>
-        <button className={styles.btnAdd} onClick={() => setShowForm(true)}>Add Calendar</button>
-      </div>
-
+    <Card title="Calendar Accounts" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Calendar</Button></>}>
       {accounts.length === 0 ? (
         <EmptyState
           message="No calendar accounts configured"
@@ -149,7 +134,7 @@ export const CalendarPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {accounts.map(account => (
             <div key={account.id} className="border border-slate-200 rounded-lg p-4">
               <div className="flex items-start justify-between mb-3">
@@ -165,8 +150,8 @@ export const CalendarPanel = () => {
                 <div className="flex items-center gap-2 ml-4 flex-shrink-0">
                   <StatusBadge active={account.active} onClick={() => handleToggleActive(account)} />
                   <SyncButton onSync={() => handleSync(account.id)} disabled={!account.active} label="Sync" />
-                  <button className={styles.btnEdit} onClick={() => setEditingAccount(account)}>Edit</button>
-                  <button className={styles.btnDelete} onClick={() => handleDelete(account.id)}>Delete</button>
+                  <Button size="sm" onClick={() => setEditingAccount(account)}>Edit</Button>
+                  <Button variant="danger" size="sm" onClick={() => handleDelete(account.id)}>Delete</Button>
                 </div>
               </div>
 
@@ -256,7 +241,7 @@ export const CalendarPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -322,119 +307,103 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
 
   return (
     <Modal title={account ? 'Edit Calendar Account' : 'Add Calendar Account'} onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Name</label>
-          <input
+        <Field label="Name">
+          <Input
             type="text"
             value={formData.name}
             onChange={e => setFormData({ ...formData, name: e.target.value })}
             required
             placeholder="My Calendar"
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Calendar Type</label>
-          <select
+        <Field label="Calendar Type">
+          <Select
             value={formData.calendar_type}
             onChange={e => setFormData({ ...formData, calendar_type: e.target.value as 'caldav' | 'google' })}
             disabled={!!account}
-            className={styles.formSelect}
           >
             <option value="caldav">CalDAV (Radicale, Nextcloud, etc.)</option>
             <option value="google">Google Calendar</option>
-          </select>
-        </div>
+          </Select>
+        </Field>
 
         {formData.calendar_type === 'caldav' ? (
           <>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>CalDAV Server URL</label>
-              <input
+            <Field label="CalDAV Server URL">
+              <Input
                 type="url"
                 value={formData.caldav_url}
                 onChange={e => setFormData({ ...formData, caldav_url: e.target.value })}
                 required={!account}
                 placeholder="https://caldav.example.com/user/calendar/"
-                className={styles.formInput}
               />
-            </div>
+            </Field>
 
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Username</label>
-              <input
+            <Field label="Username">
+              <Input
                 type="text"
                 value={formData.caldav_username}
                 onChange={e => setFormData({ ...formData, caldav_username: e.target.value })}
                 required={!account}
-                className={styles.formInput}
               />
-            </div>
+            </Field>
 
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>
-                Password {account && <span className="text-slate-400">(leave blank to keep current)</span>}
-              </label>
-              <input
+            <Field label={<>
+                Password {account && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+              <Input
                 type="password"
                 value={formData.caldav_password}
                 onChange={e => setFormData({ ...formData, caldav_password: e.target.value })}
                 required={!account}
-                className={styles.formInput}
               />
-            </div>
+            </Field>
           </>
         ) : (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Google Account</label>
+          <Field>
+            <Label>Google Account</Label>
             {googleAccounts.length === 0 ? (
-              <p className={styles.formHint}>
+              <Hint>
                 No Google accounts connected. Add a Google account in the Accounts tab first.
-              </p>
+              </Hint>
             ) : (
-              <select
+              <Select
                 value={formData.google_account_id || ''}
                 onChange={e => setFormData({ ...formData, google_account_id: parseInt(e.target.value) || undefined })}
                 required
-                className={styles.formSelect}
               >
                 <option value="">Select a Google account...</option>
                 {googleAccounts.map(ga => (
                   <option key={ga.id} value={ga.id}>{ga.email}</option>
                 ))}
-              </select>
+              </Select>
             )}
-          </div>
+          </Field>
         )}
 
-        <div className={styles.formRow}>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Sync Past Days</label>
-            <input
+        <FieldRow>
+          <Field label="Sync Past Days">
+            <Input
               type="number"
               value={formData.sync_past_days}
               onChange={e => setFormData({ ...formData, sync_past_days: parseInt(e.target.value) || 30 })}
               min={0}
               max={365}
-              className={styles.formInput}
             />
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Sync Future Days</label>
-            <input
+          </Field>
+          <Field label="Sync Future Days">
+            <Input
               type="number"
               value={formData.sync_future_days}
               onChange={e => setFormData({ ...formData, sync_future_days: parseInt(e.target.value) || 90 })}
               min={0}
               max={365}
-              className={styles.formInput}
             />
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
         <IntervalInput
           value={formData.check_interval}
@@ -442,21 +411,18 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
           label="Check interval"
         />
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Tags</label>
+        <Field label="Tags">
           <TagsInput
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formRow}>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Project</label>
-            <select
+        <FieldRow>
+          <Field label="Project" hint="Project for access control">
+            <Select
               value={formData.project_id || ''}
               onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-              className={styles.formSelect}
             >
               <option value="">None</option>
               {projects.map(project => (
@@ -464,31 +430,27 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
                   {project.title} ({project.repo_path})
                 </option>
               ))}
-            </select>
-            <p className={styles.formHint}>Project for access control</p>
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Sensitivity</label>
-            <select
+            </Select>
+          </Field>
+          <Field label="Sensitivity" hint="Visibility level for calendar events">
+            <Select
               value={formData.sensitivity}
               onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
-              className={styles.formSelect}
             >
               <option value="public">Public</option>
               <option value="basic">Basic</option>
               <option value="internal">Internal</option>
               <option value="confidential">Confidential</option>
-            </select>
-            <p className={styles.formHint}>Visibility level for calendar events</p>
-          </div>
-        </div>
+            </Select>
+          </Field>
+        </FieldRow>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAgents, type ExternalServer, type ToolDiff } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { ServerForm } from './ServerForm'
 import { ServerStatusBadge } from './ServerStatusBadge'
-
-const buttonClass = 'px-3 py-1.5 border rounded text-sm disabled:opacity-50'
+import { Badge, Button, Card, EmptyState, List, ListItem, Notice, Page, Section } from '@/components/shared/ui'
 
 const diffSummary = (diff: ToolDiff) =>
   [
@@ -47,8 +46,9 @@ export default function ServerDetail() {
     }
   }
 
-  if (!Number.isInteger(serverId) || server === null) return <div className="p-6 text-slate-500">Unknown MCP server</div>
-  if (server === undefined) return <div className="p-6 text-slate-500">{error ?? 'Loading server...'}</div>
+  const back = { to: '/ui/agents/servers', label: 'MCP servers' }
+  if (!Number.isInteger(serverId) || server === null) return <Page back={back} title="Unknown MCP server" />
+  if (server === undefined) return <Page back={back} title="MCP server" loading="Loading server..." error={error} />
 
   const reauthorize = () => act(async () => {
     window.open(await authorizeServer(server.id), '_blank', 'noopener,noreferrer')
@@ -71,67 +71,60 @@ export default function ServerDetail() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-4">
-      <Link to="/ui/agents/servers" className="text-sm text-primary">← MCP servers</Link>
-      <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-semibold">{server.name}</h1>
-        <ServerStatusBadge status={server.status} />
-      </div>
-      <div className="text-sm text-slate-500 font-mono">{server.url} · {server.transport}</div>
-      {params.get('connected') && server.status === 'connected' && (
-        <div className="p-3 bg-green-50 text-green-800 rounded text-sm">Connected.</div>
-      )}
-      {server.status_detail && server.status !== 'connected' && (
-        <div className="p-3 bg-amber-50 text-amber-800 rounded text-sm">{server.status_detail}</div>
-      )}
-      {error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
-      {message && <div className="p-3 bg-blue-50 text-blue-800 rounded text-sm">{message}</div>}
-      {diff && <div className="p-3 bg-slate-50 rounded text-sm">Tools refreshed: {diffSummary(diff)}
-        {diff.dropped.map(d => <div key={d.name} className="text-amber-700">{d.name} unavailable: {d.reason}</div>)}
-      </div>}
+    <Page
+      back={back}
+      title={<>{server.name} <ServerStatusBadge status={server.status} /></>}
+      description={<span className="font-mono break-all">{server.url} · {server.transport}</span>}
+      actions={<>
+        <Button disabled={busy} onClick={refresh}>Refresh tools</Button>
+        {server.auth_type === 'oauth' && <Button disabled={busy} onClick={reauthorize}>Re-authorize</Button>}
+        {server.has_token && <Button disabled={busy} onClick={disconnect}>Disconnect</Button>}
+        <Button disabled={busy} aria-expanded={editing} onClick={() => setEditing(e => !e)}>{editing ? 'Cancel edit' : 'Edit'}</Button>
+        <Button variant="danger" disabled={busy} onClick={remove}>Delete</Button>
+      </>}
+    >
+    {params.get('connected') && server.status === 'connected' && <Notice tone="success">Connected.</Notice>}
+    {server.status_detail && server.status !== 'connected' && <Notice tone="warning">{server.status_detail}</Notice>}
+    {error && <Notice tone="error">{error}</Notice>}
+    {message && <Notice tone="info">{message}</Notice>}
+    {diff && (
+      <Notice tone="info">
+        Tools refreshed: {diffSummary(diff)}
+        {diff.dropped.map(d => <div key={d.name} className="text-amber-800">{d.name} unavailable: {d.reason}</div>)}
+      </Notice>
+    )}
 
-      <div className="flex flex-wrap gap-2">
-        <button className={buttonClass} disabled={busy} onClick={refresh}>Refresh tools</button>
-        {server.auth_type === 'oauth' && <button className={buttonClass} disabled={busy} onClick={reauthorize}>Re-authorize</button>}
-        {server.has_token && <button className={buttonClass} disabled={busy} onClick={disconnect}>Disconnect</button>}
-        <button className={buttonClass} disabled={busy} onClick={() => setEditing(e => !e)}>{editing ? 'Cancel edit' : 'Edit'}</button>
-        <button className={`${buttonClass} border-red-300 text-red-700`} disabled={busy} onClick={remove}>Delete</button>
-      </div>
+    {editing && (
+      <Card>
+        <ServerForm server={server} onSubmit={async values => {
+          const result = await upsertServer({ ...values, serverId: server.id })
+          setServer(result.server)
+          return result
+        }} />
+      </Card>
+    )}
 
-      {editing && (
-        <div className="bg-white rounded-xl shadow-sm p-4">
-          <ServerForm server={server} onSubmit={async values => {
-            const result = await upsertServer({ ...values, serverId: server.id })
-            setServer(result.server)
-            return result
-          }} />
-        </div>
-      )}
-
-      <section className="space-y-2">
-        <h2 className="font-semibold">Tools</h2>
-        {server.tools.length === 0 && <div className="text-sm text-slate-500">No tools cached yet</div>}
-        <ul className="divide-y bg-white rounded-xl shadow-sm">
+    <Section title="Tools">
+      {server.tools.length === 0 && <EmptyState message="No tools cached yet" />}
+      {!!server.tools.length && (
+        <List>
           {server.tools.map(tool => (
-            <li key={tool.name} className="p-3 text-sm space-y-1">
-              <div className="flex items-center gap-2">
+            <ListItem key={tool.name} className="block space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-mono">{tool.name}</span>
-                {tool.read_only
-                  ? <span className="text-xs text-green-700">read-only</span>
-                  : <span className="text-xs text-amber-600">side effects</span>}
-                {tool.changed_at && (
-                  <span className="text-xs text-slate-400">as of {formatRelativeTime(tool.changed_at)}</span>
-                )}
+                {tool.read_only ? <Badge tone="success">read-only</Badge> : <Badge>side effects</Badge>}
+                {tool.changed_at && <span className="text-xs text-slate-600">as of {formatRelativeTime(tool.changed_at)}</span>}
               </div>
-              <div className="text-slate-500">{tool.description}</div>
+              <div className="text-slate-600">{tool.description}</div>
               <details>
-                <summary className="text-xs text-slate-400 cursor-pointer">Input schema</summary>
+                <summary className="text-xs text-slate-600 cursor-pointer">Input schema</summary>
                 <pre className="text-xs bg-slate-50 p-2 rounded overflow-x-auto">{JSON.stringify(tool.input_schema, null, 2)}</pre>
               </details>
-            </li>
+            </ListItem>
           ))}
-        </ul>
-      </section>
-    </div>
-  )
+        </List>
+      )}
+    </Section>
+  </Page>
+)
 }

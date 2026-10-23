@@ -31,7 +31,7 @@ src/memory/
 ├── parsers/                # Content type parsers (email, ebook, comics, etc.)
 └── workers/tasks/          # Celery tasks for content processing
 
-frontend/                   # React 19 + TypeScript + Vite
+frontend/                   # React 19 + TypeScript + Vite; every view is a <Page> built from components/shared/ui (frontend/STYLE.md)
 db/migrations/              # Alembic database migrations
 tools/                      # CLI utilities (add_user, run tasks, deploy, etc.)
 ```

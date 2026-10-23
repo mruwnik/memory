@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { useTasks, TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
 import { PRIORITY_ORDER, PRIORITY_COLORS } from '@/constants/priority'
+import { Button, EmptyState, Input, LoadingState, Notice, Page, Select, ToggleGroup } from '@/components/shared/ui'
 
 type StatusFilter = 'active' | 'completed' | 'all'
 
@@ -148,96 +148,74 @@ const Tasks = () => {
   const completedCount = tasks.filter(t => t.status === 'done').length
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8 max-w-3xl mx-auto">
-      <header className="flex items-center gap-4 mb-8 pb-4 border-b border-slate-200">
-        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Tasks</h1>
+    <Page
+      title="Tasks"
+      description={<>
         <div className="flex gap-4 text-sm text-slate-600">
           <span>{activeCount} active</span>
           <span>{completedCount} completed</span>
         </div>
-      </header>
-
+      </>}
+      width="narrow"
+    >
       <div className="space-y-6">
         {/* Add Task Form */}
         <form onSubmit={handleAddTask} className="bg-white p-6 rounded-xl shadow-md">
           <div className="flex gap-3 mb-4">
-            <input
+            <Input
               type="text"
               placeholder="What needs to be done?"
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               disabled={isAdding}
-              className="flex-1 py-2 px-3 border border-slate-200 rounded-lg text-base focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="flex-1 text-base"
             />
-            <button
+            <Button variant="primary"
               type="submit"
               disabled={isAdding || !newTaskTitle.trim()}
-              className="bg-primary text-white py-2 px-4 rounded-lg font-medium hover:bg-primary-dark disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
               Add Task
-            </button>
+            </Button>
           </div>
           <div className="flex gap-3">
-            <select
+            <Select
               value={newTaskPriority}
               onChange={(e) => setNewTaskPriority(e.target.value)}
-              className="py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white"
             >
               <option value="">No priority</option>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
               <option value="urgent">Urgent</option>
-            </select>
-            <input
+            </Select>
+            <Input
               type="date"
               value={newTaskDueDate}
               onChange={(e) => setNewTaskDueDate(e.target.value)}
-              className="py-2 px-3 border border-slate-200 rounded-lg text-sm"
             />
           </div>
         </form>
 
         {/* Filters */}
-        <div className="flex gap-2">
-          {(['active', 'completed', 'all'] as StatusFilter[]).map((filter) => (
-            <button
-              key={filter}
-              className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
-                statusFilter === filter
-                  ? 'bg-primary text-white'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-              }`}
-              onClick={() => setStatusFilter(filter)}
-            >
-              {filter.charAt(0).toUpperCase() + filter.slice(1)}
-            </button>
-          ))}
-        </div>
+        <ToggleGroup label="Filter tasks" value={statusFilter} onChange={setStatusFilter} options={[
+          { value: 'active', label: 'Active' }, { value: 'completed', label: 'Completed' }, { value: 'all', label: 'All' },
+        ]} />
 
         {/* Error */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{error}</p>
-            <button onClick={loadTasks} className="text-primary hover:underline">Retry</button>
-          </div>
+          <Notice tone="error" onRetry={loadTasks}>{error}</Notice>
         )}
 
         {/* Loading */}
-        {loading && <div className="text-center py-8 text-slate-500">Loading tasks...</div>}
+        {loading && <LoadingState message="Loading tasks..." />}
 
         {/* Empty State */}
-        {!loading && tasks.length === 0 && (
-          <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
-            {statusFilter === 'completed'
+        {!loading && !error && tasks.length === 0 && (
+          <EmptyState message={statusFilter === 'completed'
               ? 'No completed tasks yet'
               : statusFilter === 'active'
               ? 'No active tasks. Add one above!'
-              : 'No tasks yet. Add one above!'}
-          </div>
+              : 'No tasks yet. Add one above!'} />
         )}
 
         {/* Task List */}
@@ -266,18 +244,18 @@ const Tasks = () => {
                 <div className="flex-1 min-w-0">
                   {editingTask === task.id ? (
                     <div className="flex gap-2">
-                      <input
+                      <Input
                         type="text"
                         value={editTitle}
                         onChange={(e) => setEditTitle(e.target.value)}
-                        className="flex-1 py-1 px-2 border border-slate-200 rounded text-sm focus:border-primary focus:outline-none"
+                        className="flex-1"
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') handleSaveEdit(task.id)
                           if (e.key === 'Escape') handleCancelEdit()
                         }}
                       />
-                      <button onClick={() => handleSaveEdit(task.id)} className="text-sm text-primary hover:underline">Save</button>
+                      <Button variant="link" onClick={() => handleSaveEdit(task.id)}>Save</Button>
                       <button onClick={handleCancelEdit} className="text-sm text-slate-500 hover:underline">Cancel</button>
                     </div>
                   ) : (
@@ -329,7 +307,7 @@ const Tasks = () => {
           </ul>
         )}
       </div>
-    </div>
+    </Page>
   )
 }
 

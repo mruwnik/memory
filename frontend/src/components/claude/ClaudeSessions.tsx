@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, ContainerStats, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import ClaudeFleetStats, { SessionStatsPanel, sessionDisplay } from './ClaudeFleetStats'
+import { Badge, Button, Input, Label, Notice, Page, Select, Textarea, ToggleGroup } from '@/components/shared/ui'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -503,50 +504,19 @@ const ClaudeSessions = () => {
     return STATUS_COLORS[status.toLowerCase()] || 'bg-slate-100 text-slate-600'
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-slate-500">Loading...</div>
-      </div>
-    )
-  }
-
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-4">
-        <Link
-          to="/ui/dashboard"
-          className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100"
-        >
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Claude Sessions</h1>
-        {orchestratorAvailable === false && (
-          <span className="text-sm text-red-600 bg-red-50 px-3 py-1 rounded">Orchestrator Offline</span>
-        )}
-        <button
-          onClick={handleNewSession}
-          className="bg-primary text-white py-2 px-4 rounded-md text-sm hover:bg-primary/90"
-        >
-          + New Session
-        </button>
-      </header>
-
-      {/* Error banner */}
-      {error && (
-        <div className="bg-red-50 border-b border-red-200 text-red-700 px-6 py-3 flex justify-between items-center">
-          <p>{error}</p>
-          <button onClick={() => setError(null)} className="text-red-700 hover:underline text-sm">
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* Main content */}
-      <div className="flex-1 flex">
+    <Page
+      title={<>Claude Sessions{orchestratorAvailable === false && <Badge tone="danger">Orchestrator Offline</Badge>}</>}
+      width="full"
+      fill
+      loading={loading}
+      actions={<Button variant="primary" onClick={handleNewSession}>+ New Session</Button>}
+    >
+      <div className="h-full flex flex-col gap-4">
+      {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
+      <div className="flex-1 min-h-0 flex overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm">
         {/* Sidebar - Sessions list */}
-        <aside className="w-72 bg-white border-r border-slate-200 flex flex-col">
+        <aside className="w-72 shrink-0 border-r border-slate-200 flex flex-col">
           <div className="p-4 border-b border-slate-200">
             <h2 className="text-sm font-medium text-slate-600">Active Sessions</h2>
           </div>
@@ -603,14 +573,14 @@ const ClaudeSessions = () => {
         </aside>
 
         {/* Main panel */}
-        <main className="flex-1 p-6 overflow-y-auto">
+        <div className="flex-1 min-w-0 p-6 overflow-y-auto">
           {showNewSession ? (
             // New session form
             <div className="max-w-xl">
               <h2 className="text-xl font-semibold text-slate-800 mb-6">Start New Session</h2>
 
               {snapshots.length === 0 && environments.length === 0 ? (
-                <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-lg">
+                <Notice tone="warning">
                   <p className="font-medium">No snapshots or environments available</p>
                   <p className="text-sm mt-1">
                     Create a snapshot first using the CLI tool:
@@ -618,13 +588,13 @@ const ClaudeSessions = () => {
                       python tools/claude_snapshot.py --host $HOST --api-key $KEY
                     </code>
                   </p>
-                </div>
+                </Notice>
               ) : (
                 <div className="space-y-6">
                   {/* Config source selection (grouped: environments + snapshots) */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Configuration *</label>
-                    <select
+                    <Label className="mb-2">Configuration *</Label>
+                    <Select
                       value={selectedConfig ? `${selectedConfig.type}:${selectedConfig.id}` : ''}
                       onChange={(e) => {
                         const [type, id] = e.target.value.split(':')
@@ -632,7 +602,6 @@ const ClaudeSessions = () => {
                           setSelectedConfig({ type, id: Number(id) })
                         }
                       }}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     >
                       {environments.length > 0 && (
                         <optgroup label="Environments (persistent)">
@@ -657,7 +626,7 @@ const ClaudeSessions = () => {
                           ))}
                         </optgroup>
                       )}
-                    </select>
+                    </Select>
                     <p className="text-xs text-slate-500 mt-1">
                       {selectedConfig?.type === 'environment'
                         ? 'Environment: State persists across sessions'
@@ -667,11 +636,10 @@ const ClaudeSessions = () => {
 
                   {/* Repo selection */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Repository (optional)</label>
-                    <select
+                    <Label className="mb-2">Repository (optional)</Label>
+                    <Select
                       value={selectedRepoUrl}
                       onChange={(e) => setSelectedRepoUrl(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     >
                       <option value="">No repository</option>
                       {repos.map((r) => (
@@ -679,23 +647,23 @@ const ClaudeSessions = () => {
                           {r.owner}/{r.name}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                     <p className="text-xs text-slate-500 mt-1">The repo will be cloned into the workspace</p>
                   </div>
 
                   {/* Branch ID (only shown when repo selected) */}
                   {selectedRepoUrl && (
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-2">
+                      <Label className="mb-2">
                         Branch ID (optional)
-                      </label>
-                      <input
+                      </Label>
+                      <Input
                         type="text"
                         value={runId}
                         onChange={(e) => setRunId(e.target.value)}
                         placeholder="my-feature"
                         pattern="[a-zA-Z0-9_-]+"
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        className="font-mono"
                       />
                       <p className="text-xs text-slate-500 mt-1">
                         Git branch will be <code className="bg-slate-100 px-1 rounded">claude/{runId || '<session-id>'}</code>. Leave blank for auto-generated ID.
@@ -705,13 +673,13 @@ const ClaudeSessions = () => {
 
                   {/* GitHub Token */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">GitHub Token (optional)</label>
-                    <input
+                    <Label className="mb-2">GitHub Token (optional)</Label>
+                    <Input
                       type="password"
                       value={githubToken}
                       onChange={(e) => setGithubToken(e.target.value)}
                       placeholder="ghp_... or secret name"
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      className="font-mono"
                     />
                     <p className="text-xs text-slate-500 mt-1">
                       PAT for HTTPS clone, or a secret name. Cached in localStorage.
@@ -720,13 +688,13 @@ const ClaudeSessions = () => {
 
                   {/* GitHub Token Write */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">GitHub Write Token (optional)</label>
-                    <input
+                    <Label className="mb-2">GitHub Write Token (optional)</Label>
+                    <Input
                       type="password"
                       value={githubTokenWrite}
                       onChange={(e) => setGithubTokenWrite(e.target.value)}
                       placeholder="ghp_... or secret name"
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      className="font-mono"
                     />
                     <p className="text-xs text-slate-500 mt-1">
                       Write token for differ (push, PR creation). Cached in localStorage.
@@ -740,7 +708,6 @@ const ClaudeSessions = () => {
                       id="enable-playwright"
                       checked={enablePlaywright}
                       onChange={(e) => setEnablePlaywright(e.target.checked)}
-                      className="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary"
                     />
                     <label htmlFor="enable-playwright" className="text-sm font-medium text-slate-700">
                       Enable Playwright
@@ -750,13 +717,13 @@ const ClaudeSessions = () => {
 
                   {/* Dev channels server */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Dev Channels Server (optional)</label>
-                    <input
+                    <Label className="mb-2">Dev Channels Server (optional)</Label>
+                    <Input
                       type="text"
                       value={devChannelsServer}
                       onChange={(e) => setDevChannelsServer(e.target.value)}
                       placeholder="http://channels.internal:3000"
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      className="font-mono"
                     />
                     <p className="text-xs text-slate-500 mt-1">
                       Launches Claude with --dangerously-load-development-channels. Leave blank to disable.
@@ -765,9 +732,9 @@ const ClaudeSessions = () => {
 
                   {/* Pre-approved Tools */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                    <Label className="mb-2">
                       Pre-approved Tools
-                    </label>
+                    </Label>
                     <p className="text-xs text-slate-500 mb-3">
                       These tools won't require permission prompts. MCP tools always require permission.
                     </p>
@@ -778,7 +745,6 @@ const ClaudeSessions = () => {
                             type="checkbox"
                             checked={allowedTools.includes(tool)}
                             onChange={() => toggleTool(tool)}
-                            className="w-4 h-4 text-primary border-slate-300 rounded"
                           />
                           {tool}
                         </label>
@@ -788,32 +754,31 @@ const ClaudeSessions = () => {
 
                   {/* Custom Environment Variables */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                    <Label className="mb-2">
                       Custom Environment Variables
-                    </label>
+                    </Label>
                     <p className="text-xs text-slate-500 mb-2">
                       One per line: KEY=value. Lines starting with # are ignored.
                     </p>
-                    <textarea
+                    <Textarea
                       value={customEnvText}
                       onChange={(e) => setCustomEnvText(e.target.value)}
                       placeholder="MY_VAR=some_value&#10;ANOTHER_VAR=123"
                       rows={3}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      className="font-mono"
                     />
                   </div>
 
                   {/* Initial Prompt */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                    <Label className="mb-2">
                       Initial Prompt (optional)
-                    </label>
-                    <textarea
+                    </Label>
+                    <Textarea
                       value={initialPrompt}
                       onChange={(e) => setInitialPrompt(e.target.value)}
                       placeholder="Start Claude with this prompt..."
                       rows={3}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                     <p className="text-xs text-slate-500 mt-1">
                       If provided, Claude will start processing this prompt immediately.
@@ -822,16 +787,16 @@ const ClaudeSessions = () => {
 
                   {/* Cron Schedule */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                    <Label className="mb-2">
                       Schedule (optional)
-                    </label>
+                    </Label>
                     <div className="flex gap-2 mb-2">
-                      <input
+                      <Input
                         type="text"
                         value={cronExpression}
                         onChange={(e) => setCronExpression(e.target.value)}
                         placeholder="0 9 * * *"
-                        className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        className="flex-1 font-mono"
                       />
                     </div>
                     <p className="text-xs text-slate-500 mb-2">
@@ -857,13 +822,12 @@ const ClaudeSessions = () => {
                         </button>
                       ))}
                       {cronExpression && (
-                        <button
+                        <Button size="sm"
                           type="button"
                           onClick={() => setCronExpression('')}
-                          className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-400 hover:text-slate-600 hover:bg-slate-50"
                         >
                           Clear
-                        </button>
+                        </Button>
                       )}
                     </div>
                     {cronExpression && !initialPrompt && (
@@ -880,7 +844,7 @@ const ClaudeSessions = () => {
 
                   {/* Schedule success message */}
                   {scheduleSuccess && (
-                    <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded-lg">
+                    <Notice tone="success">
                       <p className="font-medium">Schedule created</p>
                       <p className="text-sm mt-1">
                         Task ID: <code className="bg-green-100 px-1 rounded">{scheduleSuccess.task_id}</code>
@@ -894,15 +858,14 @@ const ClaudeSessions = () => {
                       >
                         Dismiss
                       </button>
-                    </div>
+                    </Notice>
                   )}
 
                   {/* Actions */}
                   <div className="flex gap-3">
-                    <button
+                    <Button variant="primary"
                       onClick={cronExpression ? handleScheduleSession : handleSpawnSession}
                       disabled={spawning || scheduling || !selectedConfig}
-                      className="bg-primary text-white py-2 px-6 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:bg-slate-300 disabled:cursor-not-allowed"
                     >
                       {spawning
                         ? 'Starting...'
@@ -911,13 +874,12 @@ const ClaudeSessions = () => {
                           : cronExpression
                             ? 'Schedule Recurring Session'
                             : 'Start Session'}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       onClick={() => setShowNewSession(false)}
-                      className="bg-slate-100 text-slate-600 py-2 px-6 rounded-lg text-sm font-medium hover:bg-slate-200"
                     >
                       Cancel
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -946,13 +908,12 @@ const ClaudeSessions = () => {
                 <span className={`text-sm px-3 py-1 rounded ${getStatusColor(selectedSession.status)}`}>
                   {selectedSession.status || 'unknown'}
                 </span>
-                <button
+                <Button variant="danger"
                   onClick={() => handleKillSession(selectedSession.session_id)}
                   disabled={killingId === selectedSession.session_id}
-                  className="bg-red-50 text-red-600 py-2 px-4 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50"
                 >
                   {killingId === selectedSession.session_id ? 'Killing...' : 'Kill Session'}
-                </button>
+                </Button>
               </div>
 
               {/* Session info row */}
@@ -1039,40 +1000,10 @@ const ClaudeSessions = () => {
                 {paneCount > 1 && (
                   <div className="flex items-center gap-2 mt-2 flex-wrap">
                     <span className="text-xs text-slate-500 mr-1">Panes:</span>
-                    {panes.length > 0 ? panes.map((pane) => (
-                      <button
-                        key={pane.id}
-                        onClick={() => handleSelectPane(pane.id)}
-                        className={[
-                          "px-3 py-1 rounded-full text-xs font-mono transition-colors",
-                          pane.id === activePane
-                            ? "bg-primary text-white"
-                            : "bg-slate-200 text-slate-700 hover:bg-slate-300",
-                        ].join(" ")}
-                        title={`${pane.command} — ${pane.title || pane.id}`}
-                      >
-                        {pane.title || pane.command?.split('/').pop() || pane.id}
-                      </button>
-                    )) : (
-                      // Fallback: show simple numbered chips when pane list hasn't loaded
-                      Array.from({ length: paneCount }, (_, i) => {
-                        const paneId = `0.${i}`
-                        return (
-                          <button
-                            key={paneId}
-                            onClick={() => handleSelectPane(paneId)}
-                            className={[
-                              "px-3 py-1 rounded-full text-xs font-mono transition-colors",
-                              paneId === activePane
-                                ? "bg-primary text-white"
-                                : "bg-slate-200 text-slate-700 hover:bg-slate-300",
-                            ].join(" ")}
-                          >
-                            {paneId}
-                          </button>
-                        )
-                      })
-                    )}
+                    <ToggleGroup label="Panes" value={activePane} onChange={handleSelectPane}
+                      options={panes.length > 0
+                        ? panes.map(pane => ({ value: pane.id, label: pane.title || pane.command?.split('/').pop() || pane.id }))
+                        : Array.from({ length: paneCount }, (_, i) => ({ value: `0.${i}`, label: `0.${i}` }))} />
                   </div>
                 )}
               </div>
@@ -1120,9 +1051,10 @@ const ClaudeSessions = () => {
               />
             </div>
           )}
-        </main>
+        </div>
       </div>
-    </div>
+      </div>
+    </Page>
   )
 }
 

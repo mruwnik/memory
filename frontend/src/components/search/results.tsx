@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import { SERVER_URL } from '@/hooks/useAuth'
+import { Card } from '@/components/shared/ui'
 
 export type SearchItem = {
     filename: string
@@ -22,8 +23,7 @@ export const Tag = ({ tags }: { tags: string[] }) => {
 
 export const TextResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
-        <div className="bg-white p-6 rounded-xl shadow-md mb-4">
-            <h4 className="text-lg font-semibold text-slate-800 mb-2">{filename || metadata?.title || metadata?.url || 'Untitled'}</h4>
+        <Card title={filename || metadata?.title || metadata?.url || 'Untitled'} className="mb-4">
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
             {content && <p className="text-gray-600 mt-3 whitespace-pre-wrap">{content}</p>}
@@ -40,14 +40,13 @@ export const TextResult = ({ filename, content, chunks, tags, metadata }: Search
                     </div>
                 </details>
             )}
-        </div>
+        </Card>
     )
 }
 
 export const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
     return (
-        <div className="bg-white p-6 rounded-xl shadow-md mb-4">
-            <h4 className="text-lg font-semibold text-slate-800 mb-2">{filename || metadata?.title || metadata?.url || 'Untitled'}</h4>
+        <Card title={filename || metadata?.title || metadata?.url || 'Untitled'} className="mb-4">
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
             {content && (
@@ -68,7 +67,7 @@ export const MarkdownResult = ({ filename, content, chunks, tags, metadata }: Se
                     </div>
                 </details>
             )}
-        </div>
+        </Card>
     )
 }
 
@@ -76,14 +75,13 @@ export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
     const title = metadata?.title || filename || 'Untitled'
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-md mb-4">
-            <h4 className="text-lg font-semibold text-slate-800 mb-2">{title}</h4>
+        <Card title={title} className="mb-4">
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
             <div className="mt-4">
                 <img src={`${SERVER_URL}/files/${filename}`} alt={title} className="max-w-full h-auto rounded-lg"/>
             </div>
-        </div>
+        </Card>
     )
 }
 
@@ -115,8 +113,7 @@ export const Metadata = ({ metadata }: { metadata: any }) => {
 
 export const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => {
     return (
-        <div className="bg-white p-6 rounded-xl shadow-md mb-4">
-            <h4 className="text-lg font-semibold text-slate-800 mb-2">{filename || 'Untitled'}</h4>
+        <Card title={filename || 'Untitled'} className="mb-4">
             <Tag tags={tags} />
             <a href={`${SERVER_URL}/files/${filename}`} className="text-primary hover:underline">View PDF</a>
             <Metadata metadata={metadata} />
@@ -130,14 +127,13 @@ export const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => 
                     </details>
                 </div>
             )}
-        </div>
+        </Card>
     )
 }
 
 export const EmailResult = ({ content, tags, metadata }: SearchItem) => {
     return (
-        <div className="bg-white p-6 rounded-xl shadow-md mb-4">
-            <h4 className="text-lg font-semibold text-slate-800 mb-2">{metadata?.title || metadata?.subject || 'Untitled'}</h4>
+        <Card title={metadata?.title || metadata?.subject || 'Untitled'} className="mb-4">
             <Tag tags={tags} />
             <Metadata metadata={metadata} />
             {content && (
@@ -145,7 +141,7 @@ export const EmailResult = ({ content, tags, metadata }: SearchItem) => {
                     <ReactMarkdown>{content}</ReactMarkdown>
                 </div>
             )}
-        </div>
+        </Card>
     )
 }
 

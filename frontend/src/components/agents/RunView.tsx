@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { TERMINAL_STATUSES, useAgents, type AgentRun, type Block, type RunStep } from '@/hooks/useAgents'
 import { StatusBadge } from './StatusBadge'
+import { Button, Notice, Page } from '@/components/shared/ui'
 
 const POLL_MS = 2000
 const PAGE_SIZE = 100
@@ -14,7 +15,7 @@ function BlockView({ block }: { block: Block }) {
       return <div className="whitespace-pre-wrap">{block.text}</div>
     case 'reasoning':
       return (
-        <details className="text-slate-500 text-sm">
+        <details className="text-slate-600 text-sm">
           <summary>reasoning</summary>
           <div className="whitespace-pre-wrap">{block.text}</div>
         </details>
@@ -23,7 +24,7 @@ function BlockView({ block }: { block: Block }) {
       return (
         <div className="text-sm">
           <span className="font-mono text-indigo-700">{block.name}</span>
-          {block.executed_by === 'provider' && <span className="ml-2 text-xs text-slate-400">(run by provider)</span>}
+          {block.executed_by === 'provider' && <span className="ml-2 text-xs text-slate-600">(run by provider)</span>}
           <pre className="bg-slate-50 p-2 rounded text-xs overflow-x-auto">{JSON.stringify(block.input, null, 2)}</pre>
         </div>
       )
@@ -108,47 +109,49 @@ function RunView({ runId }: { runId: string }) {
     }
   }
 
-  if (!run) return <div className="p-6 text-slate-500">{error ?? 'Loading run...'}</div>
+  const back = { to: '/ui/agents/runs', label: 'Runs' }
+  if (!run) return <Page back={back} title="Run" loading="Loading run..." error={error} />
   const live = !TERMINAL_STATUSES.includes(run.status)
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-4">
-      <Link to="/ui/agents/runs" className="text-sm text-primary">← Runs</Link>
-      <div className="bg-white rounded-xl shadow-sm p-4 flex flex-wrap items-center gap-4 text-sm">
-        <StatusBadge status={run.status} />
-        <span className="font-mono">{run.model}</span>
-        <span>${run.cost_usd} of ${run.max_cost_usd}</span>
-        <span>{run.num_turns} turns</span>
-        <span>
-          {contextTokens(run.usage)} context ({run.usage.cache_read_tokens ?? 0} cached) / {run.usage.output_tokens ?? 0} out tokens
+    <Page
+      back={back}
+      title={<>Run <StatusBadge status={run.status} /></>}
+      description={
+        <span className="flex flex-wrap gap-x-4 gap-y-1">
+          <span className="font-mono">{run.model}</span>
+          <span>${run.cost_usd} of ${run.max_cost_usd}</span>
+          <span>{run.num_turns} turns</span>
+          <span>
+            {contextTokens(run.usage)} context ({run.usage.cache_read_tokens ?? 0} cached) / {run.usage.output_tokens ?? 0} out tokens
+          </span>
+          <span>trigger: {run.trigger_kind}</span>
         </span>
-        <span className="text-slate-400">trigger: {run.trigger_kind}</span>
-        <button className="ml-auto px-2 py-1 border rounded" onClick={() => act(() => starRun(run.id, !run.starred))}>
+      }
+      actions={<>
+        <Button aria-pressed={run.starred} onClick={() => act(() => starRun(run.id, !run.starred))}>
           {run.starred ? '★ Starred' : '☆ Star'}
-        </button>
-        {live && (
-          <button className="px-2 py-1 border border-red-300 text-red-700 rounded" onClick={() => act(() => cancelRun(run.id))}>
-            Cancel
-          </button>
-        )}
-      </div>
-      {error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
-      {run.error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm whitespace-pre-wrap">{run.error}</div>}
-      {run.result && (
-        <div className="p-3 bg-green-50 rounded text-sm whitespace-pre-wrap">
-          {typeof run.result.text === 'string' ? run.result.text : JSON.stringify(run.result, null, 2)}
-        </div>
-      )}
-      {run.steps_purged_at && <div className="text-sm text-slate-500">Transcript deleted after 90 days (star a run to keep its transcript).</div>}
-      <ol className="space-y-2">
-        {steps.map(step => (
-          <li key={step.seq} className={`bg-white rounded p-3 space-y-2 ${KIND_STYLE[step.kind]}`}>
-            <div className="text-xs text-slate-400">#{step.seq} {step.kind}{step.cost_usd ? ` · $${step.cost_usd}` : ''}</div>
-            {step.content.map((block, i) => <BlockView key={i} block={block} />)}
-          </li>
-        ))}
-      </ol>
-      {live && <div className="text-sm text-slate-400">running…</div>}
-    </div>
-  )
+        </Button>
+        {live && <Button variant="danger" onClick={() => act(() => cancelRun(run.id))}>Cancel run</Button>}
+      </>}
+    >
+    {error && <Notice tone="error">{error}</Notice>}
+    {run.error && <Notice tone="error">{run.error}</Notice>}
+    {run.result && (
+      <Notice tone="success">
+        {typeof run.result.text === 'string' ? run.result.text : JSON.stringify(run.result, null, 2)}
+      </Notice>
+    )}
+    {run.steps_purged_at && <div className="text-sm text-slate-600">Transcript deleted after 90 days (star a run to keep its transcript).</div>}
+    <ol className="space-y-2">
+      {steps.map(step => (
+        <li key={step.seq} className={`bg-white rounded-lg border border-slate-200 p-3 space-y-2 ${KIND_STYLE[step.kind]}`}>
+          <div className="text-xs text-slate-600">#{step.seq} {step.kind}{step.cost_usd ? ` · $${step.cost_usd}` : ''}</div>
+          {step.content.map((block, i) => <BlockView key={i} block={block} />)}
+        </li>
+      ))}
+    </ol>
+    {live && <div role="status" className="text-sm text-slate-600">running…</div>}
+  </Page>
+)
 }

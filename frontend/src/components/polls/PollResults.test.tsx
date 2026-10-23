@@ -131,7 +131,7 @@ describe('PollResults - rendering', () => {
       results: makeResults({ poll: makePoll({ title: 'Standup', status: 'open' }), response_count: 4 }),
     })
     renderResults()
-    expect(await screen.findByRole('heading', { name: 'Standup' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /^Standup/ })).toBeInTheDocument()
     expect(screen.getByText('open')).toBeInTheDocument()
     expect(screen.getByText('4')).toBeInTheDocument()
   })
@@ -171,7 +171,7 @@ describe('PollResults - rendering', () => {
   it('shows the add-availability link only when the poll is open', async () => {
     mockResults({ results: makeResults({ poll: makePoll({ status: 'open' }) }) })
     renderResults()
-    await screen.findByRole('heading', { name: 'Results Poll' })
+    await screen.findByRole('heading', { name: /^Results Poll/ })
     expect(
       screen.getByRole('link', { name: 'Add Your Availability' }),
     ).toHaveAttribute('href', '/ui/polls/respond/results-me')
@@ -180,7 +180,7 @@ describe('PollResults - rendering', () => {
   it('hides the add-availability link when the poll is closed', async () => {
     mockResults({ results: makeResults({ poll: makePoll({ status: 'closed' }) }) })
     renderResults()
-    await screen.findByRole('heading', { name: 'Results Poll' })
+    await screen.findByRole('heading', { name: /^Results Poll/ })
     expect(
       screen.queryByRole('link', { name: 'Add Your Availability' }),
     ).not.toBeInTheDocument()
@@ -191,7 +191,7 @@ describe('PollResults - share link', () => {
   it('copies the respond URL to the clipboard', async () => {
     mockResults()
     const { user } = renderResults()
-    await screen.findByRole('heading', { name: 'Results Poll' })
+    await screen.findByRole('heading', { name: /^Results Poll/ })
     // userEvent already provides a clipboard stub on navigator; spy on it.
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     await user.click(screen.getByRole('button', { name: 'Copy Share Link' }))
@@ -205,7 +205,7 @@ describe('PollResults - management visibility', () => {
   it('hides the manage menu for unauthenticated users', async () => {
     mockResults({ authed: false })
     renderResults()
-    await screen.findByRole('heading', { name: 'Results Poll' })
+    await screen.findByRole('heading', { name: /^Results Poll/ })
     expect(screen.queryByRole('button', { name: /Manage Poll/ })).not.toBeInTheDocument()
   })
 

@@ -63,10 +63,10 @@ describe('Sources container', () => {
   it('switches panels when a tab button is clicked', async () => {
     mockFetchRoutes({ '/auth/me': meWith(['teams']), __default: { json: {} } })
     const { user } = renderWithRouter(<Sources />)
-    await user.click(screen.getByRole('button', { name: 'RSS Feeds' }))
+    await user.click(screen.getByRole('tab', { name: 'RSS Feeds' }))
     expect(screen.getByTestId('panel-feeds')).toBeInTheDocument()
     expect(screen.queryByTestId('panel-accounts')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Books' }))
+    await user.click(screen.getByRole('tab', { name: 'Books' }))
     expect(screen.getByTestId('panel-books')).toBeInTheDocument()
   })
 

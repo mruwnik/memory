@@ -1,4 +1,5 @@
 import React from 'react'
+import { Card } from '@/components/shared/ui'
 
 interface SummaryCardsProps {
   totalEvents: number
@@ -27,34 +28,34 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-      <div className="bg-white p-4 rounded-xl shadow-md text-center">
+      <Card className="text-center">
         <span className="block text-2xl font-bold text-slate-800">{formatNumber(totalEvents)}</span>
         <span className="text-sm text-slate-500">Total Events</span>
-      </div>
+      </Card>
 
-      <div className="bg-white p-4 rounded-xl shadow-md text-center">
+      <Card className="text-center">
         <span className={`block text-2xl font-bold ${getSuccessRateColor(successRate)}`}>
           {successRate}%
         </span>
         <span className="text-sm text-slate-500">Success Rate</span>
-      </div>
+      </Card>
 
-      <div className="bg-white p-4 rounded-xl shadow-md text-center">
+      <Card className="text-center">
         <span className="block text-2xl font-bold text-slate-800">{formatDuration(avgDuration)}</span>
         <span className="text-sm text-slate-500">Avg Duration</span>
-      </div>
+      </Card>
 
       {cpuPercent !== undefined && (
-        <div className="bg-white p-4 rounded-xl shadow-md text-center">
+        <Card className="text-center">
           <span className={`block text-2xl font-bold ${getUsageColor(cpuPercent)}`}>
             {cpuPercent.toFixed(1)}%
           </span>
           <span className="text-sm text-slate-500">{hasSystemCpu ? 'System CPU' : 'Process CPU'}</span>
-        </div>
+        </Card>
       )}
 
       {memoryPercent !== undefined && (
-        <div className="bg-white p-4 rounded-xl shadow-md text-center">
+        <Card className="text-center">
           <span className={`block text-2xl font-bold ${getUsageColor(memoryPercent)}`}>
             {memoryPercent.toFixed(1)}%
           </span>
@@ -62,11 +63,11 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
           {memoryDetail && (
             <span className="block text-xs text-slate-400 mt-1">{memoryDetail}</span>
           )}
-        </div>
+        </Card>
       )}
 
       {diskPercent !== undefined && (
-        <div className="bg-white p-4 rounded-xl shadow-md text-center">
+        <Card className="text-center">
           <span className={`block text-2xl font-bold ${getUsageColor(diskPercent)}`}>
             {diskPercent.toFixed(1)}%
           </span>
@@ -74,7 +75,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
           {diskDetail && (
             <span className="block text-xs text-slate-400 mt-1">{diskDetail}</span>
           )}
-        </div>
+        </Card>
       )}
     </div>
   )

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { useUsers, type User } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
+import { Button, Input, Label, Modal, Notice, Page } from '@/components/shared/ui'
 
 const UserSettings = () => {
   const { getCurrentUser, updateUser, changePassword, regenerateApiKey } = useUsers()
@@ -132,39 +132,19 @@ const UserSettings = () => {
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-8 flex items-center justify-center">
-        <p className="text-slate-500">Loading...</p>
-      </div>
-    )
+    return <Page title="User Settings" width="narrow" loading />
   }
 
   if (error && !user) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-8">
-        <div className="max-w-2xl mx-auto">
-          <p className="text-red-600">{error}</p>
-          <button onClick={loadUser} className="mt-4 text-primary hover:underline">
-            Try again
-          </button>
-        </div>
-      </div>
-    )
+    return <Page title="User Settings" width="narrow" error={error} onRetry={loadUser} />
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
-      <div className="max-w-2xl mx-auto">
-        {/* Header */}
-        <header className="flex items-center gap-4 mb-8 pb-4 border-b border-slate-200">
-          <Link
-            to="/ui/dashboard"
-            className="bg-slate-100 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-200 transition-colors"
-          >
-            &larr; Back
-          </Link>
-          <h1 className="text-2xl font-semibold text-slate-800 flex-1">User Settings</h1>
-        </header>
+    <>
+      <Page
+        title="User Settings"
+        width="narrow"
+      >
 
         {/* Save message */}
         {saveMessage && (
@@ -183,32 +163,29 @@ const UserSettings = () => {
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
-              <input
+              <Label className="mb-1">Name</Label>
+              <Input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-              <input
+              <Label className="mb-1">Email</Label>
+              <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
 
-            <button
+            <Button variant="primary"
               onClick={handleSaveProfile}
               disabled={saving}
-              className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
             >
               {saving ? 'Saving...' : 'Save Changes'}
-            </button>
+            </Button>
           </div>
         </section>
 
@@ -224,12 +201,11 @@ const UserSettings = () => {
                   <p className="font-medium text-slate-800">Password</p>
                   <p className="text-sm text-slate-500">Change your account password</p>
                 </div>
-                <button
+                <Button
                   onClick={() => setShowPasswordModal(true)}
-                  className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
                 >
                   Change Password
-                </button>
+                </Button>
               </div>
             )}
 
@@ -241,12 +217,11 @@ const UserSettings = () => {
                   {(user?.api_key_count ?? 0) > 0 ? 'You have an API key configured' : 'No API key configured'}
                 </p>
               </div>
-              <button
+              <Button
                 onClick={() => setShowApiKeyModal(true)}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key
-              </button>
+              </Button>
             </div>
           </div>
         </section>
@@ -269,52 +244,52 @@ const UserSettings = () => {
             </div>
           </div>
         </section>
-      </div>
+      </Page>
 
       {/* Password Change Modal */}
       {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Change Password</h3>
-
-            {passwordError && (
-              <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{passwordError}</div>
+        <Modal title="Change Password" onClose={() => {
+                  setShowPasswordModal(false)
+                  setCurrentPassword('')
+                  setNewPassword('')
+                  setConfirmPassword('')
+                  setPasswordError(null)
+                }} size="md">
+          {passwordError && (
+              <Notice tone="error" className="mb-4">{passwordError}</Notice>
             )}
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Current Password</label>
-                <input
+                <Label className="mb-1">Current Password</Label>
+                <Input
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
-                <input
+                <Label className="mb-1">New Password</Label>
+                <Input
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
-                <input
+                <Label className="mb-1">Confirm New Password</Label>
+                <Input
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <button
+              <Button
                 onClick={() => {
                   setShowPasswordModal(false)
                   setCurrentPassword('')
@@ -322,20 +297,17 @@ const UserSettings = () => {
                   setConfirmPassword('')
                   setPasswordError(null)
                 }}
-                className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="primary"
                 onClick={handleChangePassword}
                 disabled={passwordSaving}
-                className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
               >
                 {passwordSaving ? 'Saving...' : 'Change Password'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* API Key Modal */}
@@ -355,19 +327,17 @@ const UserSettings = () => {
                 </p>
 
                 <div className="flex justify-end gap-3">
-                  <button
+                  <Button
                     onClick={() => setShowApiKeyModal(false)}
-                    className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
                   >
                     Cancel
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="primary"
                     onClick={handleRegenerateApiKey}
                     disabled={apiKeyLoading}
-                    className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
                   >
                     {apiKeyLoading ? 'Generating...' : (user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'}
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : (
@@ -383,28 +353,26 @@ const UserSettings = () => {
                 </div>
 
                 <div className="flex justify-end gap-3">
-                  <button
+                  <Button
                     onClick={() => copyToClipboard(newApiKey)}
-                    className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
                   >
                     Copy
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="primary"
                     onClick={() => {
                       setShowApiKeyModal(false)
                       setNewApiKey(null)
                     }}
-                    className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 transition-colors"
                   >
                     Done
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
 

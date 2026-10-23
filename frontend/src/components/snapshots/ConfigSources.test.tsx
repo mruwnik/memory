@@ -52,8 +52,8 @@ describe('ConfigSources load + tabs', () => {
     renderWithRouter(<ConfigSources />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('No environments yet')).toBeInTheDocument())
-    expect(screen.getByRole('button', { name: /Environments \(0\)/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Snapshots \(0\)/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Environments \(0\)/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Snapshots \(0\)/ })).toBeInTheDocument()
   })
 
   it('renders an environment with its formatted size and session count', async () => {
@@ -69,8 +69,8 @@ describe('ConfigSources load + tabs', () => {
   it('switches to the snapshots tab and renders snapshot summary counts', async () => {
     mockFetchRoutes(routes([], [snapshot]))
     const { user } = renderWithRouter(<ConfigSources />)
-    await waitFor(() => expect(screen.getByRole('button', { name: /Snapshots \(1\)/ })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Snapshots \(1\)/ }))
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Snapshots \(1\)/ })).toBeInTheDocument())
+    await user.click(screen.getByRole('tab', { name: /Snapshots \(1\)/ }))
     expect(await screen.findByText('Base Snap')).toBeInTheDocument()
     expect(screen.getByText('max')).toBeInTheDocument()
     expect(screen.getByText('snap@example.com')).toBeInTheDocument()
@@ -98,7 +98,7 @@ describe('ConfigSources create environment', () => {
     const mock = mockFetchRoutes({ ...routes([], []), '/claude/environments/create': { json: { ...environment, id: 101 } } })
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByText('No environments yet')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Environment' }))
+    await user.click(screen.getByRole('button', { name: 'New environment' }))
     const heading = await screen.findByText('Create Environment')
     const modal = heading.closest('div')!.parentElement as HTMLElement
     const createBtn = within(modal).getByRole('button', { name: 'Create' })
@@ -147,8 +147,8 @@ describe('ConfigSources delete flows', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const mock = mockFetchRoutes(routes([], [snapshot]))
     const { user } = renderWithRouter(<ConfigSources />)
-    await waitFor(() => expect(screen.getByRole('button', { name: /Snapshots \(1\)/ })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Snapshots \(1\)/ }))
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Snapshots \(1\)/ })).toBeInTheDocument())
+    await user.click(screen.getByRole('tab', { name: /Snapshots \(1\)/ }))
     await screen.findByText('Base Snap')
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => {

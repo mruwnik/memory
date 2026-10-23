@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState } from 'react'
 import type { Person, PersonCreate, PersonUpdate } from '../../hooks/usePeople'
+import { Button, Input, Label, Modal, Notice, Textarea } from '@/components/shared/ui'
 
 interface PersonFormModalProps {
   title: string
@@ -26,11 +27,6 @@ interface FormData {
   website: string
 }
 
-// Selectors for all normally focusable elements inside a container.
-const FOCUSABLE_SELECTORS =
-  'a[href], area[href], input:not([disabled]), select:not([disabled]), ' +
-  'textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 const PersonFormModal = ({
   title,
   initialData,
@@ -53,50 +49,6 @@ const PersonFormModal = ({
     twitter: initialData?.contact_info?.twitter || '',
     website: initialData?.contact_info?.website || '',
   })
-
-  const dialogRef = useRef<HTMLDivElement>(null)
-
-  // Move focus to first focusable element on mount; trap Tab within the dialog.
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-
-    const getFocusable = () =>
-      Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS))
-
-    // Focus first field immediately.
-    getFocusable()[0]?.focus()
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-        return
-      }
-      if (e.key !== 'Tab') return
-
-      const items = getFocusable()
-      if (items.length === 0) return
-      const first = items[0]
-      const last = items[items.length - 1]
-      const focused = document.activeElement as HTMLElement
-
-      if (e.shiftKey) {
-        if (focused === first) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        if (focused === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
-    }
-
-    dialog.addEventListener('keydown', handleKeyDown)
-    return () => dialog.removeEventListener('keydown', handleKeyDown)
-  }, [onCancel])
 
   const generateIdentifier = (name: string): string => {
     // Normalize unicode characters and convert to ASCII-friendly slug
@@ -160,49 +112,37 @@ const PersonFormModal = ({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="person-modal-title"
-        className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg m-4 max-h-[90vh] overflow-y-auto"
-      >
-        <h3 id="person-modal-title" className="text-lg font-semibold text-slate-800 mb-4">
-          {title}
-        </h3>
-
-        {error && (
-          <div role="alert" className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
+    <Modal title={title} onClose={onCancel}>
+      {error && (
+          <Notice tone="error" role="alert" className="mb-4">
             {error}
-          </div>
+          </Notice>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Basic Info */}
           <div>
-            <label htmlFor="person-display-name" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="person-display-name" className="mb-1">
               Display Name <span className="text-red-500" aria-hidden="true">*</span>
               <span className="sr-only">(required)</span>
-            </label>
-            <input
+            </Label>
+            <Input
               id="person-display-name"
               type="text"
               value={form.display_name}
               onChange={(e) => handleDisplayNameChange(e.target.value)}
               required
               placeholder="e.g., Alice Chen"
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
 
           <div>
-            <label htmlFor="person-identifier" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="person-identifier" className="mb-1">
               Identifier <span className="text-red-500" aria-hidden="true">*</span>
               <span className="sr-only">(required)</span>
               {!isEdit && <span className="font-normal text-slate-400 ml-1">(auto-generated)</span>}
-            </label>
-            <input
+            </Label>
+            <Input
               id="person-identifier"
               type="text"
               value={form.identifier}
@@ -212,7 +152,7 @@ const PersonFormModal = ({
               placeholder="e.g., alice_chen"
               pattern="[a-z0-9_]+"
               title="Only lowercase letters, numbers, and underscores"
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-500"
+              className="disabled:bg-slate-50"
             />
             {!isEdit && (
               <p className="text-xs text-slate-400 mt-1">
@@ -222,16 +162,15 @@ const PersonFormModal = ({
           </div>
 
           <div>
-            <label htmlFor="person-aliases" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="person-aliases" className="mb-1">
               Aliases
-            </label>
-            <input
+            </Label>
+            <Input
               id="person-aliases"
               type="text"
               value={form.aliases}
               onChange={(e) => setForm({ ...form, aliases: e.target.value })}
               placeholder="e.g., @alice_c, alice.chen@work.com"
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
             <p className="text-xs text-slate-400 mt-1">
               Comma-separated alternative names or handles
@@ -239,16 +178,15 @@ const PersonFormModal = ({
           </div>
 
           <div>
-            <label htmlFor="person-tags" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="person-tags" className="mb-1">
               Tags
-            </label>
-            <input
+            </Label>
+            <Input
               id="person-tags"
               type="text"
               value={form.tags}
               onChange={(e) => setForm({ ...form, tags: e.target.value })}
               placeholder="e.g., work, friend, engineering"
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
             <p className="text-xs text-slate-400 mt-1">
               Comma-separated tags for categorization
@@ -261,57 +199,52 @@ const PersonFormModal = ({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label htmlFor="person-email" className="block text-xs text-slate-500 mb-1">Email</label>
-                <input
+                <Input
                   id="person-email"
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   placeholder="alice@example.com"
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
               <div>
                 <label htmlFor="person-phone" className="block text-xs text-slate-500 mb-1">Phone</label>
-                <input
+                <Input
                   id="person-phone"
                   type="tel"
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
                   placeholder="+1 555-1234"
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
               <div>
                 <label htmlFor="person-github" className="block text-xs text-slate-500 mb-1">GitHub</label>
-                <input
+                <Input
                   id="person-github"
                   type="text"
                   value={form.github}
                   onChange={(e) => setForm({ ...form, github: e.target.value })}
                   placeholder="@alicechen"
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
               <div>
                 <label htmlFor="person-twitter" className="block text-xs text-slate-500 mb-1">Twitter/X</label>
-                <input
+                <Input
                   id="person-twitter"
                   type="text"
                   value={form.twitter}
                   onChange={(e) => setForm({ ...form, twitter: e.target.value })}
                   placeholder="@alice_c"
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
               <div className="col-span-2">
                 <label htmlFor="person-website" className="block text-xs text-slate-500 mb-1">Website</label>
-                <input
+                <Input
                   id="person-website"
                   type="url"
                   value={form.website}
                   onChange={(e) => setForm({ ...form, website: e.target.value })}
                   placeholder="https://alice.dev"
-                  className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
             </div>
@@ -319,39 +252,35 @@ const PersonFormModal = ({
 
           {/* Add a tidbit */}
           <div>
-            <label htmlFor="person-notes" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="person-notes" className="mb-1">
               Add a note
-            </label>
-            <textarea
+            </Label>
+            <Textarea
               id="person-notes"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               rows={4}
               placeholder="Saved as a tidbit. Existing tidbits are shown on the person card."
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
             />
           </div>
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
-            <button
+            <Button
               type="button"
               onClick={onCancel}
-              className="bg-slate-100 text-slate-700 py-2 px-4 rounded-lg hover:bg-slate-200 transition-colors"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button variant="primary"
               type="submit"
               disabled={loading || !form.display_name || !form.identifier}
-              className="bg-primary text-white py-2 px-4 rounded-lg hover:bg-primary/90 disabled:bg-slate-400 transition-colors"
             >
               {loading ? 'Saving...' : submitLabel}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   )
 }
 

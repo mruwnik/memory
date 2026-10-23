@@ -203,8 +203,8 @@ describe('PeopleManagement search and tag filtering', () => {
     const { user } = renderWithRouter(<PeopleManagement />)
     await screen.findByRole('heading', { name: 'Alice' })
 
-    await user.click(screen.getByText('Filter by tag'))
-    await user.click(screen.getByRole('button', { name: 'vip' }))
+    await user.click(screen.getByRole('combobox', { name: 'Filter by tag' }))
+    await user.click(screen.getByRole('option', { name: 'vip' }))
 
     await waitFor(() => {
       const tagCall = mcpCallsTo(fetchMock, 'people_list_all').find((c) => {

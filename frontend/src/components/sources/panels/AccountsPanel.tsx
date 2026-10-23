@@ -1,15 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, GithubAccount, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
-import {
-  SourceCard,
-  Modal,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  StatusBadge,
-  SyncStatus,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { SourceCard, StatusBadge, SyncStatus } from '../shared'
+import { Button, Card, EmptyState, ErrorState, Field, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, Textarea, buttonClass, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const AccountsPanel = () => {
@@ -205,11 +197,11 @@ export const AccountsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <div className={styles.panel}>
+    <Card>
       {/* GitHub Accounts Section */}
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>GitHub Accounts</h3>
-        <button className={styles.btnAdd} onClick={() => setShowGithubForm(true)}>Add Account</button>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-slate-800">GitHub Accounts</h3>
+        <Button variant="primary" onClick={() => setShowGithubForm(true)}>Add Account</Button>
       </div>
 
       {githubAccounts.length === 0 ? (
@@ -219,7 +211,7 @@ export const AccountsPanel = () => {
           onAction={() => setShowGithubForm(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {githubAccounts.map(account => (
             <SourceCard
               key={account.id}
@@ -231,7 +223,7 @@ export const AccountsPanel = () => {
               onEdit={() => setEditingGithubAccount(account)}
               onDelete={() => handleDeleteGithubAccount(account.id)}
               additionalActions={
-                <button className={styles.btnEdit} onClick={() => handleValidateGithubAccount(account.id)}>Validate</button>
+                <Button size="sm" onClick={() => handleValidateGithubAccount(account.id)}>Validate</Button>
               }
             />
           ))}
@@ -254,18 +246,18 @@ export const AccountsPanel = () => {
       )}
 
       {/* Google Accounts Section */}
-      <div className={cx(styles.panelHeader, 'mt-8')}>
-        <h3 className={styles.panelTitle}>Google Accounts</h3>
-        {oauthConfig && <button className={styles.btnAdd} onClick={handleConnectGoogle}>Connect Account</button>}
+      <div className="flex items-center justify-between mb-4 mt-8">
+        <h3 className="text-lg font-semibold text-slate-800">Google Accounts</h3>
+        {oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect Account</Button>}
       </div>
 
       {/* OAuth Config required first */}
       {oauthConfig === null ? (
-        <div className={styles.configBox}>
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
           <h4 className="font-medium text-slate-800 mb-2">OAuth Configuration Required</h4>
           <p className="text-sm text-slate-600 mb-2">Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).</p>
-          <p className={cx(styles.formHint, 'mb-4')}>Get this from the Google Cloud Console under APIs & Services → Credentials.</p>
-          <label className={cx(styles.btnUpload, 'inline-block')}>
+          <Hint className="mb-4">Get this from the Google Cloud Console under APIs & Services → Credentials.</Hint>
+          <label className={buttonClass('secondary', 'md', 'inline-block')}>
             {uploadingConfig ? 'Uploading...' : 'Upload Credentials JSON'}
             <input
               type="file"
@@ -278,13 +270,13 @@ export const AccountsPanel = () => {
         </div>
       ) : (
         <>
-          <details className={styles.detailsSection}>
-            <summary className={styles.detailsSummary}>OAuth Configuration</summary>
-            <div className={styles.detailsContent}>
+          <details className="border border-slate-200 rounded-lg">
+            <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">OAuth Configuration</summary>
+            <div className="p-4 pt-0">
               <p className="text-sm text-slate-600 mb-1"><strong>Project:</strong> {oauthConfig.project_id}</p>
               <p className="text-sm text-slate-600 mb-3"><strong>Client ID:</strong> {oauthConfig.client_id.substring(0, 20)}...</p>
               <div className="flex gap-2">
-                <label className={cx(styles.btnUpload, 'text-xs')}>
+                <label className={buttonClass('secondary', 'md', 'text-xs')}>
                   {uploadingConfig ? 'Uploading...' : 'Replace Config'}
                   <input
                     type="file"
@@ -294,9 +286,9 @@ export const AccountsPanel = () => {
                     className="hidden"
                   />
                 </label>
-                <button className={cx(styles.btnDelete, 'text-xs')} onClick={handleDeleteConfig}>
+                <Button variant="danger" size="sm" className="text-xs" onClick={handleDeleteConfig}>
                   Delete Config
-                </button>
+                </Button>
               </div>
             </div>
           </details>
@@ -308,23 +300,23 @@ export const AccountsPanel = () => {
               onAction={handleConnectGoogle}
             />
           ) : (
-            <div className={cx(styles.sourceList, 'mt-4')}>
+            <div className="space-y-3 mt-4">
               {googleAccounts.map(account => (
-                <div key={account.id} className={account.active ? styles.card : styles.cardInactive}>
-                  <div className={styles.cardHeader}>
-                    <div className={styles.cardInfo}>
+                <div key={account.id} className={cx('border border-slate-200 rounded-lg p-4', !account.active && 'opacity-60')}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
                       <SyncStatus lastSyncAt={account.last_sync_at} />
-                      <h4 className={styles.cardTitle}>{account.name}</h4>
-                      <p className={styles.cardSubtitle}>{account.email}</p>
+                      <h4 className="font-medium text-slate-800 truncate">{account.name}</h4>
+                      <p className="text-sm text-slate-600 truncate">{account.email}</p>
                     </div>
-                    <div className={styles.cardActions}>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <StatusBadge active={account.active} />
-                      <button className={styles.btnEdit} onClick={() => handleReauthorizeGoogle(account.id)}>Re-authorize</button>
-                      <button className={styles.btnDelete} onClick={() => handleDeleteGoogleAccount(account.id)}>Disconnect</button>
+                      <Button size="sm" onClick={() => handleReauthorizeGoogle(account.id)}>Re-authorize</Button>
+                      <Button variant="danger" size="sm" onClick={() => handleDeleteGoogleAccount(account.id)}>Disconnect</Button>
                     </div>
                   </div>
                   {account.sync_error && (
-                    <div className={styles.errorBanner}>{account.sync_error}</div>
+                    <Notice tone="error">{account.sync_error}</Notice>
                   )}
                 </div>
               ))}
@@ -350,7 +342,7 @@ export const AccountsPanel = () => {
                     type="checkbox"
                     checked={selectedScopes.includes(key)}
                     onChange={() => toggleScope(key)}
-                    className="mt-0.5 rounded border-slate-300"
+                    className="mt-0.5"
                   />
                   <div>
                     <span className="font-medium text-slate-800 block">{info.label}</span>
@@ -359,20 +351,19 @@ export const AccountsPanel = () => {
                 </label>
               ))}
             </div>
-            <div className={styles.modalActions}>
-              <button className={styles.btnCancel} onClick={() => setShowScopeModal(false)}>Cancel</button>
-              <button
-                className={styles.btnSubmit}
+            <FormActions>
+              <Button onClick={() => setShowScopeModal(false)}>Cancel</Button>
+              <Button variant="primary"
                 onClick={handleScopeSelectionConfirm}
                 disabled={selectedScopes.length === 0}
               >
                 {reauthorizingAccountId ? "Update Permissions" : "Connect"}
-              </button>
-            </div>
+              </Button>
+            </FormActions>
           </div>
         </Modal>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -417,92 +408,78 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
 
   return (
     <Modal title={account ? 'Edit GitHub Account' : 'Add GitHub Account'} onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Name</label>
-          <input
+        <Field label="Name">
+          <Input
             type="text"
             value={formData.name}
             onChange={e => setFormData({ ...formData, name: e.target.value })}
             required
             placeholder="My GitHub Account"
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Authentication Type</label>
-          <select
+        <Field label="Authentication Type">
+          <Select
             value={formData.auth_type}
             onChange={e => setFormData({ ...formData, auth_type: e.target.value as 'pat' | 'app' })}
             disabled={!!account}
-            className={styles.formSelect}
           >
             <option value="pat">Personal Access Token</option>
             <option value="app">GitHub App</option>
-          </select>
-        </div>
+          </Select>
+        </Field>
 
         {formData.auth_type === 'pat' ? (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>
-              Access Token {account?.has_access_token && <span className="text-slate-400">(leave blank to keep current)</span>}
-            </label>
-            <input
+          <Field label={<>
+              Access Token {account?.has_access_token && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+            <Input
               type="password"
               value={formData.access_token}
               onChange={e => setFormData({ ...formData, access_token: e.target.value })}
               required={!account}
               placeholder="ghp_..."
-              className={styles.formInput}
             />
-          </div>
+          </Field>
         ) : (
           <>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>App ID</label>
-              <input
+            <Field label="App ID">
+              <Input
                 type="number"
                 value={formData.app_id || ''}
                 onChange={e => setFormData({ ...formData, app_id: parseInt(e.target.value) || undefined })}
                 required={!account}
-                className={styles.formInput}
               />
-            </div>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Installation ID</label>
-              <input
+            </Field>
+            <Field label="Installation ID">
+              <Input
                 type="number"
                 value={formData.installation_id || ''}
                 onChange={e => setFormData({ ...formData, installation_id: parseInt(e.target.value) || undefined })}
                 required={!account}
-                className={styles.formInput}
               />
-            </div>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>
-                Private Key {account?.has_private_key && <span className="text-slate-400">(leave blank to keep current)</span>}
-              </label>
-              <textarea
+            </Field>
+            <Field label={<>
+                Private Key {account?.has_private_key && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+              <Textarea
                 value={formData.private_key}
                 onChange={e => setFormData({ ...formData, private_key: e.target.value })}
                 required={!account}
                 rows={5}
                 placeholder="-----BEGIN RSA PRIVATE KEY-----..."
-                className={styles.formTextarea}
               />
-            </div>
+            </Field>
           </>
         )}
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

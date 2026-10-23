@@ -2,17 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
-import {
-  Modal,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  StatusBadge,
-  SyncStatus,
-  SyncButton,
-  ConfirmDialog,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { StatusBadge, SyncStatus, SyncButton } from '../shared'
+import { Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const DiscordPanel = () => {
@@ -212,13 +203,9 @@ export const DiscordPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Discord</h3>
-        <button className={styles.btnAdd} onClick={() => setAddingBot(true)}>
+    <Card title="Discord" actions={<><Button variant="primary" onClick={() => setAddingBot(true)}>
           Add Bot
-        </button>
-      </div>
+        </Button></>}>
 
       {bots.length === 0 ? (
         <EmptyState
@@ -227,7 +214,7 @@ export const DiscordPanel = () => {
           onAction={() => setAddingBot(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {bots.map(bot => (
             <BotCard
               key={bot.id}
@@ -285,7 +272,7 @@ export const DiscordPanel = () => {
           onClose={() => setManagingUsersBot(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -330,9 +317,9 @@ const BotCard = ({
 }: BotCardProps) => {
   return (
     <div className="border border-slate-200 rounded-lg p-4">
-      <div className={styles.cardHeader}>
-        <div className={styles.cardInfo}>
-          <h4 className={styles.cardTitle}>{bot.name}</h4>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium text-slate-800 truncate">{bot.name}</h4>
           <div className="flex items-center gap-2 text-sm text-slate-500 mt-1">
             <span className={cx(
               'w-2 h-2 rounded-full',
@@ -347,7 +334,7 @@ const BotCard = ({
             )}
           </div>
         </div>
-        <div className={styles.cardActions}>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <StatusBadge active={bot.is_active} onClick={onToggleActive} />
         </div>
       </div>
@@ -364,15 +351,14 @@ const BotCard = ({
         >
           Add to Server
         </button>
-        <button
-          className="px-3 py-1.5 text-sm rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+        <Button size="sm"
           onClick={onManageUsers}
         >
           Manage Users
-        </button>
-        <button className={styles.btnDelete} onClick={onDelete}>
+        </Button>
+        <Button variant="danger" size="sm" onClick={onDelete}>
           Remove
-        </button>
+        </Button>
       </div>
 
       {/* Servers section */}
@@ -726,54 +712,44 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
 
   return (
     <Modal title="Add Discord Bot" onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Bot Name</label>
-          <input
+        <Field label="Bot Name" hint="A friendly name for this bot">
+          <Input
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="e.g., My Bot"
             required
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>A friendly name for this bot</p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Bot Token</label>
-          <input
+        <Field label="Bot Token" hint="Get this from the Discord Developer Portal under Bot → Token">
+          <Input
             type="password"
             value={token}
             onChange={e => setToken(e.target.value)}
             placeholder="Paste your Discord bot token"
             required
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>
-            Get this from the Discord Developer Portal under Bot → Token
-          </p>
-        </div>
+        </Field>
 
-        <div className={styles.formActions}>
-          <button
+        <FormActions>
+          <Button
             type="button"
-            className={styles.btnCancel}
             onClick={onCancel}
             disabled={submitting}
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button variant="primary"
             type="submit"
-            className={styles.btnSubmit}
             disabled={submitting}
           >
             {submitting ? 'Adding...' : 'Add Bot'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )
@@ -830,7 +806,7 @@ const ManageUsersModal = ({
   return (
     <Modal title={`Manage Users - ${bot.name}`} onClose={onClose}>
       <div className="space-y-4">
-        {error && <div className={styles.formError}>{error}</div>}
+        {error && <Notice tone="error">{error}</Notice>}
 
         {/* Current authorized users */}
         <div>
@@ -897,12 +873,12 @@ const ManageUsersModal = ({
         )}
 
         <div className="pt-4 border-t border-slate-200">
-          <button
-            className="w-full px-4 py-2 text-sm rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+          <Button
+            className="w-full"
             onClick={onClose}
           >
             Done
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>

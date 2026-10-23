@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useReports, type Report } from '@/hooks/useReports'
-import { styles, cx } from '../sources/styles'
-import { LoadingState, ErrorState, EmptyState, TagsInput, ConfirmDialog } from '../sources/shared'
+import { TagsInput } from '../sources/shared'
+import { Badge, Button, Checkbox, ConfirmDialog, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Notice, Page, Textarea, ToggleGroup, buttonClass, cx } from '@/components/shared/ui'
 import { formatRelativeTime } from '../sources/shared'
 
 type FormMode = 'html' | 'upload'
@@ -196,109 +196,68 @@ const ReportsPage = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center shadow-sm">
-        <div className="flex items-center gap-4">
-          <Link
-            to="/ui/dashboard"
-            className="text-slate-500 hover:text-slate-700 transition-colors"
-          >
-            &larr; Back
-          </Link>
-          <h1 className="text-primary text-2xl font-semibold">Reports</h1>
-        </div>
-        <button
-          className={styles.btnAdd}
-          onClick={() => { setShowForm(!showForm); resetForm() }}
-        >
+    <Page
+      title="Reports"
+      width="full"
+      fill
+      actions={
+        <Button variant={showForm ? 'secondary' : 'primary'} onClick={() => { setShowForm(!showForm); resetForm() }}>
           {showForm ? 'Cancel' : 'New Report'}
-        </button>
-      </header>
-
-      <main className="flex-1 flex overflow-hidden">
+        </Button>
+      }
+    >
+      <div className="h-full flex overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm">
         {/* Left panel — Report list */}
-        <div className="w-80 bg-white border-r border-slate-200 flex flex-col">
+        <div className="w-80 shrink-0 border-r border-slate-200 flex flex-col">
           {showForm && (
             <div className="border-b border-slate-200 p-4">
-              <form onSubmit={handleSubmit} className={styles.form}>
+              <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Mode toggle */}
-                <div className="flex rounded-md border border-slate-200 overflow-hidden mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setFormMode('html')}
-                    className={cx(
-                      'flex-1 px-3 py-1.5 text-sm font-medium transition-colors',
-                      formMode === 'html' ? 'bg-slate-100 text-slate-700' : 'bg-white text-slate-500 hover:bg-slate-50'
-                    )}
-                  >
-                    Write HTML
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormMode('upload')}
-                    className={cx(
-                      'flex-1 px-3 py-1.5 text-sm font-medium transition-colors border-l border-slate-200',
-                      formMode === 'upload' ? 'bg-slate-100 text-slate-700' : 'bg-white text-slate-500 hover:bg-slate-50'
-                    )}
-                  >
-                    Upload File
-                  </button>
-                </div>
+                <ToggleGroup label="Report source" value={formMode} onChange={setFormMode}
+                  options={[{ value: 'html', label: 'Write HTML' }, { value: 'upload', label: 'Upload File' }]} />
 
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>Title</label>
-                  <input
+                <Field label="Title">
+                  <Input
                     type="text"
                     value={title}
                     onChange={e => setTitle(e.target.value)}
-                    className={styles.formInput}
                     placeholder="Report title"
                   />
-                </div>
+                </Field>
 
                 {formMode === 'html' ? (
-                  <div className={styles.formGroup}>
-                    <label className={styles.formLabel}>HTML Content</label>
-                    <textarea
+                  <Field label="HTML Content">
+                    <Textarea
                       value={htmlContent}
                       onChange={e => setHtmlContent(e.target.value)}
-                      className={cx(styles.formTextarea, 'h-32 font-mono text-xs')}
+                      className="h-32 font-mono text-xs"
                       placeholder="<h1>My Report</h1>&#10;<p>Content here...</p>"
                     />
-                  </div>
+                  </Field>
                 ) : (
-                  <div className={styles.formGroup}>
-                    <label className={styles.formLabel}>File (.html, .htm, .pdf)</label>
+                  <Field>
+                    <Label>File (.html, .htm, .pdf)</Label>
                     <input
                       type="file"
                       accept=".html,.htm,.pdf"
                       onChange={e => setFile(e.target.files?.[0] || null)}
                       className="text-sm text-slate-600"
                     />
-                  </div>
+                  </Field>
                 )}
 
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>Tags</label>
+                <Field label="Tags">
                   <TagsInput tags={tags} onChange={setTags} />
-                </div>
+                </Field>
 
-                <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={allowScripts}
-                    onChange={e => setAllowScripts(e.target.checked)}
-                    className="rounded border-slate-300"
-                  />
-                  Allow scripts
-                </label>
+                <Checkbox checked={allowScripts} onChange={e => setAllowScripts(e.target.checked)} label="Allow scripts" />
 
                 {allowScripts && (
-                  <div className={styles.formGroup}>
-                    <label className={styles.formLabel}>
+                  <Field>
+                    <Label>
                       Allowed External URLs
                       <span className="text-xs text-slate-500 ml-2">(for CSP connect-src)</span>
-                    </label>
+                    </Label>
                     <TagsInput
                       tags={allowedConnectUrls}
                       onChange={setAllowedConnectUrls}
@@ -307,16 +266,16 @@ const ReportsPage = () => {
                     <p className="text-xs text-slate-500 mt-1">
                       External URLs this report can connect to (e.g., for calling external MCP servers)
                     </p>
-                  </div>
+                  </Field>
                 )}
 
-                {formError && <div className={styles.formError}>{formError}</div>}
+                {formError && <Notice tone="error">{formError}</Notice>}
 
-                <div className={styles.formActions}>
-                  <button type="submit" disabled={submitting} className={styles.btnSubmit}>
+                <FormActions>
+                  <Button variant="primary" type="submit" disabled={submitting}>
                     {submitting ? 'Saving...' : formMode === 'html' ? 'Create Report' : 'Upload'}
-                  </button>
-                </div>
+                  </Button>
+                </FormActions>
               </form>
             </div>
           )}
@@ -359,19 +318,14 @@ const ReportsPage = () => {
                         <span className="flex-1 font-medium text-sm text-slate-800 truncate">
                           {reportTitle(report)}
                         </span>
-                        <span className={cx(
-                          styles.badge,
-                          format === 'pdf' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
-                        )}>
-                          {format.toUpperCase()}
-                        </span>
+                        <Badge tone={format === 'pdf' ? 'danger' : 'info'}>{format.toUpperCase()}</Badge>
                       </div>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs text-slate-400">
+                        <span className="text-xs text-slate-500">
                           {formatRelativeTime(report.inserted_at)}
                         </span>
                         {(report.tags?.length ?? 0) > 0 && (
-                          <span className="text-xs text-slate-400 truncate">
+                          <span className="text-xs text-slate-500 truncate">
                             {report.tags.slice(0, 3).join(', ')}
                           </span>
                         )}
@@ -398,59 +352,46 @@ const ReportsPage = () => {
                       href={reportUrl(selectedReport)!}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className={styles.btnPrimary}
+                      className={buttonClass('secondary', 'sm')}
                     >
                       Open PDF
                     </a>
                   )}
                   {reportFormat(selectedReport) === 'html' && (
-                    <button
+                    <Button size="sm"
                       onClick={() => startEditing(selectedReport)}
-                      className={styles.btnPrimary}
                     >
                       Edit
-                    </button>
+                    </Button>
                   )}
-                  <button
+                  <Button variant="danger" size="sm"
                     onClick={() => setDeletingReport(selectedReport)}
                     disabled={deleting}
-                    className={styles.btnDanger}
                   >
                     Delete
-                  </button>
+                  </Button>
                 </div>
               </div>
               {editing && (
                 <div className="px-6 py-3 border-b border-slate-200 bg-slate-50">
                   <form onSubmit={handleEditSubmit} className="space-y-3">
-                    <div className={styles.formGroup}>
-                      <label className={styles.formLabel}>Title</label>
-                      <input
+                    <Field label="Title">
+                      <Input
                         type="text"
                         value={editTitle}
                         onChange={e => setEditTitle(e.target.value)}
-                        className={styles.formInput}
                       />
-                    </div>
-                    <div className={styles.formGroup}>
-                      <label className={styles.formLabel}>Tags</label>
+                    </Field>
+                    <Field label="Tags">
                       <TagsInput tags={editTags} onChange={setEditTags} />
-                    </div>
-                    <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editAllowScripts}
-                        onChange={e => setEditAllowScripts(e.target.checked)}
-                        className="rounded border-slate-300"
-                      />
-                      Allow scripts
-                    </label>
+                    </Field>
+                    <Checkbox checked={editAllowScripts} onChange={e => setEditAllowScripts(e.target.checked)} label="Allow scripts" />
                     {editAllowScripts && (
-                      <div className={styles.formGroup}>
-                        <label className={styles.formLabel}>
+                      <Field>
+                        <Label>
                           Allowed External URLs
                           <span className="text-xs text-slate-500 ml-2">(for CSP connect-src)</span>
-                        </label>
+                        </Label>
                         <TagsInput
                           tags={editAllowedConnectUrls}
                           onChange={setEditAllowedConnectUrls}
@@ -459,16 +400,16 @@ const ReportsPage = () => {
                         <p className="text-xs text-slate-500 mt-1">
                           External URLs this report can connect to
                         </p>
-                      </div>
+                      </Field>
                     )}
-                    {editError && <div className={styles.formError}>{editError}</div>}
+                    {editError && <Notice tone="error">{editError}</Notice>}
                     <div className="flex items-center gap-2">
-                      <button type="submit" disabled={editSubmitting} className={styles.btnSubmit}>
+                      <Button variant="primary" type="submit" disabled={editSubmitting}>
                         {editSubmitting ? 'Saving...' : 'Save Changes'}
-                      </button>
-                      <button type="button" onClick={() => setEditing(false)} className={styles.btnDanger}>
+                      </Button>
+                      <Button type="button" onClick={() => setEditing(false)}>
                         Cancel
-                      </button>
+                      </Button>
                     </div>
                   </form>
                 </div>
@@ -483,7 +424,7 @@ const ReportsPage = () => {
                           href={reportUrl(selectedReport)!}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className={styles.btnPrimary}
+                          className={buttonClass('primary')}
                         >
                           Open in new tab
                         </a>
@@ -498,19 +439,19 @@ const ReportsPage = () => {
                     />
                   )
                 ) : (
-                  <div className="flex items-center justify-center h-full text-slate-400">
+                  <div className="flex items-center justify-center h-full text-slate-500">
                     Report file not available
                   </div>
                 )}
               </div>
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-400">
+            <div className="flex-1 flex items-center justify-center text-slate-600">
               Select a report to view
             </div>
           )}
         </div>
-      </main>
+      </div>
 
       {deletingReport && (
         <ConfirmDialog
@@ -519,7 +460,7 @@ const ReportsPage = () => {
           onCancel={() => setDeletingReport(null)}
         />
       )}
-    </div>
+    </Page>
   )
 }
 

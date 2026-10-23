@@ -47,7 +47,7 @@ describe('RunView', () => {
     view()
     await waitFor(() => expect(screen.getByText('found it')).toBeInTheDocument())
     expect(screen.getAllByText('core_search').length).toBeGreaterThan(0)
-    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel run' })).not.toBeInTheDocument()
   })
 
   it('renders model output as text, never as markup', async () => {

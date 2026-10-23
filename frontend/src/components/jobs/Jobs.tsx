@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import { useJobs, Job, JobStatus, JobSource, JobUser } from '@/hooks/useJobs'
 import UserSelector, { useUserSelection, ALL_USERS_ID, NO_USER_ID } from '@/components/common/UserSelector'
+import { Button, EmptyState, Input, LoadingState, Notice, Page, Select, ToggleGroup } from '@/components/shared/ui'
 
 type StatusFilter = 'all' | JobStatus
 
@@ -180,12 +180,9 @@ const Jobs = () => {
   const completeCount = jobs.filter(j => j.status === 'complete').length
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Jobs</h1>
+    <Page
+      title="Jobs"
+      actions={<>
         <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithJobs} showAllOption showNoneOption />
         <div className="flex gap-3 text-sm">
           {showStats ? (
@@ -199,107 +196,86 @@ const Jobs = () => {
             <span className="text-slate-600">Showing {jobs.length} {statusFilter}</span>
           )}
         </div>
-      </header>
-
+      </>}
+      width="wide"
+    >
       <div className="space-y-4">
         {/* Filters */}
-        <div className="flex gap-2 items-center">
-          {FILTERS.map(f => (
-            <button
-              key={f.value}
-              className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
-                statusFilter === f.value
-                  ? 'bg-primary text-white'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-              }`}
-              onClick={() => setStatusFilter(f.value)}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-2 items-center">
+          <ToggleGroup label="Filter" options={FILTERS} value={statusFilter} onChange={setStatusFilter} />
           {jobTypes.length > 1 && (
-            <select
+            <Select className="w-auto" aria-label="Job type"
               value={jobTypeFilter}
               onChange={(e) => setJobTypeFilter(e.target.value)}
-              className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
             >
               <option value="all">All types</option>
               {jobTypes.map(t => (
                 <option key={t} value={t}>{formatJobType(t)}</option>
               ))}
-            </select>
+            </Select>
           )}
-          <select
+          <Select className="w-auto" aria-label="Source"
             value={sourceFilter}
             onChange={(e) => setSourceFilter(e.target.value as 'all' | JobSource)}
-            className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
           >
             <option value="all">All sources</option>
             <option value="manual">Manual</option>
             <option value="automatic">Automatic</option>
-          </select>
-          <div className="flex items-center gap-1 ml-2">
-            <input
+          </Select>
+          <div className="flex items-center gap-1">
+            <Input
               type="date"
+              className="w-auto"
               value={createdAfter}
               onChange={(e) => setCreatedAfter(e.target.value)}
-              className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
-              title="From date"
+              aria-label="From date"
             />
-            <span className="text-slate-400 text-xs">to</span>
-            <input
+            <span className="text-slate-500 text-xs">to</span>
+            <Input
               type="date"
+              className="w-auto"
               value={createdBefore}
               onChange={(e) => setCreatedBefore(e.target.value)}
-              className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
-              title="To date"
+              aria-label="To date"
             />
             {(createdAfter || createdBefore) && (
               <button
                 onClick={() => { setCreatedAfter(''); setCreatedBefore('') }}
-                className="text-xs text-slate-400 hover:text-slate-600 px-1"
-                title="Clear dates"
+                className="text-xs text-slate-500 hover:text-slate-700 px-1"
+                aria-label="Clear dates"
               >
                 &times;
               </button>
             )}
           </div>
-          <button
+          <Button size="icon"
             onClick={() => loadJobs()}
-            className="w-9 h-9 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-lg"
+            
             title="Refresh"
             aria-label="Refresh jobs list"
           >
             &#8635;
-          </button>
+          </Button>
         </div>
 
         {/* Action Error */}
         {actionError && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{actionError}</p>
-            <button onClick={() => setActionError(null)} className="text-red-700 hover:underline">Dismiss</button>
-          </div>
+          <Notice tone="error" onDismiss={() => setActionError(null)}>{actionError}</Notice>
         )}
 
         {/* Load Error */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{error}</p>
-            <button onClick={() => loadJobs()} className="text-primary hover:underline">Retry</button>
-          </div>
+          <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>
         )}
 
         {/* Loading */}
-        {loading && <div className="text-center py-8 text-slate-500">Loading jobs...</div>}
+        {loading && <LoadingState message="Loading jobs..." />}
 
         {/* Empty State */}
         {!loading && jobs.length === 0 && (
-          <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
-            {statusFilter === 'all'
+          <EmptyState message={statusFilter === 'all'
               ? 'No jobs found'
-              : `No ${statusFilter} jobs`}
-          </div>
+              : `No ${statusFilter} jobs`} />
         )}
 
         {/* Job List */}
@@ -342,24 +318,22 @@ const Jobs = () => {
 
                   <div className="shrink-0 flex gap-2">
                     {job.status === 'failed' && (
-                      <button
+                      <Button variant="primary" size="sm"
                         onClick={() => handleRetry(job.id)}
                         disabled={retryingId === job.id || reingestingId === job.id}
-                        className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark disabled:bg-slate-400"
                         title="Retry failed job"
                       >
                         {retryingId === job.id ? 'Retrying...' : 'Retry'}
-                      </button>
+                      </Button>
                     )}
                     {(job.status === 'complete' || job.status === 'failed') && (
-                      <button
+                      <Button size="sm"
                         onClick={() => handleReingest(job.id)}
                         disabled={retryingId === job.id || reingestingId === job.id}
-                        className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200 disabled:bg-slate-200 disabled:text-slate-400"
                         title="Re-run this job"
                       >
                         {reingestingId === job.id ? 'Reingesting...' : 'Reingest'}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -371,27 +345,25 @@ const Jobs = () => {
         {/* Pagination */}
         {!loading && (page > 0 || hasMore) && (
           <div className="flex items-center justify-between pt-2">
-            <button
+            <Button
               onClick={() => setPage(p => Math.max(0, p - 1))}
               disabled={page === 0}
-              className="py-2 px-4 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Previous
-            </button>
+            </Button>
             <span className="text-sm text-slate-500">
               Page {page + 1}{hasMore ? '' : ' (last)'}
             </span>
-            <button
+            <Button
               onClick={() => setPage(p => p + 1)}
               disabled={!hasMore}
-              className="py-2 px-4 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Next
-            </button>
+            </Button>
           </div>
         )}
       </div>
-    </div>
+    </Page>
   )
 }
 

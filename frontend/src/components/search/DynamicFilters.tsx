@@ -1,5 +1,6 @@
 import { FilterInput } from './FilterInput'
 import { CollectionMetadata, SchemaArg } from '@/types/mcp'
+import { Label } from '@/components/shared/ui'
 
 const formatFieldLabel = (field: string): string =>
     field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
@@ -98,7 +99,7 @@ export const DynamicFilters = ({
 
     return (
         <div className="space-y-4">
-            <label className="block text-sm font-medium text-slate-700">Filters:</label>
+            <Label>Filters</Label>
             <div className="space-y-3">
                 {commonFields.length > 0 && (
                     <details className="border border-slate-200 rounded-lg p-4" open>

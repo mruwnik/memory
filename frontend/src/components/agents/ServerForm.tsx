@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import type { ExternalServer, ServerAuth, ServerTransport, ServerUpsertResult } from '@/hooks/useAgents'
+import { Button, Input, Label, Notice, Select, Textarea } from '@/components/shared/ui'
 
-const inputClass = 'w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary'
-const labelClass = 'block text-xs font-medium text-slate-500 mb-1'
 
 type AuthChoice = 'auto' | 'bearer' | 'headers' | 'none'
 
@@ -87,43 +86,43 @@ export function ServerForm({ server, onSubmit }: {
     <form className="space-y-3" onSubmit={submit}>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
-          <label className={labelClass} htmlFor="server-url">URL</label>
-          <input id="server-url" required className={inputClass} placeholder="https://mcp.example.com/mcp"
+          <Label className="mb-1" htmlFor="server-url">URL</Label>
+          <Input id="server-url" required placeholder="https://mcp.example.com/mcp"
             value={url} onChange={e => setUrl(e.target.value)} />
         </div>
         <div>
-          <label className={labelClass} htmlFor="server-name">Name</label>
-          <input id="server-name" maxLength={100} className={inputClass} placeholder={hostOf(url) || 'defaults to the host'}
+          <Label className="mb-1" htmlFor="server-name">Name</Label>
+          <Input id="server-name" maxLength={100} placeholder={hostOf(url) || 'defaults to the host'}
             value={name} onChange={e => setName(e.target.value)} />
         </div>
         <div>
-          <label className={labelClass} htmlFor="server-transport">Transport</label>
-          <select id="server-transport" className={inputClass} value={transport}
+          <Label className="mb-1" htmlFor="server-transport">Transport</Label>
+          <Select id="server-transport" value={transport}
             onChange={e => setTransport(e.target.value as ServerTransport)}>
             <option value="http">Streamable HTTP</option>
             <option value="sse">SSE (legacy)</option>
-          </select>
+          </Select>
         </div>
         <div>
-          <label className={labelClass} htmlFor="server-auth">Authentication</label>
-          <select id="server-auth" className={inputClass} value={choice} onChange={e => setChoice(e.target.value as AuthChoice)}>
+          <Label className="mb-1" htmlFor="server-auth">Authentication</Label>
+          <Select id="server-auth" value={choice} onChange={e => setChoice(e.target.value as AuthChoice)}>
             <option value="auto">Auto-detect (OAuth if the server asks)</option>
             <option value="bearer">Bearer token</option>
             <option value="headers">Custom headers</option>
             <option value="none">None</option>
-          </select>
+          </Select>
         </div>
       </div>
       {choice === 'bearer' && (
         <div>
-          <label className={labelClass} htmlFor="server-token">Bearer token</label>
-          <input id="server-token" type="password" required className={inputClass} value={token} onChange={e => setToken(e.target.value)} />
+          <Label className="mb-1" htmlFor="server-token">Bearer token</Label>
+          <Input id="server-token" type="password" required value={token} onChange={e => setToken(e.target.value)} />
         </div>
       )}
       {choice === 'headers' && (
         <div>
-          <label className={labelClass} htmlFor="server-headers">Headers, one "Name: value" per line</label>
-          <textarea id="server-headers" className={`${inputClass} h-20 font-mono`} value={headers} onChange={e => setHeaders(e.target.value)} />
+          <Label className="mb-1" htmlFor="server-headers">Headers, one "Name: value" per line</Label>
+          <Textarea id="server-headers" className="h-20 font-mono" value={headers} onChange={e => setHeaders(e.target.value)} />
         </div>
       )}
       {choice === 'auto' && (
@@ -135,34 +134,34 @@ export function ServerForm({ server, onSubmit }: {
           </p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
             <div>
-              <label className={labelClass} htmlFor="server-client-id">Client ID</label>
-              <input id="server-client-id" className={inputClass} value={clientId} onChange={e => setClientId(e.target.value)} />
+              <Label className="mb-1" htmlFor="server-client-id">Client ID</Label>
+              <Input id="server-client-id" value={clientId} onChange={e => setClientId(e.target.value)} />
             </div>
             <div>
-              <label className={labelClass} htmlFor="server-client-secret">Client secret</label>
-              <input id="server-client-secret" type="password" className={inputClass} value={clientSecret} onChange={e => setClientSecret(e.target.value)} />
+              <Label className="mb-1" htmlFor="server-client-secret">Client secret</Label>
+              <Input id="server-client-secret" type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} />
             </div>
             <div>
-              <label className={labelClass} htmlFor="server-scopes">Scopes</label>
-              <input id="server-scopes" className={inputClass} placeholder="as the server suggests" value={scopes} onChange={e => setScopes(e.target.value)} />
+              <Label className="mb-1" htmlFor="server-scopes">Scopes</Label>
+              <Input id="server-scopes" placeholder="as the server suggests" value={scopes} onChange={e => setScopes(e.target.value)} />
             </div>
           </div>
         </details>
       )}
-      <button type="submit" disabled={busy || !url.trim()} className="px-3 py-1.5 bg-primary text-white rounded text-sm disabled:opacity-50">
+      <Button variant="primary" type="submit" disabled={busy || !url.trim()}>
         {busy ? 'Connecting...' : server ? 'Save and reconnect' : 'Add server'}
-      </button>
-      {error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{error}</div>}
-      {result?.error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm">{result.error}</div>}
+      </Button>
+      {error && <Notice tone="error">{error}</Notice>}
+      {result?.error && <Notice tone="error">{result.error}</Notice>}
       {result?.authorize_url && (
-        <div className="p-3 bg-blue-50 text-blue-800 rounded text-sm">
+        <Notice tone="info">
           Finish connecting in the tab that just opened, or <a className="underline" href={result.authorize_url} target="_blank" rel="noopener noreferrer">open the authorization page</a>.
-        </div>
+        </Notice>
       )}
       {result?.secret_sent_to && (
-        <div className="p-3 bg-amber-50 text-amber-800 rounded text-sm">
+        <Notice tone="warning">
           Your client secret will be sent to <strong>{result.secret_sent_to}</strong>, the server's token endpoint.
-        </div>
+        </Notice>
       )}
     </form>
   )

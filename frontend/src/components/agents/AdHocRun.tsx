@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { defaultSpec, useAgents, type AgentSpec, type Catalog } from '@/hooks/useAgents'
 import { SpecEditor } from './SpecEditor'
+import { Button, Field, Notice, Page, Textarea } from '@/components/shared/ui'
 
 export default function AdHocRun() {
   const navigate = useNavigate()
@@ -30,25 +31,29 @@ export default function AdHocRun() {
     }
   }
 
-  if (!catalog || !spec) return <div className="p-6 text-slate-500">{error ?? 'Loading...'}</div>
+  const page = {
+    back: { to: '/ui/agents/runs', label: 'Runs' },
+    title: 'Ad-hoc run',
+    description: 'Try a one-off configuration without saving an agent.',
+  }
+  if (!catalog || !spec) return <Page {...page} loading error={error} />
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-4">
-      <Link to="/ui/agents/runs" className="text-sm text-primary">← Runs</Link>
-      <h1 className="text-2xl font-semibold">Ad-hoc run</h1>
-      {error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm whitespace-pre-wrap">{error}</div>}
+    <Page {...page}>
+      {error && <Notice tone="error">{error}</Notice>}
       <SpecEditor value={spec} catalog={catalog} onChange={setSpec} onValidityChange={setJsonValid} />
-      <textarea aria-label="Run input" className="w-full px-3 py-1.5 border rounded h-24" placeholder="What should the agent do?"
-        value={input} onChange={e => setInput(e.target.value)} />
-      <div className="flex gap-2">
-        <button className="px-3 py-1.5 bg-primary text-white rounded text-sm disabled:opacity-50" disabled={!input.trim() || !jsonValid}
-          onClick={() => act(async () => navigate(`/ui/agents/runs/${(await startRun({ input, spec })).run_id}`))}>Run</button>
-        <button className="px-3 py-1.5 border rounded text-sm disabled:opacity-50" disabled={!jsonValid}
+      <Field label="Run input">
+        <Textarea className="h-24" placeholder="What should the agent do?" value={input} onChange={e => setInput(e.target.value)} />
+      </Field>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="primary" disabled={!input.trim() || !jsonValid}
+          onClick={() => act(async () => navigate(`/ui/agents/runs/${(await startRun({ input, spec })).run_id}`))}>Run</Button>
+        <Button disabled={!jsonValid}
           onClick={() => act(async () => {
             const name = window.prompt('Name for this agent')
             if (name) navigate(`/ui/agents/${(await saveDefinition({ name, description: '', spec })).id}`)
-          })}>Save as definition</button>
+          })}>Save as agent</Button>
       </div>
-    </div>
+    </Page>
   )
 }

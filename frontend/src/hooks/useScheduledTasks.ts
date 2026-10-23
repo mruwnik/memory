@@ -65,7 +65,8 @@ export const useScheduledTasks = () => {
     if (filters?.limit) args.limit = filters.limit
 
     const result = await mcpCall('scheduler_list_all', args)
-    return result[0] as ScheduledTask[]
+    // An empty list comes back as no content items at all
+    return (result[0] as ScheduledTask[] | undefined) ?? []
   }, [mcpCall])
 
   const updateTask = useCallback(async (taskId: string, updates: UpdateTaskBody): Promise<ScheduledTask> => {

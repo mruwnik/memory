@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { EmailAccountTestResult } from '../../hooks/useSources'
+import { Button, ConfirmDialog, Input } from '@/components/shared/ui'
 
 // Format relative time
 export const formatRelativeTime = (dateString: string | null): string => {
@@ -83,13 +84,12 @@ export const SyncButton = ({ onSync, disabled, label = 'Sync' }: SyncButtonProps
   }
 
   return (
-    <button
-      className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark disabled:bg-slate-300 disabled:cursor-not-allowed"
+    <Button variant="primary" size="sm"
       onClick={handleSync}
       disabled={disabled || syncing}
     >
       {syncing ? 'Syncing...' : label}
-    </button>
+    </Button>
   )
 }
 
@@ -120,14 +120,13 @@ export const TestConnectionButton = ({ onTest, onResult, disabled }: TestConnect
 
   return (
     <div className="space-y-2 my-2">
-      <button
+      <Button size="sm"
         type="button"
         onClick={handleTest}
         disabled={disabled || testing}
-        className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {testing ? 'Testing…' : 'Test Connection'}
-      </button>
+      </Button>
       {result && (
         <div
           className={`py-2 px-3 rounded text-sm ${
@@ -186,14 +185,13 @@ export const TagsInput = ({ tags, onChange, placeholder = 'Add tag...' }: TagsIn
           </span>
         ))}
       </div>
-      <input
+      <Input
         type="text"
         value={input}
         onChange={e => setInput(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={addTag}
         placeholder={placeholder}
-        className="w-full py-2 px-3 border border-slate-200 rounded text-sm focus:border-primary focus:outline-none"
       />
     </div>
   )
@@ -217,150 +215,23 @@ export const IntervalInput = ({ value, onChange, label = 'Check interval' }: Int
     <div className="space-y-1">
       <label className="text-sm font-medium text-slate-700">{label}</label>
       <div className="flex items-center gap-2">
-        <input
+        <Input
           type="number"
           min="0"
           value={hours}
           onChange={e => setHours(parseInt(e.target.value) || 0)}
-          className="w-16 py-2 px-2 border border-slate-200 rounded text-sm text-center"
+          className="w-16 text-center"
         />
         <span className="text-slate-500">h</span>
-        <input
+        <Input
           type="number"
           min="0"
           max="59"
           value={minutes}
           onChange={e => setMinutes(parseInt(e.target.value) || 0)}
-          className="w-16 py-2 px-2 border border-slate-200 rounded text-sm text-center"
+          className="w-16 text-center"
         />
         <span className="text-slate-500">m</span>
-      </div>
-    </div>
-  )
-}
-
-// Confirm Dialog
-interface ConfirmDialogProps {
-  message: string
-  onConfirm: () => void
-  onCancel: () => void
-  title?: string
-  confirmLabel?: string
-}
-
-export const ConfirmDialog = ({
-  message,
-  onConfirm,
-  onCancel,
-  title,
-  confirmLabel = 'Confirm',
-}: ConfirmDialogProps) => {
-  const titleId = useId()
-  const cancelRef = useRef<HTMLButtonElement>(null)
-
-  // Focus the Cancel button on mount (safer default for destructive confirmations)
-  useEffect(() => {
-    cancelRef.current?.focus()
-  }, [])
-
-  // Close on Escape
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onCancel])
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full"
-      >
-        {title && (
-          <h3 id={titleId} className="text-lg font-semibold text-slate-900 mb-2">{title}</h3>
-        )}
-        <p id={title ? undefined : titleId} className="text-slate-800 mb-4">{message}</p>
-        <div className="flex justify-end gap-2">
-          <button
-            ref={cancelRef}
-            className="py-2 px-4 border border-slate-200 rounded text-slate-600 hover:bg-slate-50"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="py-2 px-4 bg-red-600 text-white rounded hover:bg-red-700"
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// Modal wrapper
-interface ModalProps {
-  title: string
-  onClose: () => void
-  children: React.ReactNode
-  className?: string
-}
-
-export const Modal = ({ title, onClose, children, className }: ModalProps) => {
-  const titleId = useId()
-  const dialogRef = useRef<HTMLDivElement>(null)
-
-  // Move focus into the dialog on mount; restore to the previously focused element on close
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null
-    const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
-    firstFocusable?.focus()
-    return () => previouslyFocused?.focus()
-  }, [])
-
-  // Close on Escape
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className={`bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-auto ${className || ''}`}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-slate-100">
-          <h3 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h3>
-          <button
-            aria-label="Close"
-            className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
-            onClick={onClose}
-          >
-            &times;
-          </button>
-        </div>
-        <div className="p-4">
-          {children}
-        </div>
       </div>
     </div>
   )
@@ -414,20 +285,18 @@ export const SourceCard = ({
         {onSync && <SyncButton onSync={onSync} disabled={!active} />}
         {additionalActions}
         {onEdit && (
-          <button
-            className="py-1.5 px-3 border border-slate-200 rounded text-sm text-slate-600 hover:bg-slate-50"
+          <Button size="sm"
             onClick={onEdit}
           >
             Edit
-          </button>
+          </Button>
         )}
         {onDelete && (
-          <button
-            className="py-1.5 px-3 border border-red-200 rounded text-sm text-red-600 hover:bg-red-50"
+          <Button variant="danger" size="sm"
             onClick={() => setConfirmDelete(true)}
           >
             Delete
-          </button>
+          </Button>
         )}
       </div>
 
@@ -444,52 +313,3 @@ export const SourceCard = ({
     </div>
   )
 }
-
-// Empty state
-interface EmptyStateProps {
-  message: string
-  actionLabel?: string
-  onAction?: () => void
-}
-
-export const EmptyState = ({ message, actionLabel, onAction }: EmptyStateProps) => (
-  <div className="text-center py-12 text-slate-500">
-    <p className="mb-4">{message}</p>
-    {actionLabel && onAction && (
-      <button
-        className="bg-primary text-white py-2 px-4 rounded hover:bg-primary-dark"
-        onClick={onAction}
-      >
-        {actionLabel}
-      </button>
-    )}
-  </div>
-)
-
-// Loading state
-export const LoadingState = () => (
-  <div className="flex flex-col items-center justify-center py-12 text-slate-500">
-    <div className="w-6 h-6 border-2 border-slate-200 border-t-primary rounded-full animate-spin mb-2"></div>
-    <p>Loading...</p>
-  </div>
-)
-
-// Error state
-interface ErrorStateProps {
-  message: string
-  onRetry?: () => void
-}
-
-export const ErrorState = ({ message, onRetry }: ErrorStateProps) => (
-  <div className="text-center py-12 text-red-600">
-    <p className="mb-4">{message}</p>
-    {onRetry && (
-      <button
-        className="bg-primary text-white py-2 px-4 rounded hover:bg-primary-dark"
-        onClick={onRetry}
-      >
-        Retry
-      </button>
-    )}
-  </div>
-)

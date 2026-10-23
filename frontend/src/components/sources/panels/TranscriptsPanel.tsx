@@ -1,15 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import {
-  SourceCard,
-  Modal,
-  TagsInput,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-} from '../shared'
-import { styles } from '../styles'
+import { SourceCard, TagsInput } from '../shared'
+import { Button, Card, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const TranscriptsPanel = () => {
@@ -91,12 +84,7 @@ export const TranscriptsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Transcript Accounts</h3>
-        <button className={styles.btnAdd} onClick={() => setShowForm(true)}>Add Account</button>
-      </div>
-
+    <Card title="Transcript Accounts" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button></>}>
       {accounts.length === 0 ? (
         <EmptyState
           message="No transcript accounts configured. Connect Fireflies (or another supported provider) to ingest meeting transcripts."
@@ -104,7 +92,7 @@ export const TranscriptsPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {accounts.map(account => (
             <SourceCard
               key={account.id}
@@ -118,14 +106,13 @@ export const TranscriptsPanel = () => {
               onDelete={() => handleDelete(account.id)}
               onSync={() => handleSync(account.id)}
               additionalActions={
-                <button
-                  className="py-1.5 px-3 border border-slate-200 rounded text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                <Button size="sm"
                   onClick={() => handleRescan(account.id)}
                   disabled={!account.active}
                   title="Walk back the full rescan window (slower; catches drift)"
                 >
                   Full rescan
-                </button>
+                </Button>
               }
             >
               <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
@@ -161,7 +148,7 @@ export const TranscriptsPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -241,114 +228,98 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
   if (!account && providers.length === 0) {
     return (
       <Modal title="Add Transcript Account" onClose={onCancel}>
-        <div className={styles.formError}>
+        <Notice tone="error">
           No transcript providers are available on the server. Check the
           worker configuration (PROVIDERS dict in
           <code> memory.workers.tasks.transcripts</code>).
-        </div>
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Close</button>
-        </div>
+        </Notice>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Close</Button>
+        </FormActions>
       </Modal>
     )
   }
 
   return (
     <Modal title={account ? 'Edit Transcript Account' : 'Add Transcript Account'} onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Name</label>
-          <input
+        <Field label="Name" hint="Display label for this account.">
+          <Input
             type="text"
             value={formData.name}
             onChange={e => setFormData({ ...formData, name: e.target.value })}
             required
             placeholder="My Fireflies"
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>Display label for this account.</p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Provider</label>
-          <select
+        <Field>
+          <Label>Provider</Label>
+          <Select
             value={formData.provider}
             onChange={e => setFormData({ ...formData, provider: e.target.value })}
             disabled={!!account}
             required
-            className={styles.formSelect}
           >
             {providers.map(p => (
               <option key={p} value={p}>{p}</option>
             ))}
-          </select>
-          {account && <p className={styles.formHint}>Provider cannot be changed after creation.</p>}
-        </div>
+          </Select>
+          {account && <Hint>Provider cannot be changed after creation.</Hint>}
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>
-            API Key {account && <span className="text-slate-400">(leave blank to keep current)</span>}
-          </label>
-          <input
+        <Field label={<>
+            API Key {account && <span className="text-slate-400">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
+          <Input
             type="password"
             value={formData.api_key}
             onChange={e => setFormData({ ...formData, api_key: e.target.value })}
             required={!account}
             autoComplete="new-password"
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>
-            For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.
-          </p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>
+        <Field>
+          <Label>
             Webhook Secret {account && <span className="text-slate-400">(optional; leave blank to keep current)</span>}
-          </label>
-          <input
+          </Label>
+          <Input
             type="password"
             value={formData.webhook_secret}
             onChange={e => setFormData({ ...formData, webhook_secret: e.target.value, clear_webhook_secret: false })}
             autoComplete="new-password"
             disabled={formData.clear_webhook_secret}
-            className={styles.formInput}
           />
           {account && account.has_webhook_secret && (
-            <div className={styles.formCheckbox}>
+            <div className="flex items-center gap-2">
               <input
                 type="checkbox"
                 id="clear-webhook-secret"
                 checked={formData.clear_webhook_secret}
                 onChange={e => setFormData({ ...formData, clear_webhook_secret: e.target.checked, webhook_secret: '' })}
-                className="rounded border-slate-300"
               />
               <label htmlFor="clear-webhook-secret" className="text-sm text-slate-700">
                 Remove existing webhook secret
               </label>
             </div>
           )}
-          <p className={styles.formHint}>Optional shared secret for webhook HMAC verification.</p>
-        </div>
+          <Hint>Optional shared secret for webhook HMAC verification.</Hint>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Tags</label>
+        <Field label="Tags" hint="Tags inherited by Meetings produced from this account.">
           <TagsInput
             tags={formData.tags}
             onChange={tags => setFormData({ ...formData, tags })}
           />
-          <p className={styles.formHint}>Tags inherited by Meetings produced from this account.</p>
-        </div>
+        </Field>
 
-        <div className={styles.formRow}>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Project</label>
-            <select
+        <FieldRow>
+          <Field label="Project" hint="Project for access control.">
+            <Select
               value={formData.project_id || ''}
               onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-              className={styles.formSelect}
             >
               <option value="">None</option>
               {projects.map(project => (
@@ -356,31 +327,27 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
                   {project.title} ({project.repo_path})
                 </option>
               ))}
-            </select>
-            <p className={styles.formHint}>Project for access control.</p>
-          </div>
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Sensitivity</label>
-            <select
+            </Select>
+          </Field>
+          <Field label="Sensitivity" hint="Visibility of meetings from this account.">
+            <Select
               value={formData.sensitivity}
               onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
-              className={styles.formSelect}
             >
               <option value="public">Public</option>
               <option value="basic">Basic</option>
               <option value="internal">Internal</option>
               <option value="confidential">Confidential</option>
-            </select>
-            <p className={styles.formHint}>Visibility of meetings from this account.</p>
-          </div>
-        </div>
+            </Select>
+          </Field>
+        </FieldRow>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

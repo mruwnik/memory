@@ -16,6 +16,7 @@ import {
   type Environment,
 } from '../../hooks/useClaude'
 import { useUsers, type User } from '../../hooks/useUsers'
+import { Notice } from '@/components/shared/ui'
 
 const REFRESH_MS = 10_000
 const HISTORY_MAX = 240 // ~2h at 30s cadence
@@ -439,9 +440,9 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
 
   if (error) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+      <Notice tone="error">
         {error}
-      </div>
+      </Notice>
     )
   }
   if (!snap) {

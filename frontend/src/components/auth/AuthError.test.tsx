@@ -9,17 +9,17 @@ describe('AuthError', () => {
     expect(screen.getByText('Token expired')).toBeInTheDocument()
   })
 
-  it('renders a Try Again button', () => {
+  it('renders a Retry button', () => {
     renderWithUser(<AuthError error="oops" onRetry={() => {}} />)
     expect(
-      screen.getByRole('button', { name: 'Try Again' }),
+      screen.getByRole('button', { name: 'Retry' }),
     ).toBeInTheDocument()
   })
 
   it('invokes onRetry when the button is clicked', async () => {
     const onRetry = vi.fn()
     const { user } = renderWithUser(<AuthError error="oops" onRetry={onRetry} />)
-    await user.click(screen.getByRole('button', { name: 'Try Again' }))
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,17 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import {
-  Modal,
-  TagsInput,
-  IntervalInput,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  StatusBadge,
-  SyncStatus,
-  SyncButton,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { TagsInput, IntervalInput, StatusBadge, SyncStatus, SyncButton } from '../shared'
+import { Button, Card, Checkbox, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Modal, Notice, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GitHubPanel = () => {
@@ -102,32 +92,25 @@ export const GitHubPanel = () => {
   // Require accounts to be set up first
   if (accounts.length === 0) {
     return (
-      <div className={styles.panel}>
-        <div className={styles.panelHeader}>
-          <h3 className={styles.panelTitle}>GitHub</h3>
-        </div>
+      <Card title="GitHub">
         <EmptyState
           message="No GitHub accounts configured. Add a GitHub account in the Accounts tab first."
         />
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>GitHub</h3>
-      </div>
-
-      <div className={styles.sourceList}>
+    <Card title="GitHub">
+      <div className="space-y-3">
         {accounts.map(account => {
           const projects = accountProjects[account.id] || []
           return (
             <div key={account.id} className="border border-slate-200 rounded-lg p-4">
-              <div className={styles.cardHeader}>
-                <div className={styles.cardInfo}>
-                  <h4 className={styles.cardTitle}>{account.name}</h4>
-                  <p className={styles.cardSubtitle}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-medium text-slate-800 truncate">{account.name}</h4>
+                  <p className="text-sm text-slate-600 truncate">
                     {account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
                     {account.verified_login
                       ? ` · verified as ${account.verified_login}`
@@ -135,7 +118,7 @@ export const GitHubPanel = () => {
                     {!account.active && ' (disabled)'}
                   </p>
                 </div>
-                <div className={styles.cardActions}>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <StatusBadge active={account.active} />
                 </div>
               </div>
@@ -144,13 +127,12 @@ export const GitHubPanel = () => {
               <div className="mt-4 pt-4 border-t border-slate-100">
                 <div className="flex items-center justify-between mb-3">
                   <h5 className="text-sm font-medium text-slate-700">Repositories ({account.repos.length})</h5>
-                  <button
-                    className={cx(styles.btnAdd, 'text-xs py-1 px-2')}
+                  <Button variant="primary" size="sm"
                     onClick={() => setAddingRepoTo(account.id)}
                     disabled={!account.active}
                   >
                     Add Repo
-                  </button>
+                  </Button>
                 </div>
 
                 {account.repos.length === 0 ? (
@@ -177,18 +159,16 @@ export const GitHubPanel = () => {
                             disabled={!repo.active || !account.active}
                             label="Sync"
                           />
-                          <button
-                            className={styles.btnEdit}
+                          <Button size="sm"
                             onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)}
                           >
                             {repo.active ? 'Disable' : 'Enable'}
-                          </button>
-                          <button
-                            className={styles.btnDelete}
+                          </Button>
+                          <Button variant="danger" size="sm"
                             onClick={() => handleDeleteRepo(account.id, repo.id)}
                           >
                             Remove
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -200,13 +180,12 @@ export const GitHubPanel = () => {
               <div className="mt-4 pt-4 border-t border-slate-100">
                 <div className="flex items-center justify-between mb-3">
                   <h5 className="text-sm font-medium text-slate-700">Projects ({projects.length})</h5>
-                  <button
-                    className={cx(styles.btnAdd, 'text-xs py-1 px-2')}
+                  <Button variant="primary" size="sm"
                     onClick={() => setAddingProjectTo(account.id)}
                     disabled={!account.active}
                   >
                     Add Project
-                  </button>
+                  </Button>
                 </div>
 
                 {projects.length === 0 ? (
@@ -230,12 +209,11 @@ export const GitHubPanel = () => {
                             <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded">+{project.fields.length - 3}</span>
                           )}
                         </div>
-                        <button
-                          className={styles.btnDelete}
+                        <Button variant="danger" size="sm"
                           onClick={() => handleDeleteProject(project.id)}
                         >
                           Remove
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
@@ -271,7 +249,7 @@ export const GitHubPanel = () => {
           onCancel={() => setAddingProjectTo(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -318,12 +296,11 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
 
   return (
     <Modal title="Add GitHub Project" onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Owner (org or username)</label>
-          <input
+        <Field label="Owner (org or username)">
+          <Input
             type="text"
             value={owner}
             onChange={e => {
@@ -332,12 +309,11 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
             }}
             placeholder="e.g., my-organization"
             required
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Owner Type</label>
+        <Field>
+          <Label>Owner Type</Label>
           <div className="flex gap-4">
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -348,7 +324,7 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
                   setIsOrg(true)
                   setSelectedProject(null)
                 }}
-                className="rounded-full border-slate-300"
+                className="rounded-full"
               />
               Organization
             </label>
@@ -361,16 +337,16 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
                   setIsOrg(false)
                   setSelectedProject(null)
                 }}
-                className="rounded-full border-slate-300"
+                className="rounded-full"
               />
               User
             </label>
           </div>
-        </div>
+        </Field>
 
         {owner.trim() && (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Select Project</label>
+          <Field>
+            <Label>Select Project</Label>
             <ProjectSelector
               accountId={accountId}
               owner={owner.trim()}
@@ -379,19 +355,18 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
               selectedProject={selectedProject}
               onSelect={setSelectedProject}
             />
-          </div>
+          </Field>
         )}
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel} disabled={submitting}>Cancel</button>
-          <button
+        <FormActions>
+          <Button type="button" onClick={onCancel} disabled={submitting}>Cancel</Button>
+          <Button variant="primary"
             type="submit"
-            className={styles.btnSubmit}
             disabled={submitting || selectedProject === null}
           >
             {submitting ? 'Adding...' : 'Add Project'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )
@@ -460,12 +435,11 @@ const ProjectSelector = ({
 
   return (
     <div className="space-y-2">
-      <input
+      <Input
         type="text"
         placeholder="Filter projects..."
         value={search}
         onChange={e => setSearch(e.target.value)}
-        className={styles.formInput}
       />
       <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
         {filteredProjects.length === 0 ? (
@@ -490,7 +464,7 @@ const ProjectSelector = ({
                   checked={selectedProject === project.number}
                   onChange={() => onSelect(project.number)}
                   disabled={alreadyAdded}
-                  className="mt-0.5 rounded-full border-slate-300"
+                  className="mt-0.5 rounded-full"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-slate-800">
@@ -587,16 +561,15 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
 
   return (
     <div className="space-y-2">
-      <input
+      <Input
         type="text"
         placeholder="Filter repositories..."
         value={search}
         onChange={e => setSearch(e.target.value)}
-        className={styles.formInput}
       />
       <div className="flex items-center gap-2 text-sm">
-        <button type="button" onClick={selectAll} className="text-primary hover:underline">All</button>
-        <button type="button" onClick={selectNone} className="text-primary hover:underline">None</button>
+        <Button variant="link" type="button" onClick={selectAll}>All</Button>
+        <Button variant="link" type="button" onClick={selectNone}>None</Button>
         <span className="text-slate-500 ml-auto">
           {monitoredRepos.size} monitored of {repos.length}
         </span>
@@ -613,7 +586,7 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
                 type="checkbox"
                 checked={monitoredRepos.has(repo.full_name)}
                 onChange={() => toggleRepo(repo.full_name)}
-                className="mt-0.5 rounded border-slate-300"
+                className="mt-0.5"
               />
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-slate-800">
@@ -700,60 +673,28 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
 
   return (
     <Modal title="Manage Repositories" onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
+        <Field>
           <RepoSelector
             accountId={accountId}
             monitoredRepos={monitoredRepos}
             onChange={setMonitoredRepos}
           />
-        </div>
+        </Field>
 
         {toAdd.length > 0 && (
           <>
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Track (for new repos):</label>
+            <Field>
+              <Label>Track (for new repos):</Label>
               <div className="flex flex-wrap gap-4 mt-2">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={formData.track_issues}
-                    onChange={e => setFormData({ ...formData, track_issues: e.target.checked })}
-                    className="rounded border-slate-300"
-                  />
-                  Issues
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={formData.track_prs}
-                    onChange={e => setFormData({ ...formData, track_prs: e.target.checked })}
-                    className="rounded border-slate-300"
-                  />
-                  Pull Requests
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={formData.track_comments}
-                    onChange={e => setFormData({ ...formData, track_comments: e.target.checked })}
-                    className="rounded border-slate-300"
-                  />
-                  Comments
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={formData.track_project_fields}
-                    onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })}
-                    className="rounded border-slate-300"
-                  />
-                  Project Fields
-                </label>
+                <Checkbox checked={formData.track_issues} onChange={e => setFormData({ ...formData, track_issues: e.target.checked })} label="Issues" />
+                <Checkbox checked={formData.track_prs} onChange={e => setFormData({ ...formData, track_prs: e.target.checked })} label="Pull Requests" />
+                <Checkbox checked={formData.track_comments} onChange={e => setFormData({ ...formData, track_comments: e.target.checked })} label="Comments" />
+                <Checkbox checked={formData.track_project_fields} onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })} label="Project Fields" />
               </div>
-            </div>
+            </Field>
 
             <IntervalInput
               value={formData.check_interval}
@@ -761,19 +702,18 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
               label="Check interval (new repos)"
             />
 
-            <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Tags (new repos)</label>
+            <Field label="Tags (new repos)">
               <TagsInput
                 tags={formData.tags}
                 onChange={tags => setFormData({ ...formData, tags })}
               />
-            </div>
+            </Field>
           </>
         )}
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel} disabled={submitting}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting || !hasChanges}>
+        <FormActions>
+          <Button type="button" onClick={onCancel} disabled={submitting}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting || !hasChanges}>
             {progress
               ? progress
               : !hasChanges
@@ -783,8 +723,8 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
                   : toAdd.length > 0
                     ? `Add ${toAdd.length} ${toAdd.length === 1 ? 'Repository' : 'Repositories'}`
                     : `Remove ${toRemove.length} ${toRemove.length === 1 ? 'Repository' : 'Repositories'}`}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

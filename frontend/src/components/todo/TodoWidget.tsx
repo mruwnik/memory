@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTasks, TodoTask } from '@/hooks/useTasks'
 import { PRIORITY_ORDER, PRIORITY_COLORS } from '@/constants/priority'
+import { Card, Input } from '@/components/shared/ui'
 
 interface TodoWidgetProps {
   maxItems?: number
@@ -99,41 +100,41 @@ const TodoWidget = ({ maxItems = 5 }: TodoWidgetProps) => {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-xl shadow-md p-6">
+      <Card>
         <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
           <h3 className="text-lg font-semibold text-slate-800">Tasks</h3>
         </div>
         <div className="text-slate-500 text-center py-4">Loading...</div>
-      </div>
+      </Card>
     )
   }
 
   if (error) {
     return (
-      <div className="bg-white rounded-xl shadow-md p-6">
+      <Card>
         <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
           <h3 className="text-lg font-semibold text-slate-800">Tasks</h3>
         </div>
         <div className="text-[var(--color-danger)] text-center py-4">{error}</div>
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-md p-6">
+    <Card>
       <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
         <h3 className="text-lg font-semibold text-slate-800">Tasks</h3>
         <span className="bg-primary text-white text-xs font-medium px-2 py-1 rounded-full">{tasks.length}</span>
       </div>
 
       <form onSubmit={handleAddTask} className="flex gap-2 mb-4">
-        <input
+        <Input
           type="text"
           placeholder="Add a task..."
           value={newTaskTitle}
           onChange={(e) => setNewTaskTitle(e.target.value)}
           disabled={isAdding}
-          className="flex-1 py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          className="flex-1"
         />
         <button
           type="submit"
@@ -181,7 +182,7 @@ const TodoWidget = ({ maxItems = 5 }: TodoWidgetProps) => {
       <div className="mt-4 pt-3 border-t border-slate-100 text-center">
         <Link to="/ui/tasks" className="text-primary text-sm hover:underline">View all tasks</Link>
       </div>
-    </div>
+    </Card>
   )
 }
 

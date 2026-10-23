@@ -3,14 +3,7 @@ import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate, Jo
 import { useTeams, Team, TeamMember } from '@/hooks/useTeams'
 import { useJournal } from '@/hooks/useJournal'
 import { Person } from '@/hooks/usePeople'
-import {
-  Modal,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  ConfirmDialog,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select, Textarea, ToggleGroup, cx } from '@/components/shared/ui'
 
 // Team members popover component
 interface TeamMembersPopoverProps {
@@ -126,29 +119,28 @@ const DueDateSelectorPopover = ({ currentDueOn, onSelect, onClose }: DueDateSele
       ref={popoverRef}
       className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-3 min-w-56"
     >
-      <input
+      <Input
         type="date"
         value={dateValue}
         onChange={e => setDateValue(e.target.value)}
-        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:border-primary"
+        className="mb-2"
         autoFocus
       />
       <div className="flex gap-2">
-        <button
+        <Button variant="primary" size="sm"
           type="button"
           onClick={handleApply}
-          className="flex-1 px-3 py-1.5 text-sm bg-primary text-white rounded hover:bg-primary/90 transition-colors"
+          className="flex-1"
         >
           Apply
-        </button>
+        </Button>
         {currentDueOn && (
-          <button
+          <Button variant="danger" size="sm"
             type="button"
             onClick={handleClear}
-            className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded transition-colors"
           >
             Clear
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -190,12 +182,12 @@ const OwnerSelectorPopover = ({ currentOwnerId, availablePeople, onSelect, onClo
       ref={popoverRef}
       className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 min-w-56 max-w-72"
     >
-      <input
+      <Input
         type="text"
         placeholder="Search people..."
         value={search}
         onChange={e => setSearch(e.target.value)}
-        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:border-primary"
+        className="mb-2"
         autoFocus
       />
       <div className="max-h-48 overflow-y-auto">
@@ -450,62 +442,34 @@ export const ProjectsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Projects</h3>
-        <div className="flex items-center gap-2">
+    <Card actions={<><div className="flex items-center gap-2">
           {/* Search filter */}
-          <input
+          <Input
             type="text"
             placeholder="Search projects..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className={cx(styles.formInput, 'w-48 py-1.5')}
+            className="w-48 py-1.5"
           />
           {/* State filter */}
-          <select
+          <Select
             value={stateFilter}
             onChange={e => setStateFilter(e.target.value as 'all' | 'open' | 'closed')}
-            className={cx(styles.formSelect, 'w-auto py-1.5')}
+            className="w-auto py-1.5"
           >
             <option value="all">All</option>
             <option value="open">Open</option>
             <option value="closed">Closed</option>
-          </select>
+          </Select>
           {/* View toggle - show if there's hierarchy or user is in tree mode */}
           {showViewToggle && (
-            <div className="inline-flex border border-slate-200 rounded-lg">
-              <button
-                type="button"
-                className={cx(
-                  'px-3 py-1.5 text-sm cursor-pointer transition-colors rounded-l-lg',
-                  viewMode === 'tree'
-                    ? 'bg-primary text-white hover:bg-primary-dark'
-                    : 'bg-white text-slate-600 hover:bg-slate-50'
-                )}
-                onClick={() => setViewMode('tree')}
-              >
-                Tree
-              </button>
-              <button
-                type="button"
-                className={cx(
-                  'px-3 py-1.5 text-sm cursor-pointer transition-colors border-l border-slate-200 rounded-r-lg',
-                  viewMode === 'list'
-                    ? 'bg-primary text-white hover:bg-primary-dark'
-                    : 'bg-white text-slate-600 hover:bg-slate-50'
-                )}
-                onClick={() => setViewMode('list')}
-              >
-                List
-              </button>
-            </div>
+            <ToggleGroup label="View mode" value={viewMode} onChange={setViewMode}
+              options={[{ value: 'tree', label: 'Tree' }, { value: 'list', label: 'List' }]} />
           )}
-          <button className={styles.btnAdd} onClick={() => setShowCreateModal(true)}>
+          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
             New Project
-          </button>
-        </div>
-      </div>
+          </Button>
+        </div></>}>
 
       {projects.length === 0 ? (
         <EmptyState
@@ -514,7 +478,7 @@ export const ProjectsPanel = () => {
           onAction={() => setShowCreateModal(true)}
         />
       ) : viewMode === 'tree' && hasHierarchy ? (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {filteredTree.length === 0 && searchQuery ? (
             <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
           ) : (
@@ -536,7 +500,7 @@ export const ProjectsPanel = () => {
           )}
         </div>
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {filteredProjects.length === 0 && searchQuery ? (
             <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
           ) : (
@@ -600,11 +564,11 @@ export const ProjectsPanel = () => {
             <p className="text-slate-600 mb-4">
               GitHub-backed projects cannot be deleted. Close them in GitHub instead.
             </p>
-            <div className={styles.formActions}>
-              <button className={styles.btnCancel} onClick={() => setDeletingProject(null)}>
+            <FormActions>
+              <Button onClick={() => setDeletingProject(null)}>
                 OK
-              </button>
-            </div>
+              </Button>
+            </FormActions>
           </Modal>
         ) : (
           <ConfirmDialog
@@ -634,7 +598,7 @@ export const ProjectsPanel = () => {
           unassignTeam={unassignTeamFromProject}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -882,21 +846,20 @@ const JournalSection = ({ projectId, getProject, addJournalEntry }: JournalSecti
               )}
 
               <form onSubmit={handleSubmit} className="flex gap-2">
-                <input
+                <Input
                   type="text"
                   value={newEntry}
                   onChange={e => setNewEntry(e.target.value)}
                   placeholder="Add a journal entry..."
-                  className="flex-1 text-xs px-2 py-1.5 border border-slate-200 rounded focus:outline-none focus:border-primary"
+                  className="flex-1 text-xs"
                   disabled={submitting}
                 />
-                <button
+                <Button variant="primary" size="sm"
                   type="submit"
                   disabled={!newEntry.trim() || submitting}
-                  className="text-xs px-3 py-1.5 bg-primary text-white rounded hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {submitting ? '...' : 'Add'}
-                </button>
+                </Button>
               </form>
             </>
           )}
@@ -971,55 +934,47 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
   return (
     <div
       className={cx(
-        styles.card,
+        'border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition-colors',
         !isOpen && 'opacity-60',
         compact && 'p-3'
       )}
     >
-      <div className={styles.cardHeader}>
-        <div className={styles.cardInfo}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h4 className={cx(styles.cardTitle, compact && 'text-sm')}>
+            <h4 className={cx('font-medium text-slate-800 truncate', compact && 'text-sm')}>
               {project.title}
             </h4>
             {/* Badges */}
-            <span
-              className={cx(
-                styles.badge,
-                isOpen ? styles.badgeActive : styles.badgeInactive
-              )}
-            >
-              {project.state}
-            </span>
+            <Badge tone={isOpen ? 'success' : 'neutral'}>{project.state}</Badge>
             {isGithubBacked && (
-              <span className={cx(styles.badge, 'bg-purple-100 text-purple-700')}>
+              <Badge tone="primary">
                 GitHub
-              </span>
+              </Badge>
             )}
             {/* Warning indicators - only show for open projects */}
             {isOpen && dueWarning === 'critical' && (
-              <span
-                className={cx(styles.badge, 'bg-red-100 text-red-700')}
+              <Badge
+                tone="danger"
                 title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}
               >
                 🔴 {project.due_on && new Date(project.due_on) < new Date() ? 'Overdue' : 'Due soon'}
-              </span>
+              </Badge>
             )}
             {isOpen && dueWarning === 'caution' && (
-              <span
-                className={cx(styles.badge, 'bg-yellow-100 text-yellow-700')}
+              <Badge
+                tone="warning"
                 title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}
               >
                 🟡 Due in 2-3 weeks
-              </span>
+              </Badge>
             )}
             {isOpen && dueWarning === 'no-date' && (
-              <span
-                className={cx(styles.badge, 'bg-slate-100 text-slate-500')}
+              <Badge
                 title="No due date set"
               >
                 No due date
-              </span>
+              </Badge>
             )}
           </div>
           {project.description && !compact && (
@@ -1159,25 +1114,24 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
             </div>
           )}
         </div>
-        <div className={styles.cardActions}>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           {project.children_count > 0 && (
             <span className="text-xs text-slate-500">
               {project.children_count} child{project.children_count !== 1 ? 'ren' : ''}
             </span>
           )}
-          <button className={styles.btnEdit} onClick={onManageTeams}>
+          <Button size="sm" onClick={onManageTeams}>
             Teams
-          </button>
-          <button className={styles.btnEdit} onClick={onEdit}>
+          </Button>
+          <Button size="sm" onClick={onEdit}>
             Edit
-          </button>
-          <button
-            className={cx(styles.btnDelete, isGithubBacked && 'opacity-50 cursor-not-allowed')}
+          </Button>
+          <Button variant="danger" size="sm" className={cx(isGithubBacked && 'opacity-50 cursor-not-allowed')}
             onClick={onDelete}
             title={isGithubBacked ? 'GitHub-backed projects cannot be deleted' : undefined}
           >
             Delete
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1320,63 +1274,55 @@ const ProjectFormModal = ({
 
   return (
     <Modal title={title} onClose={onClose}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
         {isEditing && isGithubBacked && (
-          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-sm mb-4">
+          <Notice tone="warning" className="mb-4">
             This project is synced from GitHub. Only parent, owner, due date, and doc URL can be changed here.
             Edit title/description/state in GitHub.
-          </div>
+          </Notice>
         )}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Title</label>
-          <input
+        <Field label="Title">
+          <Input
             type="text"
             value={formData.title}
             onChange={e => setFormData({ ...formData, title: e.target.value })}
             required={!isEditing}
             disabled={isEditing && isGithubBacked}
             placeholder="Project name"
-            className={styles.formInput}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Description</label>
-          <textarea
+        <Field label="Description">
+          <Textarea
             value={formData.description}
             onChange={e => setFormData({ ...formData, description: e.target.value })}
             disabled={isEditing && isGithubBacked}
             placeholder="Optional description"
             rows={3}
-            className={styles.formTextarea}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>State</label>
-          <select
+        <Field label="State">
+          <Select
             value={formData.state}
             onChange={e => setFormData({ ...formData, state: e.target.value as 'open' | 'closed' })}
             disabled={isEditing && isGithubBacked}
-            className={styles.formSelect}
           >
             <option value="open">Open</option>
             <option value="closed">Closed</option>
-          </select>
-        </div>
+          </Select>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Parent Project</label>
-          <select
+        <Field label="Parent Project" hint="Organize projects into a hierarchy by setting a parent.">
+          <Select
             value={formData.parent_id ?? ''}
             onChange={e => setFormData({
               ...formData,
               parent_id: e.target.value ? Number(e.target.value) : null,
             })}
-            className={styles.formSelect}
           >
             <option value="">None (top-level)</option>
             {validParents.map(p => (
@@ -1385,21 +1331,16 @@ const ProjectFormModal = ({
                 {p.repo_path && ` (${p.repo_path})`}
               </option>
             ))}
-          </select>
-          <p className={styles.formHint}>
-            Organize projects into a hierarchy by setting a parent.
-          </p>
-        </div>
+          </Select>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Owner</label>
-          <select
+        <Field label="Owner" hint="Assign someone responsible for this project.">
+          <Select
             value={formData.owner_id ?? ''}
             onChange={e => setFormData({
               ...formData,
               owner_id: e.target.value ? Number(e.target.value) : null,
             })}
-            className={styles.formSelect}
           >
             <option value="">No owner</option>
             {availablePeople.map(person => (
@@ -1407,52 +1348,39 @@ const ProjectFormModal = ({
                 {person.display_name || person.identifier}
               </option>
             ))}
-          </select>
-          <p className={styles.formHint}>
-            Assign someone responsible for this project.
-          </p>
-        </div>
+          </Select>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Due Date</label>
-          <input
+        <Field label="Due Date" hint="Optional deadline for this project.">
+          <Input
             type="date"
             value={formData.due_on}
             onChange={e => setFormData({ ...formData, due_on: e.target.value })}
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>
-            Optional deadline for this project.
-          </p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Doc URL</label>
-          <input
+        <Field label="Doc URL" hint="Link to project documentation (Google Doc, Notion, wiki, etc.)">
+          <Input
             type="url"
             value={formData.doc_url}
             onChange={e => setFormData({ ...formData, doc_url: e.target.value })}
             placeholder="https://docs.google.com/..."
-            className={styles.formInput}
           />
-          <p className={styles.formHint}>
-            Link to project documentation (Google Doc, Notion, wiki, etc.)
-          </p>
-        </div>
+        </Field>
 
         {/* Team selection - only for new projects */}
         {!isEditing && (
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>
+          <Field>
+            <Label>
               Teams <span className="text-red-500">*</span>
-            </label>
+            </Label>
             <p className="text-sm text-slate-500 mb-2">
               Select which teams will have access to this project.
             </p>
             {availableTeams.length === 0 ? (
-              <p className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
+              <Notice tone="warning">
                 No teams available. Create a team first before creating a project.
-              </p>
+              </Notice>
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-2">
                 {availableTeams.map(team => (
@@ -1469,7 +1397,7 @@ const ProjectFormModal = ({
                       type="checkbox"
                       checked={formData.team_ids.includes(team.id)}
                       onChange={() => handleTeamToggle(team.id)}
-                      className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
+                      className="text-purple-600"
                     />
                     <span className="font-medium text-slate-900">{team.name}</span>
                     <span className="text-sm text-slate-500">@{team.slug}</span>
@@ -1478,25 +1406,24 @@ const ProjectFormModal = ({
               </div>
             )}
             {formData.team_ids.length > 0 && (
-              <p className={styles.formHint}>
+              <Hint>
                 {formData.team_ids.length} team{formData.team_ids.length !== 1 ? 's' : ''} selected
-              </p>
+              </Hint>
             )}
-          </div>
+          </Field>
         )}
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onClose} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onClose} disabled={submitting}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button variant="primary"
             type="submit"
-            className={styles.btnSubmit}
             disabled={submitting || (!isEditing && availableTeams.length === 0)}
           >
             {submitting ? 'Saving...' : isEditing ? 'Update' : 'Create'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )
@@ -1576,7 +1503,7 @@ const ProjectTeamsModal = ({
   return (
     <Modal title={`Teams for ${project.title}`} onClose={handleClose}>
       <div className="space-y-4">
-        {error && <div className={styles.formError}>{error}</div>}
+        {error && <Notice tone="error">{error}</Notice>}
 
         {loading ? (
           <p className="text-sm text-slate-500">Loading...</p>
@@ -1654,11 +1581,11 @@ const ProjectTeamsModal = ({
           </>
         )}
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnPrimary} onClick={handleClose}>
+        <FormActions>
+          <Button variant="primary" type="button" onClick={handleClose}>
             Done
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </div>
     </Modal>
   )

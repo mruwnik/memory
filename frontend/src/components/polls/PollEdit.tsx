@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { usePolls, getPollBySlug } from '../../hooks/usePolls'
 import type { Poll, PollStatus } from '../../hooks/usePolls'
 import {
@@ -10,6 +10,7 @@ import {
   toUTCDatetime,
   fromUTCToLocal,
 } from '../../utils/timezones'
+import { Button, Card, Input, Label, Notice, Page, Select, Textarea } from '@/components/shared/ui'
 
 interface FormData {
   title: string
@@ -113,60 +114,22 @@ export const PollEdit: React.FC = () => {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-        <div className="text-center py-8 text-slate-500">Loading poll...</div>
-      </div>
-    )
-  }
-
-  if (error && !formData) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-        <div className="max-w-xl mx-auto">
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-4">
-            {error}
-          </div>
-          <Link to="/ui/polls" className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
-            Back to Polls
-          </Link>
-        </div>
-      </div>
-    )
-  }
-
-  if (!formData || !poll) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-        <div className="max-w-xl mx-auto">
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-4">
-            Poll not found
-          </div>
-          <Link to="/ui/polls" className="py-2 px-4 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
-            Back to Polls
-          </Link>
-        </div>
-      </div>
-    )
+  const back = { to: '/ui/polls', label: 'Polls' }
+  if (loading || !formData || !poll) {
+    return <Page back={back} title="Edit Poll" width="narrow" loading={loading && 'Loading poll...'} error={loading ? null : error ?? 'Poll not found'} />
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-      <form className="max-w-xl mx-auto bg-white p-6 rounded-xl shadow-md" onSubmit={handleSubmit}>
-        <h2 className="text-xl font-semibold text-slate-800 mb-6">Edit Poll</h2>
-
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
-            {error}
-          </div>
-        )}
+    <Page back={back} title="Edit Poll" width="narrow">
+      <Card>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        {error && <Notice tone="error">{error}</Notice>}
 
         <div className="mb-4">
-          <label htmlFor="title" className="block text-sm font-medium text-slate-700 mb-1">
+          <Label htmlFor="title" className="mb-1">
             Poll Title *
-          </label>
-          <input
+          </Label>
+          <Input
             type="text"
             id="title"
             name="title"
@@ -174,40 +137,37 @@ export const PollEdit: React.FC = () => {
             onChange={handleChange}
             placeholder="e.g., Team Planning Meeting"
             required
-            className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>
 
         <div className="mb-4">
-          <label htmlFor="description" className="block text-sm font-medium text-slate-700 mb-1">
+          <Label htmlFor="description" className="mb-1">
             Description
-          </label>
-          <textarea
+          </Label>
+          <Textarea
             id="description"
             name="description"
             value={formData.description || ''}
             onChange={handleChange}
             placeholder="Optional description or agenda"
             rows={3}
-            className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
           />
         </div>
 
         <div className="mb-4">
-          <label htmlFor="status" className="block text-sm font-medium text-slate-700 mb-1">
+          <Label htmlFor="status" className="mb-1">
             Status
-          </label>
-          <select
+          </Label>
+          <Select
             id="status"
             name="status"
             value={formData.status}
             onChange={handleChange}
-            className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:border-primary focus:outline-none"
           >
             <option value="open">Open</option>
             <option value="closed">Closed</option>
             <option value="finalized">Finalized</option>
-          </select>
+          </Select>
           <p className="mt-1 text-xs text-slate-500">
             {formData.status === 'open' && 'Respondents can submit their availability'}
             {formData.status === 'closed' && 'No new responses allowed, but not finalized yet'}
@@ -217,89 +177,85 @@ export const PollEdit: React.FC = () => {
 
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <label htmlFor="date_start" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="date_start" className="mb-1">
               Start Date *
-            </label>
-            <input
+            </Label>
+            <Input
               type="date"
               id="date_start"
               name="date_start"
               value={formData.date_start}
               onChange={handleChange}
               required
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none"
             />
           </div>
 
           <div>
-            <label htmlFor="date_end" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="date_end" className="mb-1">
               End Date *
-            </label>
-            <input
+            </Label>
+            <Input
               type="date"
               id="date_end"
               name="date_end"
               value={formData.date_end}
               onChange={handleChange}
               required
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm focus:border-primary focus:outline-none"
             />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <label htmlFor="time_start" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="time_start" className="mb-1">
               Start Hour
-            </label>
-            <select
+            </Label>
+            <Select
               id="time_start"
               name="time_start"
               value={formData.time_start}
               onChange={handleChange}
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:border-primary focus:outline-none"
             >
               {Array.from({ length: 24 }, (_, i) => (
                 <option key={i} value={i}>{formatHour(i)}</option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
-            <label htmlFor="time_end" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="time_end" className="mb-1">
               End Hour
-            </label>
-            <select
+            </Label>
+            <Select
               id="time_end"
               name="time_end"
               value={formData.time_end}
               onChange={handleChange}
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:border-primary focus:outline-none"
             >
               {Array.from({ length: 24 }, (_, i) => (
                 <option key={i + 1} value={i + 1}>{formatHour(i + 1)}</option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <label htmlFor="slot_duration" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="slot_duration" className="mb-1">
               Time Slot Duration
-            </label>
-            <select
+            </Label>
+            <Select
               id="slot_duration"
               name="slot_duration"
               value={formData.slot_duration}
               onChange={handleChange}
               disabled={poll.response_count > 0}
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:border-primary focus:outline-none disabled:bg-slate-50 disabled:text-slate-400"
+              className="disabled:bg-slate-50"
             >
               <option value={15}>15 minutes</option>
               <option value={30}>30 minutes</option>
               <option value={60}>1 hour</option>
-            </select>
+            </Select>
             {poll.response_count > 0 && (
               <p className="mt-1 text-xs text-slate-500">
                 Cannot change slot duration when responses exist
@@ -308,15 +264,14 @@ export const PollEdit: React.FC = () => {
           </div>
 
           <div>
-            <label htmlFor="timezone" className="block text-sm font-medium text-slate-700 mb-1">
+            <Label htmlFor="timezone" className="mb-1">
               Display Timezone
-            </label>
-            <select
+            </Label>
+            <Select
               id="timezone"
               name="timezone"
               value={formData.timezone}
               onChange={handleChange}
-              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:border-primary focus:outline-none"
             >
               {!COMMON_TIMEZONES.includes(formData.timezone) && (
                 <option value={formData.timezone}>{formatTimezone(formData.timezone)}</option>
@@ -324,7 +279,7 @@ export const PollEdit: React.FC = () => {
               {COMMON_TIMEZONES.map(tz => (
                 <option key={tz} value={tz}>{formatTimezone(tz)}</option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
 
@@ -333,23 +288,22 @@ export const PollEdit: React.FC = () => {
         </p>
 
         <div className="flex justify-end gap-3">
-          <button
+          <Button
             type="button"
-            className="py-2 px-4 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50"
             onClick={() => navigate(`/ui/polls/results/${slug}`)}
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button variant="primary"
             type="submit"
-            className="py-2 px-4 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark disabled:bg-slate-300 disabled:cursor-not-allowed"
             disabled={isSubmitting || !formData.title}
           >
             {isSubmitting ? 'Saving...' : 'Save Changes'}
-          </button>
+          </Button>
         </div>
       </form>
-    </div>
+      </Card>
+    </Page>
   )
 }
 

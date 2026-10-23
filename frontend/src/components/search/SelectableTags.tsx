@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Button } from '@/components/shared/ui'
 
 interface SelectableTagProps {
     tag: string
@@ -28,12 +28,9 @@ interface SelectableTagsProps {
     tags: Record<string, boolean>
     onSelect: (tag: string, selected: boolean) => void
     onBatchUpdate?: (updates: Record<string, boolean>) => void
-    searchable?: boolean
 }
 
-export const SelectableTags = ({ title, tags, onSelect, onBatchUpdate, searchable = false }: SelectableTagsProps) => {
-    const [searchTerm, setSearchTerm] = useState('')
-
+export const SelectableTags = ({ title, tags, onSelect, onBatchUpdate }: SelectableTagsProps) => {
     const handleSelectAll = () => {
         if (onBatchUpdate) {
             const updates = Object.keys(tags).reduce((acc, tag) => {
@@ -66,14 +63,8 @@ export const SelectableTags = ({ title, tags, onSelect, onBatchUpdate, searchabl
         }
     }
 
-    const filteredTags = Object.entries(tags).filter(([tag]) => {
-        return !searchTerm || tag.toLowerCase().includes(searchTerm.toLowerCase())
-    })
-
     const selectedCount = Object.values(tags).filter(Boolean).length
     const totalCount = Object.keys(tags).length
-    const filteredSelectedCount = filteredTags.filter(([_, selected]) => selected).length
-    const filteredTotalCount = filteredTags.length
     const allSelected = selectedCount === totalCount
     const noneSelected = selectedCount === 0
 
@@ -84,46 +75,27 @@ export const SelectableTags = ({ title, tags, onSelect, onBatchUpdate, searchabl
             </summary>
 
             <div className="mt-4 flex items-center gap-2">
-                <button
+                <Button size="sm"
                     type="button"
-                    className="px-3 py-1 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={handleSelectAll}
                     disabled={allSelected}
                 >
                     All
-                </button>
-                <button
+                </Button>
+                <Button size="sm"
                     type="button"
-                    className="px-3 py-1 text-xs bg-slate-100 text-slate-600 rounded hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={handleDeselectAll}
                     disabled={noneSelected}
                 >
                     None
-                </button>
+                </Button>
                 <span className="text-xs text-slate-500">
                     ({selectedCount}/{totalCount})
                 </span>
             </div>
 
-            {searchable && (
-                <div className="mt-3 flex items-center gap-2">
-                    <input
-                        type="text"
-                        placeholder={`Search ${title.toLowerCase()}...`}
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="flex-1 py-1 px-2 border border-slate-200 rounded text-sm"
-                    />
-                    {searchTerm && (
-                        <span className="text-xs text-slate-500">
-                            Showing {filteredSelectedCount}/{filteredTotalCount}
-                        </span>
-                    )}
-                </div>
-            )}
-
             <div className="mt-3 flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
-                {filteredTags.map(([tag, selected]: [string, boolean]) => (
+                {Object.entries(tags).map(([tag, selected]) => (
                     <SelectableTag
                         key={tag}
                         tag={tag}

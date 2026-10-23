@@ -10,6 +10,7 @@ import {
   Cell,
 } from 'recharts'
 import { SessionStatsResponse, SessionStats } from '@/hooks/useTelemetry'
+import { Select } from '@/components/shared/ui'
 
 type SortBy = 'tokens' | 'cost' | 'events'
 type UsageCategory = 'high' | 'medium' | 'low'
@@ -120,27 +121,25 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
           ))}
         </div>
         <div className="flex items-center gap-2">
-          <select
+          <Select
             value={showCount}
             onChange={(e) => setShowCount(Number(e.target.value))}
-            className="text-sm border border-slate-200 rounded-md px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
             <option value={10}>Top 10</option>
             <option value={15}>Top 15</option>
             <option value={25}>Top 25</option>
             <option value={50}>Top 50</option>
-          </select>
-          <select
+          </Select>
+          <Select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as SortBy)}
-            className="text-sm border border-slate-200 rounded-md px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
             {(Object.keys(sortLabels) as SortBy[]).map((key) => (
               <option key={key} value={key}>
                 Sort by {sortLabels[key]}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
       </div>
 

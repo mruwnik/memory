@@ -7,6 +7,7 @@ import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
 import Combobox, { ComboOption } from '@/components/shared/Combobox'
 import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
+import { Button, EmptyState, Input, Label, LoadingState, Notice, Page, Select, Textarea, ToggleGroup } from '@/components/shared/ui'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
 
@@ -176,8 +177,6 @@ interface EditFormProps {
   error: string | null
 }
 
-const inputClass = "w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-const labelClass = "block text-xs font-medium text-slate-500 mb-1"
 
 // --- Reusable field-group components (also used by CreateForm) ---
 
@@ -193,11 +192,6 @@ type TargetMode = 'channel' | 'dm'
 function slackTargetIsDm(target: string): boolean {
   return /^[UW]/i.test(target)
 }
-
-const modeToggleClass = (active: boolean) =>
-  `px-3 py-1 rounded text-xs font-medium ${
-    active ? 'bg-primary text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-  }`
 
 const NotificationFields = ({ channel, target, onChannel, onTarget }: NotificationFieldsProps) => {
   const { listChannels: listDiscordChannels, listServers } = useDiscord()
@@ -303,37 +297,32 @@ const NotificationFields = ({ channel, target, onChannel, onTarget }: Notificati
   return (
     <div className="flex gap-3">
       <div className="flex-1">
-        <label className={labelClass}>Channel</label>
-        <select value={channel} onChange={e => handlePlatform(e.target.value)} className={inputClass}>
+        <Label>Channel</Label>
+        <Select value={channel} onChange={e => handlePlatform(e.target.value)}>
           <option value="">Select...</option>
           {CHANNELS.map(c => (
             <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
           ))}
-        </select>
+        </Select>
       </div>
       <div className="flex-1">
-        <label className={labelClass}>Target</label>
+        <Label>Target</Label>
         {isChat && (
-          <div className="flex items-center gap-2 mb-1">
-            <button type="button" className={modeToggleClass(mode === 'channel')} onClick={() => handleMode('channel')}>
-              Channel
-            </button>
-            <button type="button" className={modeToggleClass(mode === 'dm')} onClick={() => handleMode('dm')}>
-              Direct message
-            </button>
+          <div className="mb-1">
+            <ToggleGroup label="Target type" value={mode} onChange={handleMode}
+              options={[{ value: 'channel', label: 'Channel' }, { value: 'dm', label: 'Direct message' }]} />
           </div>
         )}
         {!channel && (
-          <input type="text" value="" disabled placeholder="Select a channel first" className={inputClass} />
+          <Input type="text" value="" disabled placeholder="Select a channel first" />
         )}
         {channel === 'email' && (
           <>
-            <input
+            <Input
               type="email"
               value={target}
               onChange={e => onTarget(e.target.value)}
               placeholder="you@example.com"
-              className={inputClass}
             />
             <p className="text-xs text-slate-400 mt-1">Email address (or a person's name to look up).</p>
           </>
@@ -404,36 +393,36 @@ const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsP
       <p className="text-xs font-semibold text-slate-600 mb-2">Spawn Config</p>
     </div>
     <div>
-      <label className={labelClass}>Environment</label>
-      <select value={state.envId ?? ''} onChange={e => setState(s => ({ ...s, envId: e.target.value ? Number(e.target.value) : null }))} className={inputClass}>
+      <Label>Environment</Label>
+      <Select value={state.envId ?? ''} onChange={e => setState(s => ({ ...s, envId: e.target.value ? Number(e.target.value) : null }))}>
         <option value="">Select environment...</option>
         {environments.map(env => (
           <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
         ))}
-      </select>
+      </Select>
     </div>
     <div className="flex gap-3">
       <div className="flex-1">
-        <label className={labelClass}>Repo URL</label>
-        <input type="text" value={state.repoUrl} onChange={e => setState(s => ({ ...s, repoUrl: e.target.value }))} placeholder="https://github.com/org/repo" className={inputClass} />
+        <Label>Repo URL</Label>
+        <Input type="text" value={state.repoUrl} onChange={e => setState(s => ({ ...s, repoUrl: e.target.value }))} placeholder="https://github.com/org/repo" />
       </div>
       <div className="flex-1">
-        <label className={labelClass}>Run ID</label>
-        <input type="text" value={state.runId} onChange={e => setState(s => ({ ...s, runId: e.target.value }))} placeholder="custom-branch-name" className={inputClass} />
+        <Label>Run ID</Label>
+        <Input type="text" value={state.runId} onChange={e => setState(s => ({ ...s, runId: e.target.value }))} placeholder="custom-branch-name" />
       </div>
     </div>
     <div>
-      <label className={labelClass}>Allowed Tools</label>
-      <input type="text" value={state.allowedTools} onChange={e => setState(s => ({ ...s, allowedTools: e.target.value }))} placeholder="Bash, Read, Write, Edit, Grep, Glob" className={inputClass} />
+      <Label>Allowed Tools</Label>
+      <Input type="text" value={state.allowedTools} onChange={e => setState(s => ({ ...s, allowedTools: e.target.value }))} placeholder="Bash, Read, Write, Edit, Grep, Glob" />
       <p className="text-xs text-slate-400 mt-1">Comma-separated tool names</p>
     </div>
     <div>
-      <label className={labelClass}>Environment Variables</label>
-      <textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className={`${inputClass} font-mono`} />
+      <Label>Environment Variables</Label>
+      <Textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className="font-mono" />
       <p className="text-xs text-slate-400 mt-1">One per line: KEY=value</p>
     </div>
     <div className="flex items-center gap-2">
-      <input type="checkbox" id="cf-playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} className="rounded border-slate-300" />
+      <input type="checkbox" id="cf-playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
       <label htmlFor="cf-playwright" className="text-xs text-slate-600">Enable Playwright</label>
     </div>
   </>
@@ -523,23 +512,23 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       <div>
-        <label className={labelClass}>Topic</label>
-        <input type="text" value={topic} onChange={e => setTopic(e.target.value)} className={inputClass} />
+        <Label>Topic</Label>
+        <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
       </div>
       <div>
-        <label className={labelClass}>Cron Expression</label>
-        <input
+        <Label>Cron Expression</Label>
+        <Input
           type="text"
           value={cronExpr}
           onChange={e => setCronExpr(e.target.value)}
           placeholder="0 9 * * *"
-          className={`${inputClass} font-mono`}
+          className="font-mono"
         />
         <p className="text-xs text-slate-400 mt-1">{describeCron(cronExpr)}</p>
       </div>
       <div>
-        <label className={labelClass}>{isClaude ? 'Initial Prompt' : 'Message'}</label>
-        <textarea value={message} onChange={e => setMessage(e.target.value)} rows={isClaude ? 4 : 2} className={inputClass} />
+        <Label>{isClaude ? 'Initial Prompt' : 'Message'}</Label>
+        <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={isClaude ? 4 : 2} />
       </div>
 
       {isClaude && (
@@ -548,59 +537,55 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
             <p className="text-xs font-semibold text-slate-600 mb-2">Spawn Config</p>
           </div>
           <div>
-            <label className={labelClass}>Environment</label>
-            <select
+            <Label>Environment</Label>
+            <Select
               value={envId ?? ''}
               onChange={e => setEnvId(e.target.value ? Number(e.target.value) : null)}
-              className={inputClass}
             >
               <option value="">Select environment...</option>
               {environments.map(env => (
                 <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className={labelClass}>Repo URL</label>
-              <input
+              <Label>Repo URL</Label>
+              <Input
                 type="text"
                 value={repoUrl}
                 onChange={e => setRepoUrl(e.target.value)}
                 placeholder="https://github.com/org/repo"
-                className={inputClass}
               />
             </div>
             <div className="flex-1">
-              <label className={labelClass}>Run ID</label>
-              <input
+              <Label>Run ID</Label>
+              <Input
                 type="text"
                 value={runId}
                 onChange={e => setRunId(e.target.value)}
                 placeholder="custom-branch-name"
-                className={inputClass}
               />
             </div>
           </div>
           <div>
-            <label className={labelClass}>Allowed Tools</label>
-            <input
+            <Label>Allowed Tools</Label>
+            <Input
               type="text"
               value={allowedTools}
               onChange={e => setAllowedTools(e.target.value)}
               placeholder="Bash, Read, Write, Edit, Grep, Glob"
-              className={inputClass}
             />
             <p className="text-xs text-slate-400 mt-1">Comma-separated tool names</p>
           </div>
           <div>
-            <label className={labelClass}>Environment Variables</label>
-            <textarea
+            <Label>Environment Variables</Label>
+            <Textarea
               value={customEnvText}
               onChange={e => setCustomEnvText(e.target.value)}
               rows={3}
               placeholder={"KEY=value\nANOTHER_KEY=value"}
-              className={`${inputClass} font-mono`}
+              className="font-mono"
             />
             <p className="text-xs text-slate-400 mt-1">One per line: KEY=value</p>
           </div>
@@ -610,7 +595,6 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
               id={`playwright-${task.id}`}
               checked={enablePlaywright}
               onChange={e => setEnablePlaywright(e.target.checked)}
-              className="rounded border-slate-300"
             />
             <label htmlFor={`playwright-${task.id}`} className="text-xs text-slate-600">Enable Playwright</label>
           </div>
@@ -622,21 +606,19 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}
       <div className="flex gap-2 pt-1">
-        <button
+        <Button variant="primary" size="sm"
           type="submit"
           disabled={saving}
-          className="bg-primary text-white py-1.5 px-4 rounded text-sm hover:bg-primary-dark disabled:bg-slate-300"
         >
           {saving ? 'Saving...' : 'Save'}
-        </button>
-        <button
+        </Button>
+        <Button size="sm"
           type="button"
           onClick={onCancel}
           disabled={saving}
-          className="bg-slate-100 text-slate-700 py-1.5 px-4 rounded text-sm hover:bg-slate-200"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -698,8 +680,8 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
         <label className="text-sm"><input type="radio" checked={taskType === 'claude_session'} onChange={() => setTaskType('claude_session')} /> Claude session</label>
       </div>
       <div>
-        <label className={labelClass}>Topic</label>
-        <input type="text" value={topic} onChange={e => setTopic(e.target.value)} className={inputClass} />
+        <Label>Topic</Label>
+        <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
       </div>
       <div className="flex gap-4">
         <label className="text-sm"><input type="radio" checked={cadence === 'recurring'} onChange={() => setCadence('recurring')} /> Recurring</label>
@@ -707,29 +689,29 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
       </div>
       {cadence === 'recurring' ? (
         <div>
-          <label className={labelClass}>Cron Expression</label>
-          <input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className={`${inputClass} font-mono`} />
+          <Label>Cron Expression</Label>
+          <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
           <p className="text-xs text-slate-400 mt-1">{describeCron(cronExpr)}</p>
         </div>
       ) : (
         <div>
-          <label className={labelClass}>Run at (local time)</label>
-          <input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} className={inputClass} />
+          <Label>Run at (local time)</Label>
+          <Input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} />
         </div>
       )}
       <div>
-        <label className={labelClass}>{taskType === 'claude_session' ? 'Initial Prompt' : 'Message'}</label>
-        <textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} className={inputClass} />
+        <Label>{taskType === 'claude_session' ? 'Initial Prompt' : 'Message'}</Label>
+        <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} />
       </div>
       {taskType === 'notification'
         ? <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
         : <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
       {error && <p className="text-sm text-red-600">{error}</p>}
       <div className="flex gap-2 pt-1">
-        <button type="submit" disabled={saving} className="bg-primary text-white py-1.5 px-4 rounded text-sm hover:bg-primary-dark disabled:bg-slate-300">
+        <Button variant="primary" size="sm" type="submit" disabled={saving}>
           {saving ? 'Creating...' : 'Create task'}
-        </button>
-        <button type="button" onClick={onCancel} disabled={saving} className="bg-slate-100 text-slate-700 py-1.5 px-4 rounded text-sm hover:bg-slate-200">Cancel</button>
+        </Button>
+        <Button size="sm" type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
       </div>
     </form>
   )
@@ -908,19 +890,15 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
 
             <div className="shrink-0 flex gap-2">
               {task.task_type !== 'agent_run' && (
-                <button
+                <Button size="sm"
                   onClick={() => setEditing(true)}
-                  className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200"
                 >
                   Edit
-                </button>
+                </Button>
               )}
-              <button
-                onClick={() => setShowHistory(h => !h)}
-                className={`py-1.5 px-3 rounded text-sm ${showHistory ? 'bg-primary text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
-              >
+              <Button size="sm" variant={showHistory ? 'primary' : 'secondary'} aria-pressed={showHistory} onClick={() => setShowHistory(h => !h)}>
                 History
-              </button>
+              </Button>
               {confirmDelete ? (
                 <span className="flex items-center gap-1 text-sm">
                   <span className="text-red-600">Delete?</span>
@@ -939,12 +917,11 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
                   </button>
                 </span>
               ) : (
-                <button
+                <Button variant="danger" size="sm"
                   onClick={() => setConfirmDelete(true)}
-                  className="bg-red-50 text-red-600 py-1.5 px-3 rounded text-sm hover:bg-red-100"
                 >
                   Delete
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -1035,54 +1012,37 @@ const ScheduledTasks = () => {
   ]
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <Link to="/ui/dashboard" className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100">
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Scheduled Tasks</h1>
+    <Page
+      title="Scheduled Tasks"
+      description={<>
         <div className="flex gap-3 text-sm">
           <span className="text-green-600 font-medium">{enabledCount} active</span>
           {disabledCount > 0 && <span className="text-slate-500">{disabledCount} disabled</span>}
         </div>
-      </header>
-
+      </>}
+      width="wide"
+    >
       <div className="space-y-4">
         <div className="flex gap-2 items-center">
-          {FILTERS.map(f => (
-            <button
-              key={f.value}
-              className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
-                typeFilter === f.value
-                  ? 'bg-primary text-white'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-              }`}
-              onClick={() => setTypeFilter(f.value)}
-            >
-              {f.label}
-            </button>
-          ))}
-          <button
+          <ToggleGroup label="Filter" options={FILTERS} value={typeFilter} onChange={setTypeFilter} />
+          <Button size="icon"
             onClick={() => loadTasks()}
-            className="w-9 h-9 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-lg"
+                
             title="Refresh"
             aria-label="Refresh task list"
           >
             &#8635;
-          </button>
-          <button onClick={() => setShowCreate(v => !v)} className="bg-primary text-white py-1.5 px-3 rounded text-sm hover:bg-primary-dark">
+          </Button>
+          <Button variant="primary" onClick={() => setShowCreate(v => !v)}>
             {showCreate ? 'Close' : '+ New task'}
-          </button>
+          </Button>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{error}</p>
-            <button onClick={() => loadTasks()} className="text-primary hover:underline">Retry</button>
-          </div>
+          <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>
         )}
 
-        {loading && <div className="text-center py-8 text-slate-500">Loading scheduled tasks...</div>}
+        {loading && <LoadingState message="Loading scheduled tasks..." />}
 
         {showCreate && (
           <div className="mb-4">
@@ -1091,11 +1051,9 @@ const ScheduledTasks = () => {
         )}
 
         {!loading && tasks.length === 0 && (
-          <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
-            {typeFilter === 'all'
+          <EmptyState message={typeFilter === 'all'
               ? 'No scheduled tasks'
-              : `No ${typeFilter === 'notification' ? 'notification' : 'Claude session'} tasks`}
-          </div>
+              : `No ${typeFilter === 'notification' ? 'notification' : 'Claude session'} tasks`} />
         )}
 
         {!loading && tasks.length > 0 && (
@@ -1113,7 +1071,7 @@ const ScheduledTasks = () => {
           </ul>
         )}
       </div>
-    </div>
+    </Page>
   )
 }
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { useClaude, Snapshot, Environment, CreateEnvironmentRequest } from '../../hooks/useClaude'
+import { Button, EmptyState, Input, Label, LoadingState, Modal, Notice, Page, Select, Tabs, Textarea, ToggleGroup } from '@/components/shared/ui'
 
 interface SnapshotSummary {
   skills: string[]
@@ -173,86 +173,39 @@ const ConfigSources = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <Link
-          to="/ui/dashboard"
-          className="bg-slate-50 text-slate-600 border border-slate-200 py-2 px-4 rounded-md text-sm hover:bg-slate-100"
-        >
-          Back
-        </Link>
-        <h1 className="text-2xl font-semibold text-slate-800 flex-1">Claude Configurations</h1>
-        <button
-          onClick={() => loadData()}
-          className="w-9 h-9 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-lg"
-          title="Refresh"
-          aria-label="Refresh list"
-        >
-          &#8635;
-        </button>
-      </header>
-
+    <Page
+      title="Claude Configurations"
+      actions={<>
+        <Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>
+        <Button size="icon" onClick={() => loadData()} title="Refresh" aria-label="Refresh list">&#8635;</Button>
+      </>}
+      width="wide"
+    >
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-slate-200 p-1 rounded-lg w-fit">
-        <button
-          onClick={() => setActiveTab('environments')}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'environments'
-              ? 'bg-white text-slate-800 shadow-sm'
-              : 'text-slate-600 hover:text-slate-800'
-          }`}
-        >
-          Environments ({environments.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('snapshots')}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'snapshots'
-              ? 'bg-white text-slate-800 shadow-sm'
-              : 'text-slate-600 hover:text-slate-800'
-          }`}
-        >
-          Snapshots ({snapshots.length})
-        </button>
-      </div>
+      <Tabs label="Sections" value={activeTab} onChange={setActiveTab} options={[{ value: 'environments', label: <>Environments ({environments.length})</> }, { value: 'snapshots', label: <>Snapshots ({snapshots.length})</> }]} />
 
       <div className="space-y-4">
         {/* Error */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex justify-between items-center">
-            <p>{error}</p>
-            <button onClick={() => setError(null)} className="text-red-700 hover:underline">
-              Dismiss
-            </button>
-          </div>
+          <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
         )}
 
         {/* Loading */}
-        {loading && <div className="text-center py-8 text-slate-500">Loading...</div>}
+        {loading && <LoadingState />}
 
         {/* Environments Tab */}
         {!loading && activeTab === 'environments' && (
           <>
-            {/* Create Environment Button */}
-            <div className="flex justify-end">
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="bg-primary text-white py-2 px-4 rounded-md text-sm hover:bg-primary/90"
-              >
-                + New Environment
-              </button>
-            </div>
-
             {/* Empty State */}
             {environments.length === 0 && (
-              <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
+              <EmptyState message={<>
                 <p className="mb-4">No environments yet</p>
                 <p className="text-sm">
                   Environments are persistent Docker volumes that retain state across sessions.
                   <br />
                   Create one to get started!
                 </p>
-              </div>
+              </>} />
             )}
 
             {/* Environment List */}
@@ -295,13 +248,12 @@ const ConfigSources = () => {
                         >
                           Reset
                         </button>
-                        <button
+                        <Button variant="danger" size="sm"
                           onClick={() => handleDeleteEnvironment(env.id)}
                           disabled={deletingId === `env-${env.id}`}
-                          className="bg-red-50 text-red-600 py-1.5 px-3 rounded text-sm hover:bg-red-100 disabled:bg-slate-200 disabled:text-slate-400"
                         >
                           {deletingId === `env-${env.id}` ? 'Deleting...' : 'Delete'}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </li>
@@ -316,7 +268,7 @@ const ConfigSources = () => {
           <>
             {/* Empty State */}
             {snapshots.length === 0 && (
-              <div className="text-center py-12 text-slate-500 bg-white rounded-xl">
+              <EmptyState message={<>
                 <p className="mb-4">No snapshots found</p>
                 <p className="text-sm">
                   Use the CLI tool to create snapshots:
@@ -325,7 +277,7 @@ const ConfigSources = () => {
                     python tools/claude_snapshot.py --host $HOST --api-key $KEY
                   </code>
                 </p>
-              </div>
+              </>} />
             )}
 
             {/* Snapshot List */}
@@ -381,13 +333,12 @@ const ConfigSources = () => {
                         </div>
 
                         <div className="shrink-0">
-                          <button
+                          <Button variant="danger" size="sm"
                             onClick={() => handleDeleteSnapshot(snapshot.id)}
                             disabled={deletingId === `snap-${snapshot.id}`}
-                            className="bg-red-50 text-red-600 py-1.5 px-3 rounded text-sm hover:bg-red-100 disabled:bg-slate-200 disabled:text-slate-400"
                           >
                             {deletingId === `snap-${snapshot.id}` ? 'Deleting...' : 'Delete'}
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     </li>
@@ -401,76 +352,43 @@ const ConfigSources = () => {
 
       {/* Create Environment Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <h2 className="text-xl font-semibold text-slate-800 mb-4">Create Environment</h2>
-
-            <div className="space-y-4">
+        <Modal title="Create Environment" onClose={() => {
+                  setShowCreateModal(false)
+                  setNewEnvName('')
+                  setNewEnvDescription('')
+                  setNewEnvSourceType('empty')
+                  setNewEnvSnapshotId(null)
+                  setNewEnvSourceEnvId(null)
+                }} size="md">
+          <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
-                <input
+                <Label className="mb-1">Name *</Label>
+                <Input
                   type="text"
                   value={newEnvName}
                   onChange={(e) => setNewEnvName(e.target.value)}
                   placeholder="My Development Environment"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
-                <textarea
+                <Label className="mb-1">Description</Label>
+                <Textarea
                   value={newEnvDescription}
                   onChange={(e) => setNewEnvDescription(e.target.value)}
                   placeholder="Optional description..."
                   rows={2}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Initialize from</label>
-                <div className="flex gap-2 mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setNewEnvSourceType('empty')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      newEnvSourceType === 'empty'
-                        ? 'bg-primary text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Empty
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewEnvSourceType('snapshot')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      newEnvSourceType === 'snapshot'
-                        ? 'bg-primary text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Snapshot
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewEnvSourceType('environment')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                      newEnvSourceType === 'environment'
-                        ? 'bg-primary text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Environment
-                  </button>
-                </div>
+                <Label className="mb-1">Initialize from</Label>
+                <ToggleGroup label="Initialize from" value={newEnvSourceType} onChange={setNewEnvSourceType} options={[{ value: 'empty', label: 'Empty' }, { value: 'snapshot', label: 'Snapshot' }, { value: 'environment', label: 'Environment' }]} />
 
                 {newEnvSourceType === 'snapshot' && (
-                  <select
+                  <Select
                     value={newEnvSnapshotId ?? ''}
                     onChange={(e) => setNewEnvSnapshotId(e.target.value ? Number(e.target.value) : null)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   >
                     <option value="">Select a snapshot...</option>
                     {snapshots.map((s) => (
@@ -478,14 +396,13 @@ const ConfigSources = () => {
                         {s.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
 
                 {newEnvSourceType === 'environment' && (
-                  <select
+                  <Select
                     value={newEnvSourceEnvId ?? ''}
                     onChange={(e) => setNewEnvSourceEnvId(e.target.value ? Number(e.target.value) : null)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   >
                     <option value="">Select an environment...</option>
                     {environments.map((env) => (
@@ -493,7 +410,7 @@ const ConfigSources = () => {
                         {env.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
 
                 <p className="text-xs text-slate-500 mt-1">
@@ -505,7 +422,7 @@ const ConfigSources = () => {
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <button
+              <Button
                 onClick={() => {
                   setShowCreateModal(false)
                   setNewEnvName('')
@@ -514,37 +431,34 @@ const ConfigSources = () => {
                   setNewEnvSnapshotId(null)
                   setNewEnvSourceEnvId(null)
                 }}
-                className="bg-slate-100 text-slate-600 py-2 px-4 rounded-lg text-sm font-medium hover:bg-slate-200"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="primary"
                 onClick={handleCreateEnvironment}
                 disabled={creating || !newEnvName.trim()}
-                className="bg-primary text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:bg-slate-300 disabled:cursor-not-allowed"
               >
                 {creating ? 'Creating...' : 'Create'}
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Reset Environment Modal */}
       {resettingEnvId !== null && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-            <h2 className="text-xl font-semibold text-slate-800 mb-4">Reset Environment</h2>
-            <p className="text-sm text-slate-600 mb-4">
+        <Modal title="Reset Environment" onClose={() => {
+                  setResettingEnvId(null)
+                  setResetSnapshotId(null)
+                }} size="md">
+          <p className="text-sm text-slate-600 mb-4">
               This will delete all current data in the environment and optionally reinitialize from a snapshot.
             </p>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Reinitialize from Snapshot</label>
-              <select
+              <Label className="mb-1">Reinitialize from Snapshot</Label>
+              <Select
                 value={resetSnapshotId ?? ''}
                 onChange={(e) => setResetSnapshotId(e.target.value ? Number(e.target.value) : null)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               >
                 <option value="">Empty (no snapshot)</option>
                 {snapshots.map((s) => (
@@ -552,30 +466,27 @@ const ConfigSources = () => {
                     {s.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <button
+              <Button
                 onClick={() => {
                   setResettingEnvId(null)
                   setResetSnapshotId(null)
                 }}
-                className="bg-slate-100 text-slate-600 py-2 px-4 rounded-lg text-sm font-medium hover:bg-slate-200"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="dangerSolid"
                 onClick={handleResetEnvironment}
-                className="bg-red-500 text-white py-2 px-4 rounded-lg text-sm font-medium hover:bg-red-600"
               >
                 Reset Environment
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
-    </div>
+    </Page>
   )
 }
 

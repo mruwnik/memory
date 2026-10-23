@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, User } from '../../hooks/useUsers'
+import { Select } from '@/components/shared/ui'
 
 export type SelectedUser = { type: 'user'; id: number; name: string }
 
@@ -101,10 +102,10 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <label htmlFor="user-selector" className="text-sm text-slate-600 font-medium">
+      <label htmlFor="user-selector" className="text-sm text-slate-600 font-medium whitespace-nowrap">
         View as:
       </label>
-      <select
+      <Select
         id="user-selector"
         value={value.id}
         onChange={(e) => {
@@ -118,7 +119,6 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
             onChange({ type: 'user', id: userId, name: user?.name || '' })
           }
         }}
-        className="text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-700 hover:border-slate-300 focus:border-primary focus:ring-1 focus:ring-primary outline-none"
       >
         {showAllOption && (
           <option value={ALL_USERS_ID}>All users</option>
@@ -131,7 +131,7 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
             {user.name} {user.id === currentUser?.id ? '(you)' : ''}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   )
 }

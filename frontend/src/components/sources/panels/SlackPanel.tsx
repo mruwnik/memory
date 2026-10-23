@@ -1,15 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSlack, SlackWorkspace, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
 import { useProjects, Project } from '@/hooks/useProjects'
-import {
-  EmptyState,
-  LoadingState,
-  ErrorState,
-  SyncStatus,
-  SyncButton,
-  ConfirmDialog,
-} from '../shared'
-import { styles, cx } from '../styles'
+import { SyncStatus, SyncButton } from '../shared'
+import { Button, Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, Select, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
 
@@ -144,13 +137,9 @@ export const SlackPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h3 className={styles.panelTitle}>Slack</h3>
-        <button className={styles.btnAdd} onClick={handleConnect}>
+    <Card title="Slack" actions={<><Button variant="primary" onClick={handleConnect}>
           Connect Workspace
-        </button>
-      </div>
+        </Button></>}>
 
       {wizardOpen && (
         <SlackAppWizard
@@ -166,7 +155,7 @@ export const SlackPanel = () => {
           onAction={handleConnect}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {workspaces.map(workspace => (
             <WorkspaceCard
               key={workspace.id}
@@ -198,7 +187,7 @@ export const SlackPanel = () => {
           onCancel={() => setDisconnecting(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -261,9 +250,9 @@ const WorkspaceCard = ({
 
   return (
     <div className="border border-slate-200 rounded-lg p-4">
-      <div className={styles.cardHeader}>
-        <div className={styles.cardInfo}>
-          <h4 className={styles.cardTitle}>{workspace.name}</h4>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium text-slate-800 truncate">{workspace.name}</h4>
           <div className="flex items-center gap-2 text-sm text-slate-500 mt-1">
             {workspace.domain && (
               <>
@@ -336,9 +325,9 @@ const WorkspaceCard = ({
 
       <div className="flex gap-2 mt-3">
         <SyncButton onSync={onSync} label="Sync Now" />
-        <button className={styles.btnDelete} onClick={onDisconnect}>
+        <Button variant="danger" size="sm" onClick={onDisconnect}>
           Disconnect
-        </button>
+        </Button>
       </div>
 
       {/* Channels section */}
@@ -434,8 +423,8 @@ const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate
         </span>
       </div>
       <div className="flex items-center gap-1">
-        <select
-          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+        <Select
+          className="text-xs"
           value={channel.project_id || ''}
           onChange={handleProjectChange}
           disabled={channel.is_archived}
@@ -444,9 +433,9 @@ const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate
           {projects.map(p => (
             <option key={p.id} value={p.id}>{p.title}</option>
           ))}
-        </select>
-        <select
-          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+        </Select>
+        <Select
+          className="text-xs"
           value={channel.sensitivity}
           onChange={handleSensitivityChange}
           disabled={channel.is_archived}
@@ -455,7 +444,7 @@ const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate
           <option value="basic">Basic</option>
           <option value="internal">Internal</option>
           <option value="confidential">Confidential</option>
-        </select>
+        </Select>
         <button
           className={cx(
             'px-2 py-0.5 rounded text-xs flex items-center gap-1',

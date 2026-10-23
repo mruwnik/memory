@@ -1,12 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSecrets, Secret, SecretWithValue } from '@/hooks/useSecrets'
-import {
-  Modal,
-  EmptyState,
-  LoadingState,
-  ErrorState,
-} from '../shared'
-import { styles } from '../styles'
+import { Button, Card, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Modal, Notice, Textarea } from '@/components/shared/ui'
 
 export const SecretsPanel = () => {
   const { listSecrets, createSecret, updateSecret, deleteSecret, getSecretValue } = useSecrets()
@@ -121,15 +115,15 @@ export const SecretsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadSecrets} />
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
+    <Card>
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className={styles.panelTitle}>Secrets</h3>
+          <h3 className="text-lg font-semibold text-slate-800">Secrets</h3>
           <p className="text-sm text-slate-500 mt-1">
             Encrypted storage for API keys, tokens, and other sensitive values
           </p>
         </div>
-        <button className={styles.btnAdd} onClick={() => setShowForm(true)}>Add Secret</button>
+        <Button variant="primary" onClick={() => setShowForm(true)}>Add Secret</Button>
       </div>
 
       {secrets.length === 0 ? (
@@ -139,7 +133,7 @@ export const SecretsPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className={styles.sourceList}>
+        <div className="space-y-3">
           {secrets.map(secret => (
             <SecretCard
               key={secret.id}
@@ -169,7 +163,7 @@ export const SecretsPanel = () => {
           onCancel={() => setEditingSecret(null)}
         />
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -193,7 +187,7 @@ const SecretCard = ({
   onDelete,
 }: SecretCardProps) => {
   return (
-    <div className={styles.sourceCard}>
+    <Card>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h4 className="font-medium text-slate-800 font-mono">{secret.name}</h4>
@@ -236,22 +230,20 @@ const SecretCard = ({
         </p>
       </div>
       <div className="flex items-start gap-1 ml-4">
-        <button
+        <Button size="sm"
           onClick={onEdit}
-          className={styles.btnEdit}
           title="Edit secret"
         >
           Edit
-        </button>
-        <button
+        </Button>
+        <Button variant="danger" size="sm"
           onClick={onDelete}
-          className={styles.btnDelete}
           title="Delete secret"
         >
           Delete
-        </button>
+        </Button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -321,57 +313,52 @@ const SecretForm = ({ secret, onSubmit, onCancel }: SecretFormProps) => {
 
   return (
     <Modal title={secret ? 'Edit Secret' : 'Add Secret'} onClose={onCancel}>
-      <form onSubmit={handleSubmit} className={styles.form}>
-        {error && <div className={styles.formError}>{error}</div>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Name</label>
-          <input
+        <Field>
+          <Label>Name</Label>
+          <Input
             type="text"
             value={formData.name}
             onChange={e => setFormData({ ...formData, name: e.target.value })}
             required={!secret}
             disabled={!!secret}
             placeholder="api-key or github-token"
-            className={`${styles.formInput} font-mono`}
+            className="font-mono"
           />
           <p className="text-xs text-slate-500 mt-1">
             Must be a valid identifier (letters, digits, and -_*+!?'&lt;&gt;=)
           </p>
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>
-            {secret ? 'New Value (leave empty to keep current)' : 'Value'}
-          </label>
-          <input
+        <Field label={secret ? 'New Value (leave empty to keep current)' : 'Value'}>
+          <Input
             type="password"
             value={formData.value}
             onChange={e => setFormData({ ...formData, value: e.target.value })}
             required={!secret}
             placeholder={secret ? 'Enter new value to update' : 'Enter secret value'}
-            className={`${styles.formInput} font-mono`}
+            className="font-mono"
             autoComplete="off"
           />
-        </div>
+        </Field>
 
-        <div className={styles.formGroup}>
-          <label className={styles.formLabel}>Description (optional)</label>
-          <textarea
+        <Field label="Description (optional)">
+          <Textarea
             value={formData.description}
             onChange={e => setFormData({ ...formData, description: e.target.value })}
             rows={2}
             placeholder="What is this secret used for?"
-            className={styles.formTextarea}
           />
-        </div>
+        </Field>
 
-        <div className={styles.formActions}>
-          <button type="button" className={styles.btnCancel} onClick={onCancel}>Cancel</button>
-          <button type="submit" className={styles.btnSubmit} disabled={submitting}>
+        <FormActions>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </form>
     </Modal>
   )

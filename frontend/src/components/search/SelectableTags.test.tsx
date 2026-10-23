@@ -107,72 +107,11 @@ describe('SelectableTags', () => {
     })
   })
 
-  describe('searchable mode', () => {
-    it('does not render a search box when not searchable', () => {
-      renderWithUser(
-        <SelectableTags title="Tags" tags={tags({ a: false })} onSelect={() => {}} />,
-      )
-      expect(screen.queryByPlaceholderText('Search tags...')).not.toBeInTheDocument()
-    })
-
-    it('renders a search box when searchable', () => {
-      renderWithUser(
-        <SelectableTags title="Modalities" tags={tags({ a: false })} onSelect={() => {}} searchable />,
-      )
-      expect(screen.getByPlaceholderText('Search modalities...')).toBeInTheDocument()
-    })
-
-    it('filters the visible tags by search term (case-insensitive)', async () => {
-      const { user } = renderWithUser(
-        <SelectableTags
-          title="Tags"
-          tags={tags({ apple: false, banana: false, apricot: true })}
-          onSelect={() => {}}
-          searchable
-        />,
-      )
-      await user.type(screen.getByPlaceholderText('Search tags...'), 'AP')
-      expect(screen.getByRole('button', { name: 'apple' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'apricot' })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'banana' })).not.toBeInTheDocument()
-    })
-
-    it('shows filtered counts only while a search term is present', async () => {
-      const { user } = renderWithUser(
-        <SelectableTags
-          title="Tags"
-          tags={tags({ apple: true, banana: false })}
-          onSelect={() => {}}
-          searchable
-        />,
-      )
-      expect(screen.queryByText(/Showing/)).not.toBeInTheDocument()
-      await user.type(screen.getByPlaceholderText('Search tags...'), 'apple')
-      expect(screen.getByText('Showing 1/1')).toBeInTheDocument()
-    })
-  })
-
   it('renders no tag buttons for an empty tag set', () => {
     renderWithUser(<SelectableTags title="Tags" tags={tags({})} onSelect={() => {}} />)
     const summary = screen.getByText('Tags (0 selected)')
     expect(summary).toBeInTheDocument()
     // All/None still present
     expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument()
-  })
-
-  it('keeps selected counts independent from filtered set', async () => {
-    const { user } = renderWithUser(
-      <SelectableTags
-        title="Tags"
-        tags={tags({ apple: true, banana: true, cherry: false })}
-        onSelect={() => {}}
-        searchable
-      />,
-    )
-    // overall summary stays 2 selected
-    expect(screen.getByText('Tags (2 selected)')).toBeInTheDocument()
-    await user.type(screen.getByPlaceholderText('Search tags...'), 'an')
-    // banana matches 'an' and is selected; apple/cherry filtered out
-    expect(screen.getByText('Showing 1/1')).toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from 'react'
+import { useEffect, lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -10,6 +10,8 @@ import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
+import { AppShell } from '@/components/shared/AppShell'
+import { LoadingState } from '@/components/shared/ui'
 
 // Lazy load heavy components (recharts ~300KB, xterm ~400KB)
 const Metrics = lazy(() => import('@/components/metrics/Metrics'))
@@ -81,309 +83,57 @@ const AuthWrapper = () => {
     )
   }
 
+  const routes: { path: string; element: ReactNode; scope?: string }[] = [
+    { path: '/ui/dashboard', element: <Dashboard hasScope={hasScope} /> },
+    { path: '/ui/settings', element: <UserSettings /> },
+    { path: '/ui/users', element: <UserManagement />, scope: 'admin:users' },
+    { path: '/ui/search', element: <Search /> },
+    { path: '/ui/sources', element: <Sources /> },
+    { path: '/ui/calendar', element: <Calendar /> },
+    { path: '/ui/tasks', element: <Tasks /> },
+    { path: '/ui/metrics', element: <Suspense fallback={<LoadingState />}><Metrics /></Suspense> },
+    { path: '/ui/notes', element: <NotesPage /> },
+    { path: '/ui/reports', element: <ReportsPage /> },
+    { path: '/ui/people', element: <PeopleManagement />, scope: 'people' },
+    { path: '/ui/projects', element: <Projects /> },
+    { path: '/ui/teams', element: <Teams /> },
+    { path: '/ui/telemetry', element: <Suspense fallback={<LoadingState />}><Telemetry /></Suspense> },
+    { path: '/ui/jobs', element: <Jobs /> },
+    { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
+    { path: '/ui/check', element: <Check />, scope: 'check' },
+    { path: '/ui/agents', element: <AgentsPage />, scope: 'agents' },
+    { path: '/ui/agents/servers', element: <ServersPage />, scope: 'agents' },
+    { path: '/ui/agents/servers/:id', element: <ServerDetail />, scope: 'agents' },
+    { path: '/ui/agents/runs', element: <AgentRuns />, scope: 'agents' },
+    { path: '/ui/agents/runs/new', element: <AdHocRun />, scope: 'agents' },
+    { path: '/ui/agents/runs/:runId', element: <RunView />, scope: 'agents' },
+    { path: '/ui/agents/:id', element: <AgentEditor />, scope: 'agents' },
+    { path: '/ui/logs', element: <DockerLogs /> },
+    { path: '/ui/snapshots', element: <ConfigSources /> },
+    { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense> },
+    { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense> },
+    { path: '/ui/celery', element: <CeleryOverview />, scope: 'admin' },
+    { path: '/ui/polls', element: <PollList /> },
+    { path: '/ui/polls/new', element: <PollCreate /> },
+    { path: '/ui/polls/edit/:slug', element: <PollEdit /> },
+  ]
+  const home = <Navigate to={isAuthenticated ? '/ui/dashboard' : '/ui/login'} replace />
+
   return (
     <Routes>
-      {/* Public routes */}
-      <Route path="/ui/login" element={
-        !isAuthenticated ? (
-          <LoginPrompt onLogin={startOAuth} />
-        ) : (
-          <Navigate to="/ui/dashboard" replace />
-        )
-      } />
+      <Route path="/ui/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
 
-      {/* Protected routes */}
-      <Route path="/ui/dashboard" element={
-        isAuthenticated ? (
-          <Dashboard onLogout={logout} user={user} hasScope={hasScope} />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
+      <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
+        {routes.map(({ path, element, scope }) => (
+          <Route key={path} path={path} element={isAuthenticated && (!scope || hasScope(scope)) ? element : home} />
+        ))}
+      </Route>
 
-      <Route path="/ui/settings" element={
-        isAuthenticated ? (
-          <UserSettings />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/users" element={
-        isAuthenticated && hasScope('admin:users') ? (
-          <UserManagement />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/search" element={
-        isAuthenticated ? (
-          <Search />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/sources" element={
-        isAuthenticated ? (
-          <Sources />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/calendar" element={
-        isAuthenticated ? (
-          <Calendar />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/tasks" element={
-        isAuthenticated ? (
-          <Tasks />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/metrics" element={
-        isAuthenticated ? (
-          <Suspense fallback={<Loading />}><Metrics /></Suspense>
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/notes" element={
-        isAuthenticated ? (
-          <NotesPage />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/reports" element={
-        isAuthenticated ? (
-          <ReportsPage />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/people" element={
-        isAuthenticated && hasScope('people') ? (
-          <PeopleManagement />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/projects" element={
-        isAuthenticated ? (
-          <Projects />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/teams" element={
-        isAuthenticated ? (
-          <Teams />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/telemetry" element={
-        isAuthenticated ? (
-          <Suspense fallback={<Loading />}><Telemetry /></Suspense>
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/jobs" element={
-        isAuthenticated ? (
-          <Jobs />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/scheduled-tasks" element={
-        isAuthenticated ? (
-          <ScheduledTasks />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/check" element={
-        isAuthenticated && hasScope('check') ? (
-          <Check />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/agents" element={
-        isAuthenticated && hasScope('agents') ? (
-          <AgentsPage />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      {/* Listed before /ui/agents/:id; AgentEditor also rejects non-numeric ids. */}
-      <Route path="/ui/agents/servers" element={
-        isAuthenticated && hasScope('agents') ? (
-          <ServersPage />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/agents/servers/:id" element={
-        isAuthenticated && hasScope('agents') ? (
-          <ServerDetail />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/agents/runs" element={
-        isAuthenticated && hasScope('agents') ? (
-          <AgentRuns />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/agents/runs/new" element={
-        isAuthenticated && hasScope('agents') ? (
-          <AdHocRun />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/agents/runs/:runId" element={
-        isAuthenticated && hasScope('agents') ? (
-          <RunView />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/agents/:id" element={
-        isAuthenticated && hasScope('agents') ? (
-          <AgentEditor />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/logs" element={
-        isAuthenticated ? (
-          <DockerLogs />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/snapshots" element={
-        isAuthenticated ? (
-          <ConfigSources />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/claude" element={
-        isAuthenticated ? (
-          <Suspense fallback={<Loading />}><ClaudeSessions /></Suspense>
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/claude/:sessionId" element={
-        isAuthenticated ? (
-          <Suspense fallback={<Loading />}><ClaudeSessions /></Suspense>
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      <Route path="/ui/celery" element={
-        isAuthenticated && hasScope('admin') ? (
-          <CeleryOverview />
-        ) : isAuthenticated ? (
-          <Navigate to="/ui/dashboard" replace />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      {/* Poll routes - authenticated */}
-      <Route path="/ui/polls" element={
-        isAuthenticated ? (
-          <PollList />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-      <Route path="/ui/polls/new" element={
-        isAuthenticated ? (
-          <PollCreate />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-      <Route path="/ui/polls/edit/:slug" element={
-        isAuthenticated ? (
-          <PollEdit />
-        ) : (
-          <Navigate to="/ui/login" replace />
-        )
-      } />
-
-      {/* Poll routes - public (no auth required) */}
+      {/* Poll respond/results are public (no auth required) */}
       <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
       <Route path="/ui/polls/results/:slug" element={<PollResults />} />
 
-      {/* Default redirect */}
-      <Route path="/" element={
-        <Navigate to={isAuthenticated ? "/ui/dashboard" : "/ui/login"} replace />
-      } />
-
-      {/* Catch-all redirect */}
-      <Route path="*" element={
-        <Navigate to={isAuthenticated ? "/ui/dashboard" : "/ui/login"} replace />
-      } />
+      <Route path="*" element={home} />
     </Routes>
   )
 }

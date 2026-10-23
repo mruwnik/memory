@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link } from 'react-router-dom'
 import { useDockerLogs, ContainerInfo, LogsResponse } from '../../hooks/useDockerLogs'
-import { styles, cx } from '../sources/styles'
+import { Badge, Button, Card, Checkbox, Input, Notice, Page, Tabs, ToggleGroup } from '@/components/shared/ui'
 
 // Custom hook for debouncing values
 function useDebounce<T>(value: T, delay: number): T {
@@ -165,120 +164,38 @@ export default function DockerLogs() {
     }
   }, [refreshInterval, loadLogs])
 
-  const tabClass = (container: string) =>
-    cx(
-      'py-3 px-6 text-sm font-medium transition-colors border-b-2 -mb-px',
-      selectedContainer === container
-        ? 'border-primary text-primary bg-slate-50'
-        : 'border-transparent text-slate-600 hover:text-slate-800 hover:bg-slate-50'
-    )
-
-  const timeButtonClass = (range: TimeRange) =>
-    cx(
-      'py-1.5 px-3 rounded text-sm font-medium transition-colors',
-      timeRange === range
-        ? 'bg-primary text-white'
-        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-    )
-
-  const refreshButtonClass = (interval: RefreshInterval) =>
-    cx(
-      'py-1.5 px-2 rounded text-sm font-medium transition-colors',
-      refreshInterval === interval
-        ? 'bg-primary text-white'
-        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-    )
-
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <header className="flex flex-wrap items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-        <div className="flex items-center gap-4 flex-1">
-          <Link to="/ui" className="text-primary hover:underline">&larr; Dashboard</Link>
-          <h1 className="text-2xl font-semibold text-slate-800">Docker Logs</h1>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex gap-1">
-            {TIME_RANGES.map(range => (
-              <button
-                key={range.value}
-                className={timeButtonClass(range.value)}
-                onClick={() => setTimeRange(range.value)}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="text-sm text-slate-500">Auto:</span>
-            {REFRESH_INTERVALS.map(interval => (
-              <button
-                key={interval.value}
-                className={refreshButtonClass(interval.value)}
-                onClick={() => setRefreshInterval(interval.value)}
-              >
-                {interval.label}
-              </button>
-            ))}
-          </div>
-
-          <button
-            onClick={loadLogs}
-            className={styles.btnPrimary}
-            disabled={loading}
-          >
-            {loading ? 'Loading...' : 'Refresh'}
-          </button>
-        </div>
-      </header>
-
+    <Page
+      title="Docker Logs"
+      actions={<>
+        <ToggleGroup label="Time range" options={TIME_RANGES} value={timeRange} onChange={setTimeRange} />
+        <span className="text-sm text-slate-600">Auto:</span>
+        <ToggleGroup label="Auto refresh" options={REFRESH_INTERVALS} value={refreshInterval} onChange={setRefreshInterval} />
+        <Button variant="primary" onClick={loadLogs} disabled={loading}>{loading ? 'Loading...' : 'Refresh'}</Button>
+      </>}
+      width="wide"
+    >
       {error && (
-        <div className={cx(styles.errorBanner, 'flex justify-between items-center mb-6')}>
-          <p>{error}</p>
-          <button onClick={loadLogs} className="text-primary hover:underline">Retry</button>
-        </div>
+        <Notice tone="error" onRetry={loadLogs}>{error}</Notice>
       )}
 
-      <div className="bg-white rounded-xl shadow-md overflow-hidden">
-        <div className="flex border-b border-slate-200">
-          {containers.map(container => (
-            <button
-              key={container.name}
-              className={tabClass(container.name)}
-              onClick={() => setSelectedContainer(container.name)}
-            >
-              <span>{getDisplayName(container.name)}</span>
-              <span className={cx(
-                'ml-2 px-1.5 py-0.5 rounded text-xs',
-                container.status.toLowerCase().includes('up')
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-slate-100 text-slate-500'
-              )}>
-                {container.status}
-              </span>
-            </button>
-          ))}
-        </div>
+      <Card flush className="overflow-hidden">
+        <Tabs label="Containers" value={selectedContainer ?? ""} onChange={setSelectedContainer}
+          options={containers.map(c => ({
+            value: c.name,
+            label: <>{getDisplayName(c.name)} <Badge tone={c.status.toLowerCase().includes('up') ? 'success' : 'neutral'}>{c.status}</Badge></>,
+          }))} />
 
         <div className="p-4 border-b border-slate-200 flex gap-4 items-center">
-          <input
+          <Input
             type="text"
             placeholder="Filter logs..."
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
-            className={cx(styles.formInput, 'flex-1 max-w-md')}
+            className="flex-1 max-w-md"
           />
 
-          <label className="flex items-center gap-2 text-sm text-slate-600">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-              className="rounded border-slate-300"
-            />
-            Auto-scroll
-          </label>
+          <Checkbox checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} label="Auto-scroll" />
 
           {logs && (
             <span className="text-sm text-slate-500">
@@ -301,7 +218,7 @@ export default function DockerLogs() {
             <span className="text-slate-500">No logs available</span>
           )}
         </pre>
-      </div>
-    </div>
+      </Card>
+    </Page>
   )
 }

@@ -6,6 +6,7 @@ import { SpecEditor } from './SpecEditor'
 import { StatusBadge } from './StatusBadge'
 import { Schedules } from './Schedules'
 import { Triggers } from './Triggers'
+import { Button, Field, FieldRow, Input, List, ListItem, Notice, Page, Section, Textarea } from '@/components/shared/ui'
 
 export default function AgentEditor() {
   const { id } = useParams()
@@ -85,51 +86,56 @@ export default function AgentEditor() {
     }
   }
 
-  if (!validId) return <div className="p-6 text-slate-500">Unknown agent</div>
-  if (!catalog || !spec) return <div className="p-6 text-slate-500">{error ?? 'Loading agent...'}</div>
+  const back = { to: '/ui/agents', label: 'Agents' }
+  if (!validId) return <Page back={back} title="Unknown agent" />
+  if (!catalog || !spec) return <Page back={back} title={isNew ? 'New agent' : 'Agent'} loading="Loading agent..." error={error} />
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-6">
-      <Link to="/ui/agents" className="text-sm text-primary">← Agents</Link>
-      {error && <div className="p-3 bg-red-50 text-red-700 rounded text-sm whitespace-pre-wrap">{error}</div>}
-      <div className="grid grid-cols-2 gap-3">
-        <input aria-label="Name" maxLength={100} className="px-3 py-1.5 border rounded" placeholder="name" value={name} onChange={e => setName(e.target.value)} />
-        <input aria-label="Description" className="px-3 py-1.5 border rounded" placeholder="description" value={description} onChange={e => setDescription(e.target.value)} />
-      </div>
+    <Page back={back} title={name || (isNew ? 'New agent' : 'Untitled agent')}>
+      {error && <Notice tone="error">{error}</Notice>}
+      <FieldRow>
+        <Field label="Name"><Input maxLength={100} value={name} onChange={e => setName(e.target.value)} /></Field>
+        <Field label="Description"><Input value={description} onChange={e => setDescription(e.target.value)} /></Field>
+      </FieldRow>
       {changedTools.length > 0 && (
-        <div className="p-3 bg-amber-50 text-amber-800 rounded text-sm">
+        <Notice tone="warning">
           These external tools changed since this agent was saved: {changedTools.join(', ')}. Check them on their
           server's page, then save the agent again to accept the change.
-        </div>
+        </Notice>
       )}
       <SpecEditor value={spec} catalog={catalog} onChange={setSpec} onValidityChange={setJsonValid} />
-      <div className="flex gap-2">
-        <button className="px-3 py-1.5 bg-primary text-white rounded text-sm disabled:opacity-50"
-          disabled={!jsonValid || (!dirty && changedTools.length === 0)} onClick={save}>Save</button>
-        {!isNew && <button className="px-3 py-1.5 border border-red-300 text-red-700 rounded text-sm" onClick={remove}>Delete</button>}
+      <div className="flex flex-wrap items-center gap-2 pb-6 border-b border-slate-200">
+        <Button variant="primary" disabled={!jsonValid || (!dirty && changedTools.length === 0)} onClick={save}>
+          {isNew ? 'Create agent' : 'Save'}
+        </Button>
+        {!isNew && dirty && <span className="text-xs text-slate-600">Unsaved changes</span>}
+        {!isNew && <Button variant="danger" className="ml-auto" onClick={remove}>Delete agent</Button>}
       </div>
       {!isNew && (
-        <section className="space-y-3">
-          <h2 className="font-semibold">Run</h2>
-          <textarea aria-label="Run input" className="w-full px-3 py-1.5 border rounded h-24" value={input} onChange={e => setInput(e.target.value)} />
-          <button className="px-3 py-1.5 bg-primary text-white rounded text-sm disabled:opacity-50"
-            disabled={!input.trim() || dirty} onClick={run}>Run saved version</button>
-          {dirty && <span className="ml-2 text-xs text-slate-500">Save your changes to run them.</span>}
-          <ul className="divide-y bg-white rounded-xl shadow-sm">
-            {runs.map(r => (
-              <li key={r.id} className="p-3 flex justify-between text-sm">
-                <Link to={`/ui/agents/runs/${r.id}`} className="text-primary truncate max-w-md">{r.input}</Link>
-                <span className="flex items-center gap-2">
-                  <StatusBadge status={r.status} />
-                  <span className="text-xs text-slate-400">{formatRelativeTime(r.created_at)} · ${r.cost_usd}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <Section title="Run">
+          <Textarea aria-label="Run input" className="h-24" placeholder="What should the agent do?"
+            value={input} onChange={e => setInput(e.target.value)} />
+          <div className="flex items-center gap-2">
+            <Button variant="primary" disabled={!input.trim() || dirty} onClick={run}>Run saved version</Button>
+            {dirty && <span className="text-xs text-slate-600">Save your changes to run them.</span>}
+          </div>
+          {!!runs.length && (
+            <List>
+              {runs.map(r => (
+                <ListItem key={r.id}>
+                  <Link to={`/ui/agents/runs/${r.id}`} className="text-primary truncate min-w-0 flex-1">{r.input}</Link>
+                  <span className="flex items-center gap-2 shrink-0 text-xs text-slate-600">
+                    <StatusBadge status={r.status} />
+                    {formatRelativeTime(r.created_at)} · ${r.cost_usd}
+                  </span>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </Section>
       )}
       {definitionId !== undefined && <Schedules definitionId={definitionId} />}
       {definitionId !== undefined && <Triggers definitionId={definitionId} sourceTypes={catalog.trigger_source_types} />}
-    </div>
+    </Page>
   )
 }
