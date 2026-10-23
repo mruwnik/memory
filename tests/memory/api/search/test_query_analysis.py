@@ -1,6 +1,8 @@
 """Tests for query_analysis module."""
 
 import json
+from datetime import date, datetime, timedelta, timezone
+
 import pytest
 from unittest.mock import patch, Mock, AsyncMock
 
@@ -14,6 +16,8 @@ from memory.api.search.query_analysis import (
     _is_valid_sql_identifier,
     analyze_query,
 )
+
+NOW = datetime(2026, 10, 22, 3, 30, tzinfo=timezone.utc)
 
 
 class TestModalityInfo:
@@ -153,6 +157,8 @@ class TestAnalyzeQuery:
                 "cleaned_query": "rationality concepts",
                 "query_variants": ["rational thinking", "epistemic rationality"],
                 "recalled_content": [],
+                "start_date": None,
+                "end_date": None,
             }
         )
 
@@ -171,7 +177,7 @@ class TestAnalyzeQuery:
                 from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
-                result = await analyze_query("something on lesswrong about rationality")
+                result = await analyze_query("something on lesswrong about rationality", now=NOW)
 
         assert result.success is True
         assert result.modalities == {"forum"}
@@ -199,7 +205,7 @@ class TestAnalyzeQuery:
                 from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
-                result = await analyze_query("test query")
+                result = await analyze_query("test query", now=NOW)
 
         assert result.success is False
         assert result.cleaned_query == "test query"
@@ -227,7 +233,7 @@ class TestAnalyzeQuery:
                 from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
-                result = await analyze_query("test query", timeout=0.01)
+                result = await analyze_query("test query", now=NOW, timeout=0.01)
 
         assert result.success is False
         assert result.cleaned_query == "test query"
@@ -242,6 +248,8 @@ class TestAnalyzeQuery:
                 "cleaned_query": "cached query",
                 "query_variants": [],
                 "recalled_content": [],
+                "start_date": None,
+                "end_date": None,
             }
         )
 
@@ -260,9 +268,9 @@ class TestAnalyzeQuery:
                 query_analysis._analysis_cache = {}
 
                 # First call
-                result1 = await analyze_query("test query for caching")
+                result1 = await analyze_query("test query for caching", now=NOW)
                 # Second call (should use cache)
-                result2 = await analyze_query("test query for caching")
+                result2 = await analyze_query("test query for caching", now=NOW)
 
         # Provider should only be called once
         assert mock_provider.agenerate.call_count == 1
@@ -278,6 +286,8 @@ class TestAnalyzeQuery:
                 "cleaned_query": "test",
                 "query_variants": [],
                 "recalled_content": [],
+                "start_date": None,
+                "end_date": None,
             }
         )
 
@@ -295,9 +305,9 @@ class TestAnalyzeQuery:
                 from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
-                await analyze_query("Test Query")
-                await analyze_query("test query")
-                await analyze_query("TEST QUERY")
+                await analyze_query("Test Query", now=NOW)
+                await analyze_query("test query", now=NOW)
+                await analyze_query("TEST QUERY", now=NOW)
 
         # All variations should hit the same cache entry
         assert mock_provider.agenerate.call_count == 1
@@ -319,7 +329,7 @@ class TestAnalyzeQuery:
                 from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
-                result = await analyze_query("test query")
+                result = await analyze_query("test query", now=NOW)
 
         assert result.success is False
         assert result.cleaned_query == "test query"
@@ -341,7 +351,7 @@ class TestAnalyzeQuery:
                 from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
-                result = await analyze_query("test query")
+                result = await analyze_query("test query", now=NOW)
 
         assert result.success is False
 
@@ -531,3 +541,106 @@ def test_get_modality_domains_extracts_domains():
     assert "example.com" in result["blog"]
     assert "forum" in result
     assert "forum.example.org" in result["forum"]
+
+
+def analysis_response(**overrides) -> str:
+    return json.dumps(
+        {
+            "modalities": [],
+            "sources": [],
+            "cleaned_query": "q",
+            "query_variants": [],
+            "recalled_content": [],
+            "start_date": None,
+            "end_date": None,
+        }
+        | overrides
+    )
+
+
+async def run_analysis(query: str, now: datetime, response: str):
+    from memory.api.search import query_analysis
+
+    query_analysis._analysis_cache = {}
+    provider = Mock()
+    provider.agenerate = AsyncMock(return_value=response)
+    with (
+        patch("memory.api.search.query_analysis.create_provider", return_value=provider),
+        patch("memory.api.search.query_analysis._get_available_modalities", return_value={}),
+    ):
+        result = await analyze_query(query, now=now)
+    return result, provider.agenerate.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "now, expected",
+    [
+        (NOW, "Thursday 2026-10-22 03:30 UTC"),
+        (datetime(2026, 1, 4, 23, 5, tzinfo=timezone.utc), "Sunday 2026-01-04 23:05 UTC"),
+        # A non-UTC clock is converted, so the model always reasons in UTC
+        (
+            datetime(2026, 10, 22, 1, 0, tzinfo=timezone(timedelta(hours=2))),
+            "Wednesday 2026-10-21 23:00 UTC",
+        ),
+    ],
+)
+async def test_analyze_query_sends_current_time_in_user_message(now, expected):
+    _, kwargs = await run_analysis("what happened yesterday", now, analysis_response())
+
+    assert expected in kwargs["messages"][0].content[0].text
+    assert expected not in kwargs["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_query_system_prompt_independent_of_clock():
+    _, first = await run_analysis("q", NOW, analysis_response())
+    _, second = await run_analysis("q", NOW + timedelta(days=3, hours=5), analysis_response())
+
+    assert first["system_prompt"] == second["system_prompt"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start, end, expected_start, expected_end",
+    [
+        ("2026-10-19", "2026-10-22", date(2026, 10, 19), date(2026, 10, 22)),
+        ("2026-10-19", None, date(2026, 10, 19), None),
+        (None, "2026-01-31", None, date(2026, 1, 31)),
+        (None, None, None, None),
+        # Reversed bounds are swapped rather than matching nothing
+        ("2026-10-22", "2026-10-19", date(2026, 10, 19), date(2026, 10, 22)),
+        # An unparseable date is dropped rather than failing the whole analysis
+        ("last monday", "2026-10-22", None, date(2026, 10, 22)),
+    ],
+)
+async def test_analyze_query_parses_date_range(start, end, expected_start, expected_end):
+    result, _ = await run_analysis("q", NOW, analysis_response(start_date=start, end_date=end))
+
+    assert result.success is True
+    assert (result.start_date, result.end_date) == (expected_start, expected_end)
+
+
+@pytest.mark.asyncio
+async def test_analyze_query_cache_is_per_day():
+    from memory.api.search import query_analysis
+
+    query_analysis._analysis_cache = {}
+    provider = Mock()
+    provider.agenerate = AsyncMock(return_value=analysis_response())
+    with (
+        patch("memory.api.search.query_analysis.create_provider", return_value=provider),
+        patch("memory.api.search.query_analysis._get_available_modalities", return_value={}),
+    ):
+        await analyze_query("what happened today", now=NOW)
+        await analyze_query("what happened today", now=NOW + timedelta(hours=1))
+        await analyze_query("what happened today", now=NOW + timedelta(days=1))
+
+    assert provider.agenerate.call_count == 2
+
+
+def test_schema_requires_date_range():
+    schema = _build_schema([])
+
+    assert {"start_date", "end_date"} <= set(schema["required"])
+    assert {"start_date", "end_date"} <= set(schema["properties"])

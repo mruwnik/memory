@@ -44,8 +44,8 @@ def test_ensure_collection_exists_new(mock_qdrant_client):
     mock_qdrant_client.get_collection.assert_called_once_with("test_collection")
     mock_qdrant_client.create_collection.assert_called_once()
     # tags (keyword) + people (integer) + the EXTRA_PAYLOAD_INDEXES mail keys
-    # (sender_email, recipient_emails, folder, email_account_id).
-    assert mock_qdrant_client.create_payload_index.call_count == 6
+    # (sender_email, recipient_emails, folder, email_account_id) + source_id.
+    assert mock_qdrant_client.create_payload_index.call_count == 7
     indexed_fields = {
         call.kwargs["field_name"]
         for call in mock_qdrant_client.create_payload_index.call_args_list
@@ -55,6 +55,7 @@ def test_ensure_collection_exists_new(mock_qdrant_client):
         "recipient_emails",
         "folder",
         "email_account_id",
+        "source_id",
     } <= indexed_fields
 
 

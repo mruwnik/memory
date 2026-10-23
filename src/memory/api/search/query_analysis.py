@@ -7,6 +7,7 @@ Uses a fast LLM (Haiku) to analyze natural language queries and extract:
 - Cleaned query: the actual search terms with meta-language removed
 - Query variants: alternative phrasings to search
 - Recalled content: specific titles/essays the LLM recalls that match the query
+- Date range: absolute dates for relative time references ("since Monday")
 
 This runs in parallel with HyDE for maximum efficiency.
 """
@@ -18,6 +19,7 @@ import re
 import textwrap
 import time
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -221,6 +223,16 @@ def _build_prompt() -> str:
         - Remove meta-language like "there was something about", "I remember reading"
         - For recalled_content: if you recognize the topic, suggest specific titles/essays
           that might be relevant (e.g., "predetermined conclusions" -> "The Bottom Line")
+        - start_date/end_date: inclusive YYYY-MM-DD bounds on when the content was sent,
+          published or happened, resolved against the current date given with the query.
+          Set them only when the query names or implies a time window ("yesterday",
+          "since Monday", "last week", "on 12 October", "in March", "today's meetings",
+          "next sync", "upcoming"); otherwise null. Leave a side null when it is open
+          ("since March" has no end_date). Weeks start on Monday. For future references
+          ("next", "upcoming") start today and end a few weeks ahead. Vague recency
+          ("latest", "recent") gets no range.
+        - Drop time expressions from cleaned_query and query_variants once they are
+          captured by the date range.
     """)
         .strip()
         .format(modality_section=modality_section)
@@ -232,6 +244,12 @@ def _build_schema(modality_names: list[str]) -> dict:
         return {
             "type": "array",
             "items": {"type": "string"},
+            "description": description,
+        }
+
+    def optional_date(description: str) -> dict:
+        return {
+            "anyOf": [{"type": "string", "format": "date"}, {"type": "null"}],
             "description": description,
         }
 
@@ -251,6 +269,8 @@ def _build_schema(modality_names: list[str]) -> dict:
         "recalled_content": strings(
             "Specific titles/essays/concepts you recall that match"
         ),
+        "start_date": optional_date("First day of the time window the query refers to"),
+        "end_date": optional_date("Last day of the time window the query refers to"),
     }
     return {
         "type": "object",
@@ -269,7 +289,27 @@ class QueryAnalysis:
     cleaned_query: str = ""
     query_variants: list[str] = field(default_factory=list)
     recalled_content: list[str] = field(default_factory=list)  # Titles/essays LLM recalls
+    start_date: date | None = None
+    end_date: date | None = None
     success: bool = False
+
+
+def parse_date(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def date_range(start: str | None, end: str | None) -> tuple[date | None, date | None]:
+    start_date, end_date = parse_date(start), parse_date(end)
+    if start_date and end_date and start_date > end_date:
+        return end_date, start_date
+    return start_date, end_date
+
+
+def format_now(now: datetime) -> str:
+    return f"{now.astimezone(timezone.utc):%A %Y-%m-%d %H:%M} UTC"
 
 
 # Cache for recent analyses (LRU-style: accessed entries move to end)
@@ -288,6 +328,7 @@ def _get_cache_lock() -> asyncio.Lock:
 
 async def analyze_query(
     query: str,
+    now: datetime,
     model: Optional[str] = None,
     timeout: float = 3.0,
 ) -> QueryAnalysis:
@@ -296,14 +337,15 @@ async def analyze_query(
 
     Args:
         query: The user's natural language search query
+        now: Current time, which relative dates in the query are resolved against
         model: LLM model to use (defaults to SUMMARIZER_MODEL, ideally Haiku)
         timeout: Maximum time to wait for LLM response
 
     Returns:
         QueryAnalysis with extracted modalities, sources, cleaned query, and variants
     """
-    # Check cache first
-    cache_key = query.lower().strip()
+    # Relative dates resolve differently each day
+    cache_key = f"{now.astimezone(timezone.utc):%Y-%m-%d} {query.lower().strip()}"
     async with _get_cache_lock():
         if cache_key in _analysis_cache:
             logger.debug(f"Query analysis cache hit for: {query[:50]}...")
@@ -317,7 +359,10 @@ async def analyze_query(
     try:
         provider = create_provider(model=model or settings.SUMMARIZER_MODEL)
 
-        messages = [Message.user(text=f"Query: {query}")]
+        # The clock goes in the user message so the system prompt stays cacheable
+        messages = [
+            Message.user(text=f"Current date/time: {format_now(now)}\nQuery: {query}")
+        ]
 
         llm_settings = LLMSettings(
             max_tokens=1024,  # headroom for thinking tokens
@@ -346,13 +391,17 @@ async def analyze_query(
                 result.cleaned_query = data["cleaned_query"]
                 result.query_variants = data["query_variants"]
                 result.recalled_content = data["recalled_content"]
+                result.start_date, result.end_date = date_range(
+                    data["start_date"], data["end_date"]
+                )
                 result.success = True
 
                 logger.debug(
                     f"Query analysis: '{query[:40]}...' -> "
                     f"modalities={result.modalities}, "
                     f"cleaned='{result.cleaned_query[:30]}...', "
-                    f"recalled={result.recalled_content}"
+                    f"recalled={result.recalled_content}, "
+                    f"dates={result.start_date}..{result.end_date}"
                 )
 
             except json.JSONDecodeError as e:

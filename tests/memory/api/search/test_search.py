@@ -3,12 +3,16 @@ Tests for search module functions including RRF fusion, query term boosting,
 title boosting, and source deduplication.
 """
 
+import importlib
 import sys
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from memory.api.search.query_analysis import QueryAnalysis
+from memory.api.search.types import SearchConfig
+from memory.common.extract import DataChunk
 from memory.api.search.constants import (
     POPULARITY_BOOST,
     QUERY_TERM_BOOST,
@@ -25,6 +29,9 @@ from memory.api.search.search import (
     extract_query_terms,
     fuse_scores_rrf,
 )
+
+# memory.api.search re-exports the `search` function under the submodule's name.
+search_module = importlib.import_module("memory.api.search.search")
 
 
 @pytest.mark.parametrize(
@@ -798,3 +805,96 @@ def test_fetch_chunks_by_title_accepts_explicit_none():
 
     assert result == {}
     mock_session.assert_called_once()
+
+
+# ============================================================================
+# Relative-date queries
+# ============================================================================
+
+FIXED_NOW = datetime(2026, 10, 22, 3, 30, tzinfo=timezone.utc)
+
+
+class FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FIXED_NOW if tz is None else FIXED_NOW.astimezone(tz)
+
+
+def dated_analysis(start: date | None = None, end: date | None = None) -> QueryAnalysis:
+    return QueryAnalysis(cleaned_query="alerts", start_date=start, end_date=end, success=True)
+
+
+async def run_dated_search(analysis: QueryAnalysis, filters: dict, ids_in_range: list[int]):
+    analyze = AsyncMock(return_value=analysis)
+    in_range = MagicMock(return_value=ids_in_range)
+    embeddings = AsyncMock(return_value={})
+    bm25 = AsyncMock(return_value={})
+    with (
+        patch.object(search_module, "datetime", FixedDatetime),
+        patch.object(search_module, "analyze_query", analyze),
+        patch.object(search_module, "search_chunks_embeddings", embeddings),
+        patch.object(search_module, "search_bm25_chunks", bm25),
+        patch.object(search_module, "source_ids_in_range", in_range),
+        patch.object(search_module, "make_session"),
+    ):
+        await search_module.search_chunks(
+            [DataChunk(data=["what happened yesterday"])],
+            modalities={"mail"},
+            filters=filters,
+            config=SearchConfig(
+                useBm25=True, useHyde=False, useReranking=False, useQueryAnalysis=True
+            ),
+        )
+    seen = {"embeddings": embeddings.call_args.args[3], "bm25": bm25.call_args.args[3]}
+    return analyze, in_range, seen
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_gives_analysis_the_search_clock():
+    analyze, _, _ = await run_dated_search(dated_analysis(), {"access_filter": None}, [])
+
+    assert analyze.call_args.kwargs["now"] == FIXED_NOW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing_ids, ids_in_range, expected",
+    [
+        (None, [3, 1, 2], [1, 2, 3]),
+        ([2, 3, 4], [1, 2, 3], [2, 3]),
+    ],
+)
+async def test_search_chunks_restricts_both_arms_to_date_range(
+    existing_ids, ids_in_range, expected
+):
+    filters = {"access_filter": None, "source_ids": existing_ids}
+    _, in_range, seen = await run_dated_search(
+        dated_analysis(date(2026, 10, 21), date(2026, 10, 21)), filters, ids_in_range
+    )
+
+    assert in_range.call_args.args[1:] == (
+        datetime(2026, 10, 20, 12, tzinfo=timezone.utc),
+        datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
+        None,
+    )
+    assert sorted(seen["embeddings"]["source_ids"]) == expected
+    assert sorted(seen["bm25"]["source_ids"]) == expected
+    assert filters["source_ids"] == existing_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "analysis, ids_in_range",
+    [
+        # No temporal reference in the query
+        (dated_analysis(), [1, 2]),
+        # Nothing dated in range: searching everything beats returning nothing
+        (dated_analysis(None, date(2026, 10, 21)), []),
+    ],
+)
+async def test_search_chunks_leaves_filters_without_usable_date_range(analysis, ids_in_range):
+    filters = {"access_filter": None, "source_ids": [7]}
+    _, _, seen = await run_dated_search(analysis, filters, ids_in_range)
+
+    assert seen["embeddings"]["source_ids"] == [7]
+    assert seen["bm25"]["source_ids"] == [7]

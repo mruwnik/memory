@@ -17,6 +17,7 @@ from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
 from memory.common.collections import ALL_COLLECTIONS
+from memory.api.search.date_range import date_bounds, source_ids_in_range
 from memory.api.search.embeddings import require_access_filter, search_chunks_embeddings
 from memory.api.search import scorer
 from memory.api.search.constants import (
@@ -227,6 +228,7 @@ def fuse_scores_rrf(
 
 async def _run_llm_analysis(
     query_text: str,
+    now: datetime,
     use_query_analysis: bool,
     use_hyde: bool,
 ) -> tuple[QueryAnalysis | None, str | None]:
@@ -245,7 +247,7 @@ async def _run_llm_analysis(
     tasks = []
 
     if use_query_analysis:
-        tasks.append(("analysis", analyze_query(query_text, timeout=3.0)))
+        tasks.append(("analysis", analyze_query(query_text, now=now, timeout=3.0)))
 
     if use_hyde and len(query_text.split()) >= 4:
         tasks.append(
@@ -319,6 +321,29 @@ def _apply_query_analysis(
     return query_text, data, modalities, query_variants, recalled_content
 
 
+def restrict_to_date_range(
+    filters: SearchFilters, analysis: QueryAnalysis | None
+) -> SearchFilters:
+    """Narrow ``filters`` to items dated within the analysed time window.
+
+    An empty window leaves the filters alone: a wrong or over-tight range from
+    the LLM should degrade to an undated search, not to no results.
+    """
+    if not (analysis and analysis.success and (analysis.start_date or analysis.end_date)):
+        return filters
+
+    access_filter = require_access_filter(filters, "restrict_to_date_range").get("access_filter")
+    start, end = date_bounds(analysis.start_date, analysis.end_date)
+    with make_session() as db:
+        ids = set(source_ids_in_range(db, start, end, access_filter))
+    if (existing := filters.get("source_ids")) is not None:
+        ids &= set(existing)
+    if not ids:
+        logger.debug(f"No items dated {start}..{end}; searching without a date range")
+        return filters
+    return {**filters, "source_ids": sorted(ids)}
+
+
 def _build_search_data(
     data: list[extract.DataChunk],
     hyde_doc: str | None,
@@ -381,6 +406,8 @@ def _fetch_chunks_by_title(
     with make_session() as db:
         # Query sources in requested modalities, applying access control
         sources_query = db.query(SourceItem).filter(SourceItem.modality.in_(modalities))
+        if source_ids := filters.get("source_ids"):
+            sources_query = sources_query.filter(SourceItem.id.in_(source_ids))
         sources_query = apply_access_filter_to_query(sources_query, access_filter)
         sources = (
             sources_query
@@ -629,10 +656,14 @@ async def search_chunks(
     # Extract query text
     query_text = " ".join(c for chunk in data for c in chunk.data if isinstance(c, str))
 
+    # Read before any await so a clock pinned around this call (evals) applies.
+    now = datetime.now(timezone.utc)
+
     # Run LLM-based operations in parallel (query analysis + HyDE)
     analysis_result, hyde_doc = await _run_llm_analysis(
-        query_text, use_query_analysis, use_hyde
+        query_text, now, use_query_analysis, use_hyde
     )
+    filters = await asyncio.to_thread(restrict_to_date_range, filters, analysis_result)
 
     # Apply query analysis results
     query_text, data, modalities, query_variants, recalled_content = _apply_query_analysis(
