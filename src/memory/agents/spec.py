@@ -31,10 +31,19 @@ DEFAULT_MAX_OUTPUT_TOKENS = 16_000
 MAX_TEXT_CHARS = 200_000
 MAX_NAME_CHARS = 100
 SUBMIT_RESULT = "submit_result"
-# agent_*: a run must not start or manage runs; one-time keys would land a live
-# credential in the transcript and the model context.
+# agent_* and the scheduler writes: a run must not start or manage runs or
+# sessions, which would escape its caps (scheduled sessions can also receive the
+# owner's stored secrets). One-time keys would land a live credential in the
+# transcript and the model context.
 DENIED_TOOL_PREFIXES = ("agent_",)
-DENIED_TOOLS = frozenset({"meta_create_one_time_key"})
+DENIED_TOOLS = frozenset(
+    {
+        "meta_create_one_time_key",
+        "scheduler_upsert",
+        "scheduler_delete",
+        "scheduler_cancel",
+    }
+)
 # 64: the strictest provider limit on tool names (OpenAI function names).
 TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 MAX_RESULT_SCHEMA_BYTES = 64 * 1024

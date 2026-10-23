@@ -77,6 +77,10 @@ def test_defaults_are_valid_on_the_default_model():
             {"tools": ["meta_create_one_time_key"]},
             "tool 'meta_create_one_time_key' can never be used inside a run",
         ),
+        *[
+            ({"tools": [tool]}, f"tool '{tool}' can never be used inside a run")
+            for tool in ("scheduler_upsert", "scheduler_delete", "scheduler_cancel")
+        ],
         (
             {"mcp_servers": [{"server_id": 3, "tools": ["agent_run"]}]},
             "tool 'agent_run' on MCP server 3 can never be used inside a run",
