@@ -11,6 +11,7 @@ import pytest
 from memory.common import embedding, extract, qdrant as qdrant_tools, settings
 from memory.common import summary_batch
 from memory.common.content_processing import push_chunks_to_qdrant
+from memory.common.db.connection import make_session
 from memory.common.db.models import SourceItem, SummaryRequest
 
 LONG_TEXT = "Some interesting sentence about things. " * 200
@@ -116,6 +117,40 @@ def test_submit_pending_creates_batch_and_persists_id(db_session, batches):
         ("submitted", "batch_1", 1)
     ] * 2
     assert (submitted.batch_id, failed.status) == ("old", "failed")
+
+
+def test_submit_pending_claims_requests_before_sending_them(db_session, batches):
+    item = make_item(db_session)
+    request_id = add_request(db_session, item).id
+
+    def create(**_kwargs):
+        # A failed commit after this call must not leave the requests pending.
+        with make_session() as other:
+            assert other.get(SummaryRequest, request_id).status == "submitted"
+        return Mock(id="batch_1")
+
+    batches.create.side_effect = create
+
+    assert summary_batch.submit_pending(db_session) == "batch_1"
+
+
+def test_submit_pending_returns_requests_when_the_batch_is_refused(db_session, batches):
+    item = make_item(db_session)
+    request = add_request(db_session, item)
+    batches.create.side_effect = RuntimeError("api down")
+
+    with pytest.raises(RuntimeError):
+        summary_batch.submit_pending(db_session)
+
+    db_session.expire_all()
+    assert (request.status, request.batch_id, request.attempts) == ("pending", None, 0)
+
+
+def test_collect_skips_requests_claimed_by_an_unfinished_submit(db_session, batches):
+    add_request(db_session, make_item(db_session), status="submitted")
+
+    assert summary_batch.collect_finished(db_session) == {}
+    batches.retrieve.assert_not_called()
 
 
 def test_submit_pending_respects_byte_budget(db_session, batches):

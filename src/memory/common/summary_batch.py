@@ -2,11 +2,13 @@
 
 Embedding records a pending `SummaryRequest` per deferred summarize call
 instead of calling the LLM (see `summarizer.deferring`). `submit_pending`
-sends pending requests as one batch and stamps them with its id in the same
-transaction; `collect_finished` applies the results of ended batches: it adds
-the summary chunk (embedded and pushed to Qdrant), merges the tags into the
-item's existing chunk payloads, and deletes the request. Failed results go
-back to pending until they run out of attempts.
+marks pending requests submitted, sends them as one batch and then stamps them
+with its id. A request left submitted without a batch id (the process died in
+between) is not retried, since it may already be billed; set it back to
+pending to retry it. `collect_finished` applies the results of ended
+batches: it adds the summary chunk (embedded and pushed to Qdrant), merges the
+tags into the item's existing chunk payloads, and deletes the request. Failed
+results go back to pending until they run out of attempts.
 """
 
 import logging
@@ -69,11 +71,20 @@ def submit_pending(session: Session) -> str | None:
         .all()
     )
     provider = summary_provider()
-    batch = provider.client.messages.batches.create(
-        requests=[batch_request(provider, r) for r in requests]  # type: ignore[arg-type]
-    )
+    payload = [batch_request(provider, r) for r in requests]
+    # Claimed before sending: if the commit after the call failed, requests
+    # still pending would be sent, and billed, again.
     for request in requests:
         request.status = "submitted"
+    session.commit()
+    try:
+        batch = provider.client.messages.batches.create(requests=payload)  # type: ignore[arg-type]
+    except Exception:
+        for request in requests:
+            request.status = "pending"
+        session.commit()
+        raise
+    for request in requests:
         request.batch_id = batch.id
         request.attempts += 1
     session.commit()
@@ -207,7 +218,7 @@ def collect_finished(session: Session) -> dict[str, int]:
     batch_ids = [
         batch_id
         for (batch_id,) in session.query(SummaryRequest.batch_id)
-        .filter(SummaryRequest.status == "submitted")
+        .filter(SummaryRequest.status == "submitted", SummaryRequest.batch_id.is_not(None))
         .distinct()
     ]
     if not batch_ids:
