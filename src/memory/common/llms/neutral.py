@@ -11,7 +11,9 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 ReasoningLevel = Literal["off", "low", "medium", "high"]
-StopReason = Literal["end_turn", "tool_calls", "max_output_tokens", "refused"]
+# "paused": the provider stopped a long turn early; resend the conversation,
+# partial turn included, to resume it.
+StopReason = Literal["end_turn", "tool_calls", "max_output_tokens", "refused", "paused"]
 # {"provider": str, "blocks": [...]}: opaque, same-provider resend only
 Replay = dict[str, Any]
 BUILTIN_TOOLS = frozenset({"web_search", "web_fetch"})
@@ -174,8 +176,6 @@ class Completion:
     replay: Replay | None
     stop_reason: StopReason
     usage: AgentUsage
-    # Priced per API request: a turn's requests sum past a long-context
-    # threshold that none of them crossed alone.
     cost: Decimal
 
 

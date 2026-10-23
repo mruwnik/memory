@@ -75,8 +75,8 @@ STOP_REASONS: dict[str, StopReason] = {
     "tool_use": "tool_calls",
     "max_tokens": "max_output_tokens",
     "refusal": "refused",
+    "pause_turn": "paused",
 }
-MAX_PAUSE_CONTINUATIONS = 5
 WEB_SEARCH_PER_1K = Decimal("10")
 
 
@@ -758,26 +758,10 @@ class AnthropicProvider(BaseLLMProvider):
             tool_choice=tool_choice,
             params=params,
         )
-        usage, cost, blocks = AgentUsage(), Decimal(0), []
         async with self.agent_client() as client:
-            for _ in range(MAX_PAUSE_CONTINUATIONS + 1):
-                async with client.messages.stream(**kwargs) as stream:
-                    msg = await stream.get_final_message()
-                request_usage = self.agent_usage(msg)
-                usage += request_usage
-                cost += pricing.cost(request_usage)
-                turn = [b.to_dict() for b in msg.content]
-                blocks += turn
-                if msg.stop_reason != "pause_turn":
-                    break
-                # A paused turn continues when re-sent with its partial content appended.
-                kwargs["messages"] = kwargs["messages"] + [
-                    {"role": "assistant", "content": turn}
-                ]
-            else:
-                raise RuntimeError(
-                    f"turn paused more than {MAX_PAUSE_CONTINUATIONS} times"
-                )
+            async with client.messages.stream(**kwargs) as stream:
+                msg = await stream.get_final_message()
+        usage = self.agent_usage(msg)
         self.log_usage(
             Usage(
                 input_tokens=usage.context_tokens,
@@ -785,4 +769,7 @@ class AnthropicProvider(BaseLLMProvider):
                 total_tokens=usage.context_tokens + usage.output_tokens,
             )
         )
-        return self.agent_completion(blocks, msg.stop_reason or "", usage, cost)
+        blocks = [b.to_dict() for b in msg.content]
+        return self.agent_completion(
+            blocks, msg.stop_reason or "", usage, pricing.cost(usage)
+        )

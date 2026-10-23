@@ -93,6 +93,8 @@ class ScriptedProvider(BaseLLMProvider):
         assert all(r["provider"] == self.provider for r in replay if r is not None)
 
     def check_completion(self, completion: Completion):
+        if completion.stop_reason == "paused":
+            return
         content = completion.message.content
         provider_calls = {
             b.id

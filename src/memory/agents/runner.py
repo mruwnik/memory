@@ -384,6 +384,10 @@ async def run_loop(
                 )
             if completion.stop_reason == "refused":
                 raise RunEnded(RunStatus.FAILED, "the model refused the request")
+            if completion.stop_reason == "paused":
+                # Resumed by the next request, which must pass the caps like any other.
+                check_budget(spec, turns, cost, claimed.max_cost)
+                continue
 
             pending = completion.message.tool_calls()
             if not pending:

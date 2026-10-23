@@ -316,7 +316,7 @@ async def complete(p, msgs, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_acomplete_absorbs_pause_turn_and_sums_usage(monkeypatch):
+async def test_a_paused_turn_is_returned_to_the_caller(monkeypatch):
     paused = message(
         [
             {
@@ -329,40 +329,13 @@ async def test_acomplete_absorbs_pause_turn_and_sums_usage(monkeypatch):
         "pause_turn",
         server_tool_use={"web_search_requests": 1, "web_fetch_requests": 0},
     )
-    done = message(
-        [{"type": "text", "text": "done"}], "end_turn", cache_read_input_tokens=7
-    )
 
-    c, client = await complete(provider(), [paused, done], monkeypatch)
+    c, client = await complete(provider(), [paused], monkeypatch)
 
-    assert c.stop_reason == "end_turn"
-    assert c.usage == AgentUsage(
-        input_tokens=20, output_tokens=10, cache_read_tokens=7, web_searches=1
-    )
-    assert [b["type"] for b in c.replay["blocks"]] == ["server_tool_use", "text"]
-    assert client.sent[1]["messages"][-1]["role"] == "assistant"
-
-
-@pytest.mark.asyncio
-async def test_each_request_is_priced_at_its_own_rate_card(monkeypatch):
-    # Together the two requests exceed Haiku's 100K long-context threshold; neither does alone.
-    paused = message(
-        [{"type": "text", "text": "a"}],
-        "pause_turn",
-        input_tokens=60_000,
-        output_tokens=0,
-    )
-    done = message(
-        [{"type": "text", "text": "b"}],
-        "end_turn",
-        input_tokens=60_000,
-        output_tokens=0,
-    )
-
-    c, _ = await complete(provider("claude-haiku-5-5"), [paused, done], monkeypatch)
-
-    assert c.usage.context_tokens == 120_000
-    assert c.cost == Decimal("0.012")
+    assert c.stop_reason == "paused"
+    assert c.usage == AgentUsage(input_tokens=10, output_tokens=5, web_searches=1)
+    assert [b["type"] for b in c.replay["blocks"]] == ["server_tool_use"]
+    assert len(client.sent) == 1
 
 
 def test_pricing_table_covers_the_documented_models():

@@ -19,7 +19,14 @@ from memory.common.llms.neutral import (
     ToolCall,
     ToolResult,
 )
-from tests.memory.agents.fakes import FAKE_MODELS, FakeHub, calls, reply
+from tests.memory.agents.fakes import (
+    DEFAULT_USAGE,
+    FAKE_MODELS,
+    PRICING,
+    FakeHub,
+    calls,
+    reply,
+)
 
 
 def make_run(db, user, model, max_cost="1", **spec):
@@ -387,6 +394,53 @@ async def test_unusable_stop_reasons_fail_with_the_fix(
     run, _ = load(db_session, run_id)
     assert run.status == "failed"
     assert expected in run.error
+
+
+def paused() -> Completion:
+    """A provider-paused turn: a search ran, the answer is still to come."""
+    message = NeutralMessage(
+        role="assistant",
+        content=[
+            ToolCall(id="s1", name="web_search", input={"query": "q"}, executed_by="provider"),
+            ToolResult(tool_call_id="s1", name="web_search", text="- a <https://a>"),
+        ],
+    )
+    return Completion(
+        message, {"blocks": []}, "paused", DEFAULT_USAGE, PRICING.cost(DEFAULT_USAGE)
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_paused_turn_is_resumed_with_its_partial_content(
+    db_session, regular_user, fake_providers
+):
+    run_id = make_run(db_session, regular_user, "fake-rich/m", tools=["web_search"])
+    fake_providers.script = [paused(), reply("found it")]
+
+    await execute_run(run_id, hub().factory())
+
+    run, _ = load(db_session, run_id)
+    assert (run.status, run.result) == ("done", {"text": "found it"})
+    resumed = fake_providers.requests[1]["messages"][-1]
+    assert resumed.role == "assistant"
+    assert resumed.content[0].id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_each_resumed_request_goes_through_the_cost_cap(
+    db_session, regular_user, fake_providers
+):
+    # The paused request costs $0.00012; resending its ~110 tokens would pass $0.0002.
+    run_id = make_run(
+        db_session, regular_user, "fake-rich/m", max_cost="0.0002", tools=["web_search"]
+    )
+    fake_providers.script = [paused(), paused(), reply("found it")]
+
+    await execute_run(run_id, hub().factory())
+
+    run, _ = load(db_session, run_id)
+    assert run.status == "budget_exceeded"
+    assert len(fake_providers.requests) == 1
 
 
 @pytest.mark.asyncio
