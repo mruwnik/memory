@@ -376,11 +376,7 @@ async def finish_authorization(
 
     A failure is recorded on the row for the server's page to show.
     """
-    flow = take_state(state)
-    if flow["user_id"] != user_id:
-        raise WrongUser(
-            "log in to memory as the user who started this authorization, then retry it"
-        )
+    flow = take_state(state, user_id)
     try:
         server = load_detached(flow["server_id"])
     except MCPServerError as e:

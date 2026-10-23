@@ -170,8 +170,13 @@ async def test_callback_from_another_user_is_refused(
 
     with pytest.raises(StateError, match="log in to memory as the user"):
         await finish_authorization(params["state"], params["code"], admin_user.id)
-
     assert reload(db_session, server.id).access_token is None
+
+    # The refused attempt doesn't burn the owner's authorization.
+    assert await finish_authorization(params["state"], params["code"], regular_user.id) == (
+        server.id,
+        True,
+    )
 
 
 @pytest.mark.asyncio

@@ -321,11 +321,22 @@ def check_issuer(flow: dict[str, Any], iss: str | None, required: bool) -> None:
         raise StateError("the authorization response came from an unexpected server")
 
 
-def take_state(state: str) -> dict[str, Any]:
-    raw = redis_client().getdel(f"{STATE_PREFIX}{state}")
+def take_state(state: str, user_id: int) -> dict[str, Any]:
+    """Consume a flow's state, unless it belongs to another user: whoever holds
+    a state value must not be able to burn someone else's authorization."""
+    client, key = redis_client(), f"{STATE_PREFIX}{state}"
+    raw = client.get(key)
     if raw is None:
         raise StateError("this authorization link expired or was already used")
-    return json.loads(cast(bytes, raw))
+    flow = json.loads(cast(bytes, raw))
+    if flow["user_id"] != user_id:
+        raise WrongUser(
+            "log in to memory as the user who started this authorization, then retry it"
+        )
+    # Only one of two racing callbacks deletes the key.
+    if not client.delete(key):
+        raise StateError("this authorization link expired or was already used")
+    return flow
 
 
 def with_client_auth(
