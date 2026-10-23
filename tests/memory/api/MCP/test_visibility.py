@@ -9,23 +9,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import mcp.types as mt
 from fastmcp.tools.tool import Tool
 
+from memory.api.MCP import visibility
 from memory.api.MCP.visibility import (
     has_items,
     require_scopes,
     visible_when,
     register_visibility,
     get_visibility_checker,
-    clear_checkers,
+    tool_key,
 )
 from memory.api.MCP.visibility_middleware import VisibilityMiddleware
 
 
 @pytest.fixture(autouse=True)
-def clean_checkers():
-    """Clear checkers before and after each test."""
-    clear_checkers()
-    yield
-    clear_checkers()
+def clean_checkers(monkeypatch):
+    """Give each test an empty registry without wiping the real servers' one."""
+    monkeypatch.setattr(visibility, "_visibility_checkers", {})
 
 
 @pytest.fixture
@@ -120,7 +119,7 @@ def test_visible_when_single_checker_registers():
         pass
 
     # Single checker uses combined wrapper now
-    registered = get_visibility_checker("my_tool")
+    registered = get_visibility_checker(tool_key(my_tool))
     assert registered is not None
 
 
@@ -147,7 +146,7 @@ async def test_visible_when_no_checkers_registers_always_true(mock_session):
     def unrestricted_tool():
         pass
 
-    checker = get_visibility_checker("unrestricted_tool")
+    checker = get_visibility_checker(tool_key(unrestricted_tool))
     assert checker is not None
     assert await checker({}, mock_session) is True
     assert await checker({"scopes": []}, mock_session) is True
@@ -172,7 +171,7 @@ async def test_visible_when_multiple_checkers_and_logic(mock_session, user_scope
     def multi_tool():
         pass
 
-    combined = get_visibility_checker("multi_tool")
+    combined = get_visibility_checker(tool_key(multi_tool))
     assert combined is not None
 
     user_info = {"scopes": user_scopes}
@@ -198,7 +197,7 @@ async def test_visible_when_multiple_checkers_fails_fast(mock_session):
     def fail_fast_tool():
         pass
 
-    combined = get_visibility_checker("fail_fast_tool")
+    combined = get_visibility_checker(tool_key(fail_fast_tool))
     assert combined is not None
     result = await combined({}, mock_session)
 
@@ -219,12 +218,20 @@ def test_registry_get_missing_returns_none():
     assert get_visibility_checker("nonexistent") is None
 
 
-def test_registry_clear_removes_all():
-    register_visibility("tool1", require_scopes("a"))
-    register_visibility("tool2", require_scopes("b"))
-    clear_checkers()
-    assert get_visibility_checker("tool1") is None
-    assert get_visibility_checker("tool2") is None
+def test_registry_rejects_duplicate_key():
+    register_visibility("core_fetch", require_scopes("a"))
+    with pytest.raises(ValueError, match="core_fetch"):
+        register_visibility("core_fetch", require_scopes("b"))
+
+
+def test_tool_key_is_the_mounted_tool_name():
+    """Subservers live in servers/<prefix>.py and are mounted under <prefix>."""
+
+    def fetch():
+        pass
+
+    fetch.__module__ = "memory.api.MCP.servers.people"
+    assert tool_key(fetch) == "people_fetch"
 
 
 # --- VisibilityMiddleware tests ---
@@ -236,7 +243,7 @@ def make_tool():
 
     def _make_tool(name: str) -> MagicMock:
         tool = MagicMock(spec=Tool)
-        tool.name = name
+        tool.name = tool.key = name
         return tool
 
     return _make_tool
@@ -250,28 +257,7 @@ def user_info():
 @pytest.fixture
 def middleware(user_info):
     """Create middleware with test user info."""
-    return VisibilityMiddleware(
-        get_user_info=lambda: user_info,
-        prefixes=["core", "github"],
-    )
-
-
-# --- _get_base_tool_name tests ---
-
-
-@pytest.mark.parametrize(
-    "tool_name,prefixes,expected",
-    [
-        ("core_search", ["core"], "search"),
-        ("github_list_issues", ["core", "github"], "list_issues"),
-        ("unprefixed_tool", ["core"], "unprefixed_tool"),
-        ("core_search", [], "core_search"),  # No prefixes configured
-        ("core_nested_name_here", ["core"], "nested_name_here"),
-    ],
-)
-def test_get_base_tool_name(tool_name, prefixes, expected):
-    middleware = VisibilityMiddleware(get_user_info=lambda: {}, prefixes=prefixes)
-    assert middleware._get_base_tool_name(tool_name) == expected
+    return VisibilityMiddleware(get_user_info=lambda: user_info)
 
 
 # --- on_list_tools tests ---
@@ -312,7 +298,7 @@ async def test_on_list_tools_filters_by_visibility(middleware, make_tool):
     with patch("memory.api.MCP.visibility_middleware.make_session"):
         result = await middleware.on_list_tools(context, call_next)
 
-    tool_names = [t.name for t in result]
+    tool_names = [t.key for t in result]
     assert "allowed_tool" in tool_names
     assert "public_tool" in tool_names
     assert "denied_tool" not in tool_names
@@ -322,28 +308,20 @@ async def test_on_list_tools_filters_by_visibility(middleware, make_tool):
 
 
 @pytest.mark.asyncio
-async def test_on_list_tools_strips_prefix_for_checker_lookup(make_tool):
-    """Middleware strips prefix when looking up checker."""
-    # Register checker for base name (without prefix)
-    async def checker(user_info, session):
-        return False  # Deny
+async def test_on_list_tools_ignores_checker_for_unprefixed_name(middleware, make_tool):
+    """A checker for the bare function name never authorizes a mounted tool."""
 
-    register_visibility("my_tool", checker)
+    async def allow(user_info, session):
+        return True
 
-    middleware = VisibilityMiddleware(
-        get_user_info=lambda: {"scopes": []},
-        prefixes=["core"],
-    )
+    register_visibility("my_tool", allow)
 
-    tools = [make_tool("core_my_tool")]  # Prefixed name
-    call_next = AsyncMock(return_value=tools)
-    context = MagicMock()
+    call_next = AsyncMock(return_value=[make_tool("core_my_tool")])
 
     with patch("memory.api.MCP.visibility_middleware.make_session"):
-        result = await middleware.on_list_tools(context, call_next)
+        result = await middleware.on_list_tools(MagicMock(), call_next)
 
-    # Tool should be filtered out (checker denies)
-    assert len(result) == 0
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -368,7 +346,7 @@ async def test_on_list_tools_checker_error_denies_access(middleware, make_tool):
 
     # Only public_tool should remain (error_tool denied due to exception)
     assert len(result) == 1
-    assert result[0].name == "public_tool"
+    assert result[0].key == "public_tool"
 
 
 # --- on_call_tool tests ---
@@ -502,29 +480,21 @@ async def test_on_call_tool_checker_error_returns_error_result(middleware):
 
 
 @pytest.mark.asyncio
-async def test_on_call_tool_strips_prefix_for_checker_lookup():
-    """on_call_tool strips prefix when looking up checker."""
+async def test_on_call_tool_ignores_checker_for_unprefixed_name(middleware):
+    """A checker for the bare function name never authorizes a mounted tool."""
 
-    async def deny_checker(user_info, session):
-        return False
+    async def allow(user_info, session):
+        return True
 
-    register_visibility("my_tool", deny_checker)
-
-    middleware = VisibilityMiddleware(
-        get_user_info=lambda: {"scopes": []},
-        prefixes=["core"],
-    )
+    register_visibility("my_tool", allow)
 
     context = MagicMock()
-    context.message = MagicMock()
-    context.message.name = "core_my_tool"  # Prefixed name
-
+    context.message.name = "core_my_tool"
     call_next = AsyncMock()
 
     with patch("memory.api.MCP.visibility_middleware.make_session"):
         result = await middleware.on_call_tool(context, call_next)
 
-    # Should be denied (checker found via base name lookup)
     text_content = cast(mt.TextContent, result.content[0])
     assert "Access denied" in text_content.text
     call_next.assert_not_awaited()

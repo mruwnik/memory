@@ -56,7 +56,6 @@ mcp = FastMCP(
 
 
 # Build list of enabled server prefixes dynamically
-# Used by middleware to strip prefixes when looking up visibility checkers
 SUBSERVER_PREFIXES = list(get_enabled_servers())
 
 # Startup validation
@@ -95,9 +94,7 @@ def _get_user_info_for_middleware() -> dict:
 
 
 # Add visibility-based tool filtering middleware
-mcp.add_middleware(
-    VisibilityMiddleware(_get_user_info_for_middleware, prefixes=SUBSERVER_PREFIXES)
-)
+mcp.add_middleware(VisibilityMiddleware(_get_user_info_for_middleware))
 
 # Add metrics middleware to record tool call timing
 mcp.add_middleware(

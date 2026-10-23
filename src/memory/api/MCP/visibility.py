@@ -77,41 +77,36 @@ class VisibilityChecker(Protocol):
 # Type alias for checker functions
 VisibilityCheckerFunc = Callable[[dict, DBSession | None], Awaitable[bool]]
 
-# Registry: function_name (without prefix) -> checker
+# Registry: mounted tool name (e.g. "people_fetch") -> checker
 _visibility_checkers: dict[str, VisibilityCheckerFunc] = {}
 
 
-def register_visibility(tool_name: str, checker: VisibilityCheckerFunc) -> None:
-    """Register a visibility checker for a tool by its function name.
+def tool_key(func: Callable) -> str:
+    """The name ``func`` is exposed under once its subserver is mounted.
 
-    Args:
-        tool_name: The function name of the tool (without any prefix)
-        checker: Async function that determines tool visibility
+    Each subserver lives in ``servers/<prefix>.py`` and is mounted under
+    ``<prefix>`` (see ``MCPServer``), so the module name is the prefix.
+    Keying on the bare function name would let same-named tools in
+    different subservers (``fetch``, ``upsert``, ...) share one checker.
     """
+    return f"{func.__module__.rsplit('.', 1)[-1]}_{func.__name__}"
+
+
+def register_visibility(tool_name: str, checker: VisibilityCheckerFunc) -> None:
+    """Register a visibility checker under a mounted tool name.
+
+    Raises ValueError on a second registration for the same name, so a
+    collision fails at import instead of silently replacing a checker.
+    """
+    if tool_name in _visibility_checkers:
+        raise ValueError(f"Visibility checker already registered for {tool_name}")
     logger.debug(f"Registering visibility checker for tool: {tool_name}")
     _visibility_checkers[tool_name] = checker
 
 
 def get_visibility_checker(tool_name: str) -> VisibilityCheckerFunc | None:
-    """Get the visibility checker for a tool, or None if unrestricted.
-
-    Args:
-        tool_name: The function name of the tool (without prefix)
-
-    Returns:
-        The registered checker, or None if no restrictions apply
-    """
+    """Get the checker for a mounted tool name, or None if none is registered."""
     return _visibility_checkers.get(tool_name)
-
-
-def get_all_checkers() -> dict[str, VisibilityCheckerFunc]:
-    """Get all registered visibility checkers (for debugging/testing)."""
-    return _visibility_checkers.copy()
-
-
-def clear_checkers() -> None:
-    """Clear all registered checkers (for testing)."""
-    _visibility_checkers.clear()
 
 
 # --- Common checker factories ---
@@ -223,7 +218,7 @@ def visible_when(*checkers: VisibilityCheckerFunc):
                 return True
 
             always_public.__name__ = "always_public"
-            register_visibility(func.__name__, always_public)
+            register_visibility(tool_key(func), always_public)
             return func
 
         async def combined(user_info: dict, session: DBSession | None) -> bool:
@@ -232,7 +227,7 @@ def visible_when(*checkers: VisibilityCheckerFunc):
                     return False
             return True
 
-        register_visibility(func.__name__, combined)
+        register_visibility(tool_key(func), combined)
         return func
 
     return decorator

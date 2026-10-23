@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from memory.api.MCP import visibility
+
 # Mock FastMCP before importing
 class MockFastMCP:
     def __init__(self, name):
@@ -66,7 +68,9 @@ def _build_mocks():
 
 
 @pytest.fixture(autouse=True)
-def _mock_mcp_modules():
+def _mock_mcp_modules(monkeypatch):
+    # The server module is re-executed below; give its tools a fresh registry.
+    monkeypatch.setattr(visibility, "_visibility_checkers", {})
     originals = {name: sys.modules.get(name) for name in _MODULES_TO_MOCK}
     for name, mock in _build_mocks().items():
         if mock is None:

@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memory.api.MCP import visibility
+
 
 # Mock FastMCP - this creates a decorator factory that passes through the function unchanged
 class MockFastMCP:
@@ -84,8 +86,10 @@ def _build_mocks():
 
 
 @pytest.fixture(autouse=True)
-def _mock_mcp_modules():
+def _mock_mcp_modules(monkeypatch):
     """Per-test scope so cleanup is reliable even if a test pollutes state."""
+    # The server module is re-executed below; give its tools a fresh registry.
+    monkeypatch.setattr(visibility, "_visibility_checkers", {})
     originals = {name: sys.modules.get(name) for name in _MODULES_TO_MOCK}
     mocks = _build_mocks()
     for name, mock in mocks.items():

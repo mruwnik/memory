@@ -28,32 +28,13 @@ logger = logging.getLogger(__name__)
 class VisibilityMiddleware(Middleware):
     """Filters tools and checks permissions based on visibility checkers."""
 
-    def __init__(
-        self,
-        get_user_info: Callable[[], dict],
-        prefixes: list[str] | None = None,
-    ):
+    def __init__(self, get_user_info: Callable[[], dict]):
         """
         Args:
             get_user_info: Callable that returns the current user's info dict.
                           Should include 'authenticated', 'scopes', 'user', etc.
-            prefixes: List of known tool name prefixes from mounted subservers.
-                     Used to strip prefixes when looking up checkers.
         """
         self.get_user_info = get_user_info
-        self.prefixes = prefixes or []
-
-    def _get_base_tool_name(self, tool_name: str) -> str:
-        """Strip the prefix from a mounted tool name.
-
-        When tools are mounted with a prefix (e.g., "core"), their names become
-        prefixed (e.g., "core_search_knowledge_base"). This strips the prefix
-        to find the original function name for checker lookup.
-        """
-        for prefix in self.prefixes:
-            if tool_name.startswith(f"{prefix}_"):
-                return tool_name[len(prefix) + 1 :]
-        return tool_name
 
     async def _check_visibility(
         self, tool: Tool, user_info: dict, session: DBSession | None = None
@@ -69,8 +50,7 @@ class VisibilityMiddleware(Middleware):
         Returns:
             True if the tool should be visible, False otherwise
         """
-        base_name = self._get_base_tool_name(tool.name)
-        checker = get_visibility_checker(base_name)
+        checker = get_visibility_checker(tool.key)
 
         if checker is None:
             # No checker registered = fail closed. Tools that should
@@ -137,8 +117,7 @@ class VisibilityMiddleware(Middleware):
         or race conditions.
         """
         tool_name = context.message.name
-        base_name = self._get_base_tool_name(tool_name)
-        checker = get_visibility_checker(base_name)
+        checker = get_visibility_checker(tool_name)
 
         if checker is None:
             # Fail closed: refuse to invoke a tool that hasn't opted
