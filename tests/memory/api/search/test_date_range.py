@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 import pytest
+from sqlalchemy import update
 
 from memory.api.search.date_range import date_bounds, source_ids_in_range
 from memory.common.access_control import AccessFilter
@@ -12,6 +13,7 @@ from memory.common.db.models import (
     SlackChannel,
     SlackMessage,
     SlackWorkspace,
+    SourceItem,
     Task,
 )
 
@@ -51,6 +53,8 @@ def items(db_session):
     rows = {
         "mail_in": MailMessage(sha256=sha("mail_in"), modality="test", sent_at=at(20), inserted_at=LONG_AGO),
         "mail_out": MailMessage(sha256=sha("mail_out"), modality="test", sent_at=at(1), inserted_at=at(20)),
+        # No event time: dated by ingestion, like an untyped item.
+        "mail_unsent_in": MailMessage(sha256=sha("mail_unsent_in"), modality="test", inserted_at=at(20)),
         "slack_in": SlackMessage(
             sha256=sha("slack_in"), modality="message", message_ts=f"{at(20).timestamp()}",
             channel_id="C1", workspace_id="T1", inserted_at=LONG_AGO,
@@ -80,7 +84,15 @@ def items(db_session):
         (
             at(19, 0),
             at(21, 0),
-            {"mail_in", "slack_in", "meeting_in", "task_due_in", "task_created_in", "note_in"},
+            {
+                "mail_in",
+                "mail_unsent_in",
+                "slack_in",
+                "meeting_in",
+                "task_due_in",
+                "task_created_in",
+                "note_in",
+            },
         ),
         (at(27, 0), None, {"event_future"}),
         (None, at(2, 0), {"mail_out", "slack_out", "task_out", "note_out"}),
@@ -90,6 +102,21 @@ def test_source_ids_in_range_uses_each_types_event_time(db_session, items, start
     found = set(source_ids_in_range(db_session, start, end, None))
 
     assert found == {items[name] for name in expected}
+
+
+def test_source_ids_in_range_includes_untyped_items(db_session, items):
+    db_session.execute(
+        update(SourceItem).where(SourceItem.id == items["note_in"]).values(type=None)
+    )
+    db_session.commit()
+
+    assert items["note_in"] in source_ids_in_range(db_session, at(19, 0), at(21, 0), None)
+
+
+def test_source_ids_in_range_keeps_only_the_searched_modalities(db_session, items):
+    found = source_ids_in_range(db_session, at(19, 0), at(21, 0), None, {"message"})
+
+    assert found == [items["slack_in"]]
 
 
 def test_source_ids_in_range_requires_a_bound(db_session):

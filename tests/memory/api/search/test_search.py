@@ -878,6 +878,7 @@ async def test_search_chunks_restricts_both_arms_to_date_range(
         datetime(2026, 10, 20, 12, tzinfo=timezone.utc),
         datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
         None,
+        {"mail"},
     )
     assert sorted(seen["embeddings"]["source_ids"]) == expected
     assert sorted(seen["bm25"]["source_ids"]) == expected

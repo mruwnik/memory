@@ -322,7 +322,7 @@ def _apply_query_analysis(
 
 
 def restrict_to_date_range(
-    filters: SearchFilters, analysis: QueryAnalysis | None
+    filters: SearchFilters, analysis: QueryAnalysis | None, modalities: set[str]
 ) -> SearchFilters:
     """Narrow ``filters`` to items dated within the analysed time window.
 
@@ -335,7 +335,7 @@ def restrict_to_date_range(
     access_filter = require_access_filter(filters, "restrict_to_date_range").get("access_filter")
     start, end = date_bounds(analysis.start_date, analysis.end_date)
     with make_session() as db:
-        ids = set(source_ids_in_range(db, start, end, access_filter))
+        ids = set(source_ids_in_range(db, start, end, access_filter, modalities))
     if (existing := filters.get("source_ids")) is not None:
         ids &= set(existing)
     if not ids:
@@ -666,7 +666,9 @@ async def search_chunks(
     analysis_result, hyde_doc = await _run_llm_analysis(
         query_text, now, use_query_analysis, use_hyde
     )
-    filters = await asyncio.to_thread(restrict_to_date_range, filters, analysis_result)
+    filters = await asyncio.to_thread(
+        restrict_to_date_range, filters, analysis_result, modalities
+    )
 
     # Apply query analysis results
     query_text, data, modalities, query_variants, recalled_content = _apply_query_analysis(

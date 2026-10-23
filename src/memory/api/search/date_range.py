@@ -8,9 +8,10 @@ which both the Qdrant and BM25 arms already filter on (the Qdrant payload has
 no indexed timestamp to range over).
 """
 
+from collections.abc import Collection
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import Float, cast, func, select, union
+from sqlalchemy import Float, cast, func, or_, select, union
 from sqlalchemy.orm import Session
 
 from memory.common.access_control import AccessFilter, apply_access_filter_to_query
@@ -86,23 +87,30 @@ def source_ids_in_range(
     start: datetime | None,
     end: datetime | None,
     access_filter: AccessFilter | None,
+    modalities: Collection[str] = (),
 ) -> list[int]:
-    """Ids of source items the caller can see whose event time is within [start, end].
+    """Ids of source items the caller can see, in `modalities` (all when empty),
+    whose event time is within [start, end]; an item without one is dated by
+    inserted_at.
 
-    Filtering by access here keeps the "nothing in range" fallback from
-    depending on other users' content.
+    Filtering by access and modality here keeps the "nothing in range"
+    fallback from depending on other users' content or other modalities.
     """
     if start is None and end is None:
         raise ValueError("source_ids_in_range needs at least one bound")
 
     by_event_time = [
-        select(model.__table__.c.id).where(*in_range(column, start, end))
+        select(model.__table__.c.id)
+        .join(SourceItem.__table__, SourceItem.id == model.__table__.c.id)
+        .where(*in_range(func.coalesce(column, SourceItem.inserted_at), start, end))
         for model, column in EVENT_TIMES.items()
     ]
     by_inserted_at = select(SourceItem.id).where(
-        SourceItem.type.notin_(INSERTED_AT_TYPES_EXCLUDED),
+        or_(SourceItem.type.is_(None), SourceItem.type.notin_(INSERTED_AT_TYPES_EXCLUDED)),
         *in_range(SourceItem.inserted_at, start, end),
     )
     in_window = union(*by_event_time, by_inserted_at).subquery()
     query = db.query(SourceItem.id).filter(SourceItem.id.in_(select(in_window.c.id)))
+    if modalities:
+        query = query.filter(SourceItem.modality.in_(modalities))
     return [source_id for (source_id,) in apply_access_filter_to_query(query, access_filter)]
