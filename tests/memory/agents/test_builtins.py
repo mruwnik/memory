@@ -2,14 +2,13 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import httpx
 import pytest
 
 from memory.agents import builtins
 from memory.agents.toolhub import local_web_fetch
+from memory.common.safe_http import NetworkPolicy, PinnedBackend
 from memory.common.ssrf import UnsafeURLError
-
-# Bound at import, before tests/conftest.py stubs ssrf.validate_public_url out.
-from memory.common.ssrf import validate_public_url as real_validate
 
 PAGES = {
     "/page": ("text/html; charset=utf-8", b"<h1>Title</h1><p>body</p>"),
@@ -71,17 +70,13 @@ class Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def server(monkeypatch):
-    """A local server that web_fetch may reach; everything else stays SSRF-checked."""
+    """A local server web_fetch may reach; every other destination keeps the real policy."""
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{httpd.server_port}"
-    monkeypatch.setattr(
-        builtins,
-        "validate_public_url",
-        lambda url: None if url.startswith(base) else real_validate(url),
-    )
-    yield base
+    policy = NetworkPolicy(loopback_allowed=True, public_only=True)
+    monkeypatch.setattr(builtins, "fetch_backend", lambda: PinnedBackend(policy=policy))
+    yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
     httpd.server_close()
 
@@ -103,12 +98,41 @@ async def test_redirects_to_internal_targets_are_refused(server):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost/",
+        "http://127.0.0.1/",
+        "http://10.0.0.1/",
+        "http://192.168.1.1/",
+        "http://100.64.0.1/",
+        "http://[fd00::1]/",
+        "http://qdrant:6333/collections",
+    ],
+)
+async def test_private_and_stack_targets_are_refused_at_dial_time(url):
+    with pytest.raises(UnsafeURLError):
+        await builtins.web_fetch(url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/x"])
+async def test_non_http_schemes_are_refused(url):
+    with pytest.raises(httpx.UnsupportedProtocol):
+        await builtins.web_fetch(url)
+
+
+@pytest.mark.asyncio
 async def test_large_bodies_are_cut_at_the_byte_cap(server, monkeypatch):
     monkeypatch.setattr(builtins, "MAX_FETCH_BYTES", 10)
 
     text = await builtins.web_fetch(f"{server}/big")
 
-    assert text == "a" * 6 + "b" * 4 + "\n[truncated: page larger than 10 bytes]"
+    # The chunk that crosses the cap is dropped whole.
+    body, marker = text.rsplit("\n", 1)
+    assert marker == "[truncated: page larger than 10 bytes]"
+    assert len(body) <= 10
+    assert PAGES["/big"][1].decode().startswith(body)
 
 
 @pytest.mark.asyncio
@@ -143,5 +167,13 @@ async def test_http_failures_are_short_error_results(server):
 
 
 @pytest.mark.asyncio
-async def test_only_encodings_httpx_always_decodes_are_accepted(server):
-    assert await builtins.web_fetch(f"{server}/encoding") == "gzip, deflate"
+async def test_malformed_urls_are_short_error_results():
+    text, is_error = await local_web_fetch({"url": "http://[::1"})
+
+    assert is_error
+    assert text.startswith("fetch failed:")
+
+
+@pytest.mark.asyncio
+async def test_bodies_are_requested_uncompressed_so_the_cap_counts_wire_bytes(server):
+    assert await builtins.web_fetch(f"{server}/encoding") == "identity"

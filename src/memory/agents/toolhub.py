@@ -132,7 +132,7 @@ async def local_web_fetch(arguments: dict[str, Any]) -> tuple[str, bool]:
         return await web_fetch(str(arguments.get("url", ""))), False
     except UnsafeURLError as e:
         return f"refused: {e}", True
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
         return f"fetch failed: {e}", True
 
 

@@ -1,7 +1,7 @@
 """Runner-level builtin tools: served natively by the model when it can, else locally."""
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 import httpx
@@ -9,7 +9,12 @@ from markdownify import markdownify
 
 from memory.common.downloads import DEFAULT_MAX_REDIRECTS as MAX_REDIRECTS
 from memory.common.llms.tools import ToolDefinition
-from memory.common.ssrf import validate_public_url
+from memory.common.safe_http import (
+    PinnedBackend,
+    ResponseTooLarge,
+    default_policy,
+    public_http_client,
+)
 
 WEB_SEARCH = ToolDefinition(
     name="web_search",
@@ -57,15 +62,20 @@ class Page:
     cut: str | None = None
 
 
+def fetch_backend() -> PinnedBackend:
+    # Unlike MCP servers, which users may run on their LAN, pages are public.
+    return PinnedBackend(policy=replace(default_policy(), public_only=True))
+
+
 async def read_page(url: str, page: Page) -> None:
-    """Fill `page` from `url`, re-validating every redirect hop like safe_get does."""
-    # Only encodings httpx always decodes: br/zstd need optional packages.
-    headers = {"Accept-Encoding": "gzip, deflate"}
-    async with httpx.AsyncClient(
-        follow_redirects=False, timeout=None, headers=headers
+    """Fill `page` from `url`. Every hop, redirects included, dials only the
+    address the policy checked."""
+    async with public_http_client(
+        timeout=FETCH_DEADLINE_SEC,
+        backend=fetch_backend(),
+        max_response_bytes=MAX_FETCH_BYTES,
     ) as client:
         for _ in range(MAX_REDIRECTS + 1):
-            validate_public_url(url)
             async with client.stream("GET", url) as response:
                 if response.is_redirect:
                     url = str(response.url.join(response.headers["location"]))
@@ -75,12 +85,11 @@ async def read_page(url: str, page: Page) -> None:
                 page.encoding = response.charset_encoding
                 if not readable(page.content_type):
                     return
-                async for chunk in response.aiter_bytes():
-                    page.body += chunk
-                    if len(page.body) > MAX_FETCH_BYTES:
-                        del page.body[MAX_FETCH_BYTES:]
-                        page.cut = f"page larger than {MAX_FETCH_BYTES} bytes"
-                        return
+                try:
+                    async for chunk in response.aiter_bytes():
+                        page.body += chunk
+                except ResponseTooLarge:
+                    page.cut = f"page larger than {MAX_FETCH_BYTES} bytes"
                 return
     raise httpx.TooManyRedirects(f"more than {MAX_REDIRECTS} redirects")
 

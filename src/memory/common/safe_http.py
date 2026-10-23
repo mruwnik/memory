@@ -121,6 +121,8 @@ class NetworkPolicy:
     blocked_hosts: frozenset[str] = frozenset()
     # Only test servers bind loopback; never set from configuration.
     loopback_allowed: bool = False
+    # Refuse every address that isn't globally routable, the LAN included.
+    public_only: bool = False
 
     def blocked(self, address: IPAddress, stack: frozenset[IPAddress]) -> bool:
         if self.loopback_allowed and address.is_loopback:
@@ -128,7 +130,9 @@ class NetworkPolicy:
         inner = embedded_ipv4(address)
         candidates = [address] + ([inner] if inner else [])
         return always_blocked(address) or any(
-            a in stack or any(a in net for net in self.blocked_networks)
+            a in stack
+            or any(a in net for net in self.blocked_networks)
+            or (self.public_only and not a.is_global)
             for a in candidates
         )
 

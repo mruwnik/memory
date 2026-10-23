@@ -3,11 +3,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from memory.agents import toolhub
-from memory.agents.builtins import web_fetch
 from memory.agents.spec import AgentSpec, ExternalMCP
 from memory.agents.toolhub import ToolHubError, open_toolhub
 from memory.common.llms.neutral import ToolCall
-from memory.common.ssrf import UnsafeURLError
 from tests.memory.agents.fake_mcp import add_server, connect_oauth, reload
 from tests.memory.agents.fakes import POOR, RICH
 
@@ -113,20 +111,6 @@ async def test_web_search_without_native_or_backend_fails_fast(
             spec(tools=["web_search"]), admin_session, ["*"], POOR.capabilities
         ):
             pass
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://127.0.0.1/",
-        "http://169.254.169.254/latest/meta-data/",
-        "file:///etc/passwd",
-    ],
-)
-@pytest.mark.asyncio
-async def test_local_web_fetch_refuses_internal_targets(url):
-    with pytest.raises(UnsafeURLError):
-        await web_fetch(url)
 
 
 def external_spec(server_id, tools=("lookup",)):
