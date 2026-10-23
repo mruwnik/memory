@@ -289,7 +289,7 @@ ENABLE_QUERY_ANALYSIS = boolean_env(
     "ENABLE_QUERY_ANALYSIS", True
 )  # Runs in parallel with HyDE
 ENABLE_RERANKING = boolean_env("ENABLE_RERANKING", True)
-RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-2-lite")
+RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-2.5")
 MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 16))
 MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 

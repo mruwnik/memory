@@ -31,7 +31,7 @@ The repo ships with an interactive installer that handles secrets, prompts for A
 - Docker + Docker Compose (Compose v2 / `docker compose ...` syntax)
 - Python 3.12+ (for the helper CLIs in `tools/`)
 - API keys for [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/settings/keys), and [Voyage AI](https://dash.voyageai.com/api-keys)
-  - All three are required. **Voyage** does all embeddings (`voyage-3-large` for text, `voyage-multimodal-3` for mixed) and reranking (`rerank-2-lite`). **Anthropic** does query analysis, HyDE expansion, and summarization. **OpenAI** is used by various LLM-backed features (notes processing, observation extraction, etc.).
+  - All three are required. **Voyage** does all embeddings (`voyage-3-large` for text, `voyage-multimodal-3` for mixed) and reranking (`rerank-2.5`). **Anthropic** does query analysis, HyDE expansion, and summarization. **OpenAI** is used by various LLM-backed features (notes processing, observation extraction, etc.).
 
 ### 1. Run the installer
 
@@ -250,7 +250,7 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `VOYAGE_API_KEY`                  | required             | All embeddings + reranking                                     |
 | `TEXT_EMBEDDING_MODEL`            | `voyage-3-large`     | Voyage text embedding model (1024d)                            |
 | `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |
-| `RERANK_MODEL`                    | `rerank-2-lite`      | Voyage reranker used after candidate retrieval                 |
+| `RERANK_MODEL`                    | `rerank-2.5`         | Voyage reranker used after candidate retrieval                 |
 | `FILE_STORAGE_DIR`                | `/tmp/memory_files`  | Where uploaded content is stored                               |
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|
 | `RATE_LIMIT_TRUSTED_PROXIES`      | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for the rate-limit bucket key          |

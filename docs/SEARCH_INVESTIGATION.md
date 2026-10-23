@@ -38,7 +38,7 @@ Implemented in `src/memory/api/search/`. Each stage is independently toggleable 
 6. **Fusion** — the vector and BM25 result lists are merged with Reciprocal Rank Fusion
    (`fuse_scores_rrf` in `search.py`, `RRF_K = 60` in `constants.py`). RRF is rank-based;
    there are no embedding/BM25 weight constants.
-7. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2-lite` cross-encoder
+7. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2.5` cross-encoder
    reorders the fused candidates.
 8. **Scoring** (`scorer.py`, `ENABLE_SEARCH_SCORING`) — recency / popularity /
    title-match boosts applied to the ranked results.

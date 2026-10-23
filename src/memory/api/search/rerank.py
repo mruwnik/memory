@@ -17,10 +17,7 @@ from memory.common.db.models import Chunk
 
 logger = logging.getLogger(__name__)
 
-# VoyageAI reranker models
-# rerank-2: More accurate, slower
-# rerank-2-lite: Faster, slightly less accurate
-DEFAULT_RERANK_MODEL = "rerank-2-lite"
+DEFAULT_RERANK_MODEL = "rerank-2.5"
 
 
 def merge_no_content_chunks(

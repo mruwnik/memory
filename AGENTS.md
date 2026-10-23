@@ -73,7 +73,7 @@ python tools/run_celery_task.py <queue> <task-name> [args]
 
 ## Search Pipeline
 
-Hybrid search combining vector (Voyage `voyage-3-large` 1024d text / `voyage-multimodal-3` mixed, in Qdrant) and PostgreSQL BM25, merged via Reciprocal Rank Fusion (`fuse_scores_rrf`, `RRF_K=60`), with optional query analysis, HyDE expansion, `rerank-2-lite` reranking, and recency/popularity/title-match scoring around the fusion. Each stage is toggleable via an `ENABLE_*` setting. **Authoritative, current detail (stages, files, toggles): [docs/SEARCH_INVESTIGATION.md](docs/SEARCH_INVESTIGATION.md).**
+Hybrid search combining vector (Voyage `voyage-3-large` 1024d text / `voyage-multimodal-3` mixed, in Qdrant) and PostgreSQL BM25, merged via Reciprocal Rank Fusion (`fuse_scores_rrf`, `RRF_K=60`), with optional query analysis, HyDE expansion, `rerank-2.5` reranking, and recency/popularity/title-match scoring around the fusion. Each stage is toggleable via an `ENABLE_*` setting. **Authoritative, current detail (stages, files, toggles): [docs/SEARCH_INVESTIGATION.md](docs/SEARCH_INVESTIGATION.md).**
 
 **Access control** is enforced at every layer (Qdrant, BM25, and the final merge) for defense in depth — users only see content their team/project memberships permit. The fail-closed gate is `require_access_filter` in `search/embeddings.py`.
 
@@ -106,7 +106,7 @@ Full queue list: the worker `QUEUES` env var in `docker-compose.yaml`.
 3. **Export** by importing the module in `src/memory/workers/tasks/__init__.py`.
 4. **Add the queue** to the worker `QUEUES` env var in both `docker-compose.yaml` and `docker/workers/Dockerfile`.
 
-To avoid queue proliferation, prefer reusing an existing queue: `maintenance` (cleanup/metrics/admin), `scheduler` (timed tasks), or `generic` (catch-all). For *deployment-specific* tasks loaded at runtime (not committed to the repo), use the `CUSTOM_TASKS_DIR` mechanism instead — see [README.md § Custom tasks](README.md#custom-tasks-deployment-specific).
+To avoid queue proliferation, prefer reusing an existing queue: `maintenance` (cleanup/metrics/admin) or `scheduler` (timed tasks). A task with different resource needs (long-running, or needing API-only dependencies) gets its own queue and worker service. For *deployment-specific* tasks loaded at runtime (not committed to the repo), use the `CUSTOM_TASKS_DIR` mechanism instead — see [README.md § Custom tasks](README.md#custom-tasks-deployment-specific).
 
 ## Database Models
 
