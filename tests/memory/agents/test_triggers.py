@@ -142,7 +142,24 @@ def test_discord_facts_carry_channel_and_author_identities():
 def test_render_input(template, expected):
     post = BlogPost(id=7, type="blog_post", title="T", content="body   text")
 
-    assert render_input(template, [post]) == expected
+    assert render_input(template, [post], max_chars=1000) == expected
+
+
+def test_render_input_caps_titles():
+    post = BlogPost(id=7, type="blog_post", title="T" * 10_000, content="body")
+
+    rendered = render_input("{items}", [post], max_chars=100_000)
+
+    assert rendered == f"- [blog_post #7] {'T' * triggers.ITEM_TITLE_CHARS}: body"
+
+
+def test_render_input_is_clipped_to_the_run_input_limit():
+    post = BlogPost(id=7, type="blog_post", title="T", content="body " * 200)
+
+    rendered = render_input("{items}" * 50, [post], max_chars=2000)
+
+    assert len(rendered) == 2000
+    assert rendered.endswith("\n[input truncated]")
 
 
 def make_definition(db, user):

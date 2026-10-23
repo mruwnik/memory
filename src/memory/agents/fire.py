@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.principal import PrincipalRevoked, standing_key
-from memory.agents.spec import AgentSpec
+from memory.agents.spec import MAX_TEXT_CHARS, AgentSpec
 from memory.agents.triggers import (
     INGEST,
     IngestConfig,
@@ -75,7 +75,7 @@ def fire_trigger(trigger_id: int, item_ids: list[int]) -> str | None:
                 db,
                 user_id=owner.id,
                 spec=AgentSpec.model_validate(definition.spec),
-                input=render_input(config.template, items),
+                input=render_input(config.template, items, MAX_TEXT_CHARS),
                 trigger=TriggerInfo(
                     kind=INGEST,
                     ref={"trigger_id": trigger.id, "item_ids": allowed},
