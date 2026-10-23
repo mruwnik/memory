@@ -1,8 +1,11 @@
-"""External MCP servers inside a run: the stored token, refreshed once on a
-401 under the row lock, and a failure that ends the run (and notifies once).
+"""Credentials that fail inside a run, and notifying their owner once.
 
-Kept apart from `external` because notifying needs the MCP meta subserver,
-which the agent subserver (importing `external`) is mounted alongside.
+External MCP servers: the stored token, refreshed once on a 401 under the row
+lock, and a failure that ends the run. Provider keys: a key its provider
+refuses is marked invalid and its owner told.
+
+Kept apart from `external` and `provider_keys` because notifying needs the MCP
+meta subserver, which the agent subserver (importing those) is mounted alongside.
 """
 
 import asyncio
@@ -17,9 +20,10 @@ from fastmcp import Client
 from mcp.types import Tool
 
 from memory.agents.external import apply_tools, mcp_session
+from memory.agents.provider_keys import keys_page
 from memory.api.MCP.servers.meta import notify_user_now
 from memory.common.db.connection import make_session
-from memory.common.db.models import ExternalMCPServer, User
+from memory.common.db.models import ExternalMCPServer, LLMProviderKey, User
 from memory.common.mcp_oauth import (
     MCPServerError,
     ReauthRequired,
@@ -45,6 +49,21 @@ def notify_reauth(error: ReauthRequired) -> None:
             "Its authorization expired or was revoked. Agent runs that use it fail "
             "until you re-authorize it.",
             server_page(error.server_id),
+        )
+
+
+def notify_key_rejected(key: LLMProviderKey) -> None:
+    with make_session() as db:
+        user = db.get(User, key.user_id)
+        if user is None:
+            return
+        notify_user_now(
+            db,
+            user,
+            f"Your {key.provider} API key '{key.label}' was rejected",
+            f"{key.provider} refused it during an agent run. Runs that use it fail "
+            "until you replace it.",
+            keys_page(),
         )
 
 

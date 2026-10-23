@@ -177,7 +177,8 @@ def test_lost_credentials_trip_the_breaker(
 
 
 def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_providers):
-    key = APIKey.create(user_id=admin_user.id, name="k", scopes=["agents", "read"])
+    scopes = ["agents", "llm_server_key", "read"]
+    key = APIKey.create(user_id=admin_user.id, name="k", scopes=scopes)
     db_session.add(key)
     db_session.commit()
     trigger = setup(db_session, admin_user)
@@ -187,7 +188,19 @@ def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_provi
     run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(post(db_session))))
 
     assert run is not None
-    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
+    assert (run.api_key_id, sorted(run.scopes)) == (key.id, scopes)
+
+
+def test_a_deleted_pinned_provider_key_trips_the_breaker(
+    db_session, admin_user, fake_providers
+):
+    trigger = setup(db_session, admin_user, spec=SPEC | {"provider_key": 99999})
+
+    assert fire_trigger(trigger.id, claimed(post(db_session))) is None
+
+    db_session.refresh(trigger)
+    assert trigger.enabled is False
+    assert "is not yours or was deleted" in trigger.state["tripped"]["reason"]
 
 
 @pytest.mark.parametrize(
@@ -252,7 +265,7 @@ def test_only_the_first_trip_disables_and_notifies(
 def test_a_batch_runs_over_only_the_items_still_readable_when_it_fires(
     db_session, regular_user, fake_providers
 ):
-    regular_user.scopes = ["agents"]
+    regular_user.scopes = ["agents", "llm_server_key"]
     project = Project(title="P", state="open")
     team = Team(name="T", slug="t-fire")
     person = Person(identifier="p-fire", display_name="P", user_id=regular_user.id)

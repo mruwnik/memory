@@ -1,3 +1,5 @@
+import anthropic
+import openai
 import pytest
 
 from memory.common.llms.anthropic_provider import AnthropicProvider
@@ -19,3 +21,13 @@ def test_provider_class_rejects_unknown_providers(model):
 def test_openai_has_no_agent_models_yet():
     with pytest.raises(ValueError, match="does not support agent runs"):
         OpenAIProvider.model_info("gpt-5")
+
+
+@pytest.mark.parametrize(
+    "cls,sdk",
+    [(AnthropicProvider, anthropic), (OpenAIProvider, openai)],
+)
+def test_only_a_401_rejects_the_key_and_a_403_only_fails_the_request(cls, sdk):
+    # A 403 also means a model, workspace or region the key can't use.
+    assert cls.KEY_REJECTED == (sdk.AuthenticationError,)
+    assert cls.KEY_FORBIDDEN == (sdk.PermissionDeniedError,)

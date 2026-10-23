@@ -2,11 +2,26 @@ import pytest
 import pytest_asyncio
 from sse_starlette.sse import AppStatus
 
+from memory.common.db.models import HumanUser
 from memory.common.llms import registry
 from memory.common import safe_http
 from memory.common.safe_http import NetworkPolicy
 from tests.memory.agents.fake_mcp import run_fake_mcp
 from tests.memory.agents.fakes import FakePoor, FakeRich, ScriptedProvider
+
+
+@pytest.fixture
+def regular_user(db_session):
+    """Agent runs need a provider key; these tests run on the server's unless they add one."""
+    user = HumanUser(
+        name="Regular User",
+        email="regular@example.com",
+        password_hash="bcrypt_hash_placeholder",
+        scopes=["teams", "llm_server_key"],
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
 
 
 @pytest.fixture

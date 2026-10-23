@@ -4,13 +4,20 @@ from decimal import Decimal
 
 import pytest
 
+from memory.agents import run_auth
 from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.runner import execute_run
 from memory.agents.spec import AgentSpec
 from memory.agents.toolhub import ToolHubError
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentRun, AgentRunStep, APIKey, UserSession
+from memory.common.db.models import (
+    AgentRun,
+    AgentRunStep,
+    APIKey,
+    LLMProviderKey,
+    UserSession,
+)
 from memory.common.llms.neutral import (
     AgentUsage,
     Completion,
@@ -25,8 +32,11 @@ from tests.memory.agents.fakes import (
     PRICING,
     FakeHub,
     calls,
+    key_forbidden,
+    key_rejected,
     reply,
 )
+from tests.memory.agents.test_provider_keys import SECRET, add_key
 
 
 def make_run(db, user, model, max_cost="1", **spec):
@@ -499,7 +509,7 @@ async def test_run_session_is_minted_for_the_owner_and_removed(
     await execute_run(run_id, h.factory())
 
     assert h.opened_with["user_id"] == regular_user.id
-    assert h.opened_with["scopes"] == ["teams"]
+    assert h.opened_with["scopes"] == ["teams", "llm_server_key"]
     token = h.opened_with["session_token"]
     assert db_session.query(UserSession).filter(UserSession.id == token).count() == 0
 
@@ -541,7 +551,7 @@ async def test_a_run_can_use_the_tools_its_owner_can_use_over_http(
 async def test_deleting_the_api_key_after_enqueue_does_not_widen_scopes(
     db_session, regular_user, fake_providers
 ):
-    key = APIKey.create(user_id=regular_user.id, name="narrow", scopes=["read"])
+    key = APIKey.create(user_id=regular_user.id, name="narrow", scopes=["read", "llm_server_key"])
     db_session.add(key)
     db_session.commit()
     run_id = enqueued(db_session, regular_user, api_key=key)
@@ -552,7 +562,7 @@ async def test_deleting_the_api_key_after_enqueue_does_not_widen_scopes(
 
     await execute_run(run_id, h.factory())
 
-    assert h.opened_with["scopes"] == ["read"]
+    assert h.opened_with["scopes"] == ["read", "llm_server_key"]
 
 
 @pytest.mark.asyncio
@@ -593,3 +603,147 @@ async def test_trimming_stubs_old_results_and_records_a_notice(
     assert last["messages"][2].content[0].text.startswith("[cleared: echo result")
     assert last["replay"] == [None] * len(last["messages"])
     assert steps[2].content[0]["text"] == "x" * 400  # stored transcript untouched
+
+
+# --- user provider keys ---------------------------------------------------------
+
+
+def on_key(db, user, key_id):
+    run_id = make_run(db, user, "fake-rich/m")
+    run = db.get(AgentRun, run_id)
+    run.key_source, run.provider_key_id = "user", key_id
+    db.commit()
+    return run_id
+
+
+@pytest.fixture
+def notifications(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        run_auth, "notify_user_now", lambda db, user, *args, **kw: sent.append((user.id, args))
+    )
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_runs_on_a_users_key_call_the_provider_with_it(
+    db_session, regular_user, fake_providers
+):
+    key = add_key(db_session, regular_user, value="sk-users-own")
+    run_id = on_key(db_session, regular_user, key.id)
+    fake_providers.script = [reply("ok")]
+
+    await execute_run(run_id, hub().factory())
+
+    run, _ = load(db_session, run_id)
+    db_session.refresh(key)
+    assert run.status == "done", run.error
+    assert fake_providers.requests[0]["api_key"] == "sk-users-own"
+    assert key.last_used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_server_key_runs_use_the_server_key(db_session, regular_user, fake_providers):
+    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    fake_providers.script = [reply("ok")]
+
+    await execute_run(run_id, hub().factory())
+
+    assert fake_providers.requests[0]["api_key"] == "fake-key"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_key_is_marked_invalid_and_notified_once(
+    db_session, regular_user, fake_providers, notifications, caplog
+):
+    key = add_key(db_session, regular_user, label="mine")
+    first = on_key(db_session, regular_user, key.id)
+    second = on_key(db_session, regular_user, key.id)
+    fake_providers.script = [key_rejected, key_rejected]
+
+    await execute_run(first, hub().factory())
+    await execute_run(second, hub().factory())
+
+    runs = [load(db_session, r)[0] for r in (first, second)]
+    db_session.refresh(key)
+    assert [r.status for r in runs] == ["failed", "failed"]
+    assert all("API key 'mine' was rejected by anthropic" in (r.error or "") for r in runs)
+    assert "401 invalid x-api-key" not in (runs[0].error or "")
+    assert (key.status, len(notifications)) == ("invalid", 1)
+    assert SECRET not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_does_not_invalidate_a_key_replaced_mid_run(
+    db_session, regular_user, fake_providers, notifications
+):
+    key = add_key(db_session, regular_user)
+    run_id = on_key(db_session, regular_user, key.id)
+
+    async def replaced_then_rejected():
+        with make_session() as db:
+            db.query(LLMProviderKey).filter(LLMProviderKey.id == key.id).one().key = (
+                "sk-replacement"
+            )
+            db.commit()
+        return await key_rejected()
+
+    fake_providers.script = [replaced_then_rejected]
+
+    await execute_run(run_id, hub().factory())
+
+    db_session.refresh(key)
+    assert (load(db_session, run_id)[0].status, key.status, notifications) == ("failed", "ok", [])
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_key_fails_its_runs_instead_of_using_the_server_key(
+    db_session, regular_user, fake_providers
+):
+    key = add_key(db_session, regular_user)
+    run_id = on_key(db_session, regular_user, key.id)
+    db_session.delete(key)
+    db_session.commit()
+
+    await execute_run(run_id, hub().factory())
+
+    run, _ = load(db_session, run_id)
+    assert (run.status, run.error) == (
+        "failed",
+        "the API key this run was set to use was deleted; pick another key for the agent",
+    )
+    assert fake_providers.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_forbidden_request_fails_only_that_run(
+    db_session, regular_user, fake_providers, notifications, caplog
+):
+    key = add_key(db_session, regular_user, label="mine")
+    run_id = on_key(db_session, regular_user, key.id)
+    fake_providers.script = [key_forbidden]
+
+    await execute_run(run_id, hub().factory())
+
+    run, _ = load(db_session, run_id)
+    db_session.refresh(key)
+    assert (run.status, key.status, notifications) == ("failed", "ok", [])
+    assert run.error == (
+        "the provider refused this request to fake-rich/m; the API key may not have "
+        "access to this model or feature"
+    )
+    assert "model not allowed for this key" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_empty_users_key_never_falls_back_to_the_server_key(
+    db_session, regular_user, fake_providers
+):
+    key = add_key(db_session, regular_user, value="")
+    run_id = on_key(db_session, regular_user, key.id)
+    fake_providers.script = [reply("ok")]
+
+    await execute_run(run_id, hub().factory())
+
+    assert load(db_session, run_id)[0].status == "failed"
+    assert fake_providers.requests == []

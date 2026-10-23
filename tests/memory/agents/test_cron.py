@@ -26,7 +26,7 @@ def ceilings(monkeypatch):
 
 @pytest.fixture
 def owner(db_session, regular_user):
-    regular_user.scopes = ["agents"]
+    regular_user.scopes = ["agents", "llm_server_key"]
     db_session.commit()
     return regular_user
 
@@ -156,13 +156,13 @@ def test_a_long_overdue_execution_is_skipped(db_session, owner, fake_providers):
 
 def test_the_creating_api_key_bounds_the_run(db_session, owner, fake_providers):
     d = definition(db_session, owner)
-    key = api_key(db_session, owner, ["agents", "read"])
+    key = api_key(db_session, owner, ["agents", "llm_server_key", "read"])
     e = execution(db_session, owner, d.id, api_key_id=key.id)
 
     start_cron_run(e.id)
 
     run = db_session.query(AgentRun).one()
-    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
+    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "llm_server_key", "read"])
 
 
 @pytest.mark.parametrize(

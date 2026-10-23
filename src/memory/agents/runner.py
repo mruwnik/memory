@@ -17,6 +17,14 @@ from typing import Any
 
 from sqlalchemy import func
 
+from memory.agents.caps import SERVER
+from memory.agents.provider_keys import (
+    KeyUnavailable,
+    key_for_run,
+    reject_key,
+    rejected_message,
+)
+from memory.agents.run_auth import notify_key_rejected
 from memory.agents.spec import (
     SUBMIT_RESULT,
     AgentSpec,
@@ -29,7 +37,13 @@ from memory.agents.toolhub import ToolHub, open_toolhub
 from memory.agents.trim import View, trim
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentDefinition, AgentRun, AgentRunStep, UserSession
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentRun,
+    AgentRunStep,
+    LLMProviderKey,
+    UserSession,
+)
 from memory.common.db.models.agents import RunStatus
 from memory.common.llms.neutral import (
     MTOK,
@@ -73,6 +87,8 @@ class Claim:
     max_cost: Decimal
     # When the run's definition was last saved; None for ad-hoc runs.
     saved_at: datetime | None = None
+    key_source: str = SERVER
+    provider_key_id: int | None = None
 
 
 def now() -> datetime:
@@ -101,6 +117,8 @@ def claim(run_id: str) -> Claim | None:
             run.input,
             run.max_cost_usd,
             definition.updated_at if definition else None,
+            run.key_source,
+            run.provider_key_id,
         )
         db.commit()
         return claimed
@@ -201,6 +219,23 @@ def output_allowance(
     return min(max_output, affordable)
 
 
+def run_key(claimed: Claim) -> LLMProviderKey | None:
+    """The user's key a run pays with, or None for the server's."""
+    if claimed.key_source == SERVER:
+        return None
+    try:
+        return key_for_run(claimed.provider_key_id)
+    except KeyUnavailable as e:
+        raise RunEnded(RunStatus.FAILED, str(e)) from e
+
+
+def key_refused(key: LLMProviderKey) -> RunEnded:
+    """Ends a run whose provider refused its user's key, notifying only on the first refusal."""
+    if reject_key(key.id, key.key):
+        notify_key_rejected(key)
+    return RunEnded(RunStatus.FAILED, rejected_message(key))
+
+
 def finish(
     run_id: str, status: RunStatus, error: str | None, result: dict[str, Any] | None
 ) -> None:
@@ -295,7 +330,8 @@ def remind(run_id: str, view: View, finish_tools: set[str]) -> int:
 async def run_loop(
     run_id: str, spec: AgentSpec, claimed: Claim, token: str, hub_factory: HubFactory
 ) -> dict[str, Any]:
-    provider = get_provider(spec.model)
+    key = run_key(claimed)
+    provider = get_provider(spec.model, api_key=key.key if key else None)
     info = provider.model_info(provider.model)
     params = generation_params(spec)
     finish_tools = finish_tool_names(spec)
@@ -342,18 +378,30 @@ async def run_loop(
             allowance = output_allowance(
                 info, estimate, cost, claimed.max_cost, params.max_output_tokens
             )
-            completion = await provider.acomplete(
-                system=spec.system_prompt,
-                messages=view.messages,
-                replay=view.replay,
-                tools=tools,
-                tool_choice=(
-                    "required"
-                    if reminded and info.capabilities.tool_choice_required
-                    else "auto"
-                ),
-                params=replace(params, max_output_tokens=allowance),
-            )
+            try:
+                completion = await provider.acomplete(
+                    system=spec.system_prompt,
+                    messages=view.messages,
+                    replay=view.replay,
+                    tools=tools,
+                    tool_choice=(
+                        "required"
+                        if reminded and info.capabilities.tool_choice_required
+                        else "auto"
+                    ),
+                    params=replace(params, max_output_tokens=allowance),
+                )
+            except provider.KEY_REJECTED as e:
+                if key is None:
+                    raise
+                raise key_refused(key) from e
+            except provider.KEY_FORBIDDEN as e:
+                logger.warning("agent run %s: %s refused the request: %s", run_id, spec.model, e)
+                raise RunEnded(
+                    RunStatus.FAILED,
+                    f"the provider refused this request to {spec.model}; the API key "
+                    "may not have access to this model or feature",
+                ) from e
             turns += 1
             reminded = False
             message = truncated_results(completion.message)

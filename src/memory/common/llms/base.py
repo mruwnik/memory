@@ -229,6 +229,11 @@ class BaseLLMProvider(ABC):
 
     provider: str = ""
     MODELS: ClassVar[dict[str, ModelInfo]] = {}
+    # What acomplete raises when the provider refuses the API key itself.
+    KEY_REJECTED: ClassVar[tuple[type[Exception], ...]] = ()
+    # What acomplete raises when a working key may not make this request (a model,
+    # workspace, region or beta it can't use); the key stays usable for others.
+    KEY_FORBIDDEN: ClassVar[tuple[type[Exception], ...]] = ()
     Extras: ClassVar[type[BaseModel]] = NoExtras
 
     @classmethod

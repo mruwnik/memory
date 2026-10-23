@@ -180,6 +180,8 @@ class AnthropicProvider(BaseLLMProvider):
 
     provider = "anthropic"
     MODELS = ANTHROPIC_MODELS
+    KEY_REJECTED = (anthropic.AuthenticationError,)
+    KEY_FORBIDDEN = (anthropic.PermissionDeniedError,)
 
     def __init__(self, api_key: str, model: str, enable_thinking: bool = False):
         """

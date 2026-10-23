@@ -122,6 +122,15 @@ class AgentRun(Base):
     api_key_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("api_keys.id", ondelete="SET NULL")
     )
+    # Which provider key pays: "server" (the deployment's) or "user". Kept apart
+    # from provider_key_id so a deleted user key fails the run instead of
+    # falling back to the server's key.
+    key_source: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="server", server_default="server"
+    )
+    provider_key_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("llm_provider_keys.id", ondelete="SET NULL")
+    )
     # The principal's effective scopes when enqueued: the run never re-derives
     # them, so a key deleted or edited later can't widen what it may call.
     scopes: Mapped[list[str]] = mapped_column(
@@ -163,6 +172,10 @@ class AgentRun(Base):
             postgresql_where=text("status IN ('pending','running')"),
         ),
         Index("agent_runs_api_key_created_idx", "api_key_id", "created_at"),
+        Index("agent_runs_provider_key_created_idx", "provider_key_id", "created_at"),
+        CheckConstraint(
+            "key_source IN ('server','user')", name="agent_runs_key_source_check"
+        ),
         Index(
             "agent_runs_definition_dedupe_key",
             "definition_id",
@@ -188,6 +201,8 @@ class AgentRun(Base):
             "trigger_kind": self.trigger_kind,
             "trigger_ref": self.trigger_ref,
             "starred": self.starred,
+            "key_source": self.key_source,
+            "provider_key_id": self.provider_key_id,
             "model": self.spec.get("model"),
             "created_at": iso(self.created_at),
             "started_at": iso(self.started_at),

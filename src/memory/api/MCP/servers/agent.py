@@ -10,6 +10,7 @@ import logging
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastmcp import FastMCP
@@ -32,6 +33,12 @@ from memory.agents.external import (
 )
 from memory.agents.enqueue import SpecInvalid, TriggerInfo, enqueue_run
 from memory.agents.mcp_client import memory_tools
+from memory.agents.provider_keys import (
+    KeyUnavailable,
+    check_key,
+    choose_key,
+    server_key_allowed,
+)
 from memory.agents.triggers import (
     INGEST,
     Batch,
@@ -64,6 +71,7 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentDefinition,
     ExternalMCPServer,
+    LLMProviderKey,
     ServerStatus,
     AgentRun,
     AgentRunStep,
@@ -76,6 +84,7 @@ from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
 from memory.common.scopes import SCOPE_AGENTS
 from memory.common.db.models.mcp import TRANSPORTS
+from memory.common.db.models.provider_keys import KEY_PROVIDERS, KeyStatus
 from memory.common.mcp_oauth import MCPServerError, describe, revoke
 from memory.common.rate_limit import check_rate_limit
 
@@ -201,9 +210,26 @@ def foreign_servers(spec: AgentSpec) -> list[str]:
         ]
 
 
+def provider_key_errors(spec: AgentSpec) -> tuple[bool, list[str]]:
+    """Whether runs of `spec` by the caller would use the server's key, and why none can pay.
+
+    A key its provider rejected still counts here: it can be replaced without
+    editing the agent, and the run says so if it isn't.
+    """
+    user_id, _ = caller()
+    _, scopes = caller_token()
+    with make_session() as db:
+        try:
+            return choose_key(db, user_id, spec, scopes, require_ok=False) is None, []
+        except KeyUnavailable as e:
+            return True, [str(e)]
+
+
 async def check_spec(spec: AgentSpec) -> None:
+    on_server_key, key_problems = provider_key_errors(spec)
     errors = (
-        spec_errors(spec)
+        spec_errors(spec, on_server_key)
+        + key_problems
         + [
             f"tool '{n}' is not visible to you (missing scope?)"
             for n in await invisible_tools(spec)
@@ -226,7 +252,9 @@ async def upsert(
     temperature, provider_extras, tools (memory tool names and builtins web_search/web_fetch),
     mcp_servers ([{server_id, tools}]), finish ({"mode": "answer"} or
     {"mode": "tool", "tools": [...]}), result_schema, max_turns, max_cost_usd,
-    max_cost_usd_per_day, timeout_sec. Errors name every problem at once.
+    max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list ids, or
+    "server"; omit for your default key for the model's provider, then the server's if
+    you may use it). Errors name every problem at once.
     """
     user_id, _ = caller()
     name = name.strip()
@@ -456,7 +484,8 @@ def capabilities_json(caps: Capabilities) -> dict:
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def catalog() -> dict:
     """What a definition can use: your visible tools, builtins, models, cost
-    ceilings and your external MCP servers with their cached tools."""
+    ceilings, your external MCP servers with their cached tools, your provider
+    keys, and whether runs may fall back to the server's keys."""
     token, scopes = caller_token()
     async with memory_tools(token, scopes) as tools:
         listed = await tools.list()
@@ -482,10 +511,13 @@ async def catalog() -> dict:
             "max_daily_cost_usd": str(settings.AGENT_MAX_DAILY_COST_USD),
             "max_timeout_sec": settings.AGENT_MAX_TIMEOUT_SEC,
             "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
+            "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),
         },
         "default_model": DEFAULT_AGENT_MODEL,
         "trigger_source_types": source_types(),
         "mcp_servers": user_servers(),
+        "provider_keys": [k for keys in user_keys().values() for k in keys],
+        "server_key_allowed": server_key_allowed(scopes),
     }
 
 
@@ -963,3 +995,224 @@ async def server_delete(server_id: int) -> dict:
     with make_session() as db:
         db.query(ExternalMCPServer).filter(ExternalMCPServer.id == server_id).delete()
     return {"deleted": server_id}
+
+
+# --- LLM provider keys ----------------------------------------------------
+
+# Each key check is one request to the provider; capped so the tool can't be
+# used to test keys in bulk.
+KEY_CHECKS_PER_HOUR = 20
+
+
+def user_keys() -> dict[str, list[dict]]:
+    user_id, _ = caller()
+    with make_session() as db:
+        keys = (
+            db.query(LLMProviderKey)
+            .filter(LLMProviderKey.user_id == user_id)
+            .order_by(LLMProviderKey.provider, LLMProviderKey.label)
+            .all()
+        )
+        return {
+            p: [k.serialize() for k in keys if k.provider == p] for p in KEY_PROVIDERS
+        }
+
+
+def owned_key(db: DBSession, key_id: int, user_id: int) -> LLMProviderKey:
+    key = db.get(LLMProviderKey, key_id)
+    if key is None or key.user_id != user_id:
+        raise ValueError(f"unknown API key {key_id}")
+    return key
+
+
+def daily_cap(value: str) -> Decimal | None:
+    """'' clears the cap."""
+    if value == "":
+        return None
+    try:
+        cap = Decimal(value)
+    except InvalidOperation as e:
+        raise ValueError("max_cost_usd_per_day must be a positive amount") from e
+    if not cap.is_finite() or cap <= 0 or cap >= Decimal("1e6"):
+        raise ValueError("max_cost_usd_per_day must be a positive amount")
+    return cap
+
+
+def checked_label(label: str | None, required: bool) -> str | None:
+    if label is None and not required:
+        return None
+    label = (label or "").strip()
+    if not label:
+        raise ValueError("label is required")
+    if len(label) > MAX_NAME_CHARS:
+        raise ValueError(f"label must be at most {MAX_NAME_CHARS} characters")
+    return label
+
+
+def key_checks_allowed(user_id: int) -> None:
+    if not check_rate_limit(f"llm-key-checks:{user_id}", KEY_CHECKS_PER_HOUR, 3600):
+        raise ValueError("too many API key checks this hour; try later")
+
+
+def label_taken(
+    db: DBSession, user_id: int, provider: str, label: str, key_id: int | None
+) -> bool:
+    query = db.query(LLMProviderKey).filter(
+        LLMProviderKey.user_id == user_id,
+        LLMProviderKey.provider == provider,
+        LLMProviderKey.label == label,
+    )
+    if key_id is not None:
+        query = query.filter(LLMProviderKey.id != key_id)
+    return query.count() > 0
+
+
+def provider_defaults(db: DBSession, user_id: int, provider: str):
+    return db.query(LLMProviderKey).filter(
+        LLMProviderKey.user_id == user_id,
+        LLMProviderKey.provider == provider,
+        LLMProviderKey.is_default,
+    )
+
+
+def make_default(db: DBSession, key: LLMProviderKey) -> None:
+    provider_defaults(db, key.user_id, key.provider).filter(
+        LLMProviderKey.id != key.id
+    ).update({"is_default": False})
+    db.flush()
+    key.is_default = True
+
+
+def promote_default(
+    db: DBSession, user_id: int, provider: str, dropped: int
+) -> LLMProviderKey | None:
+    """Make the most recently used (else newest) other key the default, if none is."""
+    db.flush()
+    if provider_defaults(db, user_id, provider).count():
+        return None
+    successor = (
+        db.query(LLMProviderKey)
+        .filter(
+            LLMProviderKey.user_id == user_id,
+            LLMProviderKey.provider == provider,
+            LLMProviderKey.id != dropped,
+        )
+        .order_by(
+            LLMProviderKey.last_used_at.desc().nulls_last(),
+            LLMProviderKey.created_at.desc(),
+            LLMProviderKey.id.desc(),
+        )
+        .first()
+    )
+    if successor is not None:
+        successor.is_default = True
+    return successor
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def key_list() -> dict:
+    """Your LLM provider API keys by provider (never the keys themselves, only their
+    last 4 characters), and whether runs may fall back to the server's keys."""
+    _, scopes = caller_token()
+    return {"providers": user_keys(), "server_key_allowed": server_key_allowed(scopes)}
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def key_upsert(
+    provider: str | None = None,
+    label: str | None = None,
+    key: str | None = None,
+    is_default: bool | None = None,
+    max_cost_usd_per_day: str | None = None,
+    key_id: int | None = None,
+) -> dict:
+    """Add or update one of your LLM provider API keys for agent runs.
+
+    Creating needs provider (anthropic or openai), label and key. A key is stored
+    only once its provider accepts it, and is never shown again. With key_id,
+    omitted fields are kept and a new key is checked again. Your first key for a
+    provider becomes its default; un-defaulting it makes your most recently used
+    other key the default. max_cost_usd_per_day caps daily spend on this key (""
+    removes the cap; with no cap here or on the agent, AGENT_DEFAULT_USER_KEY_DAILY_COST_USD
+    applies); runs on your own keys skip the server's cost ceilings.
+
+    Prefer entering keys in the web UI: a key passed in a tool call stays in the AI
+    client's transcript.
+    """
+    user_id, _ = caller()
+    with make_session() as db:
+        existing = owned_key(db, key_id, user_id).provider if key_id is not None else None
+    provider = existing or provider
+    if provider not in KEY_PROVIDERS:
+        raise ValueError(f"provider must be one of {', '.join(KEY_PROVIDERS)}")
+    label = checked_label(label, required=key_id is None)
+    secret = (key or "").strip()
+    if key_id is None and not secret:
+        raise ValueError("key is required")
+    cap = daily_cap(max_cost_usd_per_day) if max_cost_usd_per_day is not None else None
+    with make_session() as db:
+        if label is not None and label_taken(db, user_id, provider, label, key_id):
+            raise ValueError(f"you already have an {provider} key named {label!r}")
+    if secret:
+        key_checks_allowed(user_id)
+        await check_key(provider, secret)
+    with make_session() as db:
+        row = (
+            owned_key(db, key_id, user_id)
+            if key_id is not None
+            else LLMProviderKey(user_id=user_id, provider=provider)
+        )
+        db.add(row)
+        if label is not None:
+            row.label = label
+        if secret:
+            row.key = secret
+            row.status, row.status_detail = KeyStatus.OK.value, None
+        if max_cost_usd_per_day is not None:
+            row.max_cost_usd_per_day = cap
+        try:
+            db.flush()
+            first = provider_defaults(db, user_id, provider).count() == 0
+            if is_default or (is_default is None and first):
+                make_default(db, row)
+            elif is_default is False and row.is_default:
+                row.is_default = False
+                promote_default(db, user_id, provider, row.id)
+            db.flush()
+        except IntegrityError as e:
+            raise ValueError(f"your {provider} keys changed at the same time; try again") from e
+        db.refresh(row)
+        return row.serialize()
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def key_delete(key_id: int) -> dict:
+    """Delete one of your provider keys. Agents that pin it (`pinned_by`) fail
+    until you pick another key for them. Deleting the default makes your most
+    recently used other key for the provider the default (`new_default`); `note`
+    says when agents fall back to the server's key instead."""
+    user_id, _ = caller()
+    _, scopes = caller_token()
+    with make_session() as db:
+        found = owned_key(db, key_id, user_id)
+        provider = found.provider
+        definitions = db.query(AgentDefinition).filter(AgentDefinition.user_id == user_id)
+        pinned_by = sorted(d.name for d in definitions if d.spec.get("provider_key") == key_id)
+        db.delete(found)
+        successor = promote_default(db, user_id, provider, key_id)
+        new_default = successor.id if successor else None
+        keys_left = (
+            db.query(LLMProviderKey)
+            .filter(LLMProviderKey.user_id == user_id, LLMProviderKey.provider == provider)
+            .count()
+        )
+    note = None
+    if keys_left == 0 and server_key_allowed(scopes):
+        note = (
+            f"you have no {provider} keys left, so agents that don't pin a key now run "
+            f"on the server's {provider} key, under its cost ceilings"
+        )
+    return {"deleted": key_id, "pinned_by": pinned_by, "new_default": new_default, "note": note}

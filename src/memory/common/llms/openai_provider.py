@@ -26,6 +26,8 @@ class OpenAIProvider(BaseLLMProvider):
     """OpenAI LLM provider with streaming and tool support."""
 
     provider = "openai"
+    KEY_REJECTED = (openai.AuthenticationError,)
+    KEY_FORBIDDEN = (openai.PermissionDeniedError,)
 
     # Models that use max_completion_tokens instead of max_tokens
     # These are reasoning models with different parameter requirements

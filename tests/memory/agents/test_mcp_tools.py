@@ -159,7 +159,7 @@ async def test_runs_via_an_api_key_are_attributed_to_it(
     db_session.add(key)
     db_session.commit()
 
-    with mcp_auth_context(key.key, scopes=["agents"]):
+    with mcp_auth_context(key.key, scopes=["agents", "llm_server_key"]):
         result = await agent.run.fn(input="hi", spec=SPEC)
 
     run = db_session.get(AgentRun, result["run_id"])
@@ -347,4 +347,5 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
         "max_daily_cost_usd": "10.00",
         "max_timeout_sec": 1800,
         "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
+        "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),
     }

@@ -32,9 +32,13 @@ def provider_class(model: str) -> type[BaseLLMProvider]:
     return PROVIDERS[split_model(model)[0]]
 
 
-def get_provider(model: str) -> BaseLLMProvider:
+def get_provider(model: str, api_key: str | None = None) -> BaseLLMProvider:
+    """The provider for `model`, on `api_key`, or on the server's key when it is None."""
     provider, name = split_model(model)
-    api_key = API_KEYS[provider]()
+    if api_key == "":
+        raise ValueError(f"the {provider} API key for this run is empty")
+    if api_key is None:
+        api_key = API_KEYS[provider]()
     if not api_key:
         raise ValueError(
             f"{provider.upper()}_API_KEY is not set; agent runs on {model} cannot start"

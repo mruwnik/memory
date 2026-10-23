@@ -38,6 +38,7 @@ DEFAULT_REDACT: frozenset[str] = frozenset({
     "refresh_token",
     "api_key",
     "apikey",
+    "key",
     "client_secret",
     "private_key",
     "credential",

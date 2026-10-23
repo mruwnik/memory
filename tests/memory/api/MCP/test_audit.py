@@ -50,17 +50,18 @@ async def test_audit_call_preserves_signature():
 
 
 @pytest.mark.asyncio
-async def test_audit_call_default_redact_backstop(db_session, admin_session):
+@pytest.mark.parametrize("arg", ["token", "key"])
+async def test_audit_call_default_redact_backstop(db_session, admin_session, arg):
     """A secret-named arg is masked even when the call site forgets redact=."""
     @audit_call()  # no explicit redact
-    async def upsert(name: str, token: str | None = None):
+    async def upsert(name: str, token: str | None = None, key: str | None = None):
         return None
 
     with mcp_auth_context(admin_session.id):
-        await upsert(name="x", token="sekret")
+        await upsert(name="x", **{arg: "sekret"})
 
     row = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").one()
-    assert row.attributes["token"] == "***"
+    assert row.attributes[arg] == "***"
     assert row.attributes["name"] == "x"
 
 

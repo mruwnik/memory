@@ -292,6 +292,14 @@ LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
 # Agent runs
 AGENT_MAX_RUN_COST_USD = Decimal(os.getenv("AGENT_MAX_RUN_COST_USD", "1.00"))
 AGENT_MAX_DAILY_COST_USD = Decimal(os.getenv("AGENT_MAX_DAILY_COST_USD", "10.00"))
+# Per-run cap for runs on a user's own provider key whose agent sets no max_cost_usd.
+AGENT_DEFAULT_USER_KEY_RUN_COST_USD = Decimal(
+    os.getenv("AGENT_DEFAULT_USER_KEY_RUN_COST_USD", "1.00")
+)
+# Daily cap per user provider key when neither the key nor the agent sets one.
+AGENT_DEFAULT_USER_KEY_DAILY_COST_USD = Decimal(
+    os.getenv("AGENT_DEFAULT_USER_KEY_DAILY_COST_USD", "20.00")
+)
 # Runs one definition may start per rolling hour; a definition's max_runs_per_hour may only lower it.
 AGENT_MAX_RUNS_PER_HOUR = int(os.getenv("AGENT_MAX_RUNS_PER_HOUR", "60"))
 AGENT_MAX_TRIGGERS_PER_USER = int(os.getenv("AGENT_MAX_TRIGGERS_PER_USER", "20"))

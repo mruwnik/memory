@@ -60,6 +60,15 @@ section has nothing in it:
   `AGENT_MAX_TIMEOUT_SEC` plus 10 minutes.
 - New `agents` user scope gates the `agent_*` MCP tools and the Agents dashboard.
   Only `*` admins have it by default; grant it to anyone else who should use agents.
+- Users can add their own Anthropic/OpenAI API keys for agent runs (Agents → API
+  keys). Runs fall back to the server's `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` only
+  with the new `llm_server_key` scope (`*` admins have it); the migration grants it
+  to users and API keys that already hold `agents`. Server-key runs keep the
+  `AGENT_MAX_*` ceilings; runs on a user's key skip them and are capped per run by
+  the agent's `max_cost_usd` or the new `AGENT_DEFAULT_USER_KEY_RUN_COST_USD` (1.00),
+  and per key per day by the key's or the agent's daily cap, or else the new
+  `AGENT_DEFAULT_USER_KEY_DAILY_COST_USD` (20.00).
+  Keys are encrypted with `SECRETS_ENCRYPTION_KEY`.
 - Workers now refuse to start when the prefix they listen on (`QUEUE_PREFIX`,
   default `memory`) differs from `CELERY_QUEUE_PREFIX` (default `APP_NAME`,
   itself default `memory`), which tasks are routed with: such a worker would
@@ -141,6 +150,9 @@ section has nothing in it:
 - `20261026_external_mcp_servers`: drops `mcp_server_assignments` and
   `mcp_servers` (their rows are lost; see Manual steps) and creates the empty
   `external_mcp_servers` table. Fast.
+- `20261027_llm_provider_keys`: creates the empty `llm_provider_keys` table, adds
+  `key_source` (default `server`) and `provider_key_id` to `agent_runs`, and grants
+  `llm_server_key` to users and API keys holding `agents`. Fast.
 
 ### Post-deploy commands
 

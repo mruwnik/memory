@@ -201,9 +201,9 @@ async def test_a_schedule_remembers_the_key_that_made_it(
     db_session, regular_user, fake_providers
 ):
     d = definition(db_session, regular_user, SPEC | {"tools": ["core_search"]})
-    key = scoped_key(db_session, regular_user, ["agents", "read"])
+    key = scoped_key(db_session, regular_user, ["agents", "llm_server_key", "read"])
 
-    with mcp_auth_context(key.key, scopes=["agents", "read"]):
+    with mcp_auth_context(key.key, scopes=["agents", "llm_server_key", "read"]):
         created = await agent.schedule.fn(
             definition_id=d.id, input="a", cron_expression="0 9 * * *"
         )

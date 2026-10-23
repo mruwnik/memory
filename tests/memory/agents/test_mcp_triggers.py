@@ -113,11 +113,11 @@ async def test_a_trigger_remembers_the_key_that_made_it(
     db_session, regular_user, fake_providers
 ):
     d = definition(db_session, regular_user)
-    key = APIKey.create(user_id=regular_user.id, name="k", scopes=["agents"])
+    key = APIKey.create(user_id=regular_user.id, name="k", scopes=["agents", "llm_server_key"])
     db_session.add(key)
     db_session.commit()
 
-    with mcp_auth_context(key.key, scopes=["agents"]):
+    with mcp_auth_context(key.key, scopes=["agents", "llm_server_key"]):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
 
     assert (created["api_key_id"], created["via_api_key"]) == (key.id, True)

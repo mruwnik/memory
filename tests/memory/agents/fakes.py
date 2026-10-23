@@ -57,9 +57,27 @@ POOR = ModelInfo(
 ScriptItem = Completion | Callable[[], Awaitable[Completion]]
 
 
+class FakeKeyRejected(Exception):
+    """What a fake provider raises when its API key is refused."""
+
+
+class FakeKeyForbidden(Exception):
+    """What a fake provider raises when its API key may not make a request."""
+
+
+async def key_rejected() -> Completion:
+    raise FakeKeyRejected("401 invalid x-api-key")
+
+
+async def key_forbidden() -> Completion:
+    raise FakeKeyForbidden("403 model not allowed for this key")
+
+
 class ScriptedProvider(BaseLLMProvider):
     """Returns queued completions in order and records every request."""
 
+    KEY_REJECTED = (FakeKeyRejected,)
+    KEY_FORBIDDEN = (FakeKeyForbidden,)
     script: list[ScriptItem] = []
     requests: list[dict] = []
 
@@ -109,7 +127,11 @@ class ScriptedProvider(BaseLLMProvider):
         # Snapshot: the runner keeps appending to the lists it passed in.
         ScriptedProvider.requests.append(
             kwargs
-            | {"messages": list(kwargs["messages"]), "replay": list(kwargs["replay"])}
+            | {
+                "messages": list(kwargs["messages"]),
+                "replay": list(kwargs["replay"]),
+                "api_key": self.api_key,
+            }
         )
         item = ScriptedProvider.script.pop(0)
         completion = item if isinstance(item, Completion) else await item()
