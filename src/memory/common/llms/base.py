@@ -19,7 +19,7 @@ from memory.common.llms.neutral import (
     NeutralMessage,
     Replay,
 )
-from memory.common.llms.tools import MCPServer, ToolDefinition
+from memory.common.llms.tools import ToolDefinition
 from memory.common.llms.usage import UsageTracker, RedisUsageTracker
 
 logger = logging.getLogger(__name__)
@@ -427,7 +427,6 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """
@@ -450,7 +449,6 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> Iterator[StreamEvent]:
         """
@@ -473,7 +471,6 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """
@@ -496,7 +493,6 @@ class BaseLLMProvider(ABC):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { AgentSpec, Catalog, ModelEntry, Reasoning } from '@/hooks/useAgents'
+import { externalToolName, type AgentSpec, type Catalog, type ExternalServer, type ModelEntry, type Reasoning } from '@/hooks/useAgents'
+import { ServerStatusBadge } from './ServerStatusBadge'
 
 const REASONING_ORDER: Reasoning[] = ['off', 'low', 'medium', 'high']
 const inputClass = 'w-full px-3 py-1.5 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary'
@@ -14,6 +15,59 @@ interface Props {
 }
 
 const toggle = (list: string[], item: string) => (list.includes(item) ? list.filter(x => x !== item) : [...list, item])
+
+// Mirrors spec.DENIED_TOOL_PREFIXES: never callable inside a run, on any server.
+const isDenied = (tool: string) => tool.startsWith('agent_')
+
+/** The spec's external servers with `tool` toggled on `server`; a server left with no tools is dropped. */
+const toggleExternal = (servers: AgentSpec['mcp_servers'], serverId: number, tool: string): AgentSpec['mcp_servers'] => {
+  const current = servers.find(s => s.server_id === serverId)?.tools ?? []
+  const tools = toggle(current, tool)
+  const others = servers.filter(s => s.server_id !== serverId)
+  return tools.length ? [...others, { server_id: serverId, tools }] : others
+}
+
+function ExternalServers({ servers, value, onChange }: {
+  servers: ExternalServer[]
+  value: AgentSpec['mcp_servers']
+  onChange: (servers: AgentSpec['mcp_servers']) => void
+}) {
+  return (
+    <fieldset>
+      <legend className={labelClass}>External MCP servers</legend>
+      {servers.length === 0 && (
+        <div className="text-sm text-slate-500">No MCP servers yet. <a className="text-primary" href="/ui/agents/servers">Add one</a></div>
+      )}
+      <div className="space-y-2">
+        {servers.map(server => {
+          const selected = value.find(s => s.server_id === server.id)?.tools ?? []
+          return (
+            <div key={server.id} className="border border-slate-200 rounded p-2">
+              <div className="flex items-center gap-2 text-sm">
+                <a className="font-medium text-primary" href={`/ui/agents/servers/${server.id}`}>{server.name}</a>
+                <ServerStatusBadge status={server.status} />
+              </div>
+              {selected.length > 0 && server.status !== 'connected' && (
+                <div className="text-xs text-amber-700 mt-1">Runs using this server fail until it is connected again.</div>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-1 mt-1">
+                {server.tools.map(tool => (
+                  <label key={tool.name} className="flex items-center gap-2 text-sm" title={tool.description}>
+                    <input type="checkbox" disabled={isDenied(tool.name)} checked={selected.includes(tool.name)}
+                      onChange={() => onChange(toggleExternal(value, server.id, tool.name))} />
+                    <span className="font-mono">{tool.name}</span>
+                    {isDenied(tool.name) && <span className="text-xs text-slate-400">agent_* tools are never allowed in runs</span>}
+                    {!tool.read_only && <span className="text-xs text-amber-600">side effects</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </fieldset>
+  )
+}
 
 function JsonField({ id, label, value, onChange, onError, className }: {
   id: string
@@ -73,6 +127,14 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
   const set = (patch: Partial<AgentSpec>) => onChange({ ...value, ...patch })
   const toolNames = [...catalog.builtins, ...catalog.tools.map(t => t.name)]
   const sideEffects = new Set(catalog.tools.filter(t => !t.read_only).map(t => t.name))
+  const servers = catalog.mcp_servers
+  const externalNames = value.mcp_servers.flatMap(s => s.tools.map(t => externalToolName(s.server_id, t)))
+  const externalWrites = value.mcp_servers.some(s =>
+    s.tools.some(t => !servers.find(srv => srv.id === s.server_id)?.tools.find(x => x.name === t)?.read_only))
+  // Untrusted input + private data + a way out: injected text could exfiltrate.
+  const exfiltrationRisk = externalNames.length > 0
+    && value.tools.some(t => !catalog.builtins.includes(t))
+    && (value.tools.includes('web_fetch') || value.tools.some(t => sideEffects.has(t)) || externalWrites)
 
   return (
     <div className="space-y-4">
@@ -125,6 +187,14 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
         </div>
       </fieldset>
 
+      <ExternalServers servers={servers} value={value.mcp_servers} onChange={mcp_servers => set({ mcp_servers })} />
+      {exfiltrationRisk && (
+        <div role="alert" className="p-3 bg-amber-50 text-amber-800 rounded text-sm">
+          External tool output is untrusted. With your private data and a way to send it out (web_fetch or a tool with
+          side effects), instructions hidden in that output could leak it. Keep the allowlist narrow.
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div>
           <label className={labelClass} htmlFor="spec-finish">Finish</label>
@@ -138,7 +208,7 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
           <div className="md:col-span-3">
             <span className={labelClass}>Finish tools</span>
             <div className="flex flex-wrap gap-2">
-              {value.tools.filter(t => !catalog.builtins.includes(t)).map(t => (
+              {[...value.tools.filter(t => !catalog.builtins.includes(t)), ...externalNames].map(t => (
                 <label key={t} className="text-sm flex items-center gap-1">
                   <input type="checkbox" checked={value.finish.tools.includes(t)}
                     onChange={() => set({ finish: { mode: 'tool', tools: toggle(value.finish.tools, t) } })} />

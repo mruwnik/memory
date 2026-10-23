@@ -25,3 +25,29 @@ def test_extract_does_not_log_literal_value(caplog):
     full_log = "\n".join(record.getMessage() for record in caplog.records)
     assert literal_secret not in full_log
     assert "ghp_" not in full_log
+
+
+def test_key_derivation_runs_once_per_secret(monkeypatch):
+    derived = []
+    real = secrets.PBKDF2HMAC
+
+    def counting(*args, **kwargs):
+        derived.append(kwargs["salt"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(secrets, "PBKDF2HMAC", counting)
+    monkeypatch.setattr(secrets.settings, "SECRETS_ENCRYPTION_KEY", "key-derive-once")
+    secrets.derive_encryption_key.cache_clear()
+
+    tokens = [secrets.encrypt_value(f"token-{i}") for i in range(3)]
+
+    assert [secrets.decrypt_value(t) for t in tokens] == ["token-0", "token-1", "token-2"]
+    assert len(derived) == 1
+
+
+def test_a_changed_secret_derives_a_new_key(monkeypatch):
+    monkeypatch.setattr(secrets.settings, "SECRETS_ENCRYPTION_KEY", "first")
+    first = secrets.get_encryption_key()
+    monkeypatch.setattr(secrets.settings, "SECRETS_ENCRYPTION_KEY", "second")
+
+    assert secrets.get_encryption_key() != first

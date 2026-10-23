@@ -35,7 +35,8 @@ SUBMIT_RESULT = "submit_result"
 # credential in the transcript and the model context.
 DENIED_TOOL_PREFIXES = ("agent_",)
 DENIED_TOOLS = frozenset({"meta_create_one_time_key"})
-TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+# 64: the strictest provider limit on tool names (OpenAI function names).
+TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 MAX_RESULT_SCHEMA_BYTES = 64 * 1024
 Money = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=6)]
 

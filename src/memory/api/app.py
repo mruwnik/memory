@@ -32,6 +32,7 @@ from memory.api.auth import (
     router as auth_router,
 )
 from memory.api.google_drive import router as google_drive_router
+from memory.api.mcp_servers import router as mcp_servers_router
 from memory.api.email_accounts import router as email_accounts_router
 from memory.api.article_feeds import router as article_feeds_router
 from memory.api.github_sources import router as github_sources_router
@@ -452,6 +453,7 @@ async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
 
 app.include_router(auth_router)
 app.include_router(google_drive_router)
+app.include_router(mcp_servers_router)
 app.include_router(email_accounts_router)
 app.include_router(article_feeds_router)
 app.include_router(github_sources_router)

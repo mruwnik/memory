@@ -1,7 +1,20 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderWithUser, screen } from '@/test/utils'
 import { SpecEditor } from './SpecEditor'
-import { defaultSpec, type Catalog } from '@/hooks/useAgents'
+import { defaultSpec, type Catalog, type ExternalServer } from '@/hooks/useAgents'
+
+const server = (overrides: Partial<ExternalServer> = {}): ExternalServer => ({
+  id: 3, name: 'linear', url: 'https://mcp.linear.app/mcp', transport: 'http', auth_type: 'oauth',
+  status: 'connected', status_detail: null, header_names: [], issuer: null, scopes: null, client_id: 'c',
+  client_source: 'dcr', has_token: true, token_expires_at: null, tools_refreshed_at: null, tools_changed_at: null,
+  created_at: null, updated_at: null,
+  tools: [
+    { name: 'list_issues', description: 'List', input_schema: {}, read_only: true, hash: 'a' },
+    { name: 'create_issue', description: 'Create', input_schema: {}, read_only: false, hash: 'b' },
+    { name: 'agent_spawn', description: 'Nope', input_schema: {}, read_only: false, hash: 'c' },
+  ],
+  ...overrides,
+})
 
 const catalog: Catalog = {
   builtins: ['web_fetch', 'web_search'],
@@ -24,7 +37,10 @@ const catalog: Catalog = {
   ceilings: { max_run_cost_usd: '1.00', max_daily_cost_usd: '10.00', max_timeout_sec: 1800, max_runs_per_hour: 60 },
   default_model: 'anthropic/claude-sonnet-5-5',
   trigger_source_types: ['blog_post', 'discord_message'],
+  mcp_servers: [server()],
 }
+
+const withServer = (s: ExternalServer): Catalog => ({ ...catalog, mcp_servers: [s] })
 
 describe('SpecEditor', () => {
   it('only offers the reasoning levels the model supports', () => {
@@ -72,5 +88,42 @@ describe('SpecEditor', () => {
     await user.type(screen.getByLabelText('Result schema (JSON, optional)'), '{{{{')
     expect(onValidityChange).toHaveBeenLastCalledWith(false)
     expect(screen.getByText('Not valid JSON')).toBeInTheDocument()
+  })
+
+  it('adds an external tool under its server', async () => {
+    const onChange = vi.fn()
+    const { user } = renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={onChange} />)
+    await user.click(screen.getByLabelText(/list_issues/))
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ mcp_servers: [{ server_id: 3, tools: ['list_issues'] }] }))
+  })
+
+  it('drops a server once none of its tools are selected', async () => {
+    const onChange = vi.fn()
+    const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), mcp_servers: [{ server_id: 3, tools: ['list_issues'] }] }
+    const { user } = renderWithUser(<SpecEditor value={spec} catalog={catalog} onChange={onChange} />)
+    await user.click(screen.getByLabelText(/list_issues/))
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ mcp_servers: [] }))
+  })
+
+  it('never offers agent_* tools', () => {
+    renderWithUser(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
+    expect(screen.getByLabelText(/agent_spawn/)).toBeDisabled()
+  })
+
+  it('warns when a selected server is not connected', () => {
+    const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), mcp_servers: [{ server_id: 3, tools: ['list_issues'] }] }
+    renderWithUser(<SpecEditor value={spec} catalog={withServer(server({ status: 'needs_reauth' }))} onChange={vi.fn()} />)
+    expect(screen.getByText(/fail until it is connected/)).toBeInTheDocument()
+  })
+
+  it.each([
+    [['core_search', 'web_fetch'], ['list_issues'], true],
+    [['core_search'], ['create_issue'], true],
+    [['core_search'], ['list_issues'], false],
+    [['web_fetch'], ['list_issues'], false],
+  ])('warns about exfiltration only with private data and a way out (%j, %j)', (tools, external, warned) => {
+    const spec = { ...defaultSpec('anthropic/claude-sonnet-5-5'), tools, mcp_servers: [{ server_id: 3, tools: external }] }
+    renderWithUser(<SpecEditor value={spec} catalog={catalog} onChange={vi.fn()} />)
+    expect(screen.queryByRole('alert') !== null).toBe(warned)
   })
 })

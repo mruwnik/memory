@@ -16,7 +16,6 @@ from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     APIKey,
     BotUser,
-    MCPServer,
     HumanUser,
     OAuthRefreshToken,
     User,
@@ -24,8 +23,6 @@ from memory.common.db.models import (
 )
 from memory.common.access_control import get_user_project_roles, has_admin_scope
 from memory.common.db.models.base import Base
-from memory.common.mcp import mcp_tools_list
-from memory.common.oauth import complete_oauth_flow
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 
 T = TypeVar("T", bound=Base)
@@ -58,6 +55,9 @@ WHITELIST = {
     "/.well-known/",
     "/ui",
     "/google-drive/callback",  # Google OAuth callback
+    # External MCP server OAuth callback: authenticates the session itself
+    # so a logged-out user gets a page to act on instead of a bare 401.
+    "/auth/mcp/callback",
     "/polls/respond",  # Public poll response endpoints
     # Cloud-claude file transfer: gated by HMAC-signed presigned tokens
     # (query string for pull, Bearer header for push) inside the endpoints
@@ -830,114 +830,6 @@ def logout(request: Request, db: DBSession = Depends(get_session)):
 def get_me(user: User = Depends(get_current_user)):
     """Get current user info"""
     return user.serialize()
-
-
-@router.get("/callback/discord")
-async def oauth_callback_discord(request: Request):
-    """Get current user info"""
-    code = request.query_params.get("code")
-    state = request.query_params.get("state")
-    error = request.query_params.get("error")
-
-    # Log OAuth callback without sensitive data (code/state could be intercepted)
-    logger.info("Received OAuth callback")
-
-    message, title, close, status_code = "", "", "", 200
-    if error:
-        logger.error(f"OAuth error: {error}")
-        message = f"Error: {error}"
-        title = "❌ Authorization Failed"
-        status_code = 400
-    elif not code or not state:
-        message = "Missing authorization code or state parameter."
-        title = "❌ Invalid Request"
-        status_code = 400
-    else:
-        # The OAuth flow does two HTTPS round-trips (token exchange and MCP
-        # tools list). Holding a sync DB session across those `await`s pinned
-        # a connection from the pool for the duration of the upstream calls
-        # — under concurrent OAuth callbacks that's a clean route to pool
-        # starvation. Split into short DB scopes around the network I/O.
-
-        # Phase 1: locate the row and detach it from the session so its
-        # column attributes survive past session close. We pass the detached
-        # object to complete_oauth_flow which mutates its in-memory
-        # attributes; we then write those back in a fresh session.
-        with make_session() as session:
-            mcp_server = (
-                session.query(MCPServer).filter(MCPServer.state == state).first()
-            )
-            if not mcp_server:
-                return Response(
-                    content="MCP server not found",
-                    status_code=404,
-                )
-            server_id = cast(int, mcp_server.id)
-            # Force-load all columns we'll need post-detach. SQLAlchemy
-            # already loaded them via the SELECT above; the explicit access
-            # documents the dependency and fails fast if the schema changes.
-            _ = (
-                mcp_server.mcp_server_url,
-                mcp_server.client_id,
-                mcp_server.code_verifier,
-            )
-            session.expunge(mcp_server)
-
-        # Phase 2: network I/O — no DB connection held.
-        status_code, message = await complete_oauth_flow(mcp_server, code, state)
-
-        # Phase 3: persist the mutations complete_oauth_flow wrote onto the
-        # detached object. Re-fetch by primary key so a concurrent admin
-        # update on the same row isn't clobbered (only the OAuth-token
-        # fields and the temporary state/code_verifier are written).
-        with make_session() as session:
-            server = session.get(MCPServer, server_id)
-            if server is not None:
-                server.access_token = mcp_server.access_token  # type: ignore
-                server.refresh_token = mcp_server.refresh_token  # type: ignore
-                server.token_expires_at = mcp_server.token_expires_at  # type: ignore
-                server.state = mcp_server.state  # type: ignore  # cleared on success
-                server.code_verifier = mcp_server.code_verifier  # type: ignore  # cleared on success
-                session.commit()
-
-        # Phase 4: second network I/O — only on success.
-        if 200 <= status_code < 300:
-            tools = await mcp_tools_list(
-                cast(str, mcp_server.mcp_server_url),
-                cast(str, mcp_server.access_token),
-            )
-            available_tools = [
-                name for tool in tools if (name := tool.get("name"))
-            ]
-            logger.info(f"MCP server tools: {tools}")
-
-            # Phase 5: persist the tool list in a fresh short session.
-            with make_session() as session:
-                server = session.get(MCPServer, server_id)
-                if server is not None:
-                    server.available_tools = available_tools  # type: ignore
-                    session.commit()
-
-        if 200 <= status_code < 300:
-            title = "✅ Authorization Successful!"
-            close = "You can close this window and return to the MCP server."
-        else:
-            title = "❌ Authorization Failed"
-
-    from html import escape
-
-    return Response(
-        content=f"""
-        <html>
-            <body>
-                <h1>{escape(title)}</h1>
-                <p>{escape(message)}</p>
-                <p>{close}</p>
-            </body>
-        </html>
-        """,
-        status_code=status_code,
-    )
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):

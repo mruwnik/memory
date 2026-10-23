@@ -14,7 +14,6 @@ export interface AgentSpec {
   temperature: number | null
   provider_extras: Record<string, unknown>
   tools: string[]
-  // Not editable here yet: external MCP servers can't be registered in phase 1.
   mcp_servers: { server_id: number; tools: string[] }[]
   finish: { mode: 'answer' | 'tool'; tools: string[] }
   result_schema: Record<string, unknown> | null
@@ -55,6 +54,8 @@ export interface AgentDefinition {
   updated_at: string | null
   last_run?: AgentRun | null
   triggers?: { total: number; enabled: number; tripped: number }
+  // External tools whose schema changed after this definition was saved.
+  changed_tools?: string[]
 }
 
 export type Block =
@@ -93,7 +94,68 @@ export interface Catalog {
   ceilings: { max_run_cost_usd: string; max_daily_cost_usd: string; max_timeout_sec: number; max_runs_per_hour: number }
   default_model: string
   trigger_source_types: string[]
+  mcp_servers: ExternalServer[]
 }
+
+export type ServerStatus = 'pending_auth' | 'connected' | 'needs_reauth' | 'error'
+export type ServerTransport = 'http' | 'sse'
+export type ServerAuthType = 'auto' | 'oauth' | 'headers' | 'none'
+
+export interface ServerTool {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+  read_only: boolean
+  hash: string
+  changed_at?: string | null
+}
+
+export interface ExternalServer {
+  id: number
+  name: string
+  url: string
+  transport: ServerTransport
+  auth_type: Exclude<ServerAuthType, 'auto'>
+  status: ServerStatus
+  status_detail: string | null
+  header_names: string[]
+  issuer: string | null
+  scopes: string | null
+  client_id: string | null
+  client_source: 'dcr' | 'manual' | null
+  has_token: boolean
+  token_expires_at: string | null
+  tools: ServerTool[]
+  tools_refreshed_at: string | null
+  tools_changed_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ServerAuth {
+  type: ServerAuthType
+  headers?: Record<string, string>
+  client_id?: string
+  client_secret?: string
+  scopes?: string
+}
+
+export interface ServerUpsertResult {
+  server: ExternalServer
+  authorize_url: string | null
+  secret_sent_to?: string | null
+  error: string | null
+}
+
+export interface ToolDiff {
+  added: string[]
+  removed: string[]
+  changed: string[]
+  dropped: { name: string; reason: string }[]
+}
+
+/** How a run names an external server's tool (mirrors spec.external_tool_name). */
+export const externalToolName = (serverId: number, tool: string) => `mcp_${serverId}_${tool}`
 
 export interface IngestFilter {
   source_types: string[]
@@ -249,8 +311,38 @@ export const useAgents = () => {
   )
   const deleteTrigger = useCallback((triggerId: number) => call('agent_trigger_delete', { trigger_id: triggerId }), [call])
 
+  const listServers = useCallback(
+    async () => (await call<{ servers: ExternalServer[] }>('agent_server_list')).servers,
+    [call],
+  )
+  const upsertServer = useCallback(
+    (body: { name: string; url: string; transport: ServerTransport; auth: ServerAuth; serverId?: number }) =>
+      call<ServerUpsertResult>('agent_server_upsert', {
+        name: body.name,
+        url: body.url,
+        transport: body.transport,
+        auth: body.auth,
+        ...(body.serverId !== undefined ? { server_id: body.serverId } : {}),
+      }),
+    [call],
+  )
+  const authorizeServer = useCallback(
+    async (serverId: number) => (await call<{ authorize_url: string }>('agent_server_authorize', { server_id: serverId })).authorize_url,
+    [call],
+  )
+  const refreshServerTools = useCallback(
+    (serverId: number) => call<{ diff: ToolDiff; server: ExternalServer }>('agent_server_refresh_tools', { server_id: serverId }),
+    [call],
+  )
+  const disconnectServer = useCallback(
+    (serverId: number) => call<ExternalServer>('agent_server_disconnect', { server_id: serverId }),
+    [call],
+  )
+  const deleteServer = useCallback((serverId: number) => call('agent_server_delete', { server_id: serverId }), [call])
+
   return {
     listDefinitions, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
     listSchedules, saveSchedule, deleteSchedule, listTriggers, saveTrigger, deleteTrigger,
+    listServers, upsertServer, authorizeServer, refreshServerTools, disconnectServer, deleteServer,
   }
 }

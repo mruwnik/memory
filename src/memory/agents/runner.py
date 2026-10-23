@@ -29,7 +29,7 @@ from memory.agents.toolhub import ToolHub, open_toolhub
 from memory.agents.trim import View, trim
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentRun, AgentRunStep, UserSession
+from memory.common.db.models import AgentDefinition, AgentRun, AgentRunStep, UserSession
 from memory.common.db.models.agents import RunStatus
 from memory.common.llms.neutral import (
     MTOK,
@@ -44,6 +44,7 @@ from memory.common.llms.neutral import (
 )
 from memory.common.llms.registry import get_provider
 from memory.common.llms.tools import ToolDefinition
+from memory.common.mcp_oauth import MCPServerError
 from memory.common.tokens import CHARS_PER_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,8 @@ class Claim:
     scopes: list[str]
     input: str
     max_cost: Decimal
+    # When the run's definition was last saved; None for ad-hoc runs.
+    saved_at: datetime | None = None
 
 
 def now() -> datetime:
@@ -90,8 +93,14 @@ def claim(run_id: str) -> Claim | None:
             return None
         run.status = RunStatus.RUNNING.value
         run.started_at = now()
+        definition = db.get(AgentDefinition, run.definition_id) if run.definition_id else None
         claimed = Claim(
-            run.spec, run.user_id, list(run.scopes), run.input, run.max_cost_usd
+            run.spec,
+            run.user_id,
+            list(run.scopes),
+            run.input,
+            run.max_cost_usd,
+            definition.updated_at if definition else None,
         )
         db.commit()
         return claimed
@@ -232,7 +241,10 @@ async def run_tool(
             )
         return ToolResult(tool_call_id=call.id, name=call.name, text="result accepted")
     started = time.monotonic()
-    result = await hub.call(call)
+    try:
+        result = await hub.call(call)
+    except MCPServerError as e:
+        raise RunEnded(RunStatus.FAILED, str(e)) from e
     elapsed = int((time.monotonic() - started) * 1000)
     return result.model_copy(
         update={"text": truncate(result.text), "duration_ms": elapsed}
@@ -293,6 +305,7 @@ async def run_loop(
         scopes=claimed.scopes,
         session_token=token,
         capabilities=info.capabilities,
+        saved_at=claimed.saved_at,
     ) as hub:
         # Fixed for the whole run: the tool list is part of the cached prefix.
         submit = [submit_result_tool(spec.result_schema)] if spec.result_schema else []
@@ -301,6 +314,8 @@ async def run_loop(
         first = NeutralMessage(role="user", content=[Text(text=claimed.input)])
         view.append(first)
         append_step(run_id, "user", first.content)
+        if notices := hub.notices():
+            append_step(run_id, "notice", [Text(text=n) for n in notices])
         estimate = (
             prompt_chars(spec.system_prompt, claimed.input, tools) // CHARS_PER_TOKEN
         )

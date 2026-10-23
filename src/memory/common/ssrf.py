@@ -23,15 +23,10 @@ validation lookup sees ``8.8.8.8``, the subsequent fetch lookup sees
 ``169.254.169.254``.
 
 This is a structural property of any "validate then fetch" guard that
-doesn't pin the resolved IP across both calls. The proper fix is a
-custom transport that dials the validated IP directly while keeping
-the original hostname in the Host header (for TLS SNI / virtual
-hosts) — see follow-up task ``5a471003`` on the kanban. We treat that
-as out of scope here because exploitation requires running an
-authoritative DNS server for a public domain (non-trivial threshold).
-Until then, callers should at minimum re-call ``validate_public_url``
-immediately before each network operation to keep the rebinding
-window narrow.
+doesn't pin the resolved IP across both calls. ``memory.common.safe_http``
+pins it (resolve once, check, dial the checked address); external MCP servers
+use it. Callers still on this module should re-call ``validate_public_url``
+immediately before each network operation to keep the rebinding window narrow.
 """
 
 from __future__ import annotations

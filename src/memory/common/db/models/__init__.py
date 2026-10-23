@@ -59,10 +59,7 @@ from memory.common.db.models.slack import (
     SlackUserCredentials,
     slack_app_users,
 )
-from memory.common.db.models.mcp import (
-    MCPServer,
-    MCPServerAssignment,
-)
+from memory.common.db.models.mcp import ExternalMCPServer, ServerStatus
 from memory.common.db.models.observations import (
     ObservationContradiction,
     ReactionPattern,
@@ -296,8 +293,8 @@ __all__ = [
     "SlackUserCredentials",
     "SlackMessage",
     "slack_app_users",
-    "MCPServer",
-    "MCPServerAssignment",
+    "ExternalMCPServer",
+    "ServerStatus",
     # Users
     "User",
     "HumanUser",

@@ -93,11 +93,11 @@ async def test_run_input_is_capped(
 
 
 @pytest.mark.asyncio
-async def test_catalog_does_not_advertise_external_servers(db_session, admin_session):
+async def test_catalog_lists_only_your_external_servers(db_session, admin_session):
     with mcp_auth_context(admin_session.id):
         catalog = await agent.catalog.fn()
 
-    assert "mcp_servers" not in catalog
+    assert catalog["mcp_servers"] == []
 
 
 @pytest.mark.asyncio

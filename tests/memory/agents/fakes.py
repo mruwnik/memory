@@ -196,6 +196,9 @@ class FakeHub:
             for n in sorted(self.handlers)
         ]
 
+    def notices(self) -> list[str]:
+        return []
+
     async def call(self, call: ToolCall) -> ToolResult:
         self.calls.append(call.name)
         text, is_error = self.handlers[call.name](call.input)

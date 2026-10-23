@@ -18,7 +18,7 @@ from memory.common.llms.base import (
     ThinkingContent,
     LLMSettings,
 )
-from memory.common.llms.tools import MCPServer, ToolDefinition
+from memory.common.llms.tools import ToolDefinition
 from memory.workers.tasks.meetings import EXTRACTION_SCHEMA
 
 
@@ -103,7 +103,7 @@ def test_build_request_kwargs_basic(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(max_tokens=1000)
 
-    kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, None, settings)
 
     assert kwargs["model"] == "claude-haiku-5-5"
     assert kwargs["max_tokens"] == 1000
@@ -115,7 +115,7 @@ def test_build_request_kwargs_never_sends_sampling_params(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(temperature=0.2, top_p=0.9)
 
-    kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, None, settings)
 
     assert {"temperature", "top_p", "top_k"}.isdisjoint(kwargs)
 
@@ -125,7 +125,7 @@ def test_build_request_kwargs_with_system_prompt(provider):
     settings = LLMSettings()
 
     kwargs = provider._build_request_kwargs(
-        messages, "system prompt", None, None, settings
+        messages, "system prompt", None, settings
     )
 
     assert kwargs["system"] == "system prompt"
@@ -135,7 +135,7 @@ def test_build_request_kwargs_caches_system_prompt(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
 
     kwargs = provider._build_request_kwargs(
-        messages, "system prompt", None, None, LLMSettings(cache_system_prompt=True)
+        messages, "system prompt", None, LLMSettings(cache_system_prompt=True)
     )
 
     assert kwargs["system"] == [
@@ -158,7 +158,7 @@ def test_build_request_kwargs_with_tools(provider):
     ]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, None, tools, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, tools, settings)
 
     assert "tools" in kwargs
     assert len(kwargs["tools"]) == 1
@@ -187,7 +187,7 @@ def test_build_request_kwargs_thinking(
     )
     messages = [Message(role=MessageRole.USER, content="test")]
 
-    kwargs = provider._build_request_kwargs(messages, None, None, None, LLMSettings())
+    kwargs = provider._build_request_kwargs(messages, None, None, LLMSettings())
 
     assert kwargs.get("thinking") == expected_thinking
     assert kwargs.get("output_config") == expected_output_config
@@ -218,7 +218,7 @@ def test_build_request_kwargs_json_schema(model, enable_thinking, expected_outpu
     messages = [Message(role=MessageRole.USER, content="test")]
 
     kwargs = provider._build_request_kwargs(
-        messages, None, None, None, LLMSettings(json_schema=SCHEMA)
+        messages, None, None, LLMSettings(json_schema=SCHEMA)
     )
 
     assert kwargs["output_config"] == expected_output_config
@@ -237,87 +237,6 @@ def test_build_request_kwargs_json_schema(model, enable_thinking, expected_outpu
 def test_json_schemas_are_already_strict(schema):
     # The SDK's strict-mode normaliser leaves a schema the API accepts untouched
     assert transform_schema(schema) == schema
-
-
-@pytest.mark.parametrize(
-    "server, expected_toolset",
-    [
-        (
-            MCPServer(name="srv", url="https://mcp.example", token="tok"),
-            {"type": "mcp_toolset", "mcp_server_name": "srv"},
-        ),
-        (
-            MCPServer(
-                name="srv",
-                url="https://mcp.example",
-                token="tok",
-                allowed_tools=["a", "b"],
-            ),
-            {
-                "type": "mcp_toolset",
-                "mcp_server_name": "srv",
-                "default_config": {"enabled": False},
-                "configs": {"a": {"enabled": True}, "b": {"enabled": True}},
-            },
-        ),
-        (
-            MCPServer(
-                name="srv",
-                url="https://mcp.example",
-                token="tok",
-                disabled_tools=["c"],
-            ),
-            {
-                "type": "mcp_toolset",
-                "mcp_server_name": "srv",
-                "configs": {"c": {"enabled": False}},
-            },
-        ),
-        (
-            MCPServer(
-                name="srv",
-                url="https://mcp.example",
-                token="tok",
-                allowed_tools=["a", "c"],
-                disabled_tools=["c"],
-            ),
-            {
-                "type": "mcp_toolset",
-                "mcp_server_name": "srv",
-                "default_config": {"enabled": False},
-                "configs": {"a": {"enabled": True}, "c": {"enabled": False}},
-            },
-        ),
-    ],
-)
-def test_build_request_kwargs_mcp_servers(provider, server, expected_toolset):
-    messages = [Message(role=MessageRole.USER, content="test")]
-
-    kwargs = provider._build_request_kwargs(
-        messages, None, None, [server], LLMSettings()
-    )
-
-    assert kwargs["extra_headers"] == {"anthropic-beta": "mcp-client-2025-11-20"}
-    assert kwargs["extra_body"] == {
-        "mcp_servers": [
-            {
-                "type": "url",
-                "url": "https://mcp.example",
-                "name": "srv",
-                "authorization_token": "tok",
-            }
-        ]
-    }
-    assert kwargs["tools"] == [expected_toolset]
-
-
-def test_build_request_kwargs_without_mcp_sends_no_beta(provider):
-    messages = [Message(role=MessageRole.USER, content="test")]
-
-    kwargs = provider._build_request_kwargs(messages, None, None, None, LLMSettings())
-
-    assert "extra_headers" not in kwargs
-    assert "extra_body" not in kwargs
 
 
 def test_handle_stream_event_text_delta(provider):

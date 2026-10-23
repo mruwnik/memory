@@ -6,10 +6,9 @@ from memory.agents import toolhub
 from memory.agents.builtins import web_fetch
 from memory.agents.spec import AgentSpec, ExternalMCP
 from memory.agents.toolhub import ToolHubError, open_toolhub
-from memory.common import oauth
-from memory.common.db.models import MCPServer, MCPServerAssignment
 from memory.common.llms.neutral import ToolCall
 from memory.common.ssrf import UnsafeURLError
+from tests.memory.agents.fake_mcp import add_server, connect_oauth, reload
 from tests.memory.agents.fakes import POOR, RICH
 
 
@@ -130,170 +129,76 @@ async def test_local_web_fetch_refuses_internal_targets(url):
         await web_fetch(url)
 
 
-def make_server(
-    # A public IP literal: validating it needs no DNS lookup.
-    db,
-    user,
-    url="https://8.8.8.8/mcp",
-    assigned=True,
-    expires=None,
-    token="t",
-):
-    server = MCPServer(
-        name="ext",
-        mcp_server_url=url,
-        client_id="c",
-        access_token=token,
-        token_expires_at=expires,
-    )
-    db.add(server)
-    db.commit()
-    if assigned:
-        db.add(
-            MCPServerAssignment(
-                mcp_server_id=server.id, entity_type="User", entity_id=user.id
-            )
-        )
-        db.commit()
-    return server
+def external_spec(server_id, tools=("lookup",)):
+    return spec(mcp_servers=[{"server_id": server_id, "tools": list(tools)}])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kwargs,expected",
-    [
-        ({"assigned": False}, "is not assigned to you"),
-        ({"url": "http://127.0.0.1:8000/mcp"}, "is not a public URL"),
-        (
-            {"expires": datetime.now(timezone.utc) - timedelta(hours=1)},
-            "token expired and refresh failed \\(no refresh token stored\\); re-authorize",
-        ),
-        ({"token": None}, "is not authorized; authorize it"),
-    ],
-)
-async def test_external_servers_are_checked_before_connecting(
-    db_session, admin_user, admin_session, kwargs, expected
+async def test_external_tools_are_exposed_and_called_on_the_server(
+    db_session, regular_user, user_session, fake_mcp
 ):
-    server = make_server(db_session, admin_user, **kwargs)
-    s = spec(mcp_servers=[{"server_id": server.id, "tools": ["post"]}])
+    server = await connect_oauth(db_session, regular_user, fake_mcp)
+    exposed = f"mcp_{server.id}_lookup"
 
-    with pytest.raises(ToolHubError, match=expected):
-        async with hub(s, admin_session, ["*"]):
-            pass
+    async with hub(external_spec(server.id), user_session, ["teams"]) as h:
+        tools = {t.name: t for t in h.tools()}
+        result = await h.call(ToolCall(id="c", name=exposed, input={"query": "kiwi"}))
 
-
-class FakeTool:
-    def __init__(self, name):
-        self.name = name
-        self.description = f"{name} tool"
-        self.inputSchema = {"type": "object"}
-
-
-class FakeClient:
-    """Stands in for fastmcp.Client over HTTP; records the token it was given."""
-
-    tokens: list = []
-    fail_with: Exception | None = None
-
-    def __init__(self, url, auth=None):
-        FakeClient.tokens.append(auth)
-
-    async def __aenter__(self):
-        if FakeClient.fail_with is not None:
-            raise FakeClient.fail_with
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    async def list_tools(self):
-        return [FakeTool("post")]
-
-
-@pytest.fixture
-def fake_mcp_http(monkeypatch):
-    FakeClient.tokens = []
-    FakeClient.fail_with = None
-    monkeypatch.setattr(toolhub, "Client", FakeClient)
-    # example.com hosts would otherwise be resolved over the network.
-    monkeypatch.setattr(toolhub, "validate_public_url", lambda url: None)
-    monkeypatch.setattr(oauth, "validate_public_url", lambda url: None)
-    return FakeClient
+    assert list(tools) == [exposed]
+    assert tools[exposed].description == "[fake] Look something up."
+    assert (result.text, result.is_error) == ("found kiwi", False)
+    assert fake_mcp.calls == [("lookup", {"query": "kiwi"})]
 
 
 @pytest.mark.asyncio
-async def test_expired_tokens_are_refreshed_before_connecting(
-    db_session, admin_user, admin_session, fake_mcp_http, monkeypatch
+async def test_another_users_server_is_refused(
+    db_session, regular_user, admin_session, fake_mcp
 ):
-    async def endpoints(url):
-        return oauth.OAuthEndpoints(
-            authorization_endpoint="https://auth.example.com/authorize",
-            registration_endpoint="https://auth.example.com/register",
-            token_endpoint="https://auth.example.com/token",
-            redirect_uri="https://memory.example.com/callback",
-        )
+    server = await connect_oauth(db_session, regular_user, fake_mcp)
 
-    sent = []
-
-    async def post_token_request(url, data):
-        sent.append((url, data))
-        return {"access_token": "fresh", "refresh_token": "r2", "expires_in": 3600}
-
-    monkeypatch.setattr(oauth, "get_endpoints", endpoints)
-    monkeypatch.setattr(oauth, "post_token_request", post_token_request)
-    server = make_server(
-        db_session, admin_user, expires=datetime.now(timezone.utc) - timedelta(hours=1)
-    )
-    server.refresh_token = "r1"
-    db_session.commit()
-    s = spec(mcp_servers=[{"server_id": server.id, "tools": ["post"]}])
-
-    async with hub(s, admin_session, ["*"]) as h:
-        names = [t.name for t in h.tools()]
-
-    db_session.refresh(server)
-    assert names == [f"mcp_{server.id}_post"]
-    assert fake_mcp_http.tokens == ["fresh"]
-    assert sent == [
-        (
-            "https://auth.example.com/token",
-            {"grant_type": "refresh_token", "refresh_token": "r1", "client_id": "c"},
-        )
-    ]
-    assert (server.access_token, server.refresh_token) == ("fresh", "r2")
-
-
-@pytest.mark.asyncio
-async def test_a_rejected_token_names_the_server(
-    db_session, admin_user, admin_session, fake_mcp_http
-):
-    fake_mcp_http.fail_with = RuntimeError("401 Unauthorized")
-    server = make_server(db_session, admin_user)
-    s = spec(mcp_servers=[{"server_id": server.id, "tools": ["post"]}])
-
-    with pytest.raises(ToolHubError, match=r"MCP server ext: could not connect \(401"):
-        async with hub(s, admin_session, ["*"]):
+    with pytest.raises(ToolHubError, match=f"MCP server {server.id} is not yours"):
+        async with hub(external_spec(server.id), admin_session, ["*"]):
             pass
 
 
 @pytest.mark.asyncio
-async def test_internal_servers_are_refused_before_any_token_refresh(
-    db_session, admin_user, admin_session, monkeypatch
+@pytest.mark.parametrize("status", ["pending_auth", "needs_reauth", "error"])
+async def test_a_server_that_isnt_connected_fails_before_any_call(
+    db_session, regular_user, user_session, status
 ):
-    async def no_discovery(url):
-        raise AssertionError("discovery must not reach an internal server")
-
-    monkeypatch.setattr(oauth, "get_endpoints", no_discovery)
-    server = make_server(
-        db_session,
-        admin_user,
-        url="http://127.0.0.1:8000/mcp",
-        expires=datetime.now(timezone.utc) - timedelta(hours=1),
-    )
-    server.refresh_token = "r1"
+    server = add_server(db_session, regular_user, "https://mcp.example.com/mcp")
+    server.status = status
     db_session.commit()
-    s = spec(mcp_servers=[{"server_id": server.id, "tools": ["post"]}])
 
-    with pytest.raises(ToolHubError, match="is not a public URL"):
-        async with hub(s, admin_session, ["*"]):
+    with pytest.raises(ToolHubError, match=f"/ui/agents/servers/{server.id}"):
+        async with hub(external_spec(server.id), user_session, ["teams"]):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_a_token_about_to_expire_is_refreshed_first(
+    db_session, regular_user, user_session, fake_mcp
+):
+    server = await connect_oauth(db_session, regular_user, fake_mcp)
+    old = server.access_token
+    server.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+    db_session.commit()
+
+    async with hub(external_spec(server.id), user_session, ["teams"]) as h:
+        result = await h.call(
+            ToolCall(id="c", name=f"mcp_{server.id}_lookup", input={"query": "x"})
+        )
+
+    assert not result.is_error
+    assert reload(db_session, server.id).access_token not in (old, None)
+
+
+@pytest.mark.asyncio
+async def test_a_tool_the_server_no_longer_offers_fails_fast(
+    db_session, regular_user, user_session, fake_mcp
+):
+    server = await connect_oauth(db_session, regular_user, fake_mcp)
+
+    with pytest.raises(ToolHubError, match="gone \\(not offered by MCP server fake\\)"):
+        async with hub(external_spec(server.id, ["gone"]), user_session, ["teams"]):
             pass

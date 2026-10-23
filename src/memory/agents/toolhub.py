@@ -5,25 +5,40 @@ external MCP servers are called over HTTP with the owner's token, and builtins
 are either executed natively by the provider or locally here.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-import aiohttp
 import httpx
 from fastmcp import Client
+from mcp.types import Tool
 
 from memory.agents.builtins import BUILTIN_DEFS, search_backend, web_fetch
 from memory.agents.mcp_client import MemoryTools, memory_tools, render_content
 from memory.agents.spec import AgentSpec, ExternalMCP, external_tool_name, is_denied
-from memory.common.db.connection import make_session
-from memory.common.db.models import MCPServer, MCPServerAssignment
-from memory.common.oauth import refresh_mcp_token
+from memory.agents.external import load_detached, tool_entry, unusable
+from memory.agents.run_auth import (
+    RunSession,
+    StoredTokenAuth,
+    fresh_token,
+    run_auth,
+    unless_reauth,
+    write_back_tools,
+)
+from memory.common import settings
+from memory.common.db.models import ExternalMCPServer, ServerStatus
+from memory.common.mcp_oauth import (
+    UNREACHABLE,
+    MCPServerError,
+    server_page,
+    unusable_message,
+)
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities, ToolCall, ToolResult
 from memory.common.llms.tools import ToolDefinition
-from memory.common.ssrf import UnsafeURLError, validate_public_url
+from memory.common.ssrf import UnsafeURLError
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +52,34 @@ class ToolHubError(RuntimeError):
 class ToolHub(Protocol):
     def tools(self) -> list[ToolDefinition]: ...
 
+    def notices(self) -> list[str]:
+        """Things the run's transcript should mention, e.g. changed tools."""
+        ...
+
     async def call(self, call: ToolCall) -> ToolResult: ...
 
 
 class MCPToolHub:
-    def __init__(self, definitions: list[ToolDefinition], callers: dict[str, Caller]):
+    def __init__(
+        self,
+        definitions: list[ToolDefinition],
+        callers: dict[str, Caller],
+        notices: list[str] | None = None,
+    ):
         # Sorted once: the tool list is part of the cached, append-only prefix.
         self.definitions = sorted(definitions, key=lambda t: t.name)
         self.callers = callers
+        self.notice_texts = notices or []
 
     def tools(self) -> list[ToolDefinition]:
         return self.definitions
 
+    def notices(self) -> list[str]:
+        return self.notice_texts
+
     async def call(self, call: ToolCall) -> ToolResult:
-        """Never raises: a failing tool is an error result the model can react to."""
+        """A failing tool is an error result the model can react to; only an
+        external server's lost authorization (MCPServerError) is raised."""
         caller = self.callers.get(call.name)
         if caller is None:
             text = (
@@ -63,6 +92,10 @@ class MCPToolHub:
             )
         try:
             text, is_error = await caller(call.input)
+        except MCPServerError:
+            # Ends the run: the server's session is gone, and a run that quietly
+            # loses a tool is worse than a failed one.
+            raise
         except Exception as e:
             logger.exception("tool %s failed", call.name)
             text, is_error = f"{call.name} failed: {e}", True
@@ -78,9 +111,17 @@ def memory_caller(tools: MemoryTools, name: str) -> Caller:
     return call
 
 
-def http_mcp_caller(client: Client, name: str) -> Caller:
+def http_mcp_caller(client: Client, name: str, auth: StoredTokenAuth | None) -> Caller:
     async def call(arguments: dict[str, Any]) -> tuple[str, bool]:
-        result = await client.call_tool(name, arguments, raise_on_error=False)
+        result = await unless_reauth(
+            auth,
+            client.call_tool(
+                name,
+                arguments,
+                raise_on_error=False,
+                timeout=settings.MCP_CALL_TIMEOUT_SEC,
+            ),
+        )
         return render_content(result.content), result.is_error
 
     return call
@@ -101,66 +142,42 @@ def denied_tools(spec: AgentSpec) -> list[str]:
     return [t for t in raw if is_denied(t)]
 
 
-async def assigned_server(user_id: int, external: ExternalMCP) -> MCPServer:
-    """The owner's server, with a usable token and a public URL, ready to connect."""
-    with make_session() as db:
-        server = db.get(MCPServer, external.server_id)
-        assignment = (
-            db.query(MCPServerAssignment)
-            .filter(
-                MCPServerAssignment.mcp_server_id == external.server_id,
-                MCPServerAssignment.entity_type == "User",
-                MCPServerAssignment.entity_id == user_id,
-            )
-            .first()
-        )
-        if server is None or assignment is None:
-            raise ToolHubError(
-                f"MCP server {external.server_id} is not assigned to you"
-            )
-        if not server.access_token:
-            raise ToolHubError(
-                f"MCP server {server.name} is not authorized; authorize it before running this agent"
-            )
+async def usable_server(user_id: int, external: ExternalMCP) -> ExternalMCPServer:
+    """The owner's server with a current token, detached and ready to connect."""
+    try:
+        server = load_detached(external.server_id)
+    except MCPServerError:
+        server = None
+    if server is None or server.user_id != user_id:
+        raise ToolHubError(f"MCP server {external.server_id} is not yours")
+    if server.status != ServerStatus.CONNECTED:
+        raise ToolHubError(unusable_message(server))
+    soon = datetime.now(timezone.utc) + timedelta(
+        seconds=settings.MCP_TOKEN_REFRESH_SKEW_SEC
+    )
+    if server.token_expires_at is not None and server.token_expires_at < soon:
         try:
-            # The worker dials this URL itself (and refreshes through it), so it
-            # must not reach internal services.
-            validate_public_url(server.mcp_server_url)
-        except UnsafeURLError as e:
-            raise ToolHubError(
-                f"MCP server {server.name}: {server.mcp_server_url} is not a public URL ({e})"
-            ) from e
-        if server.token_expires_at and server.token_expires_at < datetime.now(
-            timezone.utc
-        ):
-            try:
-                await refresh_mcp_token(server)
-            except (ValueError, aiohttp.ClientError) as e:
-                raise ToolHubError(
-                    f"MCP server {server.name}: token expired and refresh failed ({e}); "
-                    "re-authorize it before running this agent"
-                ) from e
-            db.commit()
-            db.refresh(server)
-        db.expunge(server)
+            server.access_token = await fresh_token(server.id, server.access_token)
+        except MCPServerError as e:
+            raise ToolHubError(str(e)) from e
     return server
 
 
 async def connect_external(
-    stack: AsyncExitStack, server: MCPServer
-) -> tuple[Client, dict[str, Any]]:
+    stack: AsyncExitStack, server: ExternalMCPServer, auth: StoredTokenAuth | None
+) -> tuple[Client, list[Tool]]:
     try:
-        client = await stack.enter_async_context(
-            Client(server.mcp_server_url, auth=server.access_token)
-        )
-        offered = {t.name: t for t in await client.list_tools()}
+        async with asyncio.timeout(settings.MCP_CONNECT_TIMEOUT_SEC):
+            client = await stack.enter_async_context(RunSession(server, auth))
+            listed = await unless_reauth(auth, client.list_tools())
     except Exception as e:
-        # A revoked token surfaces as whatever the transport raises on a 401.
+        if auth and auth.failure:
+            raise ToolHubError(str(auth.failure)) from e
+        logger.warning("connecting to MCP server %s failed: %r", server.id, e)
         raise ToolHubError(
-            f"MCP server {server.name}: could not connect ({e}); "
-            "re-authorize it if its token was revoked"
+            f"MCP server '{server.name}': {UNREACHABLE} ({server_page(server.id)})"
         ) from e
-    return client, offered
+    return client, listed
 
 
 @asynccontextmanager
@@ -171,12 +188,16 @@ async def open_toolhub(
     scopes: list[str],
     session_token: str,
     capabilities: Capabilities,
+    saved_at: datetime | None = None,
 ) -> AsyncIterator[ToolHub]:
+    """`saved_at`: when the run's definition was saved, to note external tools
+    that changed since."""
     if bad := denied_tools(spec):
         raise ToolHubError(f"tools never callable inside a run: {', '.join(bad)}")
     definitions: list[ToolDefinition] = []
     callers: dict[str, Caller] = {}
     missing: list[str] = []
+    notices: list[str] = []
     async with AsyncExitStack() as stack:
         memory_names = [n for n in spec.tools if n not in BUILTIN_TOOLS]
         if memory_names:
@@ -200,21 +221,34 @@ async def open_toolhub(
                 callers[name] = memory_caller(memory, name)
 
         for external in spec.mcp_servers:
-            server = await assigned_server(user_id, external)
-            client, offered = await connect_external(stack, server)
+            server = await usable_server(user_id, external)
+            auth = run_auth(server)
+            client, listed = await connect_external(stack, server, auth)
+            offered = {t.name: t for t in listed}
+            cached = {t["name"]: t for t in write_back_tools(server, listed)}
             for name in external.tools:
                 if name not in offered:
                     missing.append(f"{name} (not offered by MCP server {server.name})")
                     continue
+                # The same limits as the cache: the live list could have grown since.
+                if reason := unusable(server.id, offered[name]):
+                    missing.append(f"{name} ({reason})")
+                    continue
+                entry = tool_entry(offered[name])
                 exposed = external_tool_name(server.id, name)
                 definitions.append(
                     ToolDefinition(
                         name=exposed,
-                        description=offered[name].description or "",
-                        input_schema=offered[name].inputSchema,
+                        description=f"[{server.name}] {entry['description']}",
+                        input_schema=entry["input_schema"],
                     )
                 )
-                callers[exposed] = http_mcp_caller(client, name)
+                callers[exposed] = http_mcp_caller(client, name, auth)
+                changed_at = cached.get(name, {}).get("changed_at")
+                if saved_at and changed_at and datetime.fromisoformat(changed_at) > saved_at:
+                    notices.append(
+                        f"tool {name} on MCP server '{server.name}' changed since this agent was saved"
+                    )
 
         native = capabilities.native_builtins()
         for name in sorted(set(spec.tools) & BUILTIN_TOOLS):
@@ -230,4 +264,4 @@ async def open_toolhub(
 
         if missing:
             raise ToolHubError(f"tools unavailable: {'; '.join(missing)}")
-        yield MCPToolHub(definitions, callers)
+        yield MCPToolHub(definitions, callers, notices)

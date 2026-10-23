@@ -6,6 +6,7 @@ with lookup by symbolic name.
 
 from __future__ import annotations
 import base64
+import functools
 import logging
 import re
 from datetime import datetime, timezone
@@ -36,10 +37,12 @@ def validate_symbol_name(name: str) -> bool:
     return bool(SYMBOL_PATTERN.match(name))
 
 
+@functools.lru_cache(maxsize=4)
 def derive_encryption_key(secret: str, salt: bytes) -> bytes:
     """Derive a Fernet-compatible key from a secret string.
 
     Uses PBKDF2 with SHA256 and 480,000 iterations (OWASP recommendation).
+    Cached: every encrypt/decrypt derives the key, and PBKDF2 is deliberately slow.
     """
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),

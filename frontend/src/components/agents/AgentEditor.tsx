@@ -23,6 +23,7 @@ export default function AgentEditor() {
   const [error, setError] = useState<string | null>(null)
   const [jsonValid, setJsonValid] = useState(true)
   const [saved, setSaved] = useState<string | null>(null)
+  const [changedTools, setChangedTools] = useState<string[]>([])
   const current = useMemo(() => JSON.stringify({ name, description, spec }), [name, description, spec])
   const dirty = current !== saved
 
@@ -42,6 +43,7 @@ export default function AgentEditor() {
         setName(d.name)
         setDescription(d.description)
         setSpec(d.spec)
+        setChangedTools(d.changed_tools ?? [])
         setSaved(JSON.stringify({ name: d.name, description: d.description, spec: d.spec }))
       })
       .catch(e => setError(e.message))
@@ -55,6 +57,7 @@ export default function AgentEditor() {
       const stored = await saveDefinition({ name, description, spec, id: definitionId })
       setName(stored.name)
       setSpec(stored.spec)
+      setChangedTools([])
       setSaved(JSON.stringify({ name: stored.name, description: stored.description, spec: stored.spec }))
       if (isNew) navigate(`/ui/agents/${stored.id}`)
     } catch (e) {
@@ -93,10 +96,16 @@ export default function AgentEditor() {
         <input aria-label="Name" maxLength={100} className="px-3 py-1.5 border rounded" placeholder="name" value={name} onChange={e => setName(e.target.value)} />
         <input aria-label="Description" className="px-3 py-1.5 border rounded" placeholder="description" value={description} onChange={e => setDescription(e.target.value)} />
       </div>
+      {changedTools.length > 0 && (
+        <div className="p-3 bg-amber-50 text-amber-800 rounded text-sm">
+          These external tools changed since this agent was saved: {changedTools.join(', ')}. Check them on their
+          server's page, then save the agent again to accept the change.
+        </div>
+      )}
       <SpecEditor value={spec} catalog={catalog} onChange={setSpec} onValidityChange={setJsonValid} />
       <div className="flex gap-2">
         <button className="px-3 py-1.5 bg-primary text-white rounded text-sm disabled:opacity-50"
-          disabled={!jsonValid || !dirty} onClick={save}>Save</button>
+          disabled={!jsonValid || (!dirty && changedTools.length === 0)} onClick={save}>Save</button>
         {!isNew && <button className="px-3 py-1.5 border border-red-300 text-red-700 rounded text-sm" onClick={remove}>Delete</button>}
       </div>
       {!isNew && (

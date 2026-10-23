@@ -193,7 +193,7 @@ def test_build_request_kwargs_basic(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
     settings = LLMSettings(temperature=0.5, max_tokens=1000)
 
-    kwargs = provider._build_request_kwargs(messages, None, None, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, None, settings)
 
     assert kwargs["model"] == "gpt-4o"
     assert kwargs["temperature"] == 0.5
@@ -206,7 +206,7 @@ def test_build_request_kwargs_with_system_prompt_standard_model(provider):
     settings = LLMSettings()
 
     kwargs = provider._build_request_kwargs(
-        messages, "system prompt", None, None, settings
+        messages, "system prompt", None, settings
     )
 
     # For gpt-4o, system prompt becomes system message
@@ -221,7 +221,7 @@ def test_build_request_kwargs_with_system_prompt_reasoning_model(
     settings = LLMSettings()
 
     kwargs = reasoning_provider._build_request_kwargs(
-        messages, "system prompt", None, None, settings
+        messages, "system prompt", None, settings
     )
 
     # For o1 models, system prompt becomes developer message
@@ -236,7 +236,7 @@ def test_build_request_kwargs_reasoning_model_uses_max_completion_tokens(
     settings = LLMSettings(max_tokens=2000)
 
     kwargs = reasoning_provider._build_request_kwargs(
-        messages, None, None, None, settings
+        messages, None, None, settings
     )
 
     # Reasoning models use max_completion_tokens
@@ -250,7 +250,7 @@ def test_build_request_kwargs_reasoning_model_no_temperature(reasoning_provider)
     settings = LLMSettings(temperature=0.7)
 
     kwargs = reasoning_provider._build_request_kwargs(
-        messages, None, None, None, settings
+        messages, None, None, settings
     )
 
     # Reasoning models don't support temperature
@@ -269,7 +269,7 @@ def test_build_request_kwargs_with_tools(provider):
     ]
     settings = LLMSettings()
 
-    kwargs = provider._build_request_kwargs(messages, None, tools, None, settings)
+    kwargs = provider._build_request_kwargs(messages, None, tools, settings)
 
     assert "tools" in kwargs
     assert len(kwargs["tools"]) == 1
@@ -281,7 +281,7 @@ def test_build_request_kwargs_with_json_schema(provider):
     messages = [Message(role=MessageRole.USER, content="test")]
 
     kwargs = provider._build_request_kwargs(
-        messages, None, None, None, LLMSettings(json_schema=schema)
+        messages, None, None, LLMSettings(json_schema=schema)
     )
 
     assert kwargs["response_format"] == {
@@ -295,7 +295,7 @@ def test_build_request_kwargs_with_stream(provider):
     settings = LLMSettings()
 
     kwargs = provider._build_request_kwargs(
-        messages, None, None, None, settings, stream=True
+        messages, None, None, settings, stream=True
     )
 
     assert kwargs["stream"] is True

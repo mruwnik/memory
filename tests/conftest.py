@@ -183,6 +183,9 @@ class MockRedis:
         self._data[key] = value
         return True
 
+    def getdel(self, key: str):
+        return self._data.pop(key, None)
+
     def delete(self, *keys: str) -> int:
         """Delete one or more keys. Returns count of deleted keys."""
         count = 0

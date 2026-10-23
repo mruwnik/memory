@@ -19,6 +19,17 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.caps import CapExceeded
+from memory.agents.external import (
+    AuthInput,
+    authorize,
+    configure,
+    load_detached,
+    STATUS_COLUMNS,
+    TOKEN_COLUMNS,
+    TOOL_COLUMNS,
+    refresh_tool_cache,
+    save,
+)
 from memory.agents.enqueue import SpecInvalid, TriggerInfo, enqueue_run
 from memory.agents.mcp_client import memory_tools
 from memory.agents.triggers import (
@@ -30,6 +41,7 @@ from memory.agents.triggers import (
     source_types,
 )
 from memory.agents.spec import (
+    external_tool_name,
     DEFAULT_AGENT_MODEL,
     MAX_NAME_CHARS,
     MAX_TEXT_CHARS,
@@ -51,6 +63,8 @@ from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentDefinition,
+    ExternalMCPServer,
+    ServerStatus,
     AgentRun,
     AgentRunStep,
     AgentTrigger,
@@ -61,6 +75,9 @@ from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
 from memory.common.scopes import SCOPE_AGENTS
+from memory.common.db.models.mcp import TRANSPORTS
+from memory.common.mcp_oauth import MCPServerError, describe, revoke
+from memory.common.rate_limit import check_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +114,37 @@ def owned_definition(
     if definition is None or definition.user_id != user_id:
         raise ValueError(f"unknown agent definition {definition_id}")
     return definition
+
+
+def changed_tools(db: DBSession, definition: AgentDefinition) -> list[str]:
+    """External tools whose schema or description changed after the definition
+    was last saved; re-saving acknowledges them."""
+    changed = []
+    for external in definition.spec.get("mcp_servers", []):
+        server = db.get(ExternalMCPServer, external["server_id"])
+        if server is None or server.user_id != definition.user_id:
+            continue
+        cached = {t["name"]: t for t in server.tools}
+        for name in external["tools"]:
+            changed_at = cached.get(name, {}).get("changed_at")
+            if changed_at and datetime.fromisoformat(changed_at) > definition.updated_at:
+                changed.append(external_tool_name(server.id, name))
+    return changed
+
+
+def external_writers(spec: AgentSpec, user_id: int) -> list[str]:
+    """Allowlisted external tools that don't declare themselves read-only."""
+    writers = []
+    with make_session() as db:
+        for external in spec.mcp_servers:
+            server = db.get(ExternalMCPServer, external.server_id)
+            if server is None or server.user_id != user_id:
+                continue
+            read_only = {t["name"] for t in server.tools if t["read_only"]}
+            writers += [
+                external_tool_name(server.id, n) for n in external.tools if n not in read_only
+            ]
+    return writers
 
 
 def trigger_summaries(db: DBSession, definition_ids: list[int]) -> dict[int, dict]:
@@ -142,11 +190,26 @@ async def invisible_tools(spec: AgentSpec) -> list[str]:
     return [n for n in names if n not in visible]
 
 
+def foreign_servers(spec: AgentSpec) -> list[str]:
+    user_id, _ = caller()
+    with make_session() as db:
+        return [
+            f"MCP server {s.server_id} is not yours"
+            for s in spec.mcp_servers
+            if (found := db.get(ExternalMCPServer, s.server_id)) is None
+            or found.user_id != user_id
+        ]
+
+
 async def check_spec(spec: AgentSpec) -> None:
-    errors = spec_errors(spec) + [
-        f"tool '{n}' is not visible to you (missing scope?)"
-        for n in await invisible_tools(spec)
-    ]
+    errors = (
+        spec_errors(spec)
+        + [
+            f"tool '{n}' is not visible to you (missing scope?)"
+            for n in await invisible_tools(spec)
+        ]
+        + foreign_servers(spec)
+    )
     if errors:
         raise ValueError("; ".join(errors))
 
@@ -240,6 +303,7 @@ async def list_all() -> dict:
                 | {
                     "last_run": last.serialize() if last else None,
                     "triggers": summaries[d.id],
+                    "changed_tools": changed_tools(db, d),
                 }
             )
     return {"definitions": result}
@@ -251,7 +315,8 @@ async def fetch(definition_id: int) -> dict:
     """One of your agent definitions."""
     user_id, _ = caller()
     with make_session() as db:
-        return owned_definition(db, definition_id, user_id).serialize()
+        definition = owned_definition(db, definition_id, user_id)
+        return definition.serialize() | {"changed_tools": changed_tools(db, definition)}
 
 
 @agent_mcp.tool()
@@ -390,8 +455,8 @@ def capabilities_json(caps: Capabilities) -> dict:
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def catalog() -> dict:
-    """What a definition can use: your visible tools, builtins, models and cost ceilings."""
-    caller()
+    """What a definition can use: your visible tools, builtins, models, cost
+    ceilings and your external MCP servers with their cached tools."""
     token, scopes = caller_token()
     async with memory_tools(token, scopes) as tools:
         listed = await tools.list()
@@ -420,6 +485,7 @@ async def catalog() -> dict:
         },
         "default_model": DEFAULT_AGENT_MODEL,
         "trigger_source_types": source_types(),
+        "mcp_servers": user_servers(),
     }
 
 
@@ -455,6 +521,7 @@ async def exposure_warnings(spec: AgentSpec) -> list[str]:
         async with memory_tools(token, scopes) as tools:
             read_only = {t.name for t in await tools.list() if t.read_only}
         writes = [n for n in names if n not in read_only]
+    writes += external_writers(spec, caller()[0])
     if not (egress or writes):
         return []
     return [
@@ -707,3 +774,187 @@ async def unschedule(task_id: str) -> dict:
     with make_session() as db:
         db.delete(owned_schedule(db, task_id, user_id))
     return {"deleted": task_id}
+
+
+# --- External MCP servers -------------------------------------------------
+
+
+def user_servers() -> list[dict]:
+    user_id, _ = caller()
+    with make_session() as db:
+        servers = (
+            db.query(ExternalMCPServer)
+            .filter(ExternalMCPServer.user_id == user_id)
+            .order_by(ExternalMCPServer.name)
+            .all()
+        )
+        return [s.serialize() for s in servers]
+
+
+def owned_server(db: DBSession, server_id: int, user_id: int) -> ExternalMCPServer:
+    server = db.get(ExternalMCPServer, server_id)
+    if server is None or server.user_id != user_id:
+        raise ValueError(f"unknown MCP server {server_id}")
+    return server
+
+
+def server_changes_allowed(user_id: int) -> int:
+    """Each change dials out to a user-chosen host, so they're rate-limited."""
+    if not check_rate_limit(
+        f"mcp-server-changes:{user_id}", settings.MCP_SERVER_CHANGES_PER_HOUR, 3600
+    ):
+        raise ValueError(
+            "too many MCP server changes this hour (MCP_SERVER_CHANGES_PER_HOUR); try later"
+        )
+    return user_id
+
+
+def serialized(server_id: int) -> dict:
+    with make_session() as db:
+        server = db.get(ExternalMCPServer, server_id)
+        return server.serialize() if server else {}
+
+
+def server_definitions(db: DBSession, user_id: int, server_id: int) -> list[str]:
+    definitions = db.query(AgentDefinition).filter(AgentDefinition.user_id == user_id)
+    return sorted(
+        d.name
+        for d in definitions
+        if any(s.get("server_id") == server_id for s in d.spec.get("mcp_servers", []))
+    )
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def server_list() -> dict:
+    """Your external MCP servers, with status and cached tools."""
+    return {"servers": user_servers()}
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def server_upsert(
+    name: str,
+    url: str,
+    transport: str = "http",
+    auth: dict | None = None,
+    server_id: int | None = None,
+) -> dict:
+    """Register or update one of your external MCP servers and connect to it.
+
+    `transport`: "http" (streamable HTTP) or "sse". `auth`: {"type": "auto" | "oauth" |
+    "headers" | "none", "headers": {...}, "client_id", "client_secret", "scopes"};
+    "auto" detects OAuth. Returns the server, `authorize_url` when you must authorize
+    it in a browser, `secret_sent_to` (the host a client secret you entered goes to),
+    and `error` when it couldn't connect. Changing the URL drops its tokens.
+    """
+    user_id = server_changes_allowed(caller()[0])
+    name = name.strip()
+    if not name or len(name) > MAX_NAME_CHARS:
+        raise ValueError(f"name must be 1 to {MAX_NAME_CHARS} characters")
+    if transport not in TRANSPORTS:
+        raise ValueError(f"transport must be one of {', '.join(TRANSPORTS)}")
+    try:
+        parsed = AuthInput.model_validate(auth or {})
+    except ValidationError as e:
+        # Not str(e): pydantic echoes input values, and these hold secrets.
+        raise ValueError(f"invalid auth: {describe(e)}") from e
+    with make_session() as db:
+        if server_id is None:
+            count = (
+                db.query(func.count(ExternalMCPServer.id))
+                .filter(ExternalMCPServer.user_id == user_id)
+                .scalar()
+            )
+            if count >= settings.MCP_MAX_SERVERS_PER_USER:
+                raise ValueError(
+                    f"you can register at most {settings.MCP_MAX_SERVERS_PER_USER} MCP "
+                    "servers (MCP_MAX_SERVERS_PER_USER)"
+                )
+            server = ExternalMCPServer(
+                user_id=user_id,
+                auth_type="none",
+                status=ServerStatus.PENDING_AUTH.value,
+            )
+            db.add(server)
+        else:
+            server = owned_server(db, server_id, user_id)
+            if (server.url, server.transport) != (url, transport):
+                # Credentials were issued for the old server.
+                server.clear_tokens()
+                server.clear_client()
+                server.headers = None
+        server.name, server.url, server.transport = name, url, transport
+        try:
+            db.flush()
+        except IntegrityError as e:
+            raise ValueError(f"you already have an MCP server named {name!r}") from e
+        server_id = server.id
+    try:
+        result = await configure(user_id, server_id, parsed)
+    except MCPServerError as e:
+        return {"server": serialized(server_id), "authorize_url": None, "error": str(e)}
+    return {
+        "server": serialized(server_id),
+        "authorize_url": result.authorize_url,
+        "secret_sent_to": result.secret_sent_to,
+        "error": None,
+    }
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def server_authorize(server_id: int) -> dict:
+    """A fresh URL to (re-)authorize one of your OAuth MCP servers in a browser."""
+    user_id = server_changes_allowed(caller()[0])
+    try:
+        return {"authorize_url": await authorize(user_id, server_id)}
+    except MCPServerError as e:
+        raise ValueError(str(e)) from e
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def server_refresh_tools(server_id: int) -> dict:
+    """Re-list a server's tools: what was added, removed, changed or dropped (and why)."""
+    user_id = server_changes_allowed(caller()[0])
+    try:
+        server = load_detached(server_id, user_id)
+        diff = await refresh_tool_cache(server)
+    except MCPServerError as e:
+        raise ValueError(str(e)) from e
+    save(server, TOOL_COLUMNS)
+    return {"diff": diff, "server": serialized(server_id)}
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def server_disconnect(server_id: int) -> dict:
+    """Revoke (best effort) and forget a server's tokens; it stays registered."""
+    user_id, _ = caller()
+    try:
+        server = load_detached(server_id, user_id)
+    except MCPServerError as e:
+        raise ValueError(str(e)) from e
+    await revoke(server)
+    server.clear_tokens()
+    server.status = ServerStatus.PENDING_AUTH.value
+    server.status_detail = "disconnected; authorize it again to use it"
+    save(server, [*TOKEN_COLUMNS, *STATUS_COLUMNS])
+    return serialized(server_id)
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def server_delete(server_id: int) -> dict:
+    """Delete one of your MCP servers. Refused while any of your agents use it."""
+    user_id, _ = caller()
+    with make_session() as db:
+        owned_server(db, server_id, user_id)
+        if users := server_definitions(db, user_id, server_id):
+            raise ValueError(f"MCP server {server_id} is used by {', '.join(users)}")
+    server = load_detached(server_id, user_id)
+    await revoke(server)
+    with make_session() as db:
+        db.query(ExternalMCPServer).filter(ExternalMCPServer.id == server_id).delete()
+    return {"deleted": server_id}

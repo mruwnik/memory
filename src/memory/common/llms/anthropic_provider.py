@@ -11,7 +11,6 @@ from memory.common import settings
 from memory.common.llms.base import (
     BaseLLMProvider,
     ImageContent,
-    MCPServer,
     LLMSettings,
     Message,
     MessageRole,
@@ -241,36 +240,11 @@ class AnthropicProvider(BaseLLMProvider):
         """Filter out system messages (handled separately in Anthropic)."""
         return message.role != MessageRole.SYSTEM
 
-    @staticmethod
-    def format_mcp_server(server: MCPServer) -> dict[str, Any]:
-        return {
-            "type": "url",
-            "url": server.url,
-            "name": server.name,
-            "authorization_token": server.token,
-        }
-
-    @staticmethod
-    def format_mcp_toolset(server: MCPServer) -> dict[str, Any]:
-        toolset: dict[str, Any] = {
-            "type": "mcp_toolset",
-            "mcp_server_name": server.name,
-        }
-        configs = {t: {"enabled": True} for t in server.allowed_tools or []} | {
-            t: {"enabled": False} for t in server.disabled_tools or []
-        }
-        if server.allowed_tools:
-            toolset["default_config"] = {"enabled": False}
-        if configs:
-            toolset["configs"] = configs
-        return toolset
-
     def _build_request_kwargs(
         self,
         messages: list[Message],
         system_prompt: str | None,
         tools: list[ToolDefinition] | None,
-        mcp_servers: list[MCPServer] | None,
         settings: LLMSettings,
     ) -> dict[str, Any]:
         """Build common request kwargs for API calls."""
@@ -298,14 +272,7 @@ class AnthropicProvider(BaseLLMProvider):
         if settings.stop_sequences:
             kwargs["stop_sequences"] = settings.stop_sequences
 
-        tool_defs = self._convert_tools(tools) or []
-        if mcp_servers:
-            kwargs["extra_headers"] = {"anthropic-beta": "mcp-client-2025-11-20"}
-            kwargs["extra_body"] = {
-                "mcp_servers": [self.format_mcp_server(s) for s in mcp_servers]
-            }
-            tool_defs += [self.format_mcp_toolset(s) for s in mcp_servers]
-        if tool_defs:
+        if tool_defs := self._convert_tools(tools):
             kwargs["tools"] = tool_defs
 
         output_config: dict[str, Any] = {}
@@ -502,12 +469,7 @@ class AnthropicProvider(BaseLLMProvider):
         settings: LLMSettings,
     ) -> dict[str, Any]:
         """A Message Batches API request equivalent to `generate` with the same arguments."""
-        params = self._build_request_kwargs(
-            messages, system_prompt, None, None, settings
-        )
-        # Client options, not request body fields
-        params.pop("extra_headers", None)
-        params |= params.pop("extra_body", None) or {}
+        params = self._build_request_kwargs(messages, system_prompt, None, settings)
         return {"custom_id": custom_id, "params": params}
 
     def generate(
@@ -515,13 +477,12 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings
+            messages, system_prompt, tools, settings
         )
 
         try:
@@ -538,13 +499,12 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> Iterator[StreamEvent]:
         """Generate a streaming response."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings
+            messages, system_prompt, tools, settings
         )
 
         try:
@@ -567,13 +527,12 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response asynchronously."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings
+            messages, system_prompt, tools, settings
         )
 
         try:
@@ -591,13 +550,12 @@ class AnthropicProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Generate a streaming response asynchronously."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings
+            messages, system_prompt, tools, settings
         )
 
         try:

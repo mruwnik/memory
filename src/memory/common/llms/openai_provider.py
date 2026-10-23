@@ -9,7 +9,6 @@ import openai
 from memory.common.llms.base import (
     BaseLLMProvider,
     ImageContent,
-    MCPServer,
     LLMSettings,
     Message,
     StreamEvent,
@@ -179,7 +178,6 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None,
         tools: list[ToolDefinition] | None,
-        mcp_servers: list[MCPServer] | None,
         settings: LLMSettings,
         stream: bool = False,
     ) -> dict[str, Any]:
@@ -190,7 +188,6 @@ class OpenAIProvider(BaseLLMProvider):
             messages: Conversation history
             system_prompt: Optional system prompt
             tools: Optional list of tools
-            mcp_servers: Optional list of MCP servers
             settings: LLM settings
             stream: Whether to enable streaming
 
@@ -349,13 +346,12 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings, stream=False
+            messages, system_prompt, tools, settings, stream=False
         )
 
         try:
@@ -378,13 +374,12 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> Iterator[StreamEvent]:
         """Generate a streaming response."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings, stream=True
+            messages, system_prompt, tools, settings, stream=True
         )
 
         if kwargs.get("stream"):
@@ -411,13 +406,12 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> str:
         """Generate a non-streaming response asynchronously."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings, stream=False
+            messages, system_prompt, tools, settings, stream=False
         )
 
         try:
@@ -433,13 +427,12 @@ class OpenAIProvider(BaseLLMProvider):
         messages: list[Message],
         system_prompt: str | None = None,
         tools: list[ToolDefinition] | None = None,
-        mcp_servers: list[MCPServer] | None = None,
         settings: LLMSettings | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Generate a streaming response asynchronously."""
         settings = settings or LLMSettings()
         kwargs = self._build_request_kwargs(
-            messages, system_prompt, tools, mcp_servers, settings, stream=True
+            messages, system_prompt, tools, settings, stream=True
         )
 
         try:

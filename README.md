@@ -288,6 +288,18 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `AGENT_MAX_RUNS_PER_HOUR`         | `60`                 | Most runs one agent definition may start per hour; definitions can only lower it |
 | `AGENT_MAX_TRIGGERS_PER_USER`     | `20`                 | Most ingest triggers a user may have enabled at once           |
 | `AGENT_WORKER_CONCURRENCY`        | `2`                  | Concurrent agent runs in `agents-worker` (~270MB each; raise its memory limit with it) |
+| `MCP_BLOCKED_NETWORKS`            | *(empty)*            | Comma-separated CIDRs external MCP servers may never reach, on top of the built-in list (see Security notes) |
+| `MCP_BLOCK_CONTAINER_NETWORKS`    | `false` (`1` in the images) | Also block every network the container is attached to; fails closed if they can't be read |
+| `MCP_MAX_SERVERS_PER_USER`        | `20`                 | External MCP servers one user may register                     |
+| `MCP_MAX_TOOLS_PER_SERVER`        | `200`                | Tools cached per external server; extras are reported, not offered |
+| `MCP_MAX_TOOL_DESCRIPTION_CHARS`  | `4000`               | External tool descriptions are truncated to this               |
+| `MCP_MAX_TOOL_SCHEMA_BYTES`       | `16384`              | External tools with a larger input schema are unavailable      |
+| `MCP_MAX_RESPONSE_BYTES`          | `10485760`           | Largest response (or SSE event) read from an external server   |
+| `MCP_CALL_TIMEOUT_SEC`            | `120`                | Timeout for one external tool call                             |
+| `MCP_CONNECT_TIMEOUT_SEC`         | `30`                 | Deadline for connecting to an external server and listing its tools |
+| `MCP_TOKEN_REFRESH_SKEW_SEC`      | `300`                | Refresh OAuth tokens this long before they expire              |
+| `MCP_OAUTH_STATE_TTL_SEC`         | `600`                | How long an external server's authorization link stays valid   |
+| `MCP_SERVER_CHANGES_PER_HOUR`     | `30`                 | Registrations, authorizations and tool refreshes per user per hour |
 
 See `src/memory/common/settings.py` for the full list and `docker-compose.yaml` for how variables map into containers.
 
@@ -298,6 +310,8 @@ See `src/memory/common/settings.py` for the full list and `docker-compose.yaml` 
 - The OAuth redirect-uri allowlist defaults to `http://localhost,http://127.0.0.1` and accepts ephemeral ports for those loopback hosts (RFC 8252 native-app flow). Set `OAUTH_REDIRECT_URI_ALLOWLIST` to add additional origins for browser-based MCP clients.
 - Containers run as non-root with `no-new-privileges=true`.
 - `/health` is unauthenticated and reports the running version and alembic revision (never content), so anyone who can reach it can tell which release you run.
+- **External MCP servers can reach your LAN.** Users register servers by URL, and private and LAN addresses are allowed so a server on your own network (a Raspberry Pi, say) works. That means **every user of the instance** can make the server dial hosts on those networks. Always blocked, with no override: loopback, link-local and cloud metadata (169.254.0.0/16, fe80::/10, fd00:ec2::254, 100.100.100.200), unspecified/multicast/broadcast, the default docker and podman pools (172.16.0.0/12, 10.88.0.0/16, 10.89.0.0/16), this instance's own host on every port, the compose services by name and address, and (in the images) every network the container is attached to. Each address is checked when it's dialed, so DNS rebinding doesn't get around it. Block more with `MCP_BLOCKED_NETWORKS`; if the host publishes ports on `0.0.0.0`, add its own LAN address (`MCP_BLOCKED_NETWORKS=192.168.1.10/32`), and on a multi-network host add each network it shouldn't reach. Fine for single-owner deployments; think before giving other people the `agents` scope.
+- External MCP tool descriptions and results are untrusted text, like `web_fetch` output. An agent whose allowlist combines an external tool, your private data (e.g. `core_search`) and a way out (`web_fetch`, or any tool with side effects, external or not) can be steered by injected instructions into leaking that data. Ingest triggers feed unvetted content to an agent the same way. The editor warns about these combinations; it doesn't block them. Registration and connection errors are deliberately generic ("couldn't reach an MCP server at that URL"); the details are in the api logs.
 
 ## Troubleshooting
 

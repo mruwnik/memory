@@ -14,7 +14,15 @@ from memory.agents.spec import (
 from memory.common.celery_app import RUN_AGENT, app
 from memory.common.db.connection import DBSession
 from memory.api.auth import TokenLookup, system_scopes
-from memory.common.db.models import AgentDefinition, AgentRun, APIKey, User
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentRun,
+    APIKey,
+    ExternalMCPServer,
+    ServerStatus,
+    User,
+)
+from memory.common.mcp_oauth import unusable_message
 
 
 class SpecInvalid(ValueError):
@@ -28,6 +36,18 @@ class TriggerInfo:
     kind: str  # manual | mcp | cron | ingest | relative | webhook | discord | chain | check
     ref: dict[str, Any] = field(default_factory=dict)
     dedupe_key: str | None = None
+
+
+def server_errors(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
+    """Why a run of `spec` by `user_id` couldn't use its external servers."""
+    errors = []
+    for external in spec.mcp_servers:
+        server = db.get(ExternalMCPServer, external.server_id)
+        if server is None or server.user_id != user_id:
+            errors.append(f"MCP server {external.server_id} is not yours")
+        elif server.status != ServerStatus.CONNECTED:
+            errors.append(unusable_message(server))
+    return errors
 
 
 def enqueue_run(
@@ -50,7 +70,8 @@ def enqueue_run(
     """
     if len(input) > MAX_TEXT_CHARS:
         raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
-    if errors := spec_errors(spec):
+    # Checked here too so cron doesn't start runs that would fail at hub open.
+    if errors := spec_errors(spec) + server_errors(db, user_id, spec):
         raise SpecInvalid(errors)
     if definition is not None:
         # Serialises a definition's enqueues until this run is committed, so

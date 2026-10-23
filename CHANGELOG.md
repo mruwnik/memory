@@ -16,6 +16,9 @@ section has nothing in it:
 
 ### Required env vars
 
+- `SECRETS_ENCRYPTION_KEY` must be set to register external MCP servers (their
+  tokens, client secrets and headers are encrypted with it). Registration fails
+  with a clear error without it; nothing else changes.
 - The api and workers now check settings at startup and refuse to start,
   listing everything that's missing. Both require `VOYAGE_API_KEY`. Workers
   also require the key for `SUMMARIZER_MODEL`'s provider: `ANTHROPIC_API_KEY`
@@ -24,7 +27,12 @@ section has nothing in it:
 
 ### Manual steps
 
-None.
+- External MCP servers must be registered again (Agents → MCP servers): the
+  migration drops the old `mcp_servers` and `mcp_server_assignments` tables,
+  whose tokens were stored in plaintext.
+- The OAuth redirect URI for external MCP servers is now
+  `{SERVER_URL}/auth/mcp/callback`; `/auth/callback/discord` is gone. Update any
+  OAuth app you registered by hand with the old URI.
 
 ### Other changes for operators
 
@@ -90,6 +98,31 @@ None.
   30 days.
 - `core_list_items` and `core_count_items` take `since`, `until` (when the
   content happened), `channel`, `author` and `repo`.
+- Agents can call tools on external MCP servers that each user registers and
+  authorizes (OAuth with dynamic or manual client registration, static headers,
+  or none; streamable HTTP or SSE). New `agent_server_*` MCP tools and dashboard
+  pages under `/ui/agents/servers`. stdio servers aren't supported.
+- External MCP servers may be on private and LAN addresses (RFC 1918, ULA,
+  CGNAT): **every user of the instance can reach your LAN through them**. Always
+  blocked: loopback, link-local and cloud metadata, the default docker/podman
+  address pools (172.16.0.0/12, 10.88.0.0/16, 10.89.0.0/16), this instance's own
+  host on every port, the compose services, and, in the api and workers images
+  (`MCP_BLOCK_CONTAINER_NETWORKS=1`), every network the container is attached
+  to. Block more with `MCP_BLOCKED_NETWORKS` (comma-separated CIDRs). If the host
+  publishes ports on 0.0.0.0, add its own LAN address, e.g.
+  `MCP_BLOCKED_NETWORKS=192.168.1.10/32`; on a host attached to several networks,
+  add each one it shouldn't reach.
+- New optional settings: `MCP_MAX_SERVERS_PER_USER` (20), `MCP_MAX_TOOLS_PER_SERVER`
+  (200), `MCP_MAX_TOOL_DESCRIPTION_CHARS` (4000), `MCP_MAX_TOOL_SCHEMA_BYTES` (16384),
+  `MCP_MAX_RESPONSE_BYTES` (10 MiB), `MCP_CALL_TIMEOUT_SEC` (120),
+  `MCP_CONNECT_TIMEOUT_SEC` (30), `MCP_TOKEN_REFRESH_SKEW_SEC` (300),
+  `MCP_OAUTH_STATE_TTL_SEC` (600), `MCP_SERVER_CHANGES_PER_HOUR` (30),
+  `MCP_BLOCKED_NETWORKS` (empty) and `MCP_BLOCK_CONTAINER_NETWORKS` (set to 1 by
+  the images; if the route table can't be read, external servers can't be dialed).
+- Agent tool names are now limited to 64 characters (the strictest provider
+  limit), so an external tool whose `mcp_<server id>_<name>` is longer is listed
+  as unavailable.
+- The unused MCP connector plumbing in the LLM providers (`mcp_servers=`) is removed.
 
 ### Migrations
 
@@ -98,6 +131,9 @@ None.
   `agent_run_steps` tables, and adds two nullable columns to `api_keys`. Fast.
 - `20261025_agent_triggers`: creates the empty `agent_triggers` and
   `agent_trigger_matches` tables. Fast.
+- `20261026_external_mcp_servers`: drops `mcp_server_assignments` and
+  `mcp_servers` (their rows are lost; see Manual steps) and creates the empty
+  `external_mcp_servers` table. Fast.
 
 ### Post-deploy commands
 

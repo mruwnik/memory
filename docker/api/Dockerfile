@@ -56,6 +56,8 @@ COPY db/migrations ./db/migrations
 # Create directories for app
 RUN mkdir -p /app/memory_files
 ENV PYTHONPATH="/app"
+# External MCP servers must never reach the stack's own container networks.
+ENV MCP_BLOCK_CONTAINER_NETWORKS=1
 
 # Create user and set permissions
 RUN useradd -m kb

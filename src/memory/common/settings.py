@@ -304,6 +304,27 @@ AGENT_CONTEXT_TRIM_TO_TOKENS = int(os.getenv("AGENT_CONTEXT_TRIM_TO_TOKENS", "60
 AGENT_STEP_RETENTION_DAYS = int(os.getenv("AGENT_STEP_RETENTION_DAYS", "90"))
 
 
+# External MCP servers (registered per user, called by agent runs)
+MCP_MAX_SERVERS_PER_USER = int(os.getenv("MCP_MAX_SERVERS_PER_USER", "20"))
+MCP_MAX_TOOLS_PER_SERVER = int(os.getenv("MCP_MAX_TOOLS_PER_SERVER", "200"))
+MCP_MAX_TOOL_DESCRIPTION_CHARS = int(os.getenv("MCP_MAX_TOOL_DESCRIPTION_CHARS", "4000"))
+MCP_MAX_TOOL_SCHEMA_BYTES = int(os.getenv("MCP_MAX_TOOL_SCHEMA_BYTES", "16384"))
+MCP_MAX_RESPONSE_BYTES = int(os.getenv("MCP_MAX_RESPONSE_BYTES", str(10 * 1024 * 1024)))
+MCP_CALL_TIMEOUT_SEC = float(os.getenv("MCP_CALL_TIMEOUT_SEC", "120"))
+# Connecting and listing tools, as one deadline (a run holds a worker slot meanwhile).
+MCP_CONNECT_TIMEOUT_SEC = float(os.getenv("MCP_CONNECT_TIMEOUT_SEC", "30"))
+MCP_TOKEN_REFRESH_SKEW_SEC = int(os.getenv("MCP_TOKEN_REFRESH_SKEW_SEC", "300"))
+MCP_OAUTH_STATE_TTL_SEC = int(os.getenv("MCP_OAUTH_STATE_TTL_SEC", "600"))
+# Registrations, authorizations and refreshes per user: each one dials out.
+MCP_SERVER_CHANGES_PER_HOUR = int(os.getenv("MCP_SERVER_CHANGES_PER_HOUR", "30"))
+# Comma-separated CIDRs external MCP servers may never reach, on top of the
+# always-blocked loopback, link-local, container pools and the stack's own hosts.
+MCP_BLOCKED_NETWORKS = os.getenv("MCP_BLOCKED_NETWORKS", "")
+# Set in the container images: also block every network this container is
+# attached to, failing closed if the route table can't be read.
+MCP_BLOCK_CONTAINER_NETWORKS = boolean_env("MCP_BLOCK_CONTAINER_NETWORKS", False)
+
+
 # Search settings
 ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
 ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)

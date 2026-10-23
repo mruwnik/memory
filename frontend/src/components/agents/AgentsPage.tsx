@@ -19,6 +19,7 @@ export default function AgentsPage() {
         <h1 className="text-2xl font-semibold">Agents</h1>
         <div className="flex gap-2">
           <Link to="/ui/agents/runs" className="px-3 py-1.5 border rounded text-sm">Runs</Link>
+          <Link to="/ui/agents/servers" className="px-3 py-1.5 border rounded text-sm">MCP servers</Link>
           <Link to="/ui/agents/new" className="px-3 py-1.5 bg-primary text-white rounded text-sm">New agent</Link>
         </div>
       </div>
@@ -32,6 +33,12 @@ export default function AgentsPage() {
               <Link to={`/ui/agents/${d.id}`} className="font-medium text-primary">{d.name}</Link>
               <div className="text-sm text-slate-500">{d.description}</div>
               <div className="text-xs text-slate-400 font-mono">{d.spec.model}</div>
+              {!!d.changed_tools?.length && (
+                <span className="inline-block mt-1 mr-1 px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800"
+                  title={d.changed_tools.join(', ')}>
+                  {d.changed_tools.length} external tool{d.changed_tools.length > 1 ? 's' : ''} changed
+                </span>
+              )}
               {!!d.triggers?.tripped && (
                 <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">
                   {d.triggers.tripped} trigger{d.triggers.tripped > 1 ? 's' : ''} tripped
