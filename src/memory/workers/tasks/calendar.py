@@ -20,6 +20,7 @@ from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
 from memory.parsers.google_drive import refresh_credentials
 from memory.common.content_processing import (
+    clear_item_chunks,
     create_task_result,
     process_content_item,
 )
@@ -429,10 +430,18 @@ def sync_calendar_event(
             )
 
         if existing:
+            old_text = existing.embedding_text
             _update_existing_event(existing, event_data)
             reconcile_people(session, existing, event_data.get("attendees", []))
-            session.commit()
-            return create_task_result(existing, "updated")
+            # Re-syncs are the only retry path for an event whose embed failed.
+            if (
+                existing.embed_status in ("STORED", "SKIPPED")
+                and existing.embedding_text == old_text
+            ):
+                session.commit()
+                return create_task_result(existing, "updated")
+            clear_item_chunks(existing, session)
+            return process_content_item(existing, session)
 
         calendar_event = _create_calendar_event(account, event_data)
 

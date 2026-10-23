@@ -580,40 +580,48 @@ def test_reingest_empty_source_items_success(db_session, item_type):
     mock_reingest.assert_has_calls(expected_calls, any_order=True)
 
 
-def test_reingest_empty_source_items_no_empty_items(db_session):
-    """Test when there are no empty source items."""
-    # Create an item with chunks
+@pytest.mark.parametrize(
+    "embed_status, has_chunks, requeued",
+    [
+        ("RAW", False, True),
+        ("FAILED", False, True),
+        # A failed Qdrant push leaves chunks behind but the item unfetchable.
+        ("FAILED", True, True),
+        ("STORED", False, True),
+        ("STORED", True, False),
+        ("SKIPPED", False, False),
+    ],
+)
+def test_reingest_empty_source_items_selection(
+    db_session, embed_status, has_chunks, requeued
+):
     item = MailMessage(
-        sha256=b"with_chunks_hash" + bytes(16),
+        sha256=b"selection_hash" + bytes(18),
         tags=["test"],
         size=100,
         mime_type="message/rfc822",
-        embed_status="STORED",
-        message_id="<with_chunks@example.com>",
-        subject="With Chunks Subject",
+        embed_status=embed_status,
+        message_id="<selection@example.com>",
+        subject="Subject",
         sender="sender@example.com",
         recipients=["recipient@example.com"],
-        content="Content with chunks",
+        content="Content",
         folder="INBOX",
         modality="mail",
     )
     db_session.add(item)
     db_session.flush()
-
-    chunk = Chunk(
-        id=str(uuid.uuid4()),
-        source=item,
-        content="Test chunk content",
-        embedding_model="test-model",
-    )
-    db_session.add(chunk)
+    chunks = [
+        Chunk(id=str(uuid.uuid4()), source=item, content="c", embedding_model="m")
+    ]
+    db_session.add_all(chunks[: int(has_chunks)])
     db_session.commit()
 
     with patch.object(reingest_item, "delay") as mock_reingest:
         result = reingest_empty_source_items("MailMessage")
 
-    assert result == {"status": "success", "items": 0}
-    mock_reingest.assert_not_called()
+    assert result == {"status": "success", "items": int(requeued)}
+    assert mock_reingest.call_args_list == [call(item.id, "MailMessage")][: int(requeued)]
 
 
 def test_reingest_empty_source_items_invalid_type(db_session):

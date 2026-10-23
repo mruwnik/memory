@@ -465,8 +465,12 @@ def test_needs_reindex_project_fields_changed(github_repo, db_session):
     assert _needs_reindex(existing, new_data) is True
 
 
-def test_needs_reindex_no_changes(github_repo, db_session):
-    """Test no reindex when nothing changed."""
+@pytest.mark.parametrize(
+    "embed_status, expected",
+    [("STORED", False), ("FAILED", True), ("RAW", True), ("QUEUED", True)],
+)
+def test_needs_reindex_unchanged_content(github_repo, db_session, embed_status, expected):
+    """Unchanged content only skips reindexing once the item is fully embedded."""
     existing = GithubItem(
         repo_path="testorg/testrepo",
         repo_id=github_repo.id,
@@ -478,6 +482,7 @@ def test_needs_reindex_no_changes(github_repo, db_session):
         project_fields={"Status": "Todo"},
         modality="text",
         sha256=b"x" * 32,
+        embed_status=embed_status,
     )
     db_session.add(existing)
     db_session.commit()
@@ -504,7 +509,7 @@ def test_needs_reindex_no_changes(github_repo, db_session):
         pr_data=None,
     )
 
-    assert _needs_reindex(existing, new_data) is False
+    assert _needs_reindex(existing, new_data) is expected
 
 
 # =============================================================================

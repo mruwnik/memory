@@ -222,6 +222,10 @@ def _create_github_item(
 
 def _needs_reindex(existing: GithubItem, new_data: GithubIssueData) -> bool:
     """Check if an existing item needs reindexing based on content changes."""
+    # Re-syncs are the only retry path for an item whose embed failed.
+    if existing.embed_status != "STORED":
+        return True
+
     # Compare content hash
     if existing.content_hash != new_data["content_hash"]:
         return True

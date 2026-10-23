@@ -400,7 +400,7 @@ def test_sync_calendar_event_update_existing(
 
     result = calendar.sync_calendar_event(caldav_account.id, serialized)
 
-    assert result["status"] == "updated"
+    assert result["status"] == "processed"
 
     # Verify event was updated
     db_session.expire_all()
@@ -411,6 +411,59 @@ def test_sync_calendar_event_update_existing(
     )
     assert event.event_title == "Updated Team Meeting"
     assert event.location == "Conference Room B"
+
+
+@pytest.mark.parametrize(
+    "prior_status, changes, reembedded",
+    [
+        ("STORED", {}, False),
+        ("STORED", {"start_time": datetime(2024, 1, 16, 10, tzinfo=timezone.utc)}, False),
+        ("STORED", {"title": "Renamed Meeting"}, True),
+        ("STORED", {"description": "New agenda"}, True),
+        ("SKIPPED", {}, False),
+        ("FAILED", {}, True),
+        ("QUEUED", {}, True),
+    ],
+)
+def test_sync_calendar_event_reembeds_stale_events(
+    mock_event_data, caldav_account, db_session, qdrant, prior_status, changes, reembedded
+):
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    old_chunk_ids = {c.id for c in event.chunks}
+    event.embed_status = prior_status
+    db_session.commit()
+
+    calendar.sync_calendar_event(
+        caldav_account.id, _serialize_event_data({**mock_event_data, **changes})
+    )
+
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    assert ({c.id for c in event.chunks} != old_chunk_ids) == reembedded
+    assert event.embed_status == ("STORED" if reembedded else prior_status)
+
+
+def test_sync_calendar_event_long_unchanged_event_is_not_resummarized(
+    mock_event_data, caldav_account, db_session, qdrant
+):
+    long_event = {**mock_event_data, "description": "Dial-in details. " * 200}
+    summaries = iter(range(100))
+    with patch(
+        "memory.common.summarizer.summarize",
+        side_effect=lambda *a, **k: (f"summary {next(summaries)}", []),
+    ) as summarize:
+        calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(long_event))
+        event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+        old_chunk_ids = {c.id for c in event.chunks}
+        summarize.reset_mock()
+
+        calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(long_event))
+
+    db_session.expire_all()
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    assert {c.id for c in event.chunks} == old_chunk_ids
+    summarize.assert_not_called()
 
 
 def test_sync_calendar_event_without_external_id(caldav_account, db_session, qdrant):
@@ -767,7 +820,7 @@ def test_update_event_adds_new_person_associations(
     serialized = _serialize_event_data(mock_event_data)
     result = calendar.sync_calendar_event(caldav_account.id, serialized)
 
-    assert result["status"] == "updated"
+    assert result["status"] == "processed"
     db_session.expire_all()
     event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
     assert {p.identifier for p in event.people} == {"alice", "bob", "charlie"}
@@ -791,7 +844,7 @@ def test_update_event_removes_old_person_associations(
     serialized = _serialize_event_data(mock_event_data)
     result = calendar.sync_calendar_event(caldav_account.id, serialized)
 
-    assert result["status"] == "updated"
+    assert result["status"] == "processed"
     db_session.expire_all()
     event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
     assert {p.identifier for p in event.people} == {"alice"}
@@ -815,7 +868,7 @@ def test_update_event_replaces_all_person_associations(
     serialized = _serialize_event_data(mock_event_data)
     result = calendar.sync_calendar_event(caldav_account.id, serialized)
 
-    assert result["status"] == "updated"
+    assert result["status"] == "processed"
     db_session.expire_all()
     event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
     assert {p.identifier for p in event.people} == {"bob", "charlie"}

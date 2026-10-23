@@ -234,7 +234,14 @@ def reingest_empty_source_items(item_type: str):
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
-        item_ids = session.query(class_.id).filter(~class_.chunks.any()).all()
+        item_ids = (
+            session.query(class_.id)
+            .filter(
+                or_(~class_.chunks.any(), class_.embed_status == "FAILED"),
+                class_.embed_status != "SKIPPED",
+            )
+            .all()
+        )
 
         logger.info(f"Found {len(item_ids)} items to reingest")
 

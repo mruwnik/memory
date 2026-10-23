@@ -1925,7 +1925,8 @@ class CalendarEvent(SourceItem):
             "tags": self.tags,
         }
 
-    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+    @property
+    def embedding_text(self) -> str:
         parts = [self.event_title]
 
         if self.content:
@@ -1942,8 +1943,10 @@ class CalendarEvent(SourceItem):
         if meeting_link := metadata.get("meeting_link"):
             parts.append(f"Meeting link: {meeting_link}")
 
-        text = "\n\n".join(parts)
-        return extract.extract_text(text, modality="calendar")
+        return "\n\n".join(parts)
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        return extract.extract_text(self.embedding_text, modality="calendar")
 
     @classmethod
     def get_collections(cls) -> list[str]:

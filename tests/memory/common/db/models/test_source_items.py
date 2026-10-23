@@ -20,7 +20,10 @@ from memory.common.db.models.source_items import (
     SlackMessage,
     Photo,
     Comic,
+    Task,
+    CalendarEvent,
 )
+from memory.common.collections import ALL_COLLECTIONS
 from memory.common.db.models.source_item import SourceItem, truncate_preview
 from memory.common.db.models import Person
 from tests.data.contents import SAMPLE_MARKDOWN
@@ -1145,3 +1148,20 @@ def test_comic_preview_text_no_title_falls_back_to_filename():
 def test_comic_preview_text_no_title_no_filename():
     comic = Comic(sha256=b"co4", modality="comic", title=None, author=None, filename=None)
     assert comic.preview_text is None
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        Task(sha256=b"t1", task_title="Send the quarterly report", content=None),
+        Task(sha256=b"t2", task_title="Book flights", content="For the offsite", due_date=datetime(2026, 5, 1)),
+        CalendarEvent(sha256=b"c1", event_title="Standup", start_time=datetime(2026, 5, 1)),
+    ],
+)
+def test_data_chunks_target_an_embeddable_collection(item):
+    item.people = []
+    chunks = item.data_chunks()
+
+    assert chunks
+    assert all(c.collection_name in ALL_COLLECTIONS for c in chunks)
+    assert all(c.embedding_model == settings.TEXT_EMBEDDING_MODEL for c in chunks)
