@@ -32,6 +32,24 @@ def mock_embed(mock_voyage_client):
 
 
 @pytest.mark.parametrize(
+    "input_type, timeout, attempts",
+    [
+        ("query", settings.QUERY_EMBEDDING_TIMEOUT, 2),
+        ("document", 60.0, 3),
+    ],
+)
+def test_embed_chunks_query_fails_fast(mock_voyage_client, monkeypatch, input_type, timeout, attempts):
+    mock_voyage_client.embed = Mock(side_effect=RuntimeError("voyage down"))
+    monkeypatch.setattr(embedding.time, "sleep", Mock())
+
+    with pytest.raises(embedding.EmbeddingError):
+        embed_chunks([["q"]], input_type=input_type)
+
+    assert embedding.voyageai.Client.call_args.kwargs["timeout"] == timeout
+    assert mock_voyage_client.embed.call_count == attempts
+
+
+@pytest.mark.parametrize(
     "mime_type, expected_modality",
     [
         ("text/plain", "text"),

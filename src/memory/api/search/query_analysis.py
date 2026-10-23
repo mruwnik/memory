@@ -171,17 +171,19 @@ def _refresh_modality_cache() -> None:
             # Get source counts for modalities with parent entities
             source_counts = _get_source_counts(db)
 
-            _modality_cache = {}
-            for modality, count in results:
-                if modality and count > 0:
-                    _modality_cache[modality] = ModalityInfo(
-                        name=modality,
-                        count=count,
-                        domains=modality_domains.get(modality, []),
-                        source_count=source_counts.get(modality),
-                    )
-
-            _cache_timestamp = time.time()
+            # Built aside and swapped in at once: concurrent searches read the
+            # cache from other threads while this runs.
+            cache = {
+                modality: ModalityInfo(
+                    name=modality,
+                    count=count,
+                    domains=modality_domains.get(modality, []),
+                    source_count=source_counts.get(modality),
+                )
+                for modality, count in results
+                if modality and count > 0
+            }
+            _modality_cache, _cache_timestamp = cache, time.time()
             logger.debug(f"Refreshed modality cache: {list(_modality_cache.keys())}")
 
     except SQLAlchemyError as e:
@@ -198,10 +200,8 @@ def _get_available_modalities() -> dict[str, ModalityInfo]:
     return _modality_cache
 
 
-def _build_prompt() -> str:
+def _build_prompt(modalities: dict[str, ModalityInfo]) -> str:
     """Build the query analysis prompt with actual available modalities."""
-    modalities = _get_available_modalities()
-
     if not modalities:
         modality_section = "  (no content indexed yet)"
     else:
@@ -358,6 +358,9 @@ async def analyze_query(
 
     try:
         provider = create_provider(model=model or settings.SUMMARIZER_MODEL)
+        # An expired cache refreshes with several DB queries; on the loop that
+        # would stall every concurrent request.
+        modalities = await asyncio.to_thread(_get_available_modalities)
 
         # The clock goes in the user message so the system prompt stays cacheable
         messages = [
@@ -366,7 +369,7 @@ async def analyze_query(
 
         llm_settings = LLMSettings(
             max_tokens=1024,  # headroom for thinking tokens
-            json_schema=_build_schema(sorted(_get_available_modalities())),
+            json_schema=_build_schema(sorted(modalities)),
             # Prompt + schema is ~800-1000 tokens and stable for an hour
             # (modality cache TTL); searches come in bursts.
             cache_system_prompt=True,
@@ -375,7 +378,7 @@ async def analyze_query(
         response = await asyncio.wait_for(
             provider.agenerate(
                 messages=messages,
-                system_prompt=_build_prompt(),
+                system_prompt=_build_prompt(modalities),
                 settings=llm_settings,
             ),
             timeout=timeout,

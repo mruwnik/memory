@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_RERANK_MODEL = "rerank-2.5"
 
 
+def rerank_timeout(n_docs: int) -> float:
+    """RERANK_TIMEOUT covers up to 100 candidates; larger requests take
+    proportionally longer, so a big ``limit`` doesn't always fall back."""
+    return settings.RERANK_TIMEOUT * max(1.0, n_docs / 100)
+
+
 def merge_no_content_chunks(
     reranked: list[Chunk],
     no_content_chunks: Sequence[Chunk],
@@ -112,7 +118,9 @@ async def rerank_chunks(
         return merge_no_content_chunks([], no_content_chunks, top_k)
 
     try:
-        vo = voyageai.Client(api_key=settings.VOYAGE_API_KEY)  # type: ignore[reportPrivateImportUsage]
+        vo = voyageai.Client(  # type: ignore[reportPrivateImportUsage]
+            api_key=settings.VOYAGE_API_KEY, timeout=rerank_timeout(len(documents))
+        )
         result = await asyncio.to_thread(
             vo.rerank,
             query=query,
@@ -132,5 +140,5 @@ async def rerank_chunks(
         return merge_no_content_chunks(reranked, no_content_chunks, top_k)
 
     except Exception as e:
-        logger.warning(f"Reranking failed, returning original order: {e}")
+        logger.warning(f"Reranking failed, returning original order: {e!r}")
         return list(chunks)

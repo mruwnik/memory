@@ -39,7 +39,7 @@ from memory.api.search.constants import (
 # would NameError at call time and silently dishonor the override.
 from memory.api.search.bm25 import search_bm25_chunks
 from memory.api.search.hyde import expand_query_hyde
-from memory.api.search.rerank import rerank_chunks
+from memory.api.search.rerank import rerank_chunks, rerank_timeout
 from memory.api.search.query_analysis import analyze_query, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
@@ -500,7 +500,9 @@ async def _run_searches(
     # This ensures LLM-recalled content makes it into the candidate pool.
     # Pass filters so access control prevents prompt-injection exfiltration.
     if recalled_titles:
-        title_chunks = _fetch_chunks_by_title(recalled_titles, modalities, filters)
+        title_chunks = await asyncio.to_thread(
+            _fetch_chunks_by_title, recalled_titles, modalities, filters
+        )
         for chunk_id, score in title_chunks.items():
             if chunk_id not in fused:
                 fused[chunk_id] = score
@@ -591,11 +593,12 @@ async def _apply_reranking(
         return list(chunks)
 
     try:
-        return await rerank_chunks(
-            query_text, chunks, model=settings.RERANK_MODEL, top_k=limit
+        return await asyncio.wait_for(
+            rerank_chunks(query_text, chunks, model=settings.RERANK_MODEL, top_k=limit),
+            rerank_timeout(len(chunks)),
         )
     except Exception as e:
-        logger.warning(f"Reranking failed, using RRF order: {e}")
+        logger.warning(f"Reranking failed, using RRF order: {e!r}")
         return list(chunks)
 
 
@@ -680,10 +683,12 @@ async def search_chunks(
     )
 
     # Fetch chunks from database
-    chunks = _fetch_chunks(fused_scores, embedding_scores, limit, use_reranking)
+    chunks = await asyncio.to_thread(
+        _fetch_chunks, fused_scores, embedding_scores, limit, use_reranking
+    )
 
     # Apply various boosts including recalled content title matching
-    _apply_boosts(chunks, data, recalled_content)
+    await asyncio.to_thread(_apply_boosts, chunks, data, recalled_content)
 
     # Apply reranking if enabled
     chunks = await _apply_reranking(chunks, query_text, limit, use_reranking)
@@ -728,15 +733,16 @@ async def search_sources(
     if not by_source:
         return []
 
-    with make_session() as db:
-        query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
-        query = apply_access_filter_to_query(query, filters["access_filter"])
+    def load() -> list[SearchResult]:
+        with make_session() as db:
+            query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
+            query = apply_access_filter_to_query(query, filters["access_filter"])
+            return [
+                SearchResult.from_source_item(source, by_source[source.id], previews)
+                for source in query.all()
+            ]
 
-        sources = query.all()
-        return [
-            SearchResult.from_source_item(source, by_source[source.id], previews)
-            for source in sources
-        ]
+    return await asyncio.to_thread(load)
 
 
 async def search(

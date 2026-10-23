@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 from unittest.mock import MagicMock, patch, Mock
 
@@ -12,7 +14,10 @@ from memory.common.qdrant import (
     upsert_vectors,
     delete_points,
     batch_ids,
+    search_vectors_batch,
+    thread_qdrant_client,
 )
+from memory.common import settings
 
 
 @pytest.fixture
@@ -110,3 +115,47 @@ def test_batch_ids(mock_qdrant_client):
         ["1", "2"],
         ["3", "4"],
     ]
+
+
+HIDDEN = {"key": "sensitivity", "match": {"value": "hidden"}}
+PROJECT_ACCESS = {"should": [{"key": "project_id", "match": {"value": 3}}]}
+
+
+@pytest.mark.parametrize(
+    "filter_params, expected_filter",
+    [
+        (None, None),
+        ({"must_not": [HIDDEN]}, qdrant_models.Filter(must_not=[HIDDEN])),
+        (
+            {"must": [PROJECT_ACCESS], "must_not": [HIDDEN]},
+            qdrant_models.Filter(must=[PROJECT_ACCESS], must_not=[HIDDEN]),
+        ),
+    ],
+)
+def test_search_vectors_batch_sends_one_filtered_request_without_payloads(
+    filter_params, expected_filter
+):
+    client = MagicMock()
+    client.search_batch.return_value = [[], []]
+
+    result = search_vectors_batch(
+        client, "text", [[0.1, 0.2], [0.3, 0.4]], filter_params=filter_params, limit=7
+    )
+
+    client.search_batch.assert_called_once()
+    requests = client.search_batch.call_args.kwargs["requests"]
+    assert [(r.vector, r.limit, r.with_payload, r.filter) for r in requests] == [
+        ([0.1, 0.2], 7, False, expected_filter),
+        ([0.3, 0.4], 7, False, expected_filter),
+    ]
+    assert result == [[], []]
+
+
+def test_thread_qdrant_client_uses_the_search_timeout(mock_qdrant_client):
+    clients = []
+    worker = threading.Thread(target=lambda: clients.append(thread_qdrant_client()))
+    worker.start()
+    worker.join()
+
+    assert clients
+    assert mock_qdrant_client.call_args.kwargs["timeout"] == settings.QDRANT_SEARCH_TIMEOUT

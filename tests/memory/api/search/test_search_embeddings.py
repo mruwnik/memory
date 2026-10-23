@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import pickle
 import threading
@@ -682,6 +683,10 @@ def make_point(score: float = 0.9) -> MagicMock:
     return point
 
 
+def new_client(timeout=None):
+    return object()
+
+
 def fake_embedder(chunks, input_type=None):
     return [[0.1] * 4 for _ in chunks]
 
@@ -695,10 +700,10 @@ async def test_query_chunks_never_shares_a_client_between_threads():
         with lock:
             users[id(client)].add(threading.get_ident())
         time.sleep(0.01)
-        return []
+        return [[]]
 
-    with patch.object(qdrant, "get_qdrant_client", side_effect=object), \
-         patch.object(qdrant, "search_vectors", side_effect=record):
+    with patch.object(qdrant, "get_qdrant_client", side_effect=new_client), \
+         patch.object(qdrant, "search_vectors_batch", side_effect=record):
         await query_chunks(
             [DataChunk(data=["a"]), DataChunk(data=["b"])],
             {"text", "mail", "blog", "book", "doc", "forum"},
@@ -717,8 +722,8 @@ async def test_query_chunks_embeds_off_the_event_loop():
         embed_threads.append(threading.get_ident())
         return fake_embedder(chunks)
 
-    with patch.object(qdrant, "get_qdrant_client", side_effect=object), \
-         patch.object(qdrant, "search_vectors", return_value=[]):
+    with patch.object(qdrant, "get_qdrant_client", side_effect=new_client), \
+         patch.object(qdrant, "search_vectors_batch", return_value=[[]]):
         await query_chunks([DataChunk(data=["a"])], {"text"}, embedder)
 
     assert embed_threads
@@ -736,10 +741,82 @@ async def test_query_chunks_embeds_off_the_event_loop():
 )
 @pytest.mark.asyncio
 async def test_query_chunks_retries_transport_error_once(failures, expected_hits):
-    outcomes = [ResponseHandlingException(e) for e in failures] + [[make_point()]]
+    outcomes = [ResponseHandlingException(e) for e in failures] + [[[make_point()]]]
 
-    with patch.object(qdrant, "get_qdrant_client", side_effect=object), \
-         patch.object(qdrant, "search_vectors", side_effect=outcomes):
+    with patch.object(qdrant, "get_qdrant_client", side_effect=new_client), \
+         patch.object(qdrant, "search_vectors_batch", side_effect=outcomes):
         results = await query_chunks([DataChunk(data=["a"])], {"text"}, fake_embedder)
 
     assert len(results["text"]) == expected_hits
+
+
+@pytest.mark.asyncio
+async def test_query_chunks_searches_each_collection_once_with_every_vector():
+    calls = []
+
+    def record(client, collection_name, query_vectors, **kwargs):
+        calls.append((collection_name, len(query_vectors)))
+        return [[make_point()] for _ in query_vectors]
+
+    with patch.object(qdrant, "get_qdrant_client", side_effect=new_client), \
+         patch.object(qdrant, "search_vectors_batch", side_effect=record):
+        results = await query_chunks(
+            [DataChunk(data=["a"]), DataChunk(data=["b"]), DataChunk(data=["c"])],
+            {"text", "mail"},
+            fake_embedder,
+        )
+
+    assert sorted(calls) == [("mail", 3), ("text", 3)]
+    assert {name: len(points) for name, points in results.items()} == {"mail": 3, "text": 3}
+
+
+async def failing_arm(*args, **kwargs):
+    raise RuntimeError("qdrant down")
+
+
+async def stalled_arm(*args, **kwargs):
+    await asyncio.sleep(60)
+
+
+async def image_arm(*args, **kwargs):
+    return {"image-chunk": 0.5}
+
+
+@pytest.mark.parametrize("text_arm", [failing_arm, stalled_arm])
+@pytest.mark.asyncio
+async def test_search_chunks_embeddings_keeps_other_arm_when_one_fails(text_arm):
+    arm_for = {False: text_arm, True: image_arm}
+
+    async def arms(data, modalities, limit, min_score, filters, multimodal):
+        return await arm_for[multimodal]()
+
+    with patch("memory.api.search.embeddings.search_chunks", side_effect=arms):
+        result = await search_chunks_embeddings(
+            [DataChunk(data=["q"])],
+            modalities={"text", "photo"},
+            filters={"access_filter": None},
+            timeout=0.05,  # type: ignore[arg-type]
+        )
+
+    assert result == {"image-chunk": 0.5}
+
+
+@pytest.mark.asyncio
+async def test_search_chunks_resolves_account_off_the_event_loop():
+    resolve_threads = []
+
+    def resolve(account, session):
+        resolve_threads.append(threading.get_ident())
+        return [1]
+
+    with patch("memory.api.search.embeddings.make_session"), \
+         patch("memory.api.search.embeddings.resolve_account_ids", side_effect=resolve), \
+         patch("memory.api.search.embeddings.query_chunks", new_callable=AsyncMock, return_value={}):
+        await search_chunks(
+            [DataChunk(data=["q"])],
+            modalities={"mail"},
+            filters={"account": "me@example.com", "access_filter": None},  # type: ignore[typeddict-item]
+        )
+
+    assert resolve_threads
+    assert threading.get_ident() not in resolve_threads

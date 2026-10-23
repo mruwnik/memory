@@ -1,5 +1,7 @@
 import logging
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any, Callable, Final, cast, TYPE_CHECKING
 
 import httpx
@@ -32,6 +34,16 @@ if TYPE_CHECKING:
     from memory.common.access_control import AccessFilter
 
 logger = logging.getLogger(__name__)
+
+# Voyage and Qdrant calls get their own threads: a call abandoned by a timed-out
+# wait_for keeps its thread until the client timeout, and on the default
+# executor that would queue the search's database stages behind it.
+SEARCH_IO_EXECUTOR = ThreadPoolExecutor(max_workers=32, thread_name_prefix="search-io")
+
+
+async def run_search_io(fn: Callable, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(SEARCH_IO_EXECUTOR, partial(fn, *args, **kwargs))
 
 
 class NoAccess:
@@ -177,25 +189,26 @@ def build_person_filter(person_id: int) -> dict[str, Any]:
 
 def search_collection(
     collection_name: str,
-    query_vector: Vector,
+    query_vectors: list[Vector],
     limit: int,
     filter_params: dict[str, Any] | None,
 ) -> list[qdrant_models.ScoredPoint]:
-    """Search one collection from a worker thread, retrying a transport error once.
+    """Search one collection with every query vector, retrying a transport error once.
 
     Searches are idempotent reads, and a single failure otherwise drops the
     whole collection from the query's results. Timeouts aren't retried: the
     caller's ``wait_for`` has long since given up, and a retry would only hold
-    the shared executor thread for another full client timeout.
+    the executor thread for another full client timeout.
     """
     def attempt() -> list[qdrant_models.ScoredPoint]:
-        return qdrant.search_vectors(
+        batches = qdrant.search_vectors_batch(
             client=qdrant.thread_qdrant_client(),
             collection_name=collection_name,
-            query_vector=query_vector,
+            query_vectors=query_vectors,
             limit=limit,
             filter_params=filter_params,
         )
+        return [point for batch in batches for point in batch]
 
     try:
         return attempt()
@@ -224,32 +237,25 @@ async def query_chunks(
 
     # The embedder is a blocking HTTP call; on the loop it would stall every
     # concurrent stage and fire their wait_for timeouts.
-    vectors = await asyncio.to_thread(embedder, chunks, input_type="query")
-
-    # Create all search tasks to run in parallel
-    search_tasks = []
-    task_metadata = []  # Keep track of which collection and vector each task corresponds to
-
-    for collection in allowed_modalities:
-        for vector in vectors:
-            task = asyncio.to_thread(
-                search_collection, collection, vector, limit, filters
-            )
-            search_tasks.append(task)
-            task_metadata.append((collection, vector))
-
-    # Run all searches in parallel
-    if not search_tasks:
+    vectors = await run_search_io(embedder, chunks, input_type="query")
+    if not vectors:
         return {}
 
-    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+    collections = list(allowed_modalities)
+    search_results = await asyncio.gather(
+        *(
+            run_search_io(search_collection, collection, vectors, limit, filters)
+            for collection in collections
+        ),
+        return_exceptions=True,
+    )
 
     # Group results by collection
     results_by_collection: dict[str, list[qdrant_models.ScoredPoint]] = {
         collection: [] for collection in allowed_modalities
     }
 
-    for (collection, _), result in zip(task_metadata, search_results):
+    for collection, result in zip(collections, search_results):
         if isinstance(result, Exception):
             logger.error(f"Search failed for collection {collection}: {result}")
             continue
@@ -371,7 +377,8 @@ async def search_chunks(
     # Qdrant-specific special-key shapes. access_filter and person_id build
     # compound conditions below.
     search_filters = build_registry_qdrant_filters(filters)
-    search_filters.extend(build_qdrant_special_filters(filters))
+    # The account filter resolves addresses with a DB query.
+    search_filters.extend(await asyncio.to_thread(build_qdrant_special_filters, filters))
 
     # Build the complete Qdrant filter. The "hidden" tombstone sensitivity is
     # excluded for EVERYONE, including the admin / access_filter-None path: an
@@ -486,10 +493,15 @@ async def search_chunks_embeddings(
             ),
             timeout,
         ),
+        return_exceptions=True,
     )
-    # Merge scores, taking max if chunk appears in both
+    # Merge scores, taking max if chunk appears in both. One arm failing or
+    # timing out must not discard the other's results.
     merged_scores: dict[str, float] = {}
     for result_dict in all_results:
+        if isinstance(result_dict, BaseException):
+            logger.warning(f"Embedding search arm failed: {result_dict!r}")
+            continue
         for chunk_id, score in result_dict.items():
             if chunk_id not in merged_scores or score > merged_scores[chunk_id]:
                 merged_scores[chunk_id] = score

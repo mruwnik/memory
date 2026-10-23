@@ -208,6 +208,9 @@ QDRANT_GRPC_PORT = int(os.getenv("QDRANT_GRPC_PORT", "6334"))
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
 QDRANT_PREFER_GRPC = boolean_env("QDRANT_PREFER_GRPC", False)
 QDRANT_TIMEOUT = int(os.getenv("QDRANT_TIMEOUT", "60"))
+# Search abandons a slow collection rather than wait; a short client timeout
+# frees the thread holding the abandoned request.
+QDRANT_SEARCH_TIMEOUT = int(os.getenv("QDRANT_SEARCH_TIMEOUT", "5"))
 
 
 # Worker settings
@@ -285,13 +288,19 @@ LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
 # Search settings
 ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
 ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)
-ENABLE_HYDE_EXPANSION = boolean_env("ENABLE_HYDE_EXPANSION", True)
+# Off by default: in retrieval evals it cost ~0.5s per search (it is usually the
+# slower of the two LLM calls) without improving retrieval.
+ENABLE_HYDE_EXPANSION = boolean_env("ENABLE_HYDE_EXPANSION", False)
 HYDE_TIMEOUT = float(os.getenv("HYDE_TIMEOUT", "3.0"))
 ENABLE_QUERY_ANALYSIS = boolean_env(
     "ENABLE_QUERY_ANALYSIS", True
 )  # Runs in parallel with HyDE
 ENABLE_RERANKING = boolean_env("ENABLE_RERANKING", True)
 RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-2.5")
+# A stalled rerank falls back to fused order instead of holding the search.
+RERANK_TIMEOUT = float(os.getenv("RERANK_TIMEOUT", "4.0"))
+# Query embeddings are on the search's critical path, unlike ingestion's.
+QUERY_EMBEDDING_TIMEOUT = float(os.getenv("QUERY_EMBEDDING_TIMEOUT", "5.0"))
 MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 16))
 MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 

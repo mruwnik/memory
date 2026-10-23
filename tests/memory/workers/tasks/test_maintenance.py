@@ -169,10 +169,10 @@ def test_reingest_chunk(db_session, qdrant, chunk):
     test_vector = [0.1] * 1024
     reingest_chunk(str(chunk.id), collection)
 
-    vectors = qd.search_vectors(qdrant, collection, test_vector, limit=1)
-    assert len(vectors) == 1
-    assert str(vectors[0].id) == str(chunk.id)
-    assert vectors[0].payload == chunk.source.as_payload()
+    [vectors] = qd.search_vectors_batch(qdrant, collection, [test_vector], limit=1)
+    assert [str(v.id) for v in vectors] == [str(chunk.id)]
+    [point] = qdrant.retrieve(collection, ids=[str(chunk.id)])
+    assert point.payload == chunk.source.as_payload()
     db_session.refresh(chunk)
     assert chunk.checked_at.isoformat() > start.isoformat()
 

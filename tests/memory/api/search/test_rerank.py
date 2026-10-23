@@ -5,7 +5,8 @@ Tests for the rerank module (VoyageAI cross-encoder reranking).
 import pytest
 from unittest.mock import MagicMock, patch
 
-from memory.api.search.rerank import rerank_chunks, DEFAULT_RERANK_MODEL
+from memory.api.search.rerank import rerank_chunks, rerank_timeout, DEFAULT_RERANK_MODEL
+from memory.common import settings
 
 
 class MockRerankResult:
@@ -410,3 +411,11 @@ async def test_rerank_all_content_less_fallback_and_top_k(mock_voyageai):
     assert len(result) == 1
     assert result[0] is high
     assert high.relevance_score == 0.8
+
+
+@pytest.mark.parametrize(
+    "n_docs, multiple",
+    [(0, 1.0), (60, 1.0), (100, 1.0), (200, 2.0), (300, 3.0)],
+)
+def test_rerank_timeout_grows_with_candidate_count(n_docs, multiple):
+    assert rerank_timeout(n_docs) == pytest.approx(settings.RERANK_TIMEOUT * multiple)

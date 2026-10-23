@@ -1,10 +1,11 @@
 """Tests for query_analysis module."""
 
 import json
+import threading
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from unittest.mock import patch, Mock, AsyncMock
+from unittest.mock import patch, MagicMock, Mock, AsyncMock
 
 from memory.api.search.query_analysis import (
     ModalityInfo,
@@ -99,11 +100,7 @@ class TestBuildPrompt:
             "book": ModalityInfo(name="book", count=22000, source_count=400),
         }
 
-        with patch(
-            "memory.api.search.query_analysis._get_available_modalities",
-            return_value=mock_modalities,
-        ):
-            prompt = _build_prompt()
+        prompt = _build_prompt(mock_modalities)
 
         assert "forum" in prompt
         assert "book" in prompt
@@ -113,11 +110,7 @@ class TestBuildPrompt:
 
     def test_builds_prompt_empty_modalities(self):
         """Prompt handles no modalities gracefully."""
-        with patch(
-            "memory.api.search.query_analysis._get_available_modalities",
-            return_value={},
-        ):
-            prompt = _build_prompt()
+        prompt = _build_prompt({})
 
         assert "no content indexed yet" in prompt
 
@@ -134,11 +127,7 @@ class TestBuildPrompt:
 
     def test_prompt_contains_guidelines(self):
         """Prompt includes usage guidelines."""
-        with patch(
-            "memory.api.search.query_analysis._get_available_modalities",
-            return_value={"forum": ModalityInfo(name="forum", count=100)},
-        ):
-            prompt = _build_prompt()
+        prompt = _build_prompt({"forum": ModalityInfo(name="forum", count=100)})
 
         assert "Remove meta-language" in prompt
         assert "recalled_content" in prompt
@@ -644,3 +633,56 @@ def test_schema_requires_date_range():
 
     assert {"start_date", "end_date"} <= set(schema["required"])
     assert {"start_date", "end_date"} <= set(schema["properties"])
+
+
+@pytest.mark.asyncio
+async def test_analyze_query_loads_modalities_off_the_event_loop():
+    from memory.api.search import query_analysis
+
+    query_analysis._analysis_cache = {}
+    load_threads = []
+
+    def load_modalities():
+        load_threads.append(threading.get_ident())
+        return {}
+
+    provider = Mock()
+    provider.agenerate = AsyncMock(return_value="{}")
+    with (
+        patch("memory.api.search.query_analysis.create_provider", return_value=provider),
+        patch("memory.api.search.query_analysis._get_available_modalities", side_effect=load_modalities),
+    ):
+        await analyze_query("anything", now=NOW)
+
+    assert load_threads
+    assert threading.get_ident() not in load_threads
+
+
+def test_refresh_modality_cache_never_exposes_a_partial_cache():
+    from memory.api.search import query_analysis
+
+    old_cache = {"mail": ModalityInfo(name="mail", count=1)}
+    query_analysis._modality_cache = old_cache
+    seen_while_building = []
+
+    def build_info(**kwargs):
+        seen_while_building.append(query_analysis._modality_cache)
+        return ModalityInfo(**kwargs)
+
+    db = MagicMock()
+    db.query.return_value.group_by.return_value.order_by.return_value.all.return_value = [
+        ("mail", 3),
+        ("forum", 2),
+    ]
+    session = MagicMock()
+    session.__enter__.return_value = db
+    with (
+        patch.object(query_analysis, "make_session", return_value=session),
+        patch.object(query_analysis, "_get_modality_domains", return_value={}),
+        patch.object(query_analysis, "_get_source_counts", return_value={}),
+        patch.object(query_analysis, "ModalityInfo", side_effect=build_info),
+    ):
+        query_analysis._refresh_modality_cache()
+
+    assert seen_while_building == [old_cache, old_cache]
+    assert set(query_analysis._modality_cache) == {"mail", "forum"}

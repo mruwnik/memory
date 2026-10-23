@@ -1,6 +1,6 @@
 # RAG Search Quality - Notes
 
-**Last verified:** 2026-05-15
+**Last verified:** 2026-10-23
 
 Working notes on search quality. Most issues from the Dec 2025 investigation have been
 addressed; what remains is mostly inherent retrieval-quality tradeoffs.
@@ -16,8 +16,9 @@ addressed; what remains is mostly inherent retrieval-quality tradeoffs.
 - **Candidate pool multiplier** — an internal limit multiplier widens the candidate pool
   before reranking.
 - **Stopword filtering** — applied to FTS queries.
-- **HyDE** — implemented (`src/memory/api/search/hyde.py`); on by default via
-  `ENABLE_HYDE_EXPANSION`.
+- **HyDE** — implemented (`src/memory/api/search/hyde.py`); off by default
+  (`ENABLE_HYDE_EXPANSION`): in retrieval evals it added ~0.5 s per search without
+  improving MRR.
 
 ---
 
@@ -28,18 +29,19 @@ Implemented in `src/memory/api/search/`. Each stage is independently toggleable 
 
 1. **Query analysis** (`query_analysis.py`, `ENABLE_QUERY_ANALYSIS`) — an LLM extracts
    intent / structured hints from the raw query.
-2. **HyDE expansion** (`hyde.py`, `ENABLE_HYDE_EXPANSION`) — generate a hypothetical
-   answer and embed that instead of / alongside the raw query.
+2. **HyDE expansion** (`hyde.py`, `ENABLE_HYDE_EXPANSION`, off by default) — generate a
+   hypothetical answer and embed that alongside the raw query.
 3. **Embedding** — Voyage `voyage-3-large` (1024d) for text, `voyage-multimodal-3` for
    mixed text+image. See `src/memory/common/embedding.py`.
-4. **Vector search** — Qdrant similarity search over the embedded query.
+4. **Vector search** — Qdrant similarity search over the embedded query strings: one
+   batched request per collection.
 5. **BM25 full-text** (`bm25.py`, `ENABLE_BM25_SEARCH`) — PostgreSQL tsvector keyword
    matching.
 6. **Fusion** — the vector and BM25 result lists are merged with Reciprocal Rank Fusion
    (`fuse_scores_rrf` in `search.py`, `RRF_K = 60` in `constants.py`). RRF is rank-based;
    there are no embedding/BM25 weight constants.
 7. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2.5` cross-encoder
-   reorders the fused candidates.
+   reorders the fused candidates; past `RERANK_TIMEOUT` the fused order is kept.
 8. **Scoring** (`scorer.py`, `ENABLE_SEARCH_SCORING`) — recency / popularity /
    title-match boosts applied to the ranked results.
 

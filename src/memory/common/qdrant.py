@@ -52,7 +52,7 @@ def ensure_payload_indexes(
             )
 
 
-def get_qdrant_client() -> qdrant_client.QdrantClient:
+def get_qdrant_client(timeout: int = settings.QDRANT_TIMEOUT) -> qdrant_client.QdrantClient:
     """Create and return a Qdrant client using environment configuration."""
     logger.info(
         f"Connecting to Qdrant at {settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
@@ -64,7 +64,7 @@ def get_qdrant_client() -> qdrant_client.QdrantClient:
         grpc_port=settings.QDRANT_GRPC_PORT or 6334,
         prefer_grpc=settings.QDRANT_PREFER_GRPC,
         api_key=settings.QDRANT_API_KEY,
-        timeout=settings.QDRANT_TIMEOUT,
+        timeout=timeout,
     )
 
 
@@ -72,7 +72,7 @@ thread_clients = threading.local()
 
 
 def thread_qdrant_client() -> qdrant_client.QdrantClient:
-    """A long-lived client owned by the calling thread.
+    """A long-lived search client owned by the calling thread.
 
     Never share a sync QdrantClient between threads: under concurrent searches
     its connection pool can close a socket another thread is using
@@ -80,7 +80,7 @@ def thread_qdrant_client() -> qdrant_client.QdrantClient:
     """
     client = getattr(thread_clients, "client", None)
     if client is None:
-        client = thread_clients.client = get_qdrant_client()
+        client = thread_clients.client = get_qdrant_client(settings.QDRANT_SEARCH_TIMEOUT)
     return client
 
 
@@ -222,34 +222,27 @@ def upsert_vectors(
     logger.debug(f"Upserted {len(ids)} vectors into {collection_name}")
 
 
-def search_vectors(
+def search_vectors_batch(
     client: qdrant_client.QdrantClient,
     collection_name: str,
-    query_vector: Vector,
+    query_vectors: Sequence[Vector],
     filter_params: dict | None = None,
     limit: int = 10,
-) -> list[qdrant_models.ScoredPoint]:
-    """Search for similar vectors in a collection.
+) -> list[list[qdrant_models.ScoredPoint]]:
+    """Search one collection with several query vectors in a single request.
 
-    Args:
-        client: Qdrant client
-        collection_name: Name of the collection
-        query_vector: Query vector
-        filter_params: Filter parameters to apply (e.g., {"tags": {"value": "work"}})
-        limit: Maximum number of results to return
-
-    Returns:
-        List of scored points
+    Returns one result list per query vector, without payloads: search only
+    needs ids and scores, and payloads dominate the response size.
     """
-    filter_obj = None
-    if filter_params:
-        filter_obj = qdrant_models.Filter(**filter_params)
-
-    return client.search(
+    filter_obj = qdrant_models.Filter(**filter_params) if filter_params else None
+    return client.search_batch(
         collection_name=collection_name,
-        query_vector=query_vector,
-        query_filter=filter_obj,
-        limit=limit,
+        requests=[
+            qdrant_models.SearchRequest(
+                vector=vector, filter=filter_obj, limit=limit, with_payload=False
+            )
+            for vector in query_vectors
+        ],
     )
 
 

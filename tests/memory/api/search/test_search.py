@@ -3,6 +3,7 @@ Tests for search module functions including RRF fusion, query term boosting,
 title boosting, and source deduplication.
 """
 
+import asyncio
 import importlib
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +13,7 @@ import pytest
 
 from memory.api.search.query_analysis import QueryAnalysis
 from memory.api.search.types import SearchConfig
+from memory.common import settings
 from memory.common.extract import DataChunk
 from memory.api.search.constants import (
     POPULARITY_BOOST,
@@ -898,3 +900,18 @@ async def test_search_chunks_leaves_filters_without_usable_date_range(analysis, 
 
     assert seen["embeddings"]["source_ids"] == [7]
     assert seen["bm25"]["source_ids"] == [7]
+
+
+@pytest.mark.asyncio
+async def test_apply_reranking_keeps_fused_order_when_rerank_stalls():
+    async def stall(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    chunks = [MagicMock(relevance_score=0.2), MagicMock(relevance_score=0.1)]
+    with patch.object(search_module, "rerank_chunks", stall), \
+         patch.object(settings, "RERANK_TIMEOUT", 0.01):
+        result = await asyncio.wait_for(
+            search_module._apply_reranking(chunks, "query", 10, True), 5
+        )
+
+    assert result == chunks

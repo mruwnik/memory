@@ -108,8 +108,14 @@ def embed_chunks(
     if not chunks:
         return []
 
+    timeout = 60.0
+    if input_type == "query":
+        # A search is waiting: fail within seconds rather than spend ingestion's
+        # long timeout and three attempts on a stalled connection.
+        timeout, max_retries = settings.QUERY_EMBEDDING_TIMEOUT, min(max_retries, 2)
+
     logger.debug(f"Embedding {len(chunks)} chunks with model {model}")
-    vo = voyageai.Client(api_key=settings.VOYAGE_API_KEY, timeout=60.0)  # type: ignore
+    vo = voyageai.Client(api_key=settings.VOYAGE_API_KEY, timeout=timeout)  # type: ignore
 
     last_error = None
     for attempt in range(max_retries):

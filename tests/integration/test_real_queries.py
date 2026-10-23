@@ -87,7 +87,7 @@ def test_real_source_item_embeddings(real_voyage_client, qdrant):
         search_vector = embed_text(
             [extract.DataChunk(data=[query])], input_type="query"
         )[0]
-        results = qdrant_tools.search_vectors(qdrant, "text", search_vector)
+        [results] = qdrant_tools.search_vectors_batch(qdrant, "text", [search_vector])
         expected = sorted(
             [
                 (part1.id, p1),
@@ -1111,7 +1111,7 @@ def test_real_observation_embeddings(real_voyage_client, qdrant):
     chunk_map = {str(c.id): c for item in items for c in item.chunks}
 
     def get_top(vector, search_type: str) -> list[tuple[float, str]]:
-        results = qdrant_tools.search_vectors(qdrant, search_type, vector)
+        [results] = qdrant_tools.search_vectors_batch(qdrant, search_type, [vector])
         return [
             (pytest.approx(i.score, 0.1), chunk_map[str(i.id)].content)  # type: ignore
             for i in sorted(results, key=lambda x: x.score, reverse=True)

@@ -45,6 +45,13 @@ None.
   collection. Both are created automatically at startup.
 - `/health` now reports `version`, `db_revision` and `expected_revision`.
   Optionally, set `LATEST_RELEASE_URL` to get `update_available`.
+- HyDE query expansion is now off by default (`ENABLE_HYDE_EXPANSION=false`):
+  it added about 0.5 s per search without improving results. Set it to `true`
+  to keep it.
+- Search has new timeouts: `RERANK_TIMEOUT` (default 4 s per 100 candidates;
+  a slower rerank falls back to fused order), `QUERY_EMBEDDING_TIMEOUT`
+  (default 5 s) and `QDRANT_SEARCH_TIMEOUT` (default 5 s; a collection that
+  misses it is left out of that search). Ingestion keeps `QDRANT_TIMEOUT`.
 
 ### Migrations
 
