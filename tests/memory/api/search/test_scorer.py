@@ -48,8 +48,8 @@ async def test_score_chunk_handles_chunk_data_error(mock_chunk):
 
 
 @pytest.mark.asyncio
-async def test_score_chunk_handles_llm_exception(mock_chunk):
-    """Returns chunk unchanged when LLM raises exception."""
+async def test_score_chunk_keeps_the_existing_score_when_the_llm_fails(mock_chunk):
+    mock_chunk.relevance_score = 0.6
     with patch(
         "memory.api.search.scorer.llms.summarize",
         side_effect=Exception("LLM error"),
@@ -57,6 +57,7 @@ async def test_score_chunk_handles_llm_exception(mock_chunk):
         result = await score_chunk("test query", mock_chunk)
 
     assert result is mock_chunk
+    assert result.relevance_score == 0.6
 
 
 @pytest.mark.asyncio

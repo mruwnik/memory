@@ -61,8 +61,9 @@ async def score_chunk(query: str, chunk: Chunk) -> Chunk:
         )
         score = json.loads(response)["score"] if response else 0.0
     except Exception as e:
+        # Keep the reranker's score: a rate limit shouldn't drop results under min_score.
         logger.error(f"Error scoring chunk: {e}")
-        score = 0.0
+        return chunk
 
     chunk.relevance_score = float(score)
     return chunk
