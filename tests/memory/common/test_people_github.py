@@ -92,6 +92,22 @@ def test_link_github_user_reconciles_recycled_username(db_session):
     )
 
 
+def test_link_github_user_clears_handle_of_displaced_person(db_session):
+    old_person = Person(
+        identifier="old", display_name="Old", contact_info={"github": "recycled"}
+    )
+    new_person = Person(identifier="new", display_name="New", contact_info={})
+    db_session.add_all([old_person, new_person])
+    db_session.flush()
+    db_session.add(GithubUser(id=5, username="recycled", person_id=old_person.id))
+    db_session.flush()
+
+    link_github_user_to_person(db_session, new_person, 99, "recycled")
+
+    assert "github" not in old_person.contact_info
+    assert new_person.contact_info["github"] == "recycled"
+
+
 def test_link_github_user_upserts_existing_row(db_session):
     person = Person(identifier="p3", display_name="P3", contact_info={})
     db_session.add(person)

@@ -447,21 +447,26 @@ def _resolve_author_person(
     if not login or login == "ghost" or login.endswith("[bot]"):
         return None
 
-    # Lookup is by login, which GitHub can recycle: if an old account's link
-    # still holds a since-reclaimed login, that author is attributed to the old
-    # Person. We accept that rare mis-attribution rather than treat every numeric
-    # id change as a new identity — people-merge is the correction path, and the
-    # reconcile in link_github_user_to_person already prevents a hard failure.
+    # The numeric id is the stable identity; a login can be renamed or
+    # recycled to a different account.
+    by_id = session.get(GithubUser, github_id) if github_id else None
+    if by_id is not None and by_id.person is not None:
+        if by_id.username != login:
+            link_github_user_to_person(session, by_id.person, by_id.id, login)
+        return by_id.person_id
+
     github_user = (
         session.query(GithubUser).filter(GithubUser.username == login).one_or_none()
     )
-    if github_user is not None and github_user.person_id is not None:
+    recycled = (
+        github_user is not None and github_id is not None and github_user.id != github_id
+    )
+    if github_user is not None and github_user.person_id is not None and not recycled:
         return github_user.person_id
 
-    # No usable link yet — either no GithubUser row, or an orphaned one whose
-    # Person was deleted (person_id went NULL via SET NULL). Find-or-create a
-    # Person and (re)link below.
-    person = find_person_by_github(session, login)
+    # A recycled login is a different human, so nothing keyed on the login
+    # (the stale link or a contact_info handle) identifies them.
+    person = None if recycled else find_person_by_github(session, login)
     if person is None:
         # Two concurrent first-sighting syncs for the same login can both reach
         # here and both insert; the unique constraints on people.identifier and
@@ -470,7 +475,7 @@ def _resolve_author_person(
         # the now-existing row. The constraints protect integrity; the race only
         # costs one task a re-run.
         person = Person(
-            identifier=f"github:{login}",
+            identifier=f"github:{login}:{github_id}" if recycled else f"github:{login}",
             display_name=login,
             aliases=[login],
             contact_info={"github": login},

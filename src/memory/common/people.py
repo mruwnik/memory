@@ -217,6 +217,14 @@ def link_github_user_to_person(
         .one_or_none()
     )
     if stale is not None:
+        # The displaced Person must stop advertising a handle that is now
+        # someone else's, or the contact_info fallback would match them.
+        displaced = stale.person
+        if displaced is not None and displaced.id != person.id:
+            handles = dict(displaced.contact_info or {})
+            if handles.get("github") == login:
+                del handles["github"]
+                displaced.contact_info = handles
         session.delete(stale)
         session.flush()
 

@@ -27,10 +27,39 @@ def test_resolve_author_person_reuses_existing_github_user(db_session):
     db_session.add(GithubUser(id=10, username="ghx", person_id=person.id))
     db_session.commit()
 
-    # A different id is supplied, but the known login short-circuits to the
-    # existing link without creating a second row.
-    assert _resolve_author_person(db_session, "ghx", 999) == person.id
+    assert _resolve_author_person(db_session, "ghx", 10) == person.id
     assert db_session.query(GithubUser).filter_by(username="ghx").count() == 1
+
+
+def test_resolve_author_person_follows_renamed_account(db_session):
+    person = Person(identifier="x", display_name="X")
+    db_session.add(person)
+    db_session.flush()
+    db_session.add(GithubUser(id=10, username="oldname", person_id=person.id))
+    db_session.commit()
+
+    assert _resolve_author_person(db_session, "newname", 10) == person.id
+    assert db_session.get(GithubUser, 10).username == "newname"
+
+
+def test_resolve_author_person_recycled_login_with_linked_person(db_session):
+    old_person = Person(
+        identifier="github:recycled",
+        display_name="Old",
+        contact_info={"github": "recycled"},
+    )
+    db_session.add(old_person)
+    db_session.flush()
+    db_session.add(GithubUser(id=5, username="recycled", person_id=old_person.id))
+    db_session.commit()
+
+    person_id = _resolve_author_person(db_session, "recycled", 99)
+
+    assert person_id not in (None, old_person.id)
+    github_user = db_session.query(GithubUser).filter_by(username="recycled").one()
+    assert (github_user.id, github_user.person_id) == (99, person_id)
+    assert db_session.get(GithubUser, 5) is None
+    assert "github" not in db_session.get(Person, old_person.id).contact_info
 
 
 def test_resolve_author_person_relinks_orphaned_github_user(db_session):
