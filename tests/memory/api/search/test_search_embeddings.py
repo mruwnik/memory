@@ -1,9 +1,13 @@
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
 import copy
 import pickle
+import threading
+import time
+from collections import defaultdict
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from memory.api.search.embeddings import (
     build_qdrant_special_filters,
@@ -11,11 +15,13 @@ from memory.api.search.embeddings import (
     build_access_qdrant_filter,
     NO_ACCESS,
     NoAccess,
+    query_chunks,
     require_access_filter,
     search_chunks,
     search_chunks_embeddings,
 )
 from memory.api.search.filters import build_registry_qdrant_filters
+from memory.common import qdrant
 from memory.common.access_control import AccessFilter, AccessCondition
 from memory.common.extract import DataChunk
 
@@ -665,3 +671,75 @@ async def test_search_chunks_embeddings_raises_on_missing_access_filter():
             modalities={"text"},
             filters={"min_size": 100},  # type: ignore[typeddict-item]
         )
+
+
+# --- query_chunks: Qdrant client use across worker threads ---
+
+
+def make_point(score: float = 0.9) -> MagicMock:
+    point = MagicMock()
+    point.score = score
+    return point
+
+
+def fake_embedder(chunks, input_type=None):
+    return [[0.1] * 4 for _ in chunks]
+
+
+@pytest.mark.asyncio
+async def test_query_chunks_never_shares_a_client_between_threads():
+    users: dict[int, set[int]] = defaultdict(set)
+    lock = threading.Lock()
+
+    def record(client, **kwargs):
+        with lock:
+            users[id(client)].add(threading.get_ident())
+        time.sleep(0.01)
+        return []
+
+    with patch.object(qdrant, "get_qdrant_client", side_effect=object), \
+         patch.object(qdrant, "search_vectors", side_effect=record):
+        await query_chunks(
+            [DataChunk(data=["a"]), DataChunk(data=["b"])],
+            {"text", "mail", "blog", "book", "doc", "forum"},
+            fake_embedder,
+        )
+
+    assert users
+    assert all(len(threads) == 1 for threads in users.values())
+
+
+@pytest.mark.asyncio
+async def test_query_chunks_embeds_off_the_event_loop():
+    embed_threads = []
+
+    def embedder(chunks, input_type=None):
+        embed_threads.append(threading.get_ident())
+        return fake_embedder(chunks)
+
+    with patch.object(qdrant, "get_qdrant_client", side_effect=object), \
+         patch.object(qdrant, "search_vectors", return_value=[]):
+        await query_chunks([DataChunk(data=["a"])], {"text"}, embedder)
+
+    assert embed_threads
+    assert threading.get_ident() not in embed_threads
+
+
+@pytest.mark.parametrize(
+    "failures, expected_hits",
+    [
+        ([], 1),
+        ([OSError(9, "Bad file descriptor")], 1),
+        ([OSError(9, "Bad file descriptor")] * 2, 0),
+        ([httpx.ReadTimeout("timed out")], 0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_query_chunks_retries_transport_error_once(failures, expected_hits):
+    outcomes = [ResponseHandlingException(e) for e in failures] + [[make_point()]]
+
+    with patch.object(qdrant, "get_qdrant_client", side_effect=object), \
+         patch.object(qdrant, "search_vectors", side_effect=outcomes):
+        results = await query_chunks([DataChunk(data=["a"])], {"text"}, fake_embedder)
+
+    assert len(results["text"]) == expected_hits

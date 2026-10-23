@@ -2,13 +2,15 @@ import logging
 import asyncio
 from typing import Any, Callable, Final, cast, TYPE_CHECKING
 
-import qdrant_client
+import httpx
 from qdrant_client.http import models as qdrant_models
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from memory.common import embedding, extract, qdrant
 from memory.common.collections import (
     MULTIMODAL_COLLECTIONS,
     TEXT_COLLECTIONS,
+    Vector,
 )
 from memory.api.search.filters import (
     FILTER_REGISTRY,
@@ -173,8 +175,38 @@ def build_person_filter(person_id: int) -> dict[str, Any]:
     }
 
 
+def search_collection(
+    collection_name: str,
+    query_vector: Vector,
+    limit: int,
+    filter_params: dict[str, Any] | None,
+) -> list[qdrant_models.ScoredPoint]:
+    """Search one collection from a worker thread, retrying a transport error once.
+
+    Searches are idempotent reads, and a single failure otherwise drops the
+    whole collection from the query's results. Timeouts aren't retried: the
+    caller's ``wait_for`` has long since given up, and a retry would only hold
+    the shared executor thread for another full client timeout.
+    """
+    def attempt() -> list[qdrant_models.ScoredPoint]:
+        return qdrant.search_vectors(
+            client=qdrant.thread_qdrant_client(),
+            collection_name=collection_name,
+            query_vector=query_vector,
+            limit=limit,
+            filter_params=filter_params,
+        )
+
+    try:
+        return attempt()
+    except ResponseHandlingException as e:
+        if isinstance(e.source, httpx.TimeoutException):
+            raise
+        logger.warning(f"Retrying search on {collection_name} after: {e}")
+    return attempt()
+
+
 async def query_chunks(
-    client: qdrant_client.QdrantClient,
     upload_data: list[extract.DataChunk],
     allowed_modalities: set[str],
     embedder: Callable,
@@ -190,7 +222,9 @@ async def query_chunks(
         logger.error(f"No chunks to embed for {allowed_modalities}")
         return {}
 
-    vectors = embedder(chunks, input_type="query")
+    # The embedder is a blocking HTTP call; on the loop it would stall every
+    # concurrent stage and fire their wait_for timeouts.
+    vectors = await asyncio.to_thread(embedder, chunks, input_type="query")
 
     # Create all search tasks to run in parallel
     search_tasks = []
@@ -199,12 +233,7 @@ async def query_chunks(
     for collection in allowed_modalities:
         for vector in vectors:
             task = asyncio.to_thread(
-                qdrant.search_vectors,
-                client=client,
-                collection_name=collection,
-                query_vector=vector,
-                limit=limit,
-                filter_params=filters,
+                search_collection, collection, vector, limit, filters
             )
             search_tasks.append(task)
             task_metadata.append((collection, vector))
@@ -392,9 +421,7 @@ async def search_chunks(
         }
         qdrant_filter["must"].append(access_nested_filter)
 
-    client = qdrant.get_qdrant_client()
     results = await query_chunks(
-        client,
         data,
         modalities,
         embedding.embed_text if not multimodal else embedding.embed_mixed,

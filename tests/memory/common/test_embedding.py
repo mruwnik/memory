@@ -1,9 +1,11 @@
+import sys
+import threading
 from unittest.mock import Mock
 import pytest
 from typing import cast
 from PIL import Image
 
-from memory.common import collections, settings
+from memory.common import collections, embedding, settings
 from memory.common.embedding import (
     as_string,
     embed_chunks,
@@ -273,3 +275,33 @@ def test_embed_by_model_calls_embed_chunks_correctly(mock_embed):
     mock_embed.embed.assert_called_once_with(
         ["content1", "content2"], model="test-model", input_type="document"
     )
+
+
+def test_query_embedding_cache_survives_concurrent_threads(monkeypatch):
+    # Query embedding runs in asyncio.to_thread workers; text and multimodal
+    # searches embed at the same time. A tiny switch interval makes an
+    # unlocked cache fail here almost every run.
+    monkeypatch.setattr(embedding, "_query_embedding_cache", {})
+    errors = []
+
+    def churn(thread_no: int):
+        try:
+            for i in range(2000):
+                query = f"{thread_no}-{i % 300}"
+                embedding._cache_embedding(query, "model", [0.0])
+                embedding._get_cached_embedding(query, "model")
+        except Exception as e:
+            errors.append(e)
+
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=churn, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(previous)
+
+    assert errors == []

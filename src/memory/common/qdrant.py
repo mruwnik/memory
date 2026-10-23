@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Any, cast, Generator, Sequence
 
 import qdrant_client
@@ -65,6 +66,22 @@ def get_qdrant_client() -> qdrant_client.QdrantClient:
         api_key=settings.QDRANT_API_KEY,
         timeout=settings.QDRANT_TIMEOUT,
     )
+
+
+thread_clients = threading.local()
+
+
+def thread_qdrant_client() -> qdrant_client.QdrantClient:
+    """A long-lived client owned by the calling thread.
+
+    Never share a sync QdrantClient between threads: under concurrent searches
+    its connection pool can close a socket another thread is using
+    (``[Errno 9] Bad file descriptor``, or a hang until the read timeout).
+    """
+    client = getattr(thread_clients, "client", None)
+    if client is None:
+        client = thread_clients.client = get_qdrant_client()
+    return client
 
 
 def ensure_collection_exists(

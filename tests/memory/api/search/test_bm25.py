@@ -3,6 +3,7 @@ Tests for PostgreSQL full-text search (BM25) functionality.
 """
 
 import asyncio
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1029,3 +1030,20 @@ async def test_search_bm25_explicit_none_access_filter_does_not_raise():
         "", {"text"}, filters={"access_filter": None}
     )
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_search_bm25_queries_db_off_the_event_loop():
+    session_threads = []
+
+    def make_session():
+        session_threads.append(threading.get_ident())
+        session = MagicMock()
+        session.__enter__.return_value.query.return_value = chained_query_mock([])
+        return session
+
+    with patch.object(bm25, "make_session", side_effect=make_session):
+        await bm25.search_bm25("test", {"text"}, filters=SUPERADMIN_FILTERS)
+
+    assert session_threads
+    assert threading.get_ident() not in session_threads

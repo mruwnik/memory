@@ -85,6 +85,17 @@ async def search_bm25(
     limit: int = 10,
     filters: SearchFilters | None = None,
 ) -> dict[str, float]:
+    """:func:`run_bm25_query` off the event loop, so its blocking DB query
+    can't stall the loop (and the ``wait_for`` timers of concurrent stages)."""
+    return await asyncio.to_thread(run_bm25_query, query, modalities, limit, filters)
+
+
+def run_bm25_query(
+    query: str,
+    modalities: set[str],
+    limit: int = 10,
+    filters: SearchFilters | None = None,
+) -> dict[str, float]:
     """
     Search chunks using PostgreSQL full-text search.
 

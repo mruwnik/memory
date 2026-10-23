@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import threading
 import time
 from typing import Literal, cast
 
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 # Simple TTL cache for query embeddings to avoid repeated API calls
 # Key: (query_hash, model), Value: (embedding, timestamp)
 _query_embedding_cache: dict[tuple[str, str], tuple[Vector, float]] = {}
+# Query embedding runs in worker threads (asyncio.to_thread), concurrently.
+_query_embedding_cache_lock = threading.Lock()
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 _CACHE_MAX_SIZE = 100
 
@@ -33,32 +36,35 @@ def _get_query_cache_key(query_text: str, model: str) -> tuple[str, str]:
 def _get_cached_embedding(query_text: str, model: str) -> Vector | None:
     """Get cached embedding if it exists and hasn't expired."""
     key = _get_query_cache_key(query_text, model)
-    if key in _query_embedding_cache:
-        embedding, timestamp = _query_embedding_cache[key]
+    with _query_embedding_cache_lock:
+        entry = _query_embedding_cache.get(key)
+        if entry is None:
+            return None
+        embedding, timestamp = entry
         if time.time() - timestamp < _CACHE_TTL_SECONDS:
             return embedding
-        else:
-            del _query_embedding_cache[key]
+        del _query_embedding_cache[key]
     return None
 
 
 def _cache_embedding(query_text: str, model: str, embedding: Vector) -> None:
     """Cache an embedding with current timestamp."""
-    # Evict old entries if cache is full
-    if len(_query_embedding_cache) >= _CACHE_MAX_SIZE:
-        # Remove oldest entries
-        now = time.time()
-        expired = [k for k, (_, ts) in _query_embedding_cache.items()
-                   if now - ts > _CACHE_TTL_SECONDS]
-        for k in expired:
-            del _query_embedding_cache[k]
-        # If still full, remove oldest
-        if len(_query_embedding_cache) >= _CACHE_MAX_SIZE:
-            oldest = min(_query_embedding_cache.items(), key=lambda x: x[1][1])
-            del _query_embedding_cache[oldest[0]]
-
     key = _get_query_cache_key(query_text, model)
-    _query_embedding_cache[key] = (embedding, time.time())
+    with _query_embedding_cache_lock:
+        # Evict old entries if cache is full
+        if len(_query_embedding_cache) >= _CACHE_MAX_SIZE:
+            # Remove oldest entries
+            now = time.time()
+            expired = [k for k, (_, ts) in _query_embedding_cache.items()
+                       if now - ts > _CACHE_TTL_SECONDS]
+            for k in expired:
+                del _query_embedding_cache[k]
+            # If still full, remove oldest
+            if len(_query_embedding_cache) >= _CACHE_MAX_SIZE:
+                oldest = min(_query_embedding_cache.items(), key=lambda x: x[1][1])
+                del _query_embedding_cache[oldest[0]]
+
+        _query_embedding_cache[key] = (embedding, time.time())
 
 
 class EmbeddingError(Exception):
