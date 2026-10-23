@@ -499,10 +499,11 @@ async def test_search_observations_with_min_confidences(
 @patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.observation")
 @patch("memory.api.MCP.servers.core.filter_observation_source_ids")
-async def test_search_observations_limit_enforced(
+async def test_search_observations_config(
     mock_filter_ids, mock_obs_formatter, mock_search_base
 ):
-    """Search observations enforces max limit of 100."""
+    """Caps the limit at 100 and keeps LLM query rewriting off: the generated
+    chunks (e.g. "Time: 14:00 on Friday") would read as a date range."""
     mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
     mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
     mock_filter_ids.return_value = None
@@ -510,8 +511,8 @@ async def test_search_observations_limit_enforced(
 
     await search_observations.fn(query="test", limit=500)
 
-    call_kwargs = mock_search_base.call_args[1]
-    assert call_kwargs["config"].limit == 100
+    config = mock_search_base.call_args[1]["config"]
+    assert (config.limit, config.useQueryAnalysis, config.useHyde) == (100, False, False)
 
 
 @pytest.mark.asyncio

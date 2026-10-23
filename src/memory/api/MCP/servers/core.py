@@ -537,7 +537,9 @@ async def search_observations(
     Results sorted by relevance to your query.
     """
     logger.info("MCP: Searching observations for %s", query)
-    config = SearchConfig(limit=min(limit, 100))
+    # The LLM steps read every chunk as one query, and the temporal chunk's
+    # "Time: HH:MM on <weekday>" would be resolved into a date range.
+    config = SearchConfig(limit=min(limit, 100), useHyde=False, useQueryAnalysis=False)
     semantic_text = observation.generate_semantic_text(
         subject=subject or "",
         observation_type="".join(observation_types or []),
