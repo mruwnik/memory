@@ -21,7 +21,7 @@ MIN_FREE_GB=${MIN_FREE_GB:-5}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-300}
 DB_USER=${DB_USER:-kb}
 DB_NAME=${DB_NAME:-kb}
-APP_SERVICES=(api worker ingest-hub)
+APP_SERVICES=(api worker agents-worker ingest-hub)
 STATE=$BACKUP_DIR/update-in-progress
 LAST_GOOD=$BACKUP_DIR/last-good
 
@@ -175,6 +175,11 @@ save_state
 
 log "Building images"
 run $COMPOSE build --pull
+
+# The new code's startup checks (required settings, matching queue prefixes)
+# fail here while the old stack is still serving, not after it was stopped.
+log "Checking settings against the new images"
+run $COMPOSE run --rm --no-deps --entrypoint python worker -m memory.common.settings worker
 
 log "Stopping app services"
 run $COMPOSE stop "${APP_SERVICES[@]}"

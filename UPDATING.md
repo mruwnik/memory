@@ -60,14 +60,16 @@ The script:
 1. refuses to run if disk is short or tracked files have local edits
 2. fetches from `origin` and checks out the target **in detached-HEAD mode**
 3. builds the images with `APP_VERSION` set to the target's `git describe`
-4. stops `api`, `worker` and `ingest-hub`
-5. dumps Postgres to `backups/postgres-<timestamp>-<previous-version>.dump`
-6. runs the one-shot `migrate` service (`alembic upgrade head`)
-7. starts the stack and polls `/health` until it is healthy, reports the new
+4. runs the new worker image's settings check, so missing required settings or
+   mismatched queue prefixes stop the update while the old stack still runs
+5. stops `api`, `worker`, `agents-worker` and `ingest-hub`
+6. dumps Postgres to `backups/postgres-<timestamp>-<previous-version>.dump`
+7. runs the one-shot `migrate` service (`alembic upgrade head`)
+8. starts the stack and polls `/health` until it is healthy, reports the new
    version, and `db_revision == expected_revision`
-8. checks that `api`, `worker` and `ingest-hub` stay running without restarts
-   for 15s
-9. records the result in `backups/last-good` and keeps the newest
+9. checks that `api`, `worker`, `agents-worker` and `ingest-hub` stay running
+   without restarts for 15s
+10. records the result in `backups/last-good` and keeps the newest
    `KEEP_BACKUPS` (default 5) dumps
 
 Each run logs to `backups/update-<timestamp>.log`; `backups/update.log`
@@ -122,7 +124,7 @@ Then check the logs for startup errors:
 
 ```bash
 docker compose ps
-docker compose logs --since 10m api worker ingest-hub | grep -iE "error|refusing"
+docker compose logs --since 10m api worker agents-worker ingest-hub | grep -iE "error|refusing"
 ```
 
 ## 3. Post-update tasks
@@ -156,7 +158,7 @@ everything written since the backup is lost.
 ```bash
 B=backups/postgres-<timestamp>-<previous>.dump
 docker compose exec -T postgres pg_restore --list < "$B" > /dev/null && \
-docker compose stop api worker ingest-hub && \
+docker compose stop api worker agents-worker ingest-hub && \
 docker compose exec -T postgres dropdb -U kb --force kb && \
 docker compose exec -T postgres createdb -U kb kb && \
 docker compose exec -T postgres pg_restore -U kb -d kb --no-owner < "$B" && \

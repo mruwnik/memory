@@ -61,9 +61,15 @@ section has nothing in it:
 - New `agents` user scope gates the `agent_*` MCP tools and the Agents dashboard.
   Only `*` admins have it by default; grant it to anyone else who should use agents.
 - Workers now refuse to start when the prefix they listen on (`QUEUE_PREFIX`,
-  default `memory`) differs from `CELERY_QUEUE_PREFIX` (default `APP_NAME`), which
-  tasks are routed with: such a worker would never receive any. If you set
-  `APP_NAME` or either prefix, check `.env` before updating.
+  default `memory`) differs from `CELERY_QUEUE_PREFIX` (default `APP_NAME`,
+  itself default `memory`), which tasks are routed with: such a worker would
+  never receive any. Before updating, run
+  `grep -E '^(APP_NAME|QUEUE_PREFIX|CELERY_QUEUE_PREFIX)=' .env`. If it prints
+  nothing, or `APP_NAME=memory` alone, there is nothing to do. Otherwise
+  `QUEUE_PREFIX` (or `memory` if unset) must equal `CELERY_QUEUE_PREFIX` (or
+  `APP_NAME` if unset); if they differ, set both to the same value in `.env`.
+  `tools/update.sh` runs this check on the new image before stopping anything,
+  so a mismatch fails the update while the old stack keeps running.
 - The `anthropic` SDK is upgraded to 2.1.0, so the images must be rebuilt.
   `tools/update.sh` does this.
 - The GitHub MCP server and the Discord management MCP tools are removed. The

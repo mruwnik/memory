@@ -3,6 +3,7 @@ import shutil
 import subprocess
 
 import pytest
+import yaml
 
 REPO_ROOT = pathlib.Path(__file__).parents[2]
 
@@ -64,6 +65,37 @@ def test_dry_run_plans_update_to_newest_tag_without_changing_anything(clone):
     assert "Dry run complete" in output
     assert git(clone, "rev-parse", "HEAD") == head_before
     assert not (clone / "backups").exists()
+
+
+def test_dry_run_stops_every_app_service_built_from_the_repo(clone):
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
+    # migrate is a one-shot `compose run`, not a running service.
+    app_services = {
+        name
+        for name, service in compose["services"].items()
+        if "build" in service and name != "migrate"
+    }
+
+    code, output = dry_run(clone)
+
+    assert code == 0, output
+    stop = next(
+        line for line in output.splitlines() if line.startswith("+ echo compose stop ")
+    )
+    assert set(stop.split()[4:]) == app_services
+
+
+def test_dry_run_checks_settings_on_the_new_images_before_stopping_anything(clone):
+    code, output = dry_run(clone)
+
+    assert code == 0, output
+    lines = output.splitlines()
+    check = lines.index(
+        "+ echo compose run --rm --no-deps --entrypoint python worker"
+        " -m memory.common.settings worker"
+    )
+    stop = next(i for i, line in enumerate(lines) if line.startswith("+ echo compose stop "))
+    assert check < stop
 
 
 def test_stale_update_state_is_refused(clone):
