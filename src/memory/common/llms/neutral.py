@@ -13,7 +13,9 @@ from pydantic import BaseModel, Field, ValidationError
 ReasoningLevel = Literal["off", "low", "medium", "high"]
 # "paused": the provider stopped a long turn early; resend the conversation,
 # partial turn included, to resume it.
-StopReason = Literal["end_turn", "tool_calls", "max_output_tokens", "refused", "paused"]
+StopReason = Literal[
+    "end_turn", "tool_calls", "max_output_tokens", "context_exceeded", "refused", "paused"
+]
 # {"provider": str, "blocks": [...]}: opaque, same-provider resend only
 Replay = dict[str, Any]
 BUILTIN_TOOLS = frozenset({"web_search", "web_fetch"})

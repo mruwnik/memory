@@ -255,6 +255,24 @@ def test_server_tool_error_is_an_error_result():
     )
 
 
+@pytest.mark.parametrize(
+    "stop_reason,neutral",
+    [
+        ("end_turn", "end_turn"),
+        ("stop_sequence", "end_turn"),
+        ("tool_use", "tool_calls"),
+        ("max_tokens", "max_output_tokens"),
+        ("model_context_window_exceeded", "context_exceeded"),
+        ("refusal", "refused"),
+        ("pause_turn", "paused"),
+    ],
+)
+def test_every_stop_reason_is_normalised(stop_reason, neutral):
+    c = provider().agent_completion([], stop_reason, AgentUsage(), Decimal(0))
+
+    assert c.stop_reason == neutral
+
+
 def message(content, stop_reason, **usage):
     return Message.model_validate(
         {

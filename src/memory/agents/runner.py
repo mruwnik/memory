@@ -382,6 +382,12 @@ async def run_loop(
                     f"the model hit max_output_tokens ({params.max_output_tokens}) mid-turn; "
                     "raise max_output_tokens",
                 )
+            if completion.stop_reason == "context_exceeded":
+                raise RunEnded(
+                    RunStatus.FAILED,
+                    "the conversation filled the model's context window; lower "
+                    "AGENT_CONTEXT_TRIM_AT_TOKENS or max_output_tokens",
+                )
             if completion.stop_reason == "refused":
                 raise RunEnded(RunStatus.FAILED, "the model refused the request")
             if completion.stop_reason == "paused":

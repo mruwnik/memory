@@ -381,7 +381,11 @@ async def test_cancel_between_tool_calls(db_session, regular_user, fake_provider
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stop_reason,expected",
-    [("max_output_tokens", "raise max_output_tokens"), ("refused", "refused")],
+    [
+        ("max_output_tokens", "raise max_output_tokens"),
+        ("context_exceeded", "AGENT_CONTEXT_TRIM_AT_TOKENS"),
+        ("refused", "refused"),
+    ],
 )
 async def test_unusable_stop_reasons_fail_with_the_fix(
     db_session, regular_user, fake_providers, stop_reason, expected

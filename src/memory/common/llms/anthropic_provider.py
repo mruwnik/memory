@@ -74,6 +74,7 @@ STOP_REASONS: dict[str, StopReason] = {
     "stop_sequence": "end_turn",
     "tool_use": "tool_calls",
     "max_tokens": "max_output_tokens",
+    "model_context_window_exceeded": "context_exceeded",
     "refusal": "refused",
     "pause_turn": "paused",
 }
