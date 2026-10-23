@@ -9,9 +9,10 @@ Provides:
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import psutil
-from sqlalchemy import delete, select, text
+from sqlalchemy import CursorResult, delete, select, text
 
 from memory.common.celery_app import (
     app,
@@ -141,7 +142,7 @@ def cleanup_old_metrics(retention_days: int = 30) -> dict:
             )
             # Delete those specific IDs
             stmt = delete(MetricEvent).where(MetricEvent.id.in_(subquery))
-            result = session.execute(stmt)
+            result = cast(CursorResult, session.execute(stmt))
             session.commit()
 
             batch_deleted = result.rowcount

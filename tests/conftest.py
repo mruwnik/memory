@@ -18,7 +18,7 @@ import voyageai
 from sqlalchemy import create_engine, event, make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
-from testcontainers.qdrant import QdrantContainer
+from testcontainers.community.qdrant import QdrantContainer
 
 from memory.common import settings
 from tests.providers.email_provider import MockEmailProvider

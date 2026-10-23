@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
-from sqlalchemy import delete, func, inspect as sa_inspect, or_, update
+from sqlalchemy import CursorResult, delete, func, inspect as sa_inspect, or_, update
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -1139,7 +1139,7 @@ def cleanup_old_task_executions(retention_days: int | None = None) -> dict:
                 .limit(batch_size)
             )
             stmt = delete(TaskExecution).where(TaskExecution.id.in_(subquery))
-            result = session.execute(stmt)
+            result = cast(CursorResult, session.execute(stmt))
             session.commit()
             if result.rowcount == 0:
                 break

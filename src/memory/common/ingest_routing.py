@@ -9,8 +9,8 @@ uses ``max_ingest_bytes()`` as the read cap and routes when the bytes arrive.
 
 Rules, in order:
   1. image (PIL can decode it, or declared image/*)      -> Photo
-  2. PDF (``%PDF`` magic / fitz reports a PDF format)     -> MiscDoc
-  3. fitz opens it as a paginated document (epub/mobi/…)  -> Book
+  2. PDF (``%PDF`` magic / PyMuPDF reports a PDF format)     -> MiscDoc
+  3. PyMuPDF opens it as a paginated document (epub/mobi/…)  -> Book
   4. anything else                                        -> MiscDoc
 """
 
@@ -18,7 +18,7 @@ import io
 import pathlib
 from dataclasses import dataclass
 
-import fitz  # PyMuPDF — same parser the ebook task uses
+import pymupdf  # same parser the ebook task uses
 from PIL import Image
 
 from memory.common import settings
@@ -76,17 +76,17 @@ def is_image_bytes(content: bytes) -> bool:
 
 
 def is_ebook_bytes(content: bytes) -> bool:
-    """True if fitz opens the bytes as a non-PDF paginated document.
+    """True if PyMuPDF opens the bytes as a non-PDF paginated document.
 
     PDFs open fine but are routed to MiscDoc, so they're excluded by both the
-    magic prefix and the reported format. (fitz also opens SVG/XPS/CBZ, which
+    magic prefix and the reported format. (PyMuPDF also opens SVG/XPS/CBZ, which
     are niche false-positives here; the common text/office/archive types fail
     to open from a stream and correctly fall through to MiscDoc.)
     """
     if content[:5].startswith(b"%PDF"):
         return False
     try:
-        doc = fitz.open(stream=content)
+        doc = pymupdf.open(stream=content)
     except Exception:
         return False
     try:

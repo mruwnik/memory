@@ -1,11 +1,11 @@
-PyMuPDF==1.25.5
+PyMuPDF==1.28.2
 EbookLib==0.18
-beautifulsoup4==4.13.4
+beautifulsoup4==4.15.0
 defusedxml>=0.7.0  # XXE protection for XML parsing
-markdownify==0.13.1
-pillow==10.3.0
-pypandoc==1.15
-feedparser==6.0.10
+markdownify==0.14.1
+pillow==13.0.0
+pypandoc==1.17
+feedparser==6.0.14
 
 # Google Drive API
 google-auth>=2.0.0

@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage=false
 import sys
 import threading
 from unittest.mock import Mock
@@ -45,7 +46,7 @@ def test_embed_chunks_query_fails_fast(mock_voyage_client, monkeypatch, input_ty
     with pytest.raises(embedding.EmbeddingError):
         embed_chunks([["q"]], input_type=input_type)
 
-    assert embedding.voyageai.Client.call_args.kwargs["timeout"] == timeout
+    assert cast(Mock, embedding.voyageai.Client).call_args.kwargs["timeout"] == timeout
     assert mock_voyage_client.embed.call_count == attempts
 
 

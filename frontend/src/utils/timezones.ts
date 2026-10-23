@@ -67,8 +67,8 @@ export function getUtcOffset(tz: string): string {
     })
     const parts = formatter.formatToParts(now)
     const offset = parts.find(p => p.type === 'timeZoneName')?.value || ''
-    // Convert "GMT-5" to "UTC-5"
-    return offset.replace('GMT', 'UTC')
+    // Convert "GMT-5" to "UTC-5"; newer ICU reports UTC itself as a bare "GMT"
+    return offset === 'GMT' ? 'UTC+0' : offset.replace('GMT', 'UTC')
   } catch {
     return ''
   }

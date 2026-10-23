@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Generator, TypedDict
 
 import defusedxml.ElementTree as DefusedElementTree
+import pymupdf
 
 from memory.common import settings
 
@@ -360,9 +361,7 @@ class GoogleDriveClient:
         Returns None on failure so callers can distinguish empty PDFs from errors.
         """
         try:
-            import fitz  # PyMuPDF
-
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
             text_parts = []
             for page in doc:
                 text_parts.append(page.get_text())  # type: ignore[union-attr]

@@ -1,10 +1,11 @@
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from typing import cast
 from unittest.mock import Mock, patch
 
 import anthropic
-import httpx
+import httpx2
 import pytest
 
 from memory.common import embedding, extract, qdrant as qdrant_tools, settings
@@ -46,9 +47,9 @@ def ended_batch(age: timedelta = timedelta(hours=1)):
 
 
 def not_found(*_args, **_kwargs):
-    request = httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches/x")
+    request = httpx2.Request("GET", "https://api.anthropic.com/v1/messages/batches/x")
     raise anthropic.NotFoundError(
-        "not found", response=httpx.Response(404, request=request), body=None
+        "not found", response=httpx2.Response(404, request=request), body=None
     )
 
 
@@ -137,7 +138,7 @@ def test_submit_pending_without_pending_requests_does_nothing(db_session, batche
 def test_collect_applies_summary_and_is_idempotent(db_session, batches, qdrant):
     item = make_item(db_session)
     existing = item.make_chunk(extract.DataChunk(data=["body text"]))
-    embedding.embed_by_model([existing], existing.embedding_model)
+    embedding.embed_by_model([existing], cast(str, existing.embedding_model))
     db_session.add(existing)
     db_session.commit()
     push_chunks_to_qdrant([existing])
@@ -313,7 +314,7 @@ def test_collect_without_anthropic_model_does_nothing(db_session, batches):
 def test_collect_merges_tags_even_if_summary_push_fails(db_session, batches, qdrant):
     item = make_item(db_session)
     existing = item.make_chunk(extract.DataChunk(data=["body text"]))
-    embedding.embed_by_model([existing], existing.embedding_model)
+    embedding.embed_by_model([existing], cast(str, existing.embedding_model))
     db_session.add(existing)
     db_session.commit()
     push_chunks_to_qdrant([existing])

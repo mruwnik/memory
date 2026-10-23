@@ -25,7 +25,7 @@ _BACKOFF_SECONDS = [0, 5, 30]  # attempt 1 immediate, then 5s, 30s
 async def _resolve(host: str) -> list[str]:
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    return [info[4][0] for info in infos]
+    return [str(info[4][0]) for info in infos]
 
 
 async def is_safe_callback_url(url: str) -> bool:

@@ -153,7 +153,7 @@ def clean_filename(filename: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", filename).strip("_")[:30]
 
 
-def image_filenames(chunk_id: str, images: list[Image.Image]) -> list[str]:
+def image_filenames(chunk_id: str, images: Sequence[Image.Image]) -> list[str]:
     for i, image in enumerate(images):
         if not getattr(image, "filename", None):  # type: ignore
             filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}_{i}.{image.format}"  # type: ignore
@@ -163,7 +163,7 @@ def image_filenames(chunk_id: str, images: list[Image.Image]) -> list[str]:
     return [image.filename for image in images]  # type: ignore
 
 
-def add_pics(chunk: str, images: list[Image.Image]) -> list[extract.MulitmodalChunk]:
+def add_pics(chunk: str, images: Sequence[Image.Image]) -> list[extract.MulitmodalChunk]:
     return [chunk] + [
         i
         for i in images
@@ -599,7 +599,7 @@ class SourceItem(AccessControlMixin, Base):
         else:
             chunks = []
 
-        if self.mime_type and self.mime_type.startswith("image/"):
+        if self.filename and self.mime_type and self.mime_type.startswith("image/"):
             chunks.append(extract.DataChunk(data=[Image.open(self.filename)]))
         return chunks
 

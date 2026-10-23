@@ -86,7 +86,7 @@ def test_doc_to_images():
     with pymupdf.open(REGULAMIN) as pdf:
         for page, pdf_page in zip(result, pdf.pages()):
             pix = pdf_page.get_pixmap()
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             assert page.data == [img]
             assert page.metadata == {
                 "page": pdf_page.number,

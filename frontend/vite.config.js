@@ -16,6 +16,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Tests assert wall-clock labels for UTC slot times
+    env: { TZ: 'UTC' },
     setupFiles: ['./src/test/setup.ts'],
     css: false,
     clearMocks: true,

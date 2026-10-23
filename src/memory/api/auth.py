@@ -38,6 +38,8 @@ _auth_disabled_warning_logged = False
 # Create router
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+AUTH_REQUIRED_BODY = "Authentication required"
+
 # Endpoints that don't require authentication (prefix matching).
 # `/register` and `/revoke` are the OAuth Dynamic Client Registration
 # (RFC 7591) and Token Revocation (RFC 7009) endpoints exposed by the
@@ -966,7 +968,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         session_id = get_token(request)
         if not session_id:
             return Response(
-                content="Authentication required",
+                content=AUTH_REQUIRED_BODY,
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},
             )

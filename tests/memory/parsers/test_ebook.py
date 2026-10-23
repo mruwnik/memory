@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-import fitz
+import pymupdf
 
 from memory.parsers.ebook import (
     Peekable,
@@ -201,7 +201,7 @@ def test_extract_sections_no_toc(mock_doc):
     ]
 
 
-@patch("fitz.open")
+@patch("pymupdf.open")
 def test_parse_ebook(mock_open, mock_doc, tmp_path):
     mock_open.return_value = mock_doc
 
@@ -218,7 +218,7 @@ def test_parse_ebook(mock_open, mock_doc, tmp_path):
     assert ebook.file_type == "epub"
 
 
-@patch("fitz.open")
+@patch("pymupdf.open")
 def test_parse_ebook_file_not_found(mock_open, tmp_path):
     non_existent_file = tmp_path / "does_not_exist.epub"
 
@@ -226,20 +226,20 @@ def test_parse_ebook_file_not_found(mock_open, tmp_path):
         parse_ebook(non_existent_file)
 
 
-@patch("fitz.open")
+@patch("pymupdf.open")
 def test_parse_ebook_fitz_error(mock_open, tmp_path):
     # Create a test file to avoid FileNotFoundError
     test_file = tmp_path / "test.epub"
     test_file.touch()
 
-    # Mock the fitz.open to raise the FileNotFoundError
-    mock_open.side_effect = fitz.FileNotFoundError("File not found by PyMuPDF")
+    # Mock pymupdf.open to raise the FileNotFoundError
+    mock_open.side_effect = pymupdf.FileNotFoundError("File not found by PyMuPDF")
 
-    with pytest.raises(fitz.FileNotFoundError):
+    with pytest.raises(pymupdf.FileNotFoundError):
         parse_ebook(test_file)
 
 
-@patch("fitz.open")
+@patch("pymupdf.open")
 def test_parse_ebook_no_metadata(mock_open, mock_doc, tmp_path):
     mock_doc.metadata = {}
     mock_open.return_value = mock_doc
@@ -263,7 +263,7 @@ def test_parse_ebook_no_metadata(mock_open, mock_doc, tmp_path):
         ("", ""),  # No extension
     ],
 )
-@patch("fitz.open")
+@patch("pymupdf.open")
 def test_parse_ebook_file_types(
     mock_open, mock_doc, tmp_path, file_suffix, expected_type
 ):
@@ -367,7 +367,7 @@ def test_extract_sections_with_different_toc_formats():
     assert sections[1].title == "Chapter 2"
 
 
-@patch("fitz.open")
+@patch("pymupdf.open")
 def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
     """Test full content is correctly concatenated from sections."""
     # Setup mock document with sections

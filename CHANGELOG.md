@@ -71,6 +71,11 @@ None.
   a slower rerank falls back to fused order), `QUERY_EMBEDDING_TIMEOUT`
   (default 5 s) and `QDRANT_SEARCH_TIMEOUT` (default 5 s; a collection that
   misses it is left out of that search). Ingestion keeps `QDRANT_TIMEOUT`.
+- Dependency security update: Python packages (pillow, cryptography,
+  python-multipart, mcp/fastmcp, awscli, markdownify and others) and the
+  frontend lockfile are bumped, and the Qdrant image moves to `v1.14.1`.
+  The api image's frontend build stage moves from Node 18 to Node 22.
+  The images must be rebuilt. `tools/update.sh` does this.
 
 ### Migrations
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 from pathlib import Path
 
-import fitz  # PyMuPDF
+import pymupdf
 from memory.common import paths
 
 logger = logging.getLogger(__name__)
@@ -163,8 +163,8 @@ def parse_ebook(file_path: str | Path) -> Ebook:
         raise FileNotFoundError(f"File not found: {path}")
 
     try:
-        doc = fitz.open(str(path))
-    except fitz.FileNotFoundError as e:
+        doc = pymupdf.open(str(path))
+    except pymupdf.FileNotFoundError as e:
         logger.error(f"Error opening ebook {path}: {e}")
         raise
 

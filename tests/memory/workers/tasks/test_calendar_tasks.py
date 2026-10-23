@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
+from typing import cast
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import CalendarEvent, HumanUser, Person
@@ -435,7 +436,7 @@ def test_sync_calendar_event_reembeds_stale_events(
     db_session.commit()
 
     calendar.sync_calendar_event(
-        caldav_account.id, _serialize_event_data({**mock_event_data, **changes})
+        caldav_account.id, _serialize_event_data(cast(EventData, {**mock_event_data, **changes}))
     )
 
     db_session.expire_all()
@@ -447,7 +448,7 @@ def test_sync_calendar_event_reembeds_stale_events(
 def test_sync_calendar_event_long_unchanged_event_is_not_resummarized(
     mock_event_data, caldav_account, db_session, qdrant
 ):
-    long_event = {**mock_event_data, "description": "Dial-in details. " * 200}
+    long_event = cast(EventData, {**mock_event_data, "description": "Dial-in details. " * 200})
     summaries = iter(range(100))
     with patch(
         "memory.common.summarizer.summarize",

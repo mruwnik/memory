@@ -125,10 +125,10 @@ PROJECT_ACCESS = {"should": [{"key": "project_id", "match": {"value": 3}}]}
     "filter_params, expected_filter",
     [
         (None, None),
-        ({"must_not": [HIDDEN]}, qdrant_models.Filter(must_not=[HIDDEN])),
+        ({"must_not": [HIDDEN]}, qdrant_models.Filter.model_validate({"must_not": [HIDDEN]})),
         (
             {"must": [PROJECT_ACCESS], "must_not": [HIDDEN]},
-            qdrant_models.Filter(must=[PROJECT_ACCESS], must_not=[HIDDEN]),
+            qdrant_models.Filter.model_validate({"must": [PROJECT_ACCESS], "must_not": [HIDDEN]}),
         ),
     ],
 )

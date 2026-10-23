@@ -24,6 +24,15 @@ async def test_every_mounted_tool_has_its_own_checker():
     assert [names for names in by_checker.values() if len(names) > 1] == []
 
 
+@pytest.mark.asyncio
+async def test_every_mounted_tool_forbids_task_execution():
+    # Task-augmented calls run outside VisibilityMiddleware.on_call_tool.
+    # A tool only accepts them when it advertises `execution.taskSupport`.
+    mounted_tools = await mcp.get_tools()
+
+    assert [n for n, t in mounted_tools.items() if t.to_mcp_tool().execution] == []
+
+
 @pytest.fixture
 def no_people_scope_middleware(monkeypatch):
     """The production VisibilityMiddleware, as seen by a user without `people`."""

@@ -274,13 +274,13 @@ def test_oauth_public_endpoints_bypass_auth_middleware(
 ):
     """The middleware must not return 401 for unauthenticated OAuth-public paths.
 
-    We don't care what the OAuth handler returns (400/422 for missing params is
-    fine) — only that the middleware passed the request along. A 401 here
-    means the middleware blocked it before the handler ran.
+    We don't care what the OAuth handler returns — only that the middleware
+    passed the request along. The handler may itself 401 (RFC 6749 allows it
+    for invalid_client), so the middleware's 401 is identified by its body.
     """
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
     response = client.request(method, path)
-    assert response.status_code != 401, (
+    assert response.text != auth.AUTH_REQUIRED_BODY, (
         f"{method} {path} returned 401 from AuthenticationMiddleware; "
         f"OAuth-public endpoints must be in WHITELIST. Body: {response.text!r}"
     )
