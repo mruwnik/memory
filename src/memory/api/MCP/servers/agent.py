@@ -511,10 +511,12 @@ async def trigger_upsert(
     with make_session() as db:
         definition = owned_definition(db, definition_id, user_id)
         existing = owned_trigger(db, trigger_id, user_id) if trigger_id is not None else None
-        if config is None and existing is None:
-            raise ValueError("config is required to create a trigger")
+        if config is None:
+            if existing is None:
+                raise ValueError("config is required to create a trigger")
+            config = existing.config
         try:
-            parsed = IngestConfig.model_validate(existing.config if config is None else config)
+            parsed = IngestConfig.model_validate(config)
         except ValidationError as e:
             raise ValueError(f"invalid trigger config: {e}") from e
         spec = parse_spec(definition.spec)
@@ -539,9 +541,10 @@ async def trigger_upsert(
             trigger.state = {k: v for k, v in (trigger.state or {}).items() if k != "tripped"}
         db.flush()
         stale_buffer = was_batched and (not will_be_enabled or parsed.delivery.mode != "batch")
+        saved_id = trigger.id
         result = trigger.serialize() | {"warnings": await exposure_warnings(spec)}
     if stale_buffer:
-        drop_buffer(result["id"])
+        drop_buffer(saved_id)
     return result
 
 

@@ -2,6 +2,7 @@ import threading
 import time
 from datetime import timedelta
 from datetime import datetime, timezone
+from typing import Any
 
 import fakeredis
 import pytest
@@ -44,7 +45,7 @@ def client():
 
 
 def facts(**overrides):
-    base = dict(
+    base: dict[str, Any] = dict(
         source_type="blog_post",
         tags=frozenset({"ai"}),
         channel_id=None,

@@ -1,3 +1,5 @@
+# redis-py types replies as sync|async unions.
+# pyright: reportOperatorIssue=false, reportIndexIssue=false
 """Ingest triggers: deterministic filters over newly stored items.
 
 Matching runs on the maintenance queue, so this module must stay importable
@@ -177,7 +179,9 @@ def lowered(values: Iterable[Any]) -> frozenset[str]:
 
 
 def mail_authors(sender: str | None) -> list[str]:
-    return [sender, email.utils.parseaddr(sender or "")[1]]
+    if not sender:
+        return []
+    return [sender, email.utils.parseaddr(sender)[1]]
 
 
 def channel_and_authors(item: SourceItem) -> tuple[str | None, list[Any]]:
