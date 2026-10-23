@@ -88,6 +88,13 @@ const Dashboard = ({ onLogout, user, hasScope }: DashboardProps) => {
                                 <p className="text-gray-600 text-base">Submit questions to verify, research, or link, and see answers</p>
                             </Link>
                         )}
+
+                        {hasScope('agents') && (
+                            <Link to="/ui/agents" className="bg-white p-8 rounded-xl shadow-md text-center transition-all cursor-pointer no-underline text-inherit block hover:-translate-y-0.5 hover:shadow-lg">
+                                <h3 className="text-slate-800 text-xl mb-2 font-semibold">Agents</h3>
+                                <p className="text-gray-600 text-base">Define and run agents over your memory</p>
+                            </Link>
+                        )}
                     </div>
                 </section>
 

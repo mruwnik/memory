@@ -1,11 +1,10 @@
 """Visibility checks against the real mounted MCP server and its registry."""
 
 from collections import defaultdict
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import mcp.types as mt
 import pytest
+from fastmcp.exceptions import ToolError
 
 from memory.api.MCP.base import mcp
 from memory.api.MCP.visibility import get_visibility_checker
@@ -55,7 +54,7 @@ async def test_people_fetch_not_callable_without_people_scope(no_people_scope_mi
     call_next = AsyncMock()
 
     with patch("memory.api.MCP.visibility_middleware.make_session"):
-        result = await middleware.on_call_tool(context, call_next)
+        with pytest.raises(ToolError, match="Access denied: people_fetch"):
+            await middleware.on_call_tool(context, call_next)
 
     call_next.assert_not_awaited()
-    assert "Access denied" in cast(mt.TextContent, result.content[0]).text

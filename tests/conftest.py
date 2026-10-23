@@ -34,12 +34,19 @@ def pytest_addoption(parser):
         default=False,
         help="Run slow tests (database, containers, etc.)",
     )
+    parser.addoption(
+        "--run-live",
+        action="store_true",
+        default=False,
+        help="Run tests that call paid external APIs",
+    )
 
 
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line("markers", "slow: marks tests as slow")
     config.addinivalue_line("markers", "integration: marks integration tests")
+    config.addinivalue_line("markers", "live: calls paid external APIs; needs --run-live")
     config.addinivalue_line("markers", "db: marks tests that require database")
     config.addinivalue_line(
         "markers",
@@ -68,8 +75,12 @@ def pytest_collection_modifyitems(config, items):
     qdrant_fixtures = {"qdrant", "qdrant_container"}
     run_slow = config.getoption("--run-slow")
     skip_slow = pytest.mark.skip(reason="need --run-slow option to run")
+    run_live = config.getoption("--run-live")
+    skip_live = pytest.mark.skip(reason="need --run-live option to run")
 
     for item in items:
+        if item.get_closest_marker("live") and not run_live:
+            item.add_marker(skip_live)
         fixtures = set(getattr(item, "fixturenames", []))
         if qdrant_fixtures.intersection(fixtures):
             item.add_marker(pytest.mark.qdrant)
@@ -996,11 +1007,7 @@ def mock_anthropic_client():
 
         client.messages.create = Mock(
             return_value=Mock(
-                content=[
-                    Mock(
-                        text=MOCK_SUMMARY_RESPONSE
-                    )
-                ]
+                content=[Mock(type="text", text=MOCK_SUMMARY_RESPONSE)]
             )
         )
 

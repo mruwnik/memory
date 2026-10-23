@@ -1,12 +1,11 @@
 """Tests for the MCP visibility system."""
 
-from typing import cast
-
 import pytest
 from sqlalchemy.orm import Session
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import mcp.types as mt
+from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import Tool
 
 from memory.api.MCP import visibility
@@ -353,30 +352,6 @@ async def test_on_list_tools_checker_error_denies_access(middleware, make_tool):
 
 
 @pytest.mark.asyncio
-async def test_on_call_tool_denies_undeclared_tools(middleware):
-    """Tools with no @visible_when registration are denied at call time.
-
-    This is the fail-closed flip from the previous "no checker = public"
-    behaviour. A tool that wants to be public must register an explicit
-    always-True checker via @visible_when() — see the explicit-public
-    test below.
-    """
-    context = MagicMock()
-    context.message = MagicMock()
-    context.message.name = "undeclared_tool"
-
-    call_next = AsyncMock()
-
-    result = await middleware.on_call_tool(context, call_next)
-
-    # Should NOT have called the underlying tool implementation.
-    call_next.assert_not_awaited()
-    # Result should be a denial-shaped ToolResult.
-    text = result.content[0].text  # type: ignore[union-attr]
-    assert "Access denied" in text or "no visibility policy" in text
-
-
-@pytest.mark.asyncio
 async def test_on_call_tool_allows_explicit_public_tools(middleware):
     """Tools registered with an always-True checker are callable by anyone."""
     async def always_true(user_info, session):
@@ -425,76 +400,40 @@ async def test_on_call_tool_allows_when_checker_passes(middleware):
     call_next.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_on_call_tool_denies_when_checker_fails(middleware):
-    """Tool call denied when checker returns False."""
+async def allow(user_info, session):
+    return True
 
-    async def deny_checker(user_info, session):
-        return False
 
-    register_visibility("denied_tool", deny_checker)
+async def deny(user_info, session):
+    return False
 
-    context = MagicMock()
-    context.message = MagicMock()
-    context.message.name = "denied_tool"
 
-    call_next = AsyncMock()
-
-    with patch("memory.api.MCP.visibility_middleware.make_session"):
-        result = await middleware.on_call_tool(context, call_next)
-
-    # Should return error result with access denied message
-    text_content = cast(mt.TextContent, result.content[0])
-    assert "Access denied" in text_content.text
-    assert "denied_tool" in text_content.text
-
-    # call_next should NOT be called
-    call_next.assert_not_awaited()
+async def explode(user_info, session):
+    raise RuntimeError("Database connection failed")
 
 
 @pytest.mark.asyncio
-async def test_on_call_tool_checker_error_returns_error_result(middleware):
-    """If checker raises exception, return error result."""
-
-    async def failing_checker(user_info, session):
-        raise RuntimeError("Database connection failed")
-
-    register_visibility("error_tool", failing_checker)
-
+@pytest.mark.parametrize(
+    "registered,called",
+    [
+        ({}, "undeclared_tool"),
+        ({"denied_tool": deny}, "denied_tool"),
+        ({"error_tool": explode}, "error_tool"),
+        # A checker for the bare function name never authorizes a mounted tool.
+        ({"my_tool": allow}, "core_my_tool"),
+    ],
+)
+async def test_on_call_tool_denials_are_indistinguishable(registered, called):
+    for name, checker in registered.items():
+        register_visibility(name, checker)
+    middleware = VisibilityMiddleware(get_user_info=lambda: {"scopes": []})
     context = MagicMock()
-    context.message = MagicMock()
-    context.message.name = "error_tool"
-
+    context.message.name = called
     call_next = AsyncMock()
 
     with patch("memory.api.MCP.visibility_middleware.make_session"):
-        result = await middleware.on_call_tool(context, call_next)
+        with pytest.raises(ToolError) as exc:
+            await middleware.on_call_tool(context, call_next)
 
-    # Should return error result with access check failed message
-    text_content = cast(mt.TextContent, result.content[0])
-    assert "Access check failed" in text_content.text
-    assert "error_tool" in text_content.text
-
-    # call_next should NOT be called
-    call_next.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_on_call_tool_ignores_checker_for_unprefixed_name(middleware):
-    """A checker for the bare function name never authorizes a mounted tool."""
-
-    async def allow(user_info, session):
-        return True
-
-    register_visibility("my_tool", allow)
-
-    context = MagicMock()
-    context.message.name = "core_my_tool"
-    call_next = AsyncMock()
-
-    with patch("memory.api.MCP.visibility_middleware.make_session"):
-        result = await middleware.on_call_tool(context, call_next)
-
-    text_content = cast(mt.TextContent, result.content[0])
-    assert "Access denied" in text_content.text
+    assert str(exc.value) == f"Access denied: {called}"
     call_next.assert_not_awaited()

@@ -1,6 +1,7 @@
+from typing import cast
+
 import anthropic
 import pytest
-from typing import Any, cast
 from unittest.mock import Mock
 from anthropic import transform_schema
 from PIL import Image
@@ -90,7 +91,6 @@ def test_convert_tool(provider):
         name="test_tool",
         description="A test tool",
         input_schema={"type": "object", "properties": {}},
-        function=lambda x: "result",
     )
     result = provider._convert_tool(tool)
 
@@ -154,7 +154,6 @@ def test_build_request_kwargs_with_tools(provider):
             name="test",
             description="test",
             input_schema={},
-            function=lambda x: "result",
         )
     ]
     settings = LLMSettings()
@@ -459,7 +458,7 @@ async def test_agenerate_basic(provider, mock_anthropic_client):
     result = await provider.agenerate(messages)
 
     assert "test summary" in result
-    anthropic.AsyncAnthropic().messages.create.assert_called_once()
+    cast(Mock, anthropic.AsyncAnthropic()).messages.create.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -489,7 +488,7 @@ async def test_async_calls_close_their_client(provider, mock_anthropic_client, c
     # in-flight requests on other clients.
     await call(provider, [Message(role=MessageRole.USER, content="test")])
 
-    anthropic.AsyncAnthropic().__aexit__.assert_awaited_once()
+    cast(Mock, anthropic.AsyncAnthropic()).__aexit__.assert_awaited_once()
 
 
 def test_convert_message_sorts_thinking_content(provider):
@@ -511,64 +510,6 @@ def test_convert_message_sorts_thinking_content(provider):
     thinking_idx = content_types.index("thinking")
     text_idx = content_types.index("text")
     assert thinking_idx < text_idx
-
-
-def test_execute_tool_success(provider):
-    tool_call = {"id": "t1", "name": "test", "input": {"arg": "value"}}
-    tools = {
-        "test": ToolDefinition(
-            name="test",
-            description="test",
-            input_schema={},
-            function=cast(Any, lambda x: f"result: {x['arg']}"),
-        )
-    }
-
-    result = provider.execute_tool(tool_call, tools)
-
-    assert result.tool_use_id == "t1"
-    assert result.content == "result: value"
-    assert result.is_error is False
-
-
-def test_execute_tool_missing_name(provider):
-    tool_call = {"id": "t1", "input": {}}
-    tools = {}
-
-    result = provider.execute_tool(tool_call, tools)
-
-    assert result.tool_use_id == "t1"
-    assert "missing" in result.content.lower()
-    assert result.is_error is True
-
-
-def test_execute_tool_not_found(provider):
-    tool_call = {"id": "t1", "name": "nonexistent", "input": {}}
-    tools = {}
-
-    result = provider.execute_tool(tool_call, tools)
-
-    assert result.tool_use_id == "t1"
-    assert "not found" in result.content.lower()
-    assert result.is_error is True
-
-
-def test_execute_tool_exception(provider):
-    tool_call = {"id": "t1", "name": "test", "input": {}}
-    tools = {
-        "test": ToolDefinition(
-            name="test",
-            description="test",
-            input_schema={},
-            function=cast(Any, lambda x: 1 / 0),  # Raises ZeroDivisionError
-        )
-    }
-
-    result = provider.execute_tool(tool_call, tools)
-
-    assert result.tool_use_id == "t1"
-    assert result.is_error is True
-    assert "division" in result.content.lower()
 
 
 def test_encode_image(provider):

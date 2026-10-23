@@ -1,8 +1,11 @@
 """Tests for user management API endpoints."""
 
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
 
+from memory.common import settings
 from memory.common.db.models import APIKey, APIKeyType, HumanUser
 
 
@@ -453,3 +456,50 @@ def test_create_api_key_admin_can_grant_full_scope(client: TestClient, admin_use
     assert response.status_code == 200
     data = response.json()
     assert data["scopes"] == ["*"]
+
+
+@pytest.fixture
+def agent_ceilings(monkeypatch):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
+    monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
+
+
+@pytest.mark.parametrize(
+    "body,run_cap,daily_cap",
+    [
+        ({}, None, None),
+        (
+            {"agent_max_run_cost_usd": "0.25", "agent_max_daily_cost_usd": "5"},
+            "0.250000",
+            "5.000000",
+        ),
+    ],
+)
+def test_create_api_key_with_agent_caps(
+    client: TestClient, admin_user, db_session, agent_ceilings, body, run_cap, daily_cap
+):
+    response = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "agents"} | body)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert (data["agent_max_run_cost_usd"], data["agent_max_daily_cost_usd"]) == (
+        run_cap,
+        daily_cap,
+    )
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"agent_max_run_cost_usd": "2"}, "AGENT_MAX_RUN_COST_USD ceiling"),
+        ({"agent_max_daily_cost_usd": "11"}, "AGENT_MAX_DAILY_COST_USD ceiling"),
+        ({"agent_max_run_cost_usd": "0"}, "greater than 0"),
+    ],
+)
+def test_api_key_agent_caps_above_ceiling_are_rejected(
+    client: TestClient, admin_user, db_session, agent_ceilings, body, expected
+):
+    response = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "agents"} | body)
+
+    assert response.status_code in (400, 422)
+    assert expected in response.text

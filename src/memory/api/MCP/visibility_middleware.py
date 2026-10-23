@@ -16,6 +16,7 @@ import logging
 from collections.abc import Callable, Sequence
 
 import mcp.types as mt
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import Tool, ToolResult
 
@@ -127,18 +128,7 @@ class VisibilityMiddleware(Middleware):
                 "Refusing to call tool %s: no visibility checker registered",
                 tool_name,
             )
-            return ToolResult(
-                content=[
-                    mt.TextContent(
-                        type="text",
-                        text=(
-                            f"Access denied: {tool_name} has no visibility "
-                            "policy. Decorate it with @visible_when(...) to "
-                            "expose it."
-                        ),
-                    )
-                ],
-            )
+            raise ToolError(f"Access denied: {tool_name}")
 
         user_info = self.get_user_info()
 
@@ -150,27 +140,13 @@ class VisibilityMiddleware(Middleware):
                 f"Visibility checker failed during tool call for {tool_name}: {e}",
                 exc_info=True,
             )
-            return ToolResult(
-                content=[
-                    mt.TextContent(
-                        type="text",
-                        text=f"Access check failed for {tool_name}",
-                    )
-                ],
-            )
+            raise ToolError(f"Access denied: {tool_name}")
 
         if not allowed:
             logger.warning(
                 f"Access denied for tool {tool_name} "
                 f"(user: {user_info.get('user', {}).get('user_id', 'anonymous')})"
             )
-            return ToolResult(
-                content=[
-                    mt.TextContent(
-                        type="text",
-                        text=f"Access denied: you don't have permission to use {tool_name}",
-                    )
-                ],
-            )
+            raise ToolError(f"Access denied: {tool_name}")
 
         return await call_next(context)

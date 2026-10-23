@@ -19,6 +19,7 @@ from memory.api.MCP.servers import (
 def test_all_servers_in_enum():
     """Verify all expected servers are in the enum."""
     expected = {
+        "agent",
         "books",
         "check",
         "claude",

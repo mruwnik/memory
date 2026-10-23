@@ -92,6 +92,8 @@ COMPLETE_SETTINGS = dict(
     ANTHROPIC_API_KEY="",
     OPENAI_API_KEY="",
     SUMMARIZER_MODEL="anthropic/claude-haiku-5-5",
+    CELERY_QUEUE_PREFIX="memory",
+    QUEUE_PREFIX="",
 )
 
 
@@ -132,3 +134,48 @@ def test_require_settings_rejects_unknown_role(capsys):
 
 def test_require_settings_passes_when_complete():
     require_settings(SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"}), "worker")
+
+
+@pytest.mark.parametrize(
+    "worker_prefix,task_prefix", [("", "memory"), ("memory", "memory"), ("chris", "chris")]
+)
+def test_workers_on_the_routed_queues_start(worker_prefix, task_prefix):
+    values = SimpleNamespace(
+        **{
+            **COMPLETE_SETTINGS,
+            "ANTHROPIC_API_KEY": "sk",
+            "QUEUE_PREFIX": worker_prefix,
+            "CELERY_QUEUE_PREFIX": task_prefix,
+        }
+    )
+
+    require_settings(values, "worker")
+
+
+@pytest.mark.parametrize(
+    "worker_prefix,task_prefix,listens",
+    [
+        ("chris", "memory", "'chris'"),
+        # entry.sh falls back to "memory" while tasks follow APP_NAME.
+        ("", "chris", "'memory'"),
+    ],
+)
+def test_a_worker_listening_on_other_queues_refuses_to_start(
+    capsys, worker_prefix, task_prefix, listens
+):
+    values = SimpleNamespace(
+        **{
+            **COMPLETE_SETTINGS,
+            "ANTHROPIC_API_KEY": "sk",
+            "QUEUE_PREFIX": worker_prefix,
+            "CELERY_QUEUE_PREFIX": task_prefix,
+        }
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "worker")
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert f"listens on {listens}" in err
+    assert f"CELERY_QUEUE_PREFIX '{task_prefix}'" in err

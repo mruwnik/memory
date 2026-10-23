@@ -214,6 +214,17 @@ Async fire-and-forget queue: callers submit text to verify/research/link/deep-di
 - **Claiming/fencing, no reaper**: claim = scan `check:open`, `SET NX EX` a lease (minting a `lease_id`) on the first free id; the TTL auto-expires to reclaim stuck jobs. `/check/next` BLPOPs the doorbell that `submit` RPUSHes. `complete_job` accepts a result only if the held lease still equals the caller's `lease_id` (else 410). Over `CHECK_MAX_REQUEUE_ATTEMPTS` claims → `expired`. Callbacks are best-effort in-process asyncio (SSRF-guarded); polling is the durable fallback.
 - **Config**: `CHECK_*` in `settings.py` (lease 1h, retention 14d, queue depth, rate limit, callback attempts, wait 60 / max 300).
 
+## Agent Runs
+
+User-defined agents (prompt + model + tools + finish rule + budgets) run as a provider-neutral tool loop. Spec: `docs/superpowers/specs/2026-10-23-agent-runs-design.md`.
+
+- **Code**: `src/memory/agents/` (spec, enqueue, toolhub, trim, runner); providers implement `acomplete` in `src/memory/common/llms/` against `neutral.py`.
+- **Trigger seam**: every trigger calls `memory.agents.enqueue.enqueue_run`; the runner never sees the trigger.
+- **Execution**: Celery queue `agents`, consumed only by the `agents-worker` service (API image: the runner calls memory MCP tools in-process as the run's user, with the scopes snapshotted at enqueue).
+- **Caps**: `AGENT_MAX_RUN_COST_USD` / `AGENT_MAX_DAILY_COST_USD` are hard ceilings; definitions and API keys can only lower them.
+- **MCP tools**: `agent_*` (scope `agents`, module `api/MCP/servers/agent.py`); never callable from inside a run.
+- **Access**: grant users the `agents` scope; only `*` admins have it by default.
+
 ## Key Design Decisions
 
 1. **Multi-user with privacy** — collaboration while staying self-hosted

@@ -172,6 +172,8 @@ RELOAD=true python -m memory.api.app
 celery -A memory.common.celery_app worker -Q memory-email,memory-blogs,memory-notes
 ```
 
+On macOS, run host-side workers with `--pool=solo` (one per concurrent task): forked prefork children segfault in libpq and the system TLS code. Linux and the Docker images are unaffected.
+
 `dev.sh` only starts the data services and writes a `.env` pointing at `localhost`. To go back to the all-in-Docker setup, run `docker compose up -d` afterwards — that brings up the API, workers, and migration runner.
 
 ## User management & ingestion
@@ -274,6 +276,16 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `ENABLE_SEARCH_SCORING`           | `true`               | Recency / popularity / title-match score boosts                |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
 | `LATEST_RELEASE_URL`              | unset                | URL returning the latest release tag; enables `update_available` in `/health` |
+| `AGENT_MAX_RUN_COST_USD`          | `1.00`               | Hard ceiling on one agent run's cost; definitions and keys can only lower it |
+| `AGENT_MAX_DAILY_COST_USD`        | `10.00`              | Hard ceiling on each rolling-24h agent pool (user, API key, definition) |
+| `AGENT_MAX_TIMEOUT_SEC`           | `1800`               | Longest `timeout_sec` an agent spec may set                    |
+| `AGENT_MAX_WAIT_SEC`              | `300`                | Longest `agent_wait` block                                     |
+| `AGENT_LLM_TIMEOUT_SEC`           | `600`                | Timeout for one agent model request                            |
+| `AGENT_TOOL_RESULT_MAX_CHARS`     | `50000`              | Tool results longer than this are truncated                    |
+| `AGENT_CONTEXT_TRIM_AT_TOKENS`    | `100000`             | Context size at which old tool results are stubbed             |
+| `AGENT_CONTEXT_TRIM_TO_TOKENS`    | `60000`              | Context size trimming aims for                                 |
+| `AGENT_STEP_RETENTION_DAYS`       | `90`                 | Days before unstarred run transcripts are deleted              |
+| `AGENT_WORKER_CONCURRENCY`        | `2`                  | Concurrent agent runs in `agents-worker` (~270MB each; raise its memory limit with it) |
 
 See `src/memory/common/settings.py` for the full list and `docker-compose.yaml` for how variables map into containers.
 

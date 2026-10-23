@@ -2,6 +2,7 @@ import logging
 import os
 import pathlib
 import sys
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
 
@@ -85,6 +86,9 @@ else:
 
 # Broker settings
 CELERY_QUEUE_PREFIX = os.getenv("CELERY_QUEUE_PREFIX", APP_NAME)
+# The prefix docker/workers/entry.sh listens on; tasks are routed with
+# CELERY_QUEUE_PREFIX, so the two must agree.
+QUEUE_PREFIX = os.getenv("QUEUE_PREFIX", "")
 CELERY_BROKER_TYPE = os.getenv("CELERY_BROKER_TYPE", "redis").lower()
 CELERY_BROKER_USER = os.getenv("CELERY_BROKER_USER", "")
 CELERY_BROKER_PASSWORD = os.getenv("CELERY_BROKER_PASSWORD", REDIS_PASSWORD)
@@ -285,6 +289,18 @@ DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS = int(
 LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
 
 
+# Agent runs
+AGENT_MAX_RUN_COST_USD = Decimal(os.getenv("AGENT_MAX_RUN_COST_USD", "1.00"))
+AGENT_MAX_DAILY_COST_USD = Decimal(os.getenv("AGENT_MAX_DAILY_COST_USD", "10.00"))
+AGENT_MAX_TIMEOUT_SEC = int(os.getenv("AGENT_MAX_TIMEOUT_SEC", "1800"))
+AGENT_MAX_WAIT_SEC = int(os.getenv("AGENT_MAX_WAIT_SEC", "300"))
+AGENT_LLM_TIMEOUT_SEC = float(os.getenv("AGENT_LLM_TIMEOUT_SEC", "600"))
+AGENT_TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", "50000"))
+AGENT_CONTEXT_TRIM_AT_TOKENS = int(os.getenv("AGENT_CONTEXT_TRIM_AT_TOKENS", "100000"))
+AGENT_CONTEXT_TRIM_TO_TOKENS = int(os.getenv("AGENT_CONTEXT_TRIM_TO_TOKENS", "60000"))
+AGENT_STEP_RETENTION_DAYS = int(os.getenv("AGENT_STEP_RETENTION_DAYS", "90"))
+
+
 # Search settings
 ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
 ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)
@@ -476,9 +492,6 @@ DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", f"{APP_NAME}-chat")
 
 # Enable Discord notifications if bot token is set
 DISCORD_NOTIFICATIONS_ENABLED = boolean_env("DISCORD_NOTIFICATIONS_ENABLED", True)
-DISCORD_PROCESS_MESSAGES = boolean_env("DISCORD_PROCESS_MESSAGES", True)
-DISCORD_MODEL = os.getenv("DISCORD_MODEL", "anthropic/claude-haiku-5-5")
-DISCORD_MAX_TOOL_CALLS = int(os.getenv("DISCORD_MAX_TOOL_CALLS", 10))
 
 
 # Discord collector settings
@@ -686,14 +699,24 @@ def require_settings(values: Any, role: str) -> None:
     if role not in ("api", "worker"):
         print(f"Unknown role {role!r}: expected 'api' or 'worker'", file=sys.stderr)
         raise SystemExit(2)
-    if not (missing := missing_required_settings(values, role)):
-        return
-    print(
-        f"Refusing to start: missing required settings: {', '.join(missing)}. "
-        "Set them in .env, or for secrets as NAME_FILE pointing at a file.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
+    if missing := missing_required_settings(values, role):
+        print(
+            f"Refusing to start: missing required settings: {', '.join(missing)}. "
+            "Set them in .env, or for secrets as NAME_FILE pointing at a file.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    # docker/workers/entry.sh and agents-worker listen on "memory" when QUEUE_PREFIX is unset.
+    listens = values.QUEUE_PREFIX or "memory"
+    if role == "worker" and listens != values.CELERY_QUEUE_PREFIX:
+        print(
+            f"Refusing to start: this worker listens on {listens!r} queues (QUEUE_PREFIX) "
+            f"but tasks are sent to CELERY_QUEUE_PREFIX {values.CELERY_QUEUE_PREFIX!r} "
+            "queues (it defaults to APP_NAME), so no task would reach it. Set QUEUE_PREFIX "
+            "and CELERY_QUEUE_PREFIX to the same value.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

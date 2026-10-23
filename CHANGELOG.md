@@ -34,8 +34,27 @@ None.
   Set `SUMMARIZER_USE_BATCH=false` to summarize inline as before. The
   `SUMMARIZER_BATCH_*` settings tune batch size, retries and the
   submit/poll intervals.
-- `SUMMARIZER_MODEL`, `RANKER_MODEL` and `DISCORD_MODEL` now default to
+- `SUMMARIZER_MODEL` and `RANKER_MODEL` now default to
   `anthropic/claude-haiku-5-5`. Values set explicitly in `.env` are kept.
+- `DISCORD_PROCESS_MESSAGES`, `DISCORD_MODEL` and `DISCORD_MAX_TOOL_CALLS` are
+  removed; nothing read them. Delete them from `.env` if set.
+- New optional agent-run settings: `AGENT_MAX_RUN_COST_USD` (1.00) and
+  `AGENT_MAX_DAILY_COST_USD` (10.00) are hard cost ceilings; `AGENT_MAX_TIMEOUT_SEC`
+  (1800), `AGENT_MAX_WAIT_SEC` (300), `AGENT_LLM_TIMEOUT_SEC` (600, per model
+  request), `AGENT_TOOL_RESULT_MAX_CHARS` (50000), `AGENT_CONTEXT_TRIM_AT_TOKENS`
+  (100000), `AGENT_CONTEXT_TRIM_TO_TOKENS` (60000) and `AGENT_STEP_RETENTION_DAYS`
+  (90).
+- New `agents-worker` service (built from the API image) consumes the
+  `<prefix>-agents` queue; `AGENT_WORKER_CONCURRENCY` (2) sets its concurrency; each run
+  process takes about 270MB, so raise the service's memory limit with it.
+  Without it, agent runs stay pending and are failed by the sweep after
+  `AGENT_MAX_TIMEOUT_SEC` plus 10 minutes.
+- New `agents` user scope gates the `agent_*` MCP tools and the Agents dashboard.
+  Only `*` admins have it by default; grant it to anyone else who should use agents.
+- Workers now refuse to start when the prefix they listen on (`QUEUE_PREFIX`,
+  default `memory`) differs from `CELERY_QUEUE_PREFIX` (default `APP_NAME`), which
+  tasks are routed with: such a worker would never receive any. If you set
+  `APP_NAME` or either prefix, check `.env` before updating.
 - The `anthropic` SDK is upgraded to 2.1.0, so the images must be rebuilt.
   `tools/update.sh` does this.
 - The GitHub MCP server and the Discord management MCP tools are removed. The
@@ -56,6 +75,8 @@ None.
 ### Migrations
 
 - `20261023_summary_requests`: creates the empty `summary_request` table. Fast.
+- `20261024_agent_runs`: creates the empty `agent_definitions`, `agent_runs` and
+  `agent_run_steps` tables, and adds two nullable columns to `api_keys`. Fast.
 
 ### Post-deploy commands
 

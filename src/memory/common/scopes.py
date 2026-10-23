@@ -104,6 +104,7 @@ SCOPE_PROJECTS_WRITE = "projects:write"
 
 # AI
 SCOPE_CLAUDE_AI = "claudeai"
+SCOPE_AGENTS = "agents"  # define and run your own agents
 
 # Check (async verify/research/link/deep-dive/investigation-team job queue)
 SCOPE_CHECK = "check"        # submit, read, and work check jobs
@@ -327,6 +328,12 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_CLAUDE_AI,
         "label": "Claude AI",
         "description": "Access Claude AI features",
+        "category": "ai",
+    },
+    {
+        "value": SCOPE_AGENTS,
+        "label": "Agents",
+        "description": "Define and run agents with your own permissions",
         "category": "ai",
     },
     # Research (check job queue)

@@ -94,6 +94,13 @@ from memory.common.db.models.sources import (
     project_teams,
     can_access_project,
 )
+from memory.common.db.models.agents import (
+    AgentDefinition,
+    AgentRun,
+    AgentRunStep,
+    RunStatus,
+    TERMINAL_STATUSES,
+)
 from memory.common.db.models.users import (
     User,
     HumanUser,
@@ -201,6 +208,11 @@ Payload = (
 
 __all__ = [
     "ACCESS_CONTROLLED_SOURCE_MODELS",
+    "AgentDefinition",
+    "AgentRun",
+    "AgentRunStep",
+    "RunStatus",
+    "TERMINAL_STATUSES",
     "Base",
     "Chunk",
     "SummaryRequest",

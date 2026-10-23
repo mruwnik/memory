@@ -314,6 +314,50 @@ services:
       - ./memory_files:/app/memory_files:rw
       - ${CUSTOM_TASKS_DIR:-./custom_tasks}:/app/custom_tasks:ro
 
+  # Agent runs call memory's MCP tools in-process, which needs the API package,
+  # so this worker runs the API image rather than the worker image. It uses the
+  # prefork pool: the in-process MCP server hangs when event loops in several
+  # threads use it at once, so a threads pool is out. Each child imports the
+  # runner and MCP server (~270MB), so memory scales with concurrency.
+  agents-worker:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+      args:
+        SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
+        SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
+        APP_VERSION: ${APP_VERSION:-dev}
+    restart: unless-stopped
+    networks: [kbnet]
+    security_opt: ["no-new-privileges=true"]
+    depends_on: [postgres, redis, qdrant]
+    env_file: [.env]
+    environment:
+      <<: *worker-env
+      AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-2}
+    secrets: [postgres_password, openai_key, anthropic_key, voyage_key, secrets_encryption_key]
+    volumes:
+      - ./memory_files:/app/memory_files:rw
+    command:
+      - sh
+      - -c
+      - >-
+        python -m memory.common.settings worker &&
+        exec celery -A memory.common.celery_app worker
+        -Q "$${QUEUE_PREFIX:-memory}-agents"
+        --concurrency="$${AGENT_WORKER_CONCURRENCY}"
+        --pool=prefork
+        --hostname="agents@%h"
+        --loglevel=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
   ingest-hub:
     <<: *worker-base
     build:

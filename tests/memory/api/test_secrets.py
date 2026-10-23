@@ -257,15 +257,16 @@ def test_update_value_re_encrypts_at_rest(client, db_session, user):
     )
     original_ciphertext = bytes(secret.encrypted_value)
 
-    response = client.patch(f"/secrets/{secret.id}", json={"value": "v2"})
+    # Spaces and "!" never occur in base64url ciphertext, so a match means plaintext.
+    response = client.patch(f"/secrets/{secret.id}", json={"value": "v2 rotated!"})
 
     assert response.status_code == 200
     db_session.expire_all()
     refreshed = db_session.get(Secret, secret.id)
-    assert refreshed.value == "v2"
+    assert refreshed.value == "v2 rotated!"
     assert refreshed.encrypted_value != original_ciphertext
     # The plaintext should never live in the encrypted column.
-    assert b"v2" not in refreshed.encrypted_value
+    assert b"v2 rotated!" not in refreshed.encrypted_value
 
 
 def test_delete_secret_removes_row(client, db_session, user):

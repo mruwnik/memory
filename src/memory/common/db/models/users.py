@@ -23,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from sqlalchemy.sql import func
 
+from memory.common.db.models.agents import money
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
@@ -268,6 +269,12 @@ class APIKey(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    agent_max_run_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 6), nullable=True
+    )
+    agent_max_daily_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 6), nullable=True
+    )
 
     # Relationship to user
     user: Mapped[User] = relationship("User", back_populates="api_keys")
@@ -336,6 +343,8 @@ class APIKey(Base):
             ),
             "revoked": self.revoked,
             "key_preview": f"{self.key[:8]}...{self.key[-4:]}" if self.key else None,
+            "agent_max_run_cost_usd": money(self.agent_max_run_cost_usd),
+            "agent_max_daily_cost_usd": money(self.agent_max_daily_cost_usd),
         }
 
 

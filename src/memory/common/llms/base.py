@@ -6,12 +6,20 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, AsyncIterator, Iterator, Literal, Union, cast
+from typing import Any, AsyncIterator, ClassVar, Iterator, Literal, Union, cast
 
 from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
 from memory.common import settings
-from memory.common.llms.tools import MCPServer, ToolCall, ToolDefinition, ToolResult
+from memory.common.llms.neutral import (
+    Completion,
+    GenerationParams,
+    ModelInfo,
+    NeutralMessage,
+    Replay,
+)
+from memory.common.llms.tools import MCPServer, ToolDefinition
 from memory.common.llms.usage import UsageTracker, RedisUsageTracker
 
 logger = logging.getLogger(__name__)
@@ -142,15 +150,6 @@ MessageContent = Union[
 
 
 @dataclass
-class Turn:
-    """A turn in the conversation."""
-
-    response: str | None
-    thinking: str | None
-    tool_calls: dict[str, ToolResult] | None
-
-
-@dataclass
 class Message:
     """A message in the conversation history."""
 
@@ -221,10 +220,40 @@ class LLMSettings:
     cache_system_prompt: bool = False
 
 
+class NoExtras(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class BaseLLMProvider(ABC):
     """Base class for LLM providers."""
 
     provider: str = ""
+    MODELS: ClassVar[dict[str, ModelInfo]] = {}
+    Extras: ClassVar[type[BaseModel]] = NoExtras
+
+    @classmethod
+    def model_info(cls, model: str) -> ModelInfo:
+        if not cls.MODELS:
+            raise ValueError(f"provider {cls.provider!r} does not support agent runs")
+        if model not in cls.MODELS:
+            known = ", ".join(sorted(cls.MODELS))
+            raise ValueError(
+                f"unknown {cls.provider} model {model!r}; agent-capable models: {known}"
+            )
+        return cls.MODELS[model]
+
+    async def acomplete(
+        self,
+        *,
+        system: str,
+        messages: list[NeutralMessage],
+        replay: list[Replay | None],
+        tools: list[ToolDefinition],
+        tool_choice: Literal["auto", "required"],
+        params: GenerationParams,
+    ) -> Completion:
+        """One assistant turn. `replay[i]` is this provider's opaque data for `messages[i]`, or None."""
+        raise NotImplementedError(f"provider {self.provider!r} does not support agent runs")
 
     def __init__(
         self, api_key: str, model: str, usage_tracker: UsageTracker | None = None
@@ -263,53 +292,6 @@ class BaseLLMProvider(ABC):
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
         )
-
-    def execute_tool(
-        self,
-        tool_call: ToolCall,
-        tool_handlers: dict[str, ToolDefinition],
-    ) -> ToolResultContent:
-        """
-        Execute a tool call.
-
-        Args:
-            tool_call: Tool call
-            tool_handlers: Dict mapping tool names to handler functions
-
-        Returns:
-            ToolResultContent with result or error
-        """
-        name = tool_call.get("name")
-        tool_use_id = tool_call.get("id")
-        input = tool_call.get("input")
-
-        if not name:
-            return ToolResultContent(
-                tool_use_id=tool_use_id,
-                content="Tool name missing",
-                is_error=True,
-            )
-
-        if not (tool := tool_handlers.get(name)):
-            return ToolResultContent(
-                tool_use_id=tool_use_id,
-                content=f"Tool '{name}' not found",
-                is_error=True,
-            )
-
-        try:
-            return ToolResultContent(
-                tool_use_id=tool_use_id,
-                content=tool(input),
-                is_error=False,
-            )
-        except Exception as e:
-            logger.error(f"Tool '{name}' failed: {e}", exc_info=True)
-            return ToolResultContent(
-                tool_use_id=tool_use_id,
-                content=str(e),
-                is_error=True,
-            )
 
     def encode_image(self, image: Image.Image) -> str:
         """
@@ -437,11 +419,7 @@ class BaseLLMProvider(ABC):
         """Convert tool definitions to provider format."""
         if not tools:
             return None
-        converted = [
-            tool.provider_format(self.provider) or self._convert_tool(tool)
-            for tool in tools
-        ]
-        return [c for c in converted if c is not None]
+        return [self._convert_tool(tool) for tool in tools]
 
     @abstractmethod
     def generate(
@@ -535,189 +513,6 @@ class BaseLLMProvider(ABC):
         """
         yield StreamEvent(type="error", data="Not implemented")  # Abstract
 
-    def stream_with_tools(
-        self,
-        messages: list[Message],
-        tools: dict[str, ToolDefinition],
-        mcp_servers: list[MCPServer] | None = None,
-        settings: LLMSettings | None = None,
-        system_prompt: str | None = None,
-        max_iterations: int = 10,
-    ) -> Iterator[StreamEvent]:
-        """
-        Stream response with automatic tool execution.
-
-        This method handles the tool call loop automatically, executing tools
-        and sending results back to the LLM until it produces a final response
-        or max_iterations is reached.
-
-        Args:
-            messages: Conversation history
-            tools: Dict mapping tool names to ToolDefinition handlers
-            settings: Optional settings for the generation
-            system_prompt: Optional system prompt
-            max_iterations: Maximum number of tool call iterations
-
-        Yields:
-            StreamEvent objects for text, tool calls, and tool results
-        """
-        if max_iterations <= 0:
-            return
-
-        response = TextContent(text="")
-        thinking = ThinkingContent(thinking="")
-
-        for event in self.stream(
-            messages=messages,
-            system_prompt=system_prompt,
-            tools=list(tools.values()),
-            mcp_servers=mcp_servers,
-            settings=settings,
-        ):
-            if event.type == "text":
-                response.text += event.data
-                yield event
-            elif event.type == "thinking":
-                thinking.thinking += event.data
-                yield event
-            elif event.type == "server_tool_use":
-                # MCP server tools are executed by Anthropic's backend
-                # Results will come as separate tool_result events
-                yield event
-
-                # Track the MCP tool call but don't execute locally
-                messages.append(
-                    Message.assistant(
-                        response,
-                        thinking,
-                        ToolUseContent(
-                            id=event.data["id"],
-                            name=event.data["name"],
-                            input=event.data["input"],
-                        ),
-                    )
-                )
-                # Reset response for next turn
-                response = TextContent(text="")
-                thinking = ThinkingContent(thinking="")
-                # Continue streaming to get the tool result from Anthropic
-
-            elif event.type == "tool_use":
-                # Execute local tools
-                yield event
-                tool_result = self.execute_tool(event.data, tools)
-                yield StreamEvent(type="tool_result", data=tool_result.to_dict())
-
-                # Add assistant message with tool call
-                messages.append(
-                    Message.assistant(
-                        response,
-                        thinking,
-                        ToolUseContent(
-                            id=event.data["id"],
-                            name=event.data["name"],
-                            input=event.data["input"],
-                        ),
-                    )
-                )
-
-                # Add user message with tool result
-                messages.append(Message.user(tool_result=tool_result))
-
-                # Recursively continue the conversation with reduced iterations
-                yield from self.stream_with_tools(
-                    messages,
-                    tools,
-                    mcp_servers,
-                    settings,
-                    system_prompt,
-                    max_iterations - 1,
-                )
-                return  # Exit after recursive call completes
-
-            elif event.type == "tool_result":
-                yield event
-                # Add user message with the result
-                tool_result_content = ToolResultContent(
-                    tool_use_id=event.data["id"],
-                    content=str(event.data.get("result", "")),
-                    is_error=event.data.get("is_error", False),
-                )
-                messages.append(Message.user(tool_result=tool_result_content))
-
-                # Continue conversation with reduced iterations
-                yield from self.stream_with_tools(
-                    messages,
-                    tools,
-                    mcp_servers,
-                    settings,
-                    system_prompt,
-                    max_iterations - 1,
-                )
-                return  # Exit after recursive call completes
-
-            elif event.type == "error":
-                logger.error(f"LLM error: {event.data}")
-                raise RuntimeError(f"LLM error: {event.data}")
-            elif event.type == "done":
-                # Stream completed without tool calls
-                yield event
-
-    def run_with_tools(
-        self,
-        messages: list[Message],
-        tools: dict[str, ToolDefinition],
-        mcp_servers: list[MCPServer] | None = None,
-        settings: LLMSettings | None = None,
-        system_prompt: str | None = None,
-        max_iterations: int = 10,
-    ) -> Turn:
-        thinking, response, tool_calls = "", "", {}
-        for event in self.stream_with_tools(
-            messages=messages,
-            tools=tools,
-            mcp_servers=mcp_servers,
-            settings=settings,
-            system_prompt=system_prompt,
-            max_iterations=max_iterations,
-        ):
-            if event.type == "thinking":
-                thinking += event.data
-            elif event.type == "tool_use" or event.type == "server_tool_use":
-                tool_calls[event.data["id"]] = {
-                    "name": event.data["name"],
-                    "input": event.data["input"],
-                    "output": "",
-                }
-            elif event.type == "text":
-                response += event.data
-            elif event.type == "tool_result":
-                tool_id = event.data.get("id") or event.data.get("tool_use_id")
-                if not tool_id:
-                    logger.warning(f"tool_result event missing id: {event.data}")
-                    continue
-                current = tool_calls.get(tool_id) or {}
-                tool_calls[tool_id] = {
-                    "name": event.data.get("name") or current.get("name"),
-                    "input": event.data.get("input") or current.get("input"),
-                    "output": event.data.get("content") or event.data.get("result"),
-                }
-        return Turn(
-            thinking=thinking or None,
-            response=response or None,
-            tool_calls=tool_calls or None,
-        )
-
-    def as_messages(self, messages: list[dict[str, Any] | str]) -> list[Message]:
-        def make_message(msg: dict[str, Any] | str) -> Message:
-            if isinstance(msg, str):
-                return Message.user(text=msg)
-            elif isinstance(msg, dict):
-                return Message.user(text=msg["text"], images=msg.get("images"))
-            else:
-                raise ValueError(f"Unknown message type: {type(msg)}")
-
-        return [make_message(msg) for msg in messages]
 
 
 def create_provider(

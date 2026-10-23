@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Literal, TYPE_CHECKING, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
+from memory.agents.caps import ceiling_error
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import (
@@ -470,6 +472,12 @@ class APIKeyCreate(BaseModel):
     key_type: str = APIKeyType.INTERNAL
     scopes: list[str] | None = None
     expires_in_days: int | None = None
+    agent_max_run_cost_usd: Decimal | None = Field(
+        default=None, gt=0, max_digits=12, decimal_places=6
+    )
+    agent_max_daily_cost_usd: Decimal | None = Field(
+        default=None, gt=0, max_digits=12, decimal_places=6
+    )
 
     @field_validator("key_type")
     @classmethod
@@ -499,6 +507,8 @@ class APIKeyResponse(BaseModel):
     last_used_at: str | None
     revoked: bool
     key_preview: str | None
+    agent_max_run_cost_usd: str | None = None
+    agent_max_daily_cost_usd: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -581,6 +591,27 @@ def create_user_api_key(
                     detail=f"Cannot grant scopes you do not possess: {', '.join(sorted(disallowed))}",
                 )
 
+    cap_errors = [
+        e
+        for e in (
+            ceiling_error(
+                "agent_max_run_cost_usd",
+                data.agent_max_run_cost_usd,
+                settings.AGENT_MAX_RUN_COST_USD,
+                "AGENT_MAX_RUN_COST_USD",
+            ),
+            ceiling_error(
+                "agent_max_daily_cost_usd",
+                data.agent_max_daily_cost_usd,
+                settings.AGENT_MAX_DAILY_COST_USD,
+                "AGENT_MAX_DAILY_COST_USD",
+            ),
+        )
+        if e
+    ]
+    if cap_errors:
+        raise HTTPException(status_code=400, detail="; ".join(cap_errors))
+
     expires_at = None
     if data.expires_in_days:
         expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
@@ -592,6 +623,8 @@ def create_user_api_key(
         scopes=data.scopes,
         expires_at=expires_at,
     )
+    api_key.agent_max_run_cost_usd = data.agent_max_run_cost_usd
+    api_key.agent_max_daily_cost_usd = data.agent_max_daily_cost_usd
     db.add(api_key)
     db.commit()
     db.refresh(api_key)

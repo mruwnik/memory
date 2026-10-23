@@ -8,9 +8,10 @@ from unittest.mock import MagicMock, patch
 from mcp.shared.auth import OAuthClientInformationFull
 from sqlalchemy.pool import QueuePool
 
+from memory.api import auth
+from memory.api.auth import resolve_api_key_scopes
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
-    resolve_api_key_scopes,
     resolve_session_scopes,
     make_token,
 )
@@ -574,15 +575,13 @@ def test_lookup_principal_returns_none_for_orphan_api_key(monkeypatch):
     A future cascade-delete race must fail closed at the lookup, not 500
     in the caller.
     """
-    from memory.api.MCP import oauth_provider as op
-
     monkeypatch.setattr(
-        op, "lookup_api_key", lambda token, session: _orphan_api_key_stub()
+        auth, "lookup_api_key", lambda token, session: _orphan_api_key_stub()
     )
     fake_session = MagicMock()
     fake_session.get.return_value = None  # no UserSession match → API key path
 
-    assert op.lookup_principal("orphan-token", fake_session) is None
+    assert auth.lookup_principal("orphan-token", fake_session) is None
 
 
 def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
@@ -592,21 +591,19 @@ def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
     of a caller who can't actually be authenticated. If a future
     refactor reorders the guards, this test pins the regression.
     """
-    from memory.api.MCP import oauth_provider as op
-
     orphan = _orphan_api_key_stub()
-    monkeypatch.setattr(op, "lookup_api_key", lambda token, session: orphan)
+    monkeypatch.setattr(auth, "lookup_api_key", lambda token, session: orphan)
 
     handle_calls = []
 
     def fake_handle(record, session):
         handle_calls.append(record)
 
-    monkeypatch.setattr(op, "handle_api_key_use", fake_handle)
+    monkeypatch.setattr(auth, "handle_api_key_use", fake_handle)
     fake_session = MagicMock()
     fake_session.get.return_value = None
 
-    assert op.lookup_principal("orphan-token", fake_session) is None
+    assert auth.lookup_principal("orphan-token", fake_session) is None
     assert handle_calls == []
 
 

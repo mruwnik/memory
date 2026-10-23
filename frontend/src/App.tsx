@@ -4,6 +4,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
+import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
@@ -227,6 +228,57 @@ const AuthWrapper = () => {
       <Route path="/ui/check" element={
         isAuthenticated && hasScope('check') ? (
           <Check />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/agents" element={
+        isAuthenticated && hasScope('agents') ? (
+          <AgentsPage />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      {/* Listed before /ui/agents/:id; AgentEditor also rejects non-numeric ids. */}
+      <Route path="/ui/agents/runs" element={
+        isAuthenticated && hasScope('agents') ? (
+          <AgentRuns />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/agents/runs/new" element={
+        isAuthenticated && hasScope('agents') ? (
+          <AdHocRun />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/agents/runs/:runId" element={
+        isAuthenticated && hasScope('agents') ? (
+          <RunView />
+        ) : isAuthenticated ? (
+          <Navigate to="/ui/dashboard" replace />
+        ) : (
+          <Navigate to="/ui/login" replace />
+        )
+      } />
+
+      <Route path="/ui/agents/:id" element={
+        isAuthenticated && hasScope('agents') ? (
+          <AgentEditor />
         ) : isAuthenticated ? (
           <Navigate to="/ui/dashboard" replace />
         ) : (

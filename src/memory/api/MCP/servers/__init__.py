@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class MCPServer(str, Enum):
     """All available MCP subservers."""
 
+    AGENT = "agent"
     BOOKS = "books"
     CHECK = "check"
     CLAUDE = "claude"
@@ -58,6 +59,10 @@ def is_server_enabled(server: str | MCPServer) -> bool:
 def get_server_instance(server: MCPServer) -> "FastMCP":
     """Lazy-load server instance to avoid importing disabled servers."""
     match server:
+        case MCPServer.AGENT:
+            from memory.api.MCP.servers.agent import agent_mcp
+
+            return agent_mcp
         case MCPServer.BOOKS:
             from memory.api.MCP.servers.books import books_mcp
 

@@ -18,3 +18,4 @@ fastmcp==2.13.3
 slowapi==0.1.9
 cachetools>=5.3.0  # TTL-based caching for prediction market tools
 jinja2>=3.1.0  # Required by starlette Jinja2Templates (MCP OAuth login page)
+jsonschema>=4.18,<5  # 4.18 added the referencing registry

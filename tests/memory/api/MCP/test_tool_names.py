@@ -8,6 +8,7 @@ server name pattern used by Claude Code.
 import pytest
 
 from memory.api.MCP.base import SUBSERVER_PREFIXES
+from memory.api.MCP.servers.agent import agent_mcp
 from memory.api.MCP.servers.books import books_mcp
 from memory.api.MCP.servers.check import check_mcp
 from memory.api.MCP.servers.claude import claude_mcp
@@ -32,6 +33,7 @@ from memory.api.MCP.servers.teams import teams_mcp
 
 # Map prefixes to their FastMCP instances
 SUBSERVERS = {
+    "agent": agent_mcp,
     "books": books_mcp,
     "check": check_mcp,
     "claude": claude_mcp,

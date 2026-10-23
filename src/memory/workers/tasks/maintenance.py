@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
-from sqlalchemy import delete, func, inspect as sa_inspect, or_
+from sqlalchemy import delete, func, inspect as sa_inspect, or_, update
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -18,6 +18,7 @@ from memory.common import (
     summarizer,
     summary_batch,
 )
+from memory.common.db.models.agents import RunStatus
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
 from memory.common.celery_app import (
@@ -27,6 +28,8 @@ from memory.common.celery_app import (
     CLEANUP_EXPIRED_OAUTH_STATES,
     CLEANUP_EXPIRED_SESSIONS,
     CLEANUP_USED_ONE_TIME_KEYS,
+    PURGE_AGENT_RUN_STEPS,
+    SWEEP_AGENT_RUNS,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_DONE_ONEOFF_TASKS,
     CLEANUP_OLD_TASK_EXECUTIONS,
@@ -47,6 +50,8 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
+    AgentRun,
+    AgentRunStep,
     Chunk,
     CodingProject,
     ScheduledTask,
@@ -1211,3 +1216,86 @@ def collect_summary_batches() -> dict:
     # Runs even with batching disabled, to drain batches already in flight
     with make_session() as session:
         return {"status": "success", **summary_batch.collect_finished(session)}
+
+
+# A run is stuck once it has outlived its own timeout by this much.
+STUCK_RUN_GRACE_SEC = 600
+PURGE_BATCH_SIZE = 1000
+
+
+@app.task(name=SWEEP_AGENT_RUNS)
+def sweep_agent_runs() -> dict[str, int]:
+    """Fail runs no worker will ever finish. Never re-runs them: tools have side effects."""
+    now = datetime.now(timezone.utc)
+    timeout = func.coalesce(
+        AgentRun.spec["timeout_sec"].as_integer(), settings.AGENT_MAX_TIMEOUT_SEC
+    )
+    with make_session() as db:
+        stale = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.status == RunStatus.RUNNING.value,
+                AgentRun.started_at
+                + func.make_interval(0, 0, 0, 0, 0, 0, timeout + STUCK_RUN_GRACE_SEC)
+                < now,
+            )
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+        # A busy queue can hold a run for as long as the longest runs ahead of it.
+        orphaned = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.status == RunStatus.PENDING.value,
+                AgentRun.created_at
+                < now - timedelta(seconds=settings.AGENT_MAX_TIMEOUT_SEC + STUCK_RUN_GRACE_SEC),
+            )
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+        for r in stale:
+            r.status, r.finished_at = RunStatus.FAILED.value, now
+            r.error = (
+                "worker lost: the run outlived its timeout without finishing "
+                "(not retried: tools have side effects)"
+            )
+        for r in orphaned:
+            r.status, r.finished_at = RunStatus.FAILED.value, now
+            r.error = (
+                "never picked up: the agents queue is backed up, or no agents-worker "
+                "service is consuming it"
+            )
+    if stale or orphaned:
+        logger.warning("swept %d stale and %d orphaned agent runs", len(stale), len(orphaned))
+    return {"stale": len(stale), "orphaned": len(orphaned)}
+
+
+@app.task(name=PURGE_AGENT_RUN_STEPS)
+def purge_agent_run_steps() -> dict[str, int]:
+    """Delete transcripts past retention; run rows (result, usage, cost) stay forever."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=settings.AGENT_STEP_RETENTION_DAYS)
+    # Re-checked inside each statement, so a run starred mid-purge keeps its transcript.
+    purgeable = (
+        AgentRun.finished_at < cutoff,
+        AgentRun.starred.is_(False),
+        AgentRun.steps_purged_at.is_(None),
+    )
+    purged = 0
+    while True:
+        with make_session() as db:
+            batch = (
+                select(AgentRun.id).where(*purgeable).limit(PURGE_BATCH_SIZE).scalar_subquery()
+            )
+            ids = db.execute(
+                update(AgentRun)
+                .where(AgentRun.id.in_(batch), *purgeable)
+                .values(steps_purged_at=now)
+                .returning(AgentRun.id)
+            ).scalars().all()
+            if not ids:
+                break
+            db.execute(delete(AgentRunStep).where(AgentRunStep.run_id.in_(ids)))
+        purged += len(ids)
+    logger.info("purged transcripts of %d agent runs", purged)
+    return {"purged_runs": purged}

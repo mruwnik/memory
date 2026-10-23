@@ -1,5 +1,6 @@
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from typing import TypeVar, cast
@@ -25,7 +26,7 @@ from memory.common.access_control import get_user_project_roles, has_admin_scope
 from memory.common.db.models.base import Base
 from memory.common.mcp import mcp_tools_list
 from memory.common.oauth import complete_oauth_flow
-from memory.common.scopes import SCOPE_ADMIN
+from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 
 T = TypeVar("T", bound=Base)
 
@@ -344,6 +345,118 @@ def handle_api_key_use(key_record: APIKey, db: DBSession) -> bool:
     key_record.last_used_at = datetime.now(timezone.utc)
     db.commit()
     return True
+
+
+def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
+    """Resolve effective scopes for a request authenticated by API key.
+
+    Distinguishes "no override declared" from "explicit empty override"
+    so an admin-minted low-privilege key (``scopes=[]``) cannot collapse
+    back to the user's full system scopes via a truthiness fallback:
+
+    * ``scopes is None`` → inherit user scopes (or ``[SCOPE_READ]`` if
+      the user themselves has none).
+    * Non-empty list → use as-is.
+    * Explicit empty list → fail closed to ``[SCOPE_READ]`` only, never
+      the user's system scopes. This is the safe default for "this key
+      has no privileges beyond read."
+    """
+    override = api_key_record.scopes
+    if override is None:
+        # Intentional inherit-from-user. Default to [SCOPE_READ] if the
+        # user themselves has no scopes set (matches prior behaviour).
+        return list(user.scopes or []) or [SCOPE_READ]
+    # Explicit list — empty list means "no privileges beyond read",
+    # NOT "fall back to user.scopes". This is the security-critical
+    # distinction.
+    return list(override) or [SCOPE_READ]
+
+
+@dataclass
+class TokenLookup:
+    """Result of looking up a bearer token.
+
+    Exactly one of ``user_session`` / ``api_key_record`` is non-None — they
+    encode which credential matched. Both ``verify_token`` and
+    ``load_access_token`` route on this distinction to project the right
+    scope dimension; the lookup, expiry/validity check, and one-time-key
+    consumption are all shared via :func:`lookup_principal` so the two
+    methods can never drift on those concerns.
+    """
+
+    user: User
+    user_session: UserSession | None = None
+    api_key_record: APIKey | None = None
+
+
+def lookup_principal(
+    token: str, session: DBSession, record_use: bool = True
+) -> TokenLookup | None:
+    """Resolve a bearer token to its (user, credential) pair.
+
+    Tries the token as a ``UserSession`` row first (OAuth access tokens and
+    frontend cookie sessions are both keyed on ``UserSession.id``); on miss,
+    falls back to ``lookup_api_key`` for bot / discord / mcp / one-time
+    keys.
+
+    Side effects on success:
+
+    * For UserSession matches: none — the caller decides whether to refresh
+      anything based on its own scope/return-type contract.
+    * For APIKey matches: ``handle_api_key_use`` is called *here* so the
+      last_used_at bump and one-time-key consumption happen atomically with
+      the lookup. Centralising it means both callers run it exactly once, and
+      a future revocation column / audit hook / key-was-used webhook
+      added to ``handle_api_key_use`` reaches both call sites for free.
+      ``record_use=False`` skips it, for re-resolving a token that already
+      authenticated this request (it must not consume a one-time key twice).
+
+    Returns ``None`` on:
+    * unknown token
+    * expired UserSession (uses :func:`is_expired` so a tz-aware
+      ``expires_at`` from a non-UTC pool doesn't crash, addressing the
+      naive-vs-aware comparison bug noted in audit 7affa983)
+    * UserSession with no attached User (fail-closed)
+    * APIKey not in valid state per ``is_valid``
+    * APIKey with no attached User (fail-closed; symmetric with the
+      session-path guard above. Schema-level FK constraints make this
+      shape unreachable today, but pinning it here keeps a stale-FK or
+      cascade-delete race from turning into a 500 — and lets downstream
+      ``principal.user.id`` be a non-Optional access without comment.)
+    """
+    user_session = session.get(UserSession, token)
+    if user_session is not None:
+        if is_expired(user_session.expires_at):
+            return None
+        if user_session.user is None:
+            return None
+        return TokenLookup(user=user_session.user, user_session=user_session)
+
+    api_key_record = lookup_api_key(token, session)
+    if api_key_record is not None and api_key_record.is_valid():
+        if api_key_record.user is None:
+            # Match the session-path fail-closed above. Today's FK
+            # constraints rule this out, but a future cascade race or
+            # detached-row bug shouldn't escalate to 500.
+            return None
+        # Side effect: bumps last_used_at; for one-time keys, atomically
+        # revokes the row. Doing it here means every caller of
+        # lookup_principal runs it exactly once — never twice, never zero.
+        # False = a concurrent request consumed the one-time key first;
+        # the race-loser must not authenticate (CWE-367, same contract as
+        # the REST path in authenticate_by_api_key).
+        if record_use and not handle_api_key_use(api_key_record, session):
+            return None
+        return TokenLookup(user=api_key_record.user, api_key_record=api_key_record)
+
+    return None
+
+
+def system_scopes(principal: TokenLookup) -> list[str]:
+    """The system scopes that gate a principal's MCP tools; see ``verify_token``."""
+    if principal.api_key_record is not None:
+        return resolve_api_key_scopes(principal.api_key_record, principal.user)
+    return sorted(set(principal.user.scopes or []) | {SCOPE_READ, SCOPE_WRITE})
 
 
 def authenticate_request(

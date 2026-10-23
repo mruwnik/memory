@@ -74,8 +74,9 @@ async def discover_oauth_metadata(server_url: str) -> dict | None:
 
     try:
         async with aiohttp.ClientSession() as session:
+            # A redirect could lead to an address validate_public_url never saw.
             async with session.get(
-                discovery_url, timeout=aiohttp.ClientTimeout(total=5)
+                discovery_url, timeout=aiohttp.ClientTimeout(total=5), allow_redirects=False
             ) as resp:
                 if resp.status == 200:
                     return await resp.json()
@@ -235,6 +236,60 @@ async def issue_challenge(
     return f"{endpoints.authorization_endpoint}?{urlencode(auth_params)}"
 
 
+def store_tokens(mcp_server: MCPServer, tokens: dict) -> None:
+    """Save a token-endpoint response; a missing refresh token keeps the old one."""
+    # Some OAuth providers return expires_in as a JSON string. Coerce to
+    # int defensively so a string slips through without exploding inside
+    # timedelta below; fall back to the 1h default on garbage.
+    try:
+        expires_in = int(tokens.get("expires_in", 3600))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Upstream returned non-integer expires_in=%r; defaulting to 3600s",
+            tokens.get("expires_in"),
+        )
+        expires_in = 3600
+    # A non-reversible correlation id: a token prefix would help brute force.
+    logger.info(f"Obtained access token id={token_id(tokens['access_token'])}")
+    mcp_server.access_token = tokens["access_token"]
+    mcp_server.refresh_token = tokens.get("refresh_token") or mcp_server.refresh_token
+    # tz-aware UTC, like every other token-expiry comparison in the codebase.
+    mcp_server.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+
+async def post_token_request(token_endpoint: str, data: dict) -> dict:
+    async with aiohttp.ClientSession() as http_session:
+        async with http_session.post(
+            token_endpoint,
+            data=data,
+            timeout=aiohttp.ClientTimeout(total=10),
+            allow_redirects=False,
+        ) as resp:
+            if resp.status != 200:
+                raise ValueError(f"token endpoint returned {resp.status}")
+            return await resp.json()
+
+
+async def refresh_mcp_token(mcp_server: MCPServer) -> None:
+    """Swap the stored refresh token for a new access token; ValueError if it can't."""
+    if not mcp_server.refresh_token:
+        raise ValueError("no refresh token stored")
+    endpoints = await get_endpoints(str(mcp_server.mcp_server_url))
+    # The endpoint comes from the upstream server's discovery document.
+    validate_public_url(endpoints.token_endpoint)
+    tokens = await post_token_request(
+        endpoints.token_endpoint,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": mcp_server.refresh_token,
+            "client_id": mcp_server.client_id,
+        },
+    )
+    if not tokens.get("access_token"):
+        raise ValueError("token response did not include access_token")
+    store_tokens(mcp_server, tokens)
+
+
 async def complete_oauth_flow(
     mcp_server: MCPServer, code: str, state: str
 ) -> tuple[int, str]:
@@ -292,6 +347,7 @@ async def complete_oauth_flow(
                 endpoints.token_endpoint,
                 data=token_data,
                 timeout=aiohttp.ClientTimeout(total=10),
+                allow_redirects=False,
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -300,38 +356,9 @@ async def complete_oauth_flow(
 
                 tokens = await resp.json()
 
-        access_token = tokens.get("access_token")
-        refresh_token = tokens.get("refresh_token")
-        # Some OAuth providers return expires_in as a JSON string. Coerce to
-        # int defensively so a string slips through without exploding inside
-        # timedelta below; fall back to the 1h default on garbage.
-        try:
-            expires_in = int(tokens.get("expires_in", 3600))
-        except (TypeError, ValueError):
-            logger.warning(
-                "Upstream returned non-integer expires_in=%r; defaulting to 3600s",
-                tokens.get("expires_in"),
-            )
-            expires_in = 3600
-
-        if not access_token:
+        if not tokens.get("access_token"):
             return 500, "Token response did not include access_token"
-
-        # The "first 20 chars" preview that used to be here is enough to
-        # fingerprint individual tokens and noticeably narrows brute force
-        # of the rest. Use a non-reversible correlation id instead.
-        logger.info(f"Obtained access token id={token_id(access_token)}")
-
-        # Store tokens and clear temporary OAuth state. Use tz-aware UTC so
-        # the column matches every other token-expiry comparison in the
-        # codebase (those use `datetime.now(timezone.utc)`); a naive
-        # local-time value would either crash on comparison or silently
-        # drift by the host's UTC offset.
-        mcp_server.access_token = access_token  # type: ignore
-        mcp_server.refresh_token = refresh_token  # type: ignore
-        mcp_server.token_expires_at = (  # type: ignore
-            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-        )
+        store_tokens(mcp_server, tokens)
 
         # Clear temporary OAuth flow data
         mcp_server.state = None  # type: ignore

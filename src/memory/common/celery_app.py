@@ -35,6 +35,7 @@ REPORTS_ROOT = "memory.workers.tasks.reports"
 METRICS_ROOT = "memory.workers.tasks.metrics"
 MISC_ROOT = "memory.workers.tasks.misc"
 VERIFICATION_ROOT = "memory.workers.tasks.verification"
+AGENTS_ROOT = "memory.workers.tasks.agents"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 UPDATE_REACTIONS = f"{DISCORD_ROOT}.update_reactions"
@@ -85,6 +86,8 @@ UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 CLEANUP_EXPIRED_OAUTH_STATES = f"{MAINTENANCE_ROOT}.cleanup_expired_oauth_states"
 CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
 CLEANUP_USED_ONE_TIME_KEYS = f"{MAINTENANCE_ROOT}.cleanup_used_one_time_keys"
+SWEEP_AGENT_RUNS = f"{MAINTENANCE_ROOT}.sweep_agent_runs"
+PURGE_AGENT_RUN_STEPS = f"{MAINTENANCE_ROOT}.purge_agent_run_steps"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
 CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
@@ -147,6 +150,8 @@ REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
 # Verification tasks
 VERIFY_ORPHANS = f"{VERIFICATION_ROOT}.verify_orphans"
 VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
+
+RUN_AGENT = f"{AGENTS_ROOT}.run_agent"
 
 # Access control tasks
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
@@ -340,6 +345,8 @@ app.conf.update(
         f"{CUSTOM_TASKS_PREFIX}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-custom"
         },
+        # Consumed only by agents-worker: the runner needs the API image.
+        f"{AGENTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-agents"},
     },
 )
 
@@ -460,6 +467,11 @@ def build_beat_schedule() -> dict:
         "cleanup-used-one-time-keys": {
             "task": CLEANUP_USED_ONE_TIME_KEYS,
             "schedule": crontab(hour="4", minute="30"),
+        },
+        "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
+        "purge-agent-run-steps": {
+            "task": PURGE_AGENT_RUN_STEPS,
+            "schedule": crontab(hour="4", minute="40"),
         },
         "cleanup-stuck-meetings": {
             "task": CLEANUP_STUCK_MEETINGS,

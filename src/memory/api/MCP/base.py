@@ -81,7 +81,7 @@ def _get_user_info_for_middleware() -> dict:
         logger.debug("_get_user_info_for_middleware: No access token")
         return {"authenticated": False, "scopes": []}
 
-    scopes = list(access_token.scopes) if access_token.scopes else ["read"]
+    scopes = list(access_token.scopes or [])
     return {
         "authenticated": True,
         "scopes": scopes,

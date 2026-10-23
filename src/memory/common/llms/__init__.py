@@ -1,7 +1,5 @@
 """LLM provider module for unified LLM access."""
 
-# Legacy imports for backwards compatibility
-import logging
 from typing import Any
 
 from PIL import Image
@@ -45,8 +43,6 @@ __all__ = [
     "create_provider",
 ]
 
-logger = logging.getLogger(__name__)
-
 SUMMARY_SYSTEM_PROMPT = (
     "You are a helpful assistant that creates concise summaries and identifies key topics."
 )
@@ -65,23 +61,13 @@ def summarize(
 ) -> str:
     """The response text; with `json_schema`, JSON guaranteed to match it."""
     provider = create_provider(model=model)
-    try:
-        # Build message content
-        content: list[MessageContent] = [TextContent(text=prompt)]
-        for image in images:
-            content.append(ImageContent(image=image))
-
-        messages = [Message(role=MessageRole.USER, content=content)]
-        res = provider.run_with_tools(
-            messages=messages,
-            system_prompt=system_prompt or SUMMARY_SYSTEM_PROMPT,
-            settings=summary_settings(json_schema),
-            tools={},
-        )
-        return res.response or ""
-    except Exception as e:
-        logger.error(f"Anthropic API error: {e}")
-        raise
+    content: list[MessageContent] = [TextContent(text=prompt)]
+    content += [ImageContent(image=image) for image in images]
+    return provider.generate(
+        messages=[Message(role=MessageRole.USER, content=content)],
+        system_prompt=system_prompt or SUMMARY_SYSTEM_PROMPT,
+        settings=summary_settings(json_schema),
+    )
 
 
 def truncate(content: str, target_tokens: int) -> str:

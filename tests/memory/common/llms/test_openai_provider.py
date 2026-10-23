@@ -178,7 +178,6 @@ def test_convert_tools(provider):
             name="test_tool",
             description="A test tool",
             input_schema={"type": "object", "properties": {"arg": {"type": "string"}}},
-            function=lambda x: "result",
         )
     ]
     result = provider._convert_tools(tools)
@@ -266,7 +265,6 @@ def test_build_request_kwargs_with_tools(provider):
             name="test",
             description="test",
             input_schema={},
-            function=lambda x: "result",
         )
     ]
     settings = LLMSettings()
