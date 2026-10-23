@@ -1040,8 +1040,8 @@ def mock_anthropic_client():
 
         async_client.messages.stream = Mock(side_effect=async_stream_ctx)
 
-        # Add async_client property to mock
-        mock_client.return_value._async_client = None
+        async_client.__aenter__ = AsyncMock(return_value=async_client)
+        async_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(anthropic, "AsyncAnthropic", return_value=async_client):
             yield client

@@ -24,22 +24,16 @@ from memory.common.llms import create_provider, LLMSettings, Message
 
 logger = logging.getLogger(__name__)
 
-# System prompt for generating hypothetical documents
-HYDE_SYSTEM_PROMPT = """You are a search assistant helping to find documents in a knowledge base.
-Given a user's search query, write a short passage (2-3 sentences) that would appear in a
-document that answers their query. Write as if you are excerpting from an actual article.
+# Telling the model the passage is never shown and may be invented stops it
+# refusing (or caveating at length) on queries about specific people and events;
+# those refusals were both useless to embed and the slowest responses.
+HYDE_SYSTEM_PROMPT = """You write hypothetical passages for HyDE retrieval in a private knowledge base (emails, chat, documents, notes).
+Given a search query, write a short passage (2-3 sentences) that could appear in a document answering it.
+The passage is never shown to anyone: it is only embedded to find real documents with similar wording.
+So it is fine, and expected, to invent plausible names, dates, numbers and details; accuracy does not matter, vocabulary does.
 
-Do NOT:
-- Ask clarifying questions
-- Say "I don't know" or "I'm not sure"
-- Include meta-commentary like "This article discusses..."
-- Use phrases like "The document might say..."
-
-DO:
-- Write in the style of the target document (article, blog post, book excerpt)
-- Use specific terminology that would appear in such a document
-- Be concise and direct
-- Include key concepts and vocabulary related to the query"""
+Always write the passage. Never refuse, ask questions, add caveats, or comment on the query.
+Write in the style of the likely source (email, chat message, article, issue, notes) and use the terminology such a document would use."""
 
 # Cache for recent HyDE expansions (simple in-memory cache)
 _hyde_cache: dict[str, str] = {}
@@ -78,10 +72,9 @@ async def expand_query_hyde(
             Message.user(text=f"Search query: {query}")
         ]
 
-        llm_settings = LLMSettings(
-            temperature=0.3,  # Lower temperature for more focused output
-            max_tokens=1024,  # headroom for thinking; the prompt keeps passages short
-        )
+        # A 2-3 sentence passage is ~150 tokens; the cap bounds the latency tail
+        # under the search timeout, and a truncated passage still embeds fine.
+        llm_settings = LLMSettings(max_tokens=512)
 
         # Run with timeout
         hypothetical_doc = await asyncio.wait_for(

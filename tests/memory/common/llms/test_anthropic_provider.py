@@ -1,3 +1,4 @@
+import anthropic
 import pytest
 from typing import Any, cast
 from unittest.mock import Mock
@@ -38,13 +39,6 @@ def test_client_lazy_loading(provider):
     assert provider._client is not None
     # Second call should return same instance
     assert provider.client is client
-
-
-def test_async_client_lazy_loading(provider):
-    assert provider._async_client is None
-    client = provider.async_client
-    assert client is not None
-    assert provider._async_client is not None
 
 
 def test_convert_text_content(provider):
@@ -465,7 +459,7 @@ async def test_agenerate_basic(provider, mock_anthropic_client):
     result = await provider.agenerate(messages)
 
     assert "test summary" in result
-    provider.async_client.messages.create.assert_called_once()
+    anthropic.AsyncAnthropic().messages.create.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -478,6 +472,24 @@ async def test_astream_basic(provider, mock_anthropic_client):
 
     assert len(events) > 0
     assert any(e.type == "text" for e in events)
+
+
+async def consume_astream(provider, messages):
+    return [event async for event in provider.astream(messages)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [lambda p, m: p.agenerate(m), consume_astream],
+    ids=["agenerate", "astream"],
+)
+async def test_async_calls_close_their_client(provider, mock_anthropic_client, call):
+    # A client left for GC finalises via a stray aclose task, which stalls
+    # in-flight requests on other clients.
+    await call(provider, [Message(role=MessageRole.USER, content="test")])
+
+    anthropic.AsyncAnthropic().__aexit__.assert_awaited_once()
 
 
 def test_convert_message_sorts_thinking_content(provider):

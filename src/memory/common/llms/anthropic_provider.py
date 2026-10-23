@@ -53,18 +53,15 @@ class AnthropicProvider(BaseLLMProvider):
         """
         super().__init__(api_key, model)
         self.enable_thinking = enable_thinking
-        self._async_client: anthropic.AsyncAnthropic | None = None
 
     def _initialize_client(self) -> anthropic.Anthropic:
         """Initialize the Anthropic client."""
         return anthropic.Anthropic(api_key=self.api_key, timeout=60.0)
 
-    @property
-    def async_client(self) -> anthropic.AsyncAnthropic:
-        """Lazy-load the async client."""
-        if self._async_client is None:
-            self._async_client = anthropic.AsyncAnthropic(api_key=self.api_key, timeout=60.0)
-        return self._async_client
+    def new_async_client(self) -> anthropic.AsyncAnthropic:
+        """A client to use as `async with`: providers are mostly built per call,
+        and async clients left for GC were seen to hang concurrent requests."""
+        return anthropic.AsyncAnthropic(api_key=self.api_key, timeout=60.0)
 
     def _convert_image_content(self, content: ImageContent) -> dict[str, Any]:
         """Convert ImageContent to Anthropic's base64 source format."""
@@ -434,7 +431,8 @@ class AnthropicProvider(BaseLLMProvider):
         )
 
         try:
-            response = await self.async_client.messages.create(**kwargs)
+            async with self.new_async_client() as client:
+                response = await client.messages.create(**kwargs)
             return "".join(
                 block.text for block in response.content if block.type == "text"
             )
@@ -457,7 +455,10 @@ class AnthropicProvider(BaseLLMProvider):
         )
 
         try:
-            async with self.async_client.messages.stream(**kwargs) as stream:
+            async with (
+                self.new_async_client() as client,
+                client.messages.stream(**kwargs) as stream,
+            ):
                 current_tool_use: dict[str, Any] | None = None
 
                 async for event in stream:

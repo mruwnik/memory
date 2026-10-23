@@ -41,7 +41,6 @@ class OpenAIProvider(BaseLLMProvider):
             model: Model identifier
         """
         super().__init__(api_key, model)
-        self._async_client: openai.AsyncOpenAI | None = None
 
     def _is_reasoning_model(self) -> bool:
         """
@@ -59,12 +58,10 @@ class OpenAIProvider(BaseLLMProvider):
         """Initialize the OpenAI client."""
         return openai.OpenAI(api_key=self.api_key, timeout=60.0)
 
-    @property
-    def async_client(self) -> openai.AsyncOpenAI:
-        """Lazy-load the async client."""
-        if self._async_client is None:
-            self._async_client = openai.AsyncOpenAI(api_key=self.api_key, timeout=60.0)
-        return self._async_client
+    def new_async_client(self) -> openai.AsyncOpenAI:
+        """A client to use as `async with`: providers are mostly built per call,
+        and async clients left for GC were seen to hang concurrent requests."""
+        return openai.AsyncOpenAI(api_key=self.api_key, timeout=60.0)
 
     def _convert_text_content(self, content: TextContent) -> dict[str, Any]:
         """Convert TextContent to OpenAI format."""
@@ -424,7 +421,8 @@ class OpenAIProvider(BaseLLMProvider):
         )
 
         try:
-            response = await self.async_client.chat.completions.create(**kwargs)
+            async with self.new_async_client() as client:
+                response = await client.chat.completions.create(**kwargs)
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
@@ -445,15 +443,16 @@ class OpenAIProvider(BaseLLMProvider):
         )
 
         try:
-            stream = await self.async_client.chat.completions.create(**kwargs)
-            current_tool_call: dict[str, Any] | None = None
+            async with self.new_async_client() as client:
+                stream = await client.chat.completions.create(**kwargs)
+                current_tool_call: dict[str, Any] | None = None
 
-            async for chunk in stream:
-                events, current_tool_call = self._handle_stream_chunk(
-                    chunk, current_tool_call
-                )
-                for event in events:
-                    yield event
+                async for chunk in stream:
+                    events, current_tool_call = self._handle_stream_chunk(
+                        chunk, current_tool_call
+                    )
+                    for event in events:
+                        yield event
 
             yield StreamEvent(type="done")
 

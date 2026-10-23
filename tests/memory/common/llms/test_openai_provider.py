@@ -1,5 +1,6 @@
+import openai
 import pytest
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, patch
 from PIL import Image
 
 from memory.common.llms.openai_provider import OpenAIProvider
@@ -37,11 +38,13 @@ def test_client_lazy_loading(provider):
     assert provider._client is not None
 
 
-def test_async_client_lazy_loading(provider):
-    assert provider._async_client is None
-    client = provider.async_client
-    assert client is not None
-    assert provider._async_client is not None
+@pytest.fixture
+def async_openai():
+    client = Mock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(openai, "AsyncOpenAI", return_value=client):
+        yield client
 
 
 @pytest.mark.parametrize(
@@ -456,7 +459,7 @@ def test_stream_basic(provider, mock_openai_client):
 
 
 @pytest.mark.asyncio
-async def test_agenerate_basic(provider, mock_openai_client):
+async def test_agenerate_basic(provider, async_openai):
     messages = [Message(role=MessageRole.USER, content="test")]
 
     # Mock the async client
@@ -464,17 +467,16 @@ async def test_agenerate_basic(provider, mock_openai_client):
         choices=[Mock(message=Mock(content="async response"))],
         usage=Mock(prompt_tokens=10, completion_tokens=20),
     )
-    provider.async_client.chat.completions.create = AsyncMock(
-        return_value=mock_response
-    )
+    async_openai.chat.completions.create = AsyncMock(return_value=mock_response)
 
     result = await provider.agenerate(messages)
 
     assert result == "async response"
+    async_openai.__aexit__.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_astream_basic(provider, mock_openai_client):
+async def test_astream_basic(provider, async_openai):
     messages = [Message(role=MessageRole.USER, content="test")]
 
     # Mock async streaming
@@ -492,9 +494,7 @@ async def test_astream_basic(provider, mock_openai_client):
             usage=Mock(prompt_tokens=10, completion_tokens=10),
         )
 
-    provider.async_client.chat.completions.create = AsyncMock(
-        return_value=async_stream()
-    )
+    async_openai.chat.completions.create = AsyncMock(return_value=async_stream())
 
     events = []
     async for event in provider.astream(messages):
@@ -503,6 +503,7 @@ async def test_astream_basic(provider, mock_openai_client):
     assert len(events) > 0
     text_events = [e for e in events if e.type == "text"]
     assert len(text_events) > 0
+    async_openai.__aexit__.assert_awaited_once()
 
 
 def test_stream_with_tool_call(provider, mock_openai_client):

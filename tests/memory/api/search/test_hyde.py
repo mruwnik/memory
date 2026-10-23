@@ -154,17 +154,6 @@ class TestExpandQueryHyde:
         mock_create.assert_called_once_with(model="default-model")
 
     @patch("memory.api.search.hyde.create_provider")
-    async def test_llm_settings_temperature(self, mock_create):
-        mock_provider = AsyncMock()
-        mock_create.return_value = mock_provider
-        mock_provider.agenerate.return_value = "Response"
-
-        await hyde.expand_query_hyde("test")
-
-        call_kwargs = mock_provider.agenerate.call_args[1]
-        assert call_kwargs["settings"].temperature == 0.3
-
-    @patch("memory.api.search.hyde.create_provider")
     async def test_llm_settings_max_tokens(self, mock_create):
         mock_provider = AsyncMock()
         mock_create.return_value = mock_provider
@@ -173,7 +162,7 @@ class TestExpandQueryHyde:
         await hyde.expand_query_hyde("test")
 
         call_kwargs = mock_provider.agenerate.call_args[1]
-        assert call_kwargs["settings"].max_tokens == 1024
+        assert call_kwargs["settings"].max_tokens == 512
 
     @patch("memory.api.search.hyde.create_provider")
     async def test_system_prompt_passed(self, mock_create):
@@ -395,30 +384,6 @@ class TestGetHydeChunks:
         # Should count 6 words, trigger expansion
         assert len(result) == 2
         mock_expand.assert_called_once()
-
-
-class TestHydeSystemPrompt:
-    """Tests for HyDE system prompt characteristics."""
-
-    def test_system_prompt_exists(self):
-        assert hyde.HYDE_SYSTEM_PROMPT is not None
-        assert len(hyde.HYDE_SYSTEM_PROMPT) > 0
-
-    def test_system_prompt_has_clear_instructions(self):
-        # Should contain guidance on what to do and what not to do
-        prompt = hyde.HYDE_SYSTEM_PROMPT
-        assert "DO NOT" in prompt or "Do NOT" in prompt
-        assert "DO:" in prompt or "write" in prompt.lower()
-
-    def test_system_prompt_emphasizes_document_style(self):
-        # Should encourage writing in document style
-        prompt = hyde.HYDE_SYSTEM_PROMPT.lower()
-        assert "document" in prompt or "article" in prompt or "passage" in prompt
-
-    def test_system_prompt_discourages_meta_commentary(self):
-        # Should tell it not to use meta phrases
-        prompt = hyde.HYDE_SYSTEM_PROMPT
-        assert "don't" in prompt.lower() or "do not" in prompt.lower()
 
 
 class TestHydeCacheManagement:
