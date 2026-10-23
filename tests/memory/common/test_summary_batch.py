@@ -126,7 +126,8 @@ def test_submit_pending_claims_requests_before_sending_them(db_session, batches)
     def create(**_kwargs):
         # A failed commit after this call must not leave the requests pending.
         with make_session() as other:
-            assert other.get(SummaryRequest, request_id).status == "submitted"
+            claimed = other.get(SummaryRequest, request_id)
+            assert claimed is not None and claimed.status == "submitted"
         return Mock(id="batch_1")
 
     batches.create.side_effect = create
