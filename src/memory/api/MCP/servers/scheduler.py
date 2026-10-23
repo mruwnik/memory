@@ -57,7 +57,7 @@ async def list_all(
     List scheduled tasks for the current user.
 
     Args:
-        task_type: Filter by task type (notification, claude_session)
+        task_type: Filter by task type (notification, claude_session, agent_run)
         enabled: Filter by enabled status
         limit: Maximum number of tasks to return (default 50)
     """
@@ -294,6 +294,8 @@ async def upsert(
     Done). notification tasks also require notification_channel,
     notification_target, and message; claude_session tasks require message (the
     initial prompt) and spawn_config (token fields must name a stored secret).
+    agent_run tasks are created and changed with agent_schedule; here they can
+    only be paused (enabled=False).
 
     Args:
         task_id: ID of the task to update. Omit (or pass a fresh id) to create.
