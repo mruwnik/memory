@@ -231,6 +231,22 @@ def test_process_message_stores_account_and_uid(db_session, test_email_account, 
     assert mail_message.imap_uid == "12345"
 
 
+def test_stored_mail_is_offered_to_agent_triggers(
+    db_session, test_email_account, qdrant, monkeypatch
+):
+    queued = []
+    monkeypatch.setattr("memory.workers.tasks.email.queue_trigger_match", queued.append)
+
+    res = run_process_message(
+        account_id=test_email_account.id,
+        message_id="777",
+        folder="INBOX",
+        raw_email=SIMPLE_EMAIL_RAW,
+    )
+
+    assert queued == [res["mail_message_id"]]
+
+
 def test_spool_file_removed_after_processing(db_session, test_email_account, qdrant):
     """The spool file is deleted once the message is handled."""
     parsed = parse_email_message(SIMPLE_EMAIL_RAW, "555")

@@ -16,6 +16,7 @@ from typing import Any, Callable, Sequence, TypeVar, cast
 
 from celery.exceptions import Retry, TaskPredicate
 from sqlalchemy import or_
+from memory.agents.triggers import queue_trigger_match
 from memory.common import embedding, qdrant
 from memory.common.db.models import SourceItem, Chunk
 from memory.common.discord import notify_task_failure
@@ -373,6 +374,8 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         logger.error(f"Failed to push embeddings to Qdrant: {e}")
         logger.error(traceback.format_exc())
     session.commit()
+    if status == "processed":
+        queue_trigger_match(item.id)
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))
 

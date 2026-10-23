@@ -32,6 +32,7 @@ def ceilings(monkeypatch):
     monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
     monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
     monkeypatch.setattr(settings, "AGENT_MAX_TIMEOUT_SEC", 1800)
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 60)
 
 
 @pytest.fixture
@@ -177,6 +178,10 @@ def test_defaults_are_valid_on_the_default_model():
         (
             {"timeout_sec": 99999},
             "timeout_sec 99999 exceeds AGENT_MAX_TIMEOUT_SEC (1800)",
+        ),
+        (
+            {"max_runs_per_hour": 61},
+            "max_runs_per_hour 61 exceeds AGENT_MAX_RUNS_PER_HOUR (60)",
         ),
         (
             {"max_output_tokens": 64_000, "max_cost_usd": "0.10"},

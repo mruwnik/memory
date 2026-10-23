@@ -310,3 +310,57 @@ def test_dedupe_key_returns_the_existing_run(
 
     assert second.id == first.id
     assert no_celery_dispatch.call_count == 1
+
+
+def rated_definition(db, user, monkeypatch, spec_rate, ceiling, earlier):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", ceiling)
+    d = AgentDefinition(
+        user_id=user.id, name="d", spec=SPEC | {"max_runs_per_hour": spec_rate}
+    )
+    db.add(d)
+    db.commit()
+    for _ in range(earlier):
+        spent(db, user, "0", definition_id=d.id)
+    # Outside the window, so never counted.
+    spent(
+        db,
+        user,
+        "0",
+        definition_id=d.id,
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    return d
+
+
+def start_definition(db, user, d):
+    return enqueue_run(
+        db,
+        user_id=user.id,
+        spec=AgentSpec.model_validate(d.spec),
+        input="hi",
+        trigger=MANUAL,
+        definition=d,
+    )
+
+
+@pytest.mark.parametrize(
+    "spec_rate,ceiling,earlier", [(None, 3, 2), (2, 3, 1)]
+)
+def test_runs_within_the_hourly_limit_start(
+    db_session, regular_user, fake_providers, monkeypatch, spec_rate, ceiling, earlier
+):
+    d = rated_definition(db_session, regular_user, monkeypatch, spec_rate, ceiling, earlier)
+
+    assert start_definition(db_session, regular_user, d).status == "pending"
+
+
+@pytest.mark.parametrize(
+    "spec_rate,ceiling,earlier,limit", [(None, 3, 3, 3), (2, 3, 2, 2)]
+)
+def test_runs_beyond_the_hourly_limit_are_refused(
+    db_session, regular_user, fake_providers, monkeypatch, spec_rate, ceiling, earlier, limit
+):
+    d = rated_definition(db_session, regular_user, monkeypatch, spec_rate, ceiling, earlier)
+
+    with pytest.raises(CapExceeded, match=f"{earlier} runs in the last hour.*limit {limit}"):
+        start_definition(db_session, regular_user, d)

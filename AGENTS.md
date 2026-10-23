@@ -224,6 +224,10 @@ User-defined agents (prompt + model + tools + finish rule + budgets) run as a pr
 - **Caps**: `AGENT_MAX_RUN_COST_USD` / `AGENT_MAX_DAILY_COST_USD` are hard ceilings; definitions and API keys can only lower them.
 - **MCP tools**: `agent_*` (scope `agents`, module `api/MCP/servers/agent.py`); never callable from inside a run.
 - **Access**: grant users the `agents` scope; only `*` admins have it by default.
+- **Cron**: `agent_schedule` creates a `ScheduledTask` of type `agent_run`; the scheduler worker hands each due execution to the agents queue (`START_CRON_RUN` → `agents/cron.py`), which enqueues with `dedupe_key=execution_id`.
+- **Ingest triggers**: `agent_triggers` rows (`agents/triggers.py`, worker-safe: no API imports). `process_content_item` and the email path call `queue_trigger_match` after storing; `MATCH_INGEST_TRIGGERS` (maintenance) filters, checks the owner's access and self-authorship, claims (trigger, item) once in `agent_trigger_matches`, then fires (`FIRE_TRIGGER` → `agents/fire.py`) or buffers in Redis for `SWEEP_TRIGGER_BUFFERS`.
+- **Loop protection**: our Discord bots and the owner's Slack user never match; `max_runs_per_hour` and the cost pools trip a breaker that disables the trigger and notifies the owner. Unattended runs re-check the credentials that set them up (`agents/principal.py`).
+- **Image boundary**: anything that calls `enqueue_run` runs on the agents queue; maintenance/scheduler code must not import `memory.agents.spec`/`enqueue` (tested in `tests/memory/agents/test_tasks.py`).
 
 ## Key Design Decisions
 

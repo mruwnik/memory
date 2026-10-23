@@ -41,6 +41,7 @@ from memory.api.search.filters import (
     apply_registry_filters_sql,
     reject_unknown_filter_keys,
 )
+from memory.api.search.scope_filters import apply_scope_filters
 from memory.api.search.search import search as search_base
 from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
 from memory.common import extract, paths, settings
@@ -192,6 +193,23 @@ def _build_filters_section() -> str:
     return "\n".join(lines)
 
 
+# Substituted after dedent, so continuation lines carry the Args indent (4).
+SCOPE_SECTION = "\n".join(
+    " " * 4 * (i > 0) + line
+    for i, line in enumerate(
+        [
+            "since / until: ISO date or datetime bounding when the content happened;",
+            "    a date-only until includes that whole day (UTC)",
+            "    (mail sent, message posted, issue opened, post published; else when stored)",
+            "channel: Discord or Slack channel name (with or without #) or id",
+            "author: Discord/Slack user name or id, GitHub login, blog/comic/forum author,",
+            "    commit author, or part of a mail sender (case-insensitive)",
+            "repo: GitHub repository as owner/name (issues, PRs, commits)",
+        ]
+    )
+)
+
+
 def _build_list_items_description() -> str:
     """Build dynamic description for the list_items tool.
 
@@ -210,6 +228,7 @@ def _build_list_items_description() -> str:
             {filters_section}
             Observation-only filters (observation_types, min_confidences) are
             rejected here - use search_observations for those.
+            {scope_section}
             limit: Max results per page (default 50, max 200)
             offset: Skip first N results for pagination
             sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
@@ -217,7 +236,7 @@ def _build_list_items_description() -> str:
             include_metadata: Include full as_payload() metadata (default True)
 
         Returns: {{items: [...], total: int, has_more: bool}}"""
-    ).format(filters_section=_build_filters_section())
+    ).format(filters_section=_build_filters_section(), scope_section=SCOPE_SECTION)
 
 
 def _build_count_items_description() -> str:
@@ -237,9 +256,10 @@ def _build_count_items_description() -> str:
             Observation-only filters (observation_types, min_confidences) are
             rejected here - use search_observations for those. count_items and
             list_items apply the identical filter set, so their totals always agree.
+            {scope_section}
 
         Returns: {{total: int, by_modality: {{mail: 100, blog: 50, ...}}}}"""
-    ).format(filters_section=_build_filters_section())
+    ).format(filters_section=_build_filters_section(), scope_section=SCOPE_SECTION)
 
 
 def _build_search_description() -> str:
@@ -886,6 +906,11 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
 async def list_items(
     modalities: set[str] = set(),
     filters: MCPSearchFilters = {},
+    since: str | None = None,
+    until: str | None = None,
+    channel: str | None = None,
+    author: str | None = None,
+    repo: str | None = None,
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "inserted_at",
@@ -906,6 +931,9 @@ async def list_items(
         query = session.query(SourceItem).filter(SourceItem.embed_status == "STORED")
         query = apply_access_control_to_query(query, access_filter, session)
         query = apply_item_filters(query, modalities, filters)
+        query = apply_scope_filters(
+            query, since=since, until=until, channel=channel, author=author, repo=repo
+        )
 
         # Get total count
         total = query.count()
@@ -956,6 +984,11 @@ async def list_items(
 async def count_items(
     modalities: set[str] = set(),
     filters: MCPSearchFilters = {},
+    since: str | None = None,
+    until: str | None = None,
+    channel: str | None = None,
+    author: str | None = None,
+    repo: str | None = None,
 ) -> dict:
     """Count items matching criteria. See tool description for full parameter docs."""
     # Get access filter for current user
@@ -967,6 +1000,9 @@ async def count_items(
         )
         base_query = apply_access_control_to_query(base_query, access_filter, session)
         base_query = apply_item_filters(base_query, modalities, filters)
+        base_query = apply_scope_filters(
+            base_query, since=since, until=until, channel=channel, author=author, repo=repo
+        )
 
         # Get total
         total = base_query.count()

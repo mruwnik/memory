@@ -121,3 +121,19 @@ def resolve_run_cap(
         api_key.agent_max_run_cost_usd if api_key else None,
     )
     return min([per_run, *(p.remaining for p in pools)])
+
+
+def check_run_rate(db: DBSession, definition: AgentDefinition, spec_rate: int | None) -> None:
+    """CapExceeded once a definition has started its hourly allowance of runs."""
+    limit = min(settings.AGENT_MAX_RUNS_PER_HOUR, spec_rate or settings.AGENT_MAX_RUNS_PER_HOUR)
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    started = (
+        db.query(func.count(AgentRun.id))
+        .filter(AgentRun.definition_id == definition.id, AgentRun.created_at > since)
+        .scalar()
+    )
+    if started >= limit:
+        raise CapExceeded(
+            f"definition rate: {started} runs in the last hour, limit {limit} "
+            "(max_runs_per_hour / AGENT_MAX_RUNS_PER_HOUR); try again later or raise it"
+        )

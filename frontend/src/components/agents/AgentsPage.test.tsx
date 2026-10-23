@@ -30,6 +30,14 @@ describe('AgentsPage', () => {
     expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/1')
   })
 
+  it('flags definitions with a tripped trigger', async () => {
+    listDefinitions.mockResolvedValue([
+      { id: 1, name: 'watcher', description: '', spec: { model: 'm' }, last_run: null, triggers: { total: 2, enabled: 1, tripped: 1 } },
+    ])
+    renderWithRouter(<AgentsPage />)
+    await waitFor(() => expect(screen.getByText('1 trigger tripped')).toBeInTheDocument())
+  })
+
   it('shows load errors', async () => {
     listDefinitions.mockRejectedValue(new Error('MCP agent_list_all tool error: boom'))
     renderWithRouter(<AgentsPage />)

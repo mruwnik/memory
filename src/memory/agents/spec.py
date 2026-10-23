@@ -79,6 +79,8 @@ class AgentSpec(BaseModel):
     max_turns: int = Field(default=20, ge=1, le=200)
     max_cost_usd: Money | None = None
     max_cost_usd_per_day: Money | None = None
+    # Runs this definition may start per rolling hour, whatever starts them.
+    max_runs_per_hour: int | None = Field(default=None, ge=1)
     timeout_sec: int = Field(default=600, ge=1)
 
 
@@ -258,6 +260,11 @@ def budget_errors(spec: AgentSpec) -> list[str]:
         ),
     ]
     errors = [e for e in ceilings if e]
+    if (spec.max_runs_per_hour or 0) > settings.AGENT_MAX_RUNS_PER_HOUR:
+        errors.append(
+            f"max_runs_per_hour {spec.max_runs_per_hour} exceeds AGENT_MAX_RUNS_PER_HOUR "
+            f"({settings.AGENT_MAX_RUNS_PER_HOUR})"
+        )
     if spec.timeout_sec > settings.AGENT_MAX_TIMEOUT_SEC:
         errors.append(
             f"timeout_sec {spec.timeout_sec} exceeds AGENT_MAX_TIMEOUT_SEC "

@@ -88,6 +88,8 @@ CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
 CLEANUP_USED_ONE_TIME_KEYS = f"{MAINTENANCE_ROOT}.cleanup_used_one_time_keys"
 SWEEP_AGENT_RUNS = f"{MAINTENANCE_ROOT}.sweep_agent_runs"
 PURGE_AGENT_RUN_STEPS = f"{MAINTENANCE_ROOT}.purge_agent_run_steps"
+MATCH_INGEST_TRIGGERS = f"{MAINTENANCE_ROOT}.match_ingest_triggers"
+SWEEP_TRIGGER_BUFFERS = f"{MAINTENANCE_ROOT}.sweep_trigger_buffers"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
 CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
@@ -152,6 +154,8 @@ VERIFY_ORPHANS = f"{VERIFICATION_ROOT}.verify_orphans"
 VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
 
 RUN_AGENT = f"{AGENTS_ROOT}.run_agent"
+START_CRON_RUN = f"{AGENTS_ROOT}.start_cron_run"
+FIRE_TRIGGER = f"{AGENTS_ROOT}.fire_trigger"
 
 # Access control tasks
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
@@ -469,6 +473,7 @@ def build_beat_schedule() -> dict:
             "schedule": crontab(hour="4", minute="30"),
         },
         "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
+        "sweep-trigger-buffers": {"task": SWEEP_TRIGGER_BUFFERS, "schedule": 60},
         "purge-agent-run-steps": {
             "task": PURGE_AGENT_RUN_STEPS,
             "schedule": crontab(hour="4", minute="40"),

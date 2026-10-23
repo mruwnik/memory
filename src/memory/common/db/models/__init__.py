@@ -98,6 +98,8 @@ from memory.common.db.models.agents import (
     AgentDefinition,
     AgentRun,
     AgentRunStep,
+    AgentTrigger,
+    AgentTriggerMatch,
     RunStatus,
     TERMINAL_STATUSES,
 )
@@ -211,6 +213,8 @@ __all__ = [
     "AgentDefinition",
     "AgentRun",
     "AgentRunStep",
+    "AgentTrigger",
+    "AgentTriggerMatch",
     "RunStatus",
     "TERMINAL_STATUSES",
     "Base",

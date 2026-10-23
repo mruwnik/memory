@@ -167,6 +167,12 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
             onChange={e => set({ max_cost_usd_per_day: e.target.value || null })} />
         </div>
         <div>
+          <label className={labelClass} htmlFor="spec-rate">Max runs per hour (≤ {catalog.ceilings.max_runs_per_hour})</label>
+          <input id="spec-rate" type="number" min="1" max={catalog.ceilings.max_runs_per_hour} className={inputClass}
+            placeholder={String(catalog.ceilings.max_runs_per_hour)} value={value.max_runs_per_hour ?? ''}
+            onChange={e => set({ max_runs_per_hour: e.target.value ? Number(e.target.value) : null })} />
+        </div>
+        <div>
           <label className={labelClass} htmlFor="spec-timeout">Timeout (s, ≤ {catalog.ceilings.max_timeout_sec})</label>
           <input id="spec-timeout" type="number" min="1" className={inputClass} value={value.timeout_sec}
             onChange={e => set({ timeout_sec: Number(e.target.value) })} />

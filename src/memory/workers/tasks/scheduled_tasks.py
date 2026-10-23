@@ -2,7 +2,8 @@
 """
 Celery tasks for executing scheduled tasks.
 
-Supports multiple task types: notification (Discord/Slack/Email), claude_session.
+Supports multiple task types: notification (Discord/Slack/Email), claude_session,
+agent_run (started on the agents queue).
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from memory.common.celery_app import (
     EXECUTE_SCHEDULED_TASK,
     RUN_SCHEDULED_TASKS,
     SEND_NOTIFICATION,
+    START_CRON_RUN,
     app,
 )
 from memory.common.db.connection import make_session
@@ -445,6 +447,13 @@ def execute_scheduled_task(self, execution_id: str):
 
         task_type = task.task_type
         task_id = task.id
+
+        if task_type == TaskType.AGENT_RUN:
+            # Starting a run needs the API image, so the agents worker owns this
+            # execution from here. While it's pending, stuck-pending recovery
+            # re-dispatches it, and the run's dedupe key keeps that idempotent.
+            app.send_task(START_CRON_RUN, args=[execution_id])
+            return {"handed_off": START_CRON_RUN, "execution_id": execution_id}
 
         # Mark as running and commit - use try/finally to ensure we always
         # update the final status even if something goes wrong after this point

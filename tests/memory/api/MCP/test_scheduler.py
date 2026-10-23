@@ -210,6 +210,10 @@ async def test_create_claude_session(db_session, regular_user, user_session):
         ),
         (dict(task_type="notification", cron_expression="0 9 * * *"), "require"),
         (
+            dict(task_type="agent_run", cron_expression="0 9 * * *", message="p"),
+            "agent_schedule",
+        ),
+        (
             dict(task_type="claude_session", cron_expression="0 9 * * *", message="p"),
             "spawn_config",
         ),
@@ -247,6 +251,46 @@ async def test_create_validation_errors(
     with mcp_auth_context(user_session.id):
         with pytest.raises(ValueError, match=match):
             await scheduler.upsert.fn(**kwargs)
+
+
+def agent_run_task(db_session, user, enabled=True):
+    task = ScheduledTask(
+        user_id=user.id,
+        task_type="agent_run",
+        cron_expression="0 9 * * *",
+        data={"definition_id": 1, "input": "go"},
+    )
+    task.enabled = enabled
+    db_session.add(task)
+    db_session.commit()
+    return task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"message": "other"}, {"enabled": True}, {"cron_expression": "0 8 * * *"}],
+)
+async def test_agent_schedules_can_only_be_paused_here(
+    db_session, regular_user, user_session, kwargs
+):
+    task = agent_run_task(db_session, regular_user, enabled=False)
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="agent_schedule"):
+            await scheduler.upsert.fn(task_id=task.id, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_agent_schedules_can_be_paused_here(
+    db_session, regular_user, user_session
+):
+    task = agent_run_task(db_session, regular_user)
+
+    with mcp_auth_context(user_session.id):
+        paused = await scheduler.upsert.fn(task_id=task.id, enabled=False)
+
+    assert paused["enabled"] is False
 
 
 @pytest.mark.asyncio

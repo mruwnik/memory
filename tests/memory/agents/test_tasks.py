@@ -20,11 +20,12 @@ def test_agent_tasks_route_to_the_agents_queue():
     }
 
 
-def test_task_module_does_not_import_the_runner_at_load_time():
-    # Every worker autodiscovers this module; only agents-worker has the runner's deps.
+def test_worker_tasks_do_not_import_the_api_package_at_load_time():
+    # Every worker autodiscovers the task modules; only agents-worker has the API's deps.
+    api_only = ["memory.agents.runner", "memory.agents.enqueue", "fastmcp", "fastapi", "jsonschema"]
     code = (
-        "import sys, memory.workers.tasks.agents; "
-        "print('memory.agents.runner' in sys.modules)"
+        "import sys, memory.workers.tasks; "
+        f"print(any(m in sys.modules for m in {api_only!r}))"
     )
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     out = subprocess.run(

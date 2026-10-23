@@ -25,6 +25,7 @@ from memory.common.db.models import (
     ScheduledTask,
     SlackUserCredentials,
     SourceItem,
+    User,
     UserSession,
 )
 
@@ -99,22 +100,15 @@ def _create_one_time_key(session: DBSession, user_session: UserSession) -> APIKe
     return one_time_key
 
 
-def _get_current_user(session: DBSession) -> dict:
-    """Get the current authenticated user from the access token."""
-    user_session = _get_user_session_from_token(session)
-    if not user_session:
-        access_token = get_access_token()
-        if not access_token:
-            return {"authenticated": False}
-        return {"authenticated": False, "error": "User not found"}
-
-    user_info = user_session.user.serialize()
+def user_info_for(session: DBSession, user: User) -> dict:
+    """A user's profile plus the accounts notifications can be delivered to."""
+    user_info = user.serialize()
 
     # Add email accounts
     email_accounts = (
         session.query(EmailAccount)
         .filter(
-            EmailAccount.user_id == user_session.user.id, EmailAccount.active.is_(True)
+            EmailAccount.user_id == user.id, EmailAccount.active.is_(True)
         )
         .all()
     )
@@ -130,7 +124,7 @@ def _get_current_user(session: DBSession) -> dict:
     # Add Slack accounts from credentials table
     slack_credentials = (
         session.query(SlackUserCredentials)
-        .filter(SlackUserCredentials.user_id == user_session.user.id)
+        .filter(SlackUserCredentials.user_id == user.id)
         .all()
     )
     user_info["slack_accounts"] = {
@@ -140,7 +134,7 @@ def _get_current_user(session: DBSession) -> dict:
     # Add GitHub accounts
     github_accounts = (
         session.query(GithubAccount)
-        .filter(GithubAccount.user_id == user_session.user.id)
+        .filter(GithubAccount.user_id == user.id)
         .all()
     )
     # ``name`` is self-attested and must not be used for identity
@@ -156,9 +150,9 @@ def _get_current_user(session: DBSession) -> dict:
     ]
 
     # Enrich from linked Person record (via User.person or discord_accounts)
-    person = user_session.user.person
+    person = user.person
     if not person:
-        for discord_acct in user_session.user.discord_accounts:
+        for discord_acct in user.discord_accounts:
             if not discord_acct.person:
                 continue
             if not person:
@@ -166,7 +160,7 @@ def _get_current_user(session: DBSession) -> dict:
             elif discord_acct.person.id != person.id:
                 logger.warning(
                     "User %s has discord accounts linked to multiple Person records; using first found",
-                    user_session.user.id,
+                    user.id,
                 )
                 break
 
@@ -196,15 +190,28 @@ def _get_current_user(session: DBSession) -> dict:
                 user_info["github_accounts"] = [{"username": github_username}]
 
     # Fall back to user's own email if no dedicated email accounts
-    if not email_accounts and user_session.user.email:
+    if not email_accounts and user.email:
         user_info["email_accounts"] = [
             {
-                "email_address": user_session.user.email,
-                "name": user_session.user.name,
+                "email_address": user.email,
+                "name": user.name,
                 "account_type": "primary",
             }
         ]
 
+    return user_info
+
+
+def _get_current_user(session: DBSession) -> dict:
+    """Get the current authenticated user from the access token."""
+    user_session = _get_user_session_from_token(session)
+    if not user_session:
+        access_token = get_access_token()
+        if not access_token:
+            return {"authenticated": False}
+        return {"authenticated": False, "error": "User not found"}
+
+    user_info = user_info_for(session, user_session.user)
     access_token = get_access_token()
     return {
         "authenticated": True,
@@ -453,6 +460,32 @@ def get_notification_channel(user_info: dict, preferred: str | None) -> tuple[st
 
     # Return first available (priority order)
     return channels[0]
+
+
+def notify_user_now(
+    session: DBSession, user: User, subject: str, message: str, details_url: str | None = None
+) -> str | None:
+    """Queue a notification to `user` on their preferred channel, as notify_user does.
+
+    For code acting on a user's behalf without their token. Returns the channel
+    type, or None when the user has no channel to notify on.
+    """
+    channel_info = get_notification_channel({"user": user_info_for(session, user)}, None)
+    if channel_info is None:
+        return None
+    channel_type, channel_identifier, extra_data = channel_info
+    celery_app.send_task(
+        SEND_NOTIFICATION,
+        args=[
+            channel_type,
+            channel_identifier,
+            format_notification_message(subject, message, details_url),
+            user.id,
+            subject,
+            extra_data,
+        ],
+    )
+    return channel_type
 
 
 def format_notification_message(subject: str, message: str, details_url: str | None) -> str:

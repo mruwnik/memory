@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from memory.common.celery_app import START_CRON_RUN
 from memory.common.db.models import ScheduledTask, TaskExecution
 from memory.common.db.models.discord import DiscordChannel, DiscordServer
 from memory.workers.tasks import scheduled_tasks
@@ -279,6 +280,30 @@ def test_execute_scheduled_task_success(
     # Verify database was updated
     db_session.refresh(pending_execution)
     assert pending_execution.status == "completed"
+
+
+def test_agent_run_execution_is_handed_to_the_agents_queue(
+    db_session, sample_user, no_celery_dispatch
+):
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="agent_run",
+        cron_expression="0 9 * * *",
+        data={"definition_id": 1, "input": "go"},
+    )
+    db_session.add(task)
+    db_session.flush()
+    execution = TaskExecution(
+        task_id=task.id, scheduled_time=datetime(2026, 1, 1), status="pending"
+    )
+    db_session.add(execution)
+    db_session.commit()
+
+    scheduled_tasks.execute_scheduled_task(execution.id)
+
+    no_celery_dispatch.assert_called_once_with(START_CRON_RUN, args=[execution.id])
+    db_session.refresh(execution)
+    assert execution.status == "pending"
 
 
 def test_execute_scheduled_task_not_found(db_session):

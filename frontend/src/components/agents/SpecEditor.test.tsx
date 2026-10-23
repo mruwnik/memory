@@ -21,8 +21,9 @@ const catalog: Catalog = {
       extras_schema: {},
     },
   ],
-  ceilings: { max_run_cost_usd: '1.00', max_daily_cost_usd: '10.00', max_timeout_sec: 1800 },
+  ceilings: { max_run_cost_usd: '1.00', max_daily_cost_usd: '10.00', max_timeout_sec: 1800, max_runs_per_hour: 60 },
   default_model: 'anthropic/claude-sonnet-5-5',
+  trigger_source_types: ['blog_post', 'discord_message'],
 }
 
 describe('SpecEditor', () => {

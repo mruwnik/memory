@@ -32,6 +32,11 @@ export default function AgentsPage() {
               <Link to={`/ui/agents/${d.id}`} className="font-medium text-primary">{d.name}</Link>
               <div className="text-sm text-slate-500">{d.description}</div>
               <div className="text-xs text-slate-400 font-mono">{d.spec.model}</div>
+              {!!d.triggers?.tripped && (
+                <span className="inline-block mt-1 px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">
+                  {d.triggers.tripped} trigger{d.triggers.tripped > 1 ? 's' : ''} tripped
+                </span>
+              )}
             </div>
             {d.last_run && (
               <div className="text-right text-sm">

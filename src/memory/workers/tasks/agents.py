@@ -1,9 +1,14 @@
-"""Celery entry point for agent runs (queue `agents`, consumed by agents-worker)."""
+"""Celery entry points for agent runs (queue `agents`, consumed by agents-worker).
+
+Each task imports its implementation inside the function, not at module top: the
+implementations need the API package (fastmcp, the MCP server, enqueue_run), which
+only the agents-worker image installs, while every worker autodiscovers this module.
+"""
 
 import asyncio
 
 from memory.common import settings
-from memory.common.celery_app import RUN_AGENT, app
+from memory.common.celery_app import FIRE_TRIGGER, RUN_AGENT, START_CRON_RUN, app
 
 
 @app.task(
@@ -13,9 +18,22 @@ from memory.common.celery_app import RUN_AGENT, app
 )
 def run_agent(run_id: str) -> None:
     """Run one agent. A redelivery finds the run no longer pending and does nothing."""
-    # Imported here, not at module top: the runner needs the API package
-    # (fastmcp and the MCP server), which only the agents-worker image installs,
-    # while every worker autodiscovers this module.
     from memory.agents.runner import execute_run
 
     asyncio.run(execute_run(run_id))
+
+
+@app.task(name=FIRE_TRIGGER)
+def fire_trigger(trigger_id: int, item_ids: list[int]) -> str | None:
+    """Start a run of a trigger's definition for the items it matched."""
+    from memory.agents.fire import fire_trigger as fire
+
+    return fire(trigger_id, item_ids)
+
+
+@app.task(name=START_CRON_RUN)
+def start_cron_run(execution_id: str) -> str | None:
+    """Start the run for a due agent_run ScheduledTask execution."""
+    from memory.agents.cron import start_cron_run as start
+
+    return start(execution_id)

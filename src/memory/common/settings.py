@@ -292,6 +292,9 @@ LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
 # Agent runs
 AGENT_MAX_RUN_COST_USD = Decimal(os.getenv("AGENT_MAX_RUN_COST_USD", "1.00"))
 AGENT_MAX_DAILY_COST_USD = Decimal(os.getenv("AGENT_MAX_DAILY_COST_USD", "10.00"))
+# Runs one definition may start per rolling hour; a definition's max_runs_per_hour may only lower it.
+AGENT_MAX_RUNS_PER_HOUR = int(os.getenv("AGENT_MAX_RUNS_PER_HOUR", "60"))
+AGENT_MAX_TRIGGERS_PER_USER = int(os.getenv("AGENT_MAX_TRIGGERS_PER_USER", "20"))
 AGENT_MAX_TIMEOUT_SEC = int(os.getenv("AGENT_MAX_TIMEOUT_SEC", "1800"))
 AGENT_MAX_WAIT_SEC = int(os.getenv("AGENT_MAX_WAIT_SEC", "300"))
 AGENT_LLM_TIMEOUT_SEC = float(os.getenv("AGENT_LLM_TIMEOUT_SEC", "600"))

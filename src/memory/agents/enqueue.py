@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from memory.agents.caps import CapExceeded, resolve_run_cap
+from memory.agents.caps import CapExceeded, check_run_rate, resolve_run_cap
 from memory.agents.spec import (
     MAX_TEXT_CHARS,
     AgentSpec,
@@ -44,13 +44,20 @@ def enqueue_run(
 
     Tool visibility is not checked here (it needs the owner's MCP identity):
     interactive callers check it up front and the runner re-checks at start.
-    The dedupe check-then-insert can race; the unique partial index is the
-    backstop (a racing duplicate raises IntegrityError).
+    Runs of a definition hold its row lock until the new run is committed,
+    so dedupe and the rate cap don't race; the unique partial index on
+    (definition_id, dedupe_key) remains the backstop.
     """
     if len(input) > MAX_TEXT_CHARS:
         raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
     if errors := spec_errors(spec):
         raise SpecInvalid(errors)
+    if definition is not None:
+        # Serialises a definition's enqueues until this run is committed, so
+        # concurrent starts can't all pass the rate check or the dedupe lookup.
+        db.query(AgentDefinition).filter(
+            AgentDefinition.id == definition.id
+        ).with_for_update().one()
     if definition is not None and trigger.dedupe_key is not None:
         existing = (
             db.query(AgentRun)
@@ -62,7 +69,8 @@ def enqueue_run(
         )
         if existing is not None:
             return existing
-
+    if definition is not None:
+        check_run_rate(db, definition, spec.max_runs_per_hour)
     max_cost = resolve_run_cap(
         db,
         user_id=user_id,

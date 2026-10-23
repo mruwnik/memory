@@ -346,4 +346,5 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
         "max_run_cost_usd": "1.00",
         "max_daily_cost_usd": "10.00",
         "max_timeout_sec": 1800,
+        "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
     }

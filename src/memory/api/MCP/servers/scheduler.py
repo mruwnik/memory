@@ -16,7 +16,7 @@ from memory.common import settings
 from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution
-from memory.common.db.models.scheduled_tasks import compute_next_cron
+from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.db.models.secrets import find_secret
 from memory.common.scopes import SCOPE_SCHEDULE, SCOPE_SCHEDULE_WRITE
 
@@ -81,6 +81,8 @@ async def list_all(
         return [task.serialize() for task in tasks]
 
 
+TASK_TYPES = {t.value for t in TaskType}
+
 SPAWN_CONFIG_FIELDS = {
     "allowed_tools",
     "repo_url",
@@ -134,6 +136,19 @@ def validate_scheduled_secret_refs(
             )
 
 
+def check_active_task_cap(session, user_id: int, exclude_id: str | None = None) -> None:
+    query = session.query(ScheduledTask).filter(
+        ScheduledTask.user_id == user_id, ScheduledTask.enabled
+    )
+    if exclude_id is not None:
+        query = query.filter(ScheduledTask.id != exclude_id)
+    if query.count() >= settings.MAX_SCHEDULED_TASKS_PER_USER:
+        raise ValueError(
+            f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active "
+            "scheduled tasks per user reached"
+        )
+
+
 NOTIFICATION_CHANNELS = {"discord", "slack", "email"}
 
 
@@ -162,6 +177,7 @@ def build_scheduled_task(
     notification_channel: str | None,
     notification_target: str | None,
     spawn_config: dict[str, Any] | None,
+    agent_run: dict[str, Any] | None = None,
 ) -> ScheduledTask:
     """Build (add but do not commit) a new ScheduledTask for upsert's create path.
 
@@ -170,9 +186,10 @@ def build_scheduled_task(
     fields. Honors an explicit task_id and a created-disabled (enabled=False)
     task. Raises ValueError on any validation failure.
     """
-    if task_type not in ("notification", "claude_session"):
+    if task_type not in TASK_TYPES:
         raise ValueError(
-            "Creating a task requires task_type 'notification' or 'claude_session'"
+            "Creating a task requires task_type 'notification' or 'claude_session' "
+            "(agent runs are scheduled with agent_schedule)"
         )
     if bool(cron_expression) == bool(scheduled_time):
         raise ValueError("Provide exactly one of cron_expression or scheduled_time")
@@ -199,16 +216,7 @@ def build_scheduled_task(
     # A created-disabled recurring task gets next_scheduled_time cleared below
     # and isn't "active", so it can't breach the cap; only enforce when active.
     if enabled is not False:
-        active_count = (
-            session.query(ScheduledTask)
-            .filter(ScheduledTask.user_id == user_id, ScheduledTask.enabled)
-            .count()
-        )
-        if active_count >= settings.MAX_SCHEDULED_TASKS_PER_USER:
-            raise ValueError(
-                f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active "
-                "scheduled tasks per user reached"
-            )
+        check_active_task_cap(session, user_id)
 
     task = ScheduledTask(
         user_id=user_id,
@@ -233,6 +241,10 @@ def build_scheduled_task(
             session, user_id, notification_channel, notification_target
         )
         task.data = {"notification_type": "notify_user", "subject": topic}
+    elif task_type == TaskType.AGENT_RUN:
+        if not agent_run:
+            raise ValueError("agent_run tasks require a definition and input")
+        task.data = agent_run
     else:
         if not spawn_config:
             raise ValueError("claude_session tasks require spawn_config")
@@ -315,6 +327,8 @@ async def upsert(
             raise ValueError("Not authorized to access this task")
 
         if task is None:
+            if task_type == TaskType.AGENT_RUN:
+                raise ValueError("create agent schedules with agent_schedule")
             task = build_scheduled_task(
                 session,
                 user_id,
@@ -354,6 +368,22 @@ async def upsert(
         # bypass it. `enabled` is derived from next_scheduled_time, so we check
         # the transition after the mutations below rather than per-field.
         was_active = task.enabled
+
+        # Anything but pausing would skip agent_schedule's re-check of the
+        # caller's scopes and tools.
+        agent_changes = (
+            enabled,
+            cron_expression,
+            topic,
+            message,
+            notification_channel,
+            notification_target,
+            spawn_config,
+        ) != (False, None, None, None, None, None, None)
+        if task.task_type == TaskType.AGENT_RUN and agent_changes:
+            raise ValueError(
+                "agent schedules can only be paused here; change them with agent_schedule"
+            )
 
         if cron_expression is not None:
             validate_cron_interval(cron_expression)
@@ -409,20 +439,7 @@ async def upsert(
         if task.enabled and not was_active:
             # This update re-activated a previously-inactive task — enforce the
             # active-task cap (excluding this task itself).
-            active_count = (
-                session.query(ScheduledTask)
-                .filter(
-                    ScheduledTask.user_id == user_id,
-                    ScheduledTask.enabled,
-                    ScheduledTask.id != task.id,
-                )
-                .count()
-            )
-            if active_count >= settings.MAX_SCHEDULED_TASKS_PER_USER:
-                raise ValueError(
-                    f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active "
-                    "scheduled tasks per user reached"
-                )
+            check_active_task_cap(session, user_id, exclude_id=task.id)
 
         session.commit()
         return task.serialize()

@@ -4,6 +4,8 @@ import { defaultSpec, useAgents, type AgentRun, type AgentSpec, type Catalog } f
 import { formatRelativeTime } from '@/components/sources/shared'
 import { SpecEditor } from './SpecEditor'
 import { StatusBadge } from './StatusBadge'
+import { Schedules } from './Schedules'
+import { Triggers } from './Triggers'
 
 export default function AgentEditor() {
   const { id } = useParams()
@@ -117,6 +119,8 @@ export default function AgentEditor() {
           </ul>
         </section>
       )}
+      {definitionId !== undefined && <Schedules definitionId={definitionId} />}
+      {definitionId !== undefined && <Triggers definitionId={definitionId} sourceTypes={catalog.trigger_source_types} />}
     </div>
   )
 }

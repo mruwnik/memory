@@ -21,6 +21,7 @@ export interface AgentSpec {
   max_turns: number
   max_cost_usd: string | null
   max_cost_usd_per_day: string | null
+  max_runs_per_hour: number | null
   timeout_sec: number
 }
 
@@ -53,6 +54,7 @@ export interface AgentDefinition {
   created_at: string | null
   updated_at: string | null
   last_run?: AgentRun | null
+  triggers?: { total: number; enabled: number; tripped: number }
 }
 
 export type Block =
@@ -88,8 +90,55 @@ export interface Catalog {
   builtins: string[]
   tools: { name: string; description: string; read_only: boolean }[]
   models: ModelEntry[]
-  ceilings: { max_run_cost_usd: string; max_daily_cost_usd: string; max_timeout_sec: number }
+  ceilings: { max_run_cost_usd: string; max_daily_cost_usd: string; max_timeout_sec: number; max_runs_per_hour: number }
   default_model: string
+  trigger_source_types: string[]
+}
+
+export interface IngestFilter {
+  source_types: string[]
+  tags_any: string[]
+  channel_ids: string[]
+  text_contains: string[]
+  regex: string | null
+  exclude_authors: string[]
+}
+
+export type Delivery = { mode: 'per_item' } | { mode: 'batch'; window_sec: number; max_items: number }
+
+export interface TriggerConfig {
+  filter: IngestFilter
+  delivery: Delivery
+  template: string
+}
+
+export interface AgentTrigger {
+  id: number
+  definition_id: number
+  kind: 'ingest'
+  config: TriggerConfig
+  enabled: boolean
+  state: { tripped?: { reason: string; at: string } }
+  api_key_id: number | null
+  via_api_key: boolean
+  created_at: string | null
+  updated_at: string | null
+}
+
+export const DEFAULT_TRIGGER_TEMPLATE = 'New items matched this trigger:\n\n{items}'
+
+export const emptyTriggerConfig = (): TriggerConfig => ({
+  filter: { source_types: [], tags_any: [], channel_ids: [], text_contains: [], regex: null, exclude_authors: [] },
+  delivery: { mode: 'per_item' },
+  template: DEFAULT_TRIGGER_TEMPLATE,
+})
+
+export interface AgentSchedule {
+  id: string
+  cron_expression: string | null
+  next_scheduled_time: string | null
+  enabled: boolean
+  data: { definition_id: number; input: string }
 }
 
 export const defaultSpec = (model: string): AgentSpec => ({
@@ -106,6 +155,7 @@ export const defaultSpec = (model: string): AgentSpec => ({
   max_turns: 20,
   max_cost_usd: null,
   max_cost_usd_per_day: null,
+  max_runs_per_hour: null,
   timeout_sec: 600,
 })
 
@@ -164,5 +214,43 @@ export const useAgents = () => {
   )
   const catalog = useCallback(() => call<Catalog>('agent_catalog'), [call])
 
-  return { listDefinitions, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog }
+  const listSchedules = useCallback(
+    async (definitionId: number) =>
+      (await call<{ schedules: AgentSchedule[] }>('agent_schedules', { definition_id: definitionId })).schedules,
+    [call],
+  )
+  const saveSchedule = useCallback(
+    (body: { definitionId: number; input?: string; cron?: string; enabled?: boolean; taskId?: string }) =>
+      call<AgentSchedule>('agent_schedule', {
+        definition_id: body.definitionId,
+        ...(body.input !== undefined ? { input: body.input } : {}),
+        ...(body.cron !== undefined ? { cron_expression: body.cron } : {}),
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.taskId !== undefined ? { task_id: body.taskId } : {}),
+      }),
+    [call],
+  )
+  const deleteSchedule = useCallback((taskId: string) => call('agent_unschedule', { task_id: taskId }), [call])
+
+  const listTriggers = useCallback(
+    async (definitionId: number) =>
+      (await call<{ triggers: AgentTrigger[] }>('agent_triggers', { definition_id: definitionId })).triggers,
+    [call],
+  )
+  const saveTrigger = useCallback(
+    (body: { definitionId: number; config?: TriggerConfig; enabled?: boolean; triggerId?: number }) =>
+      call<AgentTrigger & { warnings?: string[] }>('agent_trigger_upsert', {
+        definition_id: body.definitionId,
+        ...(body.config !== undefined ? { config: body.config } : {}),
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.triggerId !== undefined ? { trigger_id: body.triggerId } : {}),
+      }),
+    [call],
+  )
+  const deleteTrigger = useCallback((triggerId: number) => call('agent_trigger_delete', { trigger_id: triggerId }), [call])
+
+  return {
+    listDefinitions, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
+    listSchedules, saveSchedule, deleteSchedule, listTriggers, saveTrigger, deleteTrigger,
+  }
 }

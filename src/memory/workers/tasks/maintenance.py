@@ -18,6 +18,7 @@ from memory.common import (
     summarizer,
     summary_batch,
 )
+from memory.agents import triggers
 from memory.common.db.models.agents import RunStatus
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
@@ -30,6 +31,8 @@ from memory.common.celery_app import (
     CLEANUP_USED_ONE_TIME_KEYS,
     PURGE_AGENT_RUN_STEPS,
     SWEEP_AGENT_RUNS,
+    MATCH_INGEST_TRIGGERS,
+    SWEEP_TRIGGER_BUFFERS,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_DONE_ONEOFF_TASKS,
     CLEANUP_OLD_TASK_EXECUTIONS,
@@ -1272,7 +1275,10 @@ def sweep_agent_runs() -> dict[str, int]:
 
 @app.task(name=PURGE_AGENT_RUN_STEPS)
 def purge_agent_run_steps() -> dict[str, int]:
-    """Delete transcripts past retention; run rows (result, usage, cost) stay forever."""
+    """Delete transcripts past retention, and old trigger match claims.
+
+    Run rows (result, usage, cost) stay forever.
+    """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=settings.AGENT_STEP_RETENTION_DAYS)
     # Re-checked inside each statement, so a run starred mid-purge keeps its transcript.
@@ -1298,4 +1304,18 @@ def purge_agent_run_steps() -> dict[str, int]:
             db.execute(delete(AgentRunStep).where(AgentRunStep.run_id.in_(ids)))
         purged += len(ids)
     logger.info("purged transcripts of %d agent runs", purged)
-    return {"purged_runs": purged}
+    with make_session() as db:
+        claims = triggers.purge_matches(db, triggers.MATCH_RETENTION)
+    return {"purged_runs": purged, "purged_trigger_matches": claims}
+
+
+@app.task(name=MATCH_INGEST_TRIGGERS)
+def match_ingest_triggers(item_id: int) -> list[int]:
+    """Start or buffer agent runs for every ingest trigger a stored item matches."""
+    return triggers.match_ingest_triggers(item_id)
+
+
+@app.task(name=SWEEP_TRIGGER_BUFFERS)
+def sweep_trigger_buffers() -> dict[int, int]:
+    """Fire the batch ingest triggers whose window has closed or buffer is full."""
+    return triggers.sweep_trigger_buffers()

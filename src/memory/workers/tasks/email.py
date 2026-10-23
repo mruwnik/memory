@@ -6,6 +6,7 @@ from typing import Generator, cast
 
 from sqlalchemy.exc import IntegrityError
 
+from memory.agents.triggers import queue_trigger_match
 from memory.common import settings
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
 from memory.common.db.connection import DBSession, make_session
@@ -137,6 +138,7 @@ def store_email_message(
             vectorize_email(mail_message)
 
             db.commit()
+            queue_trigger_match(mail_message.id)
 
             logger.info(f"Stored embedding for message {mail_message.message_id}")
             logger.info("Chunks:")

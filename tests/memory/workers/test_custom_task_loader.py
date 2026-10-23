@@ -100,6 +100,9 @@ def test_celery_app_import_does_not_load_custom_tasks(tmp_path, monkeypatch):
 
     import memory.common.celery_app as celery_module
 
+    # The reload rebinds `app`; restore the original afterwards, since every
+    # module that imported it (and the autouse send_task patch) uses that one.
+    monkeypatch.setattr(celery_module, "app", celery_module.app)
     importlib.reload(celery_module)
 
     # If the loader had run at import time, the canary file would

@@ -19,7 +19,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
@@ -195,6 +195,98 @@ class AgentRun(Base):
             "steps_purged_at": iso(self.steps_purged_at),
         }
         return data | ({"spec": self.spec} if include_spec else {})
+
+
+class AgentTrigger(Base):
+    """Starts runs of a definition when something happens (phase 2: ingest filters).
+
+    `config` is validated per kind by memory.agents.triggers. `state` holds what
+    the trigger machinery records, e.g. why a circuit breaker disabled it.
+    """
+
+    __tablename__ = "agent_triggers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    definition_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_definitions.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    state: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    # The key the trigger was set up through: its runs act with that key's scopes.
+    api_key_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("api_keys.id", ondelete="SET NULL")
+    )
+    # Survives the key's deletion (which nulls api_key_id), so a deleted key
+    # stops the trigger instead of widening it to the owner's full access.
+    via_api_key: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Set on creation and on every re-enable: items stored before it (including
+    # while the trigger was paused) never match, however often they're reprocessed.
+    active_since: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    definition: Mapped[AgentDefinition] = relationship("AgentDefinition")
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('ingest')", name="agent_triggers_kind_check"),
+        Index("agent_triggers_definition_idx", "definition_id"),
+        Index(
+            "agent_triggers_enabled_kind_idx",
+            "kind",
+            postgresql_where=text("enabled"),
+        ),
+    )
+
+    def serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "definition_id": self.definition_id,
+            "kind": self.kind,
+            "config": self.config,
+            "enabled": self.enabled,
+            "state": self.state,
+            "api_key_id": self.api_key_id,
+            "via_api_key": self.via_api_key,
+            "active_since": iso(self.active_since),
+            "created_at": iso(self.created_at),
+            "updated_at": iso(self.updated_at),
+        }
+
+
+class AgentTriggerMatch(Base):
+    """An item a trigger has matched, so it is matched at most once however often
+    the item is reprocessed."""
+
+    __tablename__ = "agent_trigger_matches"
+
+    trigger_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_triggers.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("agent_trigger_matches_item_idx", "item_id"),
+        Index("agent_trigger_matches_created_idx", "created_at"),
+    )
 
 
 class AgentRunStep(Base):

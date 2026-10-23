@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody, CreateTaskBody } from '@/hooks/useScheduledTasks'
 import { useClaude, Environment } from '@/hooks/useClaude'
 import { useDiscord } from '@/hooks/useDiscord'
@@ -8,11 +8,17 @@ import { usePeople } from '@/hooks/usePeople'
 import Combobox, { ComboOption } from '@/components/shared/Combobox'
 import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
 
-type TypeFilter = 'all' | 'notification' | 'claude_session'
+type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
 
 const TYPE_COLORS: Record<string, string> = {
   notification: 'bg-purple-100 text-purple-700',
   claude_session: 'bg-indigo-100 text-indigo-700',
+  agent_run: 'bg-emerald-100 text-emerald-700',
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  claude_session: 'Claude Session',
+  agent_run: 'Agent Run',
 }
 
 const EXECUTION_STATUS_COLORS: Record<string, string> = {
@@ -104,6 +110,15 @@ const DataField = ({ label, value }: { label: string; value: string }) => (
 const TaskDataFields = ({ task }: { task: ScheduledTask }) => {
   const data = task.data
   if (!data || Object.keys(data).length === 0) return null
+
+  if (task.task_type === 'agent_run') {
+    return (
+      <div className="mt-1 text-sm text-slate-600">
+        <p className="line-clamp-3">{String(data.input ?? '')}</p>
+        <Link to={`/ui/agents/${data.definition_id}`} className="text-primary text-xs">Edit on the agent's page</Link>
+      </div>
+    )
+  }
 
   if (task.task_type === 'claude_session') {
     const config = data.spawn_config as Record<string, unknown> | undefined
@@ -749,6 +764,7 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
     <div className="mt-2 space-y-1">
       {executions.map(ex => {
         const sessionId = (ex.data as Record<string, unknown> | null)?.session_id as string | undefined
+        const runId = (ex.data as Record<string, unknown> | null)?.run_id as string | undefined
         return (
           <div key={ex.id} className="border-t border-slate-100 py-1">
             <div className="flex items-center gap-3 text-xs text-slate-600">
@@ -761,6 +777,9 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
                 <span className="font-mono text-slate-500" title={sessionId}>
                   session: {sessionId.length > 20 ? `${sessionId.slice(0, 20)}...` : sessionId}
                 </span>
+              )}
+              {runId && (
+                <Link to={`/ui/agents/runs/${runId}`} className="font-mono text-primary">view run</Link>
               )}
               {ex.error_message && (
                 <span className="text-red-500 truncate flex-1" title={ex.error_message}>{ex.error_message}</span>
@@ -792,6 +811,7 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
   const [editing, setEditing] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const navigate = useNavigate()
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -819,7 +839,7 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
     }
   }
 
-  const typeLabel = task.task_type === 'claude_session' ? 'Claude Session' : 'Notification'
+  const typeLabel = TYPE_LABELS[task.task_type] ?? 'Notification'
 
   return (
     <li className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-slate-200">
@@ -851,7 +871,19 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
                 {getTaskStatus(task) === 'done' ? (
                   <span className="px-2 py-1 rounded text-xs font-medium bg-sky-100 text-sky-700">Done</span>
                 ) : (
-                  <StatusBadge active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
+                  <StatusBadge
+                    active={task.enabled}
+                    onClick={() => {
+                      // Agent schedules resume on the agent's page, which re-checks their tools and scopes.
+                      if (task.task_type === 'agent_run' && !task.enabled) {
+                        if (window.confirm("Agent schedules are resumed on the agent's page. Open it?")) {
+                          navigate(`/ui/agents/${task.data?.definition_id}`)
+                        }
+                        return
+                      }
+                      onToggle(task.id, !task.enabled)
+                    }}
+                  />
                 )}
               </div>
 
@@ -875,12 +907,14 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
             </div>
 
             <div className="shrink-0 flex gap-2">
-              <button
-                onClick={() => setEditing(true)}
-                className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200"
-              >
-                Edit
-              </button>
+              {task.task_type !== 'agent_run' && (
+                <button
+                  onClick={() => setEditing(true)}
+                  className="bg-slate-100 text-slate-700 py-1.5 px-3 rounded text-sm hover:bg-slate-200"
+                >
+                  Edit
+                </button>
+              )}
               <button
                 onClick={() => setShowHistory(h => !h)}
                 className={`py-1.5 px-3 rounded text-sm ${showHistory ? 'bg-primary text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
@@ -997,6 +1031,7 @@ const ScheduledTasks = () => {
     { value: 'all', label: 'All' },
     { value: 'notification', label: 'Notifications' },
     { value: 'claude_session', label: 'Claude Sessions' },
+    { value: 'agent_run', label: 'Agent Runs' },
   ]
 
   return (

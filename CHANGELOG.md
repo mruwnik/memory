@@ -76,12 +76,28 @@ None.
   frontend lockfile are bumped, and the Qdrant image moves to `v1.14.1`.
   The api image's frontend build stage moves from Node 18 to Node 22.
   The images must be rebuilt. `tools/update.sh` does this.
+- Agents can now run unattended: on a schedule (`agent_schedule`, stored as a
+  scheduled task of type `agent_run`, counting toward `MAX_SCHEDULED_TASKS_PER_USER`)
+  and on ingest triggers (`agent_trigger_upsert`). Both start runs on the
+  `agents-worker`, so it must be running. New optional settings:
+  `AGENT_MAX_RUNS_PER_HOUR` (60, per definition; a definition's
+  `max_runs_per_hour` can only lower it) and `AGENT_MAX_TRIGGERS_PER_USER`
+  (20 enabled triggers). A trigger that hits a rate or cost cap disables itself
+  and notifies its owner. New beat task `sweep-trigger-buffers` (every minute,
+  `maintenance` queue) fires batched triggers. Once any trigger exists, every
+  stored item queues a `MATCH_INGEST_TRIGGERS` task on `maintenance`. The daily
+  `purge-agent-run-steps` task now also deletes trigger match claims older than
+  30 days.
+- `core_list_items` and `core_count_items` take `since`, `until` (when the
+  content happened), `channel`, `author` and `repo`.
 
 ### Migrations
 
 - `20261023_summary_requests`: creates the empty `summary_request` table. Fast.
 - `20261024_agent_runs`: creates the empty `agent_definitions`, `agent_runs` and
   `agent_run_steps` tables, and adds two nullable columns to `api_keys`. Fast.
+- `20261025_agent_triggers`: creates the empty `agent_triggers` and
+  `agent_trigger_matches` tables. Fast.
 
 ### Post-deploy commands
 

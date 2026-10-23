@@ -630,22 +630,28 @@ def test_by_collection_preserves_order():
 
 
 @pytest.mark.parametrize(
-    "embedding_return,qdrant_error,expected_status,expected_embed_status",
+    "embedding_return,qdrant_error,expected_status,expected_embed_status,triggers_checked",
     [
-        ("success", False, "processed", "STORED"),
-        ("success", True, "failed", "FAILED"),
-        ("empty", False, "failed", "FAILED"),
+        ("success", False, "processed", "STORED", True),
+        ("success", True, "failed", "FAILED", False),
+        ("empty", False, "failed", "FAILED", False),
     ],
 )
 def test_process_content_item(
     db_session,
     qdrant,
     mock_uuid4,
+    monkeypatch,
     embedding_return,
     qdrant_error,
     expected_status,
     expected_embed_status,
+    triggers_checked,
 ):
+    queued = []
+    monkeypatch.setattr(
+        "memory.common.content_processing.queue_trigger_match", queued.append
+    )
     # Create a fresh mail message for each test to avoid fixture contamination
     mail_message = MailMessage(
         sha256=b"test_hash" + bytes(24),
@@ -695,6 +701,7 @@ def test_process_content_item(
     db_item = db_session.query(MailMessage).filter_by(id=mail_message.id).first()
     assert db_item is not None
     assert str(db_item.embed_status) == expected_embed_status
+    assert (queued == [mail_message.id]) is triggers_checked
 
 
 def test_safe_task_execution_success():
