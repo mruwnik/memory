@@ -1,4 +1,5 @@
 import base64
+import functools
 import hashlib
 import hmac
 import logging
@@ -14,6 +15,8 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     RefreshToken,
     RegistrationError,
+    TokenError,
+    TokenErrorCode,
 )
 from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
@@ -121,6 +124,32 @@ def is_redirect_uri_allowed(
         a_scheme == scheme and a_host == host
         for (a_scheme, a_host, _) in allowed_origins
     )
+
+
+class GrantError(Exception):
+    """A rejected grant, raised inside a DB session in place of TokenError.
+
+    TokenError is a frozen dataclass, and make_session's @contextmanager
+    assigns __traceback__ when re-raising, which turns a TokenError into a
+    FrozenInstanceError and the token endpoint's 400 into a 500.
+    """
+
+    def __init__(self, error: TokenErrorCode, description: str):
+        super().__init__(description)
+        self.error: TokenErrorCode = error
+        self.description = description
+
+
+def raises_token_error(fn):
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except GrantError as e:
+            raise TokenError(e.error, e.description) from None
+
+    return wrapper
+
 
 ALLOWED_SCOPES = [SCOPE_READ, SCOPE_WRITE, SCOPE_CLAUDE_AI]
 BASE_SCOPES = [SCOPE_READ]
@@ -279,7 +308,7 @@ def revoke_refresh_token_family(
 
 
 def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
-    """Validate a refresh token, raising ValueError if invalid.
+    """Validate a refresh token, raising GrantError if invalid.
 
     Reuses memory.api.auth.is_expired so a tz-aware non-UTC expires_at
     (which can happen with some Postgres drivers / pool configs) is
@@ -288,7 +317,7 @@ def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
     if is_expired(db_refresh_token.expires_at):
         logger.error(f"Refresh token expired: id={token_id(db_refresh_token.token)}")
         db_refresh_token.revoked = True  # type: ignore
-        raise ValueError("Refresh token expired")
+        raise GrantError("invalid_grant", "Refresh token expired")
 
 
 def create_oauth_token(
@@ -706,7 +735,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(
                     f"Invalid authorization code: id={token_id(authorization_code)}"
                 )
-                raise ValueError("Invalid authorization code")
+                return None
 
             # RFC 6749 §4.1.3: verify the code was issued to THIS client
             if auth_code.client_id != client.client_id:
@@ -716,7 +745,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     client.client_id,
                     auth_code.client_id,
                 )
-                raise ValueError("Authorization code not issued to this client")
+                return None
 
             # RFC 6749 §4.1.2: auth codes MUST be short-lived ("a maximum
             # authorization code lifetime of 10 minutes is RECOMMENDED").
@@ -727,10 +756,11 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.warning(
                     "Authorization code id=%s expired", token_id(authorization_code)
                 )
-                raise ValueError("Authorization code expired")
+                return None
 
             return AuthorizationCode(**auth_code.serialize(code=True))
 
+    @raises_token_error
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
@@ -750,7 +780,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(
                     f"Invalid authorization code: id={token_id(authorization_code.code)}"
                 )
-                raise ValueError("Invalid authorization code")
+                raise GrantError("invalid_grant", "Invalid authorization code")
 
             # RFC 6749 §4.1.3: verify the code was issued to THIS client
             if auth_code.client_id != client.client_id:
@@ -760,13 +790,15 @@ class SimpleOAuthProvider(OAuthProvider):
                     client.client_id,
                     auth_code.client_id,
                 )
-                raise ValueError("Authorization code not issued to this client")
+                raise GrantError(
+                    "invalid_grant", "Authorization code not issued to this client"
+                )
 
             if not auth_code.user:
                 logger.error(
                     f"No user found for auth code: id={token_id(authorization_code.code)}"
                 )
-                raise ValueError("Invalid authorization code")
+                raise GrantError("invalid_grant", "Invalid authorization code")
 
             # RFC 6749 §4.1.2: enforce short lifetime on the exchange path
             # too — load_authorization_code already checks, but we re-check
@@ -776,7 +808,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     "Authorization code id=%s expired",
                     token_id(authorization_code.code),
                 )
-                raise ValueError("Authorization code expired")
+                raise GrantError("invalid_grant", "Authorization code expired")
 
             # RFC 7636 PKCE defence-in-depth. The upstream MCP TokenHandler
             # already verifies SHA256(code_verifier) == code_challenge before
@@ -791,8 +823,8 @@ class SimpleOAuthProvider(OAuthProvider):
                     "Authorization code id=%s has empty code_challenge — refusing exchange",
                     token_id(authorization_code.code),
                 )
-                raise ValueError(
-                    "Authorization code is missing PKCE code_challenge"
+                raise GrantError(
+                    "invalid_grant", "Authorization code is missing PKCE code_challenge"
                 )
 
             # Extract data needed for token creation
@@ -825,7 +857,7 @@ class SimpleOAuthProvider(OAuthProvider):
                     "Authorization code id=%s already consumed (race)",
                     token_id(authorization_code.code),
                 )
-                raise ValueError("Authorization code already used")
+                raise GrantError("invalid_grant", "Authorization code already used")
             session.commit()
 
             # Create token linked to the (now code-less) OAuthState
@@ -925,6 +957,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 expires_at=int(db_refresh_token.expires_at.timestamp()),
             )
 
+    @raises_token_error
     async def exchange_refresh_token(
         self,
         client: OAuthClientInformationFull,
@@ -966,7 +999,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             if not db_refresh_token:
                 logger.error(f"Refresh token not found: {token_id(refresh_token.token)}")
-                raise ValueError("Invalid refresh token")
+                raise GrantError("invalid_grant", "Invalid refresh token")
 
             # Replay detection (RFC 6819 §5.2.2.3): a revoked refresh token
             # presented again is treated as compromise — revoke the whole
@@ -984,8 +1017,8 @@ class SimpleOAuthProvider(OAuthProvider):
                     client_id=cast(str, db_refresh_token.client_id),
                 )
                 session.commit()
-                raise ValueError(
-                    "Refresh token already used — token family revoked"
+                raise GrantError(
+                    "invalid_grant", "Refresh token already used — token family revoked"
                 )
 
             # Validate refresh token (expiry; also flips revoked=True if expired)
@@ -999,7 +1032,9 @@ class SimpleOAuthProvider(OAuthProvider):
                 logger.error(
                     f"Requested scopes {requested_scopes} exceed original scopes {original_scopes}"
                 )
-                raise ValueError("Requested scopes exceed original authorization")
+                raise GrantError(
+                    "invalid_scope", "Requested scopes exceed original authorization"
+                )
 
             # Atomic single-use rotation. ``UPDATE … WHERE revoked=False
             # RETURNING id`` lets only one of N concurrent exchanges win.
@@ -1025,8 +1060,8 @@ class SimpleOAuthProvider(OAuthProvider):
                     client_id=cast(str, db_refresh_token.client_id),
                 )
                 session.commit()
-                raise ValueError(
-                    "Refresh token already used — token family revoked"
+                raise GrantError(
+                    "invalid_grant", "Refresh token already used — token family revoked"
                 )
 
             # Kill the paired access-token session so the old access token

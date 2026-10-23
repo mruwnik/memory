@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
 
+from mcp.server.auth.provider import TokenError
 from mcp.shared.auth import OAuthClientInformationFull
 from sqlalchemy.pool import QueuePool
 
@@ -14,6 +15,7 @@ from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
     resolve_session_scopes,
     make_token,
+    now_naive_utc,
 )
 from memory.common import settings as common_settings
 from memory.common.settings import build_redirect_allowlist
@@ -1070,7 +1072,7 @@ async def test_register_client_web_origin_config_still_allows_loopback():
 
 
 @pytest.mark.asyncio
-async def test_load_authorization_code_rejects_expired_hermetic():
+async def test_load_authorization_code_expired_returns_none_hermetic():
     """Expiry-on-load enforcement, exercised without a real Postgres."""
     from memory.api.MCP.oauth_provider import (
         SimpleOAuthProvider,
@@ -1096,8 +1098,7 @@ async def test_load_authorization_code_rejects_expired_hermetic():
     fake_session.query.return_value.filter.return_value.first.return_value = expired_row
 
     with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
-        with pytest.raises(ValueError, match="expired"):
-            await provider.load_authorization_code(client, "code_xyz")
+        assert await provider.load_authorization_code(client, "code_xyz") is None
 
 
 @pytest.mark.asyncio
@@ -1140,8 +1141,9 @@ async def test_exchange_authorization_code_rejects_expired_hermetic():
     fake_session.query.return_value.filter.return_value.first.return_value = expired_row
 
     with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
-        with pytest.raises(ValueError, match="expired"):
+        with pytest.raises(TokenError) as exc_info:
             await provider.exchange_authorization_code(client, expired_code)
+    assert exc_info.value.error == "invalid_grant"
 
 
 @pytest.mark.asyncio
@@ -1190,46 +1192,54 @@ async def test_exchange_authorization_code_race_loser_rejected_hermetic():
     fake_session.execute.return_value = update_result
 
     with patch("memory.api.MCP.oauth_provider.make_session", return_value=fake_session):
-        with pytest.raises(ValueError, match="already used"):
+        with pytest.raises(TokenError) as exc_info:
             await provider.exchange_authorization_code(client, valid_code)
+    assert exc_info.value.error == "invalid_grant"
 
 
 # ====== Authorization-code expiry + single-use enforcement ======
 
 
 @pytest.mark.asyncio
-async def test_load_authorization_code_rejects_expired_code(db_session):
-    """RFC 6749 §4.1.2: auth codes must not outlive their expires_at."""
-    from memory.api.MCP.oauth_provider import SimpleOAuthProvider, now_naive_utc
-    from mcp.shared.auth import OAuthClientInformationFull
-
+@pytest.mark.parametrize(
+    "presented_code, presenting_client_id, expires_in",
+    [
+        # Unknown code, e.g. the client re-registered between /authorize and /token
+        ("code_unknown", "test-client", timedelta(minutes=5)),
+        # RFC 6749 §4.1.3: code issued to a different client
+        ("code_xyz", "other-client", timedelta(minutes=5)),
+        # RFC 6749 §4.1.2: expired code
+        ("code_xyz", "test-client", -timedelta(minutes=5)),
+    ],
+)
+async def test_load_authorization_code_returns_none_for_unusable_code(
+    db_session, presented_code, presenting_client_id, expires_in
+):
+    """The SDK's TokenHandler turns None into a 400 invalid_grant; raising is a 500."""
     user = create_test_user(db_session)
     create_oauth_client(db_session)
-
-    # Insert an OAuthState whose code is set but the row is already past expiry
-    expired = OAuthState(
-        state="expired-state",
-        client_id="test-client",
-        redirect_uri="http://localhost/callback",
-        redirect_uri_provided_explicitly=True,
-        code_challenge="",
-        scopes=["read"],
-        expires_at=now_naive_utc() - timedelta(minutes=5),
-        code="code_expired_xyz",
-        user_id=user.id,
+    db_session.add(
+        OAuthState(
+            state="load-state",
+            client_id="test-client",
+            redirect_uri="http://localhost/callback",
+            redirect_uri_provided_explicitly=True,
+            code_challenge="",
+            scopes=["read"],
+            expires_at=now_naive_utc() + expires_in,
+            code="code_xyz",
+            user_id=user.id,
+        )
     )
-    db_session.add(expired)
     db_session.commit()
 
-    provider = SimpleOAuthProvider()
     client = OAuthClientInformationFull(
-        client_id="test-client",
+        client_id=presenting_client_id,
         client_secret="test-secret",
         redirect_uris=cast(list, ["http://localhost/callback"]),
     )
 
-    with pytest.raises(ValueError, match="expired"):
-        await provider.load_authorization_code(client, "code_expired_xyz")
+    assert await SimpleOAuthProvider().load_authorization_code(client, presented_code) is None
 
 
 @pytest.mark.asyncio
@@ -1273,8 +1283,9 @@ async def test_exchange_authorization_code_rejects_expired_code(db_session):
         expires_at=(now_naive_utc() - timedelta(minutes=5)).timestamp(),
     )
 
-    with pytest.raises(ValueError, match="expired"):
+    with pytest.raises(TokenError) as exc_info:
         await provider.exchange_authorization_code(client, auth_code)
+    assert exc_info.value.error == "invalid_grant"
 
 
 @pytest.mark.asyncio
@@ -1324,8 +1335,9 @@ async def test_exchange_authorization_code_atomic_single_use(db_session):
     # Second exchange (same code) must now fail — either as already-used
     # (atomic UPDATE saw NULL) or as invalid (the code field was cleared by
     # the first exchange). Either way: not a successful token.
-    with pytest.raises(ValueError):
+    with pytest.raises(TokenError) as exc_info:
         await provider.exchange_authorization_code(client, auth_code)
+    assert exc_info.value.error == "invalid_grant"
 
 
 # ====== PKCE enforcement (RFC 7636) ======
@@ -1447,8 +1459,9 @@ async def test_exchange_authorization_code_rejects_empty_code_challenge(db_sessi
         expires_at=(now_naive_utc() + timedelta(minutes=5)).timestamp(),
     )
 
-    with pytest.raises(ValueError, match="PKCE"):
+    with pytest.raises(TokenError) as exc_info:
         await provider.exchange_authorization_code(client, auth_code)
+    assert exc_info.value.error == "invalid_grant"
 
 
 @pytest.mark.asyncio
@@ -1649,8 +1662,9 @@ async def test_exchange_refresh_token_replay_revokes_family(db_session):
         expires_at=int((now_naive_utc() + timedelta(days=30)).timestamp()),
     )
 
-    with pytest.raises(ValueError, match="family revoked"):
+    with pytest.raises(TokenError) as exc_info:
         await provider.exchange_refresh_token(client, refresh_token, ["read"])
+    assert exc_info.value.error == "invalid_grant"
 
     # Live sibling is now revoked too
     db_session.expire_all()
@@ -1700,8 +1714,9 @@ async def test_exchange_refresh_token_rejects_unknown_token(db_session):
         expires_at=int((now_naive_utc() + timedelta(days=30)).timestamp()),
     )
 
-    with pytest.raises(ValueError, match="Invalid refresh token"):
+    with pytest.raises(TokenError) as exc_info:
         await provider.exchange_refresh_token(client, refresh_token, ["read"])
+    assert exc_info.value.error == "invalid_grant"
 
     # Bystander is unaffected — we only revoke families on actual replays.
     db_session.expire_all()
@@ -1746,8 +1761,9 @@ async def test_exchange_refresh_token_rejects_scope_escalation(db_session):
 
     # Asking for write when only read was granted must fail and NOT
     # revoke the token (this is a misbehaving client, not a replay).
-    with pytest.raises(ValueError, match="exceed original"):
+    with pytest.raises(TokenError) as exc_info:
         await provider.exchange_refresh_token(client, refresh_token, ["read", "write"])
+    assert exc_info.value.error == "invalid_scope"
 
     db_session.expire_all()
     rt_after = db_session.get(OAuthRefreshToken, rt_id)
