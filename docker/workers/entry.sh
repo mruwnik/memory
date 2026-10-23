@@ -39,6 +39,8 @@ LOGLEVEL=${LOGLEVEL:-INFO}
 
 HOSTNAME="${QUEUES%@*}@$(hostname)"
 
+python -m memory.common.settings worker
+
 exec celery -A memory.common.celery_app worker \
      -Q "${QUEUES}" \
      --concurrency="${CONCURRENCY}" \

@@ -16,6 +16,7 @@ from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
+from memory.common.version import db_revision, version_info
 from memory.common.db.models import (
     APIKey,
     APIKeyType,
@@ -303,9 +304,13 @@ async def get_current_time() -> dict:
 @meta_mcp.tool()
 @visible_when(require_scopes(SCOPE_READ))
 async def get_user() -> dict:
-    """Get information about the authenticated user."""
+    """Get information about the authenticated user and the server's version."""
     with make_session() as session:
-        return _get_current_user(session)
+        user = _get_current_user(session)
+        db_rev = db_revision(session)
+    if user["authenticated"]:
+        user["server"] = await version_info(db_rev)
+    return user
 
 
 # Advisory-lock class for one-time key minting; pairs with the user id in

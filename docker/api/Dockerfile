@@ -50,6 +50,8 @@ RUN apt-get purge -y gcc g++ python3-dev && \
 
 # Copy frontend build output from frontend stage
 COPY --from=frontend-builder /frontend/dist ./static/
+# Migration scripts let /health report the code's expected alembic head
+COPY db/migrations ./db/migrations
 
 # Create directories for app
 RUN mkdir -p /app/memory_files
@@ -73,4 +75,7 @@ ENV PORT=8000
 ENV FORWARDED_ALLOW_IPS="127.0.0.1,::1"
 EXPOSE 8000
 
-CMD uvicorn memory.api.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS" 
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
+CMD python -m memory.common.settings api && exec uvicorn memory.api.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS"

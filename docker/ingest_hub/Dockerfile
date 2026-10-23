@@ -35,6 +35,8 @@ RUN useradd -m kb && chown -R kb /app /var/log/supervisor /var/run/supervisor /a
 USER kb
 
 ENV PYTHONPATH="/app"
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 
 # Validate-then-exec wrapper that runs supervisord with fd 2 on /dev/null so
 # a dead conmon pipe can't kill it — rationale in the script itself.

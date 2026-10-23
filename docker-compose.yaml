@@ -42,6 +42,8 @@ x-worker-base: &worker-base
   build:
     context: .
     dockerfile: docker/workers/Dockerfile
+    args:
+      APP_VERSION: ${APP_VERSION:-dev}
   restart: unless-stopped
   networks: [kbnet]
   security_opt: ["no-new-privileges=true"]
@@ -220,6 +222,7 @@ services:
       args:
         SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
         SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
+        APP_VERSION: ${APP_VERSION:-dev}
     restart: unless-stopped
     # Add docker group for orchestrator socket access (GID varies by host)
     group_add:
@@ -268,6 +271,7 @@ services:
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,::1}
       OAUTH_REDIRECT_URI_ALLOWLIST: ${OAUTH_REDIRECT_URI_ALLOWLIST:-}
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
+      LATEST_RELEASE_URL: ${LATEST_RELEASE_URL:-}
     secrets:
       [postgres_password, openai_key, anthropic_key, voyage_key, secrets_encryption_key]
     volumes:
@@ -315,6 +319,8 @@ services:
     build:
       context: .
       dockerfile: docker/ingest_hub/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     environment:
       <<: *worker-env
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}

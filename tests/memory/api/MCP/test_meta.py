@@ -149,6 +149,8 @@ async def test_get_user_returns_user_info(db_session, admin_session):
     assert result["user"]["email"] == "admin@example.com"
     assert len(result["user"]["email_accounts"]) == 1
     assert result["user"]["email_accounts"][0]["email_address"] == "work@example.com"
+    assert result["server"]["version"]
+    assert result["server"]["db_revision"] == result["server"]["expected_revision"]
 
 
 @pytest.mark.asyncio

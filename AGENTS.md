@@ -53,7 +53,9 @@ To run the API/workers on the host while infra stays in Docker, publish the data
 
 ### Deployment
 
-Manage the production server via `tools/deploy.sh` (not covered in README):
+Deployments are single-owner and update themselves with `tools/update.sh`. Follow **[UPDATING.md](UPDATING.md)** (update, verify, roll back, failed migrations, post-deploy tasks). Every release needs a [CHANGELOG.md](CHANGELOG.md) entry (new required env vars, slow migrations, re-runnable post-deploy commands). Never squash or rewrite the alembic chain: instances may skip many releases.
+
+Legacy: `tools/deploy.sh` pushes to the old shared server over SSH (not covered in README):
 
 ```bash
 ./tools/deploy.sh deploy           # git pull + restart services (most common)

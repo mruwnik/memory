@@ -81,6 +81,17 @@ If you'd rather run it on the host (e.g. as part of a script), `pip install -e "
 - API docs (OpenAPI): <http://localhost:8000/docs> — requires an authenticated session
 - MCP endpoint: <http://localhost:8000/mcp>
 
+## Updating
+
+```bash
+tools/update.sh --dry-run origin/master   # show the plan
+tools/update.sh origin/master             # back up Postgres, update, migrate, verify
+```
+
+There are no release tags yet. Once `v*` tags exist, `tools/update.sh` with no argument picks the newest. The script leaves the checkout on a detached HEAD.
+
+See **[UPDATING.md](UPDATING.md)** for verification, rollback and post-update tasks, and [CHANGELOG.md](CHANGELOG.md) for what each release requires.
+
 ## Connecting an MCP client
 
 The MCP server uses OAuth (Dynamic Client Registration per RFC 7591), so any compliant MCP client can enroll itself the first time it connects. Point your client at `http://<host>:8000/mcp` and it will walk you through the login flow on first use.
@@ -262,6 +273,7 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `ENABLE_RERANKING`                | `true`               | Voyage reranking of fused results                              |
 | `ENABLE_SEARCH_SCORING`           | `true`               | Recency / popularity / title-match score boosts                |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
+| `LATEST_RELEASE_URL`              | unset                | URL returning the latest release tag; enables `update_available` in `/health` |
 
 See `src/memory/common/settings.py` for the full list and `docker-compose.yaml` for how variables map into containers.
 
@@ -271,11 +283,13 @@ See `src/memory/common/settings.py` for the full list and `docker-compose.yaml` 
 - Secrets live in `secrets/` (file-mounted) and `.env` (env-var-mounted). Both are gitignored.
 - The OAuth redirect-uri allowlist defaults to `http://localhost,http://127.0.0.1` and accepts ephemeral ports for those loopback hosts (RFC 8252 native-app flow). Set `OAUTH_REDIRECT_URI_ALLOWLIST` to add additional origins for browser-based MCP clients.
 - Containers run as non-root with `no-new-privileges=true`.
+- `/health` is unauthenticated and reports the running version and alembic revision (never content), so anyone who can reach it can tell which release you run.
 
 ## Troubleshooting
 
 | Symptom                                                | Likely cause                                                                                                                              |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Container exits with `Refusing to start: missing required settings` | Set the listed settings in `.env` (or as `NAME_FILE` secrets) and restart. |
 | `docker compose up` build fails                        | Missing API keys in `.env` — re-run `./tools/install.sh`. Migration container failures usually mean Postgres isn't healthy yet.            |
 | `tools/add_user.py` import errors                      | You haven't run `pip install -e ".[all]"`, or you're not using Python 3.12+.                                                              |
 | MCP client redirects to `http://...` and dies          | You're behind a reverse proxy and `FORWARDED_ALLOW_IPS` isn't set to the proxy's CIDR. See [Running behind a reverse proxy](#running-behind-a-reverse-proxy). |

@@ -1,10 +1,14 @@
 """Tests for memory.common.settings env-reading helpers."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from memory.common.settings import (
     OAUTH_LOOPBACK_DEFAULTS,
     build_redirect_allowlist,
+    missing_required_settings,
+    require_settings,
     secret_env,
 )
 
@@ -79,3 +83,52 @@ def test_build_redirect_allowlist_strips_whitespace_and_blanks():
         *OAUTH_LOOPBACK_DEFAULTS,
         "https://app.example.com",
     ]
+
+
+# --- required settings startup check -----------------------------------------
+
+COMPLETE_SETTINGS = dict(
+    VOYAGE_API_KEY="voyage",
+    ANTHROPIC_API_KEY="",
+    OPENAI_API_KEY="",
+    SUMMARIZER_MODEL="anthropic/claude-haiku-5-5",
+)
+
+
+@pytest.mark.parametrize(
+    "role, overrides, expected",
+    [
+        ("worker", {"ANTHROPIC_API_KEY": "sk"}, []),
+        ("worker", {}, ["ANTHROPIC_API_KEY"]),
+        ("worker", {"SUMMARIZER_MODEL": "openai/gpt-5", "OPENAI_API_KEY": "sk"}, []),
+        ("worker", {"SUMMARIZER_MODEL": "openai/gpt-5"}, ["OPENAI_API_KEY"]),
+        ("worker", {"VOYAGE_API_KEY": "", "ANTHROPIC_API_KEY": "sk"}, ["VOYAGE_API_KEY"]),
+        ("api", {}, []),
+        ("api", {"VOYAGE_API_KEY": ""}, ["VOYAGE_API_KEY"]),
+    ],
+)
+def test_missing_required_settings(role, overrides, expected):
+    values = SimpleNamespace(**{**COMPLETE_SETTINGS, **overrides})
+    assert missing_required_settings(values, role) == expected
+
+
+def test_require_settings_lists_every_missing_setting(capsys):
+    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "VOYAGE_API_KEY": ""})
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "worker")
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "VOYAGE_API_KEY" in err
+    assert "ANTHROPIC_API_KEY" in err
+
+
+def test_require_settings_rejects_unknown_role(capsys):
+    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"})
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "wroker")
+    assert exc.value.code == 2
+    assert "wroker" in capsys.readouterr().err
+
+
+def test_require_settings_passes_when_complete():
+    require_settings(SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"}), "worker")

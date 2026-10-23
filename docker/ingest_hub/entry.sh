@@ -23,5 +23,7 @@ CONF=/etc/supervisor/conf.d/supervisor.conf
 
 /usr/bin/python3 -c "from supervisor.options import ServerOptions; ServerOptions().realize(args=['-c', '$CONF'], progname='supervisord')"
 
+python -m memory.common.settings worker
+
 # exec so supervisord stays PID 1 and receives container signals directly
 exec /usr/bin/supervisord -c "$CONF" 2>/dev/null

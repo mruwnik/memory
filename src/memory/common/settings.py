@@ -1,6 +1,8 @@
 import logging
 import os
 import pathlib
+import sys
+from typing import Any
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -647,3 +649,43 @@ SUMMARIZER_BATCH_MAX_BYTES = int(os.getenv("SUMMARIZER_BATCH_MAX_BYTES", 100_000
 SUMMARIZER_BATCH_MAX_ATTEMPTS = int(os.getenv("SUMMARIZER_BATCH_MAX_ATTEMPTS", 3))
 SUMMARIZER_BATCH_SUBMIT_INTERVAL = int(os.getenv("SUMMARIZER_BATCH_SUBMIT_INTERVAL", 600))
 SUMMARIZER_BATCH_POLL_INTERVAL = int(os.getenv("SUMMARIZER_BATCH_POLL_INTERVAL", 300))
+
+# Optional URL returning the latest release tag, either as plain text or as a
+# GitHub-style JSON object with "tag_name" (e.g.
+# https://api.github.com/repos/<owner>/<repo>/releases/latest).
+LATEST_RELEASE_URL = os.getenv("LATEST_RELEASE_URL", "")
+LATEST_RELEASE_CHECK_INTERVAL = int(os.getenv("LATEST_RELEASE_CHECK_INTERVAL", 6 * 60 * 60))
+
+LLM_PROVIDER_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
+def missing_required_settings(values: Any, role: str) -> list[str]:
+    """Empty settings that the given process ("api" or "worker") can't run without.
+
+    Everything embeds via Voyage, and workers summarize every ingest via
+    SUMMARIZER_MODEL. The api gets no .env, so its SUMMARIZER_MODEL is always
+    the default, and its LLM calls (HyDE, query analysis) are best-effort.
+    """
+    required = ["VOYAGE_API_KEY"]
+    provider = values.SUMMARIZER_MODEL.split("/", 1)[0]
+    if role == "worker" and (key := LLM_PROVIDER_KEYS.get(provider)):
+        required.append(key)
+    return [name for name in required if not getattr(values, name)]
+
+
+def require_settings(values: Any, role: str) -> None:
+    if role not in ("api", "worker"):
+        print(f"Unknown role {role!r}: expected 'api' or 'worker'", file=sys.stderr)
+        raise SystemExit(2)
+    if not (missing := missing_required_settings(values, role)):
+        return
+    print(
+        f"Refusing to start: missing required settings: {', '.join(missing)}. "
+        "Set them in .env, or for secrets as NAME_FILE pointing at a file.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    require_settings(sys.modules[__name__], sys.argv[1] if len(sys.argv) > 1 else "worker")

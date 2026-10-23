@@ -51,5 +51,7 @@ RUN git config --global user.email "${GIT_USER_EMAIL}" && \
 # should consume every queue the codebase publishes to.
 ENV QUEUES="backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
 ENV PYTHONPATH="/app"
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 
 ENTRYPOINT ["./entry.sh"] 

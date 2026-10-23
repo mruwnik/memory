@@ -10,6 +10,7 @@ venv
 .env
 .DS_Store
 secrets/
+backups/
 acme.json
 __pycache__/
 *.egg-info/

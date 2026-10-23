@@ -24,6 +24,7 @@ from memory.api.MCP.access import fetch_user_by_token
 from memory.common.db.models import OAuthState
 from memory.common.qdrant import get_qdrant_client
 from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
+from memory.common.version import db_revision, version_info
 
 logger = logging.getLogger(__name__)
 engine = get_engine()
@@ -239,14 +240,20 @@ def get_user_scopes() -> list[str]:
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request):
-    """Health check endpoint that verifies all dependencies are accessible."""
+    """Dependency health plus version info.
+
+    Unauthenticated on purpose: container healthchecks and tools/update.sh
+    poll it without credentials, and it exposes only the release tag and
+    migration ids, never content.
+    """
     checks = {"mcp_oauth": "enabled"}
     all_healthy = True
+    db_rev = None
 
-    # Check database connection
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
+            db_rev = db_revision(conn)
         checks["database"] = "healthy"
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
@@ -263,6 +270,7 @@ async def health_check(request: Request):
         checks["qdrant"] = "unhealthy"
         all_healthy = False
 
+    checks |= await version_info(db_rev)
     checks["status"] = "healthy" if all_healthy else "degraded"
     status_code = 200 if all_healthy else 503
     return JSONResponse(checks, status_code=status_code)
