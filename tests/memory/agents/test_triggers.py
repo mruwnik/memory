@@ -10,9 +10,11 @@ from pydantic import ValidationError
 
 from memory.agents import triggers
 from memory.agents.triggers import (
+    Delivery,
     IngestConfig,
     IngestFilter,
     ItemFacts,
+    content_version,
     item_facts,
     matches,
     regex_search,
@@ -42,6 +44,16 @@ SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
 @pytest.fixture
 def client():
     return fakeredis.FakeRedis()
+
+
+def backdate(client, trigger_id):
+    """Make every buffered item look as if it arrived two minutes ago."""
+    key = triggers.buffer_key(trigger_id)
+    client.zadd(key, {m: time.time() - 120 for m in client.zrange(key, 0, -1)})
+
+
+def delivered_ids(call):
+    return [Delivery.decode(d).item_id for d in call.kwargs["args"][1]]
 
 
 def facts(**overrides):
@@ -133,16 +145,17 @@ def test_discord_facts_carry_channel_and_author_identities():
 
 
 @pytest.mark.parametrize(
-    "template,expected",
+    "template,edited,expected",
     [
-        ("Triage these:\n{items}\nThanks", "Triage these:\n- [blog_post #7] T: body text\nThanks"),
-        ("Triage", "Triage\n\n- [blog_post #7] T: body text"),
+        ("Triage these:\n{items}\nThanks", set(), "Triage these:\n- [blog_post #7] T: body text\nThanks"),
+        ("Triage", set(), "Triage\n\n- [blog_post #7] T: body text"),
+        ("{items}", {7}, "- [blog_post #7, edited] T: body text"),
     ],
 )
-def test_render_input(template, expected):
+def test_render_input(template, edited, expected):
     post = BlogPost(id=7, type="blog_post", title="T", content="body   text")
 
-    assert render_input(template, [post], max_chars=1000) == expected
+    assert render_input(template, [post], max_chars=1000, edited=edited) == expected
 
 
 def test_render_input_caps_titles():
@@ -211,7 +224,9 @@ def test_per_item_triggers_fire_at_once(
     matched = triggers.match_ingest_triggers(post.id, client)
 
     assert matched == [on.id]
-    no_celery_dispatch.assert_called_once_with(FIRE_TRIGGER, args=[on.id, [post.id]])
+    no_celery_dispatch.assert_called_once_with(
+        FIRE_TRIGGER, args=[on.id, [Delivery(post.id, content_version(post).hex(), False).encode()]]
+    )
 
 
 def test_items_the_owner_cannot_read_never_match(
@@ -316,13 +331,14 @@ def test_batch_triggers_buffer_until_the_window_closes(
         triggers.match_ingest_triggers(post.id, client)
 
     early = triggers.sweep_trigger_buffers(client)
-    client.zadd(triggers.buffer_key(trigger.id), {str(posts[0].id): time.time() - 120})
+    backdate(client, trigger.id)
     due = triggers.sweep_trigger_buffers(client)
 
+    [fired] = no_celery_dispatch.call_args_list
     assert (early, due) == ({}, {trigger.id: 1})
-    no_celery_dispatch.assert_called_once_with(
-        FIRE_TRIGGER, args=[trigger.id, sorted(p.id for p in posts)]
-    )
+    assert fired.args == (FIRE_TRIGGER,)
+    assert fired.kwargs["args"][0] == trigger.id
+    assert delivered_ids(fired) == [p.id for p in posts]
     assert client.zcard(triggers.buffer_key(trigger.id)) == 0
 
 
@@ -341,7 +357,7 @@ def test_a_full_batch_fires_before_its_window(
     fired = triggers.sweep_trigger_buffers(client)
 
     assert fired == {trigger.id: 2}
-    assert [c.kwargs["args"][1] for c in no_celery_dispatch.call_args_list] == [
+    assert [delivered_ids(c) for c in no_celery_dispatch.call_args_list] == [
         [posts[0].id, posts[1].id],
         [posts[2].id, posts[3].id],
     ]
@@ -367,19 +383,52 @@ def test_queueing_a_match_never_raises(monkeypatch):
     triggers.queue_trigger_match(1)
 
 
-def test_batch_dedupe_key_ignores_order():
-    assert triggers.dedupe_key(3, [5, 1]) == triggers.dedupe_key(3, [1, 5])
-    assert triggers.dedupe_key(3, [5]) == "3:5"
+def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
+    a = Delivery(1, "01" * 32, False)
+    b = Delivery(5, "05" * 32, False)
+    b_edited = Delivery(5, "06" * 32, True)
+
+    assert triggers.dedupe_key(3, [b, a]) == triggers.dedupe_key(3, [a, b])
+    assert triggers.dedupe_key(3, [b]) == f"3:5:{'05' * 8}"
+    assert triggers.dedupe_key(3, [b]) != triggers.dedupe_key(3, [b_edited])
 
 
+@pytest.mark.parametrize(
+    "deliveries,expected",
+    [
+        ([Delivery(1, "a", False), Delivery(2, "b", True)], {2}),
+        # Buffered fresh, then edited before the batch went out: the run is its first sight.
+        ([Delivery(1, "a", False), Delivery(1, "b", True)], set()),
+    ],
+)
+def test_edited_ids_label_by_what_this_delivery_holds(deliveries, expected):
+    assert triggers.edited_ids(deliveries) == expected
+
+
+def test_content_versions_follow_what_an_agent_sees():
+    post = BlogPost(title="T", content="body")
+    retitled = BlogPost(title="T2", content="body")
+    slack = SlackMessage(content="hi <@U1>", resolved_content="hi @al")
+    # Slack edits replace content but leave resolved_content as it was.
+    slack_edited = SlackMessage(content="bye <@U1>", resolved_content="hi @al")
+
+    assert content_version(post) == content_version(BlogPost(title="T", content="body"))
+    assert content_version(post) != content_version(retitled)
+    assert content_version(slack) != content_version(slack_edited)
+
+
+@pytest.mark.parametrize("on_edit", [False, True])
 @pytest.mark.parametrize(
     "delivery", [{"mode": "per_item"}, {"mode": "batch", "window_sec": 60, "max_items": 10}]
 )
 def test_reprocessing_a_matched_item_matches_nothing(
-    db_session, admin_user, client, no_celery_dispatch, delivery
+    db_session, admin_user, client, no_celery_dispatch, delivery, on_edit
 ):
     trigger = make_trigger(
-        db_session, make_definition(db_session, admin_user), delivery=delivery
+        db_session,
+        make_definition(db_session, admin_user),
+        delivery=delivery,
+        on_edit=on_edit,
     )
     post = blog_post(db_session)
 
@@ -390,13 +439,88 @@ def test_reprocessing_a_matched_item_matches_nothing(
     assert no_celery_dispatch.call_count + client.zcard(triggers.buffer_key(trigger.id)) == 1
 
 
-def test_items_stored_before_the_trigger_was_active_never_match(
+def edit(db, item):
+    """Change the content only: not every ingester updates sha256 on an edit."""
+    item.content = f"{item.content}, edited"
+    db.commit()
+
+
+@pytest.mark.parametrize("on_edit,runs", [(False, 1), (True, 2)])
+def test_an_edit_fires_again_only_with_on_edit(
+    db_session, admin_user, client, no_celery_dispatch, on_edit, runs
+):
+    make_trigger(db_session, make_definition(db_session, admin_user), on_edit=on_edit)
+    post = blog_post(db_session)
+
+    triggers.match_ingest_triggers(post.id, client)
+    edit(db_session, post)
+    triggers.match_ingest_triggers(post.id, client)
+    triggers.match_ingest_triggers(post.id, client)
+
+    assert no_celery_dispatch.call_count == runs
+    assert db_session.query(AgentTriggerMatch).count() == runs
+
+
+def test_a_batch_buffers_each_version_of_an_item_edited_while_buffered(
     db_session, admin_user, client, no_celery_dispatch
 ):
-    trigger = make_trigger(db_session, make_definition(db_session, admin_user))
+    trigger = make_trigger(
+        db_session,
+        make_definition(db_session, admin_user),
+        delivery={"mode": "batch", "window_sec": 60, "max_items": 10},
+        on_edit=True,
+    )
+    post = blog_post(db_session)
+
+    first = triggers.match_ingest_triggers(post.id, client)
+    edit(db_session, post)
+    edited = triggers.match_ingest_triggers(post.id, client)
+
+    assert (first, edited) == ([trigger.id], [trigger.id])
+    assert [
+        Delivery.decode(m.decode()).edited
+        for m in client.zrange(triggers.buffer_key(trigger.id), 0, -1)
+    ] == [False, True]
+
+
+@pytest.mark.parametrize("on_edit", [False, True])
+def test_items_stored_before_the_trigger_was_active_never_match(
+    db_session, admin_user, client, no_celery_dispatch, on_edit
+):
+    trigger = make_trigger(
+        db_session, make_definition(db_session, admin_user), on_edit=on_edit
+    )
     old = blog_post(db_session, inserted_at=trigger.active_since - timedelta(minutes=1))
 
-    assert triggers.match_ingest_triggers(old.id, client) == []
+    before = triggers.match_ingest_triggers(old.id, client)
+    edit(db_session, old)
+
+    assert (before, triggers.match_ingest_triggers(old.id, client)) == ([], [])
+
+
+def test_an_edit_to_an_item_matched_long_ago_still_fires(
+    db_session, admin_user, client, no_celery_dispatch
+):
+    long_ago = datetime.now(timezone.utc) - timedelta(days=60)
+    trigger = make_trigger(
+        db_session, make_definition(db_session, admin_user), on_edit=True
+    )
+    trigger.active_since = long_ago
+    post = blog_post(db_session, inserted_at=long_ago)
+    db_session.add(
+        AgentTriggerMatch(
+            trigger_id=trigger.id,
+            item_id=post.id,
+            content_hash=content_version(post),
+            created_at=long_ago,
+        )
+    )
+    db_session.commit()
+
+    unchanged = triggers.match_ingest_triggers(post.id, client)
+    edit(db_session, post)
+
+    assert (unchanged, triggers.match_ingest_triggers(post.id, client)) == ([], [trigger.id])
 
 
 def test_a_delivery_failure_unclaims_and_spares_the_other_triggers(
@@ -419,23 +543,42 @@ def test_a_delivery_failure_unclaims_and_spares_the_other_triggers(
     ] == [healthy.id]
 
 
-def test_old_claims_are_purged(db_session, admin_user, client):
-    trigger = make_trigger(db_session, make_definition(db_session, admin_user))
-    fresh, stale = blog_post(db_session), blog_post(db_session)
+@pytest.mark.parametrize(
+    "on_edit,kept",
+    [
+        (False, {b"fresh", b"racing new"}),
+        # An old claim goes once a newer one is itself old: a claim that young may
+        # still be unclaimed by a failed delivery, leaving its item no claims at all.
+        (True, {b"fresh", b"stale newest", b"racing old", b"racing new"}),
+    ],
+)
+def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest(
+    db_session, admin_user, client, on_edit, kept
+):
+    trigger = make_trigger(
+        db_session, make_definition(db_session, admin_user), on_edit=on_edit
+    )
+    fresh, stale, racing = blog_post(db_session), blog_post(db_session), blog_post(db_session)
+    now = datetime.now(timezone.utc)
+    claims = [
+        (fresh, b"fresh", now),
+        (stale, b"stale oldest", now - timedelta(days=40)),
+        (stale, b"stale newest", now - timedelta(days=31)),
+        (racing, b"racing old", now - timedelta(days=40)),
+        (racing, b"racing new", now),
+    ]
     db_session.add_all(
-        [
-            AgentTriggerMatch(trigger_id=trigger.id, item_id=fresh.id),
-            AgentTriggerMatch(
-                trigger_id=trigger.id,
-                item_id=stale.id,
-                created_at=datetime.now(timezone.utc) - timedelta(days=31),
-            ),
-        ]
+        AgentTriggerMatch(
+            trigger_id=trigger.id, item_id=item.id, content_hash=version, created_at=at
+        )
+        for item, version, at in claims
     )
     db_session.commit()
 
-    assert triggers.purge_matches(db_session, timedelta(days=30)) == 1
-    assert [m.item_id for m in db_session.query(AgentTriggerMatch)] == [fresh.id]
+    purged = triggers.purge_matches(db_session, timedelta(days=30))
+
+    assert purged == len(claims) - len(kept)
+    assert {bytes(m.content_hash) for m in db_session.query(AgentTriggerMatch)} == kept
 
 
 def test_items_older_than_claim_retention_never_match(

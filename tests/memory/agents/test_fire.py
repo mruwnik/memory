@@ -1,11 +1,21 @@
+import time
 from decimal import Decimal
 
+import fakeredis
 import pytest
 
+from memory.agents import triggers
 from memory.agents.fire import fire_trigger, trip
+from memory.agents.triggers import Delivery, content_version
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT, SEND_NOTIFICATION
-from memory.common.db.models import AgentDefinition, AgentRun, AgentTrigger, APIKey, BlogPost
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentRun,
+    AgentTrigger,
+    APIKey,
+    BlogPost,
+)
 from memory.common.db.models.sources import (
     Person,
     Project,
@@ -30,11 +40,11 @@ def ceilings(monkeypatch):
     monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 60)
 
 
-def setup(db, user, spec=SPEC, enabled=True):
+def setup(db, user, spec=SPEC, enabled=True, config=CONFIG):
     d = AgentDefinition(user_id=user.id, name="watcher", spec=spec)
     db.add(d)
     db.flush()
-    t = AgentTrigger(definition_id=d.id, kind="ingest", config=CONFIG, enabled=enabled)
+    t = AgentTrigger(definition_id=d.id, kind="ingest", config=config, enabled=enabled)
     db.add(t)
     db.commit()
     return t
@@ -55,18 +65,33 @@ def post(db, title="Post", project_id=None):
     return p
 
 
+def fire_dispatched(dispatch):
+    """Run the FIRE_TRIGGER tasks matching dispatched since the last call."""
+    fires = [c.kwargs["args"] for c in dispatch.call_args_list]
+    for args in fires:
+        fire_trigger(*args)
+    dispatch.reset_mock()
+
+
+def claimed(*items):
+    return [Delivery(i.id, content_version(i).hex(), False).encode() for i in items]
+
+
 def test_a_fire_starts_one_run_with_the_rendered_input(
     db_session, admin_user, fake_providers, no_celery_dispatch
 ):
     trigger = setup(db_session, admin_user)
     a, b = post(db_session, "A"), post(db_session, "B")
+    deliveries = claimed(b, a)
 
-    run_id = fire_trigger(trigger.id, [b.id, a.id])
-    again = fire_trigger(trigger.id, [a.id, b.id])
+    run_id = fire_trigger(trigger.id, deliveries)
+    a.content, a.sha256 = "edited after the claim", unique_sha256("edited")
+    db_session.commit()
+    redelivered = fire_trigger(trigger.id, deliveries[::-1])
 
     run = db_session.get(AgentRun, run_id)
     assert run is not None
-    assert again == run_id
+    assert redelivered == run_id
     assert (run.trigger_kind, run.trigger_ref, run.definition_id) == (
         "ingest",
         {"trigger_id": trigger.id, "item_ids": [a.id, b.id]},
@@ -78,6 +103,43 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
 
 
+@pytest.mark.parametrize(
+    "delivery,inputs",
+    [
+        (
+            {"mode": "per_item"},
+            ["New:\n- [blog_post #{id}] A: body", "New:\n- [blog_post #{id}, edited] A: body, edited"],
+        ),
+        # Edited before the batch went out, so the run is the agent's first sight of it.
+        (
+            {"mode": "batch", "window_sec": 60, "max_items": 10},
+            ["New:\n- [blog_post #{id}] A: body, edited"],
+        ),
+    ],
+)
+def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
+    db_session, admin_user, fake_providers, no_celery_dispatch, monkeypatch, delivery, inputs
+):
+    client = fakeredis.FakeRedis()
+    trigger = setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
+    item = post(db_session, "A")
+
+    triggers.match_ingest_triggers(item.id, client)
+    fire_dispatched(no_celery_dispatch)
+    item.content = "body, edited"
+    db_session.commit()
+    triggers.match_ingest_triggers(item.id, client)
+    window_closed = time.time() + 120
+    with monkeypatch.context() as m:
+        m.setattr(time, "time", lambda: window_closed)
+        triggers.sweep_trigger_buffers(client)
+    fire_dispatched(no_celery_dispatch)
+
+    assert [r.input for r in db_session.query(AgentRun).order_by(AgentRun.created_at)] == [
+        i.format(id=item.id) for i in inputs
+    ]
+
+
 def test_disabled_triggers_and_unreadable_items_start_nothing(
     db_session, admin_user, regular_user, fake_providers
 ):
@@ -85,7 +147,7 @@ def test_disabled_triggers_and_unreadable_items_start_nothing(
     theirs = setup(db_session, regular_user)
     hidden = post(db_session, project_id=None)
 
-    assert (fire_trigger(off.id, [hidden.id]), fire_trigger(theirs.id, [hidden.id])) == (
+    assert (fire_trigger(off.id, claimed(hidden)), fire_trigger(theirs.id, claimed(hidden))) == (
         None,
         None,
     )
@@ -107,7 +169,7 @@ def test_lost_credentials_trip_the_breaker(
     trigger.api_key_id, trigger.via_api_key = key.id, True
     db_session.commit()
 
-    assert fire_trigger(trigger.id, [post(db_session).id]) is None
+    assert fire_trigger(trigger.id, claimed(post(db_session))) is None
 
     db_session.refresh(trigger)
     assert trigger.enabled is False
@@ -122,7 +184,7 @@ def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_provi
     trigger.api_key_id, trigger.via_api_key = key.id, True
     db_session.commit()
 
-    run = db_session.get(AgentRun, fire_trigger(trigger.id, [post(db_session).id]))
+    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(post(db_session))))
 
     assert run is not None
     assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
@@ -155,7 +217,7 @@ def test_hitting_a_cap_trips_the_breaker_and_tells_the_owner(
     db_session.commit()
     item = post(db_session)
 
-    assert fire_trigger(trigger.id, [item.id]) is None
+    assert fire_trigger(trigger.id, claimed(item)) is None
 
     db_session.refresh(trigger)
     assert trigger.enabled is False
@@ -170,7 +232,7 @@ def test_a_deleted_key_trips_rather_than_widening(db_session, admin_user, fake_p
     trigger.via_api_key = True
     db_session.commit()
 
-    assert fire_trigger(trigger.id, [post(db_session).id]) is None
+    assert fire_trigger(trigger.id, claimed(post(db_session))) is None
 
     db_session.refresh(trigger)
     assert "was deleted" in trigger.state["tripped"]["reason"]
@@ -206,7 +268,7 @@ def test_a_batch_runs_over_only_the_items_still_readable_when_it_fires(
     moved.project_id = None
     db_session.commit()
 
-    run = db_session.get(AgentRun, fire_trigger(trigger.id, [readable.id, moved.id]))
+    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(readable, moved)))
 
     assert run is not None
     assert run.trigger_ref["item_ids"] == [readable.id]

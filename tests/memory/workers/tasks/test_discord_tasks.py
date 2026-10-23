@@ -2,9 +2,14 @@
 
 from unittest.mock import patch
 
+import fakeredis
 import pytest
 
+from memory.agents import triggers
+from memory.common.celery_app import MATCH_INGEST_TRIGGERS
 from memory.common.db.models import (
+    AgentDefinition,
+    AgentTrigger,
     DiscordBot,
     DiscordChannel,
     DiscordMessage,
@@ -238,6 +243,49 @@ def test_edit_discord_message_success(db_session, sample_message_data, qdrant):
     )
     assert message.content == new_content
     assert message.edited_at is not None
+
+
+EDITED = "This is the edited content with enough text to be meaningful and processed."
+
+
+def edit_via_edit_task(data):
+    return discord.edit_discord_message(data["message_id"], EDITED, "2024-01-01T13:00:00Z")
+
+
+def edit_via_add_task(data):
+    return discord.add_discord_message(
+        **data | {"content": EDITED, "edited_at": "2024-01-01T13:00:00Z", "is_edit": True}
+    )
+
+
+@pytest.mark.parametrize("edit", [edit_via_edit_task, edit_via_add_task])
+def test_an_edited_message_refires_an_on_edit_trigger(
+    db_session, admin_user, sample_message_data, qdrant, no_celery_dispatch, edit
+):
+    definition = AgentDefinition(user_id=admin_user.id, name="t", spec={"system_prompt": "x"})
+    db_session.add(definition)
+    db_session.flush()
+    trigger = AgentTrigger(
+        definition_id=definition.id,
+        kind="ingest",
+        config=triggers.IngestConfig.model_validate(
+            {"filter": {"source_types": ["discord_message"]}, "on_edit": True}
+        ).model_dump(mode="json"),
+    )
+    db_session.add(trigger)
+    db_session.commit()
+    client = fakeredis.FakeRedis()
+
+    discord.add_discord_message(**sample_message_data)
+    [stored] = no_celery_dispatch.call_args_list
+    [item_id] = stored.kwargs["args"]
+    first = triggers.match_ingest_triggers(item_id, client)
+    no_celery_dispatch.reset_mock()
+    edit(sample_message_data)
+    queued = no_celery_dispatch.call_args_list
+
+    assert [(c.args[0], c.kwargs["args"]) for c in queued] == [(MATCH_INGEST_TRIGGERS, [item_id])]
+    assert (first, triggers.match_ingest_triggers(item_id, client)) == ([trigger.id], [trigger.id])
 
 
 def test_edit_discord_message_not_found(db_session):

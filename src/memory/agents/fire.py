@@ -8,9 +8,11 @@ from memory.agents.principal import PrincipalRevoked, standing_key
 from memory.agents.spec import MAX_TEXT_CHARS, AgentSpec
 from memory.agents.triggers import (
     INGEST,
+    Delivery,
     IngestConfig,
     accessible_ids,
     dedupe_key,
+    edited_ids,
     render_input,
 )
 from memory.api.MCP.servers.meta import notify_user_now
@@ -52,8 +54,9 @@ def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
     return True
 
 
-def fire_trigger(trigger_id: int, item_ids: list[int]) -> str | None:
-    """Enqueue one run for these items; returns its id, or None if nothing ran."""
+def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
+    """Enqueue one run for these encoded Deliveries; returns its id, or None if nothing ran."""
+    claimed = [Delivery.decode(d) for d in deliveries]
     with make_session() as db:
         trigger = db.get(AgentTrigger, trigger_id, with_for_update=True)
         if trigger is None or not trigger.enabled or trigger.kind != INGEST:
@@ -62,9 +65,10 @@ def fire_trigger(trigger_id: int, item_ids: list[int]) -> str | None:
         owner = db.get(User, definition.user_id)
         if owner is None:
             return None
-        allowed = accessible_ids(db, owner, item_ids)
+        allowed = accessible_ids(db, owner, [d.item_id for d in claimed])
         if not allowed:
             return None
+        delivered = [d for d in claimed if d.item_id in allowed]
         items = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).order_by(SourceItem.id).all()
         config = IngestConfig.model_validate(trigger.config)
         try:
@@ -75,11 +79,13 @@ def fire_trigger(trigger_id: int, item_ids: list[int]) -> str | None:
                 db,
                 user_id=owner.id,
                 spec=AgentSpec.model_validate(definition.spec),
-                input=render_input(config.template, items, MAX_TEXT_CHARS),
+                input=render_input(
+                    config.template, items, MAX_TEXT_CHARS, edited_ids(delivered)
+                ),
                 trigger=TriggerInfo(
                     kind=INGEST,
                     ref={"trigger_id": trigger.id, "item_ids": allowed},
-                    dedupe_key=dedupe_key(trigger.id, allowed),
+                    dedupe_key=dedupe_key(trigger.id, delivered),
                 ),
                 definition=definition,
                 api_key=key,

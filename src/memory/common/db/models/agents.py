@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -268,8 +268,9 @@ class AgentTrigger(Base):
 
 
 class AgentTriggerMatch(Base):
-    """An item a trigger has matched, so it is matched at most once however often
-    the item is reprocessed."""
+    """A version of an item a trigger has matched, so reprocessing it never matches
+    again: without on_edit the first version claims the item, with it each
+    version (memory.agents.triggers.content_version) matches once."""
 
     __tablename__ = "agent_trigger_matches"
 
@@ -279,6 +280,7 @@ class AgentTriggerMatch(Base):
     item_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
+    content_hash: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

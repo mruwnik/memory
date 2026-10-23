@@ -24,11 +24,11 @@ def run_agent(run_id: str) -> None:
 
 
 @app.task(name=FIRE_TRIGGER)
-def fire_trigger(trigger_id: int, item_ids: list[int]) -> str | None:
+def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
     """Start a run of a trigger's definition for the items it matched."""
     from memory.agents.fire import fire_trigger as fire
 
-    return fire(trigger_id, item_ids)
+    return fire(trigger_id, deliveries)
 
 
 @app.task(name=START_CRON_RUN)

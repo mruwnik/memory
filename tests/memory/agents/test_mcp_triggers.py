@@ -31,7 +31,7 @@ async def test_triggers_are_created_listed_updated_and_deleted(
         updated = await agent.trigger_upsert.fn(
             definition_id=d.id,
             trigger_id=created["id"],
-            config=CONFIG | {"delivery": {"mode": "batch", "window_sec": 600}},
+            config=CONFIG | {"delivery": {"mode": "batch", "window_sec": 600}, "on_edit": True},
             enabled=False,
         )
         listed = await agent.triggers.fn(definition_id=d.id)
@@ -42,7 +42,12 @@ async def test_triggers_are_created_listed_updated_and_deleted(
         True,
         triggers.DEFAULT_TEMPLATE,
     )
-    assert (updated["enabled"], updated["config"]["delivery"]["window_sec"]) == (False, 600)
+    assert created["config"]["on_edit"] is False
+    assert (
+        updated["enabled"],
+        updated["config"]["delivery"]["window_sec"],
+        updated["config"]["on_edit"],
+    ) == (False, 600, True)
     assert [t["id"] for t in listed["triggers"]] == [created["id"]]
     assert db_session.query(AgentTrigger).count() == 0
 

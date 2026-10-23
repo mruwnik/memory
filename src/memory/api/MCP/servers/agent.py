@@ -553,12 +553,17 @@ async def trigger_upsert(
     config: {"filter": {source_types, tags_any, channel_ids, text_contains, regex,
     exclude_authors}, "delivery": {"mode": "per_item"} or {"mode": "batch",
     "window_sec", "max_items"}, "template": the run's input, where "{items}" becomes
-    one line per item with its id}. Set filter values must all hold; within a list,
-    any value matches. Only items stored since it was last enabled match, each
-    at most once, and only if you can read them.
+    one line per item with its id, "on_edit": bool}. Set filter values must all
+    hold; within a list, any value matches. Only items stored since it was last
+    enabled match, each at most once, and only if you can read them.
+
+    With "on_edit": true, an item this trigger has matched fires again each time its
+    title or text changes (its line in {items} then says "edited"); reprocessing
+    unchanged content never does. Edits to items it never matched don't fire.
 
     Loop protection: posts by our own Discord bots and by your Slack user never
-    match. Anything else an agent writes that gets ingested again (email, GitHub,
+    match. An on_edit agent that edits the item it was given re-fires itself, and
+    anything else an agent writes that gets ingested again (email, GitHub,
     Slack posted with a bot token) is only stopped by the caps: a trigger that hits
     one (the definition's max_runs_per_hour or a daily cost pool) disables itself
     and notifies you; enabling it again clears that. The response's `warnings`
