@@ -1,2 +1,7 @@
 backups/
 memory_files/
+**/node_modules
+.git/
+.claude/
+**/__pycache__
+*.egg-info/
