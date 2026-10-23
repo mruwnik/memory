@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage=false
 """Call memory's own MCP tools in-process, as a specific user.
 
 Calls go through the mounted server so the visibility and metrics middleware
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastmcp import Client
-from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
+from fastmcp.server.auth.auth import AccessToken
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 

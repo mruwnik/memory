@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from anthropic import transform_schema
 from PIL import Image
 
-from memory.api.search.query_analysis import _build_schema
+from memory.api.search.query_analysis import build_schema
 from memory.api.search.scorer import SCORE_SCHEMA
 from memory.common.summarizer import SUMMARY_SCHEMA
 from memory.common.llms.anthropic_provider import AnthropicProvider
@@ -230,8 +230,8 @@ def test_build_request_kwargs_json_schema(model, enable_thinking, expected_outpu
         SUMMARY_SCHEMA,
         SCORE_SCHEMA,
         EXTRACTION_SCHEMA,
-        _build_schema(["forum", "book"]),
-        _build_schema([]),
+        build_schema(["forum", "book"]),
+        build_schema([]),
     ],
 )
 def test_json_schemas_are_already_strict(schema):

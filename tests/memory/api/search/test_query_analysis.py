@@ -2,16 +2,18 @@
 
 import json
 import threading
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from unittest.mock import patch, MagicMock, Mock, AsyncMock
 
+from memory.api.search import query_analysis
 from memory.api.search.query_analysis import (
     ModalityInfo,
     QueryAnalysis,
     _build_prompt,
-    _build_schema,
+    build_schema,
     _get_available_modalities,
     _get_modality_domains,
     _is_valid_sql_identifier,
@@ -115,13 +117,13 @@ class TestBuildPrompt:
         assert "no content indexed yet" in prompt
 
     def test_schema_restricts_modalities_to_available(self):
-        schema = _build_schema(["forum", "book"])
+        schema = build_schema(["forum", "book"])
 
         assert schema["properties"]["modalities"]["items"]["enum"] == ["forum", "book"]
         assert set(schema["required"]) == set(schema["properties"])
 
     def test_schema_without_modalities_has_no_empty_enum(self):
-        schema = _build_schema([])
+        schema = build_schema([])
 
         assert schema["properties"]["modalities"]["items"] == {"type": "string"}
 
@@ -163,7 +165,6 @@ class TestAnalyzeQuery:
                 return_value={"forum": ModalityInfo(name="forum", count=100)},
             ):
                 # Clear any cached results
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 result = await analyze_query("something on lesswrong about rationality", now=NOW)
@@ -174,7 +175,7 @@ class TestAnalyzeQuery:
         assert result.cleaned_query == "rationality concepts"
         assert "rational thinking" in result.query_variants
         llm_settings = mock_provider.agenerate.call_args.kwargs["settings"]
-        assert llm_settings.json_schema == _build_schema(["forum"])
+        assert llm_settings.json_schema == build_schema(["forum"])
         assert llm_settings.cache_system_prompt is True
 
     @pytest.mark.asyncio
@@ -191,7 +192,6 @@ class TestAnalyzeQuery:
                 "memory.api.search.query_analysis._get_available_modalities",
                 return_value={},
             ):
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 result = await analyze_query("test query", now=NOW)
@@ -219,7 +219,6 @@ class TestAnalyzeQuery:
                 "memory.api.search.query_analysis._get_available_modalities",
                 return_value={},
             ):
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 result = await analyze_query("test query", now=NOW, timeout=0.01)
@@ -253,7 +252,6 @@ class TestAnalyzeQuery:
                 "memory.api.search.query_analysis._get_available_modalities",
                 return_value={},
             ):
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 # First call
@@ -291,7 +289,6 @@ class TestAnalyzeQuery:
                 "memory.api.search.query_analysis._get_available_modalities",
                 return_value={},
             ):
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 await analyze_query("Test Query", now=NOW)
@@ -315,7 +312,6 @@ class TestAnalyzeQuery:
                 "memory.api.search.query_analysis._get_available_modalities",
                 return_value={},
             ):
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 result = await analyze_query("test query", now=NOW)
@@ -337,7 +333,6 @@ class TestAnalyzeQuery:
                 "memory.api.search.query_analysis._get_available_modalities",
                 return_value={},
             ):
-                from memory.api.search import query_analysis
                 query_analysis._analysis_cache = {}
 
                 result = await analyze_query("test query", now=NOW)
@@ -386,7 +381,6 @@ class TestGetAvailableModalities:
     def test_uses_cache_when_fresh(self):
         """Returns cached data when cache is fresh."""
         import time
-        from memory.api.search import query_analysis
 
         # Set up cache
         query_analysis._modality_cache = {
@@ -405,7 +399,6 @@ class TestGetAvailableModalities:
     def test_refreshes_cache_when_stale(self):
         """Refreshes cache when TTL has expired."""
         import time
-        from memory.api.search import query_analysis
 
         # Set up stale cache
         query_analysis._modality_cache = {}
@@ -421,7 +414,6 @@ class TestGetAvailableModalities:
     def test_refreshes_cache_when_empty(self):
         """Refreshes cache when cache is empty."""
         import time
-        from memory.api.search import query_analysis
 
         query_analysis._modality_cache = {}
         query_analysis._cache_timestamp = time.time()
@@ -547,9 +539,8 @@ def analysis_response(**overrides) -> str:
     )
 
 
-async def run_analysis(query: str, now: datetime, response: str):
-    from memory.api.search import query_analysis
-
+@contextmanager
+def analysis_provider(response: str):
     query_analysis._analysis_cache = {}
     provider = Mock()
     provider.agenerate = AsyncMock(return_value=response)
@@ -557,6 +548,11 @@ async def run_analysis(query: str, now: datetime, response: str):
         patch("memory.api.search.query_analysis.create_provider", return_value=provider),
         patch("memory.api.search.query_analysis._get_available_modalities", return_value={}),
     ):
+        yield provider
+
+
+async def run_analysis(query: str, now: datetime, response: str):
+    with analysis_provider(response) as provider:
         result = await analyze_query(query, now=now)
     return result, provider.agenerate.call_args.kwargs
 
@@ -612,15 +608,7 @@ async def test_analyze_query_parses_date_range(start, end, expected_start, expec
 
 @pytest.mark.asyncio
 async def test_analyze_query_cache_is_per_day():
-    from memory.api.search import query_analysis
-
-    query_analysis._analysis_cache = {}
-    provider = Mock()
-    provider.agenerate = AsyncMock(return_value=analysis_response())
-    with (
-        patch("memory.api.search.query_analysis.create_provider", return_value=provider),
-        patch("memory.api.search.query_analysis._get_available_modalities", return_value={}),
-    ):
+    with analysis_provider(analysis_response()) as provider:
         await analyze_query("what happened today", now=NOW)
         await analyze_query("what happened today", now=NOW + timedelta(hours=1))
         await analyze_query("what happened today", now=NOW + timedelta(days=1))
@@ -629,7 +617,7 @@ async def test_analyze_query_cache_is_per_day():
 
 
 def test_schema_requires_date_range():
-    schema = _build_schema([])
+    schema = build_schema([])
 
     assert {"start_date", "end_date"} <= set(schema["required"])
     assert {"start_date", "end_date"} <= set(schema["properties"])
@@ -637,8 +625,6 @@ def test_schema_requires_date_range():
 
 @pytest.mark.asyncio
 async def test_analyze_query_loads_modalities_off_the_event_loop():
-    from memory.api.search import query_analysis
-
     query_analysis._analysis_cache = {}
     load_threads = []
 
@@ -659,8 +645,6 @@ async def test_analyze_query_loads_modalities_off_the_event_loop():
 
 
 def test_refresh_modality_cache_never_exposes_a_partial_cache():
-    from memory.api.search import query_analysis
-
     old_cache = {"mail": ModalityInfo(name="mail", count=1)}
     query_analysis._modality_cache = old_cache
     seen_while_building = []

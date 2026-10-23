@@ -239,7 +239,7 @@ def _build_prompt(modalities: dict[str, ModalityInfo]) -> str:
     )
 
 
-def _build_schema(modality_names: list[str]) -> dict:
+def build_schema(modality_names: list[str]) -> dict:
     def strings(description: str) -> dict:
         return {
             "type": "array",
@@ -369,7 +369,7 @@ async def analyze_query(
 
         llm_settings = LLMSettings(
             max_tokens=1024,  # headroom for thinking tokens
-            json_schema=_build_schema(sorted(modalities)),
+            json_schema=build_schema(sorted(modalities)),
             # Prompt + schema is ~800-1000 tokens and stable for an hour
             # (modality cache TTL); searches come in bursts.
             cache_system_prompt=True,
