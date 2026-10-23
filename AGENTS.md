@@ -220,7 +220,7 @@ User-defined agents (prompt + model + tools + finish rule + budgets) run as a pr
 
 - **Code**: `src/memory/agents/` (spec, enqueue, toolhub, trim, runner); providers implement `acomplete` in `src/memory/common/llms/` against `neutral.py`.
 - **Trigger seam**: every trigger calls `memory.agents.enqueue.enqueue_run`; the runner never sees the trigger.
-- **Execution**: Celery queue `agents`, consumed only by the `agents-worker` service (API image: the runner calls memory MCP tools in-process as the run's user, with the scopes snapshotted at enqueue).
+- **Execution**: Celery queue `agents`, consumed only by the `agents-worker` service (`docker/agents/Dockerfile`, api + worker deps: the runner calls memory MCP tools in-process as the run's user, with the scopes snapshotted at enqueue).
 - **Caps**: `AGENT_MAX_RUN_COST_USD` / `AGENT_MAX_DAILY_COST_USD` are hard ceilings; definitions and API keys can only lower them.
 - **MCP tools**: `agent_*` (scope `agents`, module `api/MCP/servers/agent.py`); never callable from inside a run.
 - **Access**: grant users the `agents` scope; only `*` admins have it by default.

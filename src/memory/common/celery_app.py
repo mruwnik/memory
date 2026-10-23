@@ -348,7 +348,7 @@ app.conf.update(
         f"{CUSTOM_TASKS_PREFIX}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-custom"
         },
-        # Consumed only by agents-worker: the runner needs the API image.
+        # Consumed only by agents-worker: the runner needs the API package.
         f"{AGENTS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-agents"},
     },
 )

@@ -52,9 +52,10 @@ section has nothing in it:
   request), `AGENT_TOOL_RESULT_MAX_CHARS` (50000), `AGENT_CONTEXT_TRIM_AT_TOKENS`
   (100000), `AGENT_CONTEXT_TRIM_TO_TOKENS` (60000) and `AGENT_STEP_RETENTION_DAYS`
   (90).
-- New `agents-worker` service (built from the API image) consumes the
-  `<prefix>-agents` queue; `AGENT_WORKER_CONCURRENCY` (2) sets its concurrency; each run
-  process takes about 270MB, so raise the service's memory limit with it.
+- New `agents-worker` service (its own image, `docker/agents/Dockerfile`, with
+  the api and worker dependencies) consumes the `<prefix>-agents` queue;
+  `AGENT_WORKER_CONCURRENCY` (2) sets its concurrency; each run process takes
+  about 270MB, so raise the service's memory limit with it.
   Without it, agent runs stay pending and are failed by the sweep after
   `AGENT_MAX_TIMEOUT_SEC` plus 10 minutes.
 - New `agents` user scope gates the `agent_*` MCP tools and the Agents dashboard.
