@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Update this deployment to a release. See UPDATING.md.
 #
-#   tools/update.sh [--dry-run] [REF]    REF defaults to the newest v* release tag
+#   tools/update.sh [--dry-run] [--require-signed ALLOWED_SIGNERS] [--min-age-hours N] [REF]
+#       REF defaults to the newest v* release tag. The two flags restrict the
+#       choice, and an explicit REF, to tags signed by a key in ALLOWED_SIGNERS
+#       and at least N hours old (tools/select_release.sh).
 #
 # Env: COMPOSE (default "docker compose"), DOCKER (default docker, or podman
 #      when COMPOSE starts with podman), REMOTE (default origin),
@@ -10,6 +13,7 @@
 set -Eeuo pipefail
 umask 077
 
+CALLER_DIR=$PWD
 cd "$(dirname "$0")/.."
 
 COMPOSE=${COMPOSE:-docker compose}
@@ -27,12 +31,20 @@ LAST_GOOD=$BACKUP_DIR/last-good
 
 DRY_RUN=0
 REF=""
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run) DRY_RUN=1 ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
-        -*) echo "unknown option: $arg" >&2; exit 2 ;;
-        *) REF=$arg ;;
+TARGET=""
+SELECT_ARGS=()
+while (($#)); do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --require-signed)
+            path=${2:?$1 needs a file}
+            [[ $path == /* ]] || path=$CALLER_DIR/$path
+            SELECT_ARGS+=("$1" "$path"); shift 2 ;;
+        --min-age-hours)
+            SELECT_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -*) echo "unknown option: $1" >&2; exit 2 ;;
+        *) REF=$1; shift ;;
     esac
 done
 
@@ -139,14 +151,18 @@ wait_for_postgres() {
 log "Fetching from $REMOTE"
 git fetch --tags --force "$REMOTE"
 
-if [[ -z $REF ]]; then
+if ((${#SELECT_ARGS[@]})); then
+    ((DRY_RUN)) && SELECT_ARGS+=(--no-record)
+    REF=$(tools/select_release.sh "${SELECT_ARGS[@]}" ${REF:+"$REF"})
+    TARGET=$(git rev-parse --verify "refs/tags/$REF^{commit}")
+elif [[ -z $REF ]]; then
     REF=$(git tag --list 'v*' --sort=-v:refname | head -n1)
     if [[ -z $REF ]]; then
         echo "No release tags (v*) found; pass a ref explicitly, e.g. $REMOTE/master" >&2
         exit 1
     fi
 fi
-TARGET=$(git rev-parse --verify "$REF^{commit}")
+TARGET=${TARGET:-$(git rev-parse --verify "$REF^{commit}")}
 APP_VERSION=$(git describe --tags --always "$TARGET")
 export APP_VERSION
 log "Updating $PREVIOUS -> $REF ($APP_VERSION, $TARGET)"

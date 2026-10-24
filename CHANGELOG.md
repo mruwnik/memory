@@ -48,7 +48,10 @@ section has nothing in it:
   also generate `secrets/secrets_encryption_key.txt` when absent (compose mounts
   it), and tighten `.env` and `secrets/` to owner-only permissions. `tools/add_user.py`
   reads the password from `ADD_USER_PASSWORD` and accepts `--if-missing`.
-
+- `tools/update.sh` accepts `--require-signed <allowed_signers>` and
+  `--min-age-hours N` to install only signed, sufficiently old release tags
+  (age counts from when the host first saw the tag; state in `$STATE_DIR`).
+  Without them it behaves as before. New `tools/release.sh` cuts signed tags.
 - MCP tools gated on "has any items" (organizer task and calendar tools,
   deadlines, books, observations) are still hidden from tool listings while
   their table is empty, but calling one no longer fails with "Access denied";

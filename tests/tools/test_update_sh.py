@@ -25,8 +25,9 @@ def clone(tmp_path):
     git(tmp_path, "clone", "--quiet", str(REPO_ROOT), str(clone))
     git(tmp_path, "init", "--quiet", "--bare", str(tmp_path / "origin.git"))
     git(clone, "remote", "set-url", "origin", str(tmp_path / "origin.git"))
-    shutil.copy(REPO_ROOT / "tools" / "update.sh", clone / "tools" / "update.sh")
-    git(clone, "add", "tools/update.sh")
+    for script in ["update.sh", "select_release.sh"]:
+        shutil.copy(REPO_ROOT / "tools" / script, clone / "tools" / script)
+    git(clone, "add", "tools")
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "update.sh under test")
     git(clone, "tag", "v0.0.9")
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "next release")
@@ -35,11 +36,17 @@ def clone(tmp_path):
     return clone
 
 
-def dry_run(clone):
+def dry_run(clone, *args, cwd=None):
     result = subprocess.run(
-        ["bash", "tools/update.sh", "--dry-run"],
-        cwd=clone,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "COMPOSE": "echo compose"},
+        ["bash", str(clone / "tools" / "update.sh"), "--dry-run", *args],
+        cwd=cwd or clone,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "COMPOSE": "echo compose",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "STATE_DIR": str(clone.parent / "state"),
+        },
         capture_output=True,
         text=True,
         timeout=60,
@@ -114,3 +121,53 @@ def test_update_state_for_current_checkout_is_resumed(clone):
 
     assert code == 0, output
     assert "rollback target stays v0.0.1" in output
+
+
+def test_signed_old_tag_is_planned_when_signatures_are_required(clone, allowed, signed_tag):
+    signed_tag(clone, "v0.0.11", 100, "good")
+
+    code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
+
+    assert code == 0, output
+    assert "-> v0.0.11" in output
+
+
+@pytest.mark.parametrize("explicit", [[], ["v0.0.10"]], ids=["auto", "explicit"])
+def test_unsigned_tags_are_refused_before_anything_changes(clone, allowed, explicit):
+    head_before = git(clone, "rev-parse", "HEAD")
+
+    code, output = dry_run(
+        clone, "--require-signed", str(allowed), "--min-age-hours", "48", *explicit
+    )
+
+    assert code != 0
+    assert "Dry run complete" not in output
+    assert git(clone, "rev-parse", "HEAD") == head_before
+
+
+def test_relative_allowed_signers_path_is_resolved_from_the_callers_directory(
+    clone, allowed, signed_tag
+):
+    signed_tag(clone, "v0.0.11", 100, "good")
+
+    code, output = dry_run(
+        clone, "--require-signed", allowed.name, "--min-age-hours", "48", cwd=allowed.parent
+    )
+
+    assert code == 0, output
+
+
+def test_dry_run_does_not_record_first_sightings(clone, allowed, signed_tag):
+    signed_tag(clone, "v0.0.11", 100, "good", seen=None)
+
+    code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
+
+    assert code != 0
+    assert not (clone.parent / "state" / "seen-tags").exists()
+
+
+def test_missing_allowed_signers_file_is_named_in_the_error(clone):
+    code, output = dry_run(clone, "--require-signed", "nope", "--min-age-hours", "48")
+
+    assert code != 0
+    assert "nope" in output

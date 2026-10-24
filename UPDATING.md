@@ -41,6 +41,23 @@ tools/update.sh origin/master
 Once `v*` tags exist, `tools/update.sh` with no argument picks the newest one.
 Any tag, branch or sha also works.
 
+To follow only releases you trust, pass an `allowed_signers` file (one
+`* <ssh public key>` line per release signer) and a minimum age:
+
+```bash
+tools/update.sh --require-signed /etc/memory/allowed_signers --min-age-hours 48
+```
+
+`update.sh` then takes the newest `v*` tag with a valid SSH signature from one of
+those keys that is at least 48 hours old. Age is the later of the tag date and
+when this host first saw the tag, recorded in `$STATE_DIR/seen-tags` (default
+`/var/lib/memory`), so a signer can't backdate a tag past the delay. Only
+annotated, SSH-signed tags whose embedded name matches are accepted, and
+automatic selection considers only `vMAJOR.MINOR.PATCH` tags. An explicit `REF`
+must be a `v*` tag and pass the same checks. A tag never seen before counts as
+first seen now; `--dry-run` does not record sightings. The selection lives in `tools/select_release.sh`,
+which prints the chosen tag or exits nonzero.
+
 **AI agents:** the update takes minutes (image builds, migrations, health
 polling), which is longer than most tool-call timeouts. A killed run leaves
 the stack half-updated. Start it detached in its own session (`setsid` where
@@ -224,6 +241,13 @@ stay stopped.
   commands. Post-deploy commands must be safe to re-run.
 - Tag releases as `vMAJOR.MINOR.PATCH`. `update.sh` picks the newest `v*` tag,
   and `update_available` compares tags numerically.
+- Cut a release with `tools/release.sh [--push] vX.Y.Z`. It needs a clean
+  checkout of master, a `## vX.Y.Z` section in CHANGELOG.md (rename
+  `Unreleased`) and passing tests, then creates an SSH-signed annotated tag
+  (`SIGNING_KEY` or git's `user.signingkey`). It pushes master and the tag only
+  with `--push`. The default test command is the venv's
+  `pytest --run-slow -n 3 --dist loadfile`; local master must equal
+  `$REMOTE/master`.
 
 ## Update notifications (optional)
 
