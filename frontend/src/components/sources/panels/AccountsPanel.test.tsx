@@ -54,9 +54,9 @@ describe('AccountsPanel load states', () => {
   it('shows the OAuth config upload prompt when no config exists', async () => {
     mockFetchRoutes(routes({}))
     renderWithUser(<AccountsPanel />)
-    await waitFor(() => expect(screen.getByText('OAuth Configuration Required')).toBeInTheDocument())
-    // No "Connect Account" button without config
-    expect(screen.queryByRole('button', { name: 'Connect Account' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('OAuth configuration required')).toBeInTheDocument())
+    // No "Connect account" button without config
+    expect(screen.queryByRole('button', { name: 'Connect account' })).not.toBeInTheDocument()
   })
 
   it('shows the github empty state with no accounts', async () => {
@@ -71,8 +71,8 @@ describe('AccountsPanel load states', () => {
     mockFetchRoutes(routes({ github: [githubAccount], config: oauthConfig }))
     renderWithUser(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
-    expect(screen.getByText('Personal Access Token')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Connect Account' })).toBeInTheDocument()
+    expect(screen.getByText('Personal access token')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     expect(screen.getByText('No Google accounts connected. Connect an account to use Gmail, Calendar, or Drive.')).toBeInTheDocument()
   })
 
@@ -97,7 +97,7 @@ describe('AccountsPanel github form', () => {
     const mock = mockFetchRoutes(routes({ config: oauthConfig }))
     const { user } = renderWithUser(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText(/No GitHub accounts configured/)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Add Account' }))
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
     await user.type(field(dialog, 'Name'), 'CI Bot')
     await user.type(field(dialog, /Access Token/), 'ghp_secret')
@@ -119,9 +119,9 @@ describe('AccountsPanel github form', () => {
     mockFetchRoutes(routes({ config: oauthConfig }))
     const { user } = renderWithUser(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText(/No GitHub accounts configured/)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Add Account' }))
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
-    await user.selectOptions(field(dialog, 'Authentication Type'), 'app')
+    await user.selectOptions(field(dialog, 'Authentication type'), 'app')
     expect(within(dialog).getByText('App ID')).toBeInTheDocument()
     expect(within(dialog).getByText('Installation ID')).toBeInTheDocument()
     expect(within(dialog).getByText(/Private Key/)).toBeInTheDocument()
@@ -133,7 +133,7 @@ describe('AccountsPanel github form', () => {
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = await screen.findByRole('dialog')
-    expect(field(dialog, 'Authentication Type')).toBeDisabled()
+    expect(field(dialog, 'Authentication type')).toBeDisabled()
   })
 })
 
@@ -196,8 +196,8 @@ describe('AccountsPanel google connect', () => {
       },
     })
     const { user } = renderWithUser(<AccountsPanel />)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect Account' })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Connect Account' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Connect account' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('Drive')).toBeInTheDocument()
     expect(within(dialog).getByText('Read calendar')).toBeInTheDocument()
@@ -214,8 +214,8 @@ describe('AccountsPanel google connect', () => {
       '/google-drive/authorize': { json: { authorization_url: 'https://accounts.google.com/o/oauth2' } },
     })
     const { user } = renderWithUser(<AccountsPanel />)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect Account' })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Connect Account' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Connect account' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Connect' }))
     await waitFor(() =>

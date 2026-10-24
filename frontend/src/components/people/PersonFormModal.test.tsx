@@ -16,12 +16,12 @@ const makePerson = (overrides: Partial<Person> = {}): Person => ({
 })
 
 const baseProps = {
-  title: 'Add New Person',
+  title: 'New person',
   onSubmit: vi.fn().mockResolvedValue(undefined),
   onCancel: vi.fn(),
   loading: false,
   error: null as string | null,
-  submitLabel: 'Add Person',
+  submitLabel: 'Create person',
 }
 
 beforeEach(() => {
@@ -33,8 +33,8 @@ describe('PersonFormModal rendering', () => {
   it('renders dialog with title and required fields', () => {
     render(<PersonFormModal {...baseProps} />)
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true')
-    expect(screen.getByRole('heading', { name: 'Add New Person' })).toBeInTheDocument()
-    expect(screen.getByLabelText(/Display Name/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'New person' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Display name/)).toBeInTheDocument()
     expect(screen.getByLabelText(/Identifier/)).toBeInTheDocument()
   })
 
@@ -50,7 +50,7 @@ describe('PersonFormModal rendering', () => {
 
   it('disables submit when display_name or identifier empty', () => {
     render(<PersonFormModal {...baseProps} />)
-    expect(screen.getByRole('button', { name: 'Add Person' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Create person' })).toBeDisabled()
   })
 })
 
@@ -58,14 +58,14 @@ describe('PersonFormModal identifier auto-generation (create)', () => {
   it('auto-generates a slug identifier from the display name', async () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} />)
-    await user.type(screen.getByLabelText(/Display Name/), 'Bob Smith')
+    await user.type(screen.getByLabelText(/Display name/), 'Bob Smith')
     expect(screen.getByLabelText(/Identifier/)).toHaveValue('bob_smith')
   })
 
   it('strips diacritics and punctuation in the generated identifier', async () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} />)
-    await user.type(screen.getByLabelText(/Display Name/), 'José! O’Brien')
+    await user.type(screen.getByLabelText(/Display name/), 'José! O’Brien')
     expect(screen.getByLabelText(/Identifier/)).toHaveValue('jose_obrien')
   })
 
@@ -73,10 +73,10 @@ describe('PersonFormModal identifier auto-generation (create)', () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} />)
     const idInput = screen.getByLabelText(/Identifier/)
-    await user.type(screen.getByLabelText(/Display Name/), 'Bob')
+    await user.type(screen.getByLabelText(/Display name/), 'Bob')
     await user.clear(idInput)
     await user.type(idInput, 'custom_id')
-    await user.type(screen.getByLabelText(/Display Name/), ' Smith')
+    await user.type(screen.getByLabelText(/Display name/), ' Smith')
     expect(idInput).toHaveValue('custom_id')
   })
 })
@@ -85,13 +85,13 @@ describe('PersonFormModal create submission', () => {
   it('submits PersonCreate with parsed comma-separated fields and contact info', async () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} />)
-    await user.type(screen.getByLabelText(/Display Name/), 'Bob Smith')
+    await user.type(screen.getByLabelText(/Display name/), 'Bob Smith')
     await user.type(screen.getByLabelText(/Aliases/), 'bobby , b.smith , ')
     await user.type(screen.getByLabelText(/Tags/), 'work, eng')
     await user.type(screen.getByLabelText('Email'), 'bob@x.com')
     await user.type(screen.getByLabelText('GitHub'), '@bsmith')
     await user.type(screen.getByLabelText(/Add a note/), 'met at conf')
-    await user.click(screen.getByRole('button', { name: 'Add Person' }))
+    await user.click(screen.getByRole('button', { name: 'Create person' }))
 
     expect(baseProps.onSubmit).toHaveBeenCalledTimes(1)
     expect(baseProps.onSubmit).toHaveBeenCalledWith({
@@ -107,8 +107,8 @@ describe('PersonFormModal create submission', () => {
   it('omits contact_info and content when empty', async () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} />)
-    await user.type(screen.getByLabelText(/Display Name/), 'Bob')
-    await user.click(screen.getByRole('button', { name: 'Add Person' }))
+    await user.type(screen.getByLabelText(/Display name/), 'Bob')
+    await user.click(screen.getByRole('button', { name: 'Create person' }))
     expect(baseProps.onSubmit).toHaveBeenCalledWith({
       identifier: 'bob',
       display_name: 'Bob',
@@ -125,13 +125,13 @@ describe('PersonFormModal edit mode', () => {
     render(
       <PersonFormModal
         {...baseProps}
-        title="Edit Person"
-        submitLabel="Save Changes"
+        title="Edit person"
+        submitLabel="Save changes"
         isEdit
         initialData={makePerson()}
       />,
     )
-    expect(screen.getByLabelText(/Display Name/)).toHaveValue('Alice Chen')
+    expect(screen.getByLabelText(/Display name/)).toHaveValue('Alice Chen')
     const idInput = screen.getByLabelText(/Identifier/)
     expect(idInput).toHaveValue('alice_chen')
     expect(idInput).toBeDisabled()
@@ -145,13 +145,13 @@ describe('PersonFormModal edit mode', () => {
     render(
       <PersonFormModal
         {...baseProps}
-        title="Edit Person"
-        submitLabel="Save Changes"
+        title="Edit person"
+        submitLabel="Save changes"
         isEdit
         initialData={makePerson()}
       />,
     )
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(baseProps.onSubmit).toHaveBeenCalledWith({
       display_name: 'Alice Chen',
       aliases: ['ali'],
@@ -171,8 +171,8 @@ describe('PersonFormModal edit mode', () => {
         initialData={makePerson({ identifier: 'fixed_id' })}
       />,
     )
-    await user.clear(screen.getByLabelText(/Display Name/))
-    await user.type(screen.getByLabelText(/Display Name/), 'New Name')
+    await user.clear(screen.getByLabelText(/Display name/))
+    await user.type(screen.getByLabelText(/Display name/), 'New name')
     expect(screen.getByLabelText(/Identifier/)).toHaveValue('fixed_id')
   })
 })
@@ -194,6 +194,6 @@ describe('PersonFormModal interactions', () => {
 
   it('focuses the first field on mount', () => {
     render(<PersonFormModal {...baseProps} />)
-    expect(screen.getByLabelText(/Display Name/)).toHaveFocus()
+    expect(screen.getByLabelText(/Display name/)).toHaveFocus()
   })
 })

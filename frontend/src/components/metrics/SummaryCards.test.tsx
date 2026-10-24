@@ -12,9 +12,9 @@ const baseProps = {
 describe('SummaryCards', () => {
   it('always renders the three core cards', () => {
     render(<SummaryCards {...baseProps} />)
-    expect(screen.getByText('Total Events')).toBeInTheDocument()
-    expect(screen.getByText('Success Rate')).toBeInTheDocument()
-    expect(screen.getByText('Avg Duration')).toBeInTheDocument()
+    expect(screen.getByText('Total events')).toBeInTheDocument()
+    expect(screen.getByText('Success rate')).toBeInTheDocument()
+    expect(screen.getByText('Avg duration')).toBeInTheDocument()
   })
 
   it.each([
@@ -46,8 +46,8 @@ describe('SummaryCards', () => {
     render(<SummaryCards {...baseProps} />)
     expect(screen.queryByText('System CPU')).not.toBeInTheDocument()
     expect(screen.queryByText('Process CPU')).not.toBeInTheDocument()
-    expect(screen.queryByText('Memory Usage')).not.toBeInTheDocument()
-    expect(screen.queryByText('Disk Usage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Memory usage')).not.toBeInTheDocument()
+    expect(screen.queryByText('Disk usage')).not.toBeInTheDocument()
   })
 
   it('labels CPU card "System CPU" when system.cpu_percent present', () => {
@@ -73,7 +73,7 @@ describe('SummaryCards', () => {
         }}
       />,
     )
-    expect(screen.getByText('Memory Usage')).toBeInTheDocument()
+    expect(screen.getByText('Memory usage')).toBeInTheDocument()
     expect(screen.getByText('75.0%')).toBeInTheDocument()
     // used = 2048-512 = 1536 MB -> 1.5 GB ; total 2048 MB -> 2.0 GB
     expect(screen.getByText('1.5 GB / 2.0 GB')).toBeInTheDocument()
@@ -90,14 +90,14 @@ describe('SummaryCards', () => {
         }}
       />,
     )
-    expect(screen.getByText('Disk Usage')).toBeInTheDocument()
+    expect(screen.getByText('Disk usage')).toBeInTheDocument()
     // used = 100-40 = 60 GB ; total 100 GB
     expect(screen.getByText('60.0 GB / 100.0 GB')).toBeInTheDocument()
   })
 
   it('omits the memory detail line when total/available are missing', () => {
     render(<SummaryCards {...baseProps} systemMetrics={{ 'system.memory_percent': 30 }} />)
-    expect(screen.getByText('Memory Usage')).toBeInTheDocument()
+    expect(screen.getByText('Memory usage')).toBeInTheDocument()
     expect(screen.queryByText(/\/ /)).not.toBeInTheDocument()
   })
 })

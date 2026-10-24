@@ -166,7 +166,7 @@ describe('SearchForm', () => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    await waitFor(() => expect(screen.getByText('Blog Specific')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Blog specific')).toBeInTheDocument())
     await user.type(screen.getByPlaceholderText('Author'), 'Tolkien')
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))

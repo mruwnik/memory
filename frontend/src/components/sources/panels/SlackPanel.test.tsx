@@ -166,7 +166,7 @@ describe('SlackPanel - connect wizard', () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText(/No Slack workspaces connected/)
 
-    await user.click(screen.getAllByRole('button', { name: 'Connect Workspace' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Connect workspace' })[0])
     expect(screen.getByTestId('slack-wizard')).toBeInTheDocument()
   })
 
@@ -175,7 +175,7 @@ describe('SlackPanel - connect wizard', () => {
     await screen.findByText(/No Slack workspaces connected/)
 
     listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done' }])
-    await user.click(screen.getAllByRole('button', { name: 'Connect Workspace' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Connect workspace' })[0])
     await user.click(screen.getByRole('button', { name: 'wizard-cancel' }))
     expect(screen.queryByTestId('slack-wizard')).not.toBeInTheDocument()
     expect(await screen.findByText('Half done')).toBeInTheDocument()
@@ -184,7 +184,7 @@ describe('SlackPanel - connect wizard', () => {
   it('keeps the same wizard mounted while OAuth completion reloads the panel', async () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText(/No Slack workspaces connected/)
-    await user.click(screen.getAllByRole('button', { name: 'Connect Workspace' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Connect workspace' })[0])
     const wizard = screen.getByTestId('slack-wizard')
 
     listWorkspaces.mockReturnValue(new Promise(() => {}))
@@ -201,7 +201,7 @@ describe('SlackPanel - connect wizard', () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText(/No Slack workspaces connected/)
 
-    await user.click(screen.getAllByRole('button', { name: 'Connect Workspace' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Connect workspace' })[0])
     await user.click(screen.getByRole('button', { name: 'wizard-complete' }))
     expect(screen.queryByTestId('slack-wizard')).not.toBeInTheDocument()
     await waitFor(() => expect(listWorkspaces).toHaveBeenCalledTimes(2))
@@ -240,7 +240,7 @@ describe('SlackPanel - workspace actions', () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
-    await user.click(screen.getByRole('button', { name: 'Sync Now' }))
+    await user.click(screen.getByRole('button', { name: 'Sync now' }))
     await waitFor(() => expect(triggerSync).toHaveBeenCalledWith('W1'))
   })
 
@@ -249,7 +249,7 @@ describe('SlackPanel - workspace actions', () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
-    await user.click(screen.getByRole('button', { name: 'Sync Now' }))
+    await user.click(screen.getByRole('button', { name: 'Sync now' }))
     expect(await screen.findByText('Nothing can poll this workspace')).toBeInTheDocument()
   })
 
@@ -321,7 +321,7 @@ describe('SlackPanel - event setup', () => {
 
     expect(await screen.findByText('Half done')).toBeInTheDocument()
     expect(screen.queryByText(/No Slack workspaces connected/)).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Connect Workspace' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Connect workspace' })).toHaveLength(1)
   })
 
   it('deletes an unfinished app after confirmation', async () => {

@@ -112,7 +112,7 @@ describe('TranscriptsPanel - create flow', () => {
     const { user } = renderWithUser(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
-    await user.click(screen.getByRole('button', { name: 'Add Account' }))
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
     await user.type(screen.getByPlaceholderText('My Fireflies'), 'Acct')
     // provider select defaults to first provider 'fireflies'
     const [apiKey, webhook] = passwordInputs()
@@ -138,7 +138,7 @@ describe('TranscriptsPanel - create flow', () => {
     const { user } = renderWithUser(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
-    await user.click(screen.getByRole('button', { name: 'Add Account' }))
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
     expect(await screen.findByText(/No transcript providers are available/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
   })
@@ -148,7 +148,7 @@ describe('TranscriptsPanel - create flow', () => {
     const { user } = renderWithUser(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
-    await user.click(screen.getByRole('button', { name: 'Add Account' }))
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
     await user.type(screen.getByPlaceholderText('My Fireflies'), 'Acct')
     await user.type(passwordInputs()[0], 'k')
     await user.click(screen.getByRole('button', { name: 'Save' }))

@@ -308,7 +308,7 @@ const Check = () => {
 
   return (
     <Page
-      title="Check Questions"
+      title="Check questions"
       description={<span className="flex flex-wrap gap-x-3">
         {pendingCount > 0 && <span>{pendingCount}{countSuffix} pending</span>}
         <span>{answeredCount}{countSuffix} answered</span>

@@ -86,7 +86,7 @@ export const GoogleDrivePanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <Section title="Google Drive Folders">
+    <Section title="Google Drive folders">
       {notice}
       {accounts.length === 0 ? (
         <EmptyState message="No Google accounts connected. Add a Google account in the Accounts tab first." />
@@ -101,9 +101,9 @@ export const GoogleDrivePanel = () => {
             >
               {account.sync_error && <RowError>{account.sync_error}</RowError>}
               <SubList
-                title={`Synced Folders (${account.folders.length})`}
+                title={`Synced folders (${account.folders.length})`}
                 actions={<>
-                  <Button size="sm" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</Button>
+                  <Button size="sm" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & add</Button>
                   <Button size="sm" onClick={() => setAddingFolderTo(account.id)}>Add by ID</Button>
                 </>}
                 empty="No folders configured for sync"
@@ -343,7 +343,7 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
               onClick={handleAdd}
               disabled={selected.size === 0}
             >
-              Add Selected
+              Add selected
             </Button>
           </div>
         </div>
@@ -436,12 +436,12 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
   }
 
   return (
-    <Modal title={`Manage Exclusions: ${folder.folder_name}`} onClose={onCancel}>
+    <Modal title={`Manage exclusions: ${folder.folder_name}`} onClose={onCancel}>
       <div className="space-y-4">
         {/* Current exclusions */}
         {excluded.size > 0 && (
           <Notice tone="warning">
-            <h5 className="text-sm font-medium text-amber-800 mb-2">Excluded Folders ({excluded.size})</h5>
+            <h5 className="text-sm font-medium text-amber-800 mb-2">Excluded folders ({excluded.size})</h5>
             <div className="flex flex-wrap gap-2">
               {Array.from(excluded.values()).map(item => (
                 <span key={item.id} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-amber-200 rounded text-sm" title={item.path}>
@@ -532,7 +532,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
               type="button"
               onClick={handleSave}
             >
-              Save Exclusions
+              Save exclusions
             </Button>
           </div>
         </div>
@@ -578,7 +578,7 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
   }
 
   return (
-    <Modal title="Add Google Drive Folder" onClose={onCancel}>
+    <Modal title="Add Google Drive folder" onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -592,7 +592,7 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
           />
         </Field>
 
-        <Field label="Folder Name">
+        <Field label="Folder name">
           <Input
             type="text"
             value={formData.folder_name}
@@ -652,7 +652,7 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" type="submit" disabled={submitting}>
-            {submitting ? 'Adding...' : 'Add Folder'}
+            {submitting ? 'Adding...' : 'Add folder'}
           </Button>
         </FormActions>
       </form>

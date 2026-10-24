@@ -175,11 +175,11 @@ export const AccountsPanel = () => {
   return (
     <>
       {notice}
-      <Section title="GitHub Accounts" actions={<Button variant="primary" onClick={() => setShowGithubForm(true)}>Add Account</Button>}>
+      <Section title="GitHub accounts" actions={<Button variant="primary" onClick={() => setShowGithubForm(true)}>Add account</Button>}>
         {githubAccounts.length === 0 ? (
           <EmptyState
             message="No GitHub accounts configured. Add an account to track repositories."
-            actionLabel="Add GitHub Account"
+            actionLabel="Add GitHub account"
             onAction={() => setShowGithubForm(true)}
           />
         ) : (
@@ -188,7 +188,7 @@ export const AccountsPanel = () => {
               <SourceRow
                 key={account.id}
                 title={account.name}
-                subtitle={account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
+                subtitle={account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App'}
                 meta={[account.repos.length > 0 && `${account.repos.length} repos tracked`]}
                 active={account.active}
                 lastSyncAt={account.last_sync_at}
@@ -226,12 +226,12 @@ export const AccountsPanel = () => {
         />
       )}
 
-      <Section title="Google Accounts" actions={oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect Account</Button>}>
+      <Section title="Google accounts" actions={oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect account</Button>}>
         {oauthConfig === null ? (
-          <Card title="OAuth Configuration Required"
+          <Card title="OAuth configuration required"
             description="Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).">
             <Hint className="mb-4">Get this from the Google Cloud Console under APIs & Services → Credentials.</Hint>
-            {uploadButton('Upload Credentials JSON')}
+            {uploadButton('Upload credentials JSON')}
           </Card>
         ) : (
           <>
@@ -242,8 +242,8 @@ export const AccountsPanel = () => {
                   ['Client ID', `${oauthConfig.client_id.substring(0, 20)}...`],
                 ]} />
                 <div className="flex flex-wrap gap-2">
-                  {uploadButton('Replace Config')}
-                  <ConfirmButton confirm="Delete the Google OAuth configuration?" onConfirm={handleDeleteConfig}>Delete Config</ConfirmButton>
+                  {uploadButton('Replace config')}
+                  <ConfirmButton confirm="Delete the Google OAuth configuration?" onConfirm={handleDeleteConfig}>Delete config</ConfirmButton>
                 </div>
               </div>
             </Disclosure>
@@ -251,7 +251,7 @@ export const AccountsPanel = () => {
             {googleAccounts.length === 0 ? (
               <EmptyState
                 message="No Google accounts connected. Connect an account to use Gmail, Calendar, or Drive."
-                actionLabel="Connect Google Account"
+                actionLabel="Connect Google account"
                 onAction={handleConnectGoogle}
               />
             ) : (
@@ -280,7 +280,7 @@ export const AccountsPanel = () => {
       {/* Google Scope Selection Modal */}
       {showScopeModal && availableScopes && (
         <Modal
-          title={reauthorizingAccountId ? "Update Google Permissions" : "Connect Google Account"}
+          title={reauthorizingAccountId ? "Update Google permissions" : "Connect Google account"}
           onClose={() => setShowScopeModal(false)}
         >
           <div className="space-y-4">
@@ -309,7 +309,7 @@ export const AccountsPanel = () => {
                 onClick={handleScopeSelectionConfirm}
                 disabled={selectedScopes.length === 0}
               >
-                {reauthorizingAccountId ? "Update Permissions" : "Connect"}
+                {reauthorizingAccountId ? "Update permissions" : "Connect"}
               </Button>
             </FormActions>
           </div>
@@ -359,7 +359,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
   }
 
   return (
-    <Modal title={account ? 'Edit GitHub Account' : 'Add GitHub Account'} onClose={onCancel}>
+    <Modal title={account ? 'Edit GitHub account' : 'Add GitHub account'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -373,13 +373,13 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
           />
         </Field>
 
-        <Field label="Authentication Type">
+        <Field label="Authentication type">
           <Select
             value={formData.auth_type}
             onChange={e => setFormData({ ...formData, auth_type: e.target.value as 'pat' | 'app' })}
             disabled={!!account}
           >
-            <option value="pat">Personal Access Token</option>
+            <option value="pat">Personal access token</option>
             <option value="app">GitHub App</option>
           </Select>
         </Field>

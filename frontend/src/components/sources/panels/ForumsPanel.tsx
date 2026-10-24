@@ -55,16 +55,16 @@ export const ForumsPanel = () => {
       description="Configure and trigger synchronization of posts from LessWrong. Posts matching your criteria will be indexed for search.">
       <div className="space-y-4">
         <FieldRow className="md:grid-cols-4">
-          <Field label="Days Back">
+          <Field label="Days back">
             <Input type="number" value={daysBack} onChange={e => setDaysBack(parseInt(e.target.value) || 30)} min={1} max={365} />
           </Field>
-          <Field label="Min Karma">
+          <Field label="Min karma">
             <Input type="number" value={minKarma} onChange={e => setMinKarma(parseInt(e.target.value) || 0)} min={0} />
           </Field>
           <Field label="Posts per request">
             <Input type="number" value={limit} onChange={e => setLimit(parseInt(e.target.value) || 50)} min={1} max={100} />
           </Field>
-          <Field label="Max Items">
+          <Field label="Max items">
             <Input type="number" value={maxItems} onChange={e => setMaxItems(parseInt(e.target.value) || 1000)} min={1} max={10000} />
           </Field>
         </FieldRow>

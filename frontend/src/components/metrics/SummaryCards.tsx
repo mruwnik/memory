@@ -28,17 +28,17 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
 
   return (
     <StatGrid>
-      <Stat label="Total Events" value={formatNumber(totalEvents)} />
-      <Stat label="Success Rate" value={`${successRate}%`} tone={successRateTone(successRate)} />
-      <Stat label="Avg Duration" value={formatDuration(avgDuration)} />
+      <Stat label="Total events" value={formatNumber(totalEvents)} />
+      <Stat label="Success rate" value={`${successRate}%`} tone={successRateTone(successRate)} />
+      <Stat label="Avg duration" value={formatDuration(avgDuration)} />
       {cpuPercent !== undefined && (
         <Stat label={hasSystemCpu ? 'System CPU' : 'Process CPU'} value={`${cpuPercent.toFixed(1)}%`} tone={usageTone(cpuPercent)} />
       )}
       {memoryPercent !== undefined && (
-        <Stat label="Memory Usage" value={`${memoryPercent.toFixed(1)}%`} tone={usageTone(memoryPercent)} hint={memoryDetail} />
+        <Stat label="Memory usage" value={`${memoryPercent.toFixed(1)}%`} tone={usageTone(memoryPercent)} hint={memoryDetail} />
       )}
       {diskPercent !== undefined && (
-        <Stat label="Disk Usage" value={`${diskPercent.toFixed(1)}%`} tone={usageTone(diskPercent)} hint={diskDetail} />
+        <Stat label="Disk usage" value={`${diskPercent.toFixed(1)}%`} tone={usageTone(diskPercent)} hint={diskDetail} />
       )}
     </StatGrid>
   )

@@ -4,7 +4,7 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
-import { Button, Card, Checkbox, LoadingState, Modal, Page, buttonClass } from '@/components/shared/ui'
+import { Button, Card, Checkbox, LoadingState, Modal, Notice, Page, buttonClass } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -346,7 +346,8 @@ const Calendar = () => {
 
   return (
     <Page
-      title={<>{MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}</>}
+      title="Calendar"
+      description={`${MONTH_NAMES[currentDate.getMonth()]} ${currentDate.getFullYear()}`}
       actions={<>
         <div className="flex flex-wrap gap-2">
           {isAdmin && users.length > 0 && (
@@ -359,15 +360,26 @@ const Calendar = () => {
           <FilterMenu label="Calendars" selected={enabledCalendars} onToggle={toggleCalendar}
             onAll={selectAllCalendars} onNone={selectNoCalendars}
             options={calendarNames.map(name => ({ value: name, label: name }))} />
-          <Button size="icon" onClick={goToPreviousMonth} aria-label="Previous month">&lt;</Button>
-          <Button onClick={goToToday}>Today</Button>
-          <Button size="icon" onClick={goToNextMonth} aria-label="Next month">&gt;</Button>
+          <div className="flex gap-2">
+            <Button size="icon" onClick={goToPreviousMonth} aria-label="Previous month">&lt;</Button>
+            <Button onClick={goToToday}>Today</Button>
+            <Button size="icon" onClick={goToNextMonth} aria-label="Next month">&gt;</Button>
+          </div>
         </div>
       </>}
       width="wide"
       error={error}
       onRetry={() => loadEvents(currentDate, selectedUserIds)}
     >
+      {!loading && !error && (
+        selectedUserIds?.length === 0 ? <Notice tone="info">No users selected.</Notice>
+        : events.length > 0 && filteredEvents.length === 0 ? <Notice tone="info">No calendars selected.</Notice>
+        : events.length === 0 && (
+          <Notice tone="info">
+            No events this month. <Link to="/ui/sources?tab=calendar" className="underline">Configure calendar accounts</Link>
+          </Notice>
+        )
+      )}
       <Card flush className="relative grid grid-cols-7 overflow-hidden">
         {/* Day headers */}
         {DAYS_OF_WEEK.map(day => (
@@ -544,7 +556,7 @@ const Calendar = () => {
                     rel="noopener noreferrer"
                     className="text-sm text-primary hover:underline"
                   >
-                    Join Meeting
+                    Join meeting
                   </a>
                 </div>
               )}
@@ -638,11 +650,13 @@ const Calendar = () => {
         </Modal>
       )}
 
-      <footer className="mt-6 text-center">
-        <Link to="/ui/sources" className="text-primary text-sm hover:underline">
-          Configure calendar accounts
-        </Link>
-      </footer>
+      {events.length > 0 && (
+        <footer className="text-center">
+          <Link to="/ui/sources?tab=calendar" className="inline-block py-2 text-primary text-sm hover:underline">
+            Configure calendar accounts
+          </Link>
+        </footer>
+      )}
     </Page>
   )
 }

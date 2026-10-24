@@ -64,6 +64,7 @@ describe('DockerLogs', () => {
     getLogs.mockRejectedValueOnce(new Error('logs failed'))
     renderWithRouter(<DockerLogs />)
     await waitFor(() => expect(screen.getByText('logs failed')).toBeInTheDocument())
+    expect(screen.queryByText('No logs available')).not.toBeInTheDocument()
     getLogs.mockResolvedValue(logsFor('recovered output'))
     await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.getByText('recovered output')).toBeInTheDocument())

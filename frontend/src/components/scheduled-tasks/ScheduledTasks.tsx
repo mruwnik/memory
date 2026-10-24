@@ -12,8 +12,8 @@ import { Badge, Button, ButtonLink, Checkbox, ConfirmButton, EmptyState, Field, 
 type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
 
 const TYPE_LABELS: Record<string, string> = {
-  claude_session: 'Claude Session',
-  agent_run: 'Agent Run',
+  claude_session: 'Claude session',
+  agent_run: 'Agent run',
 }
 
 const EXECUTION_STATUS_TONES: Record<string, Tone> = {
@@ -375,10 +375,10 @@ const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsP
         <Input type="text" value={state.runId} onChange={e => setState(s => ({ ...s, runId: e.target.value }))} placeholder="custom-branch-name" />
       </Field>
     </FieldRow>
-    <Field label="Allowed Tools" hint="Comma-separated tool names">
+    <Field label="Allowed tools" hint="Comma-separated tool names">
       <Input type="text" value={state.allowedTools} onChange={e => setState(s => ({ ...s, allowedTools: e.target.value }))} placeholder="Bash, Read, Write, Edit, Grep, Glob" />
     </Field>
-    <Field label="Environment Variables" hint="One per line: KEY=value">
+    <Field label="Environment variables" hint="One per line: KEY=value">
       <Textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className="font-mono" />
     </Field>
     <Checkbox label="Enable Playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
@@ -459,10 +459,10 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
       <Field label="Topic">
         <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
       </Field>
-      <Field label="Cron Expression" hint={describeCron(cronExpr)}>
+      <Field label="Cron expression" hint={describeCron(cronExpr)}>
         <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
       </Field>
-      <Field label={isClaude ? 'Initial Prompt' : 'Message'}>
+      <Field label={isClaude ? 'Initial prompt' : 'Message'}>
         <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={isClaude ? 4 : 2} />
       </Field>
       {isClaude && <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
@@ -538,7 +538,7 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
         <ToggleGroup label="Cadence" value={cadence} onChange={setCadence}
           options={[{ value: 'recurring', label: 'Recurring' }, { value: 'one_time', label: 'One-time' }]} />
         {cadence === 'recurring' ? (
-          <Field label="Cron Expression" hint={describeCron(cronExpr)}>
+          <Field label="Cron expression" hint={describeCron(cronExpr)}>
             <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
           </Field>
         ) : (
@@ -546,7 +546,7 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
             <Input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} />
           </Field>
         )}
-        <Field label={taskType === 'claude_session' ? 'Initial Prompt' : 'Message'}>
+        <Field label={taskType === 'claude_session' ? 'Initial prompt' : 'Message'}>
           <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} />
         </Field>
         {taskType === 'notification'
@@ -769,13 +769,13 @@ const ScheduledTasks = () => {
   const FILTERS: { value: TypeFilter; label: string }[] = [
     { value: 'all', label: 'All' },
     { value: 'notification', label: 'Notifications' },
-    { value: 'claude_session', label: 'Claude Sessions' },
-    { value: 'agent_run', label: 'Agent Runs' },
+    { value: 'claude_session', label: 'Claude sessions' },
+    { value: 'agent_run', label: 'Agent runs' },
   ]
 
   return (
     <Page
-      title="Scheduled Tasks"
+      title="Scheduled tasks"
       description={<span className="flex flex-wrap gap-x-3">
         <span>{enabledCount} active</span>
         {disabledCount > 0 && <span>{disabledCount} disabled</span>}

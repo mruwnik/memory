@@ -120,11 +120,13 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
             </div>
 
             <div className="space-y-4">
-                <Checkbox checked={previews} onChange={(e) => setPreviews(e.target.checked)} label="Include content previews" />
-                <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with a LLM before returning" />
+                <div className="flex flex-col gap-2">
+                    <Checkbox checked={previews} onChange={(e) => setPreviews(e.target.checked)} label="Include content previews" />
+                    <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with a LLM before returning" />
+                </div>
 
-                <Disclosure summary="Search Enhancements">
-                    <div className="space-y-3">
+                <Disclosure summary="Search enhancements">
+                    <div className="flex flex-col gap-3">
                         <Checkbox checked={useBm25} onChange={(e) => setUseBm25(e.target.checked)} label="BM25 keyword search" />
                         <Checkbox checked={useHyde} onChange={(e) => setUseHyde(e.target.checked)} label="HyDE (hypothetical document expansion)" />
                         <Checkbox checked={useReranking} onChange={(e) => setUseReranking(e.target.checked)} label="Reranking (cross-encoder)" />

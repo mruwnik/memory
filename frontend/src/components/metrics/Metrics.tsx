@@ -101,7 +101,7 @@ const Metrics: React.FC = () => {
 
   return (
     <Page
-      title="System Metrics"
+      title="Metrics"
       width="wide"
     >
       <Toolbar actions={<>
@@ -125,19 +125,19 @@ const Metrics: React.FC = () => {
             systemMetrics={systemData?.latest ?? {}}
           />
           <CardGrid>
-            <Card title="System Health" className="lg:col-span-2">
+            <Card title="System health" className="lg:col-span-2">
               {systemData && <SystemHealthChart data={systemData} />}
             </Card>
-            <Card title="Task Performance">
+            <Card title="Task performance">
               <TaskDurationChart data={summary.metrics.filter(m => m.metric_type === 'task')} />
             </Card>
             <Card title="MCP Tool Usage">
               <McpUsageChart data={summary.metrics.filter(m => m.metric_type === 'mcp_call')} />
             </Card>
-            <Card title="Recent Task Executions">
+            <Card title="Recent task executions">
               <EventsTable nameHeader="Task" empty="No task events in this time range" events={taskData?.events ?? []} />
             </Card>
-            <Card title="Recent MCP Calls">
+            <Card title="Recent MCP calls">
               <EventsTable nameHeader="Tool" empty="No MCP calls in this time range" events={mcpData?.events ?? []} />
             </Card>
           </CardGrid>

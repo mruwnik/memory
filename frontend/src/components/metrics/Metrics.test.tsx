@@ -136,11 +136,11 @@ describe('Metrics container', () => {
     mockFetchRoutes(baseRoutes)
     renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('System Health')).toBeInTheDocument())
-    expect(screen.getByText('Task Performance')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('System health')).toBeInTheDocument())
+    expect(screen.getByText('Task performance')).toBeInTheDocument()
     expect(screen.getByText('MCP Tool Usage')).toBeInTheDocument()
-    expect(screen.getByText('Recent Task Executions')).toBeInTheDocument()
-    expect(screen.getByText('Recent MCP Calls')).toBeInTheDocument()
+    expect(screen.getByText('Recent task executions')).toBeInTheDocument()
+    expect(screen.getByText('Recent MCP calls')).toBeInTheDocument()
   })
 
   it('computes summary card aggregates from the metrics list', async () => {
@@ -161,7 +161,7 @@ describe('Metrics container', () => {
     mockFetchRoutes(baseRoutes)
     renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('Recent Task Executions')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Recent task executions')).toBeInTheDocument())
     expect(screen.getByText('1234ms')).toBeInTheDocument()
     expect(screen.getByText('56ms')).toBeInTheDocument()
     expect(screen.getByText('success')).toBeInTheDocument()
@@ -211,7 +211,7 @@ describe('Metrics container', () => {
     const fetchMock = mockFetchRoutes(baseRoutes)
     const { user } = renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('System Health')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('System health')).toBeInTheDocument())
 
     const summaryUrls = () =>
       fetchMock.mock.calls
@@ -231,7 +231,7 @@ describe('Metrics container', () => {
     const fetchMock = mockFetchRoutes(baseRoutes)
     renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('System Health')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('System health')).toBeInTheDocument())
     const systemUrls = fetchMock.mock.calls
       .map((c) => String(c[0]))
       .filter((u) => u.includes('/api/metrics/system'))
@@ -250,7 +250,7 @@ describe('Metrics container', () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval')
     const { user } = renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('System Health')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('System health')).toBeInTheDocument())
     setIntervalSpy.mockClear()
 
     await user.click(screen.getByRole('button', { name: label }))
@@ -266,7 +266,7 @@ describe('Metrics container', () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval')
     renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('System Health')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('System health')).toBeInTheDocument())
     // 'off' is the default; the refresh effect schedules no interval at any of
     // the selectable refresh periods.
     const refreshPeriods = [10000, 30000, 60000, 300000]
@@ -280,7 +280,7 @@ describe('Metrics container', () => {
     mockFetchRoutes(baseRoutes)
     renderWithRouter(<Metrics />)
 
-    await waitFor(() => expect(screen.getByText('Recent Task Executions')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Recent task executions')).toBeInTheDocument())
     const tables = screen.getAllByRole('table')
     expect(within(tables[0]).getByText('email.process')).toBeInTheDocument()
   })

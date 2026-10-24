@@ -81,11 +81,11 @@ export const FeedsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadFeeds} />
 
   return (
-    <Section title="RSS Feeds" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Feed</Button>}>
+    <Section title="RSS feeds" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add feed</Button>}>
       {feeds.length === 0 ? (
         <EmptyState
           message="No RSS feeds configured"
-          actionLabel="Add RSS Feed"
+          actionLabel="Add RSS feed"
           onAction={() => setShowForm(true)}
         />
       ) : (
@@ -160,7 +160,7 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
   }
 
   return (
-    <Modal title={feed ? 'Edit RSS Feed' : 'Add RSS Feed'} onClose={onCancel}>
+    <Modal title={feed ? 'Edit RSS feed' : 'Add RSS feed'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 

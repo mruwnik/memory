@@ -10,16 +10,16 @@ import {
   Cell,
 } from 'recharts'
 import { SessionStatsResponse, SessionStats } from '@/hooks/useTelemetry'
-import { Disclosure, EmptyState, Select, Table } from '@/components/shared/ui'
+import { Badge, Disclosure, EmptyState, Select, Table } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 
 type SortBy = 'tokens' | 'cost' | 'events'
 type UsageCategory = 'high' | 'medium' | 'low'
 
 const sortLabels: Record<SortBy, string> = {
-  tokens: 'Total Tokens',
-  cost: 'Total Cost',
-  events: 'Event Count',
+  tokens: 'Total tokens',
+  cost: 'Total cost',
+  events: 'Event count',
 }
 
 // A sequential scale on the primary colour: heavier usage is darker, and none of it reads as an error.
@@ -30,9 +30,9 @@ const categoryColors: Record<UsageCategory, string> = {
 }
 
 const categoryLabels: Record<UsageCategory, string> = {
-  high: 'High Usage',
-  medium: 'Medium Usage',
-  low: 'Low Usage',
+  high: 'High usage',
+  medium: 'Medium usage',
+  low: 'Low usage',
 }
 
 interface SessionBreakdownChartProps {
@@ -125,17 +125,10 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex gap-2">
           {(['high', 'medium', 'low'] as UsageCategory[]).map((cat) => (
-            <span
-              key={cat}
-              className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full"
-              style={{ backgroundColor: `${categoryColors[cat]}20`, color: categoryColors[cat] }}
-            >
-              <span
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: categoryColors[cat] }}
-              />
+            <Badge key={cat} tone="neutral">
+              <span aria-hidden="true" className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: categoryColors[cat] }} />
               {categoryLabels[cat]}: {categoryCounts[cat]}
-            </span>
+            </Badge>
           ))}
         </div>
         <div className="flex items-center gap-2">

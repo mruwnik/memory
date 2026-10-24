@@ -253,7 +253,7 @@ const PeopleManagement = () => {
           {allTeams.length > 0 && (
             <Select className="w-auto" aria-label="Team" value={teamFilter ?? ''}
               onChange={e => setTeamFilter(e.target.value ? Number(e.target.value) : null)}>
-              <option value="">All Teams</option>
+              <option value="">All teams</option>
               {allTeams.map(team => (
                 <option key={team.id} value={team.id}>{team.name}{team.member_count !== undefined ? ` (${team.member_count})` : ''}</option>
               ))}
@@ -295,7 +295,7 @@ const PeopleManagement = () => {
       {/* Create Person Modal */}
       {showCreateModal && (
         <PersonFormModal
-          title="Add New Person"
+          title="New person"
           onSubmit={handleCreate}
           onCancel={() => {
             setShowCreateModal(false)
@@ -303,14 +303,14 @@ const PeopleManagement = () => {
           }}
           loading={createLoading}
           error={createError}
-          submitLabel="Add Person"
+          submitLabel="Create person"
         />
       )}
 
       {/* Edit Person Modal */}
       {editingPerson && (
         <PersonFormModal
-          title="Edit Person"
+          title="Edit person"
           initialData={editingPerson}
           onSubmit={handleUpdate}
           onCancel={() => {
@@ -319,14 +319,14 @@ const PeopleManagement = () => {
           }}
           loading={editLoading}
           error={editError}
-          submitLabel="Save Changes"
+          submitLabel="Save changes"
           isEdit
         />
       )}
 
       {/* Merge Modal */}
       {showMergeModal && (
-        <Modal title="Merge People" onClose={() => setShowMergeModal(false)}>
+        <Modal title="Merge people" onClose={() => setShowMergeModal(false)}>
           <p className="text-sm text-slate-600 mb-4">
               Merge {selectedForMerge.size} people into one. All tidbits, team memberships, and other
               associations will be moved to the primary person. The other records will be deleted.
@@ -388,7 +388,7 @@ const PeopleManagement = () => {
                 onClick={handleMerge}
                 disabled={mergeLoading || !mergePrimaryId}
               >
-                {mergeLoading ? 'Merging...' : 'Merge People'}
+                {mergeLoading ? 'Merging...' : 'Merge people'}
               </Button>
             </div>
         </Modal>

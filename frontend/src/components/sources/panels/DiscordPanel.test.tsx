@@ -60,7 +60,7 @@ describe('DiscordPanel load states', () => {
     renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
     expect(screen.getByText('Connected')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add to Server' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add to server' })).toBeInTheDocument()
   })
 
   it('renders a disconnected bot when connected is false', async () => {
@@ -81,12 +81,12 @@ describe('DiscordPanel add bot', () => {
     mockFetchRoutes(routes({}))
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText(/No Discord bots configured/)).toBeInTheDocument())
-    await user.click(screen.getAllByRole('button', { name: 'Add Bot' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Add bot' })[0])
     const dialog = await screen.findByRole('dialog')
     // jsdom blocks empty required submit, so fill only one field then submit
     await user.type(within(dialog).getByPlaceholderText('e.g., My Bot'), 'X')
     await user.type(within(dialog).getByPlaceholderText(/Discord bot token/), ' ')
-    await user.click(within(dialog).getByRole('button', { name: 'Add Bot' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
     expect(await within(dialog).findByText('Please fill in all fields')).toBeInTheDocument()
   })
 
@@ -94,11 +94,11 @@ describe('DiscordPanel add bot', () => {
     const mock = mockFetchRoutes(routes({}))
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText(/No Discord bots configured/)).toBeInTheDocument())
-    await user.click(screen.getAllByRole('button', { name: 'Add Bot' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Add bot' })[0])
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByPlaceholderText('e.g., My Bot'), '  My Bot  ')
     await user.type(within(dialog).getByPlaceholderText(/Discord bot token/), 'tok123')
-    await user.click(within(dialog).getByRole('button', { name: 'Add Bot' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
         ([url, init]) => String(url).endsWith('/discord/bots') && (init as RequestInit)?.method === 'POST',
@@ -160,7 +160,7 @@ describe('DiscordPanel bot actions', () => {
     })
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Add to Server' }))
+    await user.click(screen.getByRole('button', { name: 'Add to server' }))
     await waitFor(() => expect(openSpy).toHaveBeenCalledWith('https://discord.com/invite/xyz', '_blank'))
   })
 })
@@ -173,7 +173,7 @@ describe('DiscordPanel servers', () => {
     await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
     expect(await screen.findByText('My Server')).toBeInTheDocument()
     expect(screen.getByText('42 members')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Not Collecting' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Not collecting' })).toBeInTheDocument()
   })
 
   it('toggles server message collection with a PATCH', async () => {
@@ -182,7 +182,7 @@ describe('DiscordPanel servers', () => {
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
     await screen.findByText('My Server')
-    await user.click(screen.getByRole('button', { name: 'Not Collecting' }))
+    await user.click(screen.getByRole('button', { name: 'Not collecting' }))
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/discord/servers/srv-1') && (init as RequestInit)?.method === 'PATCH',
@@ -253,7 +253,7 @@ describe('DiscordPanel server controls', () => {
     })
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Refresh Metadata' }))
+    await user.click(screen.getByRole('button', { name: 'Refresh metadata' }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/discord/bots/bot-1/refresh') && (init as RequestInit)?.method === 'POST',
@@ -370,7 +370,7 @@ describe('DiscordPanel manage users', () => {
     })
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage Users' }))
+    await user.click(screen.getByRole('button', { name: 'Manage users' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('Owner')).toBeInTheDocument()
     expect(within(dialog).getByText('Guest')).toBeInTheDocument()
@@ -392,7 +392,7 @@ describe('DiscordPanel manage users', () => {
     })
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage Users' }))
+    await user.click(screen.getByRole('button', { name: 'Manage users' }))
     const dialog = await screen.findByRole('dialog')
     const removeBtns = within(dialog).getAllByRole('button', { name: 'Remove' })
     await user.click(removeBtns[removeBtns.length - 1])
@@ -412,7 +412,7 @@ describe('DiscordPanel manage users', () => {
     })
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage Users' }))
+    await user.click(screen.getByRole('button', { name: 'Manage users' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByRole('button', { name: 'Remove' })).toBeDisabled()
   })

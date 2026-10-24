@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { SourceRow, TagsInput } from '../shared'
-import { RowError, Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
+import { RowError, Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const TranscriptsPanel = () => {
@@ -85,12 +85,12 @@ export const TranscriptsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
-    <Section title="Transcript Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button>}>
+    <Section title="Transcript accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add account</Button>}>
       {notice}
       {accounts.length === 0 ? (
         <EmptyState
           message="No transcript accounts configured. Connect Fireflies (or another supported provider) to ingest meeting transcripts."
-          actionLabel="Add Transcript Account"
+          actionLabel="Add transcript account"
           onAction={() => setShowForm(true)}
         />
       ) : (
@@ -224,7 +224,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
   // PROVIDERS dict is empty server-side (regression / misconfiguration).
   if (!account && providers.length === 0) {
     return (
-      <Modal title="Add Transcript Account" onClose={onCancel}>
+      <Modal title="Add transcript account" onClose={onCancel}>
         <Notice tone="error">
           No transcript providers are available on the server. Check the
           worker configuration (PROVIDERS dict in
@@ -238,7 +238,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
   }
 
   return (
-    <Modal title={account ? 'Edit Transcript Account' : 'Add Transcript Account'} onClose={onCancel}>
+    <Modal title={account ? 'Edit transcript account' : 'Add transcript account'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -268,7 +268,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
         </Field>
 
         <Field label={<>
-            API Key {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
+            API key {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
           <Input
             type="password"
             value={formData.api_key}
@@ -290,17 +290,9 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
             disabled={formData.clear_webhook_secret}
           />
           {account && account.has_webhook_secret && (
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="clear-webhook-secret"
-                checked={formData.clear_webhook_secret}
-                onChange={e => setFormData({ ...formData, clear_webhook_secret: e.target.checked, webhook_secret: '' })}
-              />
-              <label htmlFor="clear-webhook-secret" className="text-sm text-slate-700">
-                Remove existing webhook secret
-              </label>
-            </div>
+            <Checkbox checked={formData.clear_webhook_secret}
+              onChange={e => setFormData({ ...formData, clear_webhook_secret: e.target.checked, webhook_secret: '' })}
+              label="Remove existing webhook secret" />
           )}
           <Hint>Optional shared secret for webhook HMAC verification.</Hint>
         </Field>

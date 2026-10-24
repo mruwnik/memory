@@ -141,7 +141,7 @@ describe('ClaudeSessions', () => {
   it('shows a loading state then the fleet overview empty state', async () => {
     renderClaude('/ui/claude')
     expect(screen.getByText('Loading...')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     expect(screen.getByText('No active sessions')).toBeInTheDocument()
   })
 
@@ -154,7 +154,7 @@ describe('ClaudeSessions', () => {
   it('shows the orchestrator-offline badge', async () => {
     getOrchestratorStatus.mockResolvedValue({ available: false, socket_path: null })
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Orchestrator Offline')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Orchestrator offline')).toBeInTheDocument())
   })
 
   it('lists active sessions in the sidebar', async () => {
@@ -167,9 +167,9 @@ describe('ClaudeSessions', () => {
   it('opens the new-session form and shows config options', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
-    expect(screen.getByText('Start New Session')).toBeInTheDocument()
+    expect(screen.getByText('Start new session')).toBeInTheDocument()
     expect(screen.getByText('Configuration *')).toBeInTheDocument()
   })
 
@@ -178,7 +178,7 @@ describe('ClaudeSessions', () => {
     listEnvironments.mockResolvedValue([])
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     expect(screen.getByText('No snapshots or environments available')).toBeInTheDocument()
   })
@@ -186,9 +186,9 @@ describe('ClaudeSessions', () => {
   it('spawns a session from the form', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
-    await user.click(screen.getByRole('button', { name: 'Start Session' }))
+    await user.click(screen.getByRole('button', { name: 'Start session' }))
     await waitFor(() => expect(spawnSession).toHaveBeenCalled())
     expect(spawnSession.mock.calls[0][0]).toMatchObject({ environment_id: 3 })
   })
@@ -196,11 +196,11 @@ describe('ClaudeSessions', () => {
   it('requires an initial prompt to schedule a recurring session', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.type(screen.getByPlaceholderText('0 9 * * *'), '0 9 * * *')
     expect(screen.getByText('An initial prompt is required for scheduled sessions.')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Schedule Recurring Session' }))
+    await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
     expect(screen.getByText('Scheduled sessions require an initial prompt')).toBeInTheDocument()
     expect(scheduleSession).not.toHaveBeenCalled()
   })
@@ -208,11 +208,11 @@ describe('ClaudeSessions', () => {
   it('schedules a recurring session when a prompt and cron are set', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.type(screen.getByPlaceholderText('Start Claude with this prompt...'), 'do work')
     await user.click(screen.getByRole('button', { name: 'Daily 9am' }))
-    await user.click(screen.getByRole('button', { name: 'Schedule Recurring Session' }))
+    await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
     await waitFor(() => expect(scheduleSession).toHaveBeenCalled())
     expect(screen.getByText('Schedule created')).toBeInTheDocument()
   })
@@ -220,7 +220,7 @@ describe('ClaudeSessions', () => {
   it('toggles pre-approved tools and persists to localStorage', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     const bashToggle = screen.getByRole('checkbox', { name: 'Bash' })
     expect(bashToggle).toBeChecked()
@@ -239,12 +239,15 @@ describe('ClaudeSessions', () => {
     expect(screen.getByText('claude-abc')).toBeInTheDocument()
   })
 
-  it('kills a session after confirmation', async () => {
+  it.each([
+    ['list row', '/ui/claude', () => screen.getByTitle('Kill session')],
+    ['detail pane', '/ui/claude/u1-e3-abc', () => screen.getByText('Kill session', { selector: 'button' })],
+  ])('kills a session from the %s only after confirmation', async (_, path, killButton) => {
     listSessions.mockResolvedValue([session({ session_id: 'u1-e3-abc' })])
     const user = userEvent.setup()
-    renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('u1-e3-abc')).toBeInTheDocument())
-    await user.click(screen.getByTitle('Kill session'))
+    renderClaude(path)
+    await waitFor(() => expect(screen.getAllByText('u1-e3-abc').length).toBeGreaterThan(0))
+    await user.click(await waitFor(killButton))
     expect(killSession).not.toHaveBeenCalled()
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Kill session' }))
     await waitFor(() => expect(killSession).toHaveBeenCalledWith('u1-e3-abc'))
@@ -257,6 +260,6 @@ describe('ClaudeSessions', () => {
     expect(await screen.findByText('Orchestrator not configured')).toBeInTheDocument()
     expect(screen.queryByText('No active sessions')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(await screen.findByText('Fleet Overview')).toBeInTheDocument()
+    expect(await screen.findByText('Fleet overview')).toBeInTheDocument()
   })
 })

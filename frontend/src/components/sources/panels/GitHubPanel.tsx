@@ -106,13 +106,13 @@ export const GitHubPanel = () => {
                 muted={!account.active}
                 badges={<StatusBadge active={account.active} />}
                 meta={[
-                  account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App',
+                  account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App',
                   account.verified_login ? `verified as ${account.verified_login}` : 'unverified',
                 ]}
               >
                 <SubList
                   title={`Repositories (${account.repos.length})`}
-                  actions={<Button size="sm" onClick={() => setAddingRepoTo(account.id)} disabled={!account.active}>Add Repo</Button>}
+                  actions={<Button size="sm" onClick={() => setAddingRepoTo(account.id)} disabled={!account.active}>Add repo</Button>}
                   empty="No repositories tracked"
                 >
                   {[...account.repos].sort((a, b) => a.repo_path.localeCompare(b.repo_path)).map(repo => (
@@ -139,7 +139,7 @@ export const GitHubPanel = () => {
                 </SubList>
                 <SubList
                   title={`Projects (${projects.length})`}
-                  actions={<Button size="sm" onClick={() => setAddingProjectTo(account.id)} disabled={!account.active}>Add Project</Button>}
+                  actions={<Button size="sm" onClick={() => setAddingProjectTo(account.id)} disabled={!account.active}>Add project</Button>}
                   empty="No projects tracked"
                 >
                   {projects.map(project => (
@@ -237,7 +237,7 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
   }
 
   return (
-    <Modal title="Add GitHub Project" onClose={onCancel}>
+    <Modal title="Add GitHub project" onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -255,7 +255,7 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
         </Field>
 
         <Field>
-          <Label>Owner Type</Label>
+          <Label>Owner type</Label>
           <div className="flex gap-4">
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -288,7 +288,7 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
 
         {owner.trim() && (
           <Field>
-            <Label>Select Project</Label>
+            <Label>Select project</Label>
             <ProjectSelector
               accountId={accountId}
               owner={owner.trim()}
@@ -306,7 +306,7 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
             type="submit"
             disabled={submitting || selectedProject === null}
           >
-            {submitting ? 'Adding...' : 'Add Project'}
+            {submitting ? 'Adding...' : 'Add project'}
           </Button>
         </FormActions>
       </form>
@@ -614,7 +614,7 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
   }
 
   return (
-    <Modal title="Manage Repositories" onClose={onCancel}>
+    <Modal title="Manage repositories" onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -632,9 +632,9 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
               <Label>Track (for new repos):</Label>
               <div className="flex flex-wrap gap-4 mt-2">
                 <Checkbox checked={formData.track_issues} onChange={e => setFormData({ ...formData, track_issues: e.target.checked })} label="Issues" />
-                <Checkbox checked={formData.track_prs} onChange={e => setFormData({ ...formData, track_prs: e.target.checked })} label="Pull Requests" />
+                <Checkbox checked={formData.track_prs} onChange={e => setFormData({ ...formData, track_prs: e.target.checked })} label="Pull requests" />
                 <Checkbox checked={formData.track_comments} onChange={e => setFormData({ ...formData, track_comments: e.target.checked })} label="Comments" />
-                <Checkbox checked={formData.track_project_fields} onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })} label="Project Fields" />
+                <Checkbox checked={formData.track_project_fields} onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })} label="Project fields" />
               </div>
             </Field>
 

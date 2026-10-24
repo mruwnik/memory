@@ -169,14 +169,14 @@ describe('SessionBreakdownChart', () => {
     const row = screen.getByRole('row', { name: /Fix login/ })
     expect(row).toHaveTextContent('Fixed the auth loop')
     expect(row).toHaveTextContent('/code/memory')
-    expect(row).toHaveTextContent('Medium Usage')
+    expect(row).toHaveTextContent('Medium usage')
     expect(row).toHaveTextContent('1.5K')
   })
 
   it('renders category count legend badges', () => {
     render(<SessionBreakdownChart data={makeResponse(tenSessions)} />)
-    expect(screen.getByText(/High Usage:/)).toBeInTheDocument()
-    expect(screen.getByText(/Medium Usage:/)).toBeInTheDocument()
-    expect(screen.getByText(/Low Usage:/)).toBeInTheDocument()
+    expect(screen.getByText(/High usage:/)).toBeInTheDocument()
+    expect(screen.getByText(/Medium usage:/)).toBeInTheDocument()
+    expect(screen.getByText(/Low usage:/)).toBeInTheDocument()
   })
 })

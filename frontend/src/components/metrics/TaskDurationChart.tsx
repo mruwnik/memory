@@ -73,7 +73,7 @@ export const TaskDurationChart: React.FC<TaskDurationChartProps> = ({ data }) =>
             const item = props.payload
             return [
               `${value}ms (${item.count} calls, ${item.successRate}% success)`,
-              'Avg Duration',
+              'Avg duration',
             ]
           }}
           labelFormatter={(label: string, payload: Array<{ payload: ChartDataPoint }>) => {
@@ -83,7 +83,7 @@ export const TaskDurationChart: React.FC<TaskDurationChartProps> = ({ data }) =>
             return label
           }}
         />
-        <Bar dataKey="avgDuration" name="Avg Duration" radius={[0, 4, 4, 0]}>
+        <Bar dataKey="avgDuration" name="Avg duration" radius={[0, 4, 4, 0]}>
           {chartData.map((entry, index) => (
             <Cell
               key={`cell-${index}`}

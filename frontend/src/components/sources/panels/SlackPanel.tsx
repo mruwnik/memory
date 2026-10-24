@@ -158,7 +158,7 @@ export const SlackPanel = () => {
   const unfinishedApps = apps.filter(app => app.is_owner && !EVENTS_LIVE.includes(app.setup_state) && !connectedAppIds.has(app.id))
 
   const body = loading && !loaded ? <LoadingState /> : error ? <ErrorState message={error} onRetry={loadData} /> : (
-    <Section title="Slack" actions={<Button variant="primary" onClick={handleConnect}>Connect Workspace</Button>}>
+    <Section title="Slack" actions={<Button variant="primary" onClick={handleConnect}>Connect workspace</Button>}>
       {notice}
 
       {unfinishedApps.length > 0 && (
@@ -202,7 +202,7 @@ export const SlackPanel = () => {
       ) : unfinishedApps.length === 0 && (
         <EmptyState
           message="No Slack workspaces connected. Connect a workspace to start collecting messages."
-          actionLabel="Connect Workspace"
+          actionLabel="Connect workspace"
           onAction={handleConnect}
         />
       )}
@@ -337,7 +337,7 @@ const WorkspaceRow = ({
             Finish event setup
           </Button>
         ))}
-        <SyncButton onSync={onSync} label="Sync Now" />
+        <SyncButton onSync={onSync} label="Sync now" />
         <ConfirmButton confirm={`Disconnect "${workspace.name}"? This will stop collecting messages from this workspace.`} onConfirm={onDisconnect}>Disconnect</ConfirmButton>
       </>}
     >

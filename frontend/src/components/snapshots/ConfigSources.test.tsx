@@ -99,7 +99,7 @@ describe('ConfigSources create environment', () => {
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByText('No environments yet')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New environment' }))
-    const heading = await screen.findByText('Create Environment')
+    const heading = await screen.findByRole('heading', { name: 'New environment' })
     const modal = heading.closest('div')!.parentElement as HTMLElement
     const createBtn = within(modal).getByRole('button', { name: 'Create' })
     expect(createBtn).toBeDisabled()
@@ -185,8 +185,8 @@ describe('ConfigSources reset environment', () => {
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByText('Dev Env')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Reset' }))
-    expect(await screen.findByRole('heading', { name: 'Reset Environment' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Reset Environment' }))
+    expect(await screen.findByRole('heading', { name: 'Reset environment' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Reset environment' }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/claude/environments/100/reset') && (init as RequestInit)?.method === 'POST',

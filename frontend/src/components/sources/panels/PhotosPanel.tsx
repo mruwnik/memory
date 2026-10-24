@@ -107,7 +107,7 @@ export const PhotosPanel = () => {
   return (
     <Section title="Photos" description={`${photos.length} photos`} actions={
           <label className={buttonClass('primary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
-            {uploading ? 'Uploading...' : 'Upload Photos'}
+            {uploading ? 'Uploading...' : 'Upload photos'}
             <input
               ref={fileInputRef}
               type="file"
@@ -125,7 +125,7 @@ export const PhotosPanel = () => {
       {photos.length === 0 ? (
         <EmptyState
           message="No photos indexed yet"
-          actionLabel="Upload Photos"
+          actionLabel="Upload photos"
           onAction={() => fileInputRef.current?.click()}
         />
       ) : (

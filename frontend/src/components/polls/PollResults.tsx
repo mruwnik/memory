@@ -175,7 +175,7 @@ export const PollResults: React.FC = () => {
                       }}
                       disabled={actionLoading}
                     >
-                      Finalize Poll
+                      Finalize poll
                     </button>
                     <button
                       type="button"
@@ -183,7 +183,7 @@ export const PollResults: React.FC = () => {
                       onClick={handleClosePoll}
                       disabled={actionLoading}
                     >
-                      Close Poll
+                      Close poll
                     </button>
                   </>
                 )}
@@ -198,7 +198,7 @@ export const PollResults: React.FC = () => {
                       }}
                       disabled={actionLoading}
                     >
-                      Finalize Poll
+                      Finalize poll
                     </button>
                     <button
                       type="button"
@@ -206,7 +206,7 @@ export const PollResults: React.FC = () => {
                       onClick={handleReopenPoll}
                       disabled={actionLoading}
                     >
-                      Reopen Poll
+                      Reopen poll
                     </button>
                   </>
                 )}
@@ -215,7 +215,7 @@ export const PollResults: React.FC = () => {
                   className="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
                   onClick={() => setShowManageMenu(false)}
                 >
-                  Edit Poll
+                  Edit poll
                 </Link>
                 {poll.status !== 'cancelled' && (
                   <>
@@ -229,7 +229,7 @@ export const PollResults: React.FC = () => {
                       }}
                       disabled={actionLoading}
                     >
-                      Cancel Poll
+                      Cancel poll
                     </button>
                   </>
                 )}
@@ -243,7 +243,7 @@ export const PollResults: React.FC = () => {
 
         {/* Finalize Modal */}
         {showFinalizeModal && (
-          <Modal title="Finalize Poll" onClose={() => setShowFinalizeModal(false)} size="md">
+          <Modal title="Finalize poll" onClose={() => setShowFinalizeModal(false)} size="md">
             <p className="text-slate-600 mb-4">Select a time to schedule the meeting:</p>
 
               {bestSlots.length > 0 ? (
@@ -289,7 +289,7 @@ export const PollResults: React.FC = () => {
 
         {/* Cancel Confirmation Modal */}
         {showCancelConfirm && (
-          <Modal title="Cancel Poll" onClose={() => setShowCancelConfirm(false)} size="md">
+          <Modal title="Cancel poll" onClose={() => setShowCancelConfirm(false)} size="md">
             <p className="text-slate-600 mb-2">Are you sure you want to cancel "{poll.title}"?</p>
               <p className="text-sm text-amber-600 mb-4">The poll will be marked as cancelled and will no longer accept responses.</p>
 
@@ -298,14 +298,14 @@ export const PollResults: React.FC = () => {
                   type="button"
                   onClick={() => setShowCancelConfirm(false)}
                 >
-                  Keep Open
+                  Keep open
                 </Button>
                 <Button variant="dangerSolid"
                   type="button"
                   onClick={handleCancelPoll}
                   disabled={actionLoading}
                 >
-                  {actionLoading ? 'Cancelling...' : 'Cancel Poll'}
+                  {actionLoading ? 'Cancelling...' : 'Cancel poll'}
                 </Button>
               </div>
           </Modal>
@@ -314,7 +314,7 @@ export const PollResults: React.FC = () => {
         {/* Finalized Banner */}
         {poll.finalized_time && (
           <Notice tone="success">
-            <h2 className="font-semibold">Meeting Scheduled</h2>
+            <h2 className="font-semibold">Meeting scheduled</h2>
             <p className="text-lg">
               {new Date(poll.finalized_time).toLocaleString('en-US', {
                 timeZone: displayTimezone,
@@ -332,11 +332,11 @@ export const PollResults: React.FC = () => {
         {/* Summary Stats */}
         <StatGrid>
           <Stat label="Responses" value={responseCount} />
-          {displayBestSlots.length > 0 && <Stat label="Max Available" value={displayBestSlots[0].available_count} />}
+          {displayBestSlots.length > 0 && <Stat label="Max available" value={displayBestSlots[0].available_count} />}
         </StatGrid>
 
         {displayBestSlots.length > 0 && (
-          <Section title="Best Times">
+          <Section title="Best times">
             <List>
               {displayBestSlots.map((slot, i) => (
                 <Row key={i} title={formatSlot(slot)}
@@ -347,7 +347,7 @@ export const PollResults: React.FC = () => {
         )}
 
         {/* Availability Heatmap */}
-        <Card title="Availability Heatmap">
+        <Card title="Availability heatmap">
           <PollGrid
             datetimeStart={new Date(poll.datetime_start)}
             datetimeEnd={new Date(poll.datetime_end)}
@@ -362,7 +362,7 @@ export const PollResults: React.FC = () => {
           <div className="flex items-center justify-center gap-2 mt-4 text-sm text-slate-600">
             <span>Fewer</span>
             <div className="w-24 h-3 bg-gradient-to-r from-slate-100 via-green-200 to-green-500 rounded" />
-            <span>More Available</span>
+            <span>More available</span>
           </div>
         </Card>
 
@@ -383,7 +383,7 @@ export const PollResults: React.FC = () => {
             <ButtonLink variant="primary"
               to={`/ui/polls/respond/${slug}`}
             >
-              Add Your Availability
+              Add your availability
             </ButtonLink>
           )}
           <Button
@@ -393,7 +393,7 @@ export const PollResults: React.FC = () => {
               navigator.clipboard.writeText(url)
             }}
           >
-            Copy Share Link
+            Copy share link
           </Button>
         </div>
     </Page>

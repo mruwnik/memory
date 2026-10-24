@@ -195,9 +195,9 @@ export const PollRespond: React.FC = () => {
                 type="button"
                 onClick={() => setSubmitted(false)}
               >
-                Edit Response
+                Edit response
               </Button>
-              <ButtonLink to={`/ui/polls/results/${slug}`}>View Results</ButtonLink>
+              <ButtonLink to={`/ui/polls/results/${slug}`}>View results</ButtonLink>
             </div>
           </div>
       </Page>
@@ -214,7 +214,7 @@ export const PollRespond: React.FC = () => {
           {/* Name and Timezone */}
           <Card>
             <FieldRow>
-              <Field label="Your Name *">
+              <Field label="Your name *">
                 <Input
                   type="text"
                   id="respondentName"
@@ -225,7 +225,7 @@ export const PollRespond: React.FC = () => {
                 />
               </Field>
 
-              <Field label="Your Timezone">
+              <Field label="Your timezone">
                 <Select
                   id="displayTimezone"
                   value={displayTimezone}
@@ -243,9 +243,9 @@ export const PollRespond: React.FC = () => {
           </Card>
 
           {/* Availability Level Selector */}
-          <Card title="Availability Level" description="Click and drag on the grid to mark your availability">
+          <Card title="Availability level" description="Click and drag on the grid to mark your availability">
             <ToggleGroup label="Availability level" value={String(currentLevel)} onChange={v => setCurrentLevel(Number(v) as typeof currentLevel)}
-              options={[{ value: '1', label: 'Available' }, { value: '2', label: 'If Needed' }]} />
+              options={[{ value: '1', label: 'Available' }, { value: '2', label: 'If needed' }]} />
           </Card>
 
           {/* Grid */}
@@ -269,7 +269,7 @@ export const PollRespond: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <span className="w-4 h-4 rounded bg-yellow-400" />
-              <span className="text-slate-600">If Needed</span>
+              <span className="text-slate-600">If needed</span>
             </div>
           </div>
 
@@ -279,7 +279,7 @@ export const PollRespond: React.FC = () => {
               type="submit"
               disabled={isSubmitting || !respondentName.trim()}
             >
-              {isSubmitting ? 'Submitting...' : isEditMode ? 'Update Availability' : 'Submit Availability'}
+              {isSubmitting ? 'Submitting...' : isEditMode ? 'Update availability' : 'Submit availability'}
             </Button>
           </div>
         </form>

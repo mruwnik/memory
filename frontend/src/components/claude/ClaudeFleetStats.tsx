@@ -16,7 +16,7 @@ import {
   type Environment,
 } from '../../hooks/useClaude'
 import { useUsers, type User } from '../../hooks/useUsers'
-import { Badge, Card, LoadingState, Notice } from '@/components/shared/ui'
+import { Badge, Card, EmptyState, LoadingState, Notice, Section, Table } from '@/components/shared/ui'
 
 const REFRESH_MS = 10_000
 const HISTORY_MAX = 240 // ~2h at 30s cadence
@@ -172,7 +172,7 @@ const ContainerRow: React.FC<{
   // Non-clickable rows are visible (so admins can see what's running) but
   // muted, since /claude/list only returns sessions the caller owns —
   // navigating to one would land on an empty details panel.
-  const baseCls = 'border-b border-slate-100 transition-colors'
+  const baseCls = 'transition-colors'
   const stateCls = !clickable
     ? 'opacity-60 cursor-not-allowed'
     : selected
@@ -432,20 +432,18 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
     <div className="space-y-4">
       {snap.global && <GlobalSummary snap={snap} />}
 
-      <Card flush className="overflow-hidden" title={<>Containers <span className="text-slate-500 font-normal">({containers.length})</span></>}
+      <Section title={<>Containers <span className="text-slate-500 font-normal">({containers.length})</span></>}
         actions={<span className="text-xs text-slate-600 font-mono">updated {new Date(snap.ts).toLocaleTimeString()}</span>}>
         {containers.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-slate-600 text-center border-t border-slate-200">
-            No containers running.
-          </div>
+          <EmptyState message="No containers running." />
         ) : (
-          <table className="w-full" role="grid" aria-label="Running containers">
-            <thead className="bg-slate-50 text-left">
-              <tr className="text-xs text-slate-500 uppercase tracking-wider">
-                <th className="px-3 py-2 font-medium">Session</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium text-right">CPU</th>
-                <th className="px-3 py-2 font-medium text-right">Memory</th>
+          <Table role="grid" aria-label="Running containers">
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Status</th>
+                <th className="text-right">CPU</th>
+                <th className="text-right">Memory</th>
               </tr>
             </thead>
             <tbody>
@@ -467,9 +465,9 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
                 )
               })}
             </tbody>
-          </table>
+          </Table>
         )}
-      </Card>
+      </Section>
     </div>
   )
 }

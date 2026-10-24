@@ -7,8 +7,8 @@ describe('TelemetrySummaryCards', () => {
     render(
       <TelemetrySummaryCards totalTokens={0} totalCost={0} totalSessions={0} eventCount={0} />,
     )
-    expect(screen.getByText('Total Tokens')).toBeInTheDocument()
-    expect(screen.getByText('Total Cost')).toBeInTheDocument()
+    expect(screen.getByText('Total tokens')).toBeInTheDocument()
+    expect(screen.getByText('Total cost')).toBeInTheDocument()
     expect(screen.getByText('Sessions')).toBeInTheDocument()
     expect(screen.getByText('Events')).toBeInTheDocument()
     expect(screen.getByText('Input + Output')).toBeInTheDocument()

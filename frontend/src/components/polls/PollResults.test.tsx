@@ -153,7 +153,7 @@ describe('PollResults - rendering', () => {
       }),
     })
     renderResults()
-    expect(await screen.findByText('Best Times')).toBeInTheDocument()
+    expect(await screen.findByText('Best times')).toBeInTheDocument()
     expect(screen.getByText(/4 available/)).toBeInTheDocument()
     expect(screen.getByText(/\+2 if needed/)).toBeInTheDocument()
   })
@@ -165,7 +165,7 @@ describe('PollResults - rendering', () => {
       }),
     })
     renderResults()
-    expect(await screen.findByText('Meeting Scheduled')).toBeInTheDocument()
+    expect(await screen.findByText('Meeting scheduled')).toBeInTheDocument()
   })
 
   it('shows the add-availability link only when the poll is open', async () => {
@@ -173,7 +173,7 @@ describe('PollResults - rendering', () => {
     renderResults()
     await screen.findByRole('heading', { name: /^Results Poll/ })
     expect(
-      screen.getByRole('link', { name: 'Add Your Availability' }),
+      screen.getByRole('link', { name: 'Add your availability' }),
     ).toHaveAttribute('href', '/ui/polls/respond/results-me')
   })
 
@@ -182,7 +182,7 @@ describe('PollResults - rendering', () => {
     renderResults()
     await screen.findByRole('heading', { name: /^Results Poll/ })
     expect(
-      screen.queryByRole('link', { name: 'Add Your Availability' }),
+      screen.queryByRole('link', { name: 'Add your availability' }),
     ).not.toBeInTheDocument()
   })
 })
@@ -194,7 +194,7 @@ describe('PollResults - share link', () => {
     await screen.findByRole('heading', { name: /^Results Poll/ })
     // userEvent already provides a clipboard stub on navigator; spy on it.
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
-    await user.click(screen.getByRole('button', { name: 'Copy Share Link' }))
+    await user.click(screen.getByRole('button', { name: 'Copy share link' }))
     expect(writeText).toHaveBeenCalledWith(
       expect.stringContaining('/ui/polls/respond/results-me'),
     )
@@ -228,15 +228,15 @@ describe('PollResults - management actions (authenticated)', () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'open' }) }) })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    expect(screen.getByRole('button', { name: 'Finalize Poll' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Close Poll' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Finalize poll' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close poll' })).toBeInTheDocument()
   })
 
   it('shows Reopen option for a closed poll', async () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'closed' }) }) })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    expect(screen.getByRole('button', { name: 'Reopen Poll' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reopen poll' })).toBeInTheDocument()
   })
 
   it('closes the poll and updates the status badge', async () => {
@@ -247,7 +247,7 @@ describe('PollResults - management actions (authenticated)', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Close Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Close poll' }))
     expect(await screen.findByText('closed')).toBeInTheDocument()
   })
 
@@ -259,7 +259,7 @@ describe('PollResults - management actions (authenticated)', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Reopen Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Reopen poll' }))
     expect(await screen.findByText('open')).toBeInTheDocument()
   })
 
@@ -271,7 +271,7 @@ describe('PollResults - management actions (authenticated)', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Close Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Close poll' }))
     expect(
       await screen.findByText(/MCP polling_upsert_poll failed|close failed/),
     ).toBeInTheDocument()
@@ -294,7 +294,7 @@ describe('PollResults - finalize modal', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Finalize Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Finalize poll' }))
     expect(screen.getByText('Select a time to schedule the meeting:')).toBeInTheDocument()
     const finalizeBtn = screen.getByRole('button', { name: 'Finalize' })
     expect(finalizeBtn).toBeDisabled()
@@ -314,10 +314,10 @@ describe('PollResults - finalize modal', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Finalize Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Finalize poll' }))
     await user.click(screen.getByRole('radio'))
     await user.click(screen.getByRole('button', { name: 'Finalize' }))
-    expect(await screen.findByText('Meeting Scheduled')).toBeInTheDocument()
+    expect(await screen.findByText('Meeting scheduled')).toBeInTheDocument()
   })
 
   it('shows the no-responses hint when there are no best slots', async () => {
@@ -327,7 +327,7 @@ describe('PollResults - finalize modal', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Finalize Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Finalize poll' }))
     expect(
       screen.getByText(/No responses yet. You can still finalize with a custom time./),
     ).toBeInTheDocument()
@@ -347,10 +347,10 @@ describe('PollResults - cancel modal', () => {
     })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Cancel Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel poll' }))
     // Confirmation modal appears.
     expect(screen.getByText(/Are you sure you want to cancel/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Cancel Poll' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel poll' }))
     expect(await screen.findByText('cancelled')).toBeInTheDocument()
   })
 
@@ -358,8 +358,8 @@ describe('PollResults - cancel modal', () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'open' }) }) })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    await user.click(screen.getByRole('button', { name: 'Cancel Poll' }))
-    await user.click(screen.getByRole('button', { name: 'Keep Open' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel poll' }))
+    await user.click(screen.getByRole('button', { name: 'Keep open' }))
     expect(screen.queryByText(/Are you sure you want to cancel/)).not.toBeInTheDocument()
     expect(screen.getByText('open')).toBeInTheDocument()
   })
@@ -368,6 +368,6 @@ describe('PollResults - cancel modal', () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'cancelled' }) }) })
     const { user } = renderResults()
     await user.click(await screen.findByRole('button', { name: /Manage Poll/ }))
-    expect(screen.queryByRole('button', { name: 'Cancel Poll' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel poll' })).not.toBeInTheDocument()
   })
 })

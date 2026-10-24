@@ -69,7 +69,7 @@ describe('Jobs page', () => {
       makeJob({ id: 2, status: 'complete' }),
     ])
     renderWithRouter(<Jobs />)
-    await waitFor(() => expect(screen.getByText('Blog Sync')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Blog sync')).toBeInTheDocument())
     expect(screen.getByText('1 failed')).toBeInTheDocument()
     expect(screen.getByText('1 complete')).toBeInTheDocument()
     expect(screen.getByText('bad')).toBeInTheDocument()

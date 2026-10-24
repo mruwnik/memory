@@ -110,7 +110,7 @@ describe('GoogleDrivePanel - load states', () => {
     renderWithUser(<GoogleDrivePanel />)
     expect(await screen.findByText('me@example.com')).toBeInTheDocument()
     expect(screen.getByText('No folders configured for sync')).toBeInTheDocument()
-    expect(screen.getByText('Synced Folders (0)')).toBeInTheDocument()
+    expect(screen.getByText('Synced folders (0)')).toBeInTheDocument()
   })
 
   it('renders folder badges and an account sync error', async () => {
@@ -172,7 +172,7 @@ describe('GoogleDrivePanel - Add by ID form', () => {
     await user.click(screen.getByRole('button', { name: 'Add by ID' }))
     await user.type(screen.getByPlaceholderText('From Google Drive URL'), 'fid-123')
     await user.type(screen.getByPlaceholderText('My Documents'), 'My Folder')
-    await user.click(screen.getByRole('button', { name: 'Add Folder' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder' }))
 
     await waitFor(() =>
       expect(addGoogleFolder).toHaveBeenCalledWith(
@@ -190,7 +190,7 @@ describe('GoogleDrivePanel - Add by ID form', () => {
     await user.click(screen.getByRole('button', { name: 'Add by ID' }))
     await user.type(screen.getByPlaceholderText('From Google Drive URL'), 'fid')
     await user.type(screen.getByPlaceholderText('My Documents'), 'F')
-    await user.click(screen.getByRole('button', { name: 'Add Folder' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder' }))
 
     expect(await screen.findByText('dup folder')).toBeInTheDocument()
   })
@@ -200,38 +200,38 @@ describe('GoogleDrivePanel - Add by ID form', () => {
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Add by ID' }))
-    expect(screen.getByText('Add Google Drive Folder')).toBeInTheDocument()
+    expect(screen.getByText('Add Google Drive folder')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.queryByText('Add Google Drive Folder')).not.toBeInTheDocument()
+    expect(screen.queryByText('Add Google Drive folder')).not.toBeInTheDocument()
   })
 })
 
-describe('GoogleDrivePanel - Browse & Add', () => {
+describe('GoogleDrivePanel - Browse & add', () => {
   beforeEach(() => listGoogleAccounts.mockResolvedValue([acct()]))
 
   it('lists drive items and disables Add Selected with nothing chosen', async () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
-    await user.click(screen.getByRole('button', { name: 'Browse & Add' }))
+    await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     expect(await screen.findByText('Folder One')).toBeInTheDocument()
     expect(browseGoogleDrive).toHaveBeenCalledWith(1, 'root')
     expect(screen.getByText('0 items selected')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add Selected' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add selected' })).toBeDisabled()
   })
 
   it('selecting an item and adding calls addGoogleFolder per selection', async () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
-    await user.click(screen.getByRole('button', { name: 'Browse & Add' }))
+    await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     await screen.findByText('Folder One')
 
     const checkboxes = screen.getAllByRole('checkbox')
     await user.click(checkboxes[0]) // select the folder
     expect(screen.getByText('1 item selected')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Add Selected' }))
+    await user.click(screen.getByRole('button', { name: 'Add selected' }))
     await waitFor(() =>
       expect(addGoogleFolder).toHaveBeenCalledWith(
         1,
@@ -247,7 +247,7 @@ describe('GoogleDrivePanel - Browse & Add', () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
-    await user.click(screen.getByRole('button', { name: 'Browse & Add' }))
+    await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     expect(await screen.findByText('This folder is empty')).toBeInTheDocument()
   })
 
@@ -256,7 +256,7 @@ describe('GoogleDrivePanel - Browse & Add', () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
-    await user.click(screen.getByRole('button', { name: 'Browse & Add' }))
+    await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     expect(await screen.findByText('browse failed')).toBeInTheDocument()
   })
 
@@ -264,7 +264,7 @@ describe('GoogleDrivePanel - Browse & Add', () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
-    await user.click(screen.getByRole('button', { name: 'Browse & Add' }))
+    await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     await screen.findByText('Folder One')
 
     const arrow = document.querySelector('button[title="Browse folder"]') as HTMLButtonElement
@@ -285,8 +285,8 @@ describe('GoogleDrivePanel - Exclusions', () => {
     await screen.findByText('Docs')
 
     await user.click(screen.getByRole('button', { name: 'Exclusions' }))
-    expect(await screen.findByText('Manage Exclusions: Docs')).toBeInTheDocument()
-    expect(screen.getByText('Excluded Folders (1)')).toBeInTheDocument()
+    expect(await screen.findByText('Manage exclusions: Docs')).toBeInTheDocument()
+    expect(screen.getByText('Excluded folders (1)')).toBeInTheDocument()
   })
 
   it('saving sends the set of excluded ids', async () => {
@@ -301,7 +301,7 @@ describe('GoogleDrivePanel - Exclusions', () => {
     const checkboxes = within(dialog).getAllByRole('checkbox')
     await user.click(checkboxes[0])
 
-    await user.click(screen.getByRole('button', { name: 'Save Exclusions' }))
+    await user.click(screen.getByRole('button', { name: 'Save exclusions' }))
     await waitFor(() =>
       expect(updateGoogleFolder).toHaveBeenCalledWith(
         1,

@@ -91,12 +91,12 @@ export const PollCreate: React.FC = () => {
   }
 
   return (
-    <Page back={{ to: '/ui/polls', label: 'Polls' }} title="Create Availability Poll" width="narrow">
+    <Page back={{ to: '/ui/polls', label: 'Polls' }} title="New poll" width="narrow">
       <Card>
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Poll Title *">
+        <Field label="Poll title *">
           <Input
             type="text"
             id="title"
@@ -120,7 +120,7 @@ export const PollCreate: React.FC = () => {
         </Field>
 
         <FieldRow>
-          <Field label="Start Date *">
+          <Field label="Start date *">
             <Input
               type="date"
               id="date_start"
@@ -131,7 +131,7 @@ export const PollCreate: React.FC = () => {
             />
           </Field>
 
-          <Field label="End Date *">
+          <Field label="End date *">
             <Input
               type="date"
               id="date_end"
@@ -144,7 +144,7 @@ export const PollCreate: React.FC = () => {
         </FieldRow>
 
         <FieldRow>
-          <Field label="Start Hour">
+          <Field label="Start hour">
             <Select
               id="time_start"
               name="time_start"
@@ -157,7 +157,7 @@ export const PollCreate: React.FC = () => {
             </Select>
           </Field>
 
-          <Field label="End Hour">
+          <Field label="End hour">
             <Select
               id="time_end"
               name="time_end"
@@ -172,7 +172,7 @@ export const PollCreate: React.FC = () => {
         </FieldRow>
 
         <FieldRow>
-          <Field label="Time Slot Duration">
+          <Field label="Time slot duration">
             <Select
               id="slot_duration"
               name="slot_duration"
@@ -185,7 +185,7 @@ export const PollCreate: React.FC = () => {
             </Select>
           </Field>
 
-          <Field label="Your Timezone">
+          <Field label="Your timezone">
             <Select
               id="timezone"
               name="timezone"
@@ -217,7 +217,7 @@ export const PollCreate: React.FC = () => {
             type="submit"
             disabled={isSubmitting || !formData.title}
           >
-            {isSubmitting ? 'Creating...' : 'Create Poll'}
+            {isSubmitting ? 'Creating...' : 'Create poll'}
           </Button>
         </div>
       </form>

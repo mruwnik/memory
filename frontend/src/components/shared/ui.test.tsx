@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ConfirmButton, Field, Input, Modal, SplitView, useActionNotice } from './ui'
+import { ConfirmButton, Field, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -80,5 +80,17 @@ describe('useActionNotice', () => {
     render(<Harness action={action} />)
     await act(() => userEvent.setup().click(screen.getByRole('button', { name: 'Go' })))
     expect(screen.getByRole(role)).toHaveTextContent(text)
+  })
+})
+
+describe('Tabs', () => {
+  it('scrolls the selected tab into view on mount and on change', () => {
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const options = [{ value: 'a', label: 'A' }, { value: 'z', label: 'Z' }]
+    const { rerender } = render(<Tabs label="T" options={options} value="z" onChange={vi.fn()} />)
+    expect(scroll.mock.contexts.at(-1)).toBe(screen.getByRole('tab', { name: 'Z' }))
+    rerender(<Tabs label="T" options={options} value="a" onChange={vi.fn()} />)
+    expect(scroll.mock.contexts.at(-1)).toBe(screen.getByRole('tab', { name: 'A' }))
+    scroll.mockRestore()
   })
 })

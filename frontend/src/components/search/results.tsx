@@ -64,7 +64,7 @@ const KINDS: { match: string; title: (r: SearchItem) => string; body: (r: Search
         title: r => r.filename,
         body: r => <>
             <a href={fileUrl(r.filename)} className="text-primary hover:underline">View PDF</a>
-            {r.content && <Disclosure summary="View Source"><Markdown>{r.content}</Markdown></Disclosure>}
+            {r.content && <Disclosure summary="View source"><Markdown>{r.content}</Markdown></Disclosure>}
         </>,
     },
     {

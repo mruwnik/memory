@@ -23,7 +23,7 @@ describe('visibleSections', () => {
   it('hides scoped items the user lacks', () => {
     const titles = visibleSections(() => false).flatMap(s => s.items.map(i => i.title))
     expect(titles).not.toContain('Agents')
-    expect(titles).not.toContain('User Management')
+    expect(titles).not.toContain('User management')
     expect(titles).toContain('Search')
   })
 

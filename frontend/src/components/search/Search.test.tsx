@@ -43,13 +43,13 @@ describe('Search', () => {
   it('renders the header', () => {
     installFetch()
     renderWithRouter(<Search />)
-    expect(screen.getByRole('heading', { name: /Search Knowledge Base/ })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Search' })).toBeInTheDocument()
   })
 
-  it('shows the empty state initially', () => {
+  it('shows no empty state before the first search', () => {
     installFetch()
     renderWithRouter(<Search />)
-    expect(screen.getByText('No results found')).toBeInTheDocument()
+    expect(screen.queryByText('No results found')).not.toBeInTheDocument()
   })
 
   it('renders results returned from a search', async () => {
@@ -78,15 +78,13 @@ describe('Search', () => {
     await waitFor(() => expect(screen.getByText('No results found')).toBeInTheDocument())
   })
 
-  it('clears results and logs on a search error', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('shows the failure instead of an empty result on a search error', async () => {
     installFetch({ searchFails: true })
     const { user } = renderWithRouter(<Search />)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
-    await waitFor(() => expect(errSpy).toHaveBeenCalledWith('Search error:', expect.anything()))
-    expect(screen.getByText('No results found')).toBeInTheDocument()
-    errSpy.mockRestore()
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    expect(screen.queryByText('No results found')).not.toBeInTheDocument()
   })
 
   it('does not search when the query is only whitespace', async () => {

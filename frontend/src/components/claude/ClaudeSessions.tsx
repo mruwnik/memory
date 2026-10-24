@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, AttachInfo, ScheduleResponse, PaneInfo, ContainerStats, getLogStreamUrl, getDifferUrl } from '../../hooks/useClaude'
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import ClaudeFleetStats, { SessionStatsPanel, sessionDisplay } from './ClaudeFleetStats'
-import { Badge, Button, ConfirmButton, DetailList, Disclosure, Field, Input, Label, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Input, Label, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -36,6 +36,8 @@ interface ScreenMessage {
   panes?: PaneInfo[]
   stats?: ContainerStats | null
 }
+
+const KILL_CONFIRM = 'Kill this session? The container will be stopped and removed.'
 
 const STATUS_TONES: Record<string, Tone> = {
   running: 'success',
@@ -506,7 +508,7 @@ const ClaudeSessions = () => {
   const fleet = (
             <div className="max-w-4xl p-4 md:p-6">
               <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
-                <h2 className="text-lg font-semibold text-slate-800">Fleet Overview</h2>
+                <h2 className="text-lg font-semibold text-slate-800">Fleet overview</h2>
                 <p className="text-sm text-slate-600">
                   Select a session for details, or click a row below to see its history.
                 </p>
@@ -521,21 +523,25 @@ const ClaudeSessions = () => {
             </div>
   )
 
+  const fleetDown = !!loadError || orchestratorAvailable === false
+  const offlineId = useId()
+
   return (
     <Page
-      title={<>Claude Sessions{orchestratorAvailable === false && <Badge tone="danger">Orchestrator Offline</Badge>}</>}
+      title={<>Claude sessions{orchestratorAvailable === false && <Badge id={offlineId} tone="danger">Orchestrator offline</Badge>}</>}
       width="full"
       fill
       loading={loading}
       error={loadError}
       onRetry={loadInitialData}
-      actions={<Button variant="primary" onClick={handleNewSession}>New session</Button>}
+      actions={<Button variant="primary" onClick={handleNewSession} disabled={fleetDown}
+        aria-describedby={orchestratorAvailable === false ? offlineId : undefined}>New session</Button>}
     >
       <div className="h-full flex flex-col gap-4">
       {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
       <div className="flex-1 min-h-0">
       <SplitView
-        listTitle="Active Sessions"
+        listTitle="Active sessions"
         list={sessions.length === 0 ? (
           <p className="p-4 text-sm text-slate-600 text-center">No active sessions</p>
         ) : (
@@ -548,7 +554,7 @@ const ClaudeSessions = () => {
                 selected={selectedSession?.session_id === session.session_id}
                 badges={<Badge tone={STATUS_TONES[session.status?.toLowerCase() ?? ''] ?? 'neutral'}>{session.status || 'unknown'}</Badge>}
                 actions={
-                  <ConfirmButton variant="ghost" confirm="Kill this session? The container will be stopped and removed."
+                  <ConfirmButton variant="ghost" confirm={KILL_CONFIRM}
                     confirmLabel="Kill session" onConfirm={() => handleKillSession(session.session_id)}
                     disabled={killingId === session.session_id} title="Kill session" aria-label={`Kill session ${session.session_id}`}>
                     {killingId === session.session_id ? '...' : <span aria-hidden="true">&times;</span>}
@@ -564,7 +570,7 @@ const ClaudeSessions = () => {
         detail={
           showNewSession ? (
             <>
-            <PaneHeader title="Start New Session" />
+            <PaneHeader title="Start new session" />
             <div className="flex-1 overflow-y-auto p-4 md:p-6">
             <div className="max-w-xl">
 
@@ -669,21 +675,11 @@ const ClaudeSessions = () => {
                   </Field>
 
                   {/* Playwright toggle */}
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      id="enable-playwright"
-                      checked={enablePlaywright}
-                      onChange={(e) => setEnablePlaywright(e.target.checked)}
-                    />
-                    <label htmlFor="enable-playwright" className="text-sm font-medium text-slate-700">
-                      Enable Playwright
-                    </label>
-                    <span className="text-xs text-slate-500">(headless browser automation via MCP)</span>
-                  </div>
+                  <Checkbox checked={enablePlaywright} onChange={(e) => setEnablePlaywright(e.target.checked)}
+                    label={<>Enable Playwright <span className="text-xs text-slate-500">(headless browser automation via MCP)</span></>} />
 
                   {/* Dev channels server */}
-                  <Field label="Dev Channels Server (optional)" hint="Launches Claude with --dangerously-load-development-channels. Leave blank to disable.">
+                  <Field label="Dev channels server (optional)" hint="Launches Claude with --dangerously-load-development-channels. Leave blank to disable.">
                     <Input
                       type="text"
                       value={devChannelsServer}
@@ -703,14 +699,7 @@ const ClaudeSessions = () => {
                     </p>
                     <div className="grid grid-cols-3 gap-2 mb-3">
                       {COMMON_TOOLS.map(tool => (
-                        <label key={tool} className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={allowedTools.includes(tool)}
-                            onChange={() => toggleTool(tool)}
-                          />
-                          {tool}
-                        </label>
+                        <Checkbox key={tool} checked={allowedTools.includes(tool)} onChange={() => toggleTool(tool)} label={tool} />
                       ))}
                     </div>
                   </div>
@@ -718,7 +707,7 @@ const ClaudeSessions = () => {
                   {/* Custom Environment Variables */}
                   <div>
                     <Label className="mb-2">
-                      Custom Environment Variables
+                      Custom environment variables
                     </Label>
                     <p className="text-xs text-slate-500 mb-2">
                       One per line: KEY=value. Lines starting with # are ignored.
@@ -733,7 +722,7 @@ const ClaudeSessions = () => {
                   </div>
 
                   {/* Initial Prompt */}
-                  <Field label="Initial Prompt (optional)" hint="If provided, Claude will start processing this prompt immediately.">
+                  <Field label="Initial prompt (optional)" hint="If provided, Claude will start processing this prompt immediately.">
                     <Textarea
                       value={initialPrompt}
                       onChange={(e) => setInitialPrompt(e.target.value)}
@@ -801,7 +790,7 @@ const ClaudeSessions = () => {
 
                   {/* Schedule success message */}
                   {scheduleSuccess && (
-                    <Notice tone="success">
+                    <Notice tone="success" onDismiss={() => setScheduleSuccess(null)}>
                       <p className="font-medium">Schedule created</p>
                       <p className="text-sm mt-1">
                         Task ID: <code className="bg-green-100 px-1 rounded">{scheduleSuccess.task_id}</code>
@@ -809,12 +798,6 @@ const ClaudeSessions = () => {
                       <p className="text-sm mt-1">
                         Next run: {new Date(scheduleSuccess.next_scheduled_time).toLocaleString()}
                       </p>
-                      <button
-                        onClick={() => setScheduleSuccess(null)}
-                        className="text-sm text-green-700 hover:underline mt-2"
-                      >
-                        Dismiss
-                      </button>
                     </Notice>
                   )}
 
@@ -831,8 +814,8 @@ const ClaudeSessions = () => {
                         : scheduling
                           ? 'Scheduling...'
                           : cronExpression
-                            ? 'Schedule Recurring Session'
-                            : 'Start Session'}
+                            ? 'Schedule recurring session'
+                            : 'Start session'}
                     </Button>
                     <Button
                       onClick={() => setShowNewSession(false)}
@@ -856,9 +839,10 @@ const ClaudeSessions = () => {
               actions={<>
                 <Badge tone={STATUS_TONES[selectedSession.status?.toLowerCase() ?? ''] ?? 'neutral'}>{selectedSession.status || 'unknown'}</Badge>
                 <Button variant="ghost" size="sm" onClick={() => selectSession(null)} title="Back to fleet overview">Fleet overview</Button>
-                <Button variant="danger" size="sm" onClick={() => handleKillSession(selectedSession.session_id)} disabled={killingId === selectedSession.session_id}>
-                  {killingId === selectedSession.session_id ? 'Killing...' : 'Kill Session'}
-                </Button>
+                <ConfirmButton confirm={KILL_CONFIRM} onConfirm={() => handleKillSession(selectedSession.session_id)} disabled={killingId === selectedSession.session_id}
+                  confirmLabel="Kill session">
+                  {killingId === selectedSession.session_id ? 'Killing...' : 'Kill session'}
+                </ConfirmButton>
               </>}
             />
             <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-4">
@@ -869,13 +853,13 @@ const ClaudeSessions = () => {
 
               {/* Resource stats — collapsed by default; the chart polls only
                   while expanded (mounted) so closed panels are zero cost. */}
-              <Disclosure summary="Resource Stats">
+              <Disclosure summary="Resource stats">
                 <SessionStatsPanel sessionId={selectedSession.session_id} />
               </Disclosure>
 
               {/* Attach commands (collapsible) */}
               {attachInfo && (
-                <Disclosure summary="Connect Commands">
+                <Disclosure summary="Connect commands">
                   <div className="space-y-3">
                     <div>
                       <div className="text-xs text-slate-500 mb-1">Attach to Claude (interactive)</div>
@@ -934,13 +918,13 @@ const ClaudeSessions = () => {
 
               {/* Differ code review panel */}
               {selectedSession?.differ && (
-                <Disclosure summary="Code Review (Differ)">
+                <Disclosure summary="Code review (Differ)">
                   <div>
                     <iframe
                       src={getDifferUrl(selectedSession.session_id)}
                       className="w-full border-0 rounded-b-lg"
                       style={{ height: '70vh', minHeight: '500px' }}
-                      title="Differ Code Review"
+                      title="Differ code review"
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                     />
                   </div>

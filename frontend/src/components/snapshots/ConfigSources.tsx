@@ -179,7 +179,7 @@ const ConfigSources = () => {
 
   return (
     <Page
-      title="Claude Configurations"
+      title="Claude configurations"
       actions={activeTab === 'environments' && <Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>}
       width="wide"
     >
@@ -303,7 +303,7 @@ const ConfigSources = () => {
 
       {/* Create Environment Modal */}
       {showCreateModal && (
-        <Modal title="Create Environment" onClose={closeCreateModal} size="md">
+        <Modal title="New environment" onClose={closeCreateModal} size="md">
           <div className="space-y-4">
               {createError && !createError.field && <Notice tone="error">{createError.message}</Notice>}
               <Field label="Name *" error={createError?.field ? createError.message : null}>
@@ -378,7 +378,7 @@ const ConfigSources = () => {
 
       {/* Reset Environment Modal */}
       {resettingEnvId !== null && (
-        <Modal title="Reset Environment" onClose={closeResetModal} size="md">
+        <Modal title="Reset environment" onClose={closeResetModal} size="md">
           <p className="text-sm text-slate-600 mb-4">
               This will delete all current data in the environment and optionally reinitialize from a snapshot.
               It can't be undone.
@@ -404,7 +404,7 @@ const ConfigSources = () => {
               <Button variant="dangerSolid"
                 onClick={handleResetEnvironment}
               >
-                Reset Environment
+                Reset environment
               </Button>
             </div>
         </Modal>

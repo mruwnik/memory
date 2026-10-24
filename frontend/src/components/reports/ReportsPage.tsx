@@ -208,7 +208,7 @@ const ReportsPage = () => {
         </>}
         list={loading ? <LoadingState />
           : error ? <ErrorState message={error} onRetry={loadReports} />
-          : reports.length === 0 ? <div className="p-4"><EmptyState message="No reports yet." actionLabel="Create Report" onAction={() => setShowForm(true)} /></div>
+          : reports.length === 0 ? <div className="p-4"><EmptyState message="No reports yet." actionLabel="New report" onAction={() => setShowForm(true)} /></div>
           : (
             <List flush>
               {reports.map(report => {
@@ -263,10 +263,10 @@ const ReportsPage = () => {
       />
 
       {showForm && (
-        <Modal title="New Report" onClose={closeForm}>
+        <Modal title="New report" onClose={closeForm}>
           <form onSubmit={handleSubmit} className="space-y-4">
             <ToggleGroup label="Report source" value={formMode} onChange={setFormMode}
-              options={[{ value: 'html', label: 'Write HTML' }, { value: 'upload', label: 'Upload File' }]} />
+              options={[{ value: 'html', label: 'Write HTML' }, { value: 'upload', label: 'Upload file' }]} />
             <Field label="Title">
               <Input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Report title" />
             </Field>
@@ -286,7 +286,7 @@ const ReportsPage = () => {
             <FormActions>
               <Button type="button" onClick={closeForm}>Cancel</Button>
               <Button variant="primary" type="submit" disabled={submitting}>
-                {submitting ? 'Saving...' : formMode === 'html' ? 'Create Report' : 'Upload'}
+                {submitting ? 'Saving...' : formMode === 'html' ? 'Create report' : 'Upload'}
               </Button>
             </FormActions>
           </form>
@@ -294,7 +294,7 @@ const ReportsPage = () => {
       )}
 
       {editing && selectedReport && (
-        <Modal title="Edit Report" onClose={() => setEditing(false)}>
+        <Modal title="Edit report" onClose={() => setEditing(false)}>
           <form onSubmit={handleEditSubmit} className="space-y-4">
             <Field label="Title">
               <Input type="text" value={editTitle} onChange={e => setEditTitle(e.target.value)} />
@@ -304,7 +304,7 @@ const ReportsPage = () => {
             {editError && <Notice tone="error">{editError}</Notice>}
             <FormActions>
               <Button type="button" onClick={() => setEditing(false)}>Cancel</Button>
-              <Button variant="primary" type="submit" disabled={editSubmitting}>{editSubmitting ? 'Saving...' : 'Save Changes'}</Button>
+              <Button variant="primary" type="submit" disabled={editSubmitting}>{editSubmitting ? 'Saving...' : 'Save changes'}</Button>
             </FormActions>
           </form>
         </Modal>
@@ -333,7 +333,7 @@ const ReportAccessFields = ({ tags, onTags, allowScripts, onAllowScripts, urls, 
     </Field>
     <Checkbox checked={allowScripts} onChange={e => onAllowScripts(e.target.checked)} label="Allow scripts" />
     {allowScripts && (
-      <Field label="Allowed External URLs (for CSP connect-src)"
+      <Field label="Allowed external URLs (for CSP connect-src)"
         hint="External URLs this report can connect to (e.g., for calling external MCP servers)">
         <TagsInput tags={urls} onChange={onUrls} placeholder="https://example.com/api/" />
       </Field>

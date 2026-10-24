@@ -116,12 +116,12 @@ export const CalendarPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <Section title="Calendar Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Calendar</Button>}>
+    <Section title="Calendar accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add calendar</Button>}>
       {notice}
       {accounts.length === 0 ? (
         <EmptyState
           message="No calendar accounts configured"
-          actionLabel="Add Calendar"
+          actionLabel="Add calendar"
           onAction={() => setShowForm(true)}
         />
       ) : (
@@ -253,7 +253,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
   }
 
   return (
-    <Modal title={account ? 'Edit Calendar Account' : 'Add Calendar Account'} onClose={onCancel}>
+    <Modal title={account ? 'Edit calendar account' : 'Add calendar account'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -267,7 +267,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
           />
         </Field>
 
-        <Field label="Calendar Type">
+        <Field label="Calendar type">
           <Select
             value={formData.calendar_type}
             onChange={e => setFormData({ ...formData, calendar_type: e.target.value as 'caldav' | 'google' })}
@@ -311,7 +311,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
           </>
         ) : (
           <Field>
-            <Label>Google Account</Label>
+            <Label>Google account</Label>
             {googleAccounts.length === 0 ? (
               <Hint>
                 No Google accounts connected. Add a Google account in the Accounts tab first.
@@ -332,7 +332,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
         )}
 
         <FieldRow>
-          <Field label="Sync Past Days">
+          <Field label="Sync past days">
             <Input
               type="number"
               value={formData.sync_past_days}
@@ -341,7 +341,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
               max={365}
             />
           </Field>
-          <Field label="Sync Future Days">
+          <Field label="Sync future days">
             <Input
               type="number"
               value={formData.sync_future_days}

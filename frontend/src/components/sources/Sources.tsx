@@ -35,7 +35,7 @@ import { Page, Tabs } from '@/components/shared/ui'
 const TABS = [
   { value: 'accounts', label: 'Accounts', panel: AccountsPanel },
   { value: 'email', label: 'Email', panel: EmailPanel },
-  { value: 'feeds', label: 'RSS Feeds', panel: FeedsPanel },
+  { value: 'feeds', label: 'RSS feeds', panel: FeedsPanel },
   { value: 'github', label: 'GitHub', panel: GitHubPanel },
   { value: 'drive', label: 'Drive', panel: GoogleDrivePanel },
   { value: 'calendar', label: 'Calendar', panel: CalendarPanel },
@@ -76,7 +76,7 @@ const Sources = () => {
   return (
     <SourcesContext.Provider value={{ selectedUser, userId }}>
       <Page
-        title="Manage Sources"
+        title={activeTab === 'secrets' ? 'Secrets' : 'Sources'}
         actions={isAdmin && <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />}
         width="wide"
       >

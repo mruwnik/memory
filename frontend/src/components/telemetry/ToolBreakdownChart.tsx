@@ -15,13 +15,13 @@ import { EmptyState, Select } from '@/components/shared/ui'
 type MetricType = 'total' | 'median' | 'p75' | 'p90' | 'p99' | 'min' | 'max'
 
 const metricLabels: Record<MetricType, string> = {
-  total: 'Total Tokens',
-  median: 'Median per Call',
-  p75: 'P75 per Call',
-  p90: 'P90 per Call',
-  p99: 'P99 per Call',
-  min: 'Min per Call',
-  max: 'Max per Call',
+  total: 'Total tokens',
+  median: 'Median per call',
+  p75: 'P75 per call',
+  p90: 'P90 per call',
+  p99: 'P99 per call',
+  min: 'Min per call',
+  max: 'Max per call',
 }
 
 interface ToolBreakdownChartProps {
@@ -118,7 +118,7 @@ export const ToolBreakdownChart: React.FC<ToolBreakdownChartProps> = ({ data }) 
                   </p>
                   {perCall && (
                     <div className="pt-2 mt-2 border-t border-slate-200">
-                      <p className="font-medium text-slate-700 mb-1">Per Call Stats</p>
+                      <p className="font-medium text-slate-700 mb-1">Per call stats</p>
                       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-slate-500">
                         <p>Median: <span className="font-medium">{formatNumber(perCall.median)}</span></p>
                         <p>P75: <span className="font-medium">{formatNumber(perCall.p75)}</span></p>

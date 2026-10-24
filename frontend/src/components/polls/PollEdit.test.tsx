@@ -131,14 +131,14 @@ describe('PollEdit - populated form', () => {
     mockEdit({ loadResult: makePoll({ response_count: 0 }) })
     renderEdit()
     await screen.findByDisplayValue('Editable Poll')
-    expect(screen.getByLabelText('Time Slot Duration')).toBeEnabled()
+    expect(screen.getByLabelText('Time slot duration')).toBeEnabled()
   })
 
   it('disables the slot duration selector when responses exist', async () => {
     mockEdit({ loadResult: makePoll({ response_count: 3 }) })
     renderEdit()
     await screen.findByDisplayValue('Editable Poll')
-    expect(screen.getByLabelText('Time Slot Duration')).toBeDisabled()
+    expect(screen.getByLabelText('Time slot duration')).toBeDisabled()
     expect(
       screen.getByText('Cannot change slot duration when responses exist'),
     ).toBeInTheDocument()
@@ -152,7 +152,7 @@ describe('PollEdit - submission', () => {
     const title = await screen.findByDisplayValue('Editable Poll')
     await user.clear(title)
     await user.type(title, 'Renamed Poll')
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByText('Results page')).toBeInTheDocument()
   })
 
@@ -162,7 +162,7 @@ describe('PollEdit - submission', () => {
     const title = await screen.findByDisplayValue('Editable Poll')
     await user.clear(title)
     await user.type(title, 'Patched Title')
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
         ([u, init]) => mcpToolFromRequest(u, init) === 'polling_upsert_poll',
@@ -178,11 +178,11 @@ describe('PollEdit - submission', () => {
     mockEdit({ updateResult: new Error('update rejected') })
     const { user } = renderEdit()
     await screen.findByDisplayValue('Editable Poll')
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(
       await screen.findByText(/MCP polling_upsert_poll failed|update rejected/),
     ).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Edit Poll' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Edit poll' })).toBeInTheDocument()
   })
 
   it('disables save when the title is cleared', async () => {
@@ -190,7 +190,7 @@ describe('PollEdit - submission', () => {
     const { user } = renderEdit()
     const title = await screen.findByDisplayValue('Editable Poll')
     await user.clear(title)
-    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
   })
 })
 

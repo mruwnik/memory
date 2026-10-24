@@ -125,17 +125,17 @@ const UserSettings = () => {
   }
 
   if (loading) {
-    return <Page title="User Settings" width="narrow" loading />
+    return <Page title="User settings" width="narrow" loading />
   }
 
   if (error && !user) {
-    return <Page title="User Settings" width="narrow" error={error} onRetry={loadUser} />
+    return <Page title="User settings" width="narrow" error={error} onRetry={loadUser} />
   }
 
   return (
     <>
       <Page
-        title="User Settings"
+        title="User settings"
         width="narrow"
       >
 
@@ -152,7 +152,7 @@ const UserSettings = () => {
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
             <FormActions>
-              <Button variant="primary" onClick={handleSaveProfile} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</Button>
+              <Button variant="primary" onClick={handleSaveProfile} disabled={saving}>{saving ? 'Saving...' : 'Save changes'}</Button>
             </FormActions>
           </div>
         </Card>
@@ -161,12 +161,12 @@ const UserSettings = () => {
           <List flush className="border-t border-slate-100">
             {authUser?.user_type === 'human' && (
               <Row title="Password" meta={['Change your account password']}
-                actions={<Button size="sm" onClick={() => setShowPasswordModal(true)}>Change Password</Button>} />
+                actions={<Button size="sm" onClick={() => setShowPasswordModal(true)}>Change password</Button>} />
             )}
-            <Row title="API Key"
+            <Row title="API key"
               meta={[(user?.api_key_count ?? 0) > 0 ? 'You have an API key configured' : 'No API key configured']}
               actions={<Button size="sm" onClick={() => setShowApiKeyModal(true)}>
-                {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key
+                {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API key
               </Button>} />
           </List>
         </Card>
@@ -180,7 +180,7 @@ const UserSettings = () => {
 
       {/* Password Change Modal */}
       {showPasswordModal && (
-        <Modal title="Change Password" onClose={() => {
+        <Modal title="Change password" onClose={() => {
                   setShowPasswordModal(false)
                   setCurrentPassword('')
                   setNewPassword('')
@@ -192,7 +192,7 @@ const UserSettings = () => {
             )}
 
             <div className="space-y-4">
-              <Field label="Current Password">
+              <Field label="Current password">
                 <Input
                   type="password"
                   value={currentPassword}
@@ -200,7 +200,7 @@ const UserSettings = () => {
                 />
               </Field>
 
-              <Field label="New Password">
+              <Field label="New password">
                 <Input
                   type="password"
                   value={newPassword}
@@ -208,7 +208,7 @@ const UserSettings = () => {
                 />
               </Field>
 
-              <Field label="Confirm New Password">
+              <Field label="Confirm new password">
                 <Input
                   type="password"
                   value={confirmPassword}
@@ -233,7 +233,7 @@ const UserSettings = () => {
                 onClick={handleChangePassword}
                 disabled={passwordSaving}
               >
-                {passwordSaving ? 'Saving...' : 'Change Password'}
+                {passwordSaving ? 'Saving...' : 'Change password'}
               </Button>
             </div>
         </Modal>
@@ -242,7 +242,7 @@ const UserSettings = () => {
       {/* API Key Modal */}
       {showApiKeyModal && (
         <Modal size="md"
-          title={newApiKey ? 'New API Key Generated' : `${(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key`}
+          title={newApiKey ? 'New API key generated' : `${(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API key`}
           onClose={newApiKey ? undefined : () => setShowApiKeyModal(false)}>
           {!newApiKey ? (
             <div className="space-y-4">

@@ -159,12 +159,12 @@ describe('Telemetry container', () => {
     mockFetchRoutes(baseRoutes(regularUser))
     renderWithRouter(<Telemetry />)
 
-    await waitFor(() => expect(screen.getByText('Token Usage')).toBeInTheDocument())
-    expect(screen.getByText('Cost Over Time')).toBeInTheDocument()
-    expect(screen.getByText('Session Activity')).toBeInTheDocument()
-    expect(screen.getByText('Recent Events')).toBeInTheDocument()
-    expect(screen.getByText('Token Usage by Tool')).toBeInTheDocument()
-    expect(screen.getByText('Session Breakdown')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Token usage')).toBeInTheDocument())
+    expect(screen.getByText('Cost over time')).toBeInTheDocument()
+    expect(screen.getByText('Session activity')).toBeInTheDocument()
+    expect(screen.getByText('Recent events')).toBeInTheDocument()
+    expect(screen.getByText('Token usage by tool')).toBeInTheDocument()
+    expect(screen.getByText('Session breakdown')).toBeInTheDocument()
   })
 
   it('computes summary totals from the loaded metrics', async () => {
@@ -204,7 +204,7 @@ describe('Telemetry container', () => {
     const fetchMock = mockFetchRoutes(baseRoutes(regularUser))
     const { user } = renderWithRouter(<Telemetry />)
 
-    await waitFor(() => expect(screen.getByText('Token Usage')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Token usage')).toBeInTheDocument())
 
     const metricsUrl = () => {
       const calls = fetchMock.mock.calls.map((c) => String(c[0]))
@@ -231,7 +231,7 @@ describe('Telemetry container', () => {
     setAuthCookies()
     mockFetchRoutes(baseRoutes(regularUser))
     renderWithRouter(<Telemetry />)
-    await waitFor(() => expect(screen.getByText('Token Usage')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Token usage')).toBeInTheDocument())
     expect(screen.queryByLabelText('View as:')).not.toBeInTheDocument()
   })
 
@@ -240,7 +240,7 @@ describe('Telemetry container', () => {
     mockFetchRoutes(baseRoutes(regularUser))
     renderWithRouter(<Telemetry />)
 
-    await waitFor(() => expect(screen.getByText('Recent Events')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Recent events')).toBeInTheDocument())
     const table = screen.getByRole('table')
     expect(within(table).getByText('token.usage')).toBeInTheDocument()
   })
@@ -250,9 +250,9 @@ describe('Telemetry container', () => {
     mockFetchRoutes(baseRoutes(regularUser))
     renderWithRouter(<Telemetry />)
 
-    await waitFor(() => expect(screen.getByText('Token Usage')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Token usage')).toBeInTheDocument())
     expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
-    expect(screen.queryByText('Token Usage by API Key')).not.toBeInTheDocument()
+    expect(screen.queryByText('Token usage by API key')).not.toBeInTheDocument()
   })
 
   it('filters every chart by the chosen API key', async () => {
@@ -260,7 +260,7 @@ describe('Telemetry container', () => {
     const fetchMock = mockFetchRoutes(baseRoutes(regularUser, [laptopKey]))
     const { user } = renderWithRouter(<Telemetry />)
 
-    expect(await screen.findByText('Token Usage by API Key')).toBeInTheDocument()
+    expect(await screen.findByText('Token usage by API key')).toBeInTheDocument()
     await user.selectOptions(await screen.findByLabelText('API key'), 'laptop')
 
     const urls = () => fetchMock.mock.calls.map((c) => String(c[0]))
@@ -269,7 +269,7 @@ describe('Telemetry container', () => {
     )
     expect(urls().filter((u) => u.includes('/telemetry/metrics')).at(-1)).toContain('api_key_id=4')
     expect(urls().filter((u) => u.includes('/telemetry/raw')).at(-1)).toContain('api_key_id=4')
-    expect(screen.queryByText('Token Usage by API Key')).not.toBeInTheDocument()
+    expect(screen.queryByText('Token usage by API key')).not.toBeInTheDocument()
   })
 
   it('skips the per-key usage request once a key is selected', async () => {
@@ -278,7 +278,7 @@ describe('Telemetry container', () => {
     const { user } = renderWithRouter(<Telemetry />)
 
     await user.selectOptions(await screen.findByLabelText('API key'), 'laptop')
-    await waitFor(() => expect(screen.queryByText('Token Usage by API Key')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText('Token usage by API key')).not.toBeInTheDocument())
     const keyedUsage = () =>
       fetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('group_by=api_key_id'))
     const before = keyedUsage().length

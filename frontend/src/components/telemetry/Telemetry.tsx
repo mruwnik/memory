@@ -143,7 +143,7 @@ const Telemetry: React.FC = () => {
 
   return (
     <Page
-      title="Claude Code Telemetry"
+      title="Telemetry"
       width="wide"
     >
       <Toolbar actions={<>
@@ -179,20 +179,20 @@ const Telemetry: React.FC = () => {
             eventCount={eventCount}
           />
           <CardGrid>
-            <Card title="Token Usage">
+            <Card title="Token usage">
               <TokenUsageChart data={tokenUsage} />
             </Card>
-            <Card title="Cost Over Time">
+            <Card title="Cost over time">
               <CostChart data={costUsage} />
             </Card>
-            <Card title="Session Activity">
+            <Card title="Session activity">
               <SessionActivityChart data={sessionActivity} />
             </Card>
-            <Card title="Recent Events">
+            <Card title="Recent events">
               <RecentEventsTable events={recentEvents?.events ?? []} />
             </Card>
             {apiKeys.length > 0 && apiKeyId === undefined && (
-              <Card title="Token Usage by API Key" className="lg:col-span-2">
+              <Card title="Token usage by API key" className="lg:col-span-2">
                 <TokenUsageChart
                   data={keyUsage}
                   seriesOf={(p) => (p.api_key_id == null ? 'No key' : keyNames.get(p.api_key_id) ?? `Key #${p.api_key_id}`)}
@@ -200,7 +200,7 @@ const Telemetry: React.FC = () => {
               </Card>
             )}
             <Card
-              title="Token Usage by Tool"
+              title="Token usage by tool"
               className="lg:col-span-2"
               description={
                 apiKeyId === undefined
@@ -210,7 +210,7 @@ const Telemetry: React.FC = () => {
             >
               <ToolBreakdownChart data={toolUsage} />
             </Card>
-            <Card title="Session Breakdown" className="lg:col-span-2"
+            <Card title="Session breakdown" className="lg:col-span-2"
               description="Token consumption by individual session. Sessions are categorized by usage volume: high (top 20%), medium (next 30%), and low (bottom 50%).">
               <SessionBreakdownChart data={sessionStats} />
             </Card>

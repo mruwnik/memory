@@ -58,17 +58,17 @@ describe('PollCreate - rendering', () => {
   it('renders the create form with default field values', () => {
     mockMcp({})
     renderCreate()
-    expect(screen.getByRole('heading', { name: 'Create Availability Poll' })).toBeInTheDocument()
-    expect(screen.getByLabelText(/Poll Title/)).toHaveValue('')
-    expect(screen.getByRole('button', { name: 'Create Poll' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'New poll' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Poll title/)).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Create poll' })).toBeInTheDocument()
   })
 
   it('disables submit until a title is entered', async () => {
     mockMcp({})
     const { user } = renderCreate()
-    const submit = screen.getByRole('button', { name: 'Create Poll' })
+    const submit = screen.getByRole('button', { name: 'Create poll' })
     expect(submit).toBeDisabled()
-    await user.type(screen.getByLabelText(/Poll Title/), 'Sprint Planning')
+    await user.type(screen.getByLabelText(/Poll title/), 'Sprint Planning')
     expect(submit).toBeEnabled()
   })
 })
@@ -77,16 +77,16 @@ describe('PollCreate - submission', () => {
   it('creates the poll and navigates to its results page on success', async () => {
     mockMcp({ slug: 'sprint-planning', id: 1 })
     const { user } = renderCreate()
-    await user.type(screen.getByLabelText(/Poll Title/), 'Sprint Planning')
-    await user.click(screen.getByRole('button', { name: 'Create Poll' }))
+    await user.type(screen.getByLabelText(/Poll title/), 'Sprint Planning')
+    await user.click(screen.getByRole('button', { name: 'Create poll' }))
     expect(await screen.findByText('Results for poll')).toBeInTheDocument()
   })
 
   it('sends the entered title to the upsert call', async () => {
     const fetchMock = mockMcp({ slug: 'abc', id: 2 })
     const { user } = renderCreate()
-    await user.type(screen.getByLabelText(/Poll Title/), 'Quarterly Review')
-    await user.click(screen.getByRole('button', { name: 'Create Poll' }))
+    await user.type(screen.getByLabelText(/Poll title/), 'Quarterly Review')
+    await user.click(screen.getByRole('button', { name: 'Create poll' }))
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
         ([u, init]) => mcpToolFromRequest(u, init) === 'polling_upsert_poll',
@@ -99,12 +99,12 @@ describe('PollCreate - submission', () => {
   it('shows an error banner and stays on the form when creation fails', async () => {
     mockMcp(new Error('server exploded'))
     const { user } = renderCreate()
-    await user.type(screen.getByLabelText(/Poll Title/), 'Doomed Poll')
-    await user.click(screen.getByRole('button', { name: 'Create Poll' }))
+    await user.type(screen.getByLabelText(/Poll title/), 'Doomed Poll')
+    await user.click(screen.getByRole('button', { name: 'Create poll' }))
     expect(
       await screen.findByText(/MCP polling_upsert_poll failed|server exploded/),
     ).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Create Availability Poll' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'New poll' })).toBeInTheDocument()
   })
 })
 
@@ -121,7 +121,7 @@ describe('PollCreate - slot duration field', () => {
   it('lets the user pick a 60-minute slot duration', async () => {
     mockMcp({})
     const { user } = renderCreate()
-    await user.selectOptions(screen.getByLabelText('Time Slot Duration'), '60')
-    expect(screen.getByLabelText('Time Slot Duration')).toHaveValue('60')
+    await user.selectOptions(screen.getByLabelText('Time slot duration'), '60')
+    expect(screen.getByLabelText('Time slot duration')).toHaveValue('60')
   })
 })

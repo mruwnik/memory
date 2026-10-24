@@ -7,7 +7,7 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Badge, Button, EmptyState, Field, FormActions, Input, Label, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, Field, FormActions, Input, Label, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
 
 interface UserFormData {
@@ -46,9 +46,6 @@ const UserManagement = () => {
   const [editLoading, setEditLoading] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
-  // Delete confirmation
-  const [deletingUser, setDeletingUser] = useState<User | null>(null)
-  const [deleteLoading, setDeleteLoading] = useState(false)
 
   // API Key regeneration
   const [apiKeyUser, setApiKeyUser] = useState<User | null>(null)
@@ -132,19 +129,12 @@ const UserManagement = () => {
     }
   }
 
-  const handleDelete = async () => {
-    if (!deletingUser) return
-
-    setDeleteLoading(true)
-
+  const handleDelete = async (user: User) => {
     try {
-      await deleteUser(deletingUser.id)
-      setDeletingUser(null)
+      await deleteUser(user.id)
       await loadUsers()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete user')
-    } finally {
-      setDeleteLoading(false)
     }
   }
 
@@ -178,15 +168,15 @@ const UserManagement = () => {
   }
 
   if (loading) {
-    return <Page title="User Management" width="default" loading />
+    return <Page title="User management" width="default" loading />
   }
 
   return (
     <>
       <Page
-        title="User Management"
+        title="User management"
         actions={<>
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>Add User</Button>
+          <Button variant="primary" onClick={() => setShowCreateModal(true)}>New user</Button>
         </>}
         width="narrow"
       >
@@ -212,7 +202,7 @@ const UserManagement = () => {
                 actions={<>
                   {user.user_type === 'bot' && (
                     <Button size="sm" onClick={() => setApiKeyUser(user)}>
-                      {user.api_key_count > 0 ? 'Regenerate Key' : 'Generate Key'}
+                      {user.api_key_count > 0 ? 'Regenerate key' : 'Generate key'}
                     </Button>
                   )}
                   <Button size="sm" onClick={() => {
@@ -222,7 +212,7 @@ const UserManagement = () => {
                     Edit
                   </Button>
                   {user.id !== currentUser?.id && (
-                    <Button variant="danger" size="sm" onClick={() => setDeletingUser(user)}>Delete</Button>
+                    <ConfirmButton confirm={`Delete ${user.name}? This can't be undone.`} confirmLabel="Delete user" onConfirm={() => handleDelete(user)} />
                   )}
                 </>}
               />
@@ -233,7 +223,7 @@ const UserManagement = () => {
 
       {/* Create User Modal */}
       {showCreateModal && (
-        <Modal title="Create New User" onClose={() => {
+        <Modal title="New user" onClose={() => {
                   setShowCreateModal(false)
                   setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
                   setCreateError(null)
@@ -243,7 +233,7 @@ const UserManagement = () => {
             )}
 
             <div className="space-y-4">
-              <Field label="User Type">
+              <Field label="User type">
                 <Select
                   value={createForm.user_type}
                   onChange={(e) =>
@@ -307,7 +297,7 @@ const UserManagement = () => {
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 mt-6">
+            <FormActions className="mt-6">
               <Button
                 onClick={() => {
                   setShowCreateModal(false)
@@ -321,15 +311,15 @@ const UserManagement = () => {
                 onClick={handleCreate}
                 disabled={createLoading}
               >
-                {createLoading ? 'Creating...' : 'Create User'}
+                {createLoading ? 'Creating...' : 'Create user'}
               </Button>
-            </div>
+            </FormActions>
         </Modal>
       )}
 
       {/* Edit User Modal */}
       {editingUser && (
-        <Modal title="Edit User" onClose={() => {
+        <Modal title="Edit user" onClose={() => {
                   setEditingUser(null)
                   setEditForm({})
                   setEditError(null)
@@ -381,7 +371,7 @@ const UserManagement = () => {
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 mt-6">
+            <FormActions className="mt-6">
               <Button
                 onClick={() => {
                   setEditingUser(null)
@@ -395,40 +385,16 @@ const UserManagement = () => {
                 onClick={handleEdit}
                 disabled={editLoading}
               >
-                {editLoading ? 'Saving...' : 'Save Changes'}
+                {editLoading ? 'Saving...' : 'Save changes'}
               </Button>
-            </div>
-        </Modal>
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {deletingUser && (
-        <Modal title="Delete User" onClose={() => setDeletingUser(null)} size="md">
-          <p className="text-sm text-slate-600 mb-4">
-              Are you sure you want to delete <strong>{deletingUser.name}</strong>? This action cannot
-              be undone.
-            </p>
-
-            <div className="flex justify-end gap-3">
-              <Button
-                onClick={() => setDeletingUser(null)}
-              >
-                Cancel
-              </Button>
-              <Button variant="dangerSolid"
-                onClick={handleDelete}
-                disabled={deleteLoading}
-              >
-                {deleteLoading ? 'Deleting...' : 'Delete User'}
-              </Button>
-            </div>
+            </FormActions>
         </Modal>
       )}
 
       {/* API Key Modal */}
       {apiKeyUser && (
         <Modal size="md" onClose={newApiKey ? undefined : closeApiKeyModal}
-          title={newApiKey ? 'New API Key Generated' : `${apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'} API Key`}>
+          title={newApiKey ? 'New API key generated' : `${apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'} API key`}>
           {newApiKey ? <NewApiKey apiKey={newApiKey} onDone={closeApiKeyModal} /> : (
             <div className="space-y-4">
               <p className="text-sm text-slate-600">

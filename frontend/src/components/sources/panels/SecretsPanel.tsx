@@ -113,12 +113,11 @@ export const SecretsPanel = () => {
 
   return (
     <Section
-      title="Secrets"
       description="Encrypted storage for API keys, tokens, and other sensitive values"
-      actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Secret</Button>}
+      actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add secret</Button>}
     >
       {secrets.length === 0 ? (
-        <EmptyState message="No secrets configured" actionLabel="Add Secret" onAction={() => setShowForm(true)} />
+        <EmptyState message="No secrets configured" actionLabel="Add secret" onAction={() => setShowForm(true)} />
       ) : (
         <List>
           {secrets.map(secret => (
@@ -243,7 +242,7 @@ const SecretForm = ({ secret, onSubmit, onCancel }: SecretFormProps) => {
   }
 
   return (
-    <Modal title={secret ? 'Edit Secret' : 'Add Secret'} onClose={onCancel}>
+    <Modal title={secret ? 'Edit secret' : 'Add secret'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -263,7 +262,7 @@ const SecretForm = ({ secret, onSubmit, onCancel }: SecretFormProps) => {
           </p>
         </Field>
 
-        <Field label={secret ? 'New Value (leave empty to keep current)' : 'Value'}>
+        <Field label={secret ? 'New value (leave empty to keep current)' : 'Value'}>
           <Input
             type="password"
             value={formData.value}

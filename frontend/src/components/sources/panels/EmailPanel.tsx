@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { SourceRow, TagsInput, TestConnectionButton } from '../shared'
-import { Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
+import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
@@ -73,12 +73,12 @@ export const EmailPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
-    <Section title="Email Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button>}>
+    <Section title="Email accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add account</Button>}>
       {notice}
       {accounts.length === 0 ? (
         <EmptyState
           message="No email accounts configured"
-          actionLabel="Add Email Account"
+          actionLabel="Add email account"
           onAction={() => setShowForm(true)}
         />
       ) : (
@@ -164,21 +164,11 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
     <Field>
       <Label>Folders to sync</Label>
       <Hint>Leave all unchecked to sync only INBOX.</Hint>
-      <div className="max-h-48 overflow-y-auto border border-slate-200 rounded p-2 space-y-1">
+      <div className="max-h-48 overflow-y-auto border border-slate-200 rounded p-2 flex flex-col gap-1">
         {folders.map(folder => (
-          <label
-            key={folder.name}
-            className={`flex items-center gap-2 text-sm ${folder.selectable ? 'text-slate-700' : 'text-slate-500'}`}
-          >
-            <input
-              type="checkbox"
-              checked={selected.includes(folder.name)}
-              disabled={!folder.selectable}
-              onChange={() => toggle(folder.name)}
-            />
-            <span>{folder.name}</span>
-            {!folder.selectable && <span className="text-xs italic">(not selectable)</span>}
-          </label>
+          <Checkbox key={folder.name}
+            checked={selected.includes(folder.name)} disabled={!folder.selectable} onChange={() => toggle(folder.name)}
+            label={<>{folder.name}{!folder.selectable && <span className="text-xs italic">(not selectable)</span>}</>} />
         ))}
       </div>
     </Field>
@@ -270,7 +260,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
   }
 
   return (
-    <Modal title={account ? 'Edit Email Account' : 'Add Email Account'} onClose={onCancel}>
+    <Modal title={account ? 'Edit email account' : 'Add email account'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -283,7 +273,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
           />
         </Field>
 
-        <Field label="Account Type">
+        <Field label="Account type">
           <Select
             value={formData.account_type}
             onChange={e => setFormData({ ...formData, account_type: e.target.value as 'imap' | 'gmail' })}
@@ -296,7 +286,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
 
         {formData.account_type === 'imap' ? (
           <>
-            <Field label="Email Address">
+            <Field label="Email address">
               <Input
                 type="email"
                 value={formData.email_address}
@@ -365,15 +355,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
               />
             )}
 
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="use-ssl"
-                checked={formData.use_ssl}
-                onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })}
-              />
-              <label htmlFor="use-ssl" className="text-sm text-slate-700">Use SSL</label>
-            </div>
+            <Checkbox checked={formData.use_ssl} onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })} label="Use SSL" />
 
             <FieldRow>
               <Field label={<>
@@ -397,7 +379,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
           </>
         ) : (
           <Field>
-            <Label>Google Account</Label>
+            <Label>Google account</Label>
             {googleAccounts.length === 0 ? (
               <Hint>
                 No Google accounts connected. Add a Google account in the Accounts tab first.
@@ -465,17 +447,8 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
           </Field>
         </FieldRow>
 
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="send-enabled"
-            checked={formData.send_enabled}
-            onChange={e => setFormData({ ...formData, send_enabled: e.target.checked })}
-          />
-          <label htmlFor="send-enabled" className="text-sm text-slate-700">
-            Enable sending emails from this account
-          </label>
-        </div>
+        <Checkbox checked={formData.send_enabled} onChange={e => setFormData({ ...formData, send_enabled: e.target.checked })}
+          label="Enable sending emails from this account" />
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>

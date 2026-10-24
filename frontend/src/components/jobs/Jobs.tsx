@@ -169,7 +169,7 @@ const Jobs = () => {
   }
 
   const formatJobType = (type: string) => {
-    return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    return type.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())
   }
 
   // Stats are only meaningful when showing all jobs

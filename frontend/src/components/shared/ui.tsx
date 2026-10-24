@@ -47,7 +47,7 @@ export const Page = ({ title, back, description, actions, width = 'default', fil
 )
 
 interface SectionProps {
-  title: ReactNode
+  title?: ReactNode
   description?: ReactNode
   actions?: ReactNode
   children?: ReactNode
@@ -57,8 +57,8 @@ interface SectionProps {
 export const Section = ({ title, description, actions, children, className }: SectionProps) => (
   <section className={cx('space-y-3', className)}>
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      {title && <h2 className="text-lg font-semibold text-slate-800">{title}</h2>}
+      {actions && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
     {description && <div className="text-sm text-slate-600">{description}</div>}
     {children}
@@ -164,7 +164,7 @@ export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, 
       {leading && <div className="shrink-0 pt-0.5">{leading}</div>}
       <div className="flex-1 min-w-0 space-y-2">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-x-4 gap-y-2">
-          <div className="relative flex-1 min-w-0 space-y-0.5">
+          <div className={cx('relative flex-1 min-w-0 space-y-0.5', (to || onSelect) && 'max-sm:min-h-10')}>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {to ? <Link to={to} className={titleClass} aria-current={selected || undefined}>{title}</Link>
                 : onSelect ? <button type="button" onClick={onSelect} className={titleClass} aria-current={selected || undefined} aria-expanded={expanded}>{title}</button>
@@ -528,7 +528,7 @@ export const MultiSelect = ({ options, value, onChange, id, placeholder, creatab
           <span key={v} className="inline-flex items-center gap-1 max-w-full rounded bg-primary/10 text-primary-dark text-xs font-medium pl-2">
             <span className="truncate">{labelOf(v)}</span>
             <button type="button" aria-label={`Remove ${labelOf(v)}`} onClick={() => remove(v)}
-              className="px-1.5 py-0.5 rounded hover:bg-primary/20 text-sm leading-none">&times;</button>
+              className="px-1.5 py-0.5 max-sm:px-2.5 max-sm:py-2 rounded hover:bg-primary/20 text-sm leading-none">&times;</button>
           </span>
         ))}
         <input ref={inputRef} id={id} role="combobox" aria-label={props['aria-label']} aria-expanded={open} aria-controls={listId}
@@ -652,11 +652,16 @@ interface Option<T extends string> { value: T; label: ReactNode }
 
 /** Underlined tabs that switch the view below them. */
 export function Tabs<T extends string>({ options, value, onChange, label }: { options: Option<T>[]; value: T; onChange: (v: T) => void; label: string }) {
+  const selectedRef = useRef<HTMLButtonElement>(null)
+  // On phones the strip scrolls, so a tab opened by URL (Secrets from the nav) can start off-screen.
+  useEffect(() => { selectedRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }, [value])
   return (
-    <div role="tablist" aria-label={label} className="flex flex-wrap gap-1 border-b border-slate-200">
+    // Phones scroll one row of tabs sideways rather than wrapping a long set into a block of rows.
+    <div role="tablist" aria-label={label}
+      className="flex sm:flex-wrap gap-1 border-b border-slate-200 max-sm:overflow-x-auto max-sm:overflow-y-hidden max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden">
       {options.map(o => (
-        <button key={o.value} type="button" role="tab" aria-selected={o.value === value} onClick={() => onChange(o.value)}
-          className={cx('py-2 px-4 -mb-px text-sm font-medium border-b-2 transition-colors',
+        <button key={o.value} ref={o.value === value ? selectedRef : undefined} type="button" role="tab" aria-selected={o.value === value} onClick={() => onChange(o.value)}
+          className={cx('shrink-0 whitespace-nowrap py-2 px-4 sm:-mb-px text-sm font-medium border-b-2 transition-colors',
             o.value === value ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-800 hover:border-slate-300')}>
           {o.label}
         </button>

@@ -71,9 +71,7 @@ describe('PollList - loading and empty states', () => {
     expect(
       await screen.findByText("You haven't created any polls yet."),
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole('link', { name: 'Create Your First Poll' }),
-    ).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'New poll' })).toHaveLength(2)
   })
 })
 
@@ -98,7 +96,7 @@ describe('PollList - populated list', () => {
     mockMcp({ polling_list_polls: [makePoll({ slug: 'team-sync' })] })
     renderWithRouter(<PollList />)
     await screen.findByText('Team Sync')
-    expect(screen.getByRole('link', { name: 'View Results' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'View results' })).toHaveAttribute(
       'href',
       '/ui/polls/results/team-sync',
     )

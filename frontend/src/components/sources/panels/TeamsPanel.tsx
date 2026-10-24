@@ -186,7 +186,7 @@ export const TeamsPanel = () => {
       {teams.length === 0 ? (
         <EmptyState
           message="No teams found. Create a team to organize people and manage project access."
-          actionLabel="Create Team"
+          actionLabel="New team"
           onAction={() => setShowCreateModal(true)}
         />
       ) : (
@@ -311,11 +311,11 @@ const TeamRow = ({
       meta={[
         `@${team.slug}`,
         <span className="relative">
-          Owner:{' '}
+          {team.owner && 'Owner: '}
           <button type="button" onClick={handleOwnerClick}
-            className={cx('rounded px-1 hover:bg-slate-100', team.owner ? 'text-slate-700' : 'text-amber-800 bg-amber-50')}
-            title={team.owner ? 'Change owner' : 'No owner - assign one'}>
-            {team.owner ? team.owner.display_name || team.owner.identifier : 'None'}
+            className={cx('rounded px-1 hover:bg-slate-100 max-sm:py-2', team.owner ? 'text-slate-700' : 'text-amber-800 bg-amber-50')}
+            title={team.owner ? 'Change owner' : undefined}>
+            {team.owner ? team.owner.display_name || team.owner.identifier : 'Set owner'}
           </button>
           {showOwnerSelector && onChangeOwner && availablePeople && (
             <OwnerSelectorPopover
@@ -464,7 +464,7 @@ const TeamFormModal = ({
   }
 
   return (
-    <Modal title={isEditing ? 'Edit Team' : 'Create Team'} onClose={onClose}>
+    <Modal title={isEditing ? 'Edit team' : 'New team'} onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -526,7 +526,7 @@ const TeamFormModal = ({
         {/* Member selection for new teams */}
         {!isEditing && (
           <Field>
-            <Label>Initial Members</Label>
+            <Label>Initial members</Label>
             <Input
               type="text"
               value={memberSearch}
@@ -578,7 +578,7 @@ const TeamFormModal = ({
         )}
 
         <details className="border border-slate-200 rounded-lg">
-          <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">Discord Integration</summary>
+          <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">Discord integration</summary>
           <div className="p-4 pt-0 space-y-3">
             <FieldRow>
               <Field label="Role ID">
@@ -632,7 +632,7 @@ const TeamFormModal = ({
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={submitting}>
-            {submitting ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Team'}
+            {submitting ? 'Saving...' : isEditing ? 'Save changes' : 'Create team'}
           </Button>
         </FormActions>
       </form>
@@ -748,7 +748,7 @@ const MembersModal = ({
 
         {/* Search to add */}
         <Field>
-          <Label>Add Member</Label>
+          <Label>Add member</Label>
           <Input
             type="text"
             value={searchTerm}
@@ -1050,7 +1050,7 @@ const TeamProjectsModal = ({
             {availableProjects.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium text-slate-700 mb-2">
-                  Available Projects
+                  Available projects
                 </h4>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {availableProjects.map(project => (

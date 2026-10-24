@@ -103,12 +103,12 @@ describe('SearchResult bodies', () => {
   it('links a PDF and shows its source only when there is content', () => {
     render({ mime_type: 'application/pdf', filename: 'book.pdf', content: 'raw text' })
     expect(screen.getByRole('link', { name: 'View PDF' })).toHaveAttribute('href', '/files/book.pdf')
-    expect(screen.getByText('View Source')).toBeInTheDocument()
+    expect(screen.getByText('View source')).toBeInTheDocument()
     expect(screen.getByTestId('md')).toHaveTextContent('raw text')
   })
 
   it('omits the PDF source section when content is empty', () => {
     render({ mime_type: 'application/pdf', filename: 'book.pdf' })
-    expect(screen.queryByText('View Source')).not.toBeInTheDocument()
+    expect(screen.queryByText('View source')).not.toBeInTheDocument()
   })
 })

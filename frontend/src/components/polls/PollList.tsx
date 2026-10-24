@@ -44,7 +44,7 @@ export const PollList: React.FC = () => {
 
   return (
     <Page
-      title="Availability Polls"
+      title="Polls"
       actions={<ButtonLink variant="primary" to="/ui/polls/new">New poll</ButtonLink>}
       width="default"
     >
@@ -64,7 +64,7 @@ export const PollList: React.FC = () => {
       ) : polls.length === 0 ? (
         <EmptyState
           message={statusFilter ? `No ${statusFilter} polls found.` : "You haven't created any polls yet."}
-          action={!statusFilter && <ButtonLink variant="primary" to="/ui/polls/new">Create Your First Poll</ButtonLink>}
+          action={!statusFilter && <ButtonLink variant="primary" to="/ui/polls/new">New poll</ButtonLink>}
         />
       ) : (
         <List>
@@ -80,7 +80,7 @@ export const PollList: React.FC = () => {
                 poll.finalized_time && `Meeting: ${new Date(poll.finalized_time).toLocaleString()}`,
               ]}
               actions={<>
-                <ButtonLink size="sm" to={`/ui/polls/results/${poll.slug}`}>View Results</ButtonLink>
+                <ButtonLink size="sm" to={`/ui/polls/results/${poll.slug}`}>View results</ButtonLink>
                 <ButtonLink size="sm" to={`/ui/polls/edit/${poll.slug}`}>Edit</ButtonLink>
                 <ButtonLink size="sm" to={`/ui/polls/respond/${poll.slug}`}>Share</ButtonLink>
                 <ConfirmButton confirm={`Delete the poll "${poll.title}"?`} onConfirm={() => handleDelete(poll.id)}

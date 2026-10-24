@@ -95,7 +95,7 @@ describe('Tasks page', () => {
     await waitFor(() => expect(listTasks).toHaveBeenCalled())
     await user.type(screen.getByPlaceholderText('What needs to be done?'), 'Buy milk')
     await user.selectOptions(screen.getByRole('combobox'), 'high')
-    await user.click(screen.getByRole('button', { name: 'Add Task' }))
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
     expect(createTask).toHaveBeenCalledWith({
       task_title: 'Buy milk',
       priority: 'high',
@@ -109,7 +109,7 @@ describe('Tasks page', () => {
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(screen.getByText('No active tasks. Add one above!')).toBeInTheDocument())
     await user.type(screen.getByRole('textbox', { name: 'New task' }), 'Ship it')
-    await user.click(screen.getByRole('button', { name: 'Add Task' }))
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
     expect(await screen.findByRole('alert')).toHaveTextContent("You don't have permission")
     expect(screen.getByRole('textbox', { name: 'New task' })).toHaveValue('Ship it')
   })
@@ -117,7 +117,7 @@ describe('Tasks page', () => {
   it('disables Add Task when the title is blank', async () => {
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(listTasks).toHaveBeenCalled())
-    expect(screen.getByRole('button', { name: 'Add Task' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add task' })).toBeDisabled()
   })
 
   it('completes a task', async () => {

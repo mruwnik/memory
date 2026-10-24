@@ -83,8 +83,8 @@ describe('PeopleManagement create flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'New person' }))
     const dialog = screen.getByRole('dialog')
-    await user.type(within(dialog).getByLabelText(/Display Name/), 'Carol')
-    await user.click(within(dialog).getByRole('button', { name: 'Add Person' }))
+    await user.type(within(dialog).getByLabelText(/Display name/), 'Carol')
+    await user.click(within(dialog).getByRole('button', { name: 'Create person' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     const upsert = mcpCallsTo(fetchMock, 'people_upsert')[0]
@@ -103,8 +103,8 @@ describe('PeopleManagement create flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'New person' }))
     const dialog = screen.getByRole('dialog')
-    await user.type(within(dialog).getByLabelText(/Display Name/), 'Carol')
-    await user.click(within(dialog).getByRole('button', { name: 'Add Person' }))
+    await user.type(within(dialog).getByLabelText(/Display name/), 'Carol')
+    await user.click(within(dialog).getByRole('button', { name: 'Create person' }))
 
     expect(await within(screen.getByRole('dialog')).findByRole('alert')).toBeInTheDocument()
   })
@@ -123,8 +123,8 @@ describe('PeopleManagement edit flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByLabelText(/Display Name/)).toHaveValue('Alice')
-    await user.click(within(dialog).getByRole('button', { name: 'Save Changes' }))
+    expect(within(dialog).getByLabelText(/Display name/)).toHaveValue('Alice')
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     const upsert = mcpCallsTo(fetchMock, 'people_upsert')[0]
@@ -264,8 +264,8 @@ describe('PeopleManagement merge flow', () => {
     expect(screen.getByText('2 selected')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /Merge$/ }))
-    expect(screen.getByRole('heading', { name: 'Merge People' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Merge People' }))
+    expect(screen.getByRole('heading', { name: 'Merge people' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Merge people' }))
 
     await waitFor(() => {
       const merge = mcpCallsTo(fetchMock, 'people_merge')[0]

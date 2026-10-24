@@ -352,7 +352,7 @@ export const SlackAppWizard = ({
             <p className="text-sm text-slate-600">
               Paste the Client Secret from Slack's "Basic Information" page.
             </p>
-            <Field label="Client Secret">
+            <Field label="Client secret">
               <Input
                 type="password"
                 value={clientSecret}
@@ -404,7 +404,7 @@ export const SlackAppWizard = ({
             <p className="text-sm text-slate-600">
               Paste the Signing Secret from Slack's "Basic Information" page.
             </p>
-            <Field label="Signing Secret">
+            <Field label="Signing secret">
               <Input
                 type="password"
                 value={signingSecret}

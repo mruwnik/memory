@@ -147,7 +147,7 @@ describe('ProjectsPanel - create flow', () => {
     const { user } = renderWithUser(<ProjectsPanel />)
     await screen.findByText(/No projects found/)
 
-    await user.click(screen.getByRole('button', { name: 'Create Project' }))
+    await user.click(screen.getAllByRole('button', { name: 'New project' })[0])
     await user.type(screen.getByPlaceholderText('Project name'), 'New')
     await user.click(screen.getByRole('button', { name: 'Create' }))
 
@@ -159,7 +159,7 @@ describe('ProjectsPanel - create flow', () => {
     const { user } = renderWithUser(<ProjectsPanel />)
     await screen.findByText(/No projects found/)
 
-    await user.click(screen.getByRole('button', { name: 'Create Project' }))
+    await user.click(screen.getAllByRole('button', { name: 'New project' })[0])
     await user.type(screen.getByPlaceholderText('Project name'), 'New Proj')
     await user.click(screen.getByLabelText(/Team A/))
     await user.click(screen.getByRole('button', { name: 'Create' }))

@@ -4,10 +4,10 @@ export interface NavSection { title: string; items: NavItem[] }
 
 export const NAV_SECTIONS: NavSection[] = [
   {
-    title: 'Knowledge & Content',
+    title: 'Knowledge & content',
     items: [
       { to: '/ui/search', title: 'Search', description: 'Search through your knowledge base' },
-      { to: '/ui/sources', title: 'Sources', description: 'Manage email, GitHub, RSS feeds, and Google Drive' },
+      { to: '/ui/sources', title: 'Sources', description: 'Connect email, chat, code, feeds, files and other sources' },
       { to: '/ui/notes', title: 'Notes', description: 'Browse and view your notes' },
       { to: '/ui/reports', title: 'Reports', description: 'View and create rich HTML and PDF reports' },
       { to: '/ui/people', title: 'People', description: 'Track and manage people you know', scope: 'people' },
@@ -21,7 +21,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/calendar', title: 'Calendar', description: 'View upcoming events from your calendars' },
       { to: '/ui/tasks', title: 'Tasks', description: 'Manage your todos and tasks' },
       { to: '/ui/polls', title: 'Polls', description: 'Schedule meetings with availability polls' },
-      { to: '/ui/check', title: 'Check Questions', description: 'Submit questions to verify, research, or link, and see answers', scope: 'check' },
+      { to: '/ui/check', title: 'Check questions', description: 'Submit questions to verify, research, or link, and see answers', scope: 'check' },
       { to: '/ui/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
       { to: '/ui/agents/keys', title: 'Agent API keys', description: 'Your Anthropic and OpenAI keys for agent runs', scope: 'agents' },
     ],
@@ -29,21 +29,21 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'AI',
     items: [
-      { to: '/ui/claude', title: 'Claude Sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions' },
-      { to: '/ui/snapshots', title: 'Claude Configurations', description: 'Manage Claude Code configurations' },
+      { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions' },
+      { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations' },
     ],
   },
   {
-    title: 'System Operations',
+    title: 'System operations',
     items: [
       { to: '/ui/metrics', title: 'Metrics', description: 'System health, task performance, and API usage' },
       { to: '/ui/telemetry', title: 'Telemetry', description: 'Claude Code usage, tokens, costs, and sessions' },
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
-      { to: '/ui/scheduled-tasks', title: 'Scheduled Tasks', description: 'Manage automated notifications and Claude sessions' },
-      { to: '/ui/logs', title: 'Docker Logs', description: 'View API and worker container logs' },
-      { to: '/ui/celery', title: 'Celery Tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
+      { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and Claude sessions' },
+      { to: '/ui/logs', title: 'Docker logs', description: 'View API and worker container logs' },
+      { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted API keys and tokens' },
-      { to: '/ui/users', title: 'User Management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
+      { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],
   },
 ]

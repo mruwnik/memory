@@ -116,16 +116,16 @@ export const PollEdit: React.FC = () => {
 
   const back = { to: '/ui/polls', label: 'Polls' }
   if (loading || !formData || !poll) {
-    return <Page back={back} title="Edit Poll" width="narrow" loading={loading && 'Loading poll...'} error={loading ? null : error ?? 'Poll not found'} />
+    return <Page back={back} title="Edit poll" width="narrow" loading={loading && 'Loading poll...'} error={loading ? null : error ?? 'Poll not found'} />
   }
 
   return (
-    <Page back={back} title="Edit Poll" width="narrow">
+    <Page back={back} title="Edit poll" width="narrow">
       <Card>
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Poll Title *">
+        <Field label="Poll title *">
           <Input
             type="text"
             id="title"
@@ -170,7 +170,7 @@ export const PollEdit: React.FC = () => {
         </div>
 
         <FieldRow>
-          <Field label="Start Date *">
+          <Field label="Start date *">
             <Input
               type="date"
               id="date_start"
@@ -181,7 +181,7 @@ export const PollEdit: React.FC = () => {
             />
           </Field>
 
-          <Field label="End Date *">
+          <Field label="End date *">
             <Input
               type="date"
               id="date_end"
@@ -194,7 +194,7 @@ export const PollEdit: React.FC = () => {
         </FieldRow>
 
         <FieldRow>
-          <Field label="Start Hour">
+          <Field label="Start hour">
             <Select
               id="time_start"
               name="time_start"
@@ -207,7 +207,7 @@ export const PollEdit: React.FC = () => {
             </Select>
           </Field>
 
-          <Field label="End Hour">
+          <Field label="End hour">
             <Select
               id="time_end"
               name="time_end"
@@ -224,7 +224,7 @@ export const PollEdit: React.FC = () => {
         <FieldRow>
           <div>
             <Label htmlFor="slot_duration" className="mb-1">
-              Time Slot Duration
+              Time slot duration
             </Label>
             <Select
               id="slot_duration"
@@ -245,7 +245,7 @@ export const PollEdit: React.FC = () => {
             )}
           </div>
 
-          <Field label="Display Timezone">
+          <Field label="Display timezone">
             <Select
               id="timezone"
               name="timezone"
@@ -277,7 +277,7 @@ export const PollEdit: React.FC = () => {
             type="submit"
             disabled={isSubmitting || !formData.title}
           >
-            {isSubmitting ? 'Saving...' : 'Save Changes'}
+            {isSubmitting ? 'Saving...' : 'Save changes'}
           </Button>
         </div>
       </form>

@@ -14,7 +14,7 @@ describe('LoginPrompt', () => {
   it('invokes onLogin when the Log In button is clicked', async () => {
     const onLogin = vi.fn()
     const { user } = renderWithUser(<LoginPrompt onLogin={onLogin} />)
-    await user.click(screen.getByRole('button', { name: 'Log In' }))
+    await user.click(screen.getByRole('button', { name: 'Log in' }))
     expect(onLogin).toHaveBeenCalledTimes(1)
   })
 })

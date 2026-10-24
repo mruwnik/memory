@@ -202,12 +202,12 @@ export const DiscordPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <Section title="Discord" actions={<Button variant="primary" onClick={() => setAddingBot(true)}>Add Bot</Button>}>
+    <Section title="Discord" actions={<Button variant="primary" onClick={() => setAddingBot(true)}>Add bot</Button>}>
       {notice}
       {bots.length === 0 ? (
         <EmptyState
           message="No Discord bots configured. Add a bot to start collecting messages."
-          actionLabel="Add Bot"
+          actionLabel="Add bot"
           onAction={() => setAddingBot(true)}
         />
       ) : (
@@ -312,16 +312,16 @@ const BotRow = ({
       </>}
       meta={[bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`]}
       actions={<>
-        <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh Metadata" />
+        <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />
         <PauseButton active={bot.is_active} onClick={onToggleActive} />
-        <Button size="sm" onClick={onGetInviteUrl}>Add to Server</Button>
-        <Button size="sm" onClick={onManageUsers}>Manage Users</Button>
+        <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>
+        <Button size="sm" onClick={onManageUsers}>Manage users</Button>
         <ConfirmButton confirm={`Remove "${bot.name}"? This will revoke your access to this bot.`} onConfirm={onDelete}>Remove</ConfirmButton>
       </>}
     >
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Servers ({servers.length})</ExpandToggle>}
-        empty={expanded && 'No servers found. Click "Refresh Metadata" to sync.'}
+        empty={expanded && 'No servers found. Click "Refresh metadata" to sync.'}
       >
         {expanded && servers.map(server => (
             <ServerRow
@@ -404,7 +404,7 @@ const ServerRow = ({
           onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
         <Button size="sm" variant={server.collect_messages ? 'primary' : 'secondary'} aria-pressed={server.collect_messages}
           onClick={handleToggle} disabled={toggling}>
-          {server.collect_messages ? 'Collecting' : 'Not Collecting'}
+          {server.collect_messages ? 'Collecting' : 'Not collecting'}
         </Button>
       </>}
     >
@@ -529,11 +529,11 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
   }
 
   return (
-    <Modal title="Add Discord Bot" onClose={onCancel}>
+    <Modal title="Add Discord bot" onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Bot Name" hint="A friendly name for this bot">
+        <Field label="Bot name" hint="A friendly name for this bot">
           <Input
             type="text"
             value={name}
@@ -543,7 +543,7 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
           />
         </Field>
 
-        <Field label="Bot Token" hint="Get this from the Discord Developer Portal under Bot → Token">
+        <Field label="Bot token" hint="Get this from the Discord Developer Portal under Bot → Token">
           <Input
             type="password"
             value={token}
@@ -565,7 +565,7 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
             type="submit"
             disabled={submitting}
           >
-            {submitting ? 'Adding...' : 'Add Bot'}
+            {submitting ? 'Adding...' : 'Add bot'}
           </Button>
         </FormActions>
       </form>
@@ -622,13 +622,13 @@ const ManageUsersModal = ({
   }
 
   return (
-    <Modal title={`Manage Users - ${bot.name}`} onClose={onClose}>
+    <Modal title={`Manage users - ${bot.name}`} onClose={onClose}>
       <div className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
         {/* Current authorized users */}
         <div>
-          <h4 className="text-sm font-medium text-slate-700 mb-2">Authorized Users</h4>
+          <h4 className="text-sm font-medium text-slate-700 mb-2">Authorized users</h4>
           {botUsers.length === 0 ? (
             <p className="text-sm text-slate-500 italic">No users authorized</p>
           ) : (
@@ -661,7 +661,7 @@ const ManageUsersModal = ({
         {/* Add new user */}
         {availableUsers.length > 0 && (
           <div>
-            <h4 className="text-sm font-medium text-slate-700 mb-2">Add User</h4>
+            <h4 className="text-sm font-medium text-slate-700 mb-2">Add user</h4>
             <div className="space-y-2">
               {availableUsers.map(user => (
                 <div

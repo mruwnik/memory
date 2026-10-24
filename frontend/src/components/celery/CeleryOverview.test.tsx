@@ -42,7 +42,7 @@ describe('CeleryOverview', () => {
   it('shows an error when fetching fails', async () => {
     getTaskActivity.mockRejectedValue(new Error('celery down'))
     renderWithRouter(<CeleryOverview />)
-    await waitFor(() => expect(screen.getByText('Error: celery down')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('celery down')).toBeInTheDocument())
   })
 
   it('renders the totals summary cards', async () => {
@@ -54,7 +54,7 @@ describe('CeleryOverview', () => {
 
   it('renders the beat schedule rows and count', async () => {
     renderWithRouter(<CeleryOverview />)
-    await waitFor(() => expect(screen.getByText('Beat Schedule (2 tasks)')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Beat schedule (2 tasks)')).toBeInTheDocument())
     expect(screen.getByText('Alpha Task')).toBeInTheDocument()
     expect(screen.getByText('Beta Task')).toBeInTheDocument()
     expect(screen.getByText('success')).toBeInTheDocument()
@@ -72,14 +72,14 @@ describe('CeleryOverview', () => {
 
   it('renders the task activity table', async () => {
     renderWithRouter(<CeleryOverview />)
-    await waitFor(() => expect(screen.getByText('Task Activity (last 24h)')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Task activity (last 24h)')).toBeInTheDocument())
     expect(screen.getAllByText('alpha').length).toBeGreaterThan(0)
   })
 
   it('expands a recent failure to show its error', async () => {
     const user = userEvent.setup()
     renderWithRouter(<CeleryOverview />)
-    await waitFor(() => expect(screen.getByText('Recent Failures')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Recent failures')).toBeInTheDocument())
     expect(screen.queryByText('boom traceback')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'alpha' }))
     expect(screen.getByText('boom traceback')).toBeInTheDocument()
@@ -88,7 +88,7 @@ describe('CeleryOverview', () => {
   it('hides summary cards when there are no totals', async () => {
     getTaskActivity.mockResolvedValue({ ...activity, totals: undefined as never })
     renderWithRouter(<CeleryOverview />)
-    await waitFor(() => expect(screen.getByText('Beat Schedule (2 tasks)')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Beat schedule (2 tasks)')).toBeInTheDocument())
     expect(screen.queryByText('Succeeded')).not.toBeInTheDocument()
   })
 })

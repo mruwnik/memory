@@ -63,7 +63,7 @@ describe('Sources container', () => {
   it('switches panels when a tab button is clicked', async () => {
     mockFetchRoutes({ '/auth/me': meWith(['teams']), __default: { json: {} } })
     const { user } = renderWithRouter(<Sources />)
-    await user.click(screen.getByRole('tab', { name: 'RSS Feeds' }))
+    await user.click(screen.getByRole('tab', { name: 'RSS feeds' }))
     expect(screen.getByTestId('panel-feeds')).toBeInTheDocument()
     expect(screen.queryByTestId('panel-accounts')).not.toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: 'Books' }))
@@ -73,7 +73,7 @@ describe('Sources container', () => {
   it('hides the user selector for a non-admin user', async () => {
     mockFetchRoutes({ '/auth/me': meWith(['teams']), __default: { json: {} } })
     renderWithRouter(<Sources />)
-    await waitFor(() => expect(screen.getByText('Manage Sources')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Sources')).toBeInTheDocument())
     expect(screen.queryByTestId('user-selector')).not.toBeInTheDocument()
   })
 

@@ -152,16 +152,16 @@ describe('PollRespond - open poll form', () => {
     mockRespond()
     renderRespond()
     expect(await screen.findByRole('heading', { name: 'Respond Poll' })).toBeInTheDocument()
-    expect(screen.getByLabelText(/Your Name/)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Your name/)).toBeInTheDocument()
     expect(screen.getByRole('grid', { name: 'Availability time grid' })).toBeInTheDocument()
   })
 
   it('disables submit until a name is entered', async () => {
     mockRespond()
     const { user } = renderRespond()
-    const submit = await screen.findByRole('button', { name: 'Submit Availability' })
+    const submit = await screen.findByRole('button', { name: 'Submit availability' })
     expect(submit).toBeDisabled()
-    await user.type(screen.getByLabelText(/Your Name/), 'Alice')
+    await user.type(screen.getByLabelText(/Your name/), 'Alice')
     expect(submit).toBeEnabled()
   })
 
@@ -169,9 +169,9 @@ describe('PollRespond - open poll form', () => {
     mockRespond()
     const { user } = renderRespond()
     await screen.findByRole('heading', { name: 'Respond Poll' })
-    const ifNeeded = screen.getByRole('button', { name: 'If Needed' })
+    const ifNeeded = screen.getByRole('button', { name: 'If needed' })
     await user.click(ifNeeded)
-    // After selecting "If Needed", painting a slot marks it at level 2.
+    // After selecting "If needed", painting a slot marks it at level 2.
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
     fireEvent.mouseDown(cell)
     expect(
@@ -195,10 +195,10 @@ describe('PollRespond - submission', () => {
   it('submits a new response and shows the success screen with an edit link', async () => {
     mockRespond()
     const { user } = renderRespond()
-    await user.type(await screen.findByLabelText(/Your Name/), 'Bob')
+    await user.type(await screen.findByLabelText(/Your name/), 'Bob')
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
     fireEvent.mouseDown(cell)
-    await user.click(screen.getByRole('button', { name: 'Submit Availability' }))
+    await user.click(screen.getByRole('button', { name: 'Submit availability' }))
     expect(await screen.findByText('Response submitted!')).toBeInTheDocument()
     const editInput = screen.getByDisplayValue(/\?edit=tok-123$/)
     expect(editInput).toBeInTheDocument()
@@ -207,20 +207,20 @@ describe('PollRespond - submission', () => {
   it('shows an error banner when submission fails', async () => {
     mockRespond({ submitResult: new Error('save failed') })
     const { user } = renderRespond()
-    await user.type(await screen.findByLabelText(/Your Name/), 'Carol')
-    await user.click(screen.getByRole('button', { name: 'Submit Availability' }))
+    await user.type(await screen.findByLabelText(/Your name/), 'Carol')
+    await user.click(screen.getByRole('button', { name: 'Submit availability' }))
     expect(await screen.findByText('save failed')).toBeInTheDocument()
   })
 
   it('returns to the form when clicking Edit Response from the success screen', async () => {
     mockRespond()
     const { user } = renderRespond()
-    await user.type(await screen.findByLabelText(/Your Name/), 'Dave')
-    await user.click(screen.getByRole('button', { name: 'Submit Availability' }))
+    await user.type(await screen.findByLabelText(/Your name/), 'Dave')
+    await user.click(screen.getByRole('button', { name: 'Submit availability' }))
     await screen.findByText('Response submitted!')
-    await user.click(screen.getByRole('button', { name: 'Edit Response' }))
+    await user.click(screen.getByRole('button', { name: 'Edit response' }))
     expect(
-      await screen.findByRole('button', { name: 'Submit Availability' }),
+      await screen.findByRole('button', { name: 'Submit availability' }),
     ).toBeInTheDocument()
   })
 })
@@ -240,7 +240,7 @@ describe('PollRespond - edit mode via token', () => {
     renderRespond('/ui/polls/respond/respond-me?edit=tok-xyz')
     expect(await screen.findByDisplayValue('Existing User')).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Update Availability' }),
+      screen.getByRole('button', { name: 'Update availability' }),
     ).toBeInTheDocument()
   })
 
@@ -248,7 +248,7 @@ describe('PollRespond - edit mode via token', () => {
     mockRespond({ existing })
     const { user } = renderRespond('/ui/polls/respond/respond-me?edit=tok-xyz')
     await screen.findByDisplayValue('Existing User')
-    await user.click(screen.getByRole('button', { name: 'Update Availability' }))
+    await user.click(screen.getByRole('button', { name: 'Update availability' }))
     expect(await screen.findByText('Response submitted!')).toBeInTheDocument()
   })
 
@@ -257,7 +257,7 @@ describe('PollRespond - edit mode via token', () => {
     renderRespond('/ui/polls/respond/respond-me?edit=garbage')
     // No prefill, plain submit button (create mode).
     expect(
-      await screen.findByRole('button', { name: 'Submit Availability' }),
+      await screen.findByRole('button', { name: 'Submit availability' }),
     ).toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   useCelery,
   BeatScheduleEntry,
@@ -122,7 +122,9 @@ const CeleryOverview = () => {
     'desc',
   )
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
     Promise.all([getBeatSchedule(), getTaskActivity()])
       .then(([sched, act]) => {
         setSchedule(sched)
@@ -132,28 +134,30 @@ const CeleryOverview = () => {
       .finally(() => setLoading(false))
   }, [getBeatSchedule, getTaskActivity])
 
+  useEffect(load, [load])
+
   const totals = activity?.totals
 
   return (
-    <Page title="Celery Tasks" width="wide" loading={loading && 'Loading Celery overview...'} error={error && `Error: ${error}`}>
+    <Page title="Celery tasks" width="wide" loading={loading && 'Loading Celery overview...'} error={error} onRetry={load}>
         {/* Task Metrics Summary Cards */}
         {totals && (
           <StatGrid>
             <Stat label={`Tasks (${activity?.hours || 24}h)`} value={totals.total} />
             <Stat label="Succeeded" value={totals.success} tone="success" />
             <Stat label="Failed" value={totals.failure} tone={totals.failure ? 'danger' : 'neutral'} />
-            <Stat label="Avg Duration" value={totals.avg_duration_ms !== null ? formatDuration(totals.avg_duration_ms) : '-'} />
+            <Stat label="Avg duration" value={totals.avg_duration_ms !== null ? formatDuration(totals.avg_duration_ms) : '-'} />
           </StatGrid>
         )}
 
         {/* Beat Schedule */}
-        <Section title={`Beat Schedule (${schedule.length} tasks)`}>
+        <Section title={`Beat schedule (${schedule.length} tasks)`}>
           <Table>
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <SortHeader<BeatScheduleEntry> label="Name" column="name" {...beatSort} />
                   <SortHeader<BeatScheduleEntry> label="Schedule" column="schedule_display" {...beatSort} />
-                  <SortHeader<BeatScheduleEntry> label="Last Run" column="last_run" {...beatSort} />
+                  <SortHeader<BeatScheduleEntry> label="Last run" column="last_run" {...beatSort} />
                   <SortHeader<BeatScheduleEntry> label="Status" column="last_status" {...beatSort} />
                   <SortHeader<BeatScheduleEntry> label="Duration" column="last_duration_ms" {...beatSort} />
                 </tr>
@@ -189,7 +193,7 @@ const CeleryOverview = () => {
 
         {/* Task Activity */}
         {activity && (
-          <Section title={`Task Activity (last ${activity.hours}h)`}>
+          <Section title={`Task activity (last ${activity.hours}h)`}>
             {activity.by_task.length > 0 && (
               <Table>
                   <thead className="bg-slate-50 border-b border-slate-200">
@@ -199,7 +203,7 @@ const CeleryOverview = () => {
                       <SortHeader<TaskActivityEntry> label="Success" column="success" className="text-right" {...activitySort} />
                       <SortHeader<TaskActivityEntry> label="Failed" column="failure" className="text-right" {...activitySort} />
                       <SortHeader<TaskActivityEntry> label="Rate" column="success" className="text-right" {...activitySort} />
-                      <SortHeader<TaskActivityEntry> label="Avg Duration" column="avg_duration_ms" className="text-right" {...activitySort} />
+                      <SortHeader<TaskActivityEntry> label="Avg duration" column="avg_duration_ms" className="text-right" {...activitySort} />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -233,7 +237,7 @@ const CeleryOverview = () => {
             )}
 
             {activity.recent_failures.length > 0 && (
-              <SubList title="Recent Failures">
+              <SubList title="Recent failures">
                 {activity.recent_failures.map((failure, idx) => (
                   <Row
                     key={`${failure.task}-${failure.timestamp}`}

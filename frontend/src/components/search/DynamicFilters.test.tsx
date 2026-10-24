@@ -23,9 +23,9 @@ describe('DynamicFilters', () => {
     renderWithUser(
       <DynamicFilters schemas={{}} selectedModalities={[]} filters={{}} onFilterChange={() => {}} />,
     )
-    expect(screen.getByText('Document Properties')).toBeInTheDocument()
-    expect(screen.getByLabelText('Min Created At')).toBeInTheDocument()
-    expect(screen.getByLabelText('Max Created At')).toBeInTheDocument()
+    expect(screen.getByText('Document properties')).toBeInTheDocument()
+    expect(screen.getByLabelText('Min created at')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max created at')).toBeInTheDocument()
   })
 
   it('renders modality-specific section for non-common fields', () => {
@@ -40,7 +40,7 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByText('Blog Specific')).toBeInTheDocument()
+    expect(screen.getByText('Blog specific')).toBeInTheDocument()
     expect(screen.getByLabelText('Author')).toBeInTheDocument()
   })
 
@@ -56,8 +56,8 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    // filename is a common field => it goes to Document Properties, no "Email Specific"
-    expect(screen.queryByText('Email Specific')).not.toBeInTheDocument()
+    // filename is a common field => it goes to Document Properties, no "Email specific"
+    expect(screen.queryByText('Email specific')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Filename')).toBeInTheDocument()
   })
 
@@ -73,8 +73,8 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByLabelText('Min Size')).toBeInTheDocument()
-    expect(screen.getByLabelText('Max Size')).toBeInTheDocument()
+    expect(screen.getByLabelText('Min size')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max size')).toBeInTheDocument()
   })
 
   it('expands sent_at into min/max common fields', () => {
@@ -89,8 +89,8 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByLabelText('Min Sent At')).toBeInTheDocument()
-    expect(screen.getByLabelText('Max Sent At')).toBeInTheDocument()
+    expect(screen.getByLabelText('Min sent at')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max sent at')).toBeInTheDocument()
   })
 
   it('skips the tags field entirely', () => {
@@ -112,7 +112,7 @@ describe('DynamicFilters', () => {
     expect(screen.getByLabelText('Author')).toBeInTheDocument()
   })
 
-  it('formats underscored field names into title case labels', () => {
+  it('formats underscored field names into sentence case labels', () => {
     const schemas = {
       blog: schema({ word_count: { type: 'int', description: 'Words' } }),
     }
@@ -124,7 +124,7 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByLabelText('Word Count')).toBeInTheDocument()
+    expect(screen.getByLabelText('Word count')).toBeInTheDocument()
   })
 
   it('passes current filter values into inputs', () => {
@@ -168,6 +168,6 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.queryByText('Ghost Specific')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ghost specific')).not.toBeInTheDocument()
   })
 })

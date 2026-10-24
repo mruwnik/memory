@@ -82,7 +82,7 @@ describe('ScheduledTasks', () => {
     listTasks.mockResolvedValue([claudeTask()])
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
-    expect(screen.getByText('Claude Session')).toBeInTheDocument()
+    expect(screen.getByText('Claude session')).toBeInTheDocument()
     expect(screen.getByText('org/repo')).toBeInTheDocument()
     expect(screen.getByText('nightly')).toBeInTheDocument()
   })
@@ -91,7 +91,7 @@ describe('ScheduledTasks', () => {
     const user = userEvent.setup()
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(listTasks).toHaveBeenCalled())
-    await user.click(screen.getByRole('button', { name: 'Claude Sessions' }))
+    await user.click(screen.getByRole('button', { name: 'Claude sessions' }))
     await waitFor(() => {
       const last = listTasks.mock.calls.at(-1)?.[0]
       expect(last.task_type).toBe('claude_session')
@@ -340,8 +340,8 @@ describe('ScheduledTasks', () => {
 
   it.each([
     ['Notifications', 'No notification tasks'],
-    ['Claude Sessions', 'No Claude session tasks'],
-    ['Agent Runs', 'No agent run tasks'],
+    ['Claude sessions', 'No Claude session tasks'],
+    ['Agent runs', 'No agent run tasks'],
   ])('shows the empty message for the %s filter', async (filter, message) => {
     listTasks.mockResolvedValue([])
     const user = userEvent.setup()

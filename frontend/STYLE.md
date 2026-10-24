@@ -28,6 +28,7 @@ Each route component returns exactly one `<Page>`:
 </Page>
 ```
 
+- Every label (titles, buttons, tabs, filters, fields) is sentence case, and a page's `title` is its `nav.ts` title. "New …" opens a create form; "Add …" connects or attaches something that already exists.
 - `loading` and `error` are for the initial load only. Actions on a loaded page (sync, toggle, delete) run through
   `useActionNotice`, whose `notice` shows the failure (with the server's reason) or a short success; never swallow an error.
 - `fill` makes the content fill the viewport below the header, for split panes that scroll
@@ -118,7 +119,7 @@ detail alone, with a back button to the list, or the list with the placeholder u
 (`?id=` or a path segment) so it survives reloads.
 
 ```tsx
-<Page title="Reports" width="full" fill actions={<Button variant="primary">New Report</Button>}>
+<Page title="Reports" width="full" fill actions={<Button variant="primary">New report</Button>}>
   <SplitView
     listTitle={`${reports.length} reports`}
     list={<List flush>{reports.map(r => <Row key={r.id} title={r.title} onSelect={() => select(r)} selected={r.id === id} />)}</List>}
@@ -136,13 +137,13 @@ pairs, which stack on phones), `FormActions` at the bottom of each card. Setting
 than values (change password, regenerate key) are `Row`s in a flush `List` inside the card.
 
 ```tsx
-<Page title="User Settings" width="narrow">
+<Page title="User settings" width="narrow">
   <Card title="Profile">
     <Field label="Name"><Input value={name} onChange={...} /></Field>
-    <FormActions><Button variant="primary">Save Changes</Button></FormActions>
+    <FormActions><Button variant="primary">Save changes</Button></FormActions>
   </Card>
   <Card title="Security" flush>
-    <List flush><Row title="API Key" meta={['No API key configured']} actions={<Button size="sm">Generate</Button>} /></List>
+    <List flush><Row title="API key" meta={['No API key configured']} actions={<Button size="sm">Generate</Button>} /></List>
   </Card>
 </Page>
 ```
@@ -155,12 +156,12 @@ than values (change password, regenerate key) are `Row`s in a flush `List` insid
 ```tsx
 <Toolbar actions={<RefreshButton onClick={load} />}><ToggleGroup label="Time range" ... /></Toolbar>
 <StatGrid>
-  <Stat label="Success Rate" value="97%" tone="success" />
+  <Stat label="Success rate" value="97%" tone="success" />
   <Stat label="Memory" value="62%" tone="warning" hint="5.1 GB / 8 GB" />
 </StatGrid>
 <CardGrid>
-  <Card title="System Health" className="lg:col-span-2"><Chart /></Card>
-  <Card title="Recent Calls"><Table>...</Table></Card>
+  <Card title="System health" className="lg:col-span-2"><Chart /></Card>
+  <Card title="Recent calls"><Table>...</Table></Card>
 </CardGrid>
 ```
 

@@ -5,7 +5,7 @@ import AuthError from './AuthError'
 describe('AuthError', () => {
   it('renders the error message and heading', () => {
     renderWithUser(<AuthError error="Token expired" onRetry={() => {}} />)
-    expect(screen.getByText('Authentication Error')).toBeInTheDocument()
+    expect(screen.getByText('Authentication error')).toBeInTheDocument()
     expect(screen.getByText('Token expired')).toBeInTheDocument()
   })
 

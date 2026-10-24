@@ -172,6 +172,7 @@ describe('Calendar', () => {
     await user.click(screen.getByRole('button', { name: /Calendars/ }))
     await user.click(screen.getByRole('button', { name: 'Select none' }))
     await waitFor(() => expect(screen.queryByText('WorkEvt')).not.toBeInTheDocument())
+    expect(screen.getByText('No calendars selected.')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Select all' }))
     await waitFor(() => expect(screen.getByText('WorkEvt')).toBeInTheDocument())
     expect(screen.getByText('HomeEvt')).toBeInTheDocument()
@@ -216,7 +217,7 @@ describe('Calendar', () => {
     await user.click(screen.getByText('Holiday'))
     await waitFor(() => expect(screen.getByText('All day')).toBeInTheDocument())
     expect(screen.getByText('Recurring event')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Join Meeting' })).toHaveAttribute('href', 'https://meet.example/x')
+    expect(screen.getByRole('link', { name: 'Join meeting' })).toHaveAttribute('href', 'https://meet.example/x')
   })
 
   it('renders a timed event detail modal with end time', async () => {

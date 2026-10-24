@@ -3,7 +3,7 @@ import { CollectionMetadata, SchemaArg } from '@/types/mcp'
 import { Disclosure, Field, Label } from '@/components/shared/ui'
 
 const formatFieldLabel = (field: string): string =>
-    field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+    field.replace(/_/g, ' ').replace(/^\w/, l => l.toUpperCase())
 
 const shouldSkipField = (fieldName: string): boolean =>
     ['tags'].includes(fieldName)
@@ -102,7 +102,7 @@ export const DynamicFilters = ({
             <Label>Filters</Label>
             <div className="space-y-3">
                 {commonFields.length > 0 && (
-                    <Disclosure summary="Document Properties" open>
+                    <Disclosure summary="Document properties" open>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {commonFields.map(([field, fieldConfig]: [string, SchemaArg]) => (
                                 <Field key={field} label={formatFieldLabel(field)}>
@@ -119,7 +119,7 @@ export const DynamicFilters = ({
                 )}
 
                 {Object.entries(modalityFields).map(([modality, fields]) => (
-                    <Disclosure key={modality} summary={`${formatFieldLabel(modality)} Specific`}>
+                    <Disclosure key={modality} summary={`${formatFieldLabel(modality)} specific`}>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {fields.map(([field, fieldConfig]: [string, SchemaArg]) => (
                                 <Field key={field} label={formatFieldLabel(field)}>

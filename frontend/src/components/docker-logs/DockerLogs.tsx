@@ -93,22 +93,22 @@ export default function DockerLogs() {
   const logViewerRef = useRef<HTMLPreElement>(null)
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Load containers on mount only
-  useEffect(() => {
-    let mounted = true
-    listContainers()
-      .then(data => {
-        if (mounted) {
-          setContainers(data)
-          // Auto-select first container if none selected
-          setSelectedContainer(prev => prev ?? (data.length > 0 ? data[0].name : null))
-        }
-      })
-      .catch(err => {
-        if (mounted) setError(err.message)
-      })
-    return () => { mounted = false }
+  const [containersError, setContainersError] = useState<string | null>(null)
+
+  const loadContainers = useCallback(async () => {
+    setContainersError(null)
+    try {
+      const data = await listContainers()
+      setContainers(data)
+      setSelectedContainer(prev => prev ?? (data.length > 0 ? data[0].name : null))
+    } catch (err) {
+      setContainersError(err instanceof Error ? err.message : 'Failed to list containers')
+    }
   }, [listContainers])
+
+  useEffect(() => {
+    loadContainers()
+  }, [loadContainers])
 
   // Load logs when container or time range changes
   const loadLogs = useCallback(async () => {
@@ -166,8 +166,10 @@ export default function DockerLogs() {
 
   return (
     <Page
-      title="Docker Logs"
+      title="Docker logs"
       width="wide"
+      error={containersError}
+      onRetry={loadContainers}
     >
       <Toolbar actions={<RefreshButton onClick={loadLogs} loading={loading} label="Refresh logs" />}>
         <ToggleGroup label="Time range" options={TIME_RANGES} value={timeRange} onChange={setTimeRange} />
@@ -215,7 +217,7 @@ export default function DockerLogs() {
             logs.logs.split('\n').map((line, i) => (
               <LogLine key={i} line={line} filterText={filterText} />
             ))
-          ) : (
+          ) : !error && (
             <span className="text-slate-400">No logs available</span>
           )}
         </pre>

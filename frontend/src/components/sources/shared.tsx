@@ -89,7 +89,7 @@ export const TestConnectionButton = ({ onTest, onResult, disabled }: TestConnect
         onClick={handleTest}
         disabled={disabled || testing}
       >
-        {testing ? 'Testing…' : 'Test Connection'}
+        {testing ? 'Testing…' : 'Test connection'}
       </Button>
       {result && <Notice tone={result.status === 'success' ? 'success' : 'error'}>{result.message}</Notice>}
     </div>

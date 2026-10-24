@@ -8,7 +8,7 @@ const LoginPrompt = ({ onLogin }: { onLogin: () => void }) => {
                 onClick={onLogin}
                 className="text-lg hover:-translate-y-0.5"
             >
-                Log In
+                Log in
             </Button>
         </div>
     )

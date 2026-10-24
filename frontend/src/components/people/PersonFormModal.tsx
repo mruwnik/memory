@@ -121,7 +121,7 @@ const PersonFormModal = ({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Basic Info */}
-          <Field label={<>Display Name <span className="text-red-500" aria-hidden="true">*</span> <span className="sr-only">(required)</span></>}>
+          <Field label={<>Display name <span className="text-red-500" aria-hidden="true">*</span> <span className="sr-only">(required)</span></>}>
             <Input
               id="person-display-name"
               type="text"
@@ -179,7 +179,7 @@ const PersonFormModal = ({
 
           {/* Contact Info Section */}
           <div className="pt-2">
-            <h4 className="text-sm font-medium text-slate-700 mb-3">Contact Information</h4>
+            <h4 className="text-sm font-medium text-slate-700 mb-3">Contact information</h4>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label htmlFor="person-email" className="block text-xs text-slate-500 mb-1">Email</label>

@@ -76,7 +76,7 @@ describe('SecretsPanel - create flow', () => {
     const { user } = renderWithUser(<SecretsPanel />)
     await screen.findByText('api-key')
 
-    await user.click(screen.getByRole('button', { name: 'Add Secret' }))
+    await user.click(screen.getByRole('button', { name: 'Add secret' }))
     await user.type(screen.getByPlaceholderText('api-key or github-token'), 'new-key')
     await user.type(screen.getByPlaceholderText('Enter secret value'), 'val123')
     await user.type(screen.getByPlaceholderText('What is this secret used for?'), 'desc')
@@ -85,7 +85,7 @@ describe('SecretsPanel - create flow', () => {
     await waitFor(() =>
       expect(createSecret).toHaveBeenCalledWith({ name: 'new-key', value: 'val123', description: 'desc' }),
     )
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Secret' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add secret' })).not.toBeInTheDocument())
     expect(listSecrets).toHaveBeenCalledTimes(2)
   })
 
@@ -94,7 +94,7 @@ describe('SecretsPanel - create flow', () => {
     const { user } = renderWithUser(<SecretsPanel />)
     await screen.findByText('api-key')
 
-    await user.click(screen.getByRole('button', { name: 'Add Secret' }))
+    await user.click(screen.getByRole('button', { name: 'Add secret' }))
     await user.type(screen.getByPlaceholderText('api-key or github-token'), 'dup')
     await user.type(screen.getByPlaceholderText('Enter secret value'), 'v')
     await user.click(screen.getByRole('button', { name: 'Save' }))

@@ -149,7 +149,7 @@ describe('TeamsPanel - create flow', () => {
     const slugInput = screen.getByPlaceholderText('engineering-core') as HTMLInputElement
     await waitFor(() => expect(slugInput.value).toBe('my-new-team'))
 
-    await user.click(screen.getByRole('button', { name: 'Create Team' }))
+    await user.click(screen.getByRole('button', { name: 'Create team' }))
     await waitFor(() =>
       expect(createTeam).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'My New Team', slug: 'my-new-team' }),
@@ -164,7 +164,7 @@ describe('TeamsPanel - create flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'New team' }))
     await user.type(screen.getByPlaceholderText('Engineering Core'), 'Dup')
-    await user.click(screen.getByRole('button', { name: 'Create Team' }))
+    await user.click(screen.getByRole('button', { name: 'Create team' }))
 
     expect(await screen.findByText('slug exists')).toBeInTheDocument()
   })
@@ -179,7 +179,7 @@ describe('TeamsPanel - create flow', () => {
     await user.type(screen.getByPlaceholderText('Search for people to add...'), 'bob')
     await clickPersonResult(user, 'Bob')
 
-    await user.click(screen.getByRole('button', { name: 'Create Team' }))
+    await user.click(screen.getByRole('button', { name: 'Create team' }))
     await waitFor(() => expect(createTeam).toHaveBeenCalled())
     await waitFor(() => expect(addMember).toHaveBeenCalledWith('team-x', 'bob'))
   })
@@ -198,7 +198,7 @@ describe('TeamsPanel - edit flow', () => {
     const nameInput = screen.getByPlaceholderText('Engineering Core')
     await user.clear(nameInput)
     await user.type(nameInput, 'Engineering Renamed')
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
       expect(updateTeam).toHaveBeenCalledWith(
@@ -214,7 +214,7 @@ describe('TeamsPanel - edit flow', () => {
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByText('nope')).toBeInTheDocument()
   })
 })
@@ -338,7 +338,7 @@ describe('TeamsPanel - owner change', () => {
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
-    await user.click(screen.getByText('None'))
+    await user.click(screen.getByText('Set owner'))
     await user.click(await screen.findByRole('button', { name: 'Alice' }))
     await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', { owner: 1 }))
   })

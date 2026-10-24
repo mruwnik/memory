@@ -123,7 +123,7 @@ const Tasks = () => {
           <div className="flex gap-2">
             <Input type="text" placeholder="What needs to be done?" aria-label="New task" value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)} disabled={isAdding} className="flex-1" />
-            <Button variant="primary" type="submit" disabled={isAdding || !newTaskTitle.trim()}>Add Task</Button>
+            <Button variant="primary" type="submit" disabled={isAdding || !newTaskTitle.trim()}>Add task</Button>
           </div>
           <FieldRow>
             <Select value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value)} aria-label="Priority">
@@ -188,7 +188,7 @@ const Tasks = () => {
                   ) : <span className={cx(done && 'line-through')}>{task.task_title}</span>}
                   badges={editingTask !== task.id && <>
                     {task.priority && <Badge tone={PRIORITY_TONES[task.priority] ?? 'neutral'}>{task.priority}</Badge>}
-                    {task.status === 'in_progress' && <Badge tone="info">In Progress</Badge>}
+                    {task.status === 'in_progress' && <Badge tone="info">In progress</Badge>}
                     {due && <Badge tone={due.tone}>{due.text}</Badge>}
                   </>}
                   actions={editingTask !== task.id && <>

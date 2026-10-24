@@ -60,7 +60,7 @@ export const BooksPanel = () => {
       description={`${books.length} books`}
       actions={
         <label className={buttonClass('primary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
-          {uploading ? 'Uploading...' : 'Upload Books'}
+          {uploading ? 'Uploading...' : 'Upload books'}
           <input ref={fileInputRef} type="file" accept=".epub,.pdf,.mobi,.azw,.azw3" multiple
             onChange={handleUpload} disabled={uploading} className="hidden" />
         </label>
@@ -70,7 +70,7 @@ export const BooksPanel = () => {
       {uploadSuccess && <Notice tone="success">{uploadSuccess}</Notice>}
 
       {books.length === 0 ? (
-        <EmptyState message="No books indexed yet" actionLabel="Upload Books" onAction={() => fileInputRef.current?.click()} />
+        <EmptyState message="No books indexed yet" actionLabel="Upload books" onAction={() => fileInputRef.current?.click()} />
       ) : (
         <List>
           {books.map(book => (

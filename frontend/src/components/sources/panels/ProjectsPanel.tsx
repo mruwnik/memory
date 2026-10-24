@@ -462,7 +462,7 @@ export const ProjectsPanel = () => {
       {projects.length === 0 ? (
         <EmptyState
           message="No projects found. Create a standalone project or sync GitHub milestones."
-          actionLabel="Create Project"
+          actionLabel="New project"
           onAction={() => setShowCreateModal(true)}
         />
       ) : viewMode === 'tree' && hasHierarchy ? (
@@ -524,7 +524,7 @@ export const ProjectsPanel = () => {
 
       {showCreateModal && (
         <ProjectFormModal
-          title="Create Project"
+          title="New project"
           projects={projects}
           onSubmit={handleCreate}
           onClose={() => setShowCreateModal(false)}
@@ -535,7 +535,7 @@ export const ProjectsPanel = () => {
 
       {editingProject && (
         <ProjectFormModal
-          title="Edit Project"
+          title="Edit project"
           project={editingProject}
           projects={projects}
           onSubmit={data => handleUpdate(editingProject.id, data)}
@@ -1100,7 +1100,7 @@ const ProjectFormModal = ({
           </Select>
         </Field>
 
-        <Field label="Parent Project" hint="Organize projects into a hierarchy by setting a parent.">
+        <Field label="Parent project" hint="Organize projects into a hierarchy by setting a parent.">
           <Select
             value={formData.parent_id ?? ''}
             onChange={e => setFormData({
@@ -1135,7 +1135,7 @@ const ProjectFormModal = ({
           </Select>
         </Field>
 
-        <Field label="Due Date" hint="Optional deadline for this project.">
+        <Field label="Due date" hint="Optional deadline for this project.">
           <Input
             type="date"
             value={formData.due_on}
@@ -1333,7 +1333,7 @@ const ProjectTeamsModal = ({
             {availableTeams.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium text-slate-700 mb-2">
-                  Available Teams
+                  Available teams
                 </h4>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {availableTeams.map(team => (
