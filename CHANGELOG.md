@@ -266,8 +266,9 @@ section has nothing in it:
   runs a system agent (Agents → System agents) on a user's own key. Users need
   a default Anthropic key (LLM API keys, `/ui/keys`) for summaries, search's LLM
   steps, meeting notes and session summaries; Claude sessions of users without
-  a default Anthropic key stop being summarised. OpenAI keys can be stored but
-  aren't used yet. The `openai_key` / `anthropic_key` docker secrets can be
+  a default Anthropic key stop being summarised. OpenAI keys pay for agents
+  on OpenAI models (`openai/gpt-6-astra`, `openai/gpt-6.1-sol`,
+  `openai/gpt-6-luna`). The `openai_key` / `anthropic_key` docker secrets can be
   deleted.
 - `DISCORD_PROCESS_MESSAGES`, `DISCORD_MODEL` and `DISCORD_MAX_TOOL_CALLS` are
   removed; nothing read them. Delete them from `.env` if set.

@@ -256,7 +256,7 @@ Reports must be created with `allow_scripts=True` for this to load (set via the 
 
 ## Configuration
 
-Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic key, added under LLM API keys (`/ui/keys`); the server holds none. OpenAI keys can be stored but aren't used yet. Key settings:
+Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic key, added under LLM API keys (`/ui/keys`); the server holds none. Agents can also run on OpenAI models, paid with the user's OpenAI key. Key settings:
 
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |

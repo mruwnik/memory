@@ -47,8 +47,6 @@ class BaseLLMProvider(ABC):
 
     @classmethod
     def model_info(cls, model: str) -> ModelInfo:
-        if not cls.MODELS:
-            raise ValueError(f"provider {cls.provider!r} does not support agent runs")
         if model not in cls.MODELS:
             known = ", ".join(sorted(cls.MODELS))
             raise ValueError(

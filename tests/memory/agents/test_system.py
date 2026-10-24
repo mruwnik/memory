@@ -2,7 +2,7 @@ import pytest
 
 from memory.agents.spec import AgentSpec, spec_errors
 from memory.agents.system import SOURCE_PROVIDER, SYSTEM_AGENTS, system_agent
-from memory.common.llms.anthropic_provider import is_strict_schema
+from memory.common.llms.tools import is_strict_schema
 
 
 @pytest.mark.parametrize("agent", list(SYSTEM_AGENTS.values()), ids=list(SYSTEM_AGENTS))
@@ -32,3 +32,26 @@ def test_ingest_agents_share_the_provider_source_keys_are_checked_against():
 def test_unknown_slugs_are_refused():
     with pytest.raises(ValueError, match="unknown system agent 'system:nope'"):
         system_agent("system:nope")
+
+
+STRICT_OBJECT = {
+    "type": "object",
+    "properties": {"a": {"type": "string"}},
+    "required": ["a"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    "schema,strict",
+    [
+        (STRICT_OBJECT, True),
+        ({"anyOf": [STRICT_OBJECT, {"type": "null"}]}, True),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+        ({"oneOf": [{"type": "string"}]}, False),
+        ({"$ref": "#/$defs/x"}, False),
+        ({"allOf": [{"type": "string"}]}, False),
+    ],
+)
+def test_strict_schema_rejects_what_strict_tool_use_refuses(schema, strict):
+    assert is_strict_schema(schema) is strict

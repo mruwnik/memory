@@ -191,7 +191,7 @@ export default function KeysPage() {
   return (
     <Page
       title="LLM API keys"
-      description="Anthropic keys pay for summaries and other LLM work on items you own, for the LLM steps of your searches, and for your agents. Nothing LLM-backed runs without one. OpenAI keys are stored but not used yet. Tools refer to keys by name or id."
+      description="Anthropic keys pay for summaries and other LLM work on items you own, and for the LLM steps of your searches. Anthropic and OpenAI keys both pay for agents on their models. Nothing LLM-backed runs without one. Tools refer to keys by name or id."
       actions={<Button variant="primary" onClick={() => setAdding(true)}>New key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}

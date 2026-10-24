@@ -8,7 +8,7 @@ from typing import Any, Literal
 import anthropic
 
 from memory.common import settings
-from memory.common.llms.base import BaseLLMProvider, ToolDefinition, Usage
+from memory.common.llms.base import BaseLLMProvider, Usage
 from memory.common.llms.neutral import (
     AgentUsage,
     Capabilities,
@@ -25,6 +25,7 @@ from memory.common.llms.neutral import (
     ToolCall,
     ToolResult,
 )
+from memory.common.llms.tools import ToolDefinition, is_strict_schema
 
 logger = logging.getLogger(__name__)
 
@@ -120,20 +121,6 @@ ANTHROPIC_MODELS: dict[str, ModelInfo] = {
         ),
     ),
 }
-
-
-def is_strict_schema(schema: dict[str, Any]) -> bool:
-    """Whether Anthropic strict tool use accepts this schema."""
-    if schema.get("type") == "object":
-        props = schema.get("properties", {})
-        return (
-            schema.get("additionalProperties") is False
-            and set(schema.get("required", [])) == set(props)
-            and all(is_strict_schema(p) for p in props.values())
-        )
-    if schema.get("type") == "array":
-        return is_strict_schema(schema.get("items", {}))
-    return True
 
 
 def render_server_result(block: dict[str, Any]) -> tuple[str, bool]:
