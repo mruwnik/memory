@@ -35,6 +35,7 @@ from memory.api.auth import (
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common import settings
+from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
     MARK_SLACK_MESSAGE_DELETED,
@@ -314,6 +315,17 @@ def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWor
         )
         for app in apps
     ]
+
+
+def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
+    """A workspace whose shared settings `user` may edit: any connected user's, and
+    every one for admins, who see them all in the list without a credential."""
+    if not has_admin_scope(user):
+        return get_workspace_with_access(db, workspace_id, user)
+    workspace = db.get(SlackWorkspace, workspace_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return workspace
 
 
 def workspace_to_response(
@@ -650,9 +662,9 @@ def update_workspace(
 ) -> SlackWorkspaceResponse:
     """Update workspace settings.
 
-    Any connected user can update workspace settings (settings are shared).
+    Any connected user or admin can update workspace settings (settings are shared).
     """
-    workspace = get_workspace_with_access(db, workspace_id, user)
+    workspace = get_workspace_for_settings(db, workspace_id, user)
 
     snap_pid, snap_sens = workspace.project_id, workspace.sensitivity
     if updates.collect_messages is not None:

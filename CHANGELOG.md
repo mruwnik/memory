@@ -243,7 +243,8 @@ section has nothing in it:
 - Ingest summaries and tags run only on a provider key: a source's explicit key
   (Sources → each source → LLM key), else the default key of whoever brought the
   item in. Items without one are embedded without a summary. Spend counts
-  against the key's daily cap.
+  against the key's daily cap. Anyone who can see a source may switch it to one
+  of their own keys (they pay from then on), to default, or off.
 - Meeting extraction (summary, notes, action items) runs on the meeting's key
   like other ingest LLM work; meetings without one are stored with extraction
   `skipped`. Its prompt, system prompt and model can no longer be overridden

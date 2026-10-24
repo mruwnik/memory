@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from memory.agents.provider_keys import chosen_key, default_key, payer_id, usable
 from memory.agents.system import SOURCE_PROVIDER
+from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import DBSession
 from memory.common.db.models import LLMKeyChoice, LLMProviderKey, User
 
@@ -32,21 +33,29 @@ def current_choice(holder: LLMKeyChoice) -> LLMKeyInput:
 def apply_llm_key(
     db: DBSession, user: User, holder: LLMKeyChoice, value: LLMKeyInput | None
 ) -> None:
-    """Set `holder`'s choice. Only the source's payer may change it, and an explicit
-    key must be theirs and for SOURCE_PROVIDER."""
-    if value is None or value == current_choice(holder):
+    """Set `holder`'s choice. The caller already passed the holder's visibility check.
+    "default" spends the default payer's keys, so only they or an admin may pick it; an
+    explicit key must be the caller's own and for SOURCE_PROVIDER, and the caller pays."""
+    if value is None:
         return
-    if user.id != payer_id(holder):
-        raise HTTPException(
-            status_code=403,
-            detail="only the user whose keys pay for this source can change its LLM key",
-        )
     if value in ("default", "none"):
+        if value == current_choice(holder):
+            return
+        if value == "default" and user.id != payer_id(holder) and not has_admin_scope(user):
+            raise HTTPException(
+                status_code=403,
+                detail="only the source's owner or an admin can put it back on the "
+                "default key; pick one of your own keys or turn LLM work off",
+            )
         holder.llm_key_id, holder.llm_disabled = None, value == "none"
         return
+    # Checked before the no-op shortcut, so resending another user's hidden key id
+    # fails like any unknown id.
     key = db.get(LLMProviderKey, value)
     if key is None or key.user_id != user.id:
         raise HTTPException(status_code=400, detail=f"unknown API key {value}")
+    if value == current_choice(holder):
+        return
     if key.provider != SOURCE_PROVIDER:
         raise HTTPException(
             status_code=400,
@@ -58,7 +67,7 @@ def apply_llm_key(
 
 def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyView:
     """What pays for `holder`'s items, resolved as ingest_key resolves it; another
-    user's key is never named."""
+    user's key is never named or identified."""
     if holder.llm_disabled:
         return LLMKeyView(
             choice="none",
@@ -77,7 +86,7 @@ def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyVie
     mine = pays is not None and pays.user_id == viewer.id
     return LLMKeyView(
         choice="key" if key is not None else "default",
-        key_id=key.id if key is not None else None,
+        key_id=key.id if key is not None and key.user_id == viewer.id else None,
         label=pays.label if pays is not None and mine else None,
         provider=SOURCE_PROVIDER,
         paid_by_you=mine,

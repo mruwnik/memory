@@ -55,22 +55,15 @@ def test_the_owners_default_key_pays_for_items_from_a_source_left_on_default(db_
     assert ingest_key(db_session, post, SUMMARISE) == default
 
 
-def test_a_sources_explicit_key_wins_over_the_default(db_session, regular_user):
+@pytest.mark.parametrize("chooser", ["regular_user", "admin_user"])
+def test_a_sources_explicit_key_pays_whoever_owns_it(request, db_session, regular_user, chooser):
+    """Anyone who can see a source may switch it to their own key, and then they pay."""
     key(db_session, regular_user, "default", is_default=True)
-    explicit = key(db_session, regular_user, "work")
+    explicit = key(db_session, request.getfixturevalue(chooser), "work")
     post = blog_post(db_session, feed_of(db_session, regular_user, llm_key_id=explicit.id))
     post.creator_id = regular_user.id
 
     assert ingest_key(db_session, post, SUMMARISE) == explicit
-
-
-def test_a_source_cannot_spend_someone_elses_key(db_session, regular_user, admin_user):
-    default = key(db_session, regular_user, "default", is_default=True)
-    theirs = key(db_session, admin_user, "theirs")
-    post = blog_post(db_session, feed_of(db_session, regular_user, llm_key_id=theirs.id))
-    post.creator_id = regular_user.id
-
-    assert ingest_key(db_session, post, SUMMARISE) == default
 
 
 @pytest.mark.parametrize("choice", ["disabled", "other_provider", "invalid"])
