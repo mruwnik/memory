@@ -383,7 +383,7 @@ def test_discover_feed_invalid_url(mock_get_parser, client, db_session, user):
 # ====== Helper function tests ======
 
 
-def test_feed_to_response_with_all_fields(db_session):
+def test_feed_to_response_with_all_fields(db_session, user):
     """feed_to_response converts feed with all fields."""
     from memory.api.article_feeds import feed_to_response
 
@@ -405,7 +405,7 @@ def test_feed_to_response_with_all_fields(db_session):
     db_session.add(feed)
     db_session.commit()
 
-    response = feed_to_response(feed)
+    response = feed_to_response(feed, db_session, user)
 
     assert response.id == 1
     assert response.url == "https://example.com/feed.xml"
@@ -421,7 +421,7 @@ def test_feed_to_response_with_all_fields(db_session):
     assert response.sync_failing_since == now.isoformat()
 
 
-def test_feed_to_response_with_minimal_fields(db_session):
+def test_feed_to_response_with_minimal_fields(db_session, user):
     """feed_to_response converts feed with minimal fields."""
     from memory.api.article_feeds import feed_to_response
 
@@ -438,7 +438,7 @@ def test_feed_to_response_with_minimal_fields(db_session):
     db_session.add(feed)
     db_session.commit()
 
-    response = feed_to_response(feed)
+    response = feed_to_response(feed, db_session, user)
 
     assert response.id == 2
     assert response.url == "https://example.com/feed.xml"

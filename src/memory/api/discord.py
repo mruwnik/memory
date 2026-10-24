@@ -14,6 +14,7 @@ from memory.api.auth import (
     get_current_user,
     resolve_user_filter,
 )
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.common import discord as discord_client
 from memory.common.access_control import has_admin_scope
 from memory.common.data_source_access import (
@@ -74,6 +75,7 @@ class DiscordServerResponse(BaseModel):
     # Access control
     project_id: int | None
     sensitivity: str
+    llm_key: LLMKeyView
 
 
 class DiscordServerUpdate(BaseModel):
@@ -81,6 +83,7 @@ class DiscordServerUpdate(BaseModel):
     # Access control
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 # --- Channel Models ---
@@ -188,7 +191,9 @@ def bot_to_response(
     )
 
 
-def server_to_response(server: DiscordServer) -> DiscordServerResponse:
+def server_to_response(
+    server: DiscordServer, db: Session, user: User
+) -> DiscordServerResponse:
     """Convert a DiscordServer model to a response."""
     return DiscordServerResponse(
         id=str(server.id),
@@ -200,6 +205,7 @@ def server_to_response(server: DiscordServer) -> DiscordServerResponse:
         channel_count=len(server.channels),
         project_id=server.project_id,
         sensitivity=cast(str, server.sensitivity) or "basic",
+        llm_key=llm_key_view(db, user, server),
     )
 
 
@@ -478,7 +484,7 @@ def list_servers(
     """List Discord servers owned by the requesting user's bots."""
     user, db = auth
     servers = fetch_servers(db, user_id=user.id)
-    return [server_to_response(server) for server in servers]
+    return [server_to_response(server, db, user) for server in servers]
 
 
 @router.patch("/servers/{server_id}")
@@ -504,6 +510,7 @@ def update_server(
         server.project_id = updates.project_id
     if updates.sensitivity is not None:
         server.sensitivity = updates.sensitivity
+    apply_llm_key(db, user, server, updates.llm_key)
 
     access_changed = mark_access_control_changed_if_needed(
         server,
@@ -517,7 +524,7 @@ def update_server(
     if access_changed:
         enqueue_access_control_propagation("discord_server", server)
 
-    return server_to_response(server)
+    return server_to_response(server, db, user)
 
 
 # --- Channel Endpoints ---

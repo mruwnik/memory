@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import SYNC_ARTICLE_FEED, app as celery_app
 from memory.common.db.connection import get_session
@@ -58,6 +59,7 @@ class ArticleFeedCreate(BaseModel):
     tags: list[str] = []
     check_interval: int = 1440  # 24 hours in minutes
     active: bool = True
+    llm_key: LLMKeyInput | None = None
 
 
 class ArticleFeedUpdate(BaseModel):
@@ -66,6 +68,7 @@ class ArticleFeedUpdate(BaseModel):
     tags: list[str] | None = None
     check_interval: int | None = None
     active: bool | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class ArticleFeedResponse(SyncStatusResponse):
@@ -79,6 +82,7 @@ class ArticleFeedResponse(SyncStatusResponse):
     active: bool
     created_at: str
     updated_at: str
+    llm_key: LLMKeyView
 
 
 class FeedDiscoveryResponse(BaseModel):
@@ -87,7 +91,7 @@ class FeedDiscoveryResponse(BaseModel):
     description: str | None
 
 
-def feed_to_response(feed: ArticleFeed) -> ArticleFeedResponse:
+def feed_to_response(feed: ArticleFeed, db: Session, user: User) -> ArticleFeedResponse:
     """Convert an ArticleFeed model to a response model."""
     return ArticleFeedResponse(
         id=cast(int, feed.id),
@@ -103,6 +107,7 @@ def feed_to_response(feed: ArticleFeed) -> ArticleFeedResponse:
         created_at=feed.created_at.isoformat() if feed.created_at else "",
         updated_at=feed.updated_at.isoformat() if feed.updated_at else "",
         **sync_status_fields(feed),
+        llm_key=llm_key_view(db, user, feed),
     )
 
 
@@ -116,7 +121,7 @@ def list_feeds(
     if not has_admin_scope(user):
         query = query.filter(ArticleFeed.user_id == user.id)
     feeds = query.all()
-    return [feed_to_response(feed) for feed in feeds]
+    return [feed_to_response(feed, db, user) for feed in feeds]
 
 
 @router.post("")
@@ -144,11 +149,12 @@ def create_feed(
         check_interval=data.check_interval,
         active=data.active,
     )
+    apply_llm_key(db, user, feed, data.llm_key)
     db.add(feed)
     db.commit()
     db.refresh(feed)
 
-    return feed_to_response(feed)
+    return feed_to_response(feed, db, user)
 
 
 @router.get("/{feed_id}")
@@ -159,7 +165,7 @@ def get_feed(
 ) -> ArticleFeedResponse:
     """Get a single article feed (owner or admin only)."""
     feed = get_owned_feed(db, user, feed_id)
-    return feed_to_response(feed)
+    return feed_to_response(feed, db, user)
 
 
 @router.patch("/{feed_id}")
@@ -182,11 +188,12 @@ def update_feed(
         feed.check_interval = updates.check_interval
     if updates.active is not None:
         feed.active = updates.active
+    apply_llm_key(db, user, feed, updates.llm_key)
 
     db.commit()
     db.refresh(feed)
 
-    return feed_to_response(feed)
+    return feed_to_response(feed, db, user)
 
 
 @router.delete("/{feed_id}")

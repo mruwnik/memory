@@ -60,7 +60,12 @@ from memory.common.db.models.slack import (
     slack_app_users,
 )
 from memory.common.db.models.mcp import ExternalMCPServer, ServerStatus
-from memory.common.db.models.provider_keys import KeyStatus, LLMProviderKey, LLMSpend
+from memory.common.db.models.provider_keys import (
+    KeyStatus,
+    LLMKeyChoice,
+    LLMProviderKey,
+    LLMSpend,
+)
 from memory.common.db.models.observations import (
     ObservationContradiction,
     ReactionPattern,
@@ -297,6 +302,7 @@ __all__ = [
     "slack_app_users",
     "ExternalMCPServer",
     "KeyStatus",
+    "LLMKeyChoice",
     "LLMProviderKey",
     "LLMSpend",
     "ServerStatus",

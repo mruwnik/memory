@@ -32,6 +32,7 @@ from memory.api.auth import (
     get_current_user,
     resolve_user_filter,
 )
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common import settings
 from memory.common.celery_app import (
@@ -137,6 +138,7 @@ class SlackWorkspaceResponse(SyncStatusResponse):
     # Access control
     project_id: int | None
     sensitivity: str
+    llm_key: LLMKeyView
 
 
 class SlackWorkspaceUpdate(BaseModel):
@@ -145,6 +147,7 @@ class SlackWorkspaceUpdate(BaseModel):
     # Access control
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class SlackChannelResponse(BaseModel):
@@ -357,6 +360,7 @@ def workspace_to_response(
         apps=workspace_apps(db, ws, current_user),
         project_id=ws.project_id,
         sensitivity=ws.sensitivity or "basic",
+        llm_key=llm_key_view(db, current_user, ws),
     )
 
 
@@ -661,6 +665,7 @@ def update_workspace(
         workspace.project_id = updates.project_id
     if updates.sensitivity is not None:
         workspace.sensitivity = updates.sensitivity
+    apply_llm_key(db, user, workspace, updates.llm_key)
 
     access_changed = mark_access_control_changed_if_needed(
         workspace,

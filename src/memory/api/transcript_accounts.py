@@ -15,6 +15,7 @@ from memory.api.auth import (
     get_user_account,
     resolve_user_filter,
 )
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common import settings
 from memory.common.celery_app import RESCAN_TRANSCRIPT_ACCOUNT, SYNC_TRANSCRIPT_ACCOUNT
@@ -41,6 +42,7 @@ class TranscriptAccountCreate(BaseModel):
     tags: list[str] = []
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
+    llm_key: LLMKeyInput | None = None
 
 
 class TranscriptAccountUpdate(BaseModel):
@@ -51,6 +53,7 @@ class TranscriptAccountUpdate(BaseModel):
     active: bool | None = None
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class TranscriptAccountResponse(SyncStatusResponse):
@@ -68,6 +71,7 @@ class TranscriptAccountResponse(SyncStatusResponse):
     updated_at: str
     project_id: int | None
     sensitivity: str
+    llm_key: LLMKeyView
 
 
 class WebhookSecretResponse(BaseModel):
@@ -85,7 +89,9 @@ def secret_hint(account: TranscriptAccount) -> str | None:
     return secret[-4:] if secret else None
 
 
-def account_to_response(account: TranscriptAccount) -> TranscriptAccountResponse:
+def account_to_response(
+    account: TranscriptAccount, db: Session, user: User
+) -> TranscriptAccountResponse:
     return TranscriptAccountResponse(
         id=cast(int, account.id),
         name=cast(str, account.name),
@@ -102,6 +108,7 @@ def account_to_response(account: TranscriptAccount) -> TranscriptAccountResponse
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
         project_id=account.project_id,
         sensitivity=cast(str, account.sensitivity) or "basic",
+        llm_key=llm_key_view(db, user, account),
     )
 
 
@@ -123,7 +130,7 @@ def list_accounts(
     if resolved_user_id is not None:
         query = query.filter(TranscriptAccount.user_id == resolved_user_id)
     accounts = query.all()
-    return [account_to_response(account) for account in accounts]
+    return [account_to_response(account, db, user) for account in accounts]
 
 
 @router.post("")
@@ -174,6 +181,7 @@ def create_account(
     )
     if data.api_key:
         account.api_key = data.api_key
+    apply_llm_key(db, user, account, data.llm_key)
 
     db.add(account)
     try:
@@ -193,7 +201,7 @@ def create_account(
         )
     db.refresh(account)
 
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 @router.get("/{account_id}")
@@ -204,7 +212,7 @@ def get_account(
 ) -> TranscriptAccountResponse:
     """Get a single transcript account."""
     account = get_user_account(db, TranscriptAccount, account_id, user)
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 @router.patch("/{account_id}")
@@ -238,6 +246,7 @@ def update_account(
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
+    apply_llm_key(db, user, account, updates.llm_key)
 
     access_changed = mark_access_control_changed_if_needed(
         account,
@@ -251,7 +260,7 @@ def update_account(
     if access_changed:
         enqueue_access_control_propagation("transcript_account", account)
 
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 @router.delete("/{account_id}")
@@ -296,7 +305,7 @@ def delete_webhook_secret(
     account.webhook_secret = None
     db.commit()
     db.refresh(account)
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 def get_polled_account(

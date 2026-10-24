@@ -13,6 +13,7 @@ from memory.api.auth import (
     get_user_account,
     resolve_user_filter,
 )
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common.celery_app import SYNC_ACCOUNT
 from memory.common.celery_app import app as celery_app
@@ -112,6 +113,7 @@ class EmailAccountCreate(BaseModel):
     # out of the role-granted ladder (SensitivityLevelLiteral) so generic
     # content-create paths can't.
     sensitivity: StorableSensitivityLiteral = "basic"
+    llm_key: LLMKeyInput | None = None
 
     @model_validator(mode="after")
     def validate_account_type_fields(self):
@@ -151,6 +153,7 @@ class EmailAccountUpdate(BaseModel):
     # See EmailAccountCreate.sensitivity — "hidden" tombstones the account's
     # mail. Reversible: messages re-inherit a normal level when changed back.
     sensitivity: StorableSensitivityLiteral | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class EmailAccountTest(BaseModel):
@@ -216,9 +219,12 @@ class EmailAccountResponse(SyncStatusResponse):
     # Access control
     project_id: int | None
     sensitivity: str
+    llm_key: LLMKeyView
 
 
-def account_to_response(account: EmailAccount, db: Session) -> EmailAccountResponse:
+def account_to_response(
+    account: EmailAccount, db: Session, user: User
+) -> EmailAccountResponse:
     """Convert an EmailAccount model to a response model."""
     google_account_info = None
     if account.google_account_id:
@@ -255,6 +261,7 @@ def account_to_response(account: EmailAccount, db: Session) -> EmailAccountRespo
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
         project_id=account.project_id,
         sensitivity=cast(str, account.sensitivity) or "basic",
+        llm_key=llm_key_view(db, user, account),
     )
 
 
@@ -270,7 +277,7 @@ def list_accounts(
     if resolved_user_id is not None:
         query = query.filter(EmailAccount.user_id == resolved_user_id)
     accounts = query.all()
-    return [account_to_response(account, db) for account in accounts]
+    return [account_to_response(account, db, user) for account in accounts]
 
 
 @router.post("")
@@ -327,11 +334,12 @@ def create_account(
         project_id=data.project_id,
         sensitivity=data.sensitivity,
     )
+    apply_llm_key(db, user, account, data.llm_key)
     db.add(account)
     db.commit()
     db.refresh(account)
 
-    return account_to_response(account, db)
+    return account_to_response(account, db, user)
 
 
 @router.get("/{account_id}")
@@ -342,7 +350,7 @@ def get_account(
 ) -> EmailAccountResponse:
     """Get a single email account."""
     account = get_user_account(db, EmailAccount, account_id, user)
-    return account_to_response(account, db)
+    return account_to_response(account, db, user)
 
 
 @router.patch("/{account_id}")
@@ -399,6 +407,7 @@ def update_account(
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
+    apply_llm_key(db, user, account, updates.llm_key)
 
     access_changed = mark_access_control_changed_if_needed(
         account,
@@ -412,7 +421,7 @@ def update_account(
     if access_changed:
         enqueue_access_control_propagation("email_account", account)
 
-    return account_to_response(account, db)
+    return account_to_response(account, db, user)
 
 
 @router.delete("/{account_id}")

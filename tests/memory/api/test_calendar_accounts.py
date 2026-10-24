@@ -541,7 +541,7 @@ def test_trigger_sync_not_found(mock_app, client, db_session, user):
 # ====== Helper function tests ======
 
 
-def test_account_to_response_caldav(db_session):
+def test_account_to_response_caldav(db_session, user):
     """account_to_response converts CalDAV account."""
     from memory.api.calendar_accounts import account_to_response
 
@@ -568,7 +568,7 @@ def test_account_to_response_caldav(db_session):
     db_session.add(account)
     db_session.commit()
 
-    response = account_to_response(account)
+    response = account_to_response(account, db_session, user)
 
     assert response.id == 1
     assert response.name == "Test CalDAV"
@@ -614,7 +614,7 @@ def test_account_to_response_google_with_account(db_session, user):
     # Ensure relationship is loaded
     db_session.refresh(account)
 
-    response = account_to_response(account)
+    response = account_to_response(account, db_session, user)
 
     assert response.id == 2
     assert response.calendar_type == "google"

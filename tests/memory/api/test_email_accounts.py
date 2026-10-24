@@ -999,7 +999,7 @@ def test_account_to_response_with_timestamps(db_session, user):
     db_session.add(account)
     db_session.commit()
 
-    result = email_accounts.account_to_response(account, db_session)
+    result = email_accounts.account_to_response(account, db_session, user)
 
     assert result.created_at == now.isoformat()
     assert result.updated_at == now.isoformat()
@@ -1021,7 +1021,7 @@ def test_account_to_response_null_timestamps(db_session, user):
     db_session.add(account)
     db_session.commit()
 
-    result = email_accounts.account_to_response(account, db_session)
+    result = email_accounts.account_to_response(account, db_session, user)
 
     assert result.last_sync_at is None
 
@@ -1041,7 +1041,7 @@ def test_account_to_response_without_google_account(db_session, user):
     db_session.add(account)
     db_session.commit()
 
-    result = email_accounts.account_to_response(account, db_session)
+    result = email_accounts.account_to_response(account, db_session, user)
 
     assert result.google_account_id is None
     assert result.google_account is None
@@ -1071,7 +1071,7 @@ def test_account_to_response_with_google_account(db_session, user):
     db_session.add(account)
     db_session.flush()
 
-    result = email_accounts.account_to_response(account, db_session)
+    result = email_accounts.account_to_response(account, db_session, user)
 
     assert result.google_account is not None
     assert result.google_account.name == "My Google"

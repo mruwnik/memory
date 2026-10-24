@@ -538,11 +538,15 @@ def admin_client(app_client, db_session, admin_user):
     # Patch auth to return admin user
     with patch.object(auth, "get_session_user", return_value=mock_admin):
         app.dependency_overrides[get_session] = get_test_session
+        # An earlier test's override may still name a non-admin.
+        app.dependency_overrides[get_current_user] = lambda: mock_admin
         yield test_client
         app.dependency_overrides.pop(get_session, None)
     # Restore the session-scoped auth override
     if prev_auth is not None:
         app.dependency_overrides[get_current_user] = prev_auth
+    else:
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_admin_can_see_other_user_job(admin_client: TestClient, job_for_other_user):

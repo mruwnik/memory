@@ -13,7 +13,13 @@ import httpx
 from memory.common import settings
 from memory.common.db.connection import DBSession, make_session
 from memory.agents.system import SystemAgent
-from memory.common.db.models import KeyStatus, LLMProviderKey, SourceItem, User
+from memory.common.db.models import (
+    KeyStatus,
+    LLMKeyChoice,
+    LLMProviderKey,
+    SourceItem,
+    User,
+)
 from memory.common.llms.registry import split_model
 from memory.common.notify import notify_user_now
 
@@ -112,23 +118,40 @@ def personal_key(db: DBSession, user_id: int, agent: SystemAgent) -> LLMProvider
     return usable(default_key(db, user_id, agent.provider))
 
 
+def payer_id(holder: LLMKeyChoice) -> int | None:
+    """Whose keys pay for a source's LLM work: its owner, else whoever registered its
+    app or bot."""
+    return holder.content_owner_id or holder.llm_registrant_id
+
+
+def chosen_key(
+    db: DBSession, holder: LLMKeyChoice, registrant: int | None = None
+) -> LLMProviderKey | None:
+    """`holder`'s explicit key, if it belongs to the source's payer; `registrant` stands
+    in when the source names none. A source may only spend its own payer's keys."""
+    if holder.llm_key_id is None:
+        return None
+    key = db.get(LLMProviderKey, holder.llm_key_id)
+    if key is None or key.user_id != (payer_id(holder) or registrant):
+        return None
+    return key
+
+
 def ingest_key(db: DBSession, item: SourceItem, agent: SystemAgent) -> LLMProviderKey | None:
     """The key that pays for `agent` on `item`, or None when no LLM work may run on it.
 
     The governing source's "no LLM" choice, or its explicit key when that belongs to
-    the source's owner or registrant, wins. Otherwise the
+    the source's payer, wins. Otherwise the
     default key of whoever brought the item in: its creator, or for Slack and Discord
     items (which have none) whoever registered the app or bot.
     """
     holder = item.llm_key_holder
     if holder is not None and holder.llm_disabled:
         return None
+    key = chosen_key(db, holder, item.llm_registrant_id) if holder is not None else None
+    if key is not None:
+        return usable(key) if key.provider == agent.provider else None
     registrant = (holder and holder.llm_registrant_id) or item.llm_registrant_id
-    if holder is not None and holder.llm_key_id is not None:
-        key = db.get(LLMProviderKey, holder.llm_key_id)
-        # A source may only spend its own owner's keys.
-        if key is not None and key.user_id in (holder.content_owner_id, registrant):
-            return usable(key) if key.provider == agent.provider else None
     owner = item.resolve_creator_id() or registrant
     return personal_key(db, owner, agent) if owner is not None else None
 

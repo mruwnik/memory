@@ -12,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common.access_control import has_admin_scope
 from memory.common import settings
@@ -52,6 +53,7 @@ class GithubAccountCreate(BaseModel):
     app_id: int | None = None
     installation_id: int | None = None
     private_key: str | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class GithubAccountUpdate(BaseModel):
@@ -61,6 +63,7 @@ class GithubAccountUpdate(BaseModel):
     installation_id: int | None = None
     private_key: str | None = None
     active: bool | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class GithubRepoResponse(SyncStatusResponse):
@@ -99,6 +102,7 @@ class GithubAccountResponse(BaseModel):
     created_at: str
     updated_at: str
     repos: list[GithubRepoResponse]
+    llm_key: LLMKeyView
 
 
 # --- Repo Models ---
@@ -162,7 +166,9 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
     )
 
 
-def account_to_response(account: GithubAccount) -> GithubAccountResponse:
+def account_to_response(
+    account: GithubAccount, db: Session, user: User
+) -> GithubAccountResponse:
     """Convert a GithubAccount model to a response model."""
     return GithubAccountResponse(
         id=cast(int, account.id),
@@ -178,6 +184,7 @@ def account_to_response(account: GithubAccount) -> GithubAccountResponse:
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
         repos=[repo_to_response(repo) for repo in account.repos],
+        llm_key=llm_key_view(db, user, account),
     )
 
 
@@ -226,7 +233,7 @@ def list_accounts(
     if resolved_user_id is not None:
         query = query.filter(GithubAccount.user_id == resolved_user_id)
     accounts = query.all()
-    return [account_to_response(account) for account in accounts]
+    return [account_to_response(account, db, user) for account in accounts]
 
 
 class GithubRepoBasic(BaseModel):
@@ -299,6 +306,7 @@ def create_account(
         installation_id=data.installation_id,
         private_key=data.private_key,
     )
+    apply_llm_key(db, user, account, data.llm_key)
     db.add(account)
     # Commit the row first, *then* verify. Identity verification makes a
     # GitHub network call (up to ~90s worst case for App auth); keeping it
@@ -313,7 +321,7 @@ def create_account(
     db.commit()
     db.refresh(account)
 
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 @router.get("/accounts/{account_id}")
@@ -324,7 +332,7 @@ def get_account(
 ) -> GithubAccountResponse:
     """Get a single GitHub account."""
     account = get_user_account(db, GithubAccount, account_id, user)
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 @router.patch("/accounts/{account_id}")
@@ -341,6 +349,7 @@ def update_account(
         account.name = updates.name
     if updates.active is not None:
         account.active = updates.active
+    apply_llm_key(db, user, account, updates.llm_key)
 
     # Track credential changes: if any change, the previously verified
     # login no longer reflects the stored credentials and must be redone.
@@ -369,7 +378,7 @@ def update_account(
         db.commit()
         db.refresh(account)
 
-    return account_to_response(account)
+    return account_to_response(account, db, user)
 
 
 @router.delete("/accounts/{account_id}")

@@ -34,6 +34,7 @@ from memory.api.auth import (
     require_scope,
     resolve_user_filter,
 )
+from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
@@ -74,6 +75,7 @@ class FolderCreate(BaseModel):
     # Access control
     project_id: int | None = None
     sensitivity: str = "basic"
+    llm_key: LLMKeyInput | None = None
 
 
 class FolderUpdate(BaseModel):
@@ -87,6 +89,7 @@ class FolderUpdate(BaseModel):
     # Access control: an explicit null project_id clears it, an omitted one is unchanged
     project_id: int | None = None
     sensitivity: str | None = None
+    llm_key: LLMKeyInput | None = None
 
 
 class FolderResponse(SyncStatusResponse):
@@ -104,18 +107,10 @@ class FolderResponse(SyncStatusResponse):
     # Access control
     project_id: int | None
     sensitivity: str
+    llm_key: LLMKeyView
 
 
-class AccountResponse(SyncStatusResponse):
-    id: int
-    name: str
-    email: str
-    active: bool
-    last_sync_at: str | None
-    folders: list[FolderResponse]
-
-
-def folder_to_response(folder: GoogleFolder) -> FolderResponse:
+def folder_to_response(folder: GoogleFolder, db: DBSession, user: User) -> FolderResponse:
     return FolderResponse(
         id=cast(int, folder.id),
         folder_id=cast(str, folder.folder_id),
@@ -130,8 +125,18 @@ def folder_to_response(folder: GoogleFolder) -> FolderResponse:
         exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
         project_id=folder.project_id,
         sensitivity=cast(str, folder.sensitivity) or "basic",
+        llm_key=llm_key_view(db, user, folder),
         **sync_status_fields(folder),
     )
+
+
+class AccountResponse(SyncStatusResponse):
+    id: int
+    name: str
+    email: str
+    active: bool
+    last_sync_at: str | None
+    folders: list[FolderResponse]
 
 
 # OAuth State storage using Redis for multi-worker support
@@ -527,7 +532,7 @@ def list_accounts(
             ),
             **sync_status_fields(account),
             folders=[
-                folder_to_response(folder)
+                folder_to_response(folder, db, user)
                 for folder in account.folders
             ],
         )
@@ -658,7 +663,7 @@ def add_folder(
     db: DBSession = Depends(get_session),
 ) -> FolderResponse:
     """Add a folder to sync for a Google account."""
-    get_user_account(db, GoogleAccount, account_id, user)  # Verify ownership
+    account = get_user_account(db, GoogleAccount, account_id, user)
 
     # Check for duplicate
     existing = (
@@ -676,7 +681,7 @@ def add_folder(
     assert_project_membership(db, user, folder.project_id)
 
     new_folder = GoogleFolder(
-        account_id=account_id,
+        account=account,
         folder_id=folder.folder_id,
         folder_name=folder.folder_name,
         recursive=folder.recursive,
@@ -686,11 +691,12 @@ def add_folder(
         project_id=folder.project_id,
         sensitivity=folder.sensitivity,
     )
+    apply_llm_key(db, user, new_folder, folder.llm_key)
     db.add(new_folder)
     db.commit()
     db.refresh(new_folder)
 
-    return folder_to_response(new_folder)
+    return folder_to_response(new_folder, db, user)
 
 
 @router.patch("/accounts/{account_id}/folders/{folder_id}")
@@ -737,6 +743,7 @@ def update_folder(
         folder.project_id = updates.project_id
     if updates.sensitivity is not None:
         folder.sensitivity = updates.sensitivity
+    apply_llm_key(db, user, folder, updates.llm_key)
 
     access_changed = mark_access_control_changed_if_needed(
         folder,
@@ -750,7 +757,7 @@ def update_folder(
     if access_changed:
         enqueue_access_control_propagation("google_folder", folder)
 
-    return folder_to_response(folder)
+    return folder_to_response(folder, db, user)
 
 
 @router.delete("/accounts/{account_id}/folders/{folder_id}")
