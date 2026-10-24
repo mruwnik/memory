@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Input } from '@/components/shared/ui'
 
 const isDateField = (field: string): boolean =>
@@ -9,6 +10,23 @@ const isNumberField = (field: string, fieldConfig: any): boolean =>
 const parseNumberValue = (value: string): number | null =>
     value ? parseInt(value) : null
 
+const isListField = (fieldConfig: any): boolean =>
+    fieldConfig.type?.startsWith('list') ?? false
+
+const parseListValue = (value: string): string[] | null => {
+    const items = value.split(',').map(item => item.trim()).filter(Boolean)
+    return items.length ? items : null
+}
+
+// Keeps the typed text so a trailing comma survives until the next item is typed.
+const ListInput = ({ field, fieldConfig, value, onChange, ...wiring }: FilterInputProps) => {
+    const [text, setText] = useState((value ?? []).join(', '))
+    return (
+        <Input {...wiring} value={text} type="text" placeholder={`${fieldConfig.description} (comma-separated)`}
+            onChange={(e) => { setText(e.target.value); onChange(field, parseListValue(e.target.value)) }} />
+    )
+}
+
 interface FilterInputProps {
     field: string
     fieldConfig: any
@@ -19,7 +37,12 @@ interface FilterInputProps {
     'aria-describedby'?: string
 }
 
-export const FilterInput = ({ field, fieldConfig, value, onChange, ...wiring }: FilterInputProps) => {
+export const FilterInput = (props: FilterInputProps) => {
+    const { field, fieldConfig, value, onChange, ...wiring } = props
+    if (isListField(fieldConfig)) {
+        return <ListInput {...props} />
+    }
+
     if (isNumberField(field, fieldConfig)) {
         return (
             <Input {...wiring} value={value || ''} type="number" placeholder={fieldConfig.description}

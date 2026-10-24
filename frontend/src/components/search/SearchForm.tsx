@@ -14,10 +14,8 @@ type SearchConfig = {
     previews: boolean
     useScores: boolean
     limit: number
-    useBm25?: boolean
-    useHyde?: boolean
-    useReranking?: boolean
-    useQueryAnalysis?: boolean
+    /** Keyed by the search tool's `use_*` parameter names. */
+    enhancements: Record<string, boolean>
 }
 
 export interface SearchParams {
@@ -35,6 +33,13 @@ interface SearchFormProps {
 }
 
 const DEFAULT_LIMIT = 10
+
+const ENHANCEMENTS = [
+    ['use_bm25', 'BM25 keyword search'],
+    ['use_hyde', 'HyDE (hypothetical document expansion)'],
+    ['use_reranking', 'Reranking (cross-encoder)'],
+    ['use_query_analysis', 'Query analysis (LLM-based)'],
+] as const
 const clampLimit = (limit: number | '') => Math.min(100, Math.max(1, limit === '' ? DEFAULT_LIMIT : limit))
 
 const createFlags = (items: string[], defaultValue = false, selected: string[] = []): Record<string, boolean> =>
@@ -57,29 +62,30 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
     const [tags, setTags] = useState<Record<string, boolean>>({})
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
     const [limit, setLimit] = useState<number | ''>(DEFAULT_LIMIT)
-    const [useBm25, setUseBm25] = useState<boolean | undefined>(true)
-    const [useHyde, setUseHyde] = useState<boolean | undefined>(true)
-    const [useReranking, setUseReranking] = useState<boolean | undefined>(true)
-    const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(true)
+    const [enhancements, setEnhancements] = useState<Record<string, boolean>>({})
+    const [availableEnhancements, setAvailableEnhancements] = useState<Record<string, boolean>>({})
     const [filtersReady, setFiltersReady] = useState(false)
     const [filtersError, setFiltersError] = useState<string | null>(null)
     const submittedQuery = useRef<string | null>(null)
-    const { getMetadataSchemas, getTags } = useMCP()
+    const { getMetadataSchemas, getTags, getSearchDefaults } = useMCP()
 
     useEffect(() => {
         const setupFilters = async () => {
-           const [schemas, tags] = await Promise.all([
+           const [schemas, tags, defaults] = await Promise.all([
                getMetadataSchemas(),
-               getTags()
+               getTags(),
+               getSearchDefaults(),
            ])
            setSchemas(schemas)
            setModalities(createFlags(Object.keys(schemas), true))
            setTags(createFlags(tags))
+           setEnhancements(defaults)
+           setAvailableEnhancements(defaults)
         }
         setupFilters()
             .catch(e => setFiltersError(e instanceof Error ? e.message : String(e)))
             .finally(() => setFiltersReady(true))
-    }, [getMetadataSchemas, getTags])
+    }, [getMetadataSchemas, getTags, getSearchDefaults])
 
     const handleFilterChange = (field: string, value: any) =>
         setDynamicFilters(prev => ({ ...prev, [field]: value }))
@@ -94,10 +100,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
                 previews,
                 useScores,
                 limit: clampLimit(limit),
-                useBm25,
-                useHyde,
-                useReranking,
-                useQueryAnalysis,
+                enhancements,
             },
             filters: {
                 tags: getSelectedItems(tags),
@@ -149,10 +152,13 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
 
                 <Disclosure summary="Search enhancements">
                     <div className="flex flex-col gap-3">
-                        <Checkbox checked={useBm25} onChange={(e) => setUseBm25(e.target.checked)} label="BM25 keyword search" />
-                        <Checkbox checked={useHyde} onChange={(e) => setUseHyde(e.target.checked)} label="HyDE (hypothetical document expansion)" />
-                        <Checkbox checked={useReranking} onChange={(e) => setUseReranking(e.target.checked)} label="Reranking (cross-encoder)" />
-                        <Checkbox checked={useQueryAnalysis} onChange={(e) => setUseQueryAnalysis(e.target.checked)} label="Query analysis (LLM-based)" />
+                        {ENHANCEMENTS.map(([key, label]) => (
+                            <Checkbox key={key} label={label}
+                                checked={enhancements[key] ?? false}
+                                // The server can only be asked to skip an enhancement, never to add one it has off.
+                                disabled={!availableEnhancements[key]}
+                                onChange={(e) => setEnhancements(prev => ({ ...prev, [key]: e.target.checked }))} />
+                        ))}
                     </div>
                 </Disclosure>
 

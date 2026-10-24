@@ -8,7 +8,15 @@ from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 import sqlalchemy as sa
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from memory.api.MCP.servers.core import (
+    SEARCH_FILTERS,
+    SEARCHABLE_COLLECTIONS,
+    get_current_user_access_filter,
+)
 from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
+from memory.api.search.types import MCPSearchFilters
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common import qdrant, rate_limit, settings
 from memory.common.collections import SESSION_COLLECTIONS
 from memory.common.dates import parse_iso_datetime
@@ -132,6 +140,7 @@ class SchemaArg(TypedDict):
 
 class CollectionMetadata(TypedDict):
     schema: dict[str, SchemaArg]
+    filters: dict[str, SchemaArg]
     size: int
 
 
@@ -166,6 +175,34 @@ def get_schema(klass: type[SourceItem]) -> dict[str, SchemaArg]:
     }
 
 
+SEARCH_FILTER_DESCRIPTIONS = {name: description for name, description, _ in SEARCH_FILTERS}
+
+
+def type_name(type_: Any) -> str:
+    return str(type_) if get_args(type_) else type_.__name__
+
+
+def search_filters(collection: str) -> dict[str, SchemaArg]:
+    """The `search` filters that can narrow results in ``collection``.
+
+    Filters without a vector-search translation are left out: `search` would
+    reject them.
+    """
+    types = get_type_hints(MCPSearchFilters)
+    registry_keys = [
+        spec.key
+        for spec in FILTER_REGISTRY.values()
+        if not isinstance(spec.qdrant_op, QdrantUnsupported)
+        and (spec.model is None or collection in spec.model.get_collections())
+    ]
+    # Outside the registry, but `search` applies them to every collection.
+    created_at_keys = ["min_created_at", "max_created_at"]
+    return {
+        key: SchemaArg(type=type_name(types[key]), description=SEARCH_FILTER_DESCRIPTIONS[key])
+        for key in registry_keys + created_at_keys
+    }
+
+
 @meta_mcp.tool()
 @visible_when(require_scopes(SCOPE_READ))
 async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
@@ -173,13 +210,17 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
 
     These schemas can be used to filter the knowledge base.
 
-    Returns: A mapping of collection names to their metadata schemas with field types and descriptions.
+    Returns: A mapping of collection names to their metadata schema, the
+    `search` filters that apply to them, and their size.
 
     Example:
     ```
     {
-        "mail": {"subject": {"type": "str", "description": "The subject of the email."}},
-        "chat": {"subject": {"type": "str", "description": "The subject of the chat message."}}
+        "mail": {
+            "schema": {"subject": {"type": "str", "description": "The subject of the email."}},
+            "filters": {"sender": {"type": "str", "description": "..."}},
+            "size": 1200
+        }
     }
     """
     client = qdrant.get_qdrant_client()
@@ -190,13 +231,46 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
             schemas[collection].update(get_schema(klass))
 
     return {
-        collection: CollectionMetadata(schema=schema, size=size)
+        collection: CollectionMetadata(
+            schema=schema, filters=search_filters(collection), size=size
+        )
         for collection, schema in schemas.items()
         # Session transcripts are owner-only-even-for-admins and only
         # reachable via claude_session_search; don't advertise their
         # schema or the cross-user point count here.
         if collection not in SESSION_COLLECTIONS and (size := sizes.get(collection))
     }
+
+
+@meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_READ))
+async def get_search_defaults() -> dict[str, bool]:
+    """The search enhancements this server allows.
+
+    An allowed (true) enhancement runs unless `search`'s matching `use_*` flag
+    is false. A false one is off on this server and no flag can turn it on.
+    """
+    return {
+        "use_bm25": settings.ENABLE_BM25_SEARCH,
+        "use_hyde": settings.ENABLE_HYDE_EXPANSION,
+        "use_reranking": settings.ENABLE_RERANKING,
+        "use_query_analysis": settings.ENABLE_QUERY_ANALYSIS,
+    }
+
+
+@meta_mcp.tool()
+@visible_when(require_scopes(SCOPE_READ))
+async def get_tags() -> list[str]:
+    """List the tags on items you can search, for the `tags` filter of `search`."""
+    access_filter = get_current_user_access_filter()
+    tag = sa.func.unnest(SourceItem.tags)
+    with make_session() as session:
+        query = session.query(tag).filter(
+            SourceItem.embed_status == "STORED",
+            SourceItem.modality.in_(SEARCHABLE_COLLECTIONS),
+        )
+        query = apply_access_filter_to_query(query, access_filter)
+        return sorted({t for (t,) in query.distinct()})
 
 
 @meta_mcp.tool()

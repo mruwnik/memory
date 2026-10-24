@@ -27,8 +27,8 @@ from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 from memory.common.db.models.source_item import source_item_people
 
 # BM25 accepts every logical filter: the declarative registry plus the
-# hand-coded special keys (access/person/source_ids/confidence/observation +
-# the created_at divergence). Anything else is a programming error.
+# hand-coded special keys (access/person/source_ids/confidence/observation/
+# created_at). Anything else is a programming error.
 BM25_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 logger = logging.getLogger(__name__)
@@ -138,14 +138,6 @@ def run_bm25_query(
         access_filter = filters.get("access_filter")
         person_id = filters.get("person_id")
         account = filters.get("account")
-
-        # created_at is scoped to Chunk.created_at here (NOT SourceItem.inserted_at
-        # — see SPECIAL_FILTER_KEYS in search.filters for why the two backends
-        # intentionally differ).
-        if min_created_at := filters.get("min_created_at"):
-            items_query = items_query.filter(Chunk.created_at >= min_created_at)
-        if max_created_at := filters.get("max_created_at"):
-            items_query = items_query.filter(Chunk.created_at <= max_created_at)
 
         # SourceItem is joined unconditionally. The hidden-tombstone exclusion in
         # apply_access_filter_to_query filters on SourceItem.sensitivity and must

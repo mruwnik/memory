@@ -5,8 +5,13 @@ import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
 import SearchForm from './SearchForm'
 
 const schemas = {
-  blog: { schema: { author: { type: 'string', description: 'Author' } }, size: 0 },
+  blog: {
+    schema: { author: { type: 'str', description: 'Author' } },
+    filters: { author: { type: 'str', description: 'Author' } },
+    size: 1,
+  },
 }
+const searchDefaults = { use_bm25: true, use_hyde: false, use_reranking: true, use_query_analysis: false }
 
 // Route fetch: /auth/me for useAuth, MCP calls by tool name in the JSON-RPC body.
 const installFetch = (searchResults: unknown[] = []) =>
@@ -18,6 +23,12 @@ const installFetch = (searchResults: unknown[] = []) =>
     }
     if (tool === 'meta_get_metadata_schemas') {
       return mockResponse({ json: mcpEnvelopeJson(schemas) })
+    }
+    if (tool === 'meta_get_tags') {
+      return mockResponse({ json: mcpEnvelopeJson(['work', 'home']) })
+    }
+    if (tool === 'meta_get_search_defaults') {
+      return mockResponse({ json: mcpEnvelopeJson(searchDefaults) })
     }
     if (tool === 'core_search') {
       return mockResponse({ json: mcpEnvelopeJson(...searchResults) })
@@ -56,20 +67,18 @@ describe('SearchForm', () => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
+    await waitFor(() => expect(screen.getByLabelText('BM25 keyword search')).toBeEnabled())
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'hello')
     await user.click(screen.getByRole('button', { name: 'Search' }))
 
     expect(onSearch).toHaveBeenCalledTimes(1)
     const params = onSearch.mock.calls[0][0]
     expect(params.query).toBe('hello')
-    expect(params.config).toMatchObject({
+    expect(params.config).toEqual({
       previews: false,
       useScores: false,
       limit: 10,
-      useBm25: true,
-      useHyde: true,
-      useReranking: true,
-      useQueryAnalysis: true,
+      enhancements: searchDefaults,
     })
     expect(params.filters.tags).toEqual([])
   })
@@ -114,14 +123,42 @@ describe('SearchForm', () => {
     expect(onSearch.mock.calls[0][0].config.useScores).toBe(true)
   })
 
-  it('toggles a search enhancement flag (BM25) off', async () => {
+  it.each([
+    [1, false],
+    [2, true],
+  ])('clicking BM25 %i times submits use_bm25=%s', async (clicks, expected) => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    await user.click(screen.getByLabelText('BM25 keyword search'))
+    const bm25 = screen.getByLabelText('BM25 keyword search')
+    await waitFor(() => expect(bm25).toBeEnabled())
+    for (let i = 0; i < clicks; i++) await user.click(bm25)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
-    expect(onSearch.mock.calls[0][0].config.useBm25).toBe(false)
+    expect(onSearch.mock.calls[0][0].config.enhancements).toEqual({ ...searchDefaults, use_bm25: expected })
+  })
+
+  it.each([
+    ['BM25 keyword search', true],
+    ['HyDE (hypothetical document expansion)', false],
+    ['Reranking (cross-encoder)', true],
+    ['Query analysis (LLM-based)', false],
+  ])('offers %s only when the server allows it (%s)', async (label, available) => {
+    installFetch()
+    renderWithUser(<SearchForm isLoading={false} onSearch={() => {}} />)
+    await waitFor(() => expect(screen.getByLabelText('BM25 keyword search')).toBeEnabled())
+    expect((screen.getByLabelText(label) as HTMLInputElement).disabled).toBe(!available)
+  })
+
+  it('offers the server tags and submits the chosen ones', async () => {
+    installFetch()
+    const onSearch = vi.fn()
+    const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
+    await user.click(await screen.findByPlaceholderText('Any tag'))
+    await user.click(await screen.findByRole('option', { name: 'work' }))
+    await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    expect(onSearch.mock.calls[0][0].filters.tags).toEqual(['work'])
   })
 
   it('updates Max Results limit', async () => {

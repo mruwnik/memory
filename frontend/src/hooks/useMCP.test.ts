@@ -256,22 +256,17 @@ describe('convenience wrappers', () => {
   })
 
   it.each([
-    ['getTags'],
-    ['getSubjects'],
-    ['getObservationTypes'],
-  ] as const)('%s returns an empty wrapped array without an MCP call', async (name) => {
-    const fetchMock = mockFetch()
+    ['getTags', 'meta_get_tags', '["a","b"]', ['a', 'b']],
+    ['getSearchDefaults', 'meta_get_search_defaults', '{"use_hyde":false}', { use_hyde: false }],
+  ] as const)('%s calls %s and unwraps the first content item', async (name, tool, text, expected) => {
+    const fetchMock = mockFetch(async () => jsonRpcResult([{ text }]))
     const { result } = renderHook(() => useMCP())
     let out!: unknown
     await act(async () => {
-      out = await (result.current as any)[name]()
+      out = await result.current[name]()
     })
-    expect(out).toEqual([[]])
-    // The hook's effect hits /auth/me, but no MCP call should be made.
-    const mcpCalls = fetchMock.mock.calls.filter(([u]) =>
-      u.toString().endsWith('/mcp'),
-    )
-    expect(mcpCalls).toHaveLength(0)
+    expect(out).toEqual(expected)
+    expect(findToolCall(fetchMock, tool)).toBeDefined()
   })
 
   it('getMetadataSchemas unwraps the first content item', async () => {
@@ -314,7 +309,7 @@ describe('convenience wrappers', () => {
         'q',
         ['text', 'photo'],
         { tag: 'x' },
-        { limit: 5, previews: true, useScores: true },
+        { limit: 5, previews: true, useScores: true, enhancements: { use_bm25: false, use_hyde: true } },
       )
     })
     const body = JSON.parse(
@@ -328,6 +323,8 @@ describe('convenience wrappers', () => {
       limit: 5,
       previews: true,
       use_scores: true,
+      use_bm25: false,
+      use_hyde: true,
     })
   })
 })

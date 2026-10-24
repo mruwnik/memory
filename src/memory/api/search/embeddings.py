@@ -26,8 +26,8 @@ from memory.common.db.connection import make_session
 
 # Qdrant accepts every logical filter key. Registry filters become payload
 # conditions; the special keys are hand-coded (access/person compound
-# conditions, source_id/confidence/observation payload shapes, and created_at
-# which has no Qdrant equivalent). Anything else is rejected loudly.
+# conditions, source_id/confidence/observation payload shapes, and created_at,
+# which arrives as source_ids). Anything else is rejected loudly.
 QDRANT_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 if TYPE_CHECKING:
@@ -289,12 +289,9 @@ def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any
     min/max_created_at are deliberately NOT emitted as Qdrant conditions: the
     chunk payload (``item_metadata``, built from ``SourceItem.as_payload()``)
     carries no created_at/inserted_at key, so a range on it would match zero
-    points and silently drop every vector hit on a dated search. The bound is
-    honored on the BM25/SQL arm (``Chunk.created_at``) instead, so created_at
-    stays in ``QDRANT_ALLOWED_FILTER_KEYS`` rather than raising. Known
-    limitation: because the two arms are RRF-fused, a vector hit outside the
-    range can still surface via the embedding arm; closing that needs a
-    created_at payload field + reindex (out of scope here).
+    points and silently drop every vector hit on a dated search. Search folds
+    the bounds into ``source_ids`` instead, so created_at stays in
+    ``QDRANT_ALLOWED_FILTER_KEYS`` rather than raising.
     """
     result: list[dict[str, Any]] = []
     if source_ids := filters.get("source_ids"):

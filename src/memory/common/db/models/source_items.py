@@ -345,6 +345,10 @@ class EmailAttachment(SourceItem):
 class ChatMessage(SourceItem):
     __tablename__ = "chat_message"
 
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["chat"]
+
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
@@ -369,6 +373,10 @@ class DiscordMessage(SourceItem):
     """
 
     __tablename__ = "discord_message"
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["message"]
 
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
@@ -501,6 +509,10 @@ class SlackMessage(SourceItem):
 
     __tablename__ = "slack_message"
 
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["message"]
+
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
@@ -620,6 +632,10 @@ class SlackMessage(SourceItem):
 class GitCommit(SourceItem):
     __tablename__ = "git_commit"
 
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["git"]
+
     id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
@@ -696,6 +712,10 @@ class ComicPayload(SourceItemPayload):
 
 class Comic(SourceItem):
     __tablename__ = "comic"
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["comic"]
 
     # Public by default - comics collected are typically from public webcomics
     default_sensitivity = "public"
@@ -857,6 +877,10 @@ class BlogPostPayload(SourceItemPayload):
 
 class BlogPost(SourceItem):
     __tablename__ = "blog_post"
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["blog"]
 
     # Public by default - blogs are typically world-readable
     default_sensitivity = "public"

@@ -5,7 +5,7 @@ Core MCP subserver for knowledge base search and observations.
 import base64
 import logging
 import textwrap
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastmcp import FastMCP
@@ -156,9 +156,16 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
 ]
 
 
+# Observations and session transcripts have dedicated tools
+# (search_observations, claude_session_search) with their own access
+# semantics — generic search never touches them.
+SEARCHABLE_COLLECTIONS = (
+    set(ALL_COLLECTIONS) - OBSERVATION_COLLECTIONS - SESSION_COLLECTIONS
+)
+
+
 def _get_available_modalities() -> list[str]:
     """Query database to find which modalities have indexed items."""
-    searchable = set(ALL_COLLECTIONS.keys()) - OBSERVATION_COLLECTIONS - SESSION_COLLECTIONS
     try:
         with make_session() as session:
             from sqlalchemy import func as sql_func
@@ -167,7 +174,7 @@ def _get_available_modalities() -> list[str]:
                 session.query(SourceItem.modality)
                 .filter(
                     SourceItem.embed_status == "STORED",
-                    SourceItem.modality.in_(searchable),
+                    SourceItem.modality.in_(SEARCHABLE_COLLECTIONS),
                 )
                 .group_by(SourceItem.modality)
                 .having(sql_func.count(SourceItem.id) > 0)
@@ -176,7 +183,7 @@ def _get_available_modalities() -> list[str]:
             return sorted([row[0] for row in result])
     except Exception as e:
         logger.warning(f"Failed to query available modalities: {e}")
-        return sorted(searchable)
+        return sorted(SEARCHABLE_COLLECTIONS)
 
 
 def _build_filters_section() -> str:
@@ -282,6 +289,7 @@ def _build_search_description() -> str:
             limit: Maximum number of results to return (default 20, max 100)
             previews: Whether to include content in results (up to MAX_PREVIEW_LENGTH characters)
             use_scores: Whether to score results with an LLM before returning - better but slower
+            use_bm25, use_hyde, use_reranking, use_query_analysis: Set false to skip a search enhancement. The server's settings decide which ones are available; true cannot enable one the server turned off
             {filters_section}
 
         Returns: List of search results with id, score, chunks, content, filename
@@ -314,18 +322,42 @@ def filter_observation_source_ids(
     return source_ids
 
 
-def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int] | None:
-    if source_ids := filters.get("source_ids"):
-        return source_ids
+def max_created_at_condition(max_created_at: str):
+    # A bare date means the whole of that day, not its first instant.
+    try:
+        day = date.fromisoformat(max_created_at)
+    except ValueError:
+        return SourceItem.inserted_at <= max_created_at
+    return SourceItem.inserted_at < day + timedelta(days=1)
 
+
+def created_at_conditions(filters: MCPSearchFilters) -> list:
+    min_created_at = filters.get("min_created_at")
+    max_created_at = filters.get("max_created_at")
+    return [
+        *([SourceItem.inserted_at >= min_created_at] if min_created_at else []),
+        *([max_created_at_condition(max_created_at)] if max_created_at else []),
+    ]
+
+
+def filter_source_ids(
+    modalities: set[str], filters: SearchFilters, access_filter: AccessFilter | None
+) -> list[int] | None:
+    """Ids of the visible items matching the tag, size and created_at filters,
+    or None when none of them is set.
+
+    The Qdrant payload has no created_at key, so those bounds reach the vector
+    arm only through these ids.
+    """
     tags = filters.get("tags")
     min_size = filters.get("min_size")
     max_size = filters.get("max_size")
-    if not (tags or min_size or max_size):
+    created_at = created_at_conditions(filters)
+    if not tags and min_size is None and max_size is None and not created_at:
         return None
 
     with make_session() as session:
-        items_query = session.query(SourceItem.id)
+        items_query = session.query(SourceItem.id).filter(*created_at)
 
         if tags:
             items_query = items_query.filter(
@@ -337,9 +369,8 @@ def filter_source_ids(modalities: set[str], filters: SearchFilters) -> list[int]
             items_query = items_query.filter(SourceItem.size <= max_size)
         if modalities:
             items_query = items_query.filter(SourceItem.modality.in_(modalities))
-        source_ids = [item.id for item in items_query.all()]
-
-    return source_ids
+        items_query = apply_access_filter_to_query(items_query, access_filter)
+        return [item.id for item in items_query.all()]
 
 
 @core_mcp.tool(description=_build_search_description())
@@ -351,36 +382,44 @@ async def search(
     limit: int = 20,
     previews: bool = False,
     use_scores: bool = False,
+    use_bm25: bool | None = None,
+    use_hyde: bool | None = None,
+    use_reranking: bool | None = None,
+    use_query_analysis: bool | None = None,
 ) -> list[dict]:
     logger.info(f"MCP search for: {query}")
     config = SearchConfig(
-        limit=min(limit, 100), previews=previews, useScores=use_scores
+        limit=min(limit, 100),
+        previews=previews,
+        useScores=use_scores,
+        useBm25=use_bm25,
+        useHyde=use_hyde,
+        useReranking=use_reranking,
+        useQueryAnalysis=use_query_analysis,
     )
 
     if not modalities:
         modalities = set(ALL_COLLECTIONS.keys())
-    # Observations and session transcripts have dedicated tools
-    # (search_observations, claude_session_search) with their own access
-    # semantics — generic search never touches them.
-    modalities = (
-        (set(modalities) & ALL_COLLECTIONS.keys())
-        - OBSERVATION_COLLECTIONS
-        - SESSION_COLLECTIONS
-    )
+    modalities = set(modalities) & SEARCHABLE_COLLECTIONS
 
-    search_filters = SearchFilters(**filters)
-    search_filters["source_ids"] = filter_source_ids(modalities, search_filters)
-
-    # Apply access control filter
     access_filter = get_current_user_access_filter()
+    search_filters = SearchFilters(**filters)
+    search_filters["source_ids"] = filter_source_ids(
+        modalities, search_filters, access_filter
+    )
     search_filters["access_filter"] = access_filter
 
     upload_data = extract.extract_text(query, skip_summary=True)
-    results = await search_base(
-        upload_data,
-        modalities=modalities,
-        filters=search_filters,
-        config=config,
+    # An empty id list reads as "no restriction" downstream.
+    results = (
+        []
+        if search_filters["source_ids"] == []
+        else await search_base(
+            upload_data,
+            modalities=modalities,
+            filters=search_filters,
+            config=config,
+        )
     )
 
     # Audit-log the search. The AccessLog docstring (and access_control.py:13)
@@ -830,9 +869,8 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
 
 
 # Special filter keys that item enumeration handles directly (not via the
-# shared FILTER_REGISTRY). created_at is scoped to SourceItem.inserted_at here
-# — distinct from BM25's Chunk.created_at, see SPECIAL_FILTER_KEYS in
-# search.filters. Everything else (registry keys) is folded on declaratively.
+# shared FILTER_REGISTRY). Everything else (registry keys) is folded on
+# declaratively.
 ITEM_SPECIAL_FILTER_KEYS = frozenset(
     {"source_ids", "min_created_at", "max_created_at", "person_id", "account"}
 )
@@ -876,10 +914,7 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     # Special keys scoped to SourceItem itself.
     if source_ids := filters.get("source_ids"):
         query = query.filter(SourceItem.id.in_(source_ids))
-    if min_created_at := filters.get("min_created_at"):
-        query = query.filter(SourceItem.inserted_at >= min_created_at)
-    if max_created_at := filters.get("max_created_at"):
-        query = query.filter(SourceItem.inserted_at <= max_created_at)
+    query = query.filter(*created_at_conditions(filters))
 
     # Declarative content-metadata filters (tags/size/mail/blog/doc).
     query = apply_registry_filters_sql(query, filters)

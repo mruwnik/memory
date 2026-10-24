@@ -102,6 +102,22 @@ describe('FilterInput', () => {
     })
   })
 
+  describe('list fields', () => {
+    it.each([
+      ['a@x.com', ['a@x.com']],
+      ['a@x.com, b@y.org', ['a@x.com', 'b@y.org']],
+      [' , ', null],
+    ])('reports %j as %j', async (typed, expected) => {
+      const onChange = vi.fn()
+      const { user } = renderWithUser(
+        <Controlled field="recipients" fieldConfig={{ type: 'list[str]', description: 'recipients' }} onChange={onChange} />,
+      )
+      await user.type(screen.getByRole('textbox'), typed)
+      expect(screen.getByRole('textbox')).toHaveValue(typed)
+      expect(onChange).toHaveBeenLastCalledWith('recipients', expected)
+    })
+  })
+
   describe('text fields (default)', () => {
     it('renders a text input for a plain field', () => {
       renderWithUser(

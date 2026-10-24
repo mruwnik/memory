@@ -13,6 +13,9 @@ from memory.api.MCP.servers.meta import (
     create_one_time_key,
     from_annotation,
     get_schema,
+    get_search_defaults,
+    get_tags,
+    search_filters,
 )
 from memory.api.MCP.servers.forecast import (
     get_forecasts,
@@ -32,7 +35,10 @@ from memory.common.markets import (
     _history_cache,
     _depth_cache,
 )
-from tests.conftest import mcp_auth_context
+from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
+from memory.common.collections import ALL_COLLECTIONS
+from memory.common.db.models import SourceItem
+from tests.conftest import make_source_item, mcp_auth_context
 
 
 # ====== get_metadata_schemas tests ======
@@ -88,6 +94,89 @@ async def test_get_metadata_schemas_excludes_empty_collections(mock_qdrant, mock
 
     # Should be empty if no collections have sizes
     assert result == {}
+
+
+COMMON_FILTERS = {"tags", "min_size", "max_size", "min_created_at", "max_created_at"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "collection, specific",
+    [
+        ("mail", {"sender", "recipients", "folder", "min_sent_at", "max_sent_at"}),
+        ("blog", {"domain", "author", "authors", "min_published", "max_published"}),
+        ("doc", {"folder_path"}),
+        ("book", set()),
+    ],
+)
+@patch("memory.api.MCP.servers.meta.qdrant")
+async def test_get_metadata_schemas_lists_search_filters(mock_qdrant, collection, specific):
+    mock_qdrant.get_collection_sizes.return_value = {collection: 1}
+
+    result = await get_metadata_schemas.fn()
+
+    assert set(result[collection]["filters"]) == COMMON_FILTERS | specific
+
+
+REGISTRY_FILTERS_BY_COLLECTION = [
+    (spec.key, collection)
+    for spec in FILTER_REGISTRY.values()
+    if not isinstance(spec.qdrant_op, QdrantUnsupported)
+    for collection in (spec.model.get_collections() if spec.model else ["text"])
+]
+
+
+@pytest.mark.parametrize("key, collection", REGISTRY_FILTERS_BY_COLLECTION)
+def test_search_filters_describe_every_registry_filter(key, collection):
+    assert search_filters(collection)[key]["description"]
+
+
+@pytest.mark.parametrize("klass", SourceItem.__subclasses__())
+def test_source_item_collections_are_real_collections(klass):
+    assert set(klass.get_collections()) <= set(ALL_COLLECTIONS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, False])
+@pytest.mark.parametrize(
+    "setting, key",
+    [
+        ("ENABLE_BM25_SEARCH", "use_bm25"),
+        ("ENABLE_HYDE_EXPANSION", "use_hyde"),
+        ("ENABLE_RERANKING", "use_reranking"),
+        ("ENABLE_QUERY_ANALYSIS", "use_query_analysis"),
+    ],
+)
+async def test_get_search_defaults_reports_server_settings(monkeypatch, setting, key, value):
+    monkeypatch.setattr(f"memory.common.settings.{setting}", value)
+
+    assert (await get_search_defaults.fn())[key] is value
+
+
+@pytest.mark.asyncio
+async def test_get_tags_admin_sees_searchable_tags(db_session, admin_session):
+    make_source_item(db_session, 1, tags=["common", "rare"])
+    make_source_item(db_session, 2, tags=["common"], modality="mail")
+    make_source_item(db_session, 3, tags=["secret-session"], modality="session")
+    make_source_item(db_session, 4, tags=["observation"], modality="observation")
+    make_source_item(db_session, 5, tags=["tombstoned"], sensitivity="hidden")
+    make_source_item(db_session, 6, tags=["unembedded"], embed_status="FAILED")
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_tags.fn()
+
+    assert result == ["common", "rare"]
+
+
+@pytest.mark.asyncio
+async def test_get_tags_respects_access(db_session, user_session, admin_user):
+    make_source_item(db_session, 1, tags=["mine"], creator_id=user_session.user_id)
+    make_source_item(db_session, 2, tags=["theirs"], creator_id=admin_user.id)
+
+    with mcp_auth_context(user_session.id):
+        result = await get_tags.fn()
+
+    assert result == ["mine"]
 
 
 # ====== get_current_time tests ======

@@ -3,7 +3,7 @@ from datetime import datetime
 import logging
 from typing import Optional, cast, TypedDict, NotRequired, TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, with_config
 
 from memory.common.db.models import Chunk, SourceItem
 from memory.common import settings
@@ -75,6 +75,9 @@ class SearchResult(BaseModel):
         )
 
 
+# Unknown keys must fail validation: pydantic would otherwise drop them before
+# reject_unknown_filter_keys sees them, and the search would run unfiltered.
+@with_config(ConfigDict(extra="forbid"))
 class MCPSearchFilters(TypedDict):
     """Search filters exposed via MCP API.
 

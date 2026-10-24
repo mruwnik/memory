@@ -2,86 +2,37 @@ import { FilterInput } from './FilterInput'
 import { CollectionMetadata, SchemaArg } from '@/types/mcp'
 import { Disclosure, Field } from '@/components/shared/ui'
 
+type Fields = [string, SchemaArg][]
+
 const formatFieldLabel = (field: string): string =>
     field.replace(/_/g, ' ').replace(/^\w/, l => l.toUpperCase())
 
-const shouldSkipField = (fieldName: string): boolean =>
-    ['tags'].includes(fieldName)
+// Tags have their own picker in the search form.
+const filtersOf = (metadata: CollectionMetadata): Fields =>
+    Object.entries(metadata.filters).filter(([name]) => name !== 'tags')
 
-const isCommonField = (fieldName: string): boolean =>
-    ['size', 'filename', 'content_type', 'mail_message_id', 'sent_at', 'created_at', 'source_id'].includes(fieldName)
-
-const createMinMaxFields = (fieldName: string, fieldConfig: any): [string, any][] => [
-    [`min_${fieldName}`, { ...fieldConfig, description: `Min ${fieldConfig.description}` }],
-    [`max_${fieldName}`, { ...fieldConfig, description: `Max ${fieldConfig.description}` }]
-]
-
-const createSizeFields = (): [string, any][] => [
-    ['min_size', { type: 'int', description: 'Minimum size in bytes' }],
-    ['max_size', { type: 'int', description: 'Maximum size in bytes' }]
-]
-
-const extractSchemaFields = (schema: Record<string, SchemaArg>, includeCommon = true): [string, SchemaArg][] =>
-    Object.entries(schema)
-        .filter(([fieldName]) => !shouldSkipField(fieldName))
-        .filter(([fieldName]) => includeCommon || !isCommonField(fieldName))
-        .flatMap(([fieldName, fieldConfig]) =>
-            ['sent_at', 'published', 'created_at'].includes(fieldName)
-                ? createMinMaxFields(fieldName, fieldConfig)
-                : [[fieldName, fieldConfig] as [string, SchemaArg]]
-        )
-
-const getCommonFields = (schemas: Record<string, CollectionMetadata>, selectedModalities: string[]): [string, SchemaArg][] => {
-    const commonFieldsMap = new Map<string, SchemaArg>()
-
-    createMinMaxFields('created_at', { type: 'datetime', description: 'Creation date' }).forEach(([field, config]) => {
-        commonFieldsMap.set(field, config)
-    })
-
-    selectedModalities.forEach(modality => {
-        const schema = schemas[modality]?.schema
-        if (!schema) return
-
-        Object.entries(schema).forEach(([fieldName, fieldConfig]) => {
-            if (isCommonField(fieldName)) {
-                if (['sent_at', 'created_at'].includes(fieldName)) {
-                    createMinMaxFields(fieldName, fieldConfig).forEach(([field, config]) => {
-                        commonFieldsMap.set(field, config)
-                    })
-                } else if (fieldName === 'size') {
-                    createSizeFields().forEach(([field, config]) => {
-                        commonFieldsMap.set(field, config)
-                    })
-                } else {
-                    commonFieldsMap.set(fieldName, fieldConfig)
-                }
-            }
-        })
-    })
-
-    return Array.from(commonFieldsMap.entries())
+// With a single collection every filter is shared, which says nothing; keep them under that collection.
+const getCommonFields = (schemas: Record<string, CollectionMetadata>): Fields => {
+    const [first, ...rest] = Object.values(schemas)
+    if (!rest.length) return []
+    return filtersOf(first).filter(([name]) => rest.every(metadata => name in metadata.filters))
 }
 
-const getModalityFields = (schemas: Record<string, CollectionMetadata>, selectedModalities: string[]): Record<string, [string, SchemaArg][]> => {
-    return selectedModalities.reduce((acc, modality) => {
-        const schema = schemas[modality]?.schema
-        if (!schema) return acc
-
-        const schemaFields = extractSchemaFields(schema, false)
-
-        if (schemaFields.length > 0) {
-            acc[modality] = schemaFields
-        }
-
-        return acc
-    }, {} as Record<string, [string, SchemaArg][]>)
+const getModalityFields = (schemas: Record<string, CollectionMetadata>, selectedModalities: string[], common: Fields): Record<string, Fields> => {
+    const commonNames = new Set(common.map(([name]) => name))
+    return Object.fromEntries(
+        selectedModalities
+            .filter(modality => schemas[modality])
+            .map(modality => [modality, filtersOf(schemas[modality]).filter(([name]) => !commonNames.has(name))] as const)
+            .filter(([, fields]) => fields.length > 0)
+    )
 }
 
 interface DynamicFiltersProps {
     schemas: Record<string, CollectionMetadata>
     selectedModalities: string[]
-    filters: Record<string, SchemaArg>
-    onFilterChange: (field: string, value: SchemaArg) => void
+    filters: Record<string, any>
+    onFilterChange: (field: string, value: any) => void
 }
 
 export const DynamicFilters = ({
@@ -90,12 +41,27 @@ export const DynamicFilters = ({
     filters,
     onFilterChange
 }: DynamicFiltersProps) => {
-    const commonFields = getCommonFields(schemas, selectedModalities)
-    const modalityFields = getModalityFields(schemas, selectedModalities)
+    const commonFields = getCommonFields(schemas)
+    const modalityFields = getModalityFields(schemas, selectedModalities, commonFields)
 
     if (commonFields.length === 0 && Object.keys(modalityFields).length === 0) {
         return null
     }
+
+    const renderFields = (fields: Fields) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {fields.map(([field, fieldConfig]) => (
+                <Field key={field} label={formatFieldLabel(field)}>
+                    <FilterInput
+                        field={field}
+                        fieldConfig={fieldConfig}
+                        value={filters[field]}
+                        onChange={onFilterChange}
+                    />
+                </Field>
+            ))}
+        </div>
+    )
 
     return (
         <div className="space-y-4">
@@ -103,35 +69,13 @@ export const DynamicFilters = ({
             <div className="space-y-3">
                 {commonFields.length > 0 && (
                     <Disclosure summary="Document properties" open>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {commonFields.map(([field, fieldConfig]: [string, SchemaArg]) => (
-                                <Field key={field} label={formatFieldLabel(field)}>
-                                    <FilterInput
-                                        field={field}
-                                        fieldConfig={fieldConfig}
-                                        value={filters[field]}
-                                        onChange={onFilterChange}
-                                    />
-                                </Field>
-                            ))}
-                        </div>
+                        {renderFields(commonFields)}
                     </Disclosure>
                 )}
 
                 {Object.entries(modalityFields).map(([modality, fields]) => (
                     <Disclosure key={modality} summary={`${formatFieldLabel(modality)} specific`}>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {fields.map(([field, fieldConfig]: [string, SchemaArg]) => (
-                                <Field key={field} label={formatFieldLabel(field)}>
-                                    <FilterInput
-                                        field={field}
-                                        fieldConfig={fieldConfig}
-                                        value={filters[field]}
-                                        onChange={onFilterChange}
-                                    />
-                                </Field>
-                            ))}
-                        </div>
+                        {renderFields(fields)}
                     </Disclosure>
                 ))}
             </div>

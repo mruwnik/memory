@@ -8,8 +8,13 @@ import Search from './Search'
 const LocationProbe = () => <div data-testid="location">{useLocation().search}</div>
 
 const schemas = {
-  blog: { schema: { author: { type: 'string', description: 'Author' } }, size: 0 },
+  blog: {
+    schema: { author: { type: 'str', description: 'Author' } },
+    filters: { author: { type: 'str', description: 'Author' } },
+    size: 1,
+  },
 }
+const searchDefaults = { use_bm25: true, use_hyde: false, use_reranking: true, use_query_analysis: false }
 
 const installFetch = (opts: { results?: unknown[]; searchFails?: boolean; schemasFail?: boolean } = {}) =>
   mockFetch(async (input, init) => {
@@ -21,6 +26,12 @@ const installFetch = (opts: { results?: unknown[]; searchFails?: boolean; schema
     if (tool === 'meta_get_metadata_schemas') {
       if (opts.schemasFail) return mockResponse({ status: 500, json: { detail: 'schemas down' } })
       return mockResponse({ json: mcpEnvelopeJson(schemas) })
+    }
+    if (tool === 'meta_get_tags') {
+      return mockResponse({ json: mcpEnvelopeJson(['work', 'home']) })
+    }
+    if (tool === 'meta_get_search_defaults') {
+      return mockResponse({ json: mcpEnvelopeJson(searchDefaults) })
     }
     if (tool === 'core_search') {
       if (opts.searchFails) return mockResponse({ status: 500, json: { detail: 'boom' } })

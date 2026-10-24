@@ -20,7 +20,7 @@ wired here or explicitly marked special.
 
 Filters that are genuinely backend-specific and hand-coded (access control,
 person association, source-id prefiltering, confidence scores, observation
-collection routing, and the created_at divergence described below) live in
+collection routing, and created_at, described below) live in
 :data:`SPECIAL_FILTER_KEYS` rather than the registry.
 """
 
@@ -196,14 +196,10 @@ FILTER_REGISTRY: dict[str, FilterSpec] = {spec.key: spec for spec in _SPECS}
 # Keys deliberately NOT in the registry because they are backend-specific and
 # hand-coded in each consumer.
 #
-# created_at is special because the two SQL backends scope it to *different*
-# columns on purpose:
-#   - list/count filter SourceItem.inserted_at (when the item entered the KB)
-#   - bm25 filters Chunk.created_at (when the chunk was created)
-#   - Qdrant has no per-chunk created_at payload key at all.
-# These are not interchangeable (a chunk can be re-derived after the item was
-# first inserted), so they are intentionally NOT unified into one registry
-# spec. If a future change makes them provably identical, fold them in.
+# created_at means SourceItem.inserted_at (when the item entered the KB). The
+# Qdrant payload has no such key, so search folds the bounds into source_ids
+# (see filter_source_ids in api/MCP/servers/core.py), which both arms filter
+# on; list/count apply them to the SourceItem query directly.
 # ``account`` is special because the user supplies an email *address* but the
 # filter constrains ``MailMessage.email_account_id`` (an FK). The address must be
 # resolved to account id(s) first, which the registry's value->column mapping

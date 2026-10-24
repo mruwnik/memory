@@ -33,10 +33,6 @@ from memory.api.search.constants import (
     STOPWORDS,
 )
 
-# Always import optionals; settings flags are *defaults* for SearchConfig,
-# not gates on module load. Conditionally importing means a per-request
-# override (SearchConfig.useBm25=True while ENABLE_BM25_SEARCH=False)
-# would NameError at call time and silently dishonor the override.
 from memory.api.search.bm25 import search_bm25_chunks
 from memory.api.search.hyde import expand_query_hyde
 from memory.api.search.rerank import rerank_chunks, rerank_timeout
@@ -619,11 +615,12 @@ async def search_chunks(
     If HyDE is enabled, also generates a hypothetical document from the query
     and includes it in the embedding search for better semantic matching.
 
-    Enhancement flags in config override global settings when set:
-    - useBm25: Enable BM25 lexical search
-    - useHyde: Enable HyDE query expansion
-    - useReranking: Enable cross-encoder reranking
-    - useQueryAnalysis: LLM-based query analysis (extracts modalities, cleans query, generates variants)
+    Enhancement flags in config can turn off an enhancement the settings enable:
+    - useBm25: BM25 lexical search (ENABLE_BM25_SEARCH)
+    - useHyde: HyDE query expansion (ENABLE_HYDE_EXPANSION)
+    - useReranking: cross-encoder reranking (ENABLE_RERANKING)
+    - useQueryAnalysis: LLM-based query analysis, which extracts modalities,
+      cleans the query and generates variants (ENABLE_QUERY_ANALYSIS)
     """
     # ``None`` sentinels: any defaults that look like containers must be
     # constructed per call. A shared mutable default like ``filters={}``
@@ -636,22 +633,13 @@ async def search_chunks(
     if config is None:
         config = SearchConfig()
 
-    # Resolve enhancement flags: config overrides global settings
-    use_bm25 = (
-        config.useBm25 if config.useBm25 is not None else settings.ENABLE_BM25_SEARCH
-    )
-    use_hyde = (
-        config.useHyde if config.useHyde is not None else settings.ENABLE_HYDE_EXPANSION
-    )
-    use_reranking = (
-        config.useReranking
-        if config.useReranking is not None
-        else settings.ENABLE_RERANKING
-    )
+    # The settings are the operator's ceiling: a request can turn an
+    # enhancement off, never on (they can cost LLM calls on the server's key).
+    use_bm25 = settings.ENABLE_BM25_SEARCH and config.useBm25 is not False
+    use_hyde = settings.ENABLE_HYDE_EXPANSION and config.useHyde is not False
+    use_reranking = settings.ENABLE_RERANKING and config.useReranking is not False
     use_query_analysis = (
-        config.useQueryAnalysis
-        if config.useQueryAnalysis is not None
-        else settings.ENABLE_QUERY_ANALYSIS
+        settings.ENABLE_QUERY_ANALYSIS and config.useQueryAnalysis is not False
     )
 
     internal_limit = limit * CANDIDATE_MULTIPLIER

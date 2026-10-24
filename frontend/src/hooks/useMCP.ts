@@ -177,19 +177,13 @@ export const useMCP = () => {
     })
   }, [mcpCall])
 
-  // These meta endpoints no longer exist - return empty results
-  // TODO: Find alternative source for tags/subjects/observation types if needed
-  const getTags = useCallback(async () => {
-    return [[]]  // Return empty array wrapped to match expected format
-  }, [])
+  const getTags = useCallback(async (): Promise<string[]> => {
+    return (await mcpCall('meta_get_tags'))[0]
+  }, [mcpCall])
 
-  const getSubjects = useCallback(async () => {
-    return [[]]
-  }, [])
-
-  const getObservationTypes = useCallback(async () => {
-    return [[]]
-  }, [])
+  const getSearchDefaults = useCallback(async (): Promise<Record<string, boolean>> => {
+    return (await mcpCall('meta_get_search_defaults'))[0]
+  }, [mcpCall])
 
   const getMetadataSchemas = useCallback(async () => {
     return (await mcpCall('meta_get_metadata_schemas'))[0]
@@ -203,6 +197,7 @@ export const useMCP = () => {
       limit: config.limit ?? 20,
       previews: config.previews ?? false,
       use_scores: config.useScores ?? false,
+      ...config.enhancements,
     })
   }, [mcpCall])
 
@@ -217,8 +212,7 @@ export const useMCP = () => {
     saveNote,
     searchKnowledgeBase,
     getTags,
-    getSubjects,
-    getObservationTypes,
+    getSearchDefaults,
     getMetadataSchemas,
   }
 } 

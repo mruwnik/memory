@@ -4,170 +4,79 @@ import { renderWithUser } from '@/test/utils'
 import { DynamicFilters } from './DynamicFilters'
 import { CollectionMetadata } from '@/types/mcp'
 
-const schema = (fields: Record<string, { type: string; description: string }>): CollectionMetadata => ({
-  schema: fields,
-  size: 0,
+const field = (description: string, type = 'str') => ({ type, description })
+
+const collection = (filters: CollectionMetadata['filters']): CollectionMetadata => ({
+  schema: { title: field('Title') },
+  filters,
+  size: 1,
 })
 
+const schemas = {
+  mail: collection({
+    tags: field('tags', 'list[str]'),
+    min_size: field('minimum size', 'int'),
+    sender: field('sender'),
+  }),
+  blog: collection({
+    tags: field('tags', 'list[str]'),
+    min_size: field('minimum size', 'int'),
+    domain: field('domain'),
+  }),
+}
+
+const renderFilters = (selectedModalities: string[], props: Partial<Parameters<typeof DynamicFilters>[0]> = {}) =>
+  renderWithUser(
+    <DynamicFilters
+      schemas={schemas}
+      selectedModalities={selectedModalities}
+      filters={{}}
+      onFilterChange={() => {}}
+      {...props}
+    />,
+  )
+
 describe('DynamicFilters', () => {
-  it('renders nothing when no modalities are selected', () => {
+  it('renders nothing without schemas', () => {
     const { container } = renderWithUser(
       <DynamicFilters schemas={{}} selectedModalities={[]} filters={{}} onFilterChange={() => {}} />,
     )
-    // no schemas + no selected modalities => only the always-present created_at common fields
-    // Actually getCommonFields always seeds min/max created_at, so it is NOT null.
-    expect(container.firstChild).not.toBeNull()
+    expect(container.firstChild).toBeNull()
   })
 
-  it('always renders the Document Properties section with created_at range', () => {
-    renderWithUser(
-      <DynamicFilters schemas={{}} selectedModalities={[]} filters={{}} onFilterChange={() => {}} />,
-    )
+  it('puts filters every collection accepts under Document properties', () => {
+    renderFilters([])
     expect(screen.getByText('Document properties')).toBeInTheDocument()
-    expect(screen.getByLabelText('Min created at')).toBeInTheDocument()
-    expect(screen.getByLabelText('Max created at')).toBeInTheDocument()
-  })
-
-  it('renders modality-specific section for non-common fields', () => {
-    const schemas = {
-      blog: schema({ author: { type: 'string', description: 'Author' } }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['blog']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
-    expect(screen.getByText('Blog specific')).toBeInTheDocument()
-    expect(screen.getByLabelText('Author')).toBeInTheDocument()
-  })
-
-  it('does not create a modality section when all fields are common', () => {
-    const schemas = {
-      email: schema({ filename: { type: 'string', description: 'File' } }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['email']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
-    // filename is a common field => it goes to Document Properties, no "Email specific"
-    expect(screen.queryByText('Email specific')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Filename')).toBeInTheDocument()
-  })
-
-  it('expands size into min/max size common fields', () => {
-    const schemas = {
-      file: schema({ size: { type: 'int', description: 'Size' } }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['file']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
     expect(screen.getByLabelText('Min size')).toBeInTheDocument()
-    expect(screen.getByLabelText('Max size')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Sender')).not.toBeInTheDocument()
   })
 
-  it('expands sent_at into min/max common fields', () => {
-    const schemas = {
-      email: schema({ sent_at: { type: 'datetime', description: 'Sent' } }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['email']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
-    expect(screen.getByLabelText('Min sent at')).toBeInTheDocument()
-    expect(screen.getByLabelText('Max sent at')).toBeInTheDocument()
+  it('shows collection-only filters for the selected modalities', () => {
+    renderFilters(['mail'])
+    expect(screen.getByText('Mail specific')).toBeInTheDocument()
+    expect(screen.getByLabelText('Sender')).toBeInTheDocument()
+    expect(screen.queryByText('Blog specific')).not.toBeInTheDocument()
   })
 
-  it('skips the tags field entirely', () => {
-    const schemas = {
-      blog: schema({
-        tags: { type: 'array', description: 'Tags' },
-        author: { type: 'string', description: 'Author' },
-      }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['blog']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
-    expect(screen.queryByText('Tags:')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Author')).toBeInTheDocument()
-  })
-
-  it('formats underscored field names into sentence case labels', () => {
-    const schemas = {
-      blog: schema({ word_count: { type: 'int', description: 'Words' } }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['blog']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
-    expect(screen.getByLabelText('Word count')).toBeInTheDocument()
+  it.each([['Title'], ['Tags']])('does not render %s, which has no filter input here', (label) => {
+    renderFilters(['mail', 'blog'])
+    expect(screen.queryByLabelText(label)).not.toBeInTheDocument()
   })
 
   it('passes current filter values into inputs', () => {
-    const schemas = {
-      blog: schema({ author: { type: 'string', description: 'Author' } }),
-    }
-    renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['blog']}
-        filters={{ author: 'Tolkien' }}
-        onFilterChange={() => {}}
-      />,
-    )
-    expect(screen.getByDisplayValue('Tolkien')).toBeInTheDocument()
+    renderFilters(['mail'], { filters: { sender: 'a@b.c' } })
+    expect(screen.getByDisplayValue('a@b.c')).toBeInTheDocument()
   })
 
   it('invokes onFilterChange when a filter input changes', async () => {
     const onFilterChange = vi.fn()
-    const schemas = {
-      blog: schema({ author: { type: 'string', description: 'Author' } }),
-    }
-    const { user } = renderWithUser(
-      <DynamicFilters
-        schemas={schemas}
-        selectedModalities={['blog']}
-        filters={{}}
-        onFilterChange={onFilterChange}
-      />,
-    )
-    await user.type(screen.getByPlaceholderText('Author'), 'Z')
-    expect(onFilterChange).toHaveBeenLastCalledWith('author', 'Z')
+    const { user } = renderFilters(['blog'], { onFilterChange })
+    await user.type(screen.getByLabelText('Domain'), 'Z')
+    expect(onFilterChange).toHaveBeenLastCalledWith('domain', 'Z')
   })
 
   it('ignores modalities with no schema present', () => {
-    renderWithUser(
-      <DynamicFilters
-        schemas={{}}
-        selectedModalities={['ghost']}
-        filters={{}}
-        onFilterChange={() => {}}
-      />,
-    )
+    renderFilters(['ghost'])
     expect(screen.queryByText('Ghost specific')).not.toBeInTheDocument()
   })
 })

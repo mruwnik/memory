@@ -21,6 +21,7 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.common import settings
+from memory.common.db.models import SourceItem
 from tests.providers.email_provider import MockEmailProvider
 
 MOCK_SUMMARY_RESPONSE = json.dumps({"summary": "test summary", "tags": ["tag1", "tag2"]})
@@ -1151,6 +1152,25 @@ def unique_sha256(prefix: str = "") -> bytes:
     Useful for creating SourceItem instances that require unique sha256 values.
     """
     return hashlib.sha256(f"{prefix}-{uuid.uuid4()}".encode()).digest()
+
+
+def make_source_item(db_session, n: int, **overrides) -> SourceItem:
+    """Create and persist a searchable (embed_status=STORED) SourceItem."""
+    item = SourceItem(
+        **{
+            "modality": "blog",
+            "sha256": unique_sha256(f"source-item-{n}"),
+            "content": f"Content {n}",
+            "mime_type": "text/html",
+            "tags": [],
+            "embed_status": "STORED",
+            **overrides,
+        }
+    )
+    db_session.add(item)
+    db_session.commit()
+    db_session.refresh(item)
+    return item
 
 
 @pytest.fixture

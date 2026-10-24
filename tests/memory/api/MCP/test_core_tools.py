@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from pydantic import ValidationError
+
 from memory.api.MCP.servers.core import (
     MAX_FETCH_FILE_BYTES,
     RawObservation,
@@ -23,7 +25,7 @@ from memory.api.MCP.servers.core import (
 from memory.api.search.types import SearchFilters
 from memory.common.access_control import AccessFilter
 from memory.common.db.models.source_item import SourceItem
-from tests.conftest import mcp_auth_context
+from tests.conftest import make_source_item, mcp_auth_context
 
 
 # ====== search tests ======
@@ -127,39 +129,71 @@ async def test_search_with_filters(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("value", [True, False])
+@pytest.mark.parametrize(
+    "kwarg, attr",
+    [
+        ("previews", "previews"),
+        ("use_scores", "useScores"),
+        ("use_bm25", "useBm25"),
+        ("use_hyde", "useHyde"),
+        ("use_reranking", "useReranking"),
+        ("use_query_analysis", "useQueryAnalysis"),
+    ],
+)
 @patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_previews_config(
-    mock_filter_ids, mock_extract, mock_search_base
+async def test_search_passes_config_flags(
+    mock_filter_ids, mock_extract, mock_search_base, kwarg, attr, value
 ):
-    """Search passes previews config correctly."""
-    mock_extract.extract_text.return_value = "extracted text"
     mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
-    await search.fn(query="test", previews=True)
+    await search.fn(query="test", **{kwarg: value})
 
-    call_kwargs = mock_search_base.call_args[1]
-    assert call_kwargs["config"].previews is True
+    assert getattr(mock_search_base.call_args[1]["config"], attr) is value
 
 
 @pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")
-async def test_search_use_scores_config(
+async def test_search_enhancements_default_to_server_settings(
     mock_filter_ids, mock_extract, mock_search_base
 ):
-    """Search passes useScores config correctly."""
-    mock_extract.extract_text.return_value = "extracted text"
     mock_search_base.return_value = []
     mock_filter_ids.return_value = None
 
-    await search.fn(query="test", use_scores=True)
+    await search.fn(query="test")
 
-    call_kwargs = mock_search_base.call_args[1]
-    assert call_kwargs["config"].useScores is True
+    config = mock_search_base.call_args[1]["config"]
+    assert (config.useBm25, config.useHyde, config.useReranking, config.useQueryAnalysis) == (
+        None, None, None, None,
+    )
+
+
+@pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.search_base")
+@patch("memory.api.MCP.servers.core.extract")
+@patch("memory.api.MCP.servers.core.filter_source_ids")
+async def test_search_returns_nothing_when_prefilter_matches_nothing(
+    mock_filter_ids, mock_extract, mock_search_base
+):
+    mock_filter_ids.return_value = []
+
+    assert await search.fn(query="test", filters={"min_created_at": "2099-01-01"}) == []
+    mock_search_base.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool, args",
+    [(search, {"query": "test"}), (list_items, {}), (count_items, {})],
+)
+async def test_unknown_filter_keys_are_rejected(tool, args):
+    with pytest.raises(ValidationError, match="title"):
+        await tool.run({**args, "filters": {"title": "x"}})
 
 
 @pytest.mark.asyncio
@@ -968,70 +1002,65 @@ def test_filter_observation_source_ids_by_both(mock_make_session):
 # ====== filter_source_ids tests ======
 
 
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_source_ids_with_existing_ids(mock_make_session):
-    """Returns existing source_ids if provided."""
-    filters = SearchFilters(source_ids=[1, 2, 3])
-    result = filter_source_ids(set(), filters)
-    assert result == [1, 2, 3]
+def test_filter_source_ids_no_filters():
+    assert filter_source_ids(set(), SearchFilters(tags=[]), None) is None
 
 
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_source_ids_no_filters(mock_make_session):
-    """Returns None when no applicable filters."""
-    filters = SearchFilters()
-    result = filter_source_ids(set(), filters)
-    assert result is None
+@pytest.mark.parametrize(
+    "modalities, filters, expected",
+    [
+        (set(), {"tags": ["x"]}, {"old_small"}),
+        (set(), {"tags": ["x", "y"]}, {"old_small", "new_big"}),
+        (set(), {"tags": ["missing"]}, set()),
+        (set(), {"min_size": 100}, {"new_big"}),
+        (set(), {"max_size": 100}, {"old_small", "june_empty"}),
+        (set(), {"min_size": 0}, {"old_small", "new_big", "june_empty"}),
+        (set(), {"max_size": 0}, {"june_empty"}),
+        (set(), {"min_created_at": "2026-06-01"}, {"new_big", "june_empty"}),
+        (set(), {"max_created_at": "2026-06-01"}, {"old_small", "june_empty"}),
+        (set(), {"max_created_at": "2026-06-01T12:00:00+00:00"}, {"old_small"}),
+        ({"mail"}, {"tags": ["x", "y"]}, {"new_big"}),
+    ],
+)
+def test_filter_source_ids(db_session, modalities, filters, expected):
+    items = {
+        "old_small": make_source_item(
+            db_session, 1, tags=["x"], size=10,
+            inserted_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+        "new_big": make_source_item(
+            db_session, 2, modality="mail", tags=["y"], size=1000,
+            inserted_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+        ),
+        "june_empty": make_source_item(
+            db_session, 3, size=0,
+            inserted_at=datetime(2026, 6, 1, 15, tzinfo=timezone.utc),
+        ),
+    }
+
+    result = filter_source_ids(modalities, SearchFilters(**filters), None)
+
+    assert result is not None
+    assert set(result) == {items[name].id for name in expected}
 
 
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_source_ids_by_tags(mock_make_session):
-    """Filters source items by tags."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller, searches", [("admin", 1), ("user", 0)])
+@patch("memory.api.MCP.servers.core.search_base")
+@patch("memory.api.MCP.servers.core.extract")
+async def test_search_prefilter_only_matches_visible_items(
+    mock_extract, mock_search_base, db_session, admin_user, admin_session, user_session,
+    caller, searches,
+):
+    item = make_source_item(db_session, 1, tags=["secret"], creator_id=admin_user.id)
+    mock_search_base.return_value = []
+    token = {"admin": admin_session, "user": user_session}[caller].id
 
-    mock_item = MagicMock()
-    mock_item.id = 1
-    mock_session.query.return_value.filter.return_value.all.return_value = [mock_item]
+    with mcp_auth_context(token):
+        await search.fn(query="test", filters={"tags": ["secret"]})
 
-    filters = SearchFilters(tags=["important"])
-    result = filter_source_ids(set(), filters)
-
-    assert result == [1]
-
-
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_source_ids_by_size(mock_make_session):
-    """Filters source items by size."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_item = MagicMock()
-    mock_item.id = 1
-    mock_session.query.return_value.filter.return_value.all.return_value = [mock_item]
-
-    filters = SearchFilters(max_size=1000)
-    result = filter_source_ids(set(), filters)
-
-    assert result == [1]
-
-
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_source_ids_by_modalities(mock_make_session):
-    """Filters source items by modalities."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_item = MagicMock()
-    mock_item.id = 1
-    mock_session.query.return_value.filter.return_value.filter.return_value.all.return_value = [
-        mock_item
-    ]
-
-    filters = SearchFilters(tags=["test"])
-    result = filter_source_ids({"mail", "blog"}, filters)
-
-    assert result == [1]
+    calls = [c.kwargs["filters"]["source_ids"] for c in mock_search_base.call_args_list]
+    assert calls == [[item.id]] * searches
 
 
 # ====== fetch tests ======
@@ -1196,7 +1225,6 @@ async def test_fetch_with_journal_entries(mock_make_session, mock_get_user, mock
     journal_query.order_by.return_value = journal_query
     journal_query.all.return_value = [mock_entry1, mock_entry2]
 
-    from memory.common.db.models import SourceItem
     from memory.common.db.models.journal import JournalEntry
 
     _query_map = {SourceItem: item_query, JournalEntry: journal_query}
@@ -1286,26 +1314,6 @@ async def test_fetch_bulk_max_200_limit():
     """Fetch raises when ids list exceeds 200."""
     with pytest.raises(ValueError, match="Cannot fetch more than 200"):
         await fetch.fn(ids=list(range(201)))
-
-
-def make_source_item(db_session, n: int, **overrides) -> "SourceItem":
-    """Create and persist a SourceItem with embed_status=STORED for fetch tests."""
-    from tests.conftest import unique_sha256
-
-    defaults = dict(
-        modality="blog",
-        sha256=unique_sha256(f"bulk-fetch-{n}"),
-        content=f"Content {n}",
-        mime_type="text/html",
-        tags=[],
-        embed_status="STORED",
-    )
-    defaults.update(overrides)
-    item = SourceItem(**defaults)
-    db_session.add(item)
-    db_session.commit()
-    db_session.refresh(item)
-    return item
 
 
 @pytest.mark.asyncio

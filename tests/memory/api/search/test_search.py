@@ -36,23 +36,6 @@ from memory.api.search.search import (
 search_module = importlib.import_module("memory.api.search.search")
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["search_bm25_chunks", "expand_query_hyde", "rerank_chunks"],
-)
-def test_optional_search_helpers_imported_unconditionally(name):
-    """Optional search helpers must be importable regardless of the
-    ENABLE_BM25_SEARCH / ENABLE_HYDE_EXPANSION / ENABLE_RERANKING flags.
-
-    Settings flags are *defaults* for SearchConfig.useX, not gates on
-    module load. If imports were conditional, a per-request override
-    such as SearchConfig(useBm25=True) while ENABLE_BM25_SEARCH=False
-    would NameError at call time and silently dishonor the override.
-    """
-    mod = sys.modules["memory.api.search.search"]
-    assert callable(getattr(mod, name))
-
-
 # ============================================================================
 # extract_query_terms tests
 # ============================================================================
@@ -633,8 +616,6 @@ def test_search_sources_applies_final_access_filter_when_filters_provided():
     Pre-fix the final-merge query had no filter: a regression in the
     upstream Qdrant/BM25 layer would leak SourceItem rows here.
     """
-    import asyncio
-    import sys
 
     # Sidestep the package-shadowing trap: the package's __init__ does
     # ``from .search import search``, which rebinds ``memory.api.search.search``
@@ -700,8 +681,6 @@ def test_search_sources_fails_closed_when_filters_missing():
     has no ``access_filter`` key. Callers that legitimately want admin
     access pass ``filters={'access_filter': None}`` explicitly.
     """
-    import asyncio
-    import sys
 
     search_module = sys.modules["memory.api.search.search"]
 
@@ -734,8 +713,6 @@ def test_search_sources_empty_chunks_returns_empty():
     fail-closed filter check still happens (so callers must pass filters
     even with empty chunks) but the empty-list short-circuit fires
     immediately after, so we never query."""
-    import asyncio
-    import sys
 
     search_module = sys.modules["memory.api.search.search"]
 
@@ -838,6 +815,8 @@ async def run_dated_search(analysis: QueryAnalysis, filters: dict, ids_in_range:
         patch.object(search_module, "search_bm25_chunks", bm25),
         patch.object(search_module, "source_ids_in_range", in_range),
         patch.object(search_module, "make_session"),
+        patch.object(settings, "ENABLE_BM25_SEARCH", True),
+        patch.object(settings, "ENABLE_QUERY_ANALYSIS", True),
     ):
         await search_module.search_chunks(
             [DataChunk(data=["what happened yesterday"])],
@@ -901,6 +880,50 @@ async def test_search_chunks_leaves_filters_without_usable_date_range(analysis, 
 
     assert seen["embeddings"]["source_ids"] == [7]
     assert seen["bm25"]["source_ids"] == [7]
+
+
+ENHANCEMENT_SETTINGS = [
+    "ENABLE_BM25_SEARCH", "ENABLE_HYDE_EXPANSION", "ENABLE_RERANKING", "ENABLE_QUERY_ANALYSIS",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "enabled, requested, expected",
+    [
+        (True, None, True),
+        (True, True, True),
+        (True, False, False),
+        (False, None, False),
+        (False, True, False),
+        (False, False, False),
+    ],
+)
+async def test_search_chunks_settings_cap_enhancements(monkeypatch, enabled, requested, expected):
+    for setting in ENHANCEMENT_SETTINGS:
+        monkeypatch.setattr(settings, setting, enabled)
+    llm = AsyncMock(return_value=(None, None))
+    searches = AsyncMock(return_value=({}, {}))
+    rerank = AsyncMock(return_value=[])
+    with (
+        patch.object(search_module, "_run_llm_analysis", llm),
+        patch.object(search_module, "restrict_to_date_range", lambda filters, *_: filters),
+        patch.object(search_module, "_run_searches", searches),
+        patch.object(search_module, "_fetch_chunks", MagicMock(return_value=[])),
+        patch.object(search_module, "_apply_reranking", rerank),
+    ):
+        await search_module.search_chunks(
+            [DataChunk(data=["query"])],
+            filters={"access_filter": None},
+            config=SearchConfig(
+                useBm25=requested, useHyde=requested,
+                useReranking=requested, useQueryAnalysis=requested,
+            ),
+        )
+
+    use_query_analysis, use_hyde = llm.call_args.args[2:4]
+    resolved = (use_query_analysis, use_hyde, searches.call_args.args[5], rerank.call_args.args[3])
+    assert resolved == (expected,) * 4
 
 
 @pytest.mark.asyncio

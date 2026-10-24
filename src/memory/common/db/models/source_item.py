@@ -655,7 +655,7 @@ class SourceItem(AccessControlMixin, Base):
     @classmethod
     def get_collections(cls) -> list[str]:
         """Return the list of Qdrant collections this SourceItem type can be stored in."""
-        return [cls.__tablename__]
+        raise NotImplementedError(f"{cls.__name__} must declare its collections")
 
     @property
     def popularity(self) -> float:
