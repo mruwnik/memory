@@ -170,114 +170,6 @@ def refresh_discord_metadata() -> dict[str, Any] | None:
 
 
 # =============================================================================
-# Role Management
-# =============================================================================
-
-
-def list_roles(bot_id: int, guild_id: int | str) -> dict[str, Any] | None:
-    """List all roles in a guild (guild_id can be ID or name)."""
-    try:
-        response = requests.get(
-            f"{get_api_url()}/guilds/{guild_id}/roles",
-            params={"bot_id": bot_id},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to list roles for guild {guild_id}: {e}")
-        return None
-
-
-def list_role_members(bot_id: int, guild_id: int | str, role_id: int | str) -> dict[str, Any] | None:
-    """List all members with a specific role (guild_id and role_id can be ID or string)."""
-    try:
-        response = requests.get(
-            f"{get_api_url()}/guilds/{guild_id}/roles/{role_id}/members",
-            params={"bot_id": bot_id},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to list members for role {role_id}: {e}")
-        return None
-
-
-def add_role_member(bot_id: int, guild_id: int | str, role_id: int | str, user_id: int | str) -> dict[str, Any] | None:
-    """Add a user to a role (IDs can be int or string)."""
-    try:
-        response = requests.post(
-            f"{get_api_url()}/roles/add_member",
-            json={"bot_id": bot_id, "guild_id": guild_id, "role_id": role_id, "user_id": user_id},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to add user {user_id} to role {role_id}: {e}")
-        return None
-
-
-def remove_role_member(bot_id: int, guild_id: int | str, role_id: int | str, user_id: int | str) -> dict[str, Any] | None:
-    """Remove a user from a role (IDs can be int or string)."""
-    try:
-        response = requests.post(
-            f"{get_api_url()}/roles/remove_member",
-            json={"bot_id": bot_id, "guild_id": guild_id, "role_id": role_id, "user_id": user_id},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to remove user {user_id} from role {role_id}: {e}")
-        return None
-
-
-def create_role(
-    bot_id: int,
-    guild_id: int | str,
-    name: str,
-    color: int | None = None,
-    permissions: int | None = None,
-    mentionable: bool = False,
-    hoist: bool = False,
-) -> dict[str, Any] | None:
-    """Create a role in a Discord guild.
-
-    Args:
-        bot_id: Discord bot ID
-        guild_id: Guild ID (int or string)
-        name: Role name
-        color: RGB color integer (optional)
-        permissions: Permission bitfield (optional)
-        mentionable: Whether the role is mentionable
-        hoist: Whether to display role separately in member list
-
-    Returns:
-        Created role data or None on failure
-    """
-    try:
-        response = requests.post(
-            f"{get_api_url()}/guilds/{guild_id}/roles",
-            json={
-                "bot_id": bot_id,
-                "name": name,
-                "color": color,
-                "permissions": permissions,
-                "mentionable": mentionable,
-                "hoist": hoist,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to create role {name} in guild {guild_id}: {e}")
-        return None
-
-
-# =============================================================================
 # Channel Permissions
 # =============================================================================
 
@@ -677,29 +569,6 @@ def make_channel_private(
     )
 
 
-def grant_role_channel_access(
-    bot_id: int,
-    channel_id: int,
-    role_id: int,
-) -> dict[str, Any] | None:
-    """Grant a role access to view and use a channel.
-
-    Args:
-        bot_id: Discord bot ID
-        channel_id: Channel to grant access to
-        role_id: Role to grant access
-
-    Returns:
-        Result dict or None on failure
-    """
-    return set_channel_permission(
-        bot_id,
-        channel_id,
-        role_id=role_id,
-        allow=["view_channel", "send_messages", "read_message_history"],
-    )
-
-
 # =============================================================================
 # Resolution Helpers
 # =============================================================================
@@ -776,54 +645,6 @@ def resolve_category(
                 return int(c["id"])
 
     raise ValueError(f"Discord category '{category}' not found in guild")
-
-
-def resolve_role(
-    role: int | str | None,
-    guild_id: int,
-    bot_id: int,
-    create_if_missing: bool = False,
-) -> tuple[int | None, bool]:
-    """Resolve role ID from either numeric ID or role name.
-
-    Args:
-        role: Numeric role ID or role name string, or None
-        guild_id: Discord guild ID
-        bot_id: Discord bot ID
-        create_if_missing: If True and role name doesn't exist, create it
-
-    Returns:
-        Tuple of (role_id or None, was_created)
-
-    Raises:
-        ValueError: If role name not found and create_if_missing is False
-    """
-    if role is None:
-        return None, False
-
-    # Try as numeric first
-    if isinstance(role, int):
-        return role, False
-    try:
-        return int(role), False
-    except ValueError:
-        pass
-
-    # It's a name - look up via Discord API
-    roles_result = list_roles(bot_id, guild_id)
-    if roles_result:
-        for r in roles_result.get("roles", []):
-            if r["name"].lower() == role.lower():
-                return int(r["id"]), False
-
-    # Not found - create if requested
-    if create_if_missing:
-        new_role = create_role(bot_id, guild_id, name=role)
-        if new_role and new_role.get("success") and new_role.get("role"):
-            return int(new_role["role"]["id"]), True
-        raise ValueError(f"Failed to create Discord role '{role}'")
-
-    raise ValueError(f"Discord role '{role}' not found in guild")
 
 
 # Convenience functions

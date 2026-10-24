@@ -1457,12 +1457,8 @@ project_teams = Table(
 class Team(Base):
     """A team of people for access control and organization.
 
-    Teams are flat (no hierarchy) and can be optionally linked to:
-    - Discord roles (for notifications and channel access)
-    - GitHub teams (for repository access)
-
-    Access control: A person can access a project if they are in ANY
-    of the project's assigned teams.
+    Teams are flat (no hierarchy). A person can access a project if they are
+    in ANY of the project's assigned teams.
     """
 
     __tablename__ = "teams"
@@ -1481,21 +1477,6 @@ class Team(Base):
     # Categorization via tags (for queries like "all engineering teams")
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), server_default="{}", nullable=False
-    )
-
-    # Discord integration
-    discord_role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    discord_guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    auto_sync_discord: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="true"
-    )
-
-    # GitHub integration
-    github_team_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    github_team_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
-    github_org: Mapped[str | None] = mapped_column(Text, nullable=True)
-    auto_sync_github: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="true"
     )
 
     # Lifecycle

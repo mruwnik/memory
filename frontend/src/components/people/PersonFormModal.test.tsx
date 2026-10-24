@@ -140,7 +140,7 @@ describe('PersonFormModal edit mode', () => {
     expect(screen.getByLabelText('Email')).toHaveValue('a@x.com')
   })
 
-  it('submits PersonUpdate with replace_aliases true', async () => {
+  it('submits PersonUpdate with removed aliases as null', async () => {
     const user = userEvent.setup()
     render(
       <PersonFormModal
@@ -151,24 +151,25 @@ describe('PersonFormModal edit mode', () => {
         initialData={makePerson()}
       />,
     )
+    await user.clear(screen.getByLabelText('Aliases'))
+    await user.type(screen.getByLabelText('Aliases'), 'al2')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(baseProps.onSubmit).toHaveBeenCalledWith({
       display_name: 'Alice Chen',
-      aliases: ['ali'],
+      aliases: { al2: true, ali: null },
       tags: ['work'],
       content: undefined,
-      contact_info: { email: 'a@x.com', phone: '555', github: null, twitter: null, website: null },
-      replace_aliases: true,
+      contact_info: {},
     })
   })
 
-  it('sends a cleared contact field as null so it is removed', async () => {
+  it('sends only changed contact fields, a cleared one as null so it is removed', async () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} submitLabel="Save changes" isEdit initialData={makePerson()} />)
     await user.clear(screen.getByLabelText('Phone'))
+    await user.type(screen.getByLabelText('GitHub'), 'octo')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
-    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual(
-      { email: 'a@x.com', phone: null, github: null, twitter: null, website: null })
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({ phone: null, github: 'octo' })
   })
 
   it('asks for an identifier when the name has no ASCII letters to build one from', async () => {

@@ -7,6 +7,7 @@ from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession
 from memory.common.db.models import EmailAccount, GithubAccount, SlackUserCredentials, User
+from memory.common.people import contact_values, slack_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +86,8 @@ def user_info_for(session: DBSession, user: User) -> dict:
 
         # Add Slack from Person contact_info if no credentials found
         if not slack_credentials and person.contact_info:
-            slack_info = person.contact_info.get("slack", {})
-            for workspace_id, workspace_data in slack_info.items():
-                if slack_user_id := workspace_data.get("user_id"):
-                    user_info["slack_accounts"][slack_user_id] = workspace_id
+            for workspace_id, slack_user_id in slack_accounts(person.contact_info):
+                user_info["slack_accounts"][slack_user_id] = workspace_id
 
         # Add GitHub from Person if no GithubAccount credentials found
         if not github_accounts and person.github_accounts:
@@ -96,9 +95,11 @@ def user_info_for(session: DBSession, user: User) -> dict:
                 {"username": acct.username, "id": acct.id} for acct in person.github_accounts
             ]
         elif not github_accounts and person.contact_info:
-            github_username = person.contact_info.get("github") or person.contact_info.get("github_username")
-            if github_username:
-                user_info["github_accounts"] = [{"username": github_username}]
+            github_usernames = contact_values(
+                person.contact_info.get("github") or person.contact_info.get("github_username")
+            )
+            if github_usernames:
+                user_info["github_accounts"] = [{"username": u} for u in github_usernames]
 
     # Fall back to user's own email if no dedicated email accounts
     if not email_accounts and user.email:

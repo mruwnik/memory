@@ -127,18 +127,18 @@ describe('usePeople.addPerson', () => {
 })
 
 describe('usePeople.updatePerson', () => {
-  it('sends identifier plus update fields including replace_aliases', async () => {
+  it('sends identifier plus update fields', async () => {
     const resp = { success: true }
     const fetchMock = mockFetchRoutes({ people_upsert: mcpResult(resp) })
     const { updatePerson } = setup()
 
-    const out = await updatePerson('bob', { display_name: 'Bobby', replace_aliases: true, tags: ['z'] })
+    const out = await updatePerson('bob', { display_name: 'Bobby', aliases: { old: null }, tags: ['z'] })
 
     expect(out).toEqual(resp)
     expect(mcpArgsAt(fetchMock)).toMatchObject({
       identifier: 'bob',
       display_name: 'Bobby',
-      replace_aliases: true,
+      aliases: { old: null },
       tags: ['z'],
     })
   })

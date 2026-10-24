@@ -39,10 +39,10 @@ export interface PersonCreate {
 
 export interface PersonUpdate {
   display_name?: string
-  aliases?: string[]
+  /** A list adds aliases; in the map form true adds an alias and null removes it. */
+  aliases?: string[] | Record<string, true | null>
   /** Merged into the stored contact info; null removes a key. */
   contact_info?: Record<string, string | null>
-  replace_aliases?: boolean
   content?: string  // Add a tidbit
   tidbit_type?: string
   tags?: string[]
@@ -111,7 +111,6 @@ export const usePeople = () => {
       display_name: data.display_name,
       aliases: data.aliases,
       contact_info: data.contact_info,
-      replace_aliases: data.replace_aliases,
       content: data.content,
       tidbit_type: data.tidbit_type,
       tags: data.tags,

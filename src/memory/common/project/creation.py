@@ -1,17 +1,16 @@
 """Project creation orchestration.
 
 Creates standalone, repo-level, and milestone-level projects, taking care
-of GitHub repo/milestone provisioning, team assignment (inbound + outbound
-sync), and unique-ID generation.
+of GitHub repo/milestone provisioning, team assignment, and unique-ID
+generation.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
 from memory.common.access_control import has_admin_scope, user_can_access_project
 from memory.common.db.models import Project, Team
@@ -32,11 +31,6 @@ from memory.common.project.errors import (
     RepoCreationFailedError,
     RepoNotFoundOnGithubError,
 )
-from memory.common.project.teams import (
-    SyncResult,
-    sync_repo_teams_inbound,
-    sync_repo_teams_outbound,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -55,8 +49,6 @@ class ProjectCreationResult:
     github_repo_created: bool = False
     tracking_created: bool = False
     milestone_created: bool = False
-    sync_result: SyncResult | None = None
-    inbound_teams: list[Team] = field(default_factory=list)
 
 
 def _next_negative_project_id(session: Any) -> int:
@@ -170,70 +162,6 @@ def find_existing_project_by_repo(
             .filter(Project.repo_id == repo_obj.id, Project.number.is_(None))
             .first()
         )
-
-
-def get_inbound_teams(
-    session: Session,
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    existing_teams: list[Team],
-    github_repo_created: bool,
-) -> tuple[list[Team], list[Team]]:
-    """Fetch teams from GitHub repo that should be added to a project.
-
-    For existing repos (not newly created), fetches teams that have access
-    on GitHub and returns any matching local teams that aren't already assigned.
-
-    Args:
-        session: Database session
-        client: GitHub client
-        owner: Repo owner
-        repo_name: Repo name
-        existing_teams: Teams already assigned to the project (not modified)
-        github_repo_created: Whether the repo was just created (skip sync if so)
-
-    Returns:
-        Tuple of (teams_to_add, all_inbound_teams):
-        - teams_to_add: Teams from GitHub not in existing_teams (to be added)
-        - all_inbound_teams: All matching teams from GitHub (for reporting)
-    """
-    if github_repo_created:
-        return [], []
-
-    inbound_teams = sync_repo_teams_inbound(session, client, owner, repo_name)
-    existing_team_ids = {t.id for t in existing_teams}
-    teams_to_add = [t for t in inbound_teams if t.id not in existing_team_ids]
-    return teams_to_add, inbound_teams
-
-
-def perform_outbound_sync(
-    client: GithubClient,
-    owner: str,
-    repo_name: str,
-    teams: list[Team],
-) -> SyncResult | None:
-    """Grant teams access to repo on GitHub.
-
-    Args:
-        client: Authenticated GitHub client
-        owner: Repository owner
-        repo_name: Repository name
-        teams: List of teams to sync
-
-    Returns:
-        SyncResult with synced/skipped/failed lists, or None if no teams provided.
-        Logs warnings for any failed syncs.
-    """
-    if not teams:
-        return None
-    sync_result = sync_repo_teams_outbound(client, owner, repo_name, teams)
-    if sync_result and sync_result.get("failed"):
-        logger.warning(
-            f"Some teams failed to sync to GitHub for {owner}/{repo_name}: "
-            f"{sync_result['failed']}"
-        )
-    return sync_result
 
 
 def create_standalone_project(
@@ -372,7 +300,7 @@ def create_repo_project(
     """
     logger.info(f"Creating repo-level project: {repo_path}")
 
-    client, repo_obj, github_repo_created, tracking_created, owner, repo_name = (
+    _, repo_obj, github_repo_created, tracking_created, _, repo_name = (
         _ensure_repo_for_create(
             session, user, repo_path, description, create_repo, private
         )
@@ -407,15 +335,9 @@ def create_repo_project(
             tracking_created=tracking_created,
         )
 
-    # Inbound sync: add existing repo teams to project (for existing repos)
-    teams_to_add, inbound_teams = get_inbound_teams(
-        session, client, owner, repo_name, teams, github_repo_created
-    )
-    all_teams = list(teams) + teams_to_add
-
     project = create_project_with_retry(
         session,
-        all_teams,
+        teams,
         repo_id=repo_obj.id,
         github_id=repo_obj.github_id,
         number=None,
@@ -431,16 +353,11 @@ def create_repo_project(
     session.commit()
     session.refresh(project)
 
-    # Outbound sync: grant teams access to repo on GitHub (after commit)
-    sync_result = perform_outbound_sync(client, owner, repo_name, all_teams)
-
     return ProjectCreationResult(
         project=project,
         created=True,
         github_repo_created=github_repo_created,
         tracking_created=tracking_created,
-        sync_result=sync_result,
-        inbound_teams=inbound_teams,
     )
 
 
@@ -522,18 +439,12 @@ def create_milestone_project(
             milestone_created=False,
         )
 
-    # Inbound sync: add existing repo teams to project (for existing repos)
-    teams_to_add, inbound_teams = get_inbound_teams(
-        session, client, owner, repo_name, teams, github_repo_created
-    )
-    all_teams = list(teams) + teams_to_add
-
     # Use provided due_on if set, otherwise use milestone's due_on from GitHub
     effective_due_on = due_on if due_on is not None else milestone_data.get("due_on")
 
     project = create_project_with_retry(
         session,
-        all_teams,
+        teams,
         repo_id=repo_obj.id,
         github_id=milestone_data["github_id"],
         number=milestone_data["number"],
@@ -549,15 +460,10 @@ def create_milestone_project(
     session.commit()
     session.refresh(project)
 
-    # Outbound sync: grant teams access to repo on GitHub (after commit)
-    sync_result = perform_outbound_sync(client, owner, repo_name, all_teams)
-
     return ProjectCreationResult(
         project=project,
         created=True,
         github_repo_created=github_repo_created,
         tracking_created=tracking_created,
         milestone_created=was_created,
-        sync_result=sync_result,
-        inbound_teams=inbound_teams,
     )

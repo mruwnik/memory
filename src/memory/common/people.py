@@ -9,9 +9,12 @@ records and optionally creating new ones. Used by:
 
 import logging
 import re
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
+from sqlalchemy import Text
+from sqlalchemy import cast as sql_cast
 from sqlalchemy import func as sql_func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, scoped_session
 
 from memory.common.db.models import Person
@@ -26,12 +29,31 @@ logger = logging.getLogger(__name__)
 DBSession: TypeAlias = Session | scoped_session[Session]
 
 
-def escape_like(s: str) -> str:
-    """Escape LIKE/ILIKE metacharacters in a string.
+def json_string(value: str):
+    return sql_func.to_jsonb(sql_cast(value, Text))
 
-    Prevents user input containing % or _ from matching unintended patterns.
-    """
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+def contact_values(value: Any) -> list:
+    """A contact_info value as a list, primary first: merges turn differing values into lists."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def primary_contact(value: Any) -> Any:
+    return next(iter(contact_values(value)), None)
+
+
+def slack_accounts(contact_info: dict | None) -> list[tuple[str, str]]:
+    """(workspace_id, user_id) pairs from contact_info["slack"], primary first."""
+    return [
+        (workspace_id, user_id)
+        for workspaces in contact_values((contact_info or {}).get("slack"))
+        if isinstance(workspaces, dict)
+        for workspace_id, info in workspaces.items()
+        if isinstance(info, dict)
+        for user_id in contact_values(info.get("user_id"))
+    ]
 
 
 def make_identifier(name: str) -> str:
@@ -108,12 +130,10 @@ def find_person_by_email(session: DBSession, email: str | None) -> Person | None
     if not email:
         return None
 
-    email_lower = email.lower().strip()
-    return (
-        session.query(Person)
-        .filter(Person.contact_info["email"].astext.ilike(escape_like(email_lower)))
-        .first()
-    )
+    # Lowercasing the JSON text keeps it valid JSON, and @> matches a scalar
+    # string or any element of a list, so either shape of contact_info.email works.
+    stored_lower = sql_cast(sql_func.lower(sql_cast(Person.contact_info["email"], Text)), JSONB)
+    return session.query(Person).filter(stored_lower.contains(json_string(email.lower().strip()))).first()
 
 
 def find_person_by_slack_id(
@@ -138,13 +158,10 @@ def find_person_by_slack_id(
         .all()
     )
 
-    for person in people:
-        slack_info = person.contact_info.get("slack", {})
-        workspace_info = slack_info.get(workspace_id, {})
-        if workspace_info.get("user_id") == slack_user_id:
-            return person
-
-    return None
+    return next(
+        (p for p in people if (workspace_id, slack_user_id) in slack_accounts(p.contact_info)),
+        None,
+    )
 
 
 def find_person_by_github(session: DBSession, login: str | None) -> Person | None:
@@ -174,7 +191,7 @@ def find_person_by_github(session: DBSession, login: str | None) -> Person | Non
     # happen to carry the same handle (no DB uniqueness on the JSONB field).
     return (
         session.query(Person)
-        .filter(Person.contact_info["github"].astext == login)
+        .filter(Person.contact_info["github"].contains(json_string(login)))
         .order_by(Person.id)
         .first()
     )
@@ -191,8 +208,8 @@ def link_github_user_to_person(
 ) -> GithubUser:
     """Link a GitHub account to a Person, upserting the ``GithubUser`` row.
 
-    Also records the login in ``contact_info["github"]`` so the fallback
-    readers (e.g. ``PersonSyncInfo``) stay consistent with the relational link.
+    Also records the login in ``contact_info["github"]`` so readers of contact
+    info stay consistent with the relational link.
 
     Args:
         session: Database session
@@ -221,10 +238,11 @@ def link_github_user_to_person(
         # someone else's, or the contact_info fallback would match them.
         displaced = stale.person
         if displaced is not None and displaced.id != person.id:
-            handles = dict(displaced.contact_info or {})
-            if handles.get("github") == login:
-                del handles["github"]
-                displaced.contact_info = handles
+            github = contact_values((displaced.contact_info or {}).get("github"))
+            if login in github:
+                remaining = [h for h in github if h != login]
+                rest = {k: v for k, v in displaced.contact_info.items() if k != "github"}
+                displaced.contact_info = {**rest, "github": remaining} if remaining else rest
         session.delete(stale)
         session.flush()
 
@@ -241,7 +259,9 @@ def link_github_user_to_person(
     if email is not None:
         github_user.email = email
 
-    person.contact_info = {**(person.contact_info or {}), "github": login}
+    # The linked login is verified, so it goes first; other handles stay.
+    others = [h for h in contact_values((person.contact_info or {}).get("github")) if h != login]
+    person.contact_info = {**(person.contact_info or {}), "github": [login, *others] if others else login}
     session.flush()
     logger.info(f"Linked GitHub user {login} to person '{person.identifier}'")
     return github_user

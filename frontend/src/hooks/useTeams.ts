@@ -23,14 +23,6 @@ export interface Team {
   owner_id: number | null
   owner: TeamOwner | null
   tags: string[]
-  // Discord snowflakes exceed 2^53, so the API sends them as strings
-  discord_role_id: string | null
-  discord_guild_id: string | null
-  auto_sync_discord: boolean
-  github_team_id: number | null
-  github_team_slug: string | null
-  github_org: string | null
-  auto_sync_github: boolean
   is_active: boolean
   created_at: string | null
   archived_at: string | null
@@ -54,13 +46,6 @@ export interface TeamCreate {
   description?: string
   owner?: string | number
   tags?: string[]
-  // An empty guild or github_org unlinks that integration
-  guild?: string
-  discord_role?: string
-  auto_sync_discord?: boolean
-  github_org?: string
-  github_team_slug?: string
-  auto_sync_github?: boolean
 }
 
 export interface TeamUpdate {
@@ -68,16 +53,10 @@ export interface TeamUpdate {
   description?: string
   owner?: string | number | null
   tags?: string[]
-  guild?: string
-  discord_role?: string
-  auto_sync_discord?: boolean
-  github_org?: string
-  github_team_slug?: string
-  auto_sync_github?: boolean
   is_active?: boolean
 }
 
-/** A save that succeeded, with what the Discord/GitHub sync couldn't do. */
+/** A save that succeeded, with anything it couldn't resolve (e.g. an unknown owner). */
 export interface TeamSaved {
   team?: Team
   warnings?: string[]

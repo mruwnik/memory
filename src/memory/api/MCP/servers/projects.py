@@ -43,7 +43,6 @@ from memory.common.project import (
     handle_clear_repo as _handle_clear_repo,
     handle_promote_to_milestone,
     mark_repo_inactive,
-    perform_outbound_sync,
     refresh_from_github,
     sync_milestone_due_date,
 )
@@ -131,10 +130,6 @@ def _creation_result_to_dict(
     elif kind == "milestone":
         response["github_repo_created"] = result.github_repo_created
         response["milestone_created"] = result.milestone_created
-    if result.sync_result:
-        response["github_team_sync"] = result.sync_result
-    if result.inbound_teams:
-        response["teams_from_github"] = [t.name for t in result.inbound_teams]
     return response
 
 
@@ -1003,16 +998,12 @@ async def update_project(
 
     # Handle team assignment changes
     teams = None
-    old_team_ids: set[int] = set()
     if team_ids is not None:
         if not team_ids:
             return {
                 "error": "team_ids cannot be empty - projects require at least one team",
                 "project": None,
             }
-
-        # Capture old teams before changes (for outbound sync)
-        old_team_ids = {t.id for t in project.teams}
 
         # Validate all specified teams exist
         teams = session.query(Team).filter(Team.id.in_(team_ids)).all()
@@ -1236,10 +1227,6 @@ async def update_project(
         if state is not None:
             project.state = state
 
-    # Update team assignments (works for both standalone and GitHub-backed)
-    # NOTE: When teams are removed from a project, their GitHub repo access is NOT
-    # automatically revoked. This is intentional for now - see GithubClient.remove_team_from_repo
-    # for the capability. Revoking access should be implemented as a follow-up if needed.
     if teams is not None:
         project.teams.clear()
         for team in teams:
@@ -1248,41 +1235,6 @@ async def update_project(
     session.commit()
     session.refresh(project)
 
-    # Outbound sync: grant teams access to repo on GitHub (after commit).
-    # Two trigger conditions, ORed:
-    #   1. team_ids was supplied AND new teams were added (push only the diff).
-    #   2. The project was just attached/promoted on this call — we need to grant
-    #      every existing team access to the freshly-linked repo, regardless of
-    #      whether team_ids was passed. This mirrors create_repo_project's behaviour
-    #      and prevents the regression where `upsert(project_id=X, repo=...)` linked
-    #      the repo but left the project's existing teams without access on GitHub.
-    sync_result = None
-    if project.repo:
-        teams_to_sync: list[Team] = []
-        if teams is not None:
-            new_team_ids = {t.id for t in teams}
-            added_team_ids = new_team_ids - old_team_ids
-            if added_team_ids:
-                teams_to_sync = [t for t in teams if t.id in added_team_ids]
-        if just_attached:
-            # Sync the full current team list — handle_attach/handle_promote may
-            # have left the project linked without granting any team access.
-            teams_to_sync = list(project.teams)
-        if teams_to_sync:
-            try:
-                client, _ = get_github_client(
-                    session, f"{project.repo.owner}/{project.repo.name}", user.id
-                )
-                if client:
-                    sync_result = perform_outbound_sync(
-                        client, project.repo.owner, project.repo.name, teams_to_sync
-                    )
-            except ValueError as e:
-                # GitHub client unavailable or not configured
-                logger.warning(
-                    f"Could not sync teams to GitHub: {type(e).__name__}: {e}"
-                )
-
     # Count children
     children_count = (
         session.query(func.count(Project.id))
@@ -1290,16 +1242,13 @@ async def update_project(
         .scalar()
     ) or 0
 
-    result: dict[str, Any] = {
+    return {
         "success": True,
         "created": False,
         "project": project_to_dict(
             project, include_teams=team_ids is not None, children_count=children_count
         ),
     }
-    if sync_result:
-        result["github_team_sync"] = sync_result
-    return result
 
 
 @projects_mcp.tool()

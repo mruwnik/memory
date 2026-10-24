@@ -66,7 +66,7 @@ def resolve_email_target(target: str, person: Person | None) -> str:
         return target
     if person is None:
         raise ValueError(f"No email address found for '{target}'")
-    email = (person.contact_info or {}).get("email")
+    email = people_mod.primary_contact((person.contact_info or {}).get("email"))
     if not email:
         raise ValueError(f"No email address on file for '{person.display_name}'")
     return email
@@ -136,15 +136,13 @@ def resolve_person_slack_id(session: DBSession, user: User, person: Person) -> s
     id from a workspace the caller isn't a member of (it both leaks a target the
     caller shouldn't reach and wouldn't deliver under the caller's own token).
     """
-    slack_info = (person.contact_info or {}).get("slack") or {}
-    if not slack_info:
+    accounts = people_mod.slack_accounts(person.contact_info)
+    if not accounts:
         raise ValueError(f"'{person.display_name}' has no linked Slack account")
 
-    for workspace_id, info in slack_info.items():
+    for workspace_id, user_id in accounts:
         if user_has_workspace_membership(session, workspace_id, user):
-            user_id = (info or {}).get("user_id")
-            if user_id:
-                return user_id
+            return user_id
 
     raise ValueError(
         f"'{person.display_name}' has no Slack account in a workspace you share"

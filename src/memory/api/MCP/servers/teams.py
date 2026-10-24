@@ -1,9 +1,7 @@
 """MCP subserver for team management."""
 
-import asyncio
 import logging
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from fastmcp import FastMCP
@@ -32,11 +30,6 @@ from memory.common.db.models.sources import (
     GithubRepo,
     team_members,
 )
-from memory.common import discord as discord_client
-from memory.common.github import GithubClient
-from memory.common.telemetry import record_event
-from memory.api.MCP.servers.discord import resolve_bot_id, resolve_guild_id
-from memory.common.project.client import get_github_client_for_org
 
 logger = logging.getLogger(__name__)
 
@@ -48,114 +41,11 @@ _UNSET = "__UNSET__"
 def resolve_person(
     session: Session | scoped_session[Session],
     identifier: str | int,
-    eager_load: list | None = None,
 ) -> Person | None:
-    """Resolve a person by int ID or fuzzy name/email/alias/identifier.
-
-    Uses find_person from memory.common.people for fuzzy matching when
-    the identifier is not a numeric ID.
-    """
-    query = session.query(Person)
-    if eager_load:
-        for loader in eager_load:
-            query = query.options(loader)
-
+    """Resolve a person by int ID or fuzzy name/email/alias/identifier."""
     if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
-        return query.filter(Person.id == int(identifier)).first()
-
-    # Try fuzzy match first (display_name, aliases, email, identifier slug)
-    person = find_person(session, str(identifier))
-    if not person:
-        return None
-
-    # Re-query to pick up eager-loaded relationships. SQLAlchemy can't
-    # retroactively apply selectinload/joinedload to an already-loaded
-    # instance, so a second query by PK is the simplest correct approach.
-    if eager_load:
-        return query.filter(Person.id == person.id).first()
-    return person
-
-
-# ============== Async-Safe Data Capture ==============
-#
-# SQLAlchemy objects can become detached from their session after async/await
-# operations, causing DetachedInstanceError when accessing attributes.
-# These dataclasses capture the needed values upfront for safe use in async code.
-
-
-@dataclass(frozen=True)
-class TeamSyncInfo:
-    """Team attributes needed for external service sync operations."""
-
-    slug: str
-    discord_guild_id: int | None
-    discord_role_id: int | None
-    auto_sync_discord: bool
-    github_org: str | None
-    github_team_slug: str | None
-    github_team_id: int | None
-    auto_sync_github: bool
-
-    @classmethod
-    def from_team(cls, team: Team) -> "TeamSyncInfo":
-        return cls(
-            slug=team.slug,
-            discord_guild_id=team.discord_guild_id,
-            discord_role_id=team.discord_role_id,
-            auto_sync_discord=team.auto_sync_discord,
-            github_org=team.github_org,
-            github_team_slug=team.github_team_slug,
-            github_team_id=team.github_team_id,
-            auto_sync_github=team.auto_sync_github,
-        )
-
-    @property
-    def should_sync_discord(self) -> bool:
-        return bool(self.auto_sync_discord and self.discord_role_id and self.discord_guild_id)
-
-    @property
-    def should_sync_github(self) -> bool:
-        return bool(self.auto_sync_github and self.github_team_id and self.github_org)
-
-
-@dataclass(frozen=True)
-class PersonSyncInfo:
-    """Person attributes needed for external service sync operations."""
-
-    identifier: str
-    discord_accounts: tuple[tuple[int, str], ...]  # (id, username) pairs
-    github_usernames: tuple[str, ...]
-
-    @classmethod
-    def from_person(cls, person: Person) -> "PersonSyncInfo":
-        # Get GitHub usernames from linked accounts
-        github_usernames = [acc.username for acc in person.github_accounts]
-
-        # Also check contact_info for github username if no linked accounts
-        if not github_usernames and person.contact_info:
-            github_contact = person.contact_info.get("github")
-            if isinstance(github_contact, str) and github_contact.strip():
-                github_usernames = [github_contact.strip()]
-            elif isinstance(github_contact, list):
-                github_usernames = [u.strip() for u in github_contact if isinstance(u, str) and u.strip()]
-
-        return cls(
-            identifier=person.identifier,
-            discord_accounts=tuple(
-                (acc.id, acc.username) for acc in person.discord_accounts
-            ),
-            github_usernames=tuple(github_usernames),
-        )
-
-
-def sanitize_error(e: Exception, context: str) -> str:
-    """Sanitize error for external API response.
-
-    Logs the full error internally but returns a generic message to avoid
-    leaking internal details (stack traces, file paths, connection strings).
-    """
-    logger.warning(f"{context}: {type(e).__name__}: {e}")
-    return f"{context}: operation failed"
+        return session.query(Person).filter(Person.id == int(identifier)).first()
+    return find_person(session, str(identifier))
 
 
 def team_to_dict(
@@ -180,13 +70,6 @@ def team_to_dict(
         "owner_id": team.owner_id,
         "owner": person_summary(team.owner) if team.owner else None,
         "tags": list(team.tags or []),
-        "discord_role_id": str(team.discord_role_id) if team.discord_role_id else None,
-        "discord_guild_id": str(team.discord_guild_id) if team.discord_guild_id else None,
-        "auto_sync_discord": team.auto_sync_discord,
-        "github_team_id": team.github_team_id,
-        "github_team_slug": team.github_team_slug,
-        "github_org": team.github_org,
-        "auto_sync_github": team.auto_sync_github,
         "is_active": team.is_active,
         "created_at": team.created_at.isoformat() if team.created_at else None,
         "archived_at": team.archived_at.isoformat() if team.archived_at else None,
@@ -285,396 +168,6 @@ def upsert_team_record(
     return team, "created"
 
 
-def record_membership_snapshot(
-    *,
-    user_id: int,
-    source: str,
-    team_id: int,
-    external_id: int | str | None,
-    external_members: set[int] | set[str],
-    to_remove: set[int] | set[str],
-    force_empty: bool,
-) -> None:
-    """Record pre-sync external membership so a removal stays recoverable.
-
-    `tool_name` matches the `func.__name__` the audit decorator records for the
-    upsert call, so the snapshot and the `mcp.call` audit row are joinable.
-
-    Note: these rows persist in `telemetry_events` indefinitely (by design, to
-    outlive Discord/GitHub audit retention). They hold external member IDs /
-    usernames and are admin-readable; a retention/pruning policy for
-    `telemetry_events` is a separate follow-up.
-    """
-    logger.warning(
-        "Removing %s member(s) %s from team %s (external_id=%s, force_empty=%s); "
-        "pre-sync members %s snapshotted to telemetry_events",
-        source,
-        sorted(to_remove),
-        team_id,
-        external_id,
-        force_empty,
-        sorted(external_members),
-    )
-    record_event(
-        name="team.external_membership_snapshot",
-        user_id=user_id,
-        source=source,
-        tool_name="upsert",
-        attributes={
-            "team_id": team_id,
-            "external_id": external_id,
-            "external_members": sorted(external_members),
-            "to_remove": sorted(to_remove),
-            "force_empty": force_empty,
-        },
-    )
-
-
-async def ensure_discord_role(
-    session: Session | scoped_session[Session],
-    team_id: int,
-    guild: str | None,
-    discord_role: str | None,
-    auto_sync_discord: bool,
-    force_empty: bool = False,
-) -> tuple[dict[str, Any], list[str]]:
-    """Ensure Discord role exists and membership matches internal team.
-
-    1. Resolve/create the Discord role
-    2. If auto_sync_discord: diff current role members vs internal team members,
-       add missing, remove extras
-
-    Returns (sync_info, warnings)
-    """
-    warnings: list[str] = []
-    sync_info: dict[str, Any] = {}
-
-    team = session.query(Team).filter(Team.id == team_id).first()
-    if not team:
-        return sync_info, [f"Team {team_id} not found"]
-
-    if guild is None:
-        team.auto_sync_discord = auto_sync_discord
-        return sync_info, warnings
-
-    if not guild:
-        team.discord_guild_id = None
-        team.discord_role_id = None
-        team.auto_sync_discord = auto_sync_discord
-        return sync_info, warnings
-
-    try:
-        resolved_guild_id = resolve_guild_id(session, guild)
-    except ValueError as e:
-        warnings.append(f"Discord guild resolution failed: {e}")
-        team.auto_sync_discord = auto_sync_discord
-        return sync_info, warnings
-
-    team.discord_guild_id = resolved_guild_id
-
-    resolved_role_id = None
-    role_created = False
-
-    if discord_role == "":
-        team.discord_role_id = None
-    elif discord_role is not None:
-        try:
-            bot_id = resolve_bot_id(None, session=session)
-            resolved_role_id, role_created = discord_client.resolve_role(
-                discord_role,
-                resolved_guild_id,
-                bot_id,
-                create_if_missing=True,
-            )
-            team.discord_role_id = resolved_role_id
-            if role_created:
-                sync_info["role_created"] = True
-                sync_info["role_name"] = discord_role if isinstance(discord_role, str) else None
-        except Exception as e:
-            warnings.append(f"Discord role resolution failed: {e}")
-
-    team.auto_sync_discord = auto_sync_discord
-    session.flush()
-
-    # Sync membership if auto_sync is enabled and we have a role
-    if not auto_sync_discord or not resolved_role_id or not resolved_guild_id:
-        return sync_info, warnings
-
-    try:
-        bot_id = resolve_bot_id(None, session=session)
-
-        # Re-query team with members + discord_accounts eagerly loaded
-        team = (
-            session.query(Team)
-            .options(
-                selectinload(Team.members).selectinload(Person.discord_accounts),
-            )
-            .filter(Team.id == team_id)
-            .first()
-        )
-        if not team:
-            return sync_info, warnings
-
-        # Capture sync info before any awaits
-        team_info = TeamSyncInfo.from_team(team)
-        internal_discord_ids: dict[int, PersonSyncInfo] = {}
-        for person in team.members:
-            person_info = PersonSyncInfo.from_person(person)
-            for account_id, _username in person_info.discord_accounts:
-                internal_discord_ids[account_id] = person_info
-
-        # Fetch current Discord role members
-        members_data = await asyncio.to_thread(
-            discord_client.list_role_members, bot_id, resolved_guild_id, resolved_role_id
-        )
-        external_discord_ids = {
-            int(m["id"]) for m in (members_data or {}).get("members", []) if m.get("id")
-        }
-
-        # Diff: add internal members missing from Discord role
-        to_add = {
-            did: pinfo for did, pinfo in internal_discord_ids.items()
-            if did not in external_discord_ids
-        }
-        # Diff: remove Discord role members not in internal team
-        to_remove_ids = external_discord_ids - set(internal_discord_ids.keys())
-
-        # Fix #83: refuse to empty a populated role when no internal member maps
-        # to Discord, unless force_empty is set. This is the "wipe" signature.
-        if not internal_discord_ids and to_remove_ids and not force_empty:
-            sync_info["removal_skipped"] = len(to_remove_ids)
-            warnings.append(
-                f"Refused to remove {len(to_remove_ids)} member(s) from Discord role "
-                f"{resolved_role_id}: internal team has no mapped Discord members. "
-                f"Pass force_empty=True to override."
-            )
-            to_remove_ids = set()
-
-        # Fix #83: snapshot external membership before any removal, so the
-        # pre-sync state is recoverable independent of Discord audit retention.
-        # Fail closed: if we can't attribute a snapshot, don't remove either.
-        if to_remove_ids:
-            actor = get_mcp_current_user()
-            if not actor or actor.id is None:
-                warnings.append(
-                    "Skipping Discord member removal: could not resolve the acting "
-                    "user to record a pre-sync membership snapshot."
-                )
-                to_remove_ids = set()
-            else:
-                record_membership_snapshot(
-                    user_id=actor.id,
-                    source="discord",
-                    team_id=team_id,
-                    external_id=resolved_role_id,
-                    external_members=external_discord_ids,
-                    to_remove=to_remove_ids,
-                    force_empty=force_empty,
-                )
-
-        members_added = 0
-        members_removed = 0
-        errors: list[str] = []
-
-        for person_info in set(to_add.values()):
-            add_result = await _discord_add_role(team_info, person_info)
-            if add_result.get("success"):
-                members_added += len(add_result.get("users_added", []))
-            errors.extend(add_result.get("errors", []))
-
-        for discord_id in to_remove_ids:
-            # Create a minimal PersonSyncInfo for the removal
-            remove_person = PersonSyncInfo(
-                identifier=f"discord:{discord_id}",
-                discord_accounts=((discord_id, str(discord_id)),),
-                github_usernames=(),
-            )
-            remove_result = await _discord_remove_role(team_info, remove_person)
-            if remove_result.get("success"):
-                members_removed += len(remove_result.get("users_removed", []))
-            errors.extend(remove_result.get("errors", []))
-
-        sync_info["members_added"] = members_added
-        sync_info["members_removed"] = members_removed
-        if errors:
-            sync_info["errors"] = errors
-    except Exception as e:
-        warnings.append(f"Discord membership sync failed: {e}")
-
-    return sync_info, warnings
-
-
-async def ensure_github_team(
-    session: Session | scoped_session[Session],
-    team_id: int,
-    name: str,
-    github_org: str | None,
-    github_team_slug: str | None,
-    auto_sync_github: bool,
-    force_empty: bool = False,
-) -> tuple[dict[str, Any], list[str]]:
-    """Ensure GitHub team exists and membership matches internal team.
-
-    1. Fetch or create the GitHub team
-    2. If auto_sync_github: diff current GitHub members vs internal team members,
-       add missing, remove extras
-
-    Returns (sync_info, warnings)
-    """
-    sync_info: dict[str, Any] = {}
-    warnings: list[str] = []
-
-    team = session.query(Team).filter(Team.id == team_id).first()
-    if not team:
-        return sync_info, [f"Team {team_id} not found"]
-
-    team.auto_sync_github = auto_sync_github
-
-    if github_org is None:
-        return sync_info, warnings
-
-    if not github_org:
-        team.github_org = None
-        team.github_team_slug = None
-        team.github_team_id = None
-        return sync_info, warnings
-
-    team.github_org = github_org
-
-    if github_team_slug is None:
-        return sync_info, warnings
-
-    if not github_team_slug:
-        team.github_team_slug = None
-        team.github_team_id = None
-        return sync_info, warnings
-
-    team.github_team_slug = github_team_slug
-
-    try:
-        github_team_data = await fetch_or_create_github_team(
-            session, github_org, github_team_slug, name
-        )
-    except Exception as e:
-        return sync_info, [f"GitHub team resolution failed: {e}"]
-
-    if not github_team_data:
-        return sync_info, warnings
-
-    if github_team_data.get("created"):
-        sync_info["team_created"] = True
-    if github_team_data.get("id"):
-        team.github_team_id = github_team_data["id"]
-
-    session.flush()
-
-    # Sync membership if auto_sync is enabled and we have a team
-    if not auto_sync_github or not team.github_team_id or not team.github_org:
-        return sync_info, warnings
-
-    # Resolve GitHub client
-    user = get_mcp_current_user(session=session, full=True)
-    if not user or user.id is None:
-        warnings.append("GitHub membership sync skipped: no authenticated user")
-        return sync_info, warnings
-
-    github_client = get_github_client_for_org(session, github_org, user.id)
-    if not github_client:
-        warnings.append("GitHub membership sync skipped: no GitHub client for org")
-        return sync_info, warnings
-
-    try:
-        # Re-query team with members + github_accounts eagerly loaded
-        team = (
-            session.query(Team)
-            .options(
-                selectinload(Team.members).selectinload(Person.github_accounts),
-            )
-            .filter(Team.id == team_id)
-            .first()
-        )
-        if not team:
-            return sync_info, warnings
-
-        # Capture sync info before any awaits
-        team_info = TeamSyncInfo.from_team(team)
-        internal_github_usernames: dict[str, PersonSyncInfo] = {}
-        for person in team.members:
-            person_info = PersonSyncInfo.from_person(person)
-            for username in person_info.github_usernames:
-                internal_github_usernames[username] = person_info
-
-        # Fetch current GitHub team members
-        github_members = await asyncio.to_thread(
-            github_client.get_team_members, github_org, github_team_slug
-        )
-        external_github_usernames = {
-            m["login"] for m in (github_members or []) if m.get("login")
-        }
-
-        # Diff: add internal members missing from GitHub team
-        to_add = {
-            uname: pinfo for uname, pinfo in internal_github_usernames.items()
-            if uname not in external_github_usernames
-        }
-        # Diff: remove GitHub team members not in internal team
-        to_remove_usernames = external_github_usernames - set(internal_github_usernames.keys())
-
-        # Fix #83: refuse to empty a populated team when no internal member maps
-        # to GitHub, unless force_empty is set. This is the "wipe" signature.
-        if not internal_github_usernames and to_remove_usernames and not force_empty:
-            sync_info["removal_skipped"] = len(to_remove_usernames)
-            warnings.append(
-                f"Refused to remove {len(to_remove_usernames)} member(s) from GitHub team "
-                f"{github_team_slug}: internal team has no mapped GitHub members. "
-                f"Pass force_empty=True to override."
-            )
-            to_remove_usernames = set()
-
-        # Fix #83: snapshot external membership before any removal, so the
-        # pre-sync state is recoverable independent of GitHub audit retention.
-        if to_remove_usernames:
-            record_membership_snapshot(
-                user_id=user.id,
-                source="github",
-                team_id=team_id,
-                external_id=github_team_slug,
-                external_members=external_github_usernames,
-                to_remove=to_remove_usernames,
-                force_empty=force_empty,
-            )
-
-        members_added = 0
-        members_removed = 0
-        errors: list[str] = []
-
-        for person_info in set(to_add.values()):
-            add_result = await _github_add_member(github_client, team_info, person_info)
-            if add_result.get("success"):
-                members_added += len(add_result.get("users_added", []))
-            errors.extend(add_result.get("errors", []))
-
-        for username in to_remove_usernames:
-            remove_person = PersonSyncInfo(
-                identifier=f"github:{username}",
-                discord_accounts=(),
-                github_usernames=(username,),
-            )
-            remove_result = await _github_remove_member(github_client, team_info, remove_person)
-            if remove_result.get("success"):
-                members_removed += len(remove_result.get("users_removed", []))
-            errors.extend(remove_result.get("errors", []))
-
-        sync_info["members_added"] = members_added
-        sync_info["members_removed"] = members_removed
-        if errors:
-            sync_info["errors"] = errors
-    except Exception as e:
-        warnings.append(f"GitHub membership sync failed: {e}")
-
-    return sync_info, warnings
-
-
 @teams_mcp.tool()
 @visible_when(require_scopes(SCOPE_TEAMS_WRITE))
 @audit_call(level=logging.INFO)
@@ -685,22 +178,11 @@ async def upsert(
     tags: list[str] | None = None,
     # Ownership
     owner: str | int | None = _UNSET,
-    # Discord integration
-    guild: str | None = None,
-    discord_role: str | None = None,
-    auto_sync_discord: bool | None = None,
-    # GitHub integration
-    github_org: str | None = None,
-    github_team_slug: str | None = None,
-    auto_sync_github: bool | None = None,
-    # Membership
     members: list[str] | None = None,
-    force_empty: bool = False,
-    # Status
     is_active: bool | None = None,
 ) -> dict:
     """
-    Create or update a team with optional Discord/GitHub integration.
+    Create or update a team.
 
     Args:
         name: Team display name
@@ -709,30 +191,14 @@ async def upsert(
         tags: Tags for categorization (e.g., ["engineering", "core"])
         owner: Person responsible for this team - can be person identifier or ID.
                Set to null to clear the owner.
-        guild: Discord guild - can be numeric ID or server name. "" unlinks Discord.
-        discord_role: Discord role - can be numeric ID or role name (creates if doesn't exist).
-            "" unlinks the role.
-        auto_sync_discord: Whether to auto-sync membership to Discord.
-            None (default) = off for new teams, unchanged for existing teams.
-        github_org: GitHub organization for team sync. "" unlinks GitHub.
-        github_team_slug: GitHub team slug - creates team if doesn't exist. "" unlinks the team.
-        auto_sync_github: Same semantics as auto_sync_discord, for GitHub.
         members: If provided, set team to exactly these members.
                  Pass [] to remove all members. Pass None to leave unchanged.
-        force_empty: Allow a sync to remove ALL members from a populated external
-            entity. Without it, such a wipe is refused.
         is_active: Active status (set to false to archive team)
 
-    Behavior:
-        - If team with slug exists: updates it
-        - If discord_role name doesn't exist: creates new role
-        - If github_team_slug doesn't exist: creates team using `name`
-        - If auto_sync_discord/auto_sync_github: syncs membership bidirectionally
-          (adds internal members to external service, removes external-only members)
-        - Members are set first, then external services are synced to match
+    If a team with the slug exists it is updated, otherwise created.
 
     Returns:
-        Dict with team data and sync results
+        Dict with team data and membership changes
     """
     if not slug:
         slug = make_slug(name)
@@ -743,8 +209,6 @@ async def upsert(
         "success": True,
         "action": None,
         "team": None,
-        "discord_sync": {},
-        "github_sync": {},
         "membership_changes": {},
         "warnings": [],
     }
@@ -780,24 +244,6 @@ async def upsert(
         # and expire the object (DetachedInstanceError with scoped_session)
         team_id = team.id
 
-        # Fix #83: resolve auto-sync. None = off on create, unchanged on update.
-        # Apply directly to the team record so the default holds even when no
-        # external service is configured (ensure_* only runs when one is).
-        def resolve_sync(arg: bool | None, stored: bool) -> bool:
-            if arg is not None:
-                return arg
-            return False if action == "created" else stored
-
-        resolved_auto_sync_discord = resolve_sync(
-            auto_sync_discord, bool(team.auto_sync_discord)
-        )
-        resolved_auto_sync_github = resolve_sync(
-            auto_sync_github, bool(team.auto_sync_github)
-        )
-        team.auto_sync_discord = resolved_auto_sync_discord
-        team.auto_sync_github = resolved_auto_sync_github
-
-        # Step 2: Set explicit members if provided
         if members is not None:
             team = (
                 session.query(Team)
@@ -806,30 +252,8 @@ async def upsert(
                 .first()
             )
             if team:
-                membership_result = await set_team_members(session, team, members)
-                result["membership_changes"] = membership_result
+                result["membership_changes"] = set_team_members(session, team, members)
 
-        session.flush()
-
-        # Step 3: Ensure Discord role + sync membership
-        if guild is not None or discord_role is not None:
-            discord_sync, discord_warnings = await ensure_discord_role(
-                session, team_id, guild, discord_role, resolved_auto_sync_discord,
-                force_empty=force_empty,
-            )
-            result["discord_sync"].update(discord_sync)
-            result["warnings"].extend(discord_warnings)
-
-        # Step 4: Ensure GitHub team + sync membership
-        if github_org is not None:
-            github_sync, github_warnings = await ensure_github_team(
-                session, team_id, name, github_org, github_team_slug, resolved_auto_sync_github,
-                force_empty=force_empty,
-            )
-            result["github_sync"].update(github_sync)
-            result["warnings"].extend(github_warnings)
-
-        session.flush()
         session.commit()
 
         # Re-query with relationships to avoid lazy-load issues
@@ -845,54 +269,12 @@ async def upsert(
     return result
 
 
-async def fetch_or_create_github_team(
-    session: Session | scoped_session[Session],
-    org: str,
-    team_slug: str,
-    team_name: str,
-) -> dict[str, Any] | None:
-    """Fetch or create a GitHub team.
-
-    Returns:
-        Dict with "id", "slug", and "created" (bool) keys, or None on failure
-    """
-    user = get_mcp_current_user(session=session, full=True)
-    if not user or user.id is None:
-        return None
-
-    client = get_github_client_for_org(session, org, user.id)
-    if not client:
-        return None
-
-    # Check if team exists (run blocking API call in thread)
-    existing = await asyncio.to_thread(client.fetch_team, org, team_slug)
-    if existing:
-        return {
-            "id": existing.get("github_id"),
-            "slug": existing.get("slug"),
-            "created": False,
-        }
-
-    # Create team (run blocking API call in thread)
-    new_team = await asyncio.to_thread(client.create_team, org, team_name)
-    if new_team:
-        return {
-            "id": new_team.get("id"),
-            "slug": new_team.get("slug"),
-            "created": True,
-        }
-
-    return None
-
-
-
-
-async def set_team_members(
+def set_team_members(
     session: Session | scoped_session[Session],
     team: Team,
     member_identifiers: list[str],
 ) -> dict[str, Any]:
-    """Set team to exactly these members, syncing to external services.
+    """Set team to exactly these members.
 
     Returns dict with added/removed counts and any warnings.
     """
@@ -926,43 +308,17 @@ async def set_team_members(
     to_add_ids = set(target_people) - current_member_ids
     to_remove_ids = current_member_ids - set(target_people)
 
-    # Capture sync info upfront (before any DB changes that might affect relationships)
-    team_info = TeamSyncInfo.from_team(team)
-    pending_syncs: list[tuple[PersonSyncInfo, bool]] = []  # (person_info, is_add)
-
-    # Resolve GitHub client upfront if needed for sync.
-    # IMPORTANT: Must resolve before any DB operations that might trigger commits,
-    # as get_github_client_for_org() opens its own session. Nested sessions cause
-    # DetachedInstanceError when the inner session closes and invalidates objects
-    # that the outer session expects to use.
-    github_client: GithubClient | None = None
-    if team_info.should_sync_github:
-        user = get_mcp_current_user(session, full=True)
-        if user and user.id and team.github_org:
-            github_client = get_github_client_for_org(session, team.github_org, user.id)
-
-    # Remove members no longer in target list
     for person in current_member_list:
         if person.id in to_remove_ids:
-            pending_syncs.append((PersonSyncInfo.from_person(person), False))
             team.members.remove(person)
             result["removed"].append(person.identifier)
 
-    # Add new members
     for person_id in to_add_ids:
         person = target_people[person_id]
         team.members.append(person)
-        current_member_ids.add(person.id)
-        pending_syncs.append((PersonSyncInfo.from_person(person), True))
         result["added"].append(person.identifier)
 
     session.flush()
-
-    # Run external syncs after DB changes are flushed
-    for person_info, is_add in pending_syncs:
-        await _run_external_sync(
-            team_info, person_info, add=is_add, github_client=github_client
-        )
 
     # Warning for clearing all members
     if not target_people and current_member_list:
@@ -1103,16 +459,13 @@ async def team_add_member(
     """
     Add a person to a team.
 
-    If the team has Discord/GitHub integration enabled (auto_sync_discord/auto_sync_github),
-    this will also add the person to the corresponding Discord role and/or GitHub team.
-
     Args:
         team: Team slug or ID
         person: Person identifier or ID
         role: Team role - "member", "lead", or "admin" (default: "member")
 
     Returns:
-        Result with sync status, or error if team not found/accessible
+        Result, or error if team not found/accessible
     """
     logger.info(f"MCP: Adding {person} to team {team}")
 
@@ -1136,10 +489,7 @@ async def team_add_member(
             return {"error": f"Team not found: {team}"}
 
         # Find person
-        person_obj = resolve_person(session, person, eager_load=[
-            selectinload(Person.discord_accounts),
-            selectinload(Person.github_accounts),
-        ])
+        person_obj = resolve_person(session, person)
 
         if not person_obj:
             return {"error": f"Person not found: {person}"}
@@ -1180,29 +530,12 @@ async def team_add_member(
         )
         session.commit()
 
-        # Refresh to get updated members list
-        session.refresh(team_obj)
-
-        result = {
+        return {
             "success": True,
             "team": team_obj.slug,
             "person": person_obj.identifier,
             "role": role,
-            "sync": {},
         }
-
-        # Sync to external services based on team's auto_sync settings
-        # Resolve GitHub client if needed (avoids nested sessions in sync functions)
-        github_client: GithubClient | None = None
-        if team_obj.github_org and team_obj.auto_sync_github:
-            github_client = get_github_client_for_org(
-                session, team_obj.github_org, user.id
-            )
-        result["sync"] = await sync_membership_add(
-            team_obj, person_obj, github_client=github_client
-        )
-
-        return result
 
 
 @teams_mcp.tool()
@@ -1215,15 +548,12 @@ async def team_remove_member(
     """
     Remove a person from a team.
 
-    If the team has Discord/GitHub integration enabled (auto_sync_discord/auto_sync_github),
-    this will also remove the person from the corresponding Discord role and/or GitHub team.
-
     Args:
         team: Team slug or ID
         person: Person identifier or ID
 
     Returns:
-        Result with sync status, or error if team not found/accessible
+        Result, or error if team not found/accessible
     """
     logger.info(f"MCP: Removing {person} from team {team}")
 
@@ -1249,10 +579,7 @@ async def team_remove_member(
             return {"error": "Only team leads and admins can remove members"}
 
         # Find person
-        person_obj = resolve_person(session, person, eager_load=[
-            selectinload(Person.discord_accounts),
-            selectinload(Person.github_accounts),
-        ])
+        person_obj = resolve_person(session, person)
 
         if not person_obj:
             return {"error": f"Person not found: {person}"}
@@ -1269,242 +596,11 @@ async def team_remove_member(
         team_obj.members.remove(person_obj)
         session.commit()
 
-        result = {
+        return {
             "success": True,
             "team": team_obj.slug,
             "person": person_obj.identifier,
-            "sync": {},
         }
-
-        # Sync to external services based on team's auto_sync settings
-        # Resolve GitHub client if needed (avoids nested sessions in sync functions)
-        github_client: GithubClient | None = None
-        if team_obj.github_org and team_obj.auto_sync_github:
-            github_client = get_github_client_for_org(
-                session, team_obj.github_org, user.id
-            )
-        result["sync"] = await sync_membership_remove(
-            team_obj, person_obj, github_client=github_client
-        )
-
-        return result
-
-
-# ============== External Service Sync ==============
-
-
-async def _run_external_sync(
-    team: TeamSyncInfo,
-    person: PersonSyncInfo,
-    add: bool,
-    github_client: GithubClient | None = None,
-) -> dict[str, Any]:
-    """Run Discord and GitHub sync for a membership change.
-
-    Args:
-        team: Team sync info
-        person: Person sync info
-        add: True to add member, False to remove
-        github_client: Pre-resolved GitHub client (required if team has GitHub sync enabled)
-    """
-    result: dict[str, Any] = {"discord": None, "github": None}
-
-    if team.should_sync_discord:
-        result["discord"] = await (
-            _discord_add_role(team, person) if add else _discord_remove_role(team, person)
-        )
-
-    if team.should_sync_github:
-        if not github_client:
-            result["github"] = {
-                "success": False,
-                "errors": ["GitHub sync skipped: no authenticated client (user not logged in or missing org access)"],
-            }
-        elif add:
-            result["github"] = await _github_add_member(github_client, team, person)
-        else:
-            result["github"] = await _github_remove_member(github_client, team, person)
-
-    return result
-
-
-async def sync_membership_add(
-    team: Team,
-    person: Person,
-    github_client: GithubClient | None = None,
-) -> dict[str, Any]:
-    """Sync membership addition to Discord and GitHub.
-
-    Args:
-        team: Team ORM object
-        person: Person ORM object
-        github_client: Pre-resolved GitHub client (required if team has GitHub sync)
-    """
-    return await _run_external_sync(
-        TeamSyncInfo.from_team(team),
-        PersonSyncInfo.from_person(person),
-        add=True,
-        github_client=github_client,
-    )
-
-
-async def sync_membership_remove(
-    team: Team,
-    person: Person,
-    github_client: GithubClient | None = None,
-) -> dict[str, Any]:
-    """Sync membership removal to Discord and GitHub.
-
-    Args:
-        team: Team ORM object
-        person: Person ORM object
-        github_client: Pre-resolved GitHub client (required if team has GitHub sync)
-    """
-    return await _run_external_sync(
-        TeamSyncInfo.from_team(team),
-        PersonSyncInfo.from_person(person),
-        add=False,
-        github_client=github_client,
-    )
-
-
-async def _discord_add_role(team: TeamSyncInfo, person: PersonSyncInfo) -> dict[str, Any]:
-    """Add Discord role to person's Discord accounts."""
-    if not team.discord_guild_id or not team.discord_role_id:
-        return {"success": False, "users_added": [], "errors": ["Discord sync not configured"]}
-
-    bot_id = resolve_bot_id(None)
-    successes: list[str] = []
-    errors: list[str] = []
-
-    for account_id, username in person.discord_accounts:
-        try:
-            result = await asyncio.to_thread(
-                discord_client.add_role_member,
-                bot_id,
-                team.discord_guild_id,
-                team.discord_role_id,
-                account_id,
-            )
-            if result is None or "error" in result:
-                errors.append(f"{username}: {result.get('error') if result else 'Failed'}")
-            else:
-                successes.append(username)
-        except Exception as e:
-            errors.append(sanitize_error(e, f"Discord add role for {username}"))
-
-    return {"success": not errors, "users_added": successes, "errors": errors}
-
-
-async def _discord_remove_role(team: TeamSyncInfo, person: PersonSyncInfo) -> dict[str, Any]:
-    """Remove Discord role from person's Discord accounts."""
-    if not team.discord_guild_id or not team.discord_role_id:
-        return {"success": False, "users_removed": [], "errors": ["Discord sync not configured"]}
-
-    bot_id = resolve_bot_id(None)
-    successes: list[str] = []
-    errors: list[str] = []
-
-    for account_id, username in person.discord_accounts:
-        try:
-            result = await asyncio.to_thread(
-                discord_client.remove_role_member,
-                bot_id,
-                team.discord_guild_id,
-                team.discord_role_id,
-                account_id,
-            )
-            if result is None or "error" in result:
-                errors.append(f"{username}: {result.get('error') if result else 'Failed'}")
-            else:
-                successes.append(username)
-        except Exception as e:
-            errors.append(sanitize_error(e, f"Discord remove role for {username}"))
-
-    return {"success": not errors, "users_removed": successes, "errors": errors}
-
-
-async def _github_add_member(
-    client: GithubClient,
-    team: TeamSyncInfo,
-    person: PersonSyncInfo,
-) -> dict[str, Any]:
-    """Add person's GitHub accounts to GitHub team.
-
-    Args:
-        client: Pre-resolved GitHub client with org access
-        team: Team sync info with github_org and github_team_slug
-        person: Person sync info with github_usernames
-    """
-    if not team.github_org or not team.github_team_slug:
-        return {
-            "success": False,
-            "users_added": [],
-            "errors": [f"Team {team.slug} missing github_org or github_team_slug"],
-        }
-
-    successes: list[str] = []
-    errors: list[str] = []
-
-    for username in person.github_usernames:
-        try:
-            result = await asyncio.to_thread(
-                client.add_team_member,
-                team.github_org,
-                team.github_team_slug,
-                username,
-            )
-            if result.get("error"):
-                errors.append(f"{username}: {result['error']}")
-            elif result.get("success"):
-                successes.append(username)
-            else:
-                errors.append(f"{username}: Unknown result")
-        except Exception as e:
-            errors.append(sanitize_error(e, f"GitHub add {username}"))
-
-    return {"success": not errors, "users_added": successes, "errors": errors}
-
-
-async def _github_remove_member(
-    client: GithubClient,
-    team: TeamSyncInfo,
-    person: PersonSyncInfo,
-) -> dict[str, Any]:
-    """Remove person's GitHub accounts from GitHub team.
-
-    Args:
-        client: Pre-resolved GitHub client with org access
-        team: Team sync info with github_org and github_team_slug
-        person: Person sync info with github_usernames
-    """
-    if not team.github_org or not team.github_team_slug:
-        return {
-            "success": False,
-            "users_removed": [],
-            "errors": [f"Team {team.slug} missing github_org or github_team_slug"],
-        }
-
-    successes: list[str] = []
-    errors: list[str] = []
-
-    for username in person.github_usernames:
-        try:
-            # remove_team_member returns bool
-            success = await asyncio.to_thread(
-                client.remove_team_member,
-                team.github_org,
-                team.github_team_slug,
-                username,
-            )
-            if success:
-                successes.append(username)
-            else:
-                errors.append(f"{username}: Failed to remove")
-        except Exception as e:
-            errors.append(sanitize_error(e, f"GitHub remove {username}"))
-
-    return {"success": not errors, "users_removed": successes, "errors": errors}
 
 
 # ============== Project-Team Assignment ==============

@@ -426,12 +426,12 @@ def test_record_event_commits_independently(db_session, admin_user):
     # record_event opens + commits its own session; the row is visible
     # from a separate session even without committing db_session.
     record_event(
-        name="team.external_membership_snapshot",
+        name="test.independent_commit",
         user_id=admin_user.id,
         attributes={"external_members": [1, 2, 3]},
     )
     db_session.expire_all()
     row = db_session.query(TelemetryEvent).filter(
-        TelemetryEvent.name == "team.external_membership_snapshot"
+        TelemetryEvent.name == "test.independent_commit"
     ).one()
     assert row.attributes["external_members"] == [1, 2, 3]

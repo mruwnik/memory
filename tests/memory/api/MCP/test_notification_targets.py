@@ -85,7 +85,10 @@ def test_email_accepts_address(db_session, admin_user, target, expected):
     )
 
 
-def test_email_resolves_person(db_session, admin_user, person_with_discord):
+@pytest.mark.parametrize("email", ["ada@example.com", ["ada@example.com", "ada@old.example.com"]])
+def test_email_resolves_person(db_session, admin_user, person_with_discord, email):
+    person_with_discord.contact_info = {**person_with_discord.contact_info, "email": email}
+    db_session.commit()
     assert (
         resolve_and_validate_target(db_session, admin_user.id, "email", "ada-lovelace")
         == "ada@example.com"

@@ -24,8 +24,6 @@ from memory.common.project.creation import (
     create_repo_project,
     create_standalone_project,
     find_existing_project_by_repo,
-    get_inbound_teams,
-    perform_outbound_sync,
 )
 from memory.common.project.errors import (
     GithubClientUnavailableError,
@@ -50,11 +48,6 @@ from memory.common.project.sync import (
     refresh_from_github,
     sync_milestone_due_date,
 )
-from memory.common.project.teams import (
-    SyncResult,
-    sync_repo_teams_inbound,
-    sync_repo_teams_outbound,
-)
 
 
 __all__ = [
@@ -74,16 +67,10 @@ __all__ = [
     "create_repo_project",
     "create_standalone_project",
     "find_existing_project_by_repo",
-    "get_inbound_teams",
-    "perform_outbound_sync",
     # sync
     "mark_repo_inactive",
     "refresh_from_github",
     "sync_milestone_due_date",
-    # teams
-    "SyncResult",
-    "sync_repo_teams_inbound",
-    "sync_repo_teams_outbound",
     # errors
     "GithubClientUnavailableError",
     "GithubMilestoneSyncError",

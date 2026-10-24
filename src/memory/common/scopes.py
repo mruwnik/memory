@@ -218,13 +218,13 @@ VALID_SCOPES: list[ScopeInfo] = [
     {
         "value": SCOPE_DISCORD_ADMIN,
         "label": "Discord Admin",
-        "description": "View Discord roles, permissions, and categories",
+        "description": "View Discord channel permissions and categories",
         "category": "integrations",
     },
     {
         "value": SCOPE_DISCORD_ADMIN_WRITE,
         "label": "Discord Admin (write)",
-        "description": "Manage Discord roles, permissions, and channels",
+        "description": "Manage Discord channel permissions and channels",
         "category": "integrations",
     },
     {

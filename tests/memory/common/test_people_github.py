@@ -7,21 +7,13 @@ from memory.common.db.models.sources import GithubUser
 from memory.common.people import find_person_by_github, link_github_user_to_person
 
 
-@pytest.fixture
-def person_with_github_contact(db_session):
-    person = Person(
-        identifier="github:octocat",
-        display_name="octocat",
-        aliases=["octocat"],
-        contact_info={"github": "octocat"},
-    )
+@pytest.mark.parametrize("github", ["octocat", ["old-handle", "octocat"]])
+def test_find_person_by_github_via_contact_info(db_session, github):
+    person = Person(identifier="gh", display_name="GH", contact_info={"github": github})
     db_session.add(person)
     db_session.commit()
-    return person
 
-
-def test_find_person_by_github_via_contact_info(db_session, person_with_github_contact):
-    assert find_person_by_github(db_session, "octocat") == person_with_github_contact
+    assert find_person_by_github(db_session, "octocat") == person
 
 
 def test_find_person_by_github_via_github_user(db_session):
@@ -92,11 +84,24 @@ def test_link_github_user_reconciles_recycled_username(db_session):
     )
 
 
-def test_link_github_user_clears_handle_of_displaced_person(db_session):
-    old_person = Person(
-        identifier="old", display_name="Old", contact_info={"github": "recycled"}
-    )
-    new_person = Person(identifier="new", display_name="New", contact_info={})
+@pytest.mark.parametrize(
+    "old_handles, old_after, new_handles, new_after",
+    [
+        ({"github": "recycled"}, {}, {}, {"github": "recycled"}),
+        (
+            {"github": ["other", "recycled"]},
+            {"github": ["other"]},
+            {"github": "mine"},
+            {"github": ["recycled", "mine"]},
+        ),
+        ({"github": "other"}, {"github": "other"}, {"github": ["recycled"]}, {"github": "recycled"}),
+    ],
+)
+def test_link_github_user_moves_handle_from_displaced_person(
+    db_session, old_handles, old_after, new_handles, new_after
+):
+    old_person = Person(identifier="old", display_name="Old", contact_info=old_handles)
+    new_person = Person(identifier="new", display_name="New", contact_info=new_handles)
     db_session.add_all([old_person, new_person])
     db_session.flush()
     db_session.add(GithubUser(id=5, username="recycled", person_id=old_person.id))
@@ -104,8 +109,8 @@ def test_link_github_user_clears_handle_of_displaced_person(db_session):
 
     link_github_user_to_person(db_session, new_person, 99, "recycled")
 
-    assert "github" not in old_person.contact_info
-    assert new_person.contact_info["github"] == "recycled"
+    assert old_person.contact_info == old_after
+    assert new_person.contact_info == new_after
 
 
 def test_link_github_user_upserts_existing_row(db_session):

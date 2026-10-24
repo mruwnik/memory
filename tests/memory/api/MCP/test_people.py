@@ -8,6 +8,7 @@ from memory.api.MCP.servers.people import (
     delete,
     fetch,
     list_all,
+    merge,
     tidbit_add,
     tidbit_delete,
     tidbit_list,
@@ -17,6 +18,8 @@ from memory.api.MCP.servers.people import (
 from memory.common.db import connection as db_connection
 from memory.common.db.models import Person, PersonTidbit
 from memory.common.content_processing import create_content_hash
+from memory.common.notify import user_info_for
+from memory.common.people import find_person_by_slack_id
 from tests.conftest import mcp_auth_context
 
 
@@ -312,31 +315,140 @@ async def test_upsert_create_requires_display_name(db_session, admin_session):
 
 
 @pytest.mark.asyncio
-async def test_upsert_update_with_replace_aliases(db_session, admin_session, sample_people):
-    """Test that replace_aliases=True replaces instead of merging aliases."""
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"display_name": "Alice Renamed"},
+        {"aliases": None, "contact_info": None},
+        {"aliases": [], "contact_info": {}},
+    ],
+)
+async def test_upsert_omitted_fields_are_unchanged(db_session, admin_session, sample_people, kwargs):
     upsert_fn = get_fn(upsert)
-
-    # First, verify alice has existing aliases
-    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
-    original_aliases = alice.aliases.copy()
-    assert len(original_aliases) > 0
-
     with mcp_auth_context(admin_session.id):
-        # Update with replace_aliases=True
-        result = await upsert_fn(
-            identifier="alice_chen",
-            aliases=["@new_only"],
-            replace_aliases=True,
-        )
+        await upsert_fn(identifier="alice_chen", **kwargs)
 
-    assert result["status"] == "updated"
-
-    # Refresh to see changes
     db_session.expire_all()
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    assert alice.aliases == ["@alice_c", "alice.chen@work.com"]
+    assert alice.contact_info == {"email": "alice@example.com", "phone": "555-1234"}
 
-    # Aliases should be replaced, not merged
-    assert alice.aliases == ["@new_only"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "aliases, expected",
+    [
+        (["@new", "@alice_c"], ["@alice_c", "alice.chen@work.com", "@new"]),
+        ({"@alice_c": None}, ["alice.chen@work.com"]),
+        ({"@alice_c": None, "@new": True}, ["alice.chen@work.com", "@new"]),
+        ({"@unknown": None}, ["@alice_c", "alice.chen@work.com"]),
+    ],
+)
+async def test_upsert_aliases_only_removed_by_null(
+    db_session, admin_session, sample_people, aliases, expected
+):
+    upsert_fn = get_fn(upsert)
+    with mcp_auth_context(admin_session.id):
+        await upsert_fn(identifier="alice_chen", aliases=aliases)
+
+    db_session.expire_all()
+    alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    assert alice.aliases == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "update, expected",
+    [
+        ({"discord": ["c", "a"]}, {"discord": ["a", "b", "c"], "email": "e"}),
+        ({"discord": "c"}, {"discord": ["a", "b", "c"], "email": "e"}),
+        ({"email": ["f"]}, {"discord": ["a", "b"], "email": ["e", "f"]}),
+        ({"discord": {"a": None}}, {"discord": ["b"], "email": "e"}),
+        ({"discord": {"a": None, "c": True}}, {"discord": ["b", "c"], "email": "e"}),
+        ({"discord": None}, {"email": "e"}),
+        ({"email": "f"}, {"discord": ["a", "b"], "email": "f"}),
+        ({"matrix": {"x": True}}, {"discord": ["a", "b"], "email": "e", "matrix": ["x"]}),
+        ({"matrix": {"x": True, "y": None}}, {"discord": ["a", "b"], "email": "e", "matrix": ["x"]}),
+    ],
+)
+async def test_upsert_contact_list_entries_only_removed_by_null(
+    db_session, admin_session, update, expected
+):
+    upsert_fn = get_fn(upsert)
+    with mcp_auth_context(admin_session.id):
+        await upsert_fn(
+            identifier="list_person",
+            display_name="List Person",
+            contact_info={"discord": ["a", "b"], "email": "e"},
+        )
+        await upsert_fn(identifier="list_person", contact_info=update)
+
+    db_session.expire_all()
+    person = db_session.query(Person).filter(Person.identifier == "list_person").first()
+    assert person.contact_info == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "initial, update, expected",
+    [
+        (
+            {"addresses": [{"city": "Paris"}, {"city": "Paris"}]},
+            {},
+            {"addresses": [{"city": "Paris"}]},
+        ),
+        (
+            {"addresses": [{"city": "Paris"}]},
+            {"addresses": [{"city": "Rome"}, {"city": "Paris"}, {"city": "Rome"}]},
+            {"addresses": [{"city": "Paris"}, {"city": "Rome"}]},
+        ),
+        (
+            {"addresses": [{"city": "Paris"}, "home"]},
+            {"addresses": {"home": None}},
+            {"addresses": [{"city": "Paris"}]},
+        ),
+        (
+            {"addresses": [{"city": "Paris"}]},
+            {"addresses": {"work": True}},
+            {"addresses": [{"city": "Paris"}, "work"]},
+        ),
+    ],
+)
+async def test_upsert_contact_lists_of_dicts(db_session, admin_session, initial, update, expected):
+    upsert_fn = get_fn(upsert)
+    with mcp_auth_context(admin_session.id):
+        await upsert_fn(identifier="dict_list_person", display_name="Dicts", contact_info=initial)
+        await upsert_fn(identifier="dict_list_person", contact_info=update)
+
+    db_session.expire_all()
+    person = db_session.query(Person).filter(Person.identifier == "dict_list_person").first()
+    assert person.contact_info == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "update, field",
+    [
+        ({"email": {"work": "w@example.com"}}, "email"),
+        ({"github": "octo"}, "github"),
+        ({"github": ["octo"]}, "github"),
+        ({"discord": {"a": "yes"}}, "discord"),
+    ],
+)
+async def test_upsert_contact_update_that_would_drop_data_is_refused(
+    db_session, admin_session, update, field
+):
+    upsert_fn = get_fn(upsert)
+    initial = {"email": "e", "github": {"work": "w"}, "discord": ["a"]}
+    with mcp_auth_context(admin_session.id):
+        await upsert_fn(identifier="typed_person", display_name="Typed", contact_info=initial)
+        with pytest.raises(ValueError, match=f"contact_info.{field}"):
+            await upsert_fn(identifier="typed_person", contact_info=update)
+
+    db_session.expire_all()
+    person = db_session.query(Person).filter(Person.identifier == "typed_person").first()
+    assert person.contact_info == initial
 
 
 # =============================================================================
@@ -835,8 +947,6 @@ async def test_tidbit_delete_not_found(db_session, admin_session, sample_people)
 @pytest.mark.asyncio
 async def test_merge_people(db_session, admin_session, sample_people):
     """Test merging multiple people into one."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     # Create an additional duplicate person to merge
@@ -888,8 +998,6 @@ async def test_merge_people(db_session, admin_session, sample_people):
 @pytest.mark.asyncio
 async def test_merge_people_requires_admin(db_session, user_session, sample_people):
     """Test that only admins can merge people."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     with mcp_auth_context(user_session.id):
@@ -902,8 +1010,6 @@ async def test_merge_people_requires_admin(db_session, user_session, sample_peop
 @pytest.mark.asyncio
 async def test_merge_people_minimum_two(db_session, admin_session, sample_people):
     """Test that at least 2 identifiers are required."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     with mcp_auth_context(admin_session.id):
@@ -914,8 +1020,6 @@ async def test_merge_people_minimum_two(db_session, admin_session, sample_people
 @pytest.mark.asyncio
 async def test_merge_people_not_found(db_session, admin_session, sample_people):
     """Test merging with non-existent person."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     with mcp_auth_context(admin_session.id):
@@ -926,8 +1030,6 @@ async def test_merge_people_not_found(db_session, admin_session, sample_people):
 @pytest.mark.asyncio
 async def test_merge_people_primary_not_in_list(db_session, admin_session, sample_people):
     """Test that primary_identifier must be in identifiers list."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     with mcp_auth_context(admin_session.id):
@@ -941,8 +1043,6 @@ async def test_merge_people_primary_not_in_list(db_session, admin_session, sampl
 @pytest.mark.asyncio
 async def test_merge_people_default_primary(db_session, admin_session, sample_people):
     """Test that first identifier is used as primary when not specified."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     # Create a duplicate to merge
@@ -966,51 +1066,94 @@ async def test_merge_people_default_primary(db_session, admin_session, sample_pe
 
 
 @pytest.mark.asyncio
-async def test_merge_people_contact_info_priority(db_session, admin_session, sample_people):
-    """Test that primary's contact_info takes precedence in conflicts."""
-    from memory.api.MCP.servers.people import merge
-
-    merge_fn = get_fn(merge)
-
-    # Alice already has email and phone in contact_info
-    # Create duplicate with overlapping and new contact info
-    duplicate = Person(
-        identifier="alice_dup2",
-        display_name="Alice Dup 2",
-        aliases=[],
-        contact_info={
-            "email": "different@example.com",  # Should NOT override primary
-            "twitter": "@alice_twitter",  # New field, should be added
-        },
+@pytest.mark.parametrize(
+    "primary, secondary, expected",
+    [
+        ({"email": "a@x.com"}, {"twitter": "@a"}, {"email": "a@x.com", "twitter": "@a"}),
+        ({"email": "a@x.com"}, {"email": "a@x.com"}, {"email": "a@x.com"}),
+        ({"email": "a@x.com"}, {"email": "b@x.com"}, {"email": ["a@x.com", "b@x.com"]}),
+        ({"discord": ["a"]}, {"discord": ["b", "a"]}, {"discord": ["a", "b"]}),
+        ({"discord": "a"}, {"discord": ["b"]}, {"discord": ["a", "b"]}),
+        (
+            {"slack": "U1"},
+            {"slack": {"T1": {"user_id": "U2"}}},
+            {"slack": ["U1", {"T1": {"user_id": "U2"}}]},
+        ),
+        ({"email": {"work": "b"}}, {"email": ["a"]}, {"email": [{"work": "b"}, "a"]}),
+        (
+            {"slack": {"T1": {"user_id": "U1"}}},
+            {"slack": {"T1": {"user_id": "U2"}, "T2": {"user_id": "U3"}}},
+            {"slack": {"T1": {"user_id": ["U1", "U2"]}, "T2": {"user_id": "U3"}}},
+        ),
+        (
+            {"addresses": [{"city": "Paris"}]},
+            {"addresses": [{"city": "Rome"}, {"city": "Paris"}]},
+            {"addresses": [{"city": "Paris"}, {"city": "Rome"}]},
+        ),
+    ],
+)
+async def test_merge_people_contact_info_keeps_both(
+    db_session, admin_session, primary, secondary, expected
+):
+    db_session.add_all(
+        [
+            Person(identifier="merge_primary", display_name="Primary", contact_info=primary),
+            Person(identifier="merge_secondary", display_name="Secondary", contact_info=secondary),
+        ]
     )
-    db_session.add(duplicate)
     db_session.commit()
 
     with mcp_auth_context(admin_session.id):
-        result = await merge_fn(
-            identifiers=["alice_chen", "alice_dup2"],
-            primary_identifier="alice_chen",
+        result = await get_fn(merge)(
+            identifiers=["merge_primary", "merge_secondary"],
+            primary_identifier="merge_primary",
         )
 
     assert result["success"] is True
-
-    # Check merged contact_info
     db_session.expire_all()
-    primary = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
+    merged = db_session.query(Person).filter(Person.identifier == "merge_primary").first()
+    assert merged.contact_info == expected
 
-    # Primary's email should be preserved
-    assert primary.contact_info["email"] == "alice@example.com"
-    # Primary's phone should be preserved
-    assert primary.contact_info["phone"] == "555-1234"
-    # Secondary's twitter should be added
-    assert primary.contact_info["twitter"] == "@alice_twitter"
+
+@pytest.mark.asyncio
+async def test_merged_people_found_and_notified_by_each_identity(
+    db_session, admin_session, regular_user
+):
+    db_session.add_all(
+        [
+            Person(
+                identifier="merge_primary",
+                display_name="Primary",
+                contact_info={"slack": {"T1": {"user_id": "U1"}}, "github": "gh-a"},
+                user_id=regular_user.id,
+            ),
+            Person(
+                identifier="merge_secondary",
+                display_name="Secondary",
+                contact_info={"slack": {"T1": {"user_id": "U2"}}, "github": "gh-b"},
+            ),
+        ]
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        await get_fn(merge)(
+            identifiers=["merge_primary", "merge_secondary"],
+            primary_identifier="merge_primary",
+        )
+    db_session.expire_all()
+
+    found = [find_person_by_slack_id(db_session, "T1", uid) for uid in ("U1", "U2")]
+    assert [p.identifier for p in found if p] == ["merge_primary", "merge_primary"]
+
+    info = user_info_for(db_session, regular_user)
+    assert info["slack_accounts"] == {"U1": "T1", "U2": "T1"}
+    assert info["github_accounts"] == [{"username": "gh-a"}, {"username": "gh-b"}]
 
 
 @pytest.mark.asyncio
 async def test_merge_people_alias_deduplication(db_session, admin_session, sample_people):
     """Test that aliases are deduplicated after merge."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     # Create duplicate with some overlapping aliases
@@ -1050,7 +1193,6 @@ async def test_merge_people_team_membership_role_priority(
     db_session, admin_session, sample_people
 ):
     """Test that higher team role is preserved when merging."""
-    from memory.api.MCP.servers.people import merge
     from memory.common.db.models import Team, team_members
 
     merge_fn = get_fn(merge)
@@ -1109,7 +1251,6 @@ async def test_merge_people_team_membership_role_priority(
 @pytest.mark.asyncio
 async def test_merge_people_team_membership_new_team(db_session, admin_session, sample_people):
     """Test that team membership is moved when primary doesn't have it."""
-    from memory.api.MCP.servers.people import merge
     from memory.common.db.models import Team, team_members
 
     merge_fn = get_fn(merge)
@@ -1162,7 +1303,6 @@ async def test_merge_people_team_membership_new_team(db_session, admin_session, 
 @pytest.mark.asyncio
 async def test_merge_people_discord_users(db_session, admin_session, sample_people):
     """Test that Discord users are moved to primary."""
-    from memory.api.MCP.servers.people import merge
     from memory.common.db.models.discord import DiscordUser
 
     merge_fn = get_fn(merge)
@@ -1208,7 +1348,6 @@ async def test_merge_people_discord_users(db_session, admin_session, sample_peop
 @pytest.mark.asyncio
 async def test_merge_people_github_users(db_session, admin_session, sample_people):
     """Test that GitHub users are moved to primary."""
-    from memory.api.MCP.servers.people import merge
     from memory.common.db.models.sources import GithubUser
 
     merge_fn = get_fn(merge)
@@ -1254,7 +1393,6 @@ async def test_merge_people_github_users(db_session, admin_session, sample_peopl
 @pytest.mark.asyncio
 async def test_merge_people_poll_responses(db_session, admin_session, sample_people):
     """Test that poll responses are moved to primary."""
-    from memory.api.MCP.servers.people import merge
     from memory.common.db.models.polls import AvailabilityPoll, PollResponse
 
     merge_fn = get_fn(merge)
@@ -1313,7 +1451,6 @@ async def test_merge_people_poll_responses(db_session, admin_session, sample_peo
 @pytest.mark.asyncio
 async def test_merge_people_user_link_moved(db_session, admin_session, sample_people):
     """Test that user link is moved from secondary to primary when primary has none."""
-    from memory.api.MCP.servers.people import merge
     from memory.common.db.models import HumanUser
 
     merge_fn = get_fn(merge)
@@ -1360,8 +1497,6 @@ async def test_merge_people_user_link_moved(db_session, admin_session, sample_pe
 @pytest.mark.asyncio
 async def test_merge_three_people(db_session, admin_session, sample_people):
     """Test merging more than 2 people at once."""
-    from memory.api.MCP.servers.people import merge
-
     merge_fn = get_fn(merge)
 
     # Create two duplicates

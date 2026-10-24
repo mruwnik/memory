@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject, TeamSaved } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FieldRow, FormActions, Input, Modal, Notice, Select, Textarea, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FormActions, Input, Modal, Notice, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e)
 
@@ -187,8 +187,6 @@ const TeamRow = ({
     muted={!team.is_active}
     badges={<>
       {!team.is_active && <Badge>Archived</Badge>}
-      {team.discord_role_id && <Badge tone="info">Discord</Badge>}
-      {team.github_team_slug && <Badge>GitHub</Badge>}
     </>}
     meta={[
       `@${team.slug}`,
@@ -287,24 +285,11 @@ const TeamFormModal = ({
   listPeople: ListPeople
   availablePeople?: Person[]
 }) => {
-  const initialGuild = team?.discord_guild_id ?? ''
-  const initialRole = team?.discord_role_id ?? ''
-  const initialOrg = team?.github_org ?? ''
-  const initialGithubTeam = team?.github_team_slug ?? ''
-  const initialAutoSyncDiscord = team?.auto_sync_discord ?? false
-  const initialAutoSyncGithub = team?.auto_sync_github ?? false
-
   const [name, setName] = useState(team?.name || '')
   const [slug, setSlug] = useState(team?.slug || '')
   const [description, setDescription] = useState(team?.description || '')
   const [ownerId, setOwnerId] = useState<number | null>(team?.owner_id ?? null)
   const [tags, setTags] = useState(team?.tags?.join(', ') || '')
-  const [guild, setGuild] = useState(initialGuild)
-  const [discordRole, setDiscordRole] = useState(initialRole)
-  const [autoSyncDiscord, setAutoSyncDiscord] = useState(initialAutoSyncDiscord)
-  const [githubOrg, setGithubOrg] = useState(initialOrg)
-  const [githubTeam, setGithubTeam] = useState(initialGithubTeam)
-  const [autoSyncGithub, setAutoSyncGithub] = useState(initialAutoSyncGithub)
   const [pendingMembers, setPendingMembers] = useState<Person[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -317,19 +302,8 @@ const TeamFormModal = ({
     }
   }, [name, isEditing])
 
-  // A role is looked up in a server, so a new one can't be saved without it. An existing role is
-  // fine: clearing the server unlinks Discord, role included.
-  const roleError = discordRole.trim() && discordRole !== initialRole && !guild.trim() ? 'Set the server too' : null
-  const githubTeamError = githubTeam.trim() && githubTeam !== initialGithubTeam && !githubOrg.trim() ? 'Set the organization too' : null
-
-  // Send an integration only when it changed: each save re-resolves it against Discord/GitHub and,
-  // with auto-sync on, syncs membership (so turning auto-sync on runs a sync). Empty strings unlink it.
-  const discordChanged = guild !== initialGuild || discordRole !== initialRole || autoSyncDiscord !== initialAutoSyncDiscord
-  const githubChanged = githubOrg !== initialOrg || githubTeam !== initialGithubTeam || autoSyncGithub !== initialAutoSyncGithub
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (roleError || githubTeamError) return
     setSubmitting(true)
     setError(null)
 
@@ -340,10 +314,6 @@ const TeamFormModal = ({
         description,
         ...(isEditing ? { owner: ownerId } : ownerId != null ? { owner: ownerId } : {}),
         tags: tags.split(',').map(t => t.trim()).filter(Boolean),
-        ...(discordChanged && { guild: guild.trim(), discord_role: discordRole.trim() }),
-        auto_sync_discord: autoSyncDiscord,
-        ...(githubChanged && { github_org: githubOrg.trim(), github_team_slug: githubTeam.trim() }),
-        auto_sync_github: autoSyncGithub,
       }
       await onSubmit(data, pendingMembers)
     } catch (e) {
@@ -426,34 +396,6 @@ const TeamFormModal = ({
             </SubList>
           </div>
         )}
-
-        <Disclosure summary="Discord integration" open={!!initialGuild}>
-          <div className="space-y-3">
-            <FieldRow>
-              <Field label="Server" hint="Server ID or name. Clear it to unlink Discord.">
-                <Input type="text" value={guild} onChange={e => setGuild(e.target.value)} />
-              </Field>
-              <Field label="Role" hint="Role ID or name; a new name creates the role" error={roleError}>
-                <Input type="text" value={discordRole} onChange={e => setDiscordRole(e.target.value)} />
-              </Field>
-            </FieldRow>
-            <Checkbox checked={autoSyncDiscord} onChange={e => setAutoSyncDiscord(e.target.checked)} label="Auto-sync membership changes to Discord" />
-          </div>
-        </Disclosure>
-
-        <Disclosure summary="GitHub integration" open={!!initialOrg}>
-          <div className="space-y-3">
-            <FieldRow>
-              <Field label="Organization" hint="Clear it to unlink GitHub.">
-                <Input type="text" value={githubOrg} onChange={e => setGithubOrg(e.target.value)} placeholder="myorg" />
-              </Field>
-              <Field label="Team slug" hint="Created in GitHub if it doesn't exist" error={githubTeamError}>
-                <Input type="text" value={githubTeam} onChange={e => setGithubTeam(e.target.value)} placeholder="core-team" />
-              </Field>
-            </FieldRow>
-            <Checkbox checked={autoSyncGithub} onChange={e => setAutoSyncGithub(e.target.checked)} label="Auto-sync membership changes to GitHub" />
-          </div>
-        </Disclosure>
 
         <FormActions>
           <Button type="button" onClick={onClose}>

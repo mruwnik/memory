@@ -121,7 +121,7 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
     db_session, admin_user, fake_providers, no_celery_dispatch, monkeypatch, delivery, inputs
 ):
     client = fakeredis.FakeRedis()
-    trigger = setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
+    setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
     item = post(db_session, "A")
 
     triggers.match_ingest_triggers(item.id, client)

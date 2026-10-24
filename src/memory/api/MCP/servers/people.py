@@ -2,7 +2,8 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from functools import reduce
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 from sqlalchemy import Text, or_, text
@@ -42,6 +43,7 @@ from memory.common.db.models.discord import DiscordUser
 from memory.common.db.models.polls import PollResponse
 from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.sources import GithubUser
+from memory.common.people import contact_values
 
 logger = logging.getLogger(__name__)
 
@@ -103,18 +105,82 @@ def _filter_tidbits_by_access(
     return [t for t in tidbits if user_can_access(user, t, project_roles)]
 
 
-def _deep_merge(base: dict, updates: dict) -> dict:
-    """Deep merge two dictionaries, with updates taking precedence; a None update removes the key, at any depth."""
+EntryChanges = dict[str, Literal[True] | None]
+
+
+def append_new(entries: list, new: list) -> list:
+    """Append the values not already present, comparing by == so dict entries work."""
+    return reduce(lambda acc, v: acc if v in acc else [*acc, v], new, entries)
+
+
+def is_entry_changes(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and any(v is True for v in value.values())
+        and all(v is True or v is None for v in value.values())
+    )
+
+
+def merge_entries(existing: list, update: list | EntryChanges, field: str) -> list:
+    """Add list entries, keeping order; in the dict form true adds an entry and null removes it."""
+    if isinstance(update, list):
+        return append_new(existing, update)
+    invalid = sorted(k for k, v in update.items() if v is not True and v is not None)
+    if invalid:
+        raise ValueError(f"{field}: entry changes must be true (add) or null (remove): {invalid}")
+    removed = [k for k, v in update.items() if v is None]
+    kept = [v for v in existing if v not in removed]
+    return append_new(kept, [k for k, v in update.items() if v is True])
+
+
+def _deep_merge(base: dict, updates: dict, path: str = "") -> dict:
+    """Merge a contact_info update; only a null or a new scalar removes anything.
+
+    A null removes its key at any depth, dicts merge recursively, a scalar
+    replaces a scalar, and lists gain entries. A dict of entry -> true/null
+    adds/removes single list entries, and starts a list on a missing key when
+    it adds anything. Changes that would silently drop data, such as a scalar
+    replacing a dict, raise ValueError.
+    """
     result = dict(base)
     for key, value in updates.items():
+        existing = result.get(key)
+        conflict = ValueError(
+            f"contact_info.{path}{key}: a {type(value).__name__} can't replace a "
+            f"{type(existing).__name__}; set it to null first to remove it"
+        )
         if value is None:
             result.pop(key, None)
+        elif isinstance(existing, list) or (existing is None and is_entry_changes(value)):
+            result[key] = merge_entries(
+                existing or [], value if isinstance(value, (list, dict)) else [value], f"contact_info.{path}{key}"
+            )
+        elif isinstance(existing, dict) and not isinstance(value, dict):
+            raise conflict
+        elif isinstance(value, list):
+            result[key] = merge_entries([] if existing is None else [existing], value, f"contact_info.{path}{key}")
         elif isinstance(value, dict):
-            existing = result.get(key)
-            result[key] = _deep_merge(existing if isinstance(existing, dict) else {}, value)
+            if existing is not None and not isinstance(existing, dict):
+                raise conflict
+            result[key] = _deep_merge(existing or {}, value, f"{path}{key}.")
         else:
             result[key] = value
     return result
+
+
+def combine_contact(primary: Any, secondary: Any) -> Any:
+    """Combine two people's values for one contact key, keeping both; the primary's come first.
+
+    Dicts combine per key; any other pair of differing values becomes a list
+    holding both, whatever their shapes.
+    """
+    if secondary is None or secondary == primary:
+        return primary
+    if primary is None:
+        return secondary
+    if isinstance(primary, dict) and isinstance(secondary, dict):
+        return {k: combine_contact(primary.get(k), secondary.get(k)) for k in primary | secondary}
+    return append_new(contact_values(primary), contact_values(secondary))
 
 
 def _caller_owns_person(person: Person, caller_id: int | None) -> bool:
@@ -301,9 +367,8 @@ def link_discord_from_contact_info(
 async def upsert(
     identifier: str,
     display_name: str | None = None,
-    aliases: list[str] | None = None,
+    aliases: list[str] | EntryChanges | None = None,
     contact_info: dict | None = None,
-    replace_aliases: bool = False,
     content: str | None = None,
     tidbit_type: str = "note",
     tags: list[str] | None = None,
@@ -320,19 +385,32 @@ async def upsert(
     - display_name is required
     - Creates thin identity record
 
-    Update mode (person exists):
+    Update mode (person exists): an omitted or top-level null argument leaves
+    its field unchanged; a null inside aliases/contact_info removes that entry.
     - display_name: Replaces if provided
-    - aliases: Union with existing (or replace if replace_aliases=True)
-    - contact_info: Deep merge with existing; a null value removes that key
+    - aliases: A list adds aliases. To remove one, pass a dict mapping it to
+      null; true adds: {"@old": null, "@new": true}
+    - contact_info: Merged into the existing info.
+      - A null value removes that key, at any depth.
+      - A scalar replaces an existing scalar, and the old value is gone:
+        {"email": "new@x"} overwrites the old email.
+      - Dicts merge key by key.
+      - Lists gain entries: a scalar or list is appended to an existing list,
+        and a list sent for a scalar gives [old, *new].
+      - A dict of entry -> true/null adds/removes single list entries
+        ({"discord": {"old_handle": null, "new_handle": true}}), and starts a
+        list when the key is missing.
+      - Any other shape change (e.g. a string for a dict) is refused; null the
+        key first.
 
     To add information/notes about a person, use tidbit_add() instead.
 
     Args:
         identifier: Unique slug for the person (e.g., "alice_chen")
         display_name: Human-readable name - required for create, optional for update
-        aliases: Alternative names/handles (e.g., ["@alice_c", "alice.chen@work.com"])
+        aliases: Alternative names/handles to add (e.g., ["@alice_c", "alice.chen@work.com"]),
+            or a dict of alias -> true (add) / null (remove)
         contact_info: Contact information as a dict (e.g., {"email": "...", "phone": "..."})
-        replace_aliases: If True, replace all aliases instead of merging (update only)
         content: Optional initial note about the person
         tidbit_type: Type of initial tidbit if content provided (default: "note")
         tags: Tags for the initial tidbit (e.g., ["work", "engineering"])
@@ -369,12 +447,7 @@ async def upsert(
                 person.display_name = display_name
 
             if aliases is not None:
-                if replace_aliases:
-                    person.aliases = list(aliases)
-                else:
-                    existing_aliases = set(person.aliases or [])
-                    new_aliases = existing_aliases | set(aliases)
-                    person.aliases = list(new_aliases)
+                person.aliases = merge_entries(list(person.aliases or []), aliases, "aliases")
 
             if contact_info is not None:
                 existing_contact = dict(person.contact_info or {})
@@ -391,7 +464,7 @@ async def upsert(
             person = Person(
                 identifier=identifier,
                 display_name=display_name,
-                aliases=aliases or [],
+                aliases=merge_entries([], aliases or [], "aliases"),
                 contact_info=_deep_merge({}, contact_info or {}),
             )
             session.add(person)
@@ -692,12 +765,12 @@ def merge_aliases(primary: Person, secondaries: list[Person]) -> None:
 
 
 def merge_contact_info(primary: Person, secondaries: list[Person]) -> None:
-    """Merge contact_info dicts. Primary takes precedence for conflicts."""
-    merged_contact: dict = {}
-    for sec in reversed(secondaries):
-        merged_contact = _deep_merge(merged_contact, dict(sec.contact_info or {}))
-    merged_contact = _deep_merge(merged_contact, dict(primary.contact_info or {}))
-    primary.contact_info = merged_contact
+    """Combine everyone's contact_info into the primary without dropping any value."""
+    primary.contact_info = reduce(
+        combine_contact,
+        [dict(sec.contact_info or {}) for sec in secondaries],
+        dict(primary.contact_info or {}),
+    )
 
 
 def merge_tidbits(session: DBSession, primary: Person, secondaries: list[Person]) -> int:

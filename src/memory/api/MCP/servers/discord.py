@@ -22,7 +22,7 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordUser,
 )
-from memory.common.people import find_person
+from memory.common.people import find_person, primary_contact
 from memory.common.discord_data import (
     fetch_channel_history,
     fetch_channels,
@@ -232,8 +232,8 @@ def suggest_people(session: DBSession, query: str) -> list[dict[str, str]]:
         discord_id = str(person.discord_accounts[0].id)
         discord_username = person.discord_accounts[0].username
     elif person.contact_info:
-        discord_id = person.contact_info.get("discord_id")
-        discord_username = person.contact_info.get("discord")
+        discord_id = primary_contact(person.contact_info.get("discord_id"))
+        discord_username = primary_contact(person.contact_info.get("discord"))
 
     if not discord_id:
         return []

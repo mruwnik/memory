@@ -724,7 +724,7 @@ def test_restore_waits_for_health_before_reporting_success(box, backup_set):
     "env_line,env",
     [
         (f'BACKUP_ENCRYPTION_KEY="{KEY}"\n', {}),
-        (f"BACKUP_ENCRYPTION_KEY_FILE={{keyfile}}\n", {}),
+        ("BACKUP_ENCRYPTION_KEY_FILE={keyfile}\n", {}),
     ],
     ids=["quoted-in-dotenv", "key-file"],
 )

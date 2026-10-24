@@ -52,40 +52,6 @@ def test_team_creation_minimal(minimal_team_data):
     assert team.tags == [] or team.tags is None
 
 
-def test_team_discord_integration_fields():
-    """Test Team Discord integration fields."""
-    from memory.common.db.models import Team
-
-    team = Team(
-        name="Discord Team",
-        slug="discord-team",
-        discord_role_id=123456789,
-        discord_guild_id=987654321,
-        auto_sync_discord=True,
-    )
-
-    assert team.discord_role_id == 123456789
-    assert team.discord_guild_id == 987654321
-    assert team.auto_sync_discord is True
-
-
-def test_team_github_integration_fields():
-    """Test Team GitHub integration fields."""
-    from memory.common.db.models import Team
-
-    team = Team(
-        name="GitHub Team",
-        slug="github-team",
-        github_team_id=42,
-        github_org="myorg",
-        auto_sync_github=True,
-    )
-
-    assert team.github_team_id == 42
-    assert team.github_org == "myorg"
-    assert team.auto_sync_github is True
-
-
 def test_team_lifecycle_fields():
     """Test Team lifecycle fields."""
     from memory.common.db.models import Team

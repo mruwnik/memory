@@ -539,6 +539,21 @@ def no_celery_dispatch():
         yield mock_send_task
 
 
+@pytest.fixture(autouse=True)
+def no_job_rows_without_db_session(request):
+    """Stop @tracked_task from writing PendingJob rows outside db_session.
+
+    Without db_session, make_session() is the real engine: the rows commit to
+    the worker's shared test DB (or the dev DB, before any DB test has run)
+    and skew later tests' job counts.
+    """
+    if "db_session" in request.fixturenames:
+        yield
+        return
+    with patch("memory.common.jobs._start_or_create_job", return_value=None):
+        yield
+
+
 @pytest.fixture(scope="session")
 def mcp_servers():
     """Pre-load MCP server modules once per test session.

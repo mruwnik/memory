@@ -94,12 +94,6 @@ describe('useTeams.createTeam', () => {
       description: 'd',
       owner: 'alice',
       tags: ['t'],
-      guild: '1234567890123456789',
-      discord_role: '9876543210987654321',
-      auto_sync_discord: true,
-      github_org: 'org',
-      github_team_slug: 'gts',
-      auto_sync_github: false,
     })
 
     expect(out).toEqual(resp)
@@ -107,11 +101,7 @@ describe('useTeams.createTeam', () => {
       name: 'Core',
       slug: 'core',
       owner: 'alice',
-      guild: '1234567890123456789',
-      discord_role: '9876543210987654321',
-      auto_sync_discord: true,
-      github_org: 'org',
-      github_team_slug: 'gts',
+      tags: ['t'],
     })
   })
 

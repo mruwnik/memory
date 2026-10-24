@@ -68,3 +68,20 @@ def test_find_person_by_email_exact_match_baseline(db_session, alice_person):
     assert find_person_by_email(db_session, "alice@company.com") is alice_person
     # A substring-like attacker query must miss.
     assert find_person_by_email(db_session, "alice@company.com.attacker.tld") is None
+
+
+@pytest.mark.parametrize(
+    "email, query, found",
+    [
+        ("alice@company.com", "Alice@Company.com", True),
+        (["old@company.com", "Alice@Company.com"], "alice@company.com", True),
+        (["old@company.com"], "alice@company.com", False),
+        ({"work": "alice@company.com"}, "alice@company.com", False),
+    ],
+)
+def test_find_person_by_email_scalar_or_list(db_session, email, query, found):
+    person = Person(identifier="emails", display_name="Emails", contact_info={"email": email})
+    db_session.add(person)
+    db_session.commit()
+
+    assert (find_person_by_email(db_session, query) is person) == found

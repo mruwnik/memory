@@ -12,13 +12,11 @@ from typing import Any, cast
 
 from discord import (
     CategoryChannel,
-    Color,
     Forbidden,
     ForumChannel,
     Guild,
     Member,
     NotFound,
-    Permissions,
     PermissionOverwrite,
     Role,
     StageChannel,
@@ -64,13 +62,6 @@ class ReactionRequest(BaseModel):
     emoji: str
 
 
-class RoleMemberRequest(BaseModel):
-    bot_id: int
-    guild_id: int | str  # Accepts ID (int) or name (str)
-    role_id: int | str  # Accepts ID as int or string
-    user_id: int | str  # Accepts ID as int or string
-
-
 class ChannelPermissionRequest(BaseModel):
     bot_id: int
     channel_id: int | str  # Accepts ID (int) or string
@@ -112,15 +103,6 @@ class EditChannelRequest(BaseModel):
     new_topic: str | None = None  # New topic (use empty string to clear)
     category_id: int | str | None = None  # Move to category by ID
     category_name: str | None = None  # Move to category by name (use empty string to remove from category)
-
-
-class CreateRoleRequest(BaseModel):
-    bot_id: int
-    name: str
-    color: int | None = None  # RGB color integer
-    permissions: int | None = None  # Permission bitfield
-    mentionable: bool = False
-    hoist: bool = False  # Whether the role should be displayed separately in member list
 
 
 @asynccontextmanager
@@ -433,120 +415,6 @@ async def refresh_metadata() -> dict[str, Any]:
             session.commit()
 
     return {"success": True, "updated": updated}
-
-
-# =============================================================================
-# Role Management Endpoints
-# =============================================================================
-
-
-@app.get("/guilds/{guild_id}/roles")
-async def list_roles(guild_id: str, bot_id: int) -> dict[str, Any]:
-    """List all roles in a guild (guild_id can be ID or name)."""
-    mgr = get_manager()
-    collector = get_collector_or_404(mgr, bot_id)
-    guild = get_guild_or_404(collector, guild_id)
-
-    roles = [
-        {
-            "id": str(role.id),  # String to preserve precision
-            "name": role.name,
-            "color": role.color.value,
-            "position": role.position,
-            "mentionable": role.mentionable,
-            "member_count": len(role.members),
-            "managed": role.managed,  # True if managed by integration (can't be assigned)
-        }
-        for role in guild.roles
-        if not role.is_default()  # Skip @everyone
-    ]
-    return {"roles": sorted(roles, key=lambda r: -r["position"])}
-
-
-@app.get("/guilds/{guild_id}/roles/{role_id}/members")
-async def list_role_members(guild_id: str, role_id: str, bot_id: int) -> dict[str, Any]:
-    """List all members with a specific role (guild_id can be ID or name)."""
-    mgr = get_manager()
-    collector = get_collector_or_404(mgr, bot_id)
-    guild = get_guild_or_404(collector, guild_id)
-    role = get_role_or_404(guild, int(role_id))
-
-    members = [
-        {
-            "id": str(member.id),
-            "username": member.name,
-            "display_name": member.display_name,
-            "joined_at": member.joined_at.isoformat() if member.joined_at else None,
-        }
-        for member in role.members
-    ]
-    return {"role": role.name, "members": members}
-
-
-@app.post("/roles/add_member")
-async def add_role_member(request: RoleMemberRequest) -> dict[str, Any]:
-    """Add a user to a role."""
-    mgr = get_manager()
-    collector = get_collector_or_404(mgr, request.bot_id)
-    guild = get_guild_or_404(collector, request.guild_id)
-    role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
-    user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
-    role = get_role_or_404(guild, role_id)
-    member = await get_member_or_404(guild, user_id)
-
-    async with discord_api_errors("manage this role"):
-        await member.add_roles(role, reason="Added via MCP")
-        return {"success": True, "user": member.display_name, "role": role.name}
-
-
-@app.post("/roles/remove_member")
-async def remove_role_member(request: RoleMemberRequest) -> dict[str, Any]:
-    """Remove a user from a role."""
-    mgr = get_manager()
-    collector = get_collector_or_404(mgr, request.bot_id)
-    guild = get_guild_or_404(collector, request.guild_id)
-    role_id = int(request.role_id) if isinstance(request.role_id, str) else request.role_id
-    user_id = int(request.user_id) if isinstance(request.user_id, str) else request.user_id
-    role = get_role_or_404(guild, role_id)
-    member = await get_member_or_404(guild, user_id)
-
-    async with discord_api_errors("manage this role"):
-        await member.remove_roles(role, reason="Removed via MCP")
-        return {"success": True, "user": member.display_name, "role": role.name}
-
-
-@app.post("/guilds/{guild_id}/roles")
-async def create_role(guild_id: str, request: CreateRoleRequest) -> dict[str, Any]:
-    """Create a new role in a guild."""
-    mgr = get_manager()
-    collector = get_collector_or_404(mgr, request.bot_id)
-    guild = get_guild_or_404(collector, guild_id)
-
-    # Build role kwargs
-    kwargs: dict[str, Any] = {
-        "name": request.name,
-        "mentionable": request.mentionable,
-        "hoist": request.hoist,
-        "reason": "Created via MCP",
-    }
-    if request.color is not None:
-        kwargs["color"] = Color(request.color)
-    if request.permissions is not None:
-        kwargs["permissions"] = Permissions(request.permissions)
-
-    async with discord_api_errors("create roles"):
-        role = await guild.create_role(**kwargs)
-        return {
-            "success": True,
-            "role": {
-                "id": str(role.id),
-                "name": role.name,
-                "color": role.color.value,
-                "position": role.position,
-                "mentionable": role.mentionable,
-                "hoist": role.hoist,
-            },
-        }
 
 
 # =============================================================================

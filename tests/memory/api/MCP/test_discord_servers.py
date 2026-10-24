@@ -16,22 +16,18 @@ from memory.api.MCP.servers.discord import (
     has_discord_bots,
     send_message,
 )
-from memory.api.MCP.servers.teams import team_to_dict
 from memory.common.db import connection as db_connection
 from memory.common.db.models import (
     APIKey,
     DiscordBot,
     HumanUser,
-    Team,
     UserSession,
 )
 
 from tests.conftest import mcp_auth_context
 
 # Discord snowflakes large enough to lose precision through JS Number (>2^53).
-GUILD_ID = "1379887229916155914"
 CHANNEL_ID = "1502068455027900446"
-ROLE_ID = "1502068455027900447"
 BOT_ID = "1379887229916155914"
 
 
@@ -157,48 +153,3 @@ async def test_send_message_schema_accepts_string_snowflake(param):
     schema = send_message.parameters  # type: ignore[attr-defined]
     types = {entry["type"] for entry in schema["properties"][param]["anyOf"]}
     assert types == {"string", "null"}
-
-
-# =============================================================================
-# team_to_dict snowflake stringification
-# =============================================================================
-
-
-def test_team_to_dict_stringifies_discord_snowflakes(db_session):
-    """``discord_role_id`` and ``discord_guild_id`` must come out as strings.
-
-    Storing them in BigInteger DB columns is fine — the precision loss
-    happens at the JSON boundary. ``team_to_dict`` is the response builder
-    for every team-MCP tool, so this is the single most important place
-    for the contract.
-    """
-    role_id = int(ROLE_ID)
-    guild_id = int(GUILD_ID)
-    team = Team(
-        name="Snowflake Team",
-        slug="snowflake-team",
-        discord_role_id=role_id,
-        discord_guild_id=guild_id,
-    )
-    db_session.add(team)
-    db_session.commit()
-
-    result = team_to_dict(team)
-
-    assert result["discord_role_id"] == ROLE_ID
-    assert result["discord_guild_id"] == GUILD_ID
-    assert isinstance(result["discord_role_id"], str)
-    assert isinstance(result["discord_guild_id"], str)
-
-
-def test_team_to_dict_handles_null_discord_fields(db_session):
-    team = Team(name="Plain Team", slug="plain-team")
-    db_session.add(team)
-    db_session.commit()
-
-    result = team_to_dict(team)
-
-    assert result["discord_role_id"] is None
-    assert result["discord_guild_id"] is None
-
-

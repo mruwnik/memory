@@ -38,13 +38,6 @@ const makeTeam = (overrides: Partial<Team> = {}): Team => ({
   owner_id: null,
   owner: null,
   tags: [],
-  discord_role_id: null,
-  discord_guild_id: null,
-  auto_sync_discord: false,
-  github_team_id: null,
-  github_team_slug: null,
-  github_org: null,
-  auto_sync_github: false,
   is_active: true,
   created_at: null,
   archived_at: null,
@@ -183,15 +176,15 @@ describe('PersonCard expanded details', () => {
     expect(screen.getByText('Loading teams...')).toBeInTheDocument()
   })
 
-  it('renders teams with discord/github icons', () => {
+  it('renders the person\'s teams', () => {
     render(
       <PersonCard
         {...baseProps}
         person={makePerson()}
         expanded
         teams={[
-          makeTeam({ id: 1, name: 'Eng', discord_role_id: 5 }),
-          makeTeam({ id: 2, name: 'Ops', github_team_id: 7 }),
+          makeTeam({ id: 1, name: 'Eng' }),
+          makeTeam({ id: 2, name: 'Ops' }),
         ]}
       />,
     )

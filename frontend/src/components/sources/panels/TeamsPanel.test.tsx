@@ -57,10 +57,6 @@ const team = (over: Record<string, unknown> = {}) => ({
   tags: [],
   member_count: 2,
   is_active: true,
-  discord_role_id: null,
-  discord_guild_id: null,
-  github_org: null,
-  github_team_slug: null,
   members: [],
   projects: [],
   ...over,
@@ -194,18 +190,6 @@ describe('TeamsPanel - create flow', () => {
     expect(createTeam).not.toHaveBeenCalled()
   })
 
-  it('creates teams with auto-sync off unless asked', async () => {
-    const { user } = renderWithUser(<TeamsPanel />)
-    await screen.findByText('Engineering')
-
-    await user.click(screen.getByRole('button', { name: 'New team' }))
-    await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
-    await user.click(screen.getByRole('button', { name: 'Create team' }))
-
-    await waitFor(() => expect(createTeam).toHaveBeenCalledWith(
-      expect.objectContaining({ auto_sync_discord: false, auto_sync_github: false })))
-  })
-
   it('reports initial members that could not be added', async () => {
     listPeople.mockResolvedValue([person({ id: 2, identifier: 'bob', display_name: 'Bob' })])
     addMember.mockRejectedValueOnce(new Error('not allowed'))
@@ -220,8 +204,8 @@ describe('TeamsPanel - create flow', () => {
     expect(await screen.findByText(/Couldn't add Bob: not allowed/)).toBeInTheDocument()
   })
 
-  it('shows sync warnings returned by the save', async () => {
-    createTeam.mockResolvedValueOnce({ team: team(), warnings: ['Discord guild resolution failed: unknown'] })
+  it('shows warnings returned by the save', async () => {
+    createTeam.mockResolvedValueOnce({ team: team(), warnings: ['Owner not found: zed'] })
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
@@ -229,7 +213,7 @@ describe('TeamsPanel - create flow', () => {
     await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
     await user.click(screen.getByRole('button', { name: 'Create team' }))
 
-    expect(await screen.findByText(/Discord guild resolution failed: unknown/)).toBeInTheDocument()
+    expect(await screen.findByText(/Owner not found: zed/)).toBeInTheDocument()
   })
 })
 
@@ -266,47 +250,6 @@ describe('TeamsPanel - edit flow', () => {
     expect(await screen.findByText('nope')).toBeInTheDocument()
   })
 
-  it('sends Discord and GitHub links under the API names, keeping snowflakes as strings', async () => {
-    const { user } = renderWithUser(<TeamsPanel />)
-    await openEdit(user)
-
-    await user.type(screen.getByLabelText('Server'), '1234567890123456789')
-    await user.type(screen.getByLabelText('Role'), '9876543210987654321')
-    await user.type(screen.getByLabelText('Organization'), 'acme')
-    await user.type(screen.getByLabelText('Team slug'), 'core')
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
-
-    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({
-      guild: '1234567890123456789',
-      discord_role: '9876543210987654321',
-      github_org: 'acme',
-      github_team_slug: 'core',
-    })))
-  })
-
-  it('unlinks Discord when the server is cleared', async () => {
-    listTeams.mockResolvedValue([team({ discord_guild_id: '1234567890123456789', discord_role_id: '42' })])
-    const { user } = renderWithUser(<TeamsPanel />)
-    await openEdit(user)
-
-    await user.clear(screen.getByLabelText('Server'))
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
-
-    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ guild: '' })))
-  })
-
-  it('re-sends the Discord link when auto-sync is turned on, so a sync runs', async () => {
-    listTeams.mockResolvedValue([team({ discord_guild_id: '1', discord_role_id: '2', auto_sync_discord: false })])
-    const { user } = renderWithUser(<TeamsPanel />)
-    await openEdit(user)
-
-    await user.click(screen.getByLabelText('Auto-sync membership changes to Discord'))
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
-
-    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering',
-      expect.objectContaining({ guild: '1', discord_role: '2', auto_sync_discord: true })))
-  })
-
   it('saves a cleared description and tags', async () => {
     listTeams.mockResolvedValue([team({ tags: ['eng'] })])
     const { user } = renderWithUser(<TeamsPanel />)
@@ -319,28 +262,6 @@ describe('TeamsPanel - edit flow', () => {
     await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ description: '', tags: [] })))
   })
 
-  it('leaves unchanged links out of the save', async () => {
-    listTeams.mockResolvedValue([team({ discord_guild_id: '1', discord_role_id: '2', github_org: 'acme', github_team_slug: 'core' })])
-    const { user } = renderWithUser(<TeamsPanel />)
-    await openEdit(user)
-
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
-
-    await waitFor(() => expect(updateTeam).toHaveBeenCalled())
-    expect(updateTeam.mock.calls[0][1]).not.toHaveProperty('guild')
-    expect(updateTeam.mock.calls[0][1]).not.toHaveProperty('github_org')
-  })
-
-  it('refuses a Discord role without a server', async () => {
-    const { user } = renderWithUser(<TeamsPanel />)
-    await openEdit(user)
-
-    await user.type(screen.getByLabelText('Role'), 'Engineers')
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
-
-    expect(await screen.findByText('Set the server too')).toBeInTheDocument()
-    expect(updateTeam).not.toHaveBeenCalled()
-  })
 })
 
 describe('TeamsPanel - archive flow', () => {

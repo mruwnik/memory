@@ -64,6 +64,34 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- Teams no longer link to Discord roles or GitHub teams. `teams_upsert` drops
+  `guild`, `discord_role`, `auto_sync_discord`, `github_org`,
+  `github_team_slug`, `auto_sync_github` and `force_empty`; adding or removing a
+  team member, and creating or updating a GitHub-backed project, no longer
+  touches Discord roles, GitHub team membership or GitHub repo access. Existing
+  Discord roles and GitHub teams are left as they are. MCP clients that read
+  them lose the response keys `discord_sync` and `github_sync` (`teams_upsert`),
+  `sync` (`teams_team_add_member`/`teams_team_remove_member`), and
+  `github_team_sync` and `teams_from_github` (`projects_upsert`). The Discord
+  collector's role endpoints (`/guilds/{id}/roles`, `/roles/add_member`,
+  `/roles/remove_member`) are gone.
+- **Narrower visibility for new repo projects.** Creating a project for a
+  GitHub repo no longer adds the local teams whose GitHub team had access to
+  that repo. The project gets only the teams passed in, so it can be visible
+  to fewer people than before; assign teams explicitly.
+- `people_upsert`: `replace_aliases` is gone. A list of aliases is always
+  added, and an alias is removed by mapping it to null
+  (`aliases={"@old": null}`). In `contact_info`, a null removes a key, lists
+  gain entries instead of being replaced (remove one entry with
+  `{"discord": {"old_handle": null}}`), and a shape change that would drop data
+  (e.g. a string replacing a dict) is refused. A new scalar still replaces the
+  old one: `{"email": "new@x"}` overwrites the old email.
+- `people_merge` keeps both people's contact info: values that differ become
+  a list (primary's first) instead of the primary's value winning. Email,
+  GitHub and Slack lookups match any value in such a list; notifications reach
+  every merged Slack/GitHub account, and single-value uses (email target,
+  Discord suggestion) take the primary's. The people edit form only sends
+  contact fields that changed.
 - The Claude "New session" form saves GitHub tokens on the server (encrypted,
   per user, only the last 4 characters are ever shown) instead of in the
   browser's localStorage, and clears the old localStorage copy on load. Users
@@ -376,6 +404,10 @@ section has nothing in it:
   Downgrading deletes push-only (`generic`) accounts.
 - `20261101_claude_github_tokens`: creates the empty `claude_github_tokens`
   table. Fast.
+- `20261102_drop_team_sync`: drops the Discord role and GitHub team columns
+  from `teams` (`discord_role_id`, `discord_guild_id`, `auto_sync_discord`,
+  `github_team_id`, `github_team_slug`, `github_org`, `auto_sync_github`). Fast.
+  The links are lost; downgrading restores the columns empty.
 
 ### Post-deploy commands
 

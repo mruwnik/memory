@@ -130,33 +130,6 @@ class GithubProjectData(TypedDict):
     items_total_count: int  # Number of items in the project
 
 
-class GithubTeamMember(TypedDict):
-    """A member of a GitHub team."""
-
-    login: str
-    id: int
-    node_id: str
-    role: str  # 'member' or 'maintainer'
-
-
-class GithubTeamData(TypedDict):
-    """GitHub Team data for storage."""
-
-    node_id: str  # GraphQL node ID
-    github_id: int  # REST API ID
-    slug: str  # URL-safe team name
-    name: str  # Display name
-    description: str | None
-    privacy: str  # 'closed' or 'secret'
-    permission: str | None  # 'pull', 'push', 'admin', 'maintain', 'triage'
-    org_login: str
-    parent_team_slug: str | None
-    members_count: int
-    repos_count: int
-    github_created_at: datetime | None
-    github_updated_at: datetime | None
-
-
 class GithubIssueData(TypedDict):
     """Parsed issue/PR data ready for storage."""
 

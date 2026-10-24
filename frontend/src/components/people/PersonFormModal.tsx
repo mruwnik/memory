@@ -45,7 +45,7 @@ const PersonFormModal = ({
   submitLabel,
   isEdit = false,
 }: PersonFormModalProps) => {
-  const [form, setForm] = useState<FormData>({
+  const initialForm: FormData = {
     identifier: initialData?.identifier || '',
     display_name: initialData?.display_name || '',
     aliases: initialData?.aliases?.join(', ') || '',
@@ -56,7 +56,8 @@ const PersonFormModal = ({
     github: initialData?.contact_info?.github || '',
     twitter: initialData?.contact_info?.twitter || '',
     website: initialData?.contact_info?.website || '',
-  })
+  }
+  const [form, setForm] = useState<FormData>(initialForm)
 
   const generateIdentifier = (name: string): string => {
     return name
@@ -88,15 +89,21 @@ const PersonFormModal = ({
     e.preventDefault()
 
     if (isEdit) {
-      // null removes a field the user cleared; the server merges contact_info.
-      const contact_info = Object.fromEntries(CONTACT_FIELDS.map(({ key }) => [key, form[key] || null]))
+      // The server only removes what is sent as null, so cleared fields and dropped aliases go as null.
+      // Unchanged fields aren't sent: a merged person's list value would come back as one joined string.
+      const contact_info = Object.fromEntries(
+        CONTACT_FIELDS.filter(({ key }) => form[key] !== initialForm[key]).map(({ key }) => [key, form[key] || null]),
+      )
+      const aliases = parseCommaSeparated(form.aliases)
       const data: PersonUpdate = {
         display_name: form.display_name || undefined,
-        aliases: parseCommaSeparated(form.aliases),
+        aliases: Object.fromEntries([
+          ...aliases.map(alias => [alias, true] as const),
+          ...(initialData?.aliases ?? []).filter(alias => !aliases.includes(alias)).map(alias => [alias, null] as const),
+        ]),
         tags: parseCommaSeparated(form.tags),
         content: form.notes || undefined,
         contact_info,
-        replace_aliases: true,
       }
       await onSubmit(data)
     } else {
