@@ -1,11 +1,12 @@
 """Tests for meeting Celery tasks."""
 
-import json
 import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import anthropic
 import fakeredis
+import httpx2
 import pytest
 
 from memory.agents import triggers
@@ -25,6 +26,8 @@ from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import meetings
 from memory.common.content_processing import create_content_hash
 from memory.common.people import find_or_create_person, make_identifier
+from tests.conftest import unique_sha256
+from tests.memory.agents.fakes import key_rejected, submitted
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:
@@ -767,44 +770,65 @@ def test_create_action_item_tasks_with_due_date(mock_make_session, qdrant):
 
 
 # ============================================================================
-# Tests for call_extraction_llm
+# Tests for extract_and_update_meeting
 # ============================================================================
 
 
-@patch("memory.workers.tasks.meetings.llms.summarize")
-def test_call_extraction_llm_success(mock_summarize):
-    """Test successful LLM extraction call."""
-    mock_summarize.return_value = '{"summary": "Test", "notes": "Notes", "action_items": []}'
-
-    result = meetings.call_extraction_llm("Test transcript")
-
-    assert result == {"summary": "Test", "notes": "Notes", "action_items": []}
-    assert mock_summarize.call_args.kwargs["json_schema"] == meetings.EXTRACTION_SCHEMA
+EXTRACTED = {"summary": "We met.", "notes": "- a", "action_items": [
+    {"description": "Ship it", "assignee": None, "due_date": "2026-11-01", "priority": "high"},
+]}
 
 
-@patch("memory.workers.tasks.meetings.llms.summarize", return_value="I can't help")
-def test_call_extraction_llm_raises_on_non_json(mock_summarize):
-    """A refusal surfaces as an error so the meeting is marked failed."""
-    with pytest.raises(json.JSONDecodeError):
-        meetings.call_extraction_llm("Test transcript")
+async def connection_dropped():
+    raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com"))
 
 
-@patch("memory.workers.tasks.meetings.llms.summarize")
-def test_call_extraction_llm_uses_custom_prompts(mock_summarize):
-    """Test that custom prompts are used."""
-    mock_summarize.return_value = '{"summary": "Custom", "notes": "", "action_items": []}'
+def meeting_for(db, creator_id):
+    meeting = Meeting(modality="meeting", sha256=unique_sha256("m"), content="Alice: hi", creator_id=creator_id)
+    db.add(meeting)
+    db.flush()
+    return meeting
 
-    meetings.call_extraction_llm(
-        "Transcript",
-        extraction_prompt="Custom prompt: {transcript}",
-        system_prompt="Custom system",
-        model="custom-model",
-    )
 
-    call_args = mock_summarize.call_args
-    assert "Custom prompt: Transcript" == call_args[0][0]
-    assert call_args[1]["system_prompt"] == "Custom system"
-    assert call_args[1]["model"] == "custom-model"
+def test_extraction_runs_on_the_creators_key(db_session, regular_user, llm_key, scripted_llm):
+    scripted_llm.script = [submitted(EXTRACTED)]
+    meeting = meeting_for(db_session, regular_user.id)
+
+    result = meetings.extract_and_update_meeting(db_session, meeting)
+
+    request = scripted_llm.requests[0]
+    assert (result["status"], result["tasks_created"], meeting.summary) == ("success", 1, "We met.")
+    assert request["api_key"] == "sk-test-default"
+    assert request["messages"][0].content[0].text == "Meeting transcript:\nAlice: hi"
+
+
+def test_meetings_without_a_key_are_kept_unextracted(db_session, regular_user, scripted_llm):
+    meeting = meeting_for(db_session, regular_user.id)
+
+    result = meetings.extract_and_update_meeting(db_session, meeting)
+
+    assert (result["status"], meeting.extraction_status, scripted_llm.requests) == ("skipped", "skipped", [])
+
+
+@pytest.mark.parametrize("failure", [key_rejected, connection_dropped])
+def test_a_failed_extraction_marks_the_meeting_failed(db_session, regular_user, llm_key, scripted_llm, failure):
+    scripted_llm.script = [failure]
+    meeting = meeting_for(db_session, regular_user.id)
+
+    result = meetings.extract_and_update_meeting(db_session, meeting)
+
+    assert (result["status"], meeting.extraction_status) == ("error", "failed")
+    assert "sk-test-default" not in result["error"]
+
+
+def test_keyless_meeting_is_embedded_with_extraction_skipped(
+    regular_user, scripted_llm, mock_make_session, qdrant
+):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+
+    result = meetings.execute_meeting_processing(mock_make_session, meeting, None, None)
+
+    assert (result["status"], meeting.extraction_status, meeting.embed_status) == ("success", "skipped", "STORED")
 
 
 # ============================================================================
@@ -812,14 +836,14 @@ def test_call_extraction_llm_uses_custom_prompts(mock_summarize):
 # ============================================================================
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_success(
-    mock_extraction, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
     """Test successful meeting processing."""
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
 
     result = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=sample_transcript,
         title="Q1 Planning",
         meeting_date="2024-01-10T10:00:00",
@@ -843,16 +867,16 @@ def test_process_meeting_success(
     assert meeting.extraction_status == "complete"
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_synced_meeting_visible_to_account_owner_not_to_non_member(
-    mock_extraction,
+    scripted_llm,
+    llm_key,
     sample_extraction_response,
     sample_transcript,
     mock_make_session,
     qdrant,
     regular_user,
 ):
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
     db = mock_make_session
     project = Project(title="Sales", state="open")
     db.add(project)
@@ -888,16 +912,16 @@ def test_synced_meeting_visible_to_account_owner_not_to_non_member(
     assert user_can_access(outsider, meeting, {project.id: "manager"})
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
-    mock_extraction,
+    scripted_llm,
+    llm_key,
     sample_extraction_response,
     sample_transcript,
     mock_make_session,
     qdrant,
     regular_user,
 ):
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
     db = mock_make_session
     project = Project(title="Sales", state="open")
     db.add(project)
@@ -966,11 +990,10 @@ def test_detached_tasks_keep_their_resolved_access_control(db_session, regular_u
     )
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_records_uploader_as_creator(
-    mock_extraction, sample_transcript, mock_make_session, qdrant, regular_user
+    scripted_llm, llm_key, sample_transcript, mock_make_session, qdrant, regular_user
 ):
-    mock_extraction.return_value = {"summary": "s", "notes": "", "action_items": []}
+    scripted_llm.script = [submitted({"summary": "s", "notes": "", "action_items": []})]
 
     result = meetings.process_meeting(
         transcript=sample_transcript, creator_id=regular_user.id
@@ -980,15 +1003,15 @@ def test_process_meeting_records_uploader_as_creator(
     assert meeting.creator_id == regular_user.id
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_idempotent(
-    mock_extraction, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
     """Test that duplicate external_id skips processing."""
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
 
     # First call
     result1 = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=sample_transcript,
         external_id="duplicate-123",
     )
@@ -996,6 +1019,7 @@ def test_process_meeting_idempotent(
 
     # Second call with same external_id
     result2 = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript="Different transcript",
         external_id="duplicate-123",
     )
@@ -1007,65 +1031,37 @@ def test_process_meeting_idempotent(
     assert count == 1
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
-def test_process_meeting_minimal(mock_extraction, sample_transcript, mock_make_session, qdrant):
+def test_process_meeting_minimal(
+    scripted_llm, llm_key, regular_user, sample_transcript, mock_make_session, qdrant
+):
     """Test meeting processing with minimal data."""
-    mock_extraction.return_value = {
-        "summary": "Brief summary",
-        "notes": "",
-        "action_items": [],
-    }
+    scripted_llm.script = [submitted({"summary": "Brief summary", "notes": "", "action_items": []})]
 
-    result = meetings.process_meeting(transcript=sample_transcript)
+    result = meetings.process_meeting(transcript=sample_transcript, creator_id=regular_user.id)
 
     assert result["status"] == "success"
     assert result["tasks_created"] == 0
     assert result["attendees_linked"] == 0
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
-def test_process_meeting_handles_extraction_error(
-    mock_extraction, sample_transcript, mock_make_session, qdrant
-):
-    """Test that extraction errors are handled gracefully."""
-    mock_extraction.side_effect = Exception("LLM API error")
-
-    result = meetings.process_meeting(
-        transcript=sample_transcript,
-        external_id="error-test",
-    )
-
-    assert result["status"] == "error"
-    # Error key normalized to "error" (was "message" prior to the regression
-    # fix that bailed out before embedding when extraction itself failed).
-    assert "LLM API error" in result["error"]
-
-    # Verify meeting was created but marked as failed (and NOT overwritten
-    # to "complete" by the embedding step, which the bugfix prevents).
-    meeting = mock_make_session.query(Meeting).first()
-    assert meeting is not None
-    assert meeting.extraction_status == "failed"
-
-
 @patch("memory.workers.tasks.meetings.process_content_item")
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_extraction_failure_short_circuits(
-    mock_extraction, mock_process_content, sample_transcript, mock_make_session, qdrant
+    mock_process_content, scripted_llm, llm_key, regular_user, sample_transcript, mock_make_session, qdrant
 ):
     """Regression: when extraction fails, embedding (process_content_item)
     must NOT run, extraction_status stays 'failed', and the result keeps
     status='error' rather than being overwritten to 'complete' by the
     embedding step. This pins the bugfix in execute_meeting_processing.
     """
-    mock_extraction.side_effect = Exception("LLM API error")
+    scripted_llm.script = [connection_dropped]
 
     result = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=sample_transcript,
         external_id="extraction-shortcircuit",
     )
 
     assert result["status"] == "error"
-    assert "LLM API error" in result["error"]
     # Crucially: embedding must not be called when extraction failed.
     mock_process_content.assert_not_called()
 
@@ -1074,12 +1070,23 @@ def test_process_meeting_extraction_failure_short_circuits(
     assert meeting.extraction_status == "failed"
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
+@patch("memory.workers.tasks.meetings.create_action_item_tasks", side_effect=RuntimeError("db down"))
+def test_a_task_creation_failure_marks_the_meeting_failed(
+    mock_create_tasks, scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+):
+    scripted_llm.script = [submitted(sample_extraction_response)]
+
+    result = meetings.process_meeting(transcript=sample_transcript, creator_id=regular_user.id)
+
+    meeting = mock_make_session.get(Meeting, result["meeting_id"])
+    assert (result["status"], meeting.extraction_status) == ("error", "failed")
+
+
 def test_process_meeting_with_existing_people(
-    mock_extraction, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
     """Test meeting with existing attendees."""
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
 
     # Create existing people
     alice = Person(
@@ -1090,6 +1097,7 @@ def test_process_meeting_with_existing_people(
     mock_make_session.commit()
 
     result = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=sample_transcript,
         attendee_names=["Alice", "New Bob"],
     )
@@ -1099,14 +1107,14 @@ def test_process_meeting_with_existing_people(
     assert result["attendees_created"] == 1  # New Bob
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_parses_meeting_date(
-    mock_extraction, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
     """Test that meeting date is parsed correctly."""
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
 
     meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=sample_transcript,
         meeting_date="2024-06-15T14:30:00",
     )
@@ -1118,14 +1126,14 @@ def test_process_meeting_parses_meeting_date(
     assert meeting.meeting_date.day == 15
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_sets_tags(
-    mock_extraction, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
     """Test that tags are set correctly."""
-    mock_extraction.return_value = sample_extraction_response
+    scripted_llm.script = [submitted(sample_extraction_response)]
 
     meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=sample_transcript,
         tags=["important", "q1", "planning"],
     )
@@ -1226,15 +1234,15 @@ def test_parse_due_date_invalid_formats(date_str):
     assert result is None
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_prepends_attendees_to_transcript(
-    mock_extraction, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, mock_make_session, qdrant
 ):
     """Test that attendee names are prepended to the transcript content."""
-    mock_extraction.return_value = {"summary": "Test", "notes": "", "action_items": []}
+    scripted_llm.script = [submitted({"summary": "Test", "notes": "", "action_items": []})]
 
     transcript = "Let's discuss the roadmap."
     result = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=transcript,
         attendee_names=["Alice", "Bob", "Charlie"],
         external_id="attendee-test-123",
@@ -1248,15 +1256,15 @@ def test_process_meeting_prepends_attendees_to_transcript(
     assert transcript in meeting.content
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_no_attendees_no_prefix(
-    mock_extraction, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, mock_make_session, qdrant
 ):
     """Test that transcript is unchanged when no attendees provided."""
-    mock_extraction.return_value = {"summary": "Test", "notes": "", "action_items": []}
+    scripted_llm.script = [submitted({"summary": "Test", "notes": "", "action_items": []})]
 
     transcript = "Let's discuss the roadmap."
     result = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=transcript,
         attendee_names=None,
         external_id="no-attendee-test-123",
@@ -1269,15 +1277,15 @@ def test_process_meeting_no_attendees_no_prefix(
     assert meeting.content == transcript
 
 
-@patch("memory.workers.tasks.meetings.call_extraction_llm")
 def test_process_meeting_empty_attendees_no_prefix(
-    mock_extraction, mock_make_session, qdrant
+    scripted_llm, llm_key, regular_user, mock_make_session, qdrant
 ):
     """Test that transcript is unchanged when attendees list is empty."""
-    mock_extraction.return_value = {"summary": "Test", "notes": "", "action_items": []}
+    scripted_llm.script = [submitted({"summary": "Test", "notes": "", "action_items": []})]
 
     transcript = "Let's discuss the roadmap."
     result = meetings.process_meeting(
+        creator_id=regular_user.id,
         transcript=transcript,
         attendee_names=[],
         external_id="empty-attendee-test-123",

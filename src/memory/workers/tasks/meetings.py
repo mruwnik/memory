@@ -1,14 +1,17 @@
 """Celery tasks for meeting transcript processing."""
 
 import hashlib
-import json
 import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
 
-from memory.common import llms, settings, jobs as job_utils
+from memory.agents.call import LLMError, Record, run_agent_sync
+from memory.agents.provider_keys import Credential, credential, ingest_key
+from memory.agents.system import MEETING_EXTRACT
+from memory.common import jobs as job_utils
+from memory.common.llms import PROVIDER_ERRORS
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Task
 from memory.common.db.models.source_items import Meeting
@@ -28,55 +31,6 @@ from memory.common.people import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EXTRACTION_PROMPT = """You are analyzing a meeting transcript. Extract the following information:
-
-1. A concise 2-3 sentence summary of the meeting's main purpose and outcomes
-2. Key discussion points, decisions made, and important information (as bullet points)
-3. Action items - tasks that were assigned or need to be done, with assignee, due date, and priority if mentioned
-
-Meeting transcript:
-{transcript}
-"""
-
-DEFAULT_SYSTEM_PROMPT = "You are an expert at analyzing meeting transcripts and extracting actionable information."
-
-NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
-EXTRACTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string", "description": "2-3 sentence summary"},
-        "notes": {
-            "type": "string",
-            "description": "Markdown bullet list of key points and decisions",
-        },
-        "action_items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string"},
-                    "assignee": NULLABLE_STRING | {"description": "Person name"},
-                    "due_date": NULLABLE_STRING | {"description": "YYYY-MM-DD"},
-                    "priority": {
-                        "anyOf": [
-                            {
-                                "type": "string",
-                                "enum": ["low", "medium", "high", "urgent"],
-                            },
-                            {"type": "null"},
-                        ]
-                    },
-                },
-                "required": ["description", "assignee", "due_date", "priority"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["summary", "notes", "action_items"],
-    "additionalProperties": False,
-}
-
-
 def parse_due_date(date_str: str | None) -> datetime | None:
     """Parse a due date string into a datetime."""
     if not date_str:
@@ -93,26 +47,16 @@ def make_task_sha256(meeting_id: int, description: str) -> bytes:
     return hashlib.sha256(content.encode()).digest()
 
 
-def call_extraction_llm(
-    transcript: str,
-    extraction_prompt: str | None = None,
-    system_prompt: str | None = None,
-    model: str | None = None,
-) -> dict:
-    """Call LLM to extract structured information from transcript."""
-    prompt_template = extraction_prompt or DEFAULT_EXTRACTION_PROMPT
-    sys_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
-    llm_model = model or getattr(settings, "MEETING_MODEL", settings.SUMMARIZER_MODEL)
-
-    prompt = prompt_template.format(transcript=transcript)
-    logger.info(f"Calling LLM for meeting extraction using {llm_model}")
-    response = llms.summarize(
-        prompt,
-        model=llm_model,
-        system_prompt=sys_prompt,
-        json_schema=EXTRACTION_SCHEMA,
+def call_extraction_llm(transcript: str, key: Credential) -> dict:
+    """Summary, notes and action items for `transcript`, paid with `key`."""
+    result = run_agent_sync(
+        MEETING_EXTRACT.slug,
+        f"Meeting transcript:\n{transcript}",
+        user=key.user_id,
+        key=key,
+        record=Record.COST,
     )
-    return json.loads(response)
+    return result.data or {}
 
 
 def normalize_attendee_names(attendee_names: Sequence[str | None]) -> list[str]:
@@ -425,56 +369,45 @@ def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
     return len(tasks)
 
 
-def extract_and_update_meeting(
-    session: DBSession,
-    meeting: Meeting,
-    extraction_prompt: str | None = None,
-    system_prompt: str | None = None,
-    model: str | None = None,
-) -> dict:
+def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     """
     Run LLM extraction on a meeting and update it with extracted data.
 
-    Returns dict with extraction results including summary_length, notes_length,
+    A meeting no key pays for is kept with extraction "skipped". Returns dict
+    with extraction results including summary_length, notes_length,
     tasks_created, or error info on failure.
     """
+    found = ingest_key(session, meeting, MEETING_EXTRACT)
+    if found is None:
+        meeting.extraction_status = "skipped"
+        return {"status": "skipped"}
     meeting.extraction_status = "processing"
     session.flush()
 
     try:
-        transcript = meeting.content or ""
-        extracted = call_extraction_llm(
-            transcript, extraction_prompt, system_prompt, model
-        )
-        meeting.summary = extracted.get("summary", "")
-        meeting.notes = extracted.get("notes", "")
-        # Note: status stays "processing" until embedding completes in execute_meeting_processing
-        meeting.extraction_status = "extracted"
-
-        created_tasks = create_action_item_tasks(
-            session, meeting, extracted.get("action_items", [])
-        )
-        logger.info(f"Created {len(created_tasks)} tasks from meeting {meeting.id}")
-
-        return {
-            "status": "success",
-            "summary_length": len(meeting.summary or ""),
-            "notes_length": len(meeting.notes or ""),
-            "tasks_created": len(created_tasks),
-        }
-    except Exception as e:
-        logger.exception(f"Failed to extract meeting {meeting.id}: {e}")
+        extracted = call_extraction_llm(meeting.content or "", credential(found))
+    except (LLMError, *PROVIDER_ERRORS) as e:
+        logger.warning(f"Failed to extract meeting {meeting.id}: {e}")
         meeting.extraction_status = "failed"
         return {"status": "error", "error": str(e)}
 
+    meeting.summary = extracted.get("summary", "")
+    meeting.notes = extracted.get("notes", "")
+    created_tasks = create_action_item_tasks(
+        session, meeting, extracted.get("action_items", [])
+    )
+    meeting.extraction_status = "extracted"
+    logger.info(f"Created {len(created_tasks)} tasks from meeting {meeting.id}")
 
-def reextract_meeting(
-    session: DBSession,
-    meeting: Meeting,
-    extraction_prompt: str | None = None,
-    system_prompt: str | None = None,
-    model: str | None = None,
-) -> dict:
+    return {
+        "status": "success",
+        "summary_length": len(meeting.summary or ""),
+        "notes_length": len(meeting.notes or ""),
+        "tasks_created": len(created_tasks),
+    }
+
+
+def reextract_meeting(session: DBSession, meeting: Meeting) -> dict:
     """
     Re-run LLM extraction on a meeting transcript.
 
@@ -487,9 +420,7 @@ def reextract_meeting(
     detached_tasks = detach_meeting_tasks(session, meeting)
     logger.info(f"Detached {detached_tasks} existing tasks for meeting {meeting.id}")
 
-    return extract_and_update_meeting(
-        session, meeting, extraction_prompt, system_prompt, model
-    )
+    return extract_and_update_meeting(session, meeting)
 
 
 def create_meeting_record(
@@ -564,9 +495,6 @@ def execute_meeting_processing(
     session: DBSession,
     meeting: Meeting,
     attendee_names: list[str] | None,
-    extraction_prompt: str | None,
-    system_prompt: str | None,
-    model: str | None,
     job_id: int | None,
     attendee_emails: list[str] | None = None,
     attendee_pairs: list[tuple[str, str]] | None = None,
@@ -583,18 +511,13 @@ def execute_meeting_processing(
         session: Database session
         meeting: Meeting record (new or existing with chunks cleared)
         attendee_names: Optional attendee names to link
-        extraction_prompt: Custom extraction prompt
-        system_prompt: Custom system prompt for LLM
-        model: LLM model to use
         job_id: Optional job ID for status tracking
 
     Returns:
         Dict with processing results
     """
     try:
-        extract_result = extract_and_update_meeting(
-            session, meeting, extraction_prompt, system_prompt, model
-        )
+        extract_result = extract_and_update_meeting(session, meeting)
 
         # Bail out early if extraction itself failed — don't proceed to
         # embeddings or overwrite extraction_status="failed" with "complete".
@@ -625,7 +548,7 @@ def execute_meeting_processing(
         embed_result = process_content_item(meeting, session)
 
         # Only mark complete after both extraction AND embedding succeed
-        meeting.extraction_status = "complete"
+        meeting.extraction_status = "skipped" if extract_result["status"] == "skipped" else "complete"
         session.commit()
 
         if job_id:
@@ -671,9 +594,6 @@ def process_meeting(
     source_tool: str | None = None,
     external_id: str | None = None,
     tags: list[str] | None = None,
-    extraction_prompt: str | None = None,
-    system_prompt: str | None = None,
-    model: str | None = None,
     job_id: int | None = None,
     attendee_emails: list[str] | None = None,
     transcript_account_id: int | None = None,
@@ -695,9 +615,6 @@ def process_meeting(
         source_tool: Source of transcript (fireflies, granola, etc.)
         external_id: External ID for idempotency
         tags: Optional tags for the meeting
-        extraction_prompt: Custom extraction prompt
-        system_prompt: Custom system prompt
-        model: LLM model to use
         job_id: Optional job ID for status tracking
         creator_id: Uploader; synced meetings inherit their account's owner
         attendee_pairs: (email, name) pairs known to belong to one attendee
@@ -749,9 +666,6 @@ def process_meeting(
             session,
             meeting,
             attendee_names,
-            extraction_prompt,
-            system_prompt,
-            model,
             job_id,
             attendee_emails=attendee_emails,
             attendee_pairs=attendee_pairs,
@@ -762,9 +676,6 @@ def process_meeting(
 @safe_task_execution
 def reprocess_meeting(
     item_id: int,
-    extraction_prompt: str | None = None,
-    system_prompt: str | None = None,
-    model: str | None = None,
     job_id: int | None = None,
 ):
     """
@@ -775,9 +686,6 @@ def reprocess_meeting(
 
     Args:
         item_id: ID of the meeting to reprocess
-        extraction_prompt: Custom extraction prompt
-        system_prompt: Custom system prompt
-        model: LLM model to use
         job_id: Optional job ID for status tracking
     """
     logger.info(f"Reprocessing meeting {item_id} (job_id={job_id})")
@@ -800,15 +708,7 @@ def reprocess_meeting(
             [p.display_name for p in meeting.attendees] if meeting.attendees else None
         )
 
-        return execute_meeting_processing(
-            session,
-            meeting,
-            attendee_names,
-            extraction_prompt,
-            system_prompt,
-            model,
-            job_id,
-        )
+        return execute_meeting_processing(session, meeting, attendee_names, job_id)
 
 
 # Timeout for stuck meetings (1 hour - if processing takes longer, something is wrong)

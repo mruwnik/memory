@@ -237,6 +237,10 @@ section has nothing in it:
   (Sources → each source → LLM key), else the default key of whoever brought the
   item in. Items without one are embedded without a summary. Spend counts
   against the key's daily cap.
+- Meeting extraction (summary, notes, action items) runs on the meeting's key
+  like other ingest LLM work; meetings without one are stored with extraction
+  `skipped`. Its prompt, system prompt and model can no longer be overridden
+  per call.
 - Ingestion summaries now go through the Anthropic Message Batches API
   (`SUMMARIZER_USE_BATCH`, default `true`). Items are searchable at once, and
   their summary chunk arrives when the batch ends, usually within an hour.

@@ -17,7 +17,7 @@ from memory.common.llms.base import (
     LLMSettings,
 )
 from memory.common.llms.tools import ToolDefinition
-from memory.workers.tasks.meetings import EXTRACTION_SCHEMA
+from memory.agents.system import EXTRACTION_SCHEMA
 
 
 @pytest.fixture

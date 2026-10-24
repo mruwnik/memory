@@ -2012,7 +2012,7 @@ class MeetingPayload(SourceItemPayload):
     source_tool: Annotated[str | None, "Tool that generated the transcript (fireflies, granola, etc.)"]
     summary: Annotated[str | None, "LLM-generated summary of the meeting"]
     notes: Annotated[str | None, "LLM-extracted key points and decisions"]
-    extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, complete, failed"]
+    extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, complete, skipped, failed"]
     # Note: 'people' is inherited from SourceItemPayload - for Meeting, it contains attendee IDs
     task_ids: Annotated[list[int], "IDs of Task records extracted from this meeting"]
     calendar_event_id: Annotated[int | None, "ID of linked CalendarEvent if available"]

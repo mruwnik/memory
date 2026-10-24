@@ -69,6 +69,60 @@ SUMMARISE = SystemAgent(
     result_schema=SUMMARY_SCHEMA,
 )
 
+NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "2-3 sentence summary"},
+        "notes": {
+            "type": "string",
+            "description": "Markdown bullet list of key points and decisions",
+        },
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "assignee": NULLABLE_STRING | {"description": "Person name"},
+                    "due_date": NULLABLE_STRING | {"description": "YYYY-MM-DD"},
+                    "priority": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "enum": ["low", "medium", "high", "urgent"],
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                },
+                "required": ["description", "assignee", "due_date", "priority"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "notes", "action_items"],
+    "additionalProperties": False,
+}
+
+MEETING_EXTRACT = SystemAgent(
+    slug="system:meeting-extract",
+    title="Meeting notes and action items",
+    description="Summarises meeting transcripts and turns their action items into tasks.",
+    use="ingest",
+    model="anthropic/claude-haiku-5-5",
+    system_prompt=(
+        "You are an expert at analyzing meeting transcripts and extracting actionable information.\n\n"
+        "From the meeting transcript you are given, extract:\n"
+        "1. A concise 2-3 sentence summary of the meeting's main purpose and outcomes\n"
+        "2. Key discussion points, decisions made, and important information (as bullet points)\n"
+        "3. Action items - tasks that were assigned or need to be done, with assignee, due date, "
+        "and priority if mentioned"
+    ),
+    max_output_tokens=4096,
+    result_schema=EXTRACTION_SCHEMA,
+)
+
 # Telling the model the passage is never shown and may be invented stops it
 # refusing (or caveating at length) on queries about specific people and events;
 # those refusals were both useless to embed and the slowest responses.
@@ -202,7 +256,7 @@ CHUNK_SCORE = SystemAgent(
 )
 
 SYSTEM_AGENTS: dict[str, SystemAgent] = {
-    a.slug: a for a in (SUMMARISE, HYDE, QUERY_ANALYSIS, CHUNK_SCORE)
+    a.slug: a for a in (SUMMARISE, MEETING_EXTRACT, HYDE, QUERY_ANALYSIS, CHUNK_SCORE)
 }
 
 # Every ingest agent runs on this provider, so one explicit key per source serves them all.

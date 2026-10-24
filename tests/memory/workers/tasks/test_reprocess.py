@@ -19,12 +19,14 @@ from memory.workers.tasks.meetings import (
     reextract_meeting,
     prepare_meeting_for_reingest,
 )
+from tests.memory.agents.fakes import key_rejected, submitted
 
 
 @pytest.fixture
-def meeting(db_session):
+def meeting(db_session, regular_user):
     """Create a sample meeting."""
     meeting = Meeting(
+        creator_id=regular_user.id,
         sha256=b"test_meeting_hash_xxx" + bytes(11),  # 21 + 11 = 32 bytes
         title="Test Meeting",
         content="Meeting transcript content for testing extraction.",
@@ -135,26 +137,27 @@ def test_prepare_meeting_for_reingest_not_found(db_session):
     assert result is None
 
 
-def test_reprocess_meeting_success(db_session, qdrant, meeting_with_chunks):
+def test_reprocess_meeting_success(db_session, qdrant, meeting_with_chunks, llm_key, scripted_llm):
     """Test reprocessing an existing meeting."""
     meeting, chunks = meeting_with_chunks
+    scripted_llm.script = [
+        submitted(
+            {
+                "summary": "Re-extracted summary",
+                "notes": "Re-extracted notes",
+                "action_items": [{"description": "New task", "assignee": None, "due_date": None, "priority": "high"}],
+            }
+        )
+    ]
 
     with (
         patch(
             "memory.common.content_processing.qdrant.delete_points"
         ) as mock_delete,
         patch(
-            "memory.workers.tasks.meetings.call_extraction_llm"
-        ) as mock_llm,
-        patch(
             "memory.workers.tasks.meetings.process_content_item"
         ) as mock_embed,
     ):
-        mock_llm.return_value = {
-            "summary": "Re-extracted summary",
-            "notes": "Re-extracted notes",
-            "action_items": [{"description": "New task", "priority": "high"}],
-        }
         mock_embed.return_value = {"status": "processed", "chunks_count": 1}
 
         result = reprocess_meeting(item_id=meeting.id)
@@ -164,7 +167,7 @@ def test_reprocess_meeting_success(db_session, qdrant, meeting_with_chunks):
     assert cast(int, result["summary_length"]) > 0
     assert result["tasks_created"] == 1
     mock_delete.assert_called_once()
-    mock_llm.assert_called_once()
+    assert len(scripted_llm.requests) == 1
     mock_embed.assert_called_once()
 
 
@@ -177,19 +180,14 @@ def test_reprocess_meeting_not_found(db_session):
 
 
 def test_reprocess_meeting_with_job_tracking(
-    db_session, qdrant, meeting, pending_job
+    db_session, qdrant, meeting, pending_job, llm_key, scripted_llm
 ):
     """Test reprocessing with job status tracking."""
+    scripted_llm.script = [submitted({"summary": "Summary", "notes": "Notes", "action_items": []})]
     with (
         patch("memory.common.content_processing.qdrant.delete_points"),
-        patch("memory.workers.tasks.meetings.call_extraction_llm") as mock_llm,
         patch("memory.workers.tasks.meetings.process_content_item") as mock_embed,
     ):
-        mock_llm.return_value = {
-            "summary": "Summary",
-            "notes": "Notes",
-            "action_items": [],
-        }
         mock_embed.return_value = {"status": "processed"}
 
         result = reprocess_meeting(item_id=meeting.id, job_id=pending_job.id)
@@ -204,43 +202,38 @@ def test_reprocess_meeting_with_job_tracking(
 
 
 def test_reprocess_meeting_job_fails_on_error(
-    db_session, qdrant, meeting, pending_job
+    db_session, qdrant, meeting, pending_job, llm_key, scripted_llm
 ):
     """Test that job is marked failed when reprocessing fails."""
-    with (
-        patch("memory.common.content_processing.qdrant.delete_points"),
-        patch("memory.workers.tasks.meetings.call_extraction_llm") as mock_llm,
-    ):
-        mock_llm.side_effect = Exception("LLM API error")
-
+    scripted_llm.script = [key_rejected]
+    with patch("memory.common.content_processing.qdrant.delete_points"):
         result = reprocess_meeting(item_id=meeting.id, job_id=pending_job.id)
 
     assert result["status"] == "error"
-    assert "LLM API error" in result["error"]
 
     # Check job was marked as failed
     db_session.refresh(pending_job)
     assert pending_job.status == JobStatus.FAILED.value
 
 
-def test_reextract_meeting_success(db_session, meeting_with_tasks):
+def test_reextract_meeting_success(db_session, meeting_with_tasks, llm_key, scripted_llm):
     """Test re-extracting meeting information."""
     meeting, original_tasks = meeting_with_tasks
     original_task_ids = [t.id for t in original_tasks]
+    scripted_llm.script = [
+        submitted(
+            {
+                "summary": "New extracted summary",
+                "notes": "New extracted notes",
+                "action_items": [
+                    {"description": "New task 1", "assignee": None, "due_date": None, "priority": "high"},
+                    {"description": "New task 2", "assignee": None, "due_date": None, "priority": "low"},
+                ],
+            }
+        )
+    ]
 
-    with patch(
-        "memory.workers.tasks.meetings.call_extraction_llm"
-    ) as mock_llm:
-        mock_llm.return_value = {
-            "summary": "New extracted summary",
-            "notes": "New extracted notes",
-            "action_items": [
-                {"description": "New task 1", "priority": "high"},
-                {"description": "New task 2", "priority": "low"},
-            ],
-        }
-
-        result = reextract_meeting(db_session, meeting)
+    result = reextract_meeting(db_session, meeting)
 
     assert result["status"] == "success"
     assert result["summary_length"] > 0
@@ -273,17 +266,13 @@ def test_reextract_meeting_success(db_session, meeting_with_tasks):
     assert len(new_tasks) == 2
 
 
-def test_reextract_meeting_llm_failure(db_session, meeting):
+def test_reextract_meeting_llm_failure(db_session, meeting, llm_key, scripted_llm):
     """Test handling LLM failure during re-extraction."""
-    with patch(
-        "memory.workers.tasks.meetings.call_extraction_llm"
-    ) as mock_llm:
-        mock_llm.side_effect = Exception("LLM API error")
+    scripted_llm.script = [key_rejected]
 
-        result = reextract_meeting(db_session, meeting)
+    result = reextract_meeting(db_session, meeting)
 
     assert result["status"] == "error"
-    assert "LLM API error" in result["error"]
 
     # reextract_meeting() doesn't commit on the failure path; commit so the
     # status update is visible after refresh.
