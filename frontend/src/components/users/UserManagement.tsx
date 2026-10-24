@@ -7,7 +7,7 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, FormActions, Hint, Input, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, Fieldset, FormActions, Hint, Input, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
 
@@ -23,8 +23,7 @@ const ScopeFieldset = ({ scopes, value, onChange, locked = [] }: {
 }) => {
   const id = useId()
   return (
-    <fieldset className="space-y-2">
-      <legend className="block text-sm font-medium text-slate-700 mb-2">Scopes</legend>
+    <Fieldset legend="Scopes" className="space-y-2">
       {scopes.map((scope) => {
         const isLocked = locked.includes(scope.value) && value.includes(scope.value)
         return (
@@ -37,7 +36,7 @@ const ScopeFieldset = ({ scopes, value, onChange, locked = [] }: {
           </div>
         )
       })}
-    </fieldset>
+    </Fieldset>
   )
 }
 

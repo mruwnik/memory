@@ -171,7 +171,8 @@ A page with only a couple of counts (Tasks, Check) puts them in the `Page` `desc
 
 | Need | Use |
 |------|-----|
-| Button / link that looks like one | `Button`, `ButtonLink` with `variant`: `primary` (one per area), `secondary` (default), `danger` (destructive, outlined), `dangerSolid` (confirm dialogs), `ghost`, `link`; `size`: `md`, `sm` (in-row actions), `icon` |
+| Button / link that looks like one | `Button`, `ButtonLink` with `variant`: `primary` (one per area), `secondary` (default), `danger` (destructive, outlined), `dangerSolid` (confirm dialogs), `ghost`, `link`; `size`: `md`, `sm` (in-row actions), `icon`; `Button` is `type="button"` unless you pass `type="submit"` |
+| Group of radios/checkboxes/paired inputs under one label | `Fieldset legend hint? error?` (a real `<fieldset>`; `disabled` disables the controls), not a hand-rolled `<fieldset>`/`<legend>` |
 | Non-button element with button looks (file-upload label) | `className={buttonClass(variant, size)}` |
 | Lists and tables | `List` + `Row` (see Collection); `SubList` inside a row; `Table` (plain `<th>`/`<td>`, the wrapper styles them) |
 | Toolbars and paging | `Toolbar`, `RefreshButton`, `Pager` |

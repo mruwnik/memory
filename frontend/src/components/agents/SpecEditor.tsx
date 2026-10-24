@@ -3,7 +3,7 @@ import { externalToolName, type AgentSpec, type Catalog, type ExternalServer, ty
 import { ServerStatusBadge } from './ServerStatusBadge'
 import { KeyPicker, payer, providerOf } from './KeyPicker'
 import { Link } from 'react-router-dom'
-import { Checkbox, Field, Input, Label, MultiSelect, Notice, Select, Textarea } from '@/components/shared/ui'
+import { Checkbox, Field, Fieldset, Input, Label, MultiSelect, Notice, Select, Textarea } from '@/components/shared/ui'
 
 const REASONING_ORDER: Reasoning[] = ['off', 'low', 'medium', 'high']
 
@@ -37,8 +37,7 @@ function ExternalServers({ servers, value, onChange }: {
   onChange: (servers: AgentSpec['mcp_servers']) => void
 }) {
   return (
-    <fieldset>
-      <legend className="block text-sm font-medium text-slate-700 mb-1">External MCP servers</legend>
+    <Fieldset legend="External MCP servers">
       {servers.length === 0 && (
         <div className="text-sm text-slate-500">No MCP servers yet. <Link className="text-primary hover:underline" to="/ui/agents/servers">Add one</Link></div>
       )}
@@ -70,7 +69,7 @@ function ExternalServers({ servers, value, onChange }: {
           )
         })}
       </div>
-    </fieldset>
+    </Fieldset>
   )
 }
 
@@ -201,8 +200,7 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
         <KeyPicker value={value} catalog={catalog} onChange={provider_key => set({ provider_key })} />
       </div>
 
-      <fieldset>
-        <legend className="block text-sm font-medium text-slate-700 mb-1">Tools</legend>
+      <Fieldset legend="Tools">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-1 max-h-64 overflow-y-auto border border-slate-200 rounded p-2">
           {toolNames.map(name => (
             <Checkbox key={name} className="flex-wrap min-w-0" checked={value.tools.includes(name)}
@@ -210,7 +208,7 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
               label={<><span className="font-mono break-all">{name}</span>{sideEffects.has(name) && <SideEffects />}</>} />
           ))}
         </div>
-      </fieldset>
+      </Fieldset>
 
       <ExternalServers servers={servers} value={value.mcp_servers} onChange={mcp_servers => set({ mcp_servers })} />
       {exfiltrationRisk && (

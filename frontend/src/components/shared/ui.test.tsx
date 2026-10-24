@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { Combobox, ConfirmButton, CopyButton, Field, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
+import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -100,6 +100,26 @@ describe('Field', () => {
     const input = screen.getByRole('textbox', { name: 'Target' })
     expect(input).toHaveAccessibleDescription('Who gets it Required')
     expect(input).toHaveAttribute('aria-invalid', 'true')
+  })
+})
+
+describe('Button', () => {
+  it('does not submit its form unless it is a submit button', async () => {
+    const onSubmit = vi.fn((e: { preventDefault: () => void }) => e.preventDefault())
+    render(<form onSubmit={onSubmit}><Button>Plain</Button><Button type="submit">Save</Button></form>)
+    await userEvent.click(screen.getByRole('button', { name: 'Plain' }))
+    expect(onSubmit).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSubmit).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Fieldset', () => {
+  it('names the group by its legend, describes it with the hint and error, and disables its controls', () => {
+    render(<Fieldset legend="Scopes" hint="Pick some" error="Pick at least one" disabled><input type="checkbox" aria-label="read" /></Fieldset>)
+    const group = screen.getByRole('group', { name: 'Scopes' })
+    expect(group).toHaveAccessibleDescription('Pick some Pick at least one')
+    expect(screen.getByRole('checkbox', { name: 'read' })).toBeDisabled()
   })
 })
 

@@ -6,7 +6,7 @@ import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import GithubTokens from './GithubTokens'
 import ClaudeFleetStats, { SessionStatsPanel, Usage, formatMb, sessionDisplay } from './ClaudeFleetStats'
-import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Hint, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Fieldset, Hint, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -648,15 +648,13 @@ const ClaudeSessions = () => {
                     />
                   </Field>
 
-                  <fieldset className="space-y-2">
-                    <legend className="text-sm font-medium text-slate-700">Pre-approved tools</legend>
-                    <Hint>These tools won't require permission prompts. MCP tools always require permission.</Hint>
+                  <Fieldset legend="Pre-approved tools" hint="These tools won't require permission prompts. MCP tools always require permission." className="space-y-2">
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {COMMON_TOOLS.map(tool => (
                         <Checkbox key={tool} checked={allowedTools.includes(tool)} onChange={() => toggleTool(tool)} label={tool} />
                       ))}
                     </div>
-                  </fieldset>
+                  </Fieldset>
 
                   <Field label="Custom environment variables" hint="One per line: KEY=value. Lines starting with # are ignored.">
                     <Textarea

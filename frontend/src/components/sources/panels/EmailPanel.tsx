@@ -310,7 +310,6 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                   value={formData.imap_port}
                   onChange={e => setFormData({ ...formData, imap_port: numberValue(e.target.value) })}
                   required
-                  required
                 />
               </Field>
             </FieldRow>

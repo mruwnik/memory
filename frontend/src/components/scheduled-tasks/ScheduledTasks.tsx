@@ -6,7 +6,7 @@ import { useDiscord } from '@/hooks/useDiscord'
 import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
 import { PauseButton, StatusBadge, formatRelativeTime } from '@/components/sources/shared'
-import { Badge, Button, ButtonLink, Checkbox, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
+import { Badge, Button, ButtonLink, Checkbox, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, Fieldset, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
 
@@ -328,8 +328,7 @@ interface SpawnConfigFieldsProps {
 }
 
 const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsProps) => (
-  <fieldset className="space-y-4 border-t border-slate-200 pt-4">
-    <legend className="text-sm font-semibold text-slate-700 pr-2">Spawn config</legend>
+  <Fieldset legend="Spawn config" className="space-y-4 border-t border-slate-200 pt-4">
     <Field label="Environment">
       <Select value={state.envId ?? ''} onChange={e => setState(s => ({ ...s, envId: e.target.value ? Number(e.target.value) : null }))}>
         <option value="">Select environment...</option>
@@ -353,7 +352,7 @@ const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsP
       <Textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className="font-mono" />
     </Field>
     <Checkbox label="Enable Playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
-  </fieldset>
+  </Fieldset>
 )
 
 const envText = (env: unknown) =>

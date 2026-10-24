@@ -373,8 +373,9 @@ interface ButtonProps extends ComponentProps<'button'> {
   size?: keyof typeof BUTTON_SIZES
 }
 
-export const Button = ({ variant, size, className, ...props }: ButtonProps) => (
-  <button className={buttonClass(variant, size, className)} {...props} />
+// Defaults to type="button" so a button in a form never submits by accident; submit buttons say so.
+export const Button = ({ variant, size, className, type = 'button', ...props }: ButtonProps) => (
+  <button type={type} className={buttonClass(variant, size, className)} {...props} />
 )
 
 export const ButtonLink = ({ variant, size, className, ...props }: LinkProps & Pick<ButtonProps, 'variant' | 'size'>) => (
@@ -412,13 +413,25 @@ export const requiredLabel = (label: ReactNode) => (
   <>{label} <span className="text-red-500" aria-hidden="true">*</span><span className="sr-only"> (required)</span></>
 )
 
-/** A group of related controls (radios, checkboxes, paired inputs) under one label. */
-export const Fieldset = ({ legend, className, children, ...props }: ComponentProps<'fieldset'> & { legend: ReactNode }) => (
-  <fieldset className={cx('space-y-1', className)} {...props}>
-    <legend className="text-sm font-medium text-slate-700">{legend}</legend>
-    {children}
-  </fieldset>
-)
+/** A group of related controls (radios, checkboxes, paired inputs) under one label; the hint and error describe the group. */
+export const Fieldset = ({ legend, hint, error, className, children, ...props }: Omit<ComponentProps<'fieldset'>, 'children'> & {
+  legend: ReactNode
+  hint?: ReactNode
+  error?: string | null
+  children?: ReactNode
+}) => {
+  const id = useId()
+  const hintId = hint ? `${id}-hint` : undefined
+  const errorId = error ? `${id}-error` : undefined
+  return (
+    <fieldset className={cx(!/(^|\s)space-y-/.test(className ?? '') && 'space-y-1', className)} aria-describedby={cx(hintId, errorId) || undefined} {...props}>
+      <legend className="text-sm font-medium text-slate-700">{legend}</legend>
+      {hint && <Hint id={hintId}>{hint}</Hint>}
+      {children}
+      {error && <p id={errorId} className="text-xs text-red-700">{error}</p>}
+    </fieldset>
+  )
+}
 
 /** Rejects instead of throwing when the Clipboard API is missing, as it is on plain-http installs. */
 export const copyText = (text: string) => Promise.resolve().then(() => navigator.clipboard.writeText(text))
