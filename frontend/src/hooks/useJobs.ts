@@ -33,6 +33,8 @@ export interface JobFilters {
   created_before?: string  // ISO datetime
 }
 
+export type JobCounts = Record<JobStatus, number>
+
 export interface JobUser {
   id: number
   name: string
@@ -48,24 +50,37 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   return await response.json()
 }
 
+// The filters shared by the list and the counts endpoints
+function jobFilterParams(filters: JobFilters): URLSearchParams {
+  const params = new URLSearchParams()
+  if (filters.job_type) params.set('job_type', filters.job_type)
+  if (filters.source) params.set('source', filters.source)
+  if (filters.created_after) params.set('created_after', filters.created_after)
+  if (filters.created_before) params.set('created_before', filters.created_before)
+  if (filters.userId !== undefined) params.set('user_id', filters.userId.toString())
+  return params
+}
+
 export const useJobs = () => {
   const { apiCall } = useAuth()
 
   const listJobs = useCallback(async (filters: JobFilters = {}): Promise<Job[]> => {
-    const params = new URLSearchParams()
+    const params = jobFilterParams(filters)
     if (filters.status) params.set('status', filters.status)
-    if (filters.job_type) params.set('job_type', filters.job_type)
     if (filters.limit) params.set('limit', filters.limit.toString())
     if (filters.offset) params.set('offset', filters.offset.toString())
-    if (filters.source) params.set('source', filters.source)
-    if (filters.created_after) params.set('created_after', filters.created_after)
-    if (filters.created_before) params.set('created_before', filters.created_before)
-    if (filters.userId !== undefined) params.set('user_id', filters.userId.toString())
 
     const query = params.toString()
     const response = await apiCall(`/jobs${query ? `?${query}` : ''}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch jobs')
     return parseJsonResponse<Job[]>(response)
+  }, [apiCall])
+
+  const getJobCounts = useCallback(async (filters: JobFilters = {}): Promise<JobCounts> => {
+    const query = jobFilterParams(filters).toString()
+    const response = await apiCall(`/jobs/counts${query ? `?${query}` : ''}`)
+    if (!response.ok) throw await apiError(response, 'Failed to fetch job counts')
+    return parseJsonResponse<JobCounts>(response)
   }, [apiCall])
 
   const getJob = useCallback(async (id: number): Promise<Job> => {
@@ -100,6 +115,7 @@ export const useJobs = () => {
 
   return {
     listJobs,
+    getJobCounts,
     getJob,
     retryJob,
     reingestJob,

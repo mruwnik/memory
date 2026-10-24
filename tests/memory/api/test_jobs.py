@@ -254,6 +254,46 @@ def test_list_jobs_filter_by_type(client: TestClient, db_session, user):
     assert all(job["job_type"] == "meeting" for job in data)
 
 
+def test_job_counts_cover_all_jobs_of_the_user_not_a_page(
+    non_admin_client: TestClient, db_session, user, job_for_other_user
+):
+    statuses = [JobStatus.FAILED] * 2 + [JobStatus.COMPLETE] * 3
+    db_session.add_all(
+        PendingJob(job_type=JobType.MEETING.value, params={}, status=s.value, user_id=user.id)
+        for s in statuses
+    )
+    db_session.commit()
+
+    response = non_admin_client.get("/jobs/counts")
+
+    assert response.status_code == 200
+    assert response.json() == {"pending": 0, "processing": 0, "complete": 3, "failed": 2}
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("job_type=meeting", {"complete": 1, "failed": 0}),
+        ("source=automatic", {"complete": 0, "failed": 1}),
+    ],
+)
+def test_job_counts_honour_non_status_filters(
+    client: TestClient, db_session, user, query, expected
+):
+    db_session.add_all(
+        [
+            PendingJob(job_type="meeting", params={}, status="complete", user_id=user.id),
+            PendingJob(job_type="other", params={}, status="failed", user_id=None),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(f"/jobs/counts?{query}")
+
+    assert response.status_code == 200
+    assert {k: response.json()[k] for k in expected} == expected
+
+
 def test_list_jobs_pagination(client: TestClient, db_session, user):
     """Test job listing pagination."""
     # Create 5 jobs

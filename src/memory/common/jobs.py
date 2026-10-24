@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, TypeVar, overload
 
+from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 
 from celery.exceptions import TaskPredicate
@@ -216,34 +217,16 @@ def fail_job(
     return job
 
 
-def list_jobs(
-    session: DBSession,
+def filter_jobs(
+    query,
     status: str | JobStatus | None = None,
     job_type: str | JobType | None = None,
     user_id: int | None = None,
     source: str | None = None,
     created_after: datetime | None = None,
     created_before: datetime | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> list[PendingJob]:
-    """
-    List jobs with optional filtering.
-
-    Args:
-        session: Database session
-        status: Filter by status
-        job_type: Filter by job type
-        user_id: Filter by user
-        source: Filter by origin — "manual" (user_id set) or "automatic" (user_id NULL)
-        limit: Maximum results
-        offset: Number of results to skip
-
-    Returns:
-        List of matching PendingJob instances
-    """
-    query = session.query(PendingJob)
-
+):
+    """Apply the job list filters to a PendingJob-based query."""
     if status:
         status_val = status.value if isinstance(status, JobStatus) else status
         query = query.filter(PendingJob.status == status_val)
@@ -265,9 +248,25 @@ def list_jobs(
     if created_before:
         query = query.filter(PendingJob.created_at <= created_before)
 
-    return (
-        query.order_by(PendingJob.created_at.desc()).limit(limit).offset(offset).all()
-    )
+    return query
+
+
+def list_jobs(
+    session: DBSession,
+    limit: int = 50,
+    offset: int = 0,
+    **filters,
+) -> list[PendingJob]:
+    """List jobs matching ``filter_jobs`` filters, newest first."""
+    query = filter_jobs(session.query(PendingJob), **filters)
+    return query.order_by(PendingJob.created_at.desc()).limit(limit).offset(offset).all()
+
+
+def count_jobs_by_status(session: DBSession, **filters) -> dict[str, int]:
+    """Count jobs per status in one query; every status is present, zero if unused."""
+    query = filter_jobs(session.query(PendingJob.status, func.count()), **filters)
+    counted = dict(query.group_by(PendingJob.status).all())
+    return {s.value: counted.get(s.value, 0) for s in JobStatus}
 
 
 @dataclass

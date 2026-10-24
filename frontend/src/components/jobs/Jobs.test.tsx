@@ -5,13 +5,14 @@ import type { Job } from '@/hooks/useJobs'
 import { Jobs } from './index'
 
 const listJobs = vi.fn()
+const getJobCounts = vi.fn()
 const retryJob = vi.fn()
 const reingestJob = vi.fn()
 const getUsersWithJobs = vi.fn()
 const getJobTypes = vi.fn()
 
 vi.mock('@/hooks/useJobs', () => ({
-  useJobs: () => ({ listJobs, retryJob, reingestJob, getUsersWithJobs, getJobTypes }),
+  useJobs: () => ({ listJobs, getJobCounts, retryJob, reingestJob, getUsersWithJobs, getJobTypes }),
 }))
 
 // Non-admin auth so UserSelector renders nothing and useUserSelection stays stable.
@@ -44,6 +45,7 @@ const makeJob = (o: Partial<Job> = {}): Job => ({
 
 beforeEach(() => {
   listJobs.mockReset().mockResolvedValue([])
+  getJobCounts.mockReset().mockResolvedValue({ pending: 0, processing: 0, complete: 0, failed: 0 })
   retryJob.mockReset().mockResolvedValue(undefined)
   reingestJob.mockReset().mockResolvedValue(undefined)
   getUsersWithJobs.mockReset().mockResolvedValue([])
@@ -68,6 +70,7 @@ describe('Jobs page', () => {
   })
 
   it('renders job rows with formatted type, status, and stats', async () => {
+    getJobCounts.mockResolvedValue({ pending: 0, processing: 0, complete: 1, failed: 1 })
     listJobs.mockResolvedValue([
       makeJob({ id: 1, status: 'failed', job_type: 'blog_sync', error_message: 'bad' }),
       makeJob({ id: 2, status: 'complete' }),
@@ -76,7 +79,6 @@ describe('Jobs page', () => {
     await waitFor(() => expect(screen.getByText('Blog sync')).toBeInTheDocument())
     expect(screen.getByText('1 failed')).toBeInTheDocument()
     expect(screen.getByText('1 complete')).toBeInTheDocument()
-    expect(screen.queryByText('on this page')).not.toBeInTheDocument()
     expect(screen.getByText('bad')).toBeInTheDocument()
   })
 
@@ -107,6 +109,7 @@ describe('Jobs page', () => {
       const last = listJobs.mock.calls.at(-1)?.[0]
       expect(last.status).toBe('failed')
     })
+    expect(getJobCounts.mock.calls.at(-1)?.[0]).not.toHaveProperty('status')
   })
 
   it('shows a job-type dropdown only when more than one type exists', async () => {
@@ -117,11 +120,11 @@ describe('Jobs page', () => {
 
   it('renders pagination next/previous and advances pages', async () => {
     listJobs.mockResolvedValue(Array.from({ length: 100 }, (_, i) => makeJob({ id: i + 1 })))
+    getJobCounts.mockResolvedValue({ pending: 0, processing: 0, complete: 250, failed: 0 })
     const user = userEvent.setup()
     renderWithRouter(<Jobs />)
     await waitFor(() => expect(screen.getByText('Page 1')).toBeInTheDocument())
-    expect(screen.getByText('100 complete')).toBeInTheDocument()
-    expect(screen.getByText('on this page')).toBeInTheDocument()
+    expect(screen.getByText('250 complete')).toBeInTheDocument()
     const next = screen.getByRole('button', { name: 'Next' })
     expect(next).toBeEnabled()
     await user.click(next)

@@ -76,6 +76,27 @@ describe('useJobs.listJobs', () => {
   })
 })
 
+describe('useJobs.getJobCounts', () => {
+  const counts = { pending: 1, processing: 2, complete: 3, failed: 4 }
+
+  it('returns the counts and sends only the shared filters', async () => {
+    const fetchMock = route(() => mockResponse({ json: counts, headers: JSON_HEADERS }))
+    const { result } = renderHook(() => useJobs())
+    const got = await result.current.getJobCounts({ job_type: 'email', status: 'failed', limit: 10, userId: 3 })
+    expect(got).toEqual(counts)
+    const url = String(fetchMock.mock.calls.find((c) => String(c[0]).includes('/jobs/counts'))?.[0])
+    expect(url).toContain('job_type=email')
+    expect(url).toContain('user_id=3')
+    expect(url).not.toMatch(/status|limit/)
+  })
+
+  it('throws on non-ok response', async () => {
+    route(() => mockResponse({ status: 500, json: { detail: 'boom' }, headers: JSON_HEADERS }))
+    const { result } = renderHook(() => useJobs())
+    await expect(result.current.getJobCounts()).rejects.toThrow()
+  })
+})
+
 describe('useJobs.getJob', () => {
   it('fetches a single job by id', async () => {
     const fetchMock = route(() => mockResponse({ json: job, headers: JSON_HEADERS }))

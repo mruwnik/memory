@@ -72,7 +72,7 @@ def get_job_types(
     return [r[0] for r in rows]
 
 
-# NOTE: /external/{external_id} and /types must come BEFORE /{job_id}
+# NOTE: /external/{external_id}, /types and /counts must come BEFORE /{job_id}
 # to avoid FastAPI treating the path segment as a job_id integer
 @router.get("/external/{external_id}")
 def get_job_by_external_id(
@@ -96,6 +96,30 @@ def get_job_by_external_id(
         raise HTTPException(status_code=404, detail="Job not found")
 
     return PendingJobPayload.model_validate(job)
+
+
+@router.get("/counts")
+def get_job_counts(
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+    job_type: str | None = Query(None, description="Filter by job type"),
+    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
+    source: str | None = Query(None, description="Filter by origin: 'manual' or 'automatic'"),
+    created_after: str | None = Query(None, description="Filter jobs created after this ISO datetime"),
+    created_before: str | None = Query(None, description="Filter jobs created before this ISO datetime"),
+) -> dict[str, int]:
+    """Job counts per status across every job `GET /jobs` could list.
+
+    Takes the list's filters except status and pagination.
+    """
+    return job_utils.count_jobs_by_status(
+        db,
+        job_type=job_type,
+        source=source,
+        created_after=parse_iso_datetime_query("created_after", created_after),
+        created_before=parse_iso_datetime_query("created_before", created_before),
+        user_id=resolve_user_filter(user_id, user, db),
+    )
 
 
 @router.get("/{job_id}")

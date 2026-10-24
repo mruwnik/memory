@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { useJobs, Job, JobStatus, JobSource, JobUser } from '@/hooks/useJobs'
+import { useJobs, Job, JobCounts, JobStatus, JobSource, JobUser } from '@/hooks/useJobs'
 import UserSelector, { useUserSelection, ALL_USERS_ID, NO_USER_ID } from '@/components/common/UserSelector'
 import { Badge, Button, EmptyState, Input, List, LoadingState, Notice, Page, Pager, RefreshButton, Row, RowError, Select, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
 
@@ -30,8 +30,9 @@ const STATUS_TONES: Record<string, Tone> = {
 }
 
 const Jobs = () => {
-  const { listJobs, retryJob, reingestJob, getUsersWithJobs, getJobTypes } = useJobs()
+  const { listJobs, getJobCounts, retryJob, reingestJob, getUsersWithJobs, getJobTypes } = useJobs()
   const [jobs, setJobs] = useState<Job[] | null>(null)
+  const [counts, setCounts] = useState<JobCounts | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -90,9 +91,14 @@ const Jobs = () => {
       if (effectiveSourceFilter !== 'all') filters.source = effectiveSourceFilter
       if (createdAfter) filters.created_after = new Date(createdAfter).toISOString()
       if (createdBefore) filters.created_before = new Date(createdBefore + 'T23:59:59').toISOString()
-      const data = await listJobs({ ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE, userId } as Parameters<typeof listJobs>[0])
+      const { status: _status, ...countFilters } = filters
+      const [data, jobCounts] = await Promise.all([
+        listJobs({ ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE, userId } as Parameters<typeof listJobs>[0]),
+        getJobCounts({ ...countFilters, userId } as Parameters<typeof getJobCounts>[0]),
+      ])
       // Check if request was aborted
       if (signal?.aborted) return
+      setCounts(jobCounts)
       setHasMore(data.length === PAGE_SIZE)
       // Sort: failed first, then processing, pending, complete
       const sorted = [...data].sort((a, b) => {
@@ -111,7 +117,7 @@ const Jobs = () => {
         setLoading(false)
       }
     }
-  }, [listJobs, statusFilter, jobTypeFilter, effectiveSourceFilter, createdAfter, createdBefore, page, userId])
+  }, [listJobs, getJobCounts, statusFilter, jobTypeFilter, effectiveSourceFilter, createdAfter, createdBefore, page, userId])
 
   useEffect(() => {
     // Cancel any in-flight request
@@ -173,22 +179,17 @@ const Jobs = () => {
   }
 
   const shown = jobs ?? []
-  const countOf = (status: JobStatus) => shown.filter(j => j.status === status).length
-  const failedCount = countOf('failed')
-  const processingCount = countOf('processing')
-
-  // The API returns one page without totals, so once there is more than one page the counts only cover this one
-  const counts = [
-    ...(statusFilter === 'all'
-      ? [failedCount > 0 && `${failedCount} failed`, processingCount > 0 && `${processingCount} processing`, `${countOf('pending')} pending`, `${countOf('complete')} complete`]
-      : [`Showing ${shown.length} ${statusFilter}`]),
-    (page > 0 || hasMore) && 'on this page',
+  const summary = counts && [
+    counts.failed > 0 && `${counts.failed} failed`,
+    counts.processing > 0 && `${counts.processing} processing`,
+    `${counts.pending} pending`,
+    `${counts.complete} complete`,
   ]
 
   return (
     <Page
       title="Jobs"
-      description={<span className="flex flex-wrap gap-x-3">{counts.filter(Boolean).map(c => <span key={c as string}>{c}</span>)}</span>}
+      description={<span className="flex flex-wrap gap-x-3">{(summary || []).filter(Boolean).map(c => <span key={c as string}>{c}</span>)}</span>}
       width="wide"
       loading={jobs === null && 'Loading jobs...'}
       error={jobs === null ? error : null}
