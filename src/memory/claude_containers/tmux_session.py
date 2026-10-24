@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from typing import Any
 from fastapi import WebSocket
 
-from memory.api.orchestrator_client import OrchestratorClient, OrchestratorError
-from memory.api.terminal_relay_client import RelayClient, RelayError
+from memory.claude_containers.orchestrator_client import OrchestratorClient, OrchestratorError
+from memory.claude_containers.terminal_relay_client import RelayClient, RelayError
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from memory.api.tmux_session import (
+from memory.claude_containers.tmux_session import (
     coerce_int,
     input_handler_loop,
 )

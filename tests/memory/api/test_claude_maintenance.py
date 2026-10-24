@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 import fakeredis.aioredis
 import pytest
 
-from memory.api import claude_maintenance
-from memory.api.orchestrator_client import OrchestratorClient, SessionInfo
+from memory.claude_containers import claude_maintenance
+from memory.claude_containers.orchestrator_client import OrchestratorClient, SessionInfo
 from memory.common import settings
 from memory.common.db.models import ScheduledTask, TaskExecution
 

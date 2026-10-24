@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from memory.api.transfer_tokens import (
+from memory.claude_containers.transfer_tokens import (
     TransferTokenPayload,
     mint_token,
 )

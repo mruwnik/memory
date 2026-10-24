@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import require_scope
-from memory.api.orchestrator_client import OrchestratorError, get_orchestrator_client
+from memory.claude_containers.orchestrator_client import OrchestratorError, get_orchestrator_client
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User

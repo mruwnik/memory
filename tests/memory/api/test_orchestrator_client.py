@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.api.orchestrator_client import OrchestratorClient, OrchestratorError
+from memory.claude_containers.orchestrator_client import OrchestratorClient, OrchestratorError
 
 
 SESSION_ID = "u1-e6-deadbeefcafe"
@@ -216,7 +216,7 @@ async def test_stats_history_400_raises_with_status():
 
 def test_tail_log_text_short_file(tmp_path):
     """Files smaller than one chunk read everything and tail correctly."""
-    from memory.api.orchestrator_client import tail_log_text
+    from memory.claude_containers.orchestrator_client import tail_log_text
 
     log = tmp_path / "short.log"
     log.write_text("a\nb\nc\nd\ne\n")
@@ -227,7 +227,7 @@ def test_tail_log_text_short_file(tmp_path):
 
 def test_tail_log_text_seeks_for_long_file(tmp_path, monkeypatch):
     """A file larger than _TAIL_READ_CHUNK must use the seek-loop, not slurp."""
-    import memory.api.orchestrator_client as oc
+    import memory.claude_containers.orchestrator_client as oc
 
     # Force a tiny chunk so the seek loop actually runs even on small fixtures.
     monkeypatch.setattr(oc, "_TAIL_READ_CHUNK", 16)
@@ -242,7 +242,7 @@ def test_tail_log_text_seeks_for_long_file(tmp_path, monkeypatch):
 
 def test_tail_log_text_caps_response_size(tmp_path, monkeypatch):
     """Even a huge tail request is bounded by LOG_TAIL_MAX_BYTES."""
-    import memory.api.orchestrator_client as oc
+    import memory.claude_containers.orchestrator_client as oc
 
     # 200 bytes of cap is enough to clearly bound the result.
     monkeypatch.setattr(oc, "LOG_TAIL_MAX_BYTES", 200)
@@ -261,7 +261,7 @@ def test_tail_log_text_with_tail_zero_returns_whole_capped_file(
     tmp_path, monkeypatch
 ):
     """tail=0 means "give me the file" but still subject to the size cap."""
-    import memory.api.orchestrator_client as oc
+    import memory.claude_containers.orchestrator_client as oc
 
     monkeypatch.setattr(oc, "LOG_TAIL_MAX_BYTES", 50)
 
@@ -275,7 +275,7 @@ def test_tail_log_text_with_tail_zero_returns_whole_capped_file(
 
 def test_tail_log_text_handles_no_trailing_newline(tmp_path):
     """A log with no trailing newline must still tail correctly."""
-    from memory.api.orchestrator_client import tail_log_text
+    from memory.claude_containers.orchestrator_client import tail_log_text
 
     log = tmp_path / "no_newline.log"
     log.write_text("a\nb\nc")  # no \n at end
@@ -285,7 +285,7 @@ def test_tail_log_text_handles_no_trailing_newline(tmp_path):
 
 def test_tail_log_text_handles_invalid_utf8(tmp_path):
     """Binary garbage in the log shouldn't crash the tail."""
-    from memory.api.orchestrator_client import tail_log_text
+    from memory.claude_containers.orchestrator_client import tail_log_text
 
     log = tmp_path / "binary.log"
     log.write_bytes(b"line1\n\xff\xfe garbage\nline3\n")

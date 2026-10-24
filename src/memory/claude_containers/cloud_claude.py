@@ -35,7 +35,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_user_from_token, require_scope
-from memory.api.transfer_tokens import (
+from memory.claude_containers.transfer_tokens import (
     TransferTokenError,
     TransferTokenExpiredError,
     TransferTokenPayload,
@@ -43,14 +43,14 @@ from memory.api.transfer_tokens import (
     verify_token,
 )
 from memory.common.access_control import has_admin_scope
-from memory.api.orchestrator_client import (
+from memory.claude_containers.orchestrator_client import (
     ORCHESTRATOR_SOCKET,
     OrchestratorError,
     get_orchestrator_client,
 )
 from memory.api.request_body import read_request_body_with_cap
-from memory.api.terminal_relay_client import RelayClient
-from memory.api.tmux_session import (
+from memory.claude_containers.terminal_relay_client import RelayClient
+from memory.claude_containers.tmux_session import (
     input_handler_loop,
     pane_poll_loop,
     screen_capture_loop,
@@ -59,7 +59,7 @@ from memory.api.tmux_session import (
 from memory.common import paths, settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
-from memory.api.claude_environments import mark_environment_used
+from memory.claude_containers.claude_environments import mark_environment_used
 from memory.common.db.models.secrets import extract as extract_secret
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 

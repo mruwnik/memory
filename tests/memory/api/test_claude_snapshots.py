@@ -6,7 +6,7 @@ import tarfile
 
 import pytest
 
-from memory.api.claude_snapshots import (
+from memory.claude_containers.claude_snapshots import (
     MAX_TAR_MEMBERS,
     extract_account_info,
     extract_snapshot_summary,

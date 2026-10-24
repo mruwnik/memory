@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.api.transfer_tokens import (
+from memory.claude_containers.transfer_tokens import (
     TransferTokenError,
     TransferTokenExpiredError,
     TransferTokenPayload,

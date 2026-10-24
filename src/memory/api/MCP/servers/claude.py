@@ -31,17 +31,17 @@ from memory.api.MCP.access import (
     log_search_access,
 )
 from memory.api.MCP.visibility import require_scopes, visible_when
-from memory.api.cloud_claude import (
+from memory.claude_containers.cloud_claude import (
     get_user_id_from_session,
     is_valid_session_id,
 )
-from memory.api.orchestrator_client import (
+from memory.claude_containers.orchestrator_client import (
     OrchestratorError,
     get_orchestrator_client,
 )
 from memory.api.search.search import search as search_base
 from memory.api.search.types import SearchConfig, SearchFilters
-from memory.api.transfer_tokens import (
+from memory.claude_containers.transfer_tokens import (
     mint_transfer_url,
     normalize_abs_path,
     validate_transfer_path,

@@ -6,7 +6,7 @@ import pytest
 
 from memory.api import ingest_tokens as it
 from memory.api import signed_tokens
-from memory.api import transfer_tokens as tt
+from memory.claude_containers import transfer_tokens as tt
 
 
 def _ingest_token_from_segment(seg: str) -> str:

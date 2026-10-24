@@ -49,7 +49,7 @@ Visibility flows User → Person → Team → Project → content (`common/acces
 
 - Every request to a user-supplied URL goes through `common/safe_http.public_http_client`, which checks each address at dial time. Never use plain httpx/aiohttp for these.
 - Image boundary: maintenance/scheduler code must not import `memory.agents.spec` or `memory.agents.enqueue`; anything that calls `enqueue_run` runs on the `agents` queue (tested in `tests/memory/agents/test_tasks.py`).
-- Claude container reconcile and cleanup run in the API process (`api/claude_maintenance.py`), because only it holds the orchestrator socket.
+- Claude container reconcile and cleanup run in the API process (`claude_containers/claude_maintenance.py`), because only it holds the orchestrator socket.
 - User LLM provider keys are write-only: only `key_hint` is ever returned.
 - The check job queue (`common/check/`) is pure Redis: no Celery, no Postgres. Non-owners get 404 "unknown job", checked before any wait.
 

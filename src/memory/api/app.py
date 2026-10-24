@@ -28,7 +28,7 @@ from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
-from memory.api.claude_maintenance import maintenance_running
+from memory import claude_containers
 from memory.api.auth import (
     AuthenticationMiddleware,
     get_current_user,
@@ -49,9 +49,6 @@ from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.source_items import router as source_items_router
 from memory.api.sessions import router as sessions_router
-from memory.api.claude_snapshots import router as claude_snapshots_router
-from memory.api.claude_environments import router as claude_environments_router
-from memory.api.cloud_claude import router as cloud_claude_router
 from memory.api.secrets import router as secrets_router
 from memory.api.users import router as users_router
 from memory.api.discord import router as discord_router
@@ -89,7 +86,7 @@ mcp_http_app = mcp.http_app(stateless_http=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    async with mcp_http_app.lifespan(app), maintenance_running():
+    async with mcp_http_app.lifespan(app), claude_containers.maintenance_running():
         yield
 
 # OpenAPI tag descriptions for better documentation organization
@@ -496,9 +493,8 @@ app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(source_items_router)
 app.include_router(sessions_router)
-app.include_router(claude_snapshots_router)
-app.include_router(claude_environments_router)
-app.include_router(cloud_claude_router)
+for claude_router in claude_containers.routers:
+    app.include_router(claude_router)
 app.include_router(secrets_router)
 app.include_router(users_router)
 app.include_router(discord_router)

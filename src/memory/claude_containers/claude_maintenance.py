@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import redis.asyncio as aioredis
 
-from memory.api.orchestrator_client import OrchestratorClient, get_orchestrator_client
+from memory.claude_containers.orchestrator_client import OrchestratorClient, get_orchestrator_client
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution

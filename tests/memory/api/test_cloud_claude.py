@@ -13,7 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from memory.api.auth import get_current_user
 
-from memory.api.cloud_claude import (
+from memory.claude_containers.cloud_claude import (
     SpawnRequest,
     get_user_id_from_session,
     is_valid_session_id,
@@ -24,7 +24,7 @@ from memory.api.cloud_claude import (
     user_owns_session,
     validate_differ_subpath,
 )
-from memory.api.orchestrator_client import OrchestratorError
+from memory.claude_containers.orchestrator_client import OrchestratorError
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
@@ -350,7 +350,7 @@ def test_orchestrator_get_logs_rejects_path_traversal():
     constructing ``LOG_DIR / {malformed}.log`` on the host filesystem."""
     import asyncio
 
-    from memory.api.orchestrator_client import OrchestratorClient
+    from memory.claude_containers.orchestrator_client import OrchestratorClient
 
     client = OrchestratorClient()
 
@@ -477,7 +477,7 @@ def test_ssh_key_user_property_none(db_session):
 
 def test_spawn_request_enable_playwright_cannot_be_set_via_custom_env():
     """Test that ENABLE_PLAYWRIGHT is in the reserved env vars list."""
-    from memory.api.cloud_claude import RESERVED_ENV_VARS
+    from memory.claude_containers.cloud_claude import RESERVED_ENV_VARS
 
     assert "ENABLE_PLAYWRIGHT" in RESERVED_ENV_VARS
 
@@ -534,7 +534,7 @@ def test_stats_admin_sees_full_snapshot(client, user):
     """Admins (scopes=['*']) get the orchestrator response unmodified —
     other users' containers, the global block, everything."""
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats",
         new=AsyncMock(return_value=_STATS_SNAPSHOT),
     ):
         response = client.get("/claude/stats")
@@ -548,7 +548,7 @@ def test_stats_regular_user_filtered_no_global(regular_client, user):
     The global block leaks orchestrator-wide capacity, which is an operator
     concern — surfacing it to every user is information disclosure."""
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats",
         new=AsyncMock(return_value=_STATS_SNAPSHOT),
     ):
         response = regular_client.get("/claude/stats")
@@ -561,10 +561,10 @@ def test_stats_regular_user_filtered_no_global(regular_client, user):
 
 def test_stats_orchestrator_down_returns_502(client, user):
     """Orchestrator unreachable → 502, not a misleading 200."""
-    from memory.api.orchestrator_client import OrchestratorError
+    from memory.claude_containers.orchestrator_client import OrchestratorError
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats",
         new=AsyncMock(side_effect=OrchestratorError("socket missing")),
     ):
         response = client.get("/claude/stats")
@@ -575,7 +575,7 @@ def test_container_stats_admin_can_view_others(client, user):
     """Admin can fetch stats for any session including ones they don't own."""
     payload = _STATS_SNAPSHOT["containers"][1]
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.container_stats",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.container_stats",
         new=AsyncMock(return_value=payload),
     ):
         response = client.get("/claude/u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222/stats")
@@ -593,7 +593,7 @@ def test_container_stats_regular_user_404_on_other_user(regular_client, user):
 def test_container_stats_404_when_session_unknown(client, user):
     """Orchestrator returning 404 (None from client) propagates as 404."""
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.container_stats",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.container_stats",
         new=AsyncMock(return_value=None),
     ):
         response = client.get("/claude/u1-x-deadbeefdeadbeefdeadbeefdeadbeef/stats")
@@ -603,10 +603,10 @@ def test_container_stats_404_when_session_unknown(client, user):
 def test_container_stats_orchestrator_status_propagates(client, user):
     """If the orchestrator raises with a status_code, the API forwards it
     unchanged rather than squashing to 502 — mirrors stats_history behavior."""
-    from memory.api.orchestrator_client import OrchestratorError
+    from memory.claude_containers.orchestrator_client import OrchestratorError
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.container_stats",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.container_stats",
         new=AsyncMock(
             side_effect=OrchestratorError("orch unavailable", status_code=503)
         ),
@@ -635,7 +635,7 @@ def test_stats_history_non_admin_with_own_session_id(regular_client, user):
         return _HISTORY_RESULT
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats_history",
         new=fake_history,
     ):
         response = regular_client.get(
@@ -649,7 +649,7 @@ def test_stats_history_non_admin_with_own_session_id(regular_client, user):
 def test_stats_history_admin_sees_all_points(client, user):
     """Admin gets the orchestrator response untouched."""
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats_history",
         new=AsyncMock(return_value=_HISTORY_RESULT),
     ):
         response = client.get("/claude/stats/history")
@@ -680,7 +680,7 @@ def test_stats_history_passes_query_params_through(client, user):
         return _HISTORY_RESULT
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats_history",
         new=fake_history,
     ):
         response = client.get(
@@ -707,10 +707,10 @@ def test_stats_history_orchestrator_400_propagates(client, user):
     """If the orchestrator returns a 400 (e.g. bad `since`), the API forwards
     it unchanged rather than squashing to 502 — pins the
     `status = e.status_code if e.status_code else 502` propagation behavior."""
-    from memory.api.orchestrator_client import OrchestratorError
+    from memory.claude_containers.orchestrator_client import OrchestratorError
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.stats_history",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.stats_history",
         new=AsyncMock(side_effect=OrchestratorError("bad since", status_code=400)),
     ):
         response = client.get("/claude/stats/history?since=not-a-date")
@@ -764,7 +764,7 @@ def test_spawn_session_cleans_up_snapshot_volume_on_container_failure(tmp_path):
     client.delete_volume = AsyncMock(return_value=True)
 
     with (
-        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
         patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
@@ -799,7 +799,7 @@ def test_spawn_session_does_not_delete_volume_when_volume_creation_fails(tmp_pat
     client.delete_volume = AsyncMock()
 
     with (
-        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
         patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
@@ -832,7 +832,7 @@ def test_spawn_session_swallows_cleanup_failure(tmp_path):
     )
 
     with (
-        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
         patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
@@ -869,7 +869,7 @@ def test_spawn_session_rejects_over_concurrent_limit(tmp_path):
     client.create_container = AsyncMock()
 
     with (
-        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
         patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
@@ -911,7 +911,7 @@ def test_spawn_session_concurrent_limit_counts_only_owner(tmp_path):
     snapshot_file.write_bytes(b"snapshot-payload")
 
     with (
-        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
         patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
@@ -954,7 +954,7 @@ def test_spawn_session_concurrent_limit_ignores_exited_sessions(tmp_path):
     snapshot_file.write_bytes(b"snapshot-payload")
 
     with (
-        patch("memory.api.cloud_claude.get_orchestrator_client", return_value=client),
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
         patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
@@ -1016,7 +1016,7 @@ def unscoped_client(app_client, db_session, user):
 )
 def test_container_routes_require_claude_sessions_scope(unscoped_client, method, path):
     orchestrator = MagicMock(side_effect=AssertionError("orchestrator must not be reached"))
-    with patch("memory.api.cloud_claude.get_orchestrator_client", orchestrator):
+    with patch("memory.claude_containers.cloud_claude.get_orchestrator_client", orchestrator):
         response = unscoped_client.request(method, path, json={"environment_id": 1})
 
     assert response.status_code == 403

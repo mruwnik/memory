@@ -9,9 +9,9 @@ import pytest
 
 from memory.api.MCP.servers import claude as claude_server  # noqa: F401 (registers checkers)
 from memory.api.MCP.visibility import get_visibility_checker
-from memory.api.orchestrator_client import SessionInfo as OrchSessionInfo
+from memory.claude_containers.orchestrator_client import SessionInfo as OrchSessionInfo
 from memory.api.search.types import SearchResult
-from memory.api.transfer_tokens import verify_token
+from memory.claude_containers.transfer_tokens import verify_token
 from memory.common import settings as settings_module
 from memory.common.db.models import Session as CodingSession
 from memory.common.db.models import CodingProject, SessionSegment
@@ -85,7 +85,7 @@ async def test_session_list_returns_only_user_owned(db_session, admin_user, admi
     ]
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_containers",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_orch_sessions),
     ):
         with mcp_auth_context(admin_session.id):
@@ -188,7 +188,7 @@ async def test_session_pull_url_resolves_latest(
         ),
     ]
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_containers",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_sessions),
     ):
         with mcp_auth_context(admin_session.id):
@@ -226,7 +226,7 @@ async def test_session_pull_url_latest_sorts_deterministically(
         ),
     ]
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_containers",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_sessions),
     ):
         with mcp_auth_context(admin_session.id):
@@ -242,7 +242,7 @@ async def test_session_pull_url_latest_sorts_deterministically(
     # Re-run with the list in a different order — same result.
     reshuffled = list(reversed(fake_sessions))
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_containers",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=reshuffled),
     ):
         with mcp_auth_context(admin_session.id):
@@ -281,7 +281,7 @@ async def test_session_pull_url_latest_cross_source_uses_random_suffix(
         ),
     ]
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_containers",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_sessions),
     ):
         with mcp_auth_context(admin_session.id):
@@ -301,7 +301,7 @@ async def test_session_pull_url_latest_with_no_sessions(
     from memory.api.MCP.servers.claude import session_pull_url
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_containers",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=[]),
     ):
         with mcp_auth_context(admin_session.id):
@@ -330,7 +330,7 @@ async def test_session_list_dir_proxies_to_orchestrator(
     }
 
     with patch(
-        "memory.api.orchestrator_client.OrchestratorClient.list_dir",
+        "memory.claude_containers.orchestrator_client.OrchestratorClient.list_dir",
         new=AsyncMock(return_value=fake_manifest),
     ):
         with mcp_auth_context(admin_session.id):
