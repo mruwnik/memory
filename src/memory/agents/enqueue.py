@@ -54,9 +54,6 @@ def server_errors(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
     return errors
 
 
-SERVER_KEY_GONE = "set to the server's key, which no longer exists; pick one of your keys"
-
-
 def missing_tools(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
     problems = []
     for external in spec.mcp_servers:
@@ -91,8 +88,7 @@ def run_problems(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
 
 
 def stored_spec_problems(db: DBSession, user_id: int, spec: dict[str, Any]) -> list[str]:
-    if spec.get("provider_key") == "server":
-        return [SERVER_KEY_GONE]
+    """Why a stored spec can't run, including one that no longer validates."""
     try:
         parsed = AgentSpec.model_validate(spec)
     except ValidationError as e:

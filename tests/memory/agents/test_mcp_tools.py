@@ -396,7 +396,7 @@ async def test_listed_definitions_carry_their_problems(
             user_id=regular_user.id,
             name="old",
             description="",
-            spec={"system_prompt": "x", "model": "anthropic/m", "provider_key": "server"},
+            spec={"system_prompt": "x", "model": "anthropic/m", "provider_key": 99999},
         )
     )
     db_session.commit()
@@ -405,7 +405,7 @@ async def test_listed_definitions_carry_their_problems(
         (definition,) = (await agent.list_all.fn())["definitions"]
 
     assert definition["problems"] == [
-        "set to the server's key, which no longer exists; pick one of your keys"
+        "API key 99999 is not yours or was deleted; pick another key for this agent"
     ]
 
 

@@ -500,10 +500,6 @@ def test_without_a_key_for_the_models_provider_no_run_starts(db_session, regular
     "spec,expected",
     [
         (
-            {"system_prompt": "x", "model": "anthropic/m", "provider_key": "server"},
-            "set to the server's key, which no longer exists; pick one of your keys",
-        ),
-        (
             {"system_prompt": "x", "model": "anthropic/m", "provider_key": 99999},
             "is not yours or was deleted",
         ),
