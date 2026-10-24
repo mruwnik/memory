@@ -92,6 +92,15 @@ export interface ProjectFilters {
   search?: string
 }
 
+type ProjectResult = { project?: Project; error?: string }
+
+// MCP tools report failures as `{error}` in a normal result, so turn them into throws.
+const unwrap = <T extends { error?: string }>(result: T[] | undefined, fallback: string): T => {
+  const r = result?.[0]
+  if (!r || r.error) throw new Error(r?.error || fallback)
+  return r
+}
+
 export const useProjects = () => {
   const { mcpCall } = useMCP()
 
@@ -132,62 +141,22 @@ export const useProjects = () => {
       include_teams: options.includeTeams ?? false,
       include_journal: options.includeJournal ?? false,
     })
-    if (result?.[0]?.error) {
-      return { project: null }
-    }
-    return {
-      project: result?.[0]?.project || null,
-      journal_entries: result?.[0]?.journal_entries,
-    }
+    const r = unwrap(result, 'Failed to load project')
+    return { project: r.project || null, journal_entries: r.journal_entries }
   }, [mcpCall])
 
-  const createProject = useCallback(async (data: ProjectCreate): Promise<{ success: boolean; project?: Project; error?: string }> => {
-    const result = await mcpCall<{ success?: boolean; project?: Project; error?: string }[]>('projects_upsert', {
-      title: data.title,
-      team_ids: data.team_ids,
-      description: data.description,
-      state: data.state ?? 'open',
-      parent_id: data.parent_id,
-      owner_id: data.owner_id,
-      due_on: data.due_on,
-      doc_url: data.doc_url,
-    })
-    const response = result?.[0]
-    if (response?.error) {
-      return { success: false, error: response.error }
-    }
-    return { success: true, project: response?.project }
+  const createProject = useCallback(async (data: ProjectCreate): Promise<Project | undefined> => {
+    const result = await mcpCall<ProjectResult[]>('projects_upsert', { ...data, state: data.state ?? 'open' })
+    return unwrap(result, 'Failed to create project').project
   }, [mcpCall])
 
-  const updateProject = useCallback(async (id: number, data: ProjectUpdate): Promise<{ success: boolean; project?: Project; error?: string }> => {
-    const result = await mcpCall<{ success?: boolean; project?: Project; error?: string }[]>('projects_upsert', {
-      project_id: id,
-      title: data.title,
-      description: data.description,
-      state: data.state,
-      parent_id: data.parent_id,
-      clear_parent: data.clear_parent,
-      owner_id: data.owner_id,
-      due_on: data.due_on,
-      clear_due_on: data.clear_due_on,
-      doc_url: data.doc_url,
-    })
-    const response = result?.[0]
-    if (response?.error) {
-      return { success: false, error: response.error }
-    }
-    return { success: true, project: response?.project }
+  const updateProject = useCallback(async (id: number, data: ProjectUpdate): Promise<Project | undefined> => {
+    const result = await mcpCall<ProjectResult[]>('projects_upsert', { ...data, project_id: id })
+    return unwrap(result, 'Failed to update project').project
   }, [mcpCall])
 
-  const deleteProject = useCallback(async (id: number): Promise<{ success: boolean; deleted_id?: number; error?: string }> => {
-    const result = await mcpCall<{ success?: boolean; deleted_id?: number; error?: string }[]>('projects_delete', {
-      project_id: id,
-    })
-    const response = result?.[0]
-    if (response?.error) {
-      return { success: false, error: response.error }
-    }
-    return { success: true, deleted_id: response?.deleted_id }
+  const deleteProject = useCallback(async (id: number): Promise<void> => {
+    unwrap(await mcpCall<ProjectResult[]>('projects_delete', { project_id: id }), 'Failed to delete project')
   }, [mcpCall])
 
   return {

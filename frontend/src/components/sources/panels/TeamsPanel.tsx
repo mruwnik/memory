@@ -1,88 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject } from '@/hooks/useTeams'
+import { useState, useEffect, useCallback } from 'react'
+import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject, TeamSaved } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, List, Page, Row, Toolbar, FieldRow, FormActions, Hint, Input, Label, Modal, Notice, Select, Textarea, cx } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FieldRow, FormActions, Input, Modal, Notice, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 
-// Owner selector dropdown for teams
-interface OwnerSelectorPopoverProps {
-  currentOwnerId: number | null
-  availablePeople: Person[]
-  onSelect: (ownerId: number | null) => void
-  onClose: () => void
-}
-
-const OwnerSelectorPopover = ({ currentOwnerId, availablePeople, onSelect, onClose }: OwnerSelectorPopoverProps) => {
-  const popoverRef = useRef<HTMLDivElement>(null)
-  const [search, setSearch] = useState('')
-
-  // Close on click outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        onClose()
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [onClose])
-
-  const filteredPeople = search.trim()
-    ? availablePeople.filter(p =>
-        (p.display_name?.toLowerCase().includes(search.toLowerCase())) ||
-        p.identifier.toLowerCase().includes(search.toLowerCase())
-      )
-    : availablePeople
-
-  return (
-    <div
-      ref={popoverRef}
-      className="absolute z-50 mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 min-w-56 max-w-72"
-    >
-      <Input
-        type="text"
-        placeholder="Search people..."
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        className="mb-2"
-        autoFocus
-      />
-      <div className="max-h-48 overflow-y-auto">
-        {/* None option */}
-        <button
-          type="button"
-          onClick={() => { onSelect(null); onClose() }}
-          className={cx(
-            'w-full text-left px-2 py-1.5 rounded text-sm transition-colors',
-            currentOwnerId === null
-              ? 'bg-primary/10 text-primary'
-              : 'hover:bg-slate-50 text-slate-500 italic'
-          )}
-        >
-          None
-        </button>
-        {filteredPeople.map(person => (
-          <button
-            key={person.id}
-            type="button"
-            onClick={() => { onSelect(person.id); onClose() }}
-            className={cx(
-              'w-full text-left px-2 py-1.5 rounded text-sm transition-colors',
-              currentOwnerId === person.id
-                ? 'bg-primary/10 text-primary'
-                : 'hover:bg-slate-50 text-slate-700'
-            )}
-          >
-            {person.display_name || person.identifier}
-          </button>
-        ))}
-        {filteredPeople.length === 0 && search && (
-          <p className="text-sm text-slate-500 px-2 py-1.5">No matches</p>
-        )}
-      </div>
-    </div>
-  )
-}
+const errorText = (e: unknown) => e instanceof Error ? e.message : String(e)
 
 export const TeamsPanel = () => {
   const {
@@ -98,11 +20,13 @@ export const TeamsPanel = () => {
 
   const { listPeople, getPerson } = usePeople()
   const { listProjects } = useProjects()
+  const { run, notice } = useActionNotice()
 
   const [teams, setTeams] = useState<Team[]>([])
   const [availablePeople, setAvailablePeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<string[]>([])
   const [showInactive, setShowInactive] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingTeam, setEditingTeam] = useState<Team | null>(null)
@@ -117,8 +41,8 @@ export const TeamsPanel = () => {
         listTeams({ include_inactive: showInactive, include_projects: true }),
         listPeople({ limit: 100 }),
       ])
-      setTeams(Array.isArray(teamsList) ? teamsList : [])
-      setAvailablePeople(Array.isArray(people) ? people : [])
+      setTeams(teamsList)
+      setAvailablePeople(people)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load teams')
     } finally {
@@ -130,45 +54,28 @@ export const TeamsPanel = () => {
     loadTeams()
   }, [loadTeams])
 
-  const handleCreate = async (data: TeamCreate) => {
-    const result = await createTeam(data)
-    if (result.success) {
-      setShowCreateModal(false)
-      loadTeams()
-    } else {
-      throw new Error(result.error || 'Failed to create team')
-    }
-  }
-
-  const handleUpdate = async (slug: string, data: TeamUpdate) => {
-    const result = await updateTeam(slug, data)
-    if (result.success) {
-      setEditingTeam(null)
-      loadTeams()
-    } else {
-      throw new Error(result.error || 'Failed to update team')
-    }
-  }
-
-  const handleChangeOwner = useCallback(async (teamSlug: string, ownerId: number | null) => {
-    const result = await updateTeam(teamSlug, { owner: ownerId })
-    if (!result.success) {
-      setError(result.error || 'Failed to update owner')
-      return
-    }
-    // Update local state instead of reloading everything
-    const owner = ownerId != null ? availablePeople.find(p => p.id === ownerId) : null
-    setTeams(prev => prev.map(t => t.slug === teamSlug ? {
-      ...t,
-      owner_id: ownerId,
-      owner: owner ? { id: owner.id, identifier: owner.identifier, display_name: owner.display_name } : null,
-    } : t))
-  }, [updateTeam, availablePeople])
-
-  const handleArchive = async (team: Team) => {
-    await updateTeam(team.slug, { is_active: false })
+  const saved = (result: TeamSaved, extraWarnings: string[] = []) => {
+    setWarnings([...(result.warnings ?? []), ...extraWarnings])
+    setShowCreateModal(false)
+    setEditingTeam(null)
     loadTeams()
   }
+
+  const handleCreate = async (data: TeamCreate, members: Person[]) => {
+    const result = await createTeam(data)
+    const slug = result.team?.slug ?? data.slug ?? ''
+    const added = await Promise.allSettled(members.map(person => addMember(slug, person.identifier)))
+    const failed = added.flatMap((r, i) =>
+      r.status === 'rejected' ? [`Couldn't add ${members[i].display_name || members[i].identifier}: ${errorText(r.reason)}`] : [])
+    saved(result, failed)
+  }
+
+  const handleUpdate = async (slug: string, data: TeamUpdate) => saved(await updateTeam(slug, data))
+
+  const handleArchive = (team: Team) => run(async () => {
+    await updateTeam(team.slug, { is_active: false })
+    await loadTeams()
+  }, `Archived ${team.name}`)
 
   return (
     <Page
@@ -182,6 +89,13 @@ export const TeamsPanel = () => {
       <Toolbar>
         <Checkbox checked={showInactive} onChange={e => setShowInactive(e.target.checked)} label="Show archived" />
       </Toolbar>
+
+      {notice}
+      {warnings.length > 0 && (
+        <Notice tone="warning" onDismiss={() => setWarnings([])}>
+          Team saved, but:{'\n'}{warnings.join('\n')}
+        </Notice>
+      )}
 
       {teams.length === 0 ? (
         <EmptyState
@@ -199,45 +113,36 @@ export const TeamsPanel = () => {
               onManageMembers={() => setManagingMembers(team)}
               onManageProjects={() => setManagingProjects(team)}
               onArchive={() => handleArchive(team)}
-              onChangeOwner={handleChangeOwner}
-              availablePeople={availablePeople}
             />
           ))}
         </List>
       )}
 
-      {/* Create Modal */}
       {showCreateModal && (
         <TeamFormModal
-          onSubmit={handleCreate}
+          onSubmit={(data, members) => handleCreate(data as TeamCreate, members)}
           onClose={() => setShowCreateModal(false)}
           listPeople={listPeople}
-          addMember={addMember}
           availablePeople={availablePeople}
         />
       )}
 
-      {/* Edit Modal */}
       {editingTeam && (
         <TeamFormModal
           team={editingTeam}
           onSubmit={data => handleUpdate(editingTeam.slug, data)}
           onClose={() => setEditingTeam(null)}
           listPeople={listPeople}
-          addMember={addMember}
           availablePeople={availablePeople}
         />
       )}
 
-      {/* Manage Members Modal */}
       {managingMembers && (
         <MembersModal
           team={managingMembers}
           onClose={(hasChanges) => {
             setManagingMembers(null)
-            if (hasChanges) {
-              loadTeams()
-            }
+            if (hasChanges) loadTeams()
           }}
           addMember={addMember}
           removeMember={removeMember}
@@ -247,15 +152,12 @@ export const TeamsPanel = () => {
         />
       )}
 
-      {/* Manage Projects Modal */}
       {managingProjects && (
         <TeamProjectsModal
           team={managingProjects}
           onClose={(hasChanges) => {
             setManagingProjects(null)
-            if (hasChanges) {
-              loadTeams()
-            }
+            if (hasChanges) loadTeams()
           }}
           getTeam={getTeam}
           listProjects={listProjects}
@@ -273,158 +175,161 @@ const TeamRow = ({
   onManageMembers,
   onManageProjects,
   onArchive,
-  onChangeOwner,
-  availablePeople,
 }: {
   team: Team
   onEdit: () => void
   onManageMembers: () => void
   onManageProjects: () => void
   onArchive: () => void
-  onChangeOwner?: (teamSlug: string, ownerId: number | null) => Promise<void>
-  availablePeople?: Person[]
+}) => (
+  <Row
+    title={team.name}
+    muted={!team.is_active}
+    badges={<>
+      {!team.is_active && <Badge>Archived</Badge>}
+      {team.discord_role_id && <Badge tone="info">Discord</Badge>}
+      {team.github_team_slug && <Badge>GitHub</Badge>}
+    </>}
+    meta={[
+      `@${team.slug}`,
+      team.owner && `Owner: ${team.owner.display_name || team.owner.identifier}`,
+      team.member_count !== undefined && `${team.member_count} member${team.member_count !== 1 ? 's' : ''}`,
+      !!team.projects?.length && `Projects: ${team.projects.map(p => p.title).join(', ')}`,
+    ]}
+    actions={<>
+      <Button size="sm" onClick={onManageMembers}>Members</Button>
+      <Button size="sm" onClick={onManageProjects}>Projects</Button>
+      <Button size="sm" onClick={onEdit}>Edit</Button>
+      {team.is_active && (
+        <ConfirmButton confirm={`Archive "${team.name}"? Members will lose access to projects through this team.`} onConfirm={onArchive}>Archive</ConfirmButton>
+      )}
+    </>}
+  >
+    {team.description && <p className="text-slate-600 line-clamp-2">{team.description}</p>}
+    {!!team.tags?.length && <div className="flex flex-wrap gap-1">{team.tags.map(tag => <Badge key={tag}>{tag}</Badge>)}</div>}
+  </Row>
+)
+
+type ListPeople = (filters?: { search?: string; limit?: number }) => Promise<Person[]>
+
+/** Searches people by name and offers each match with an "Add" action. */
+const PersonSearch = ({ label, listPeople, exclude, onAdd }: {
+  label: string
+  listPeople: ListPeople
+  exclude: Set<number>
+  onAdd: (person: Person) => void
 }) => {
-  const [showOwnerSelector, setShowOwnerSelector] = useState(false)
+  const [term, setTerm] = useState('')
+  const [results, setResults] = useState<Person[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleOwnerClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (onChangeOwner && availablePeople) {
-      setShowOwnerSelector(!showOwnerSelector)
+  useEffect(() => {
+    if (!term.trim()) {
+      setResults(null)
+      return
     }
-  }
+    // A response for an older term must not overwrite a newer one
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setError(null)
+      try {
+        const people = await listPeople({ search: term, limit: 10 })
+        if (!cancelled) setResults(people)
+      } catch (e) {
+        if (cancelled) return
+        setError(`Search failed: ${errorText(e)}`)
+        setResults(null)
+      }
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [term, listPeople])
 
-  const handleOwnerSelect = async (ownerId: number | null) => {
-    if (onChangeOwner) {
-      await onChangeOwner(team.slug, ownerId)
-    }
+  const matches = results?.filter(p => !exclude.has(p.id))
+  const add = (person: Person) => {
+    onAdd(person)
+    setTerm('')
   }
 
   return (
-    <Row
-      title={team.name}
-      muted={!team.is_active}
-      badges={<>
-        {!team.is_active && <Badge>Archived</Badge>}
-        {team.discord_role_id && <Badge tone="info">Discord</Badge>}
-        {team.github_team_id && <Badge>GitHub</Badge>}
-      </>}
-      meta={[
-        `@${team.slug}`,
-        <span className="relative">
-          {team.owner && 'Owner: '}
-          <button type="button" onClick={handleOwnerClick}
-            className={cx('rounded px-1 hover:bg-slate-100 max-sm:py-2', team.owner ? 'text-slate-700' : 'text-amber-800 bg-amber-50')}
-            title={team.owner ? 'Change owner' : undefined}>
-            {team.owner ? team.owner.display_name || team.owner.identifier : 'Set owner'}
-          </button>
-          {showOwnerSelector && onChangeOwner && availablePeople && (
-            <OwnerSelectorPopover
-              currentOwnerId={team.owner_id}
-              availablePeople={availablePeople}
-              onSelect={handleOwnerSelect}
-              onClose={() => setShowOwnerSelector(false)}
-            />
-          )}
-        </span>,
-        team.member_count !== undefined && `${team.member_count} member${team.member_count !== 1 ? 's' : ''}`,
-        !!team.projects?.length && `Projects: ${team.projects.map(p => p.title).join(', ')}`,
-      ]}
-      actions={<>
-        <Button size="sm" onClick={onManageMembers}>Members</Button>
-        <Button size="sm" onClick={onManageProjects}>Projects</Button>
-        <Button size="sm" onClick={onEdit}>Edit</Button>
-        {team.is_active && (
-          <ConfirmButton confirm={`Archive "${team.name}"? Members will lose access to projects through this team.`} onConfirm={onArchive}>Archive</ConfirmButton>
-        )}
-      </>}
-    >
-      {team.description && <p className="text-slate-600 line-clamp-2">{team.description}</p>}
-      {!!team.tags?.length && <div className="flex flex-wrap gap-1">{team.tags.map(tag => <Badge key={tag}>{tag}</Badge>)}</div>}
-    </Row>
+    <div className="space-y-2">
+      <Field label={label} error={error}>
+        <Input type="search" value={term} onChange={e => setTerm(e.target.value)} placeholder="Search people by name"
+          onKeyDown={e => e.key === 'Enter' && e.preventDefault()} />
+      </Field>
+      <p role="status" className="sr-only">{matches && `${matches.length} match${matches.length !== 1 ? 'es' : ''}`}</p>
+      {matches && (matches.length === 0
+        ? <p className="text-sm text-slate-600">No matching people</p>
+        : (
+          <List className="max-h-48 overflow-y-auto">
+            {matches.map(person => (
+              <Row key={person.id} title={person.display_name} meta={[`@${person.identifier}`]}
+                actions={<Button type="button" size="sm" onClick={() => add(person)} aria-label={`Add ${person.display_name}`}>Add</Button>} />
+            ))}
+          </List>
+        ))}
+    </div>
   )
 }
 
-// Team Form Modal
 const TeamFormModal = ({
   team,
   onSubmit,
   onClose,
   listPeople,
-  addMember,
   availablePeople = [],
 }: {
   team?: Team
-  onSubmit: (data: TeamCreate | TeamUpdate) => Promise<void>
+  onSubmit: (data: TeamCreate | TeamUpdate, members: Person[]) => Promise<void>
   onClose: () => void
-  listPeople: (filters?: { search?: string; limit?: number }) => Promise<Person[]>
-  addMember: (team: string, person: string, role?: string) => Promise<{ success: boolean; error?: string }>
+  listPeople: ListPeople
   availablePeople?: Person[]
 }) => {
+  const initialGuild = team?.discord_guild_id ?? ''
+  const initialRole = team?.discord_role_id ?? ''
+  const initialOrg = team?.github_org ?? ''
+  const initialGithubTeam = team?.github_team_slug ?? ''
+  const initialAutoSyncDiscord = team?.auto_sync_discord ?? false
+  const initialAutoSyncGithub = team?.auto_sync_github ?? false
+
   const [name, setName] = useState(team?.name || '')
   const [slug, setSlug] = useState(team?.slug || '')
   const [description, setDescription] = useState(team?.description || '')
   const [ownerId, setOwnerId] = useState<number | null>(team?.owner_id ?? null)
   const [tags, setTags] = useState(team?.tags?.join(', ') || '')
-  const [discordRoleId, setDiscordRoleId] = useState(team?.discord_role_id?.toString() || '')
-  const [discordGuildId, setDiscordGuildId] = useState(team?.discord_guild_id?.toString() || '')
-  const [autoSyncDiscord, setAutoSyncDiscord] = useState(team?.auto_sync_discord ?? true)
-  const [githubTeamId, setGithubTeamId] = useState(team?.github_team_id?.toString() || '')
-  const [githubOrg, setGithubOrg] = useState(team?.github_org || '')
-  const [autoSyncGithub, setAutoSyncGithub] = useState(team?.auto_sync_github ?? true)
+  const [guild, setGuild] = useState(initialGuild)
+  const [discordRole, setDiscordRole] = useState(initialRole)
+  const [autoSyncDiscord, setAutoSyncDiscord] = useState(initialAutoSyncDiscord)
+  const [githubOrg, setGithubOrg] = useState(initialOrg)
+  const [githubTeam, setGithubTeam] = useState(initialGithubTeam)
+  const [autoSyncGithub, setAutoSyncGithub] = useState(initialAutoSyncGithub)
+  const [pendingMembers, setPendingMembers] = useState<Person[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Member management state (for new teams)
-  const [pendingMembers, setPendingMembers] = useState<Person[]>([])
-  const [memberSearch, setMemberSearch] = useState('')
-  const [memberSearchResults, setMemberSearchResults] = useState<Person[]>([])
-  const [searchingMembers, setSearchingMembers] = useState(false)
-
   const isEditing = !!team
 
-  // Auto-generate slug from name if not editing
   useEffect(() => {
     if (!isEditing && name) {
       setSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''))
     }
   }, [name, isEditing])
 
-  // Search for people to add as members
-  useEffect(() => {
-    if (!memberSearch.trim()) {
-      setMemberSearchResults([])
-      return
-    }
+  // A role is looked up in a server, so a new one can't be saved without it. An existing role is
+  // fine: clearing the server unlinks Discord, role included.
+  const roleError = discordRole.trim() && discordRole !== initialRole && !guild.trim() ? 'Set the server too' : null
+  const githubTeamError = githubTeam.trim() && githubTeam !== initialGithubTeam && !githubOrg.trim() ? 'Set the organization too' : null
 
-    const timer = setTimeout(async () => {
-      setSearchingMembers(true)
-      try {
-        const people = await listPeople({ search: memberSearch, limit: 10 })
-        // Filter out already pending members
-        const pendingIds = new Set(pendingMembers.map(p => p.id))
-        setMemberSearchResults(people.filter(p => !pendingIds.has(p.id)))
-      } catch {
-        // Ignore search errors
-      } finally {
-        setSearchingMembers(false)
-      }
-    }, 300)
-
-    return () => clearTimeout(timer)
-  }, [memberSearch, listPeople, pendingMembers])
-
-  const handleAddPendingMember = (person: Person) => {
-    setPendingMembers(prev => [...prev, person])
-    setMemberSearch('')
-    setMemberSearchResults([])
-  }
-
-  const handleRemovePendingMember = (personId: number) => {
-    setPendingMembers(prev => prev.filter(p => p.id !== personId))
-  }
+  // Send an integration only when it changed: each save re-resolves it against Discord/GitHub and,
+  // with auto-sync on, syncs membership (so turning auto-sync on runs a sync). Empty strings unlink it.
+  const discordChanged = guild !== initialGuild || discordRole !== initialRole || autoSyncDiscord !== initialAutoSyncDiscord
+  const githubChanged = githubOrg !== initialOrg || githubTeam !== initialGithubTeam || autoSyncGithub !== initialAutoSyncGithub
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (roleError || githubTeamError) return
     setSubmitting(true)
     setError(null)
 
@@ -432,33 +337,17 @@ const TeamFormModal = ({
       const data: TeamCreate | TeamUpdate = {
         name,
         ...(isEditing ? {} : { slug }),
-        description: description || undefined,
+        description,
         ...(isEditing ? { owner: ownerId } : ownerId != null ? { owner: ownerId } : {}),
-        tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
-        discord_role_id: discordRoleId ? parseInt(discordRoleId) : undefined,
-        discord_guild_id: discordGuildId ? parseInt(discordGuildId) : undefined,
+        tags: tags.split(',').map(t => t.trim()).filter(Boolean),
+        ...(discordChanged && { guild: guild.trim(), discord_role: discordRole.trim() }),
         auto_sync_discord: autoSyncDiscord,
-        github_team_id: githubTeamId ? parseInt(githubTeamId) : undefined,
-        github_org: githubOrg || undefined,
+        ...(githubChanged && { github_org: githubOrg.trim(), github_team_slug: githubTeam.trim() }),
         auto_sync_github: autoSyncGithub,
       }
-      await onSubmit(data)
-
-      // If creating a new team with pending members, add them after creation
-      if (!isEditing && pendingMembers.length > 0) {
-        const results = await Promise.allSettled(
-          pendingMembers.map(person => addMember(slug, person.identifier))
-        )
-        const failures = results.filter(
-          (r): r is PromiseRejectedResult => r.status === 'rejected'
-        )
-        if (failures.length > 0) {
-          console.warn('Some members failed to add:', failures.map(f => f.reason))
-        }
-      }
+      await onSubmit(data, pendingMembers)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save team')
-    } finally {
       setSubmitting(false)
     }
   }
@@ -468,7 +357,7 @@ const TeamFormModal = ({
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Name *">
+        <Field label="Name">
           <Input
             type="text"
             value={name}
@@ -479,7 +368,7 @@ const TeamFormModal = ({
         </Field>
 
         {!isEditing && (
-          <Field label="Slug *" hint="URL-safe identifier, auto-generated from name">
+          <Field label="Slug" hint="URL-safe identifier, auto-generated from name">
             <Input
               type="text"
               value={slug}
@@ -523,109 +412,48 @@ const TeamFormModal = ({
           </Select>
         </Field>
 
-        {/* Member selection for new teams */}
         {!isEditing && (
-          <Field>
-            <Label>Initial members</Label>
-            <Input
-              type="text"
-              value={memberSearch}
-              onChange={e => setMemberSearch(e.target.value)}
-              placeholder="Search for people to add..."
-            />
-            {searchingMembers && <p className="text-xs text-slate-500 mt-1">Searching...</p>}
-            {memberSearchResults.length > 0 && (
-              <div className="mt-2 border border-slate-200 rounded-lg max-h-32 overflow-y-auto">
-                {memberSearchResults.map(person => (
-                  <button
-                    key={person.id}
-                    type="button"
-                    className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between"
-                    onClick={() => handleAddPendingMember(person)}
-                  >
-                    <span>
-                      <span className="font-medium">{person.display_name}</span>
-                      <span className="text-slate-500 ml-2">@{person.identifier}</span>
-                    </span>
-                    <span className="text-primary text-sm">Add</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {pendingMembers.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {pendingMembers.map(person => (
-                  <span
-                    key={person.id}
-                    className="bg-purple-100 text-purple-700 px-2 py-1 rounded-full text-sm flex items-center gap-1"
-                  >
-                    {person.display_name}
-                    <button
-                      type="button"
-                      className="hover:text-purple-900 ml-1"
-                      onClick={() => handleRemovePendingMember(person.id)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <Hint>
-              You can add more members after creation via the Members button
-            </Hint>
-          </Field>
+          <div className="space-y-2">
+            <PersonSearch label="Initial members" listPeople={listPeople}
+              exclude={new Set(pendingMembers.map(p => p.id))}
+              onAdd={person => setPendingMembers(prev => [...prev, person])} />
+            <SubList title={`To add (${pendingMembers.length})`} empty="You can also add members later from Members.">
+              {pendingMembers.map(person => (
+                <Row key={person.id} title={person.display_name} meta={[`@${person.identifier}`]}
+                  actions={<Button type="button" size="sm" aria-label={`Don't add ${person.display_name}`}
+                    onClick={() => setPendingMembers(prev => prev.filter(p => p.id !== person.id))}>Remove</Button>} />
+              ))}
+            </SubList>
+          </div>
         )}
 
-        <details className="border border-slate-200 rounded-lg">
-          <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">Discord integration</summary>
-          <div className="p-4 pt-0 space-y-3">
+        <Disclosure summary="Discord integration" open={!!initialGuild}>
+          <div className="space-y-3">
             <FieldRow>
-              <Field label="Role ID">
-                <Input
-                  type="text"
-                  value={discordRoleId}
-                  onChange={e => setDiscordRoleId(e.target.value)}
-                  placeholder="123456789"
-                />
+              <Field label="Server" hint="Server ID or name. Clear it to unlink Discord.">
+                <Input type="text" value={guild} onChange={e => setGuild(e.target.value)} />
               </Field>
-              <Field label="Guild ID">
-                <Input
-                  type="text"
-                  value={discordGuildId}
-                  onChange={e => setDiscordGuildId(e.target.value)}
-                  placeholder="987654321"
-                />
+              <Field label="Role" hint="Role ID or name; a new name creates the role" error={roleError}>
+                <Input type="text" value={discordRole} onChange={e => setDiscordRole(e.target.value)} />
               </Field>
             </FieldRow>
             <Checkbox checked={autoSyncDiscord} onChange={e => setAutoSyncDiscord(e.target.checked)} label="Auto-sync membership changes to Discord" />
           </div>
-        </details>
+        </Disclosure>
 
-        <details className="border border-slate-200 rounded-lg">
-          <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">GitHub Integration</summary>
-          <div className="p-4 pt-0 space-y-3">
+        <Disclosure summary="GitHub integration" open={!!initialOrg}>
+          <div className="space-y-3">
             <FieldRow>
-              <Field label="Team ID">
-                <Input
-                  type="text"
-                  value={githubTeamId}
-                  onChange={e => setGithubTeamId(e.target.value)}
-                  placeholder="42"
-                />
+              <Field label="Organization" hint="Clear it to unlink GitHub.">
+                <Input type="text" value={githubOrg} onChange={e => setGithubOrg(e.target.value)} placeholder="myorg" />
               </Field>
-              <Field label="Organization">
-                <Input
-                  type="text"
-                  value={githubOrg}
-                  onChange={e => setGithubOrg(e.target.value)}
-                  placeholder="myorg"
-                />
+              <Field label="Team slug" hint="Created in GitHub if it doesn't exist" error={githubTeamError}>
+                <Input type="text" value={githubTeam} onChange={e => setGithubTeam(e.target.value)} placeholder="core-team" />
               </Field>
             </FieldRow>
             <Checkbox checked={autoSyncGithub} onChange={e => setAutoSyncGithub(e.target.checked)} label="Auto-sync membership changes to GitHub" />
           </div>
-        </details>
+        </Disclosure>
 
         <FormActions>
           <Button type="button" onClick={onClose}>
@@ -640,7 +468,6 @@ const TeamFormModal = ({
   )
 }
 
-// Members Management Modal
 const MembersModal = ({
   team,
   onClose,
@@ -652,174 +479,72 @@ const MembersModal = ({
 }: {
   team: Team
   onClose: (hasChanges: boolean) => void
-  addMember: (team: string, person: string, role?: string) => Promise<{ success: boolean; error?: string }>
-  removeMember: (team: string, person: string) => Promise<{ success: boolean; error?: string }>
-  listPeople: (filters?: { search?: string; limit?: number }) => Promise<Person[]>
+  addMember: (team: string, person: string) => Promise<void>
+  removeMember: (team: string, person: string) => Promise<void>
+  listPeople: ListPeople
   getTeam: (team: string, includeMembers?: boolean) => Promise<Team | null>
-  getPerson: (identifier: string, includeTidbits?: boolean) => Promise<Person | null>
+  getPerson: GetPerson
 }) => {
-  const [members, setMembers] = useState<TeamMember[]>(team.members || [])
-  const [searchTerm, setSearchTerm] = useState('')
-  const [searchResults, setSearchResults] = useState<Person[]>([])
-  const [searching, setSearching] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedMember, setSelectedMember] = useState<{ identifier: string; person: Person | null; loading: boolean } | null>(null)
+  const [members, setMembers] = useState<TeamMember[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<TeamMember | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
+  const { run, notice } = useActionNotice()
 
-  // Load members
-  useEffect(() => {
-    const loadMembers = async () => {
+  const load = useCallback(async () => {
+    setLoadError(null)
+    try {
       const teamData = await getTeam(team.slug, true)
-      if (teamData?.members) {
-        setMembers(teamData.members)
-      }
+      if (!teamData) throw new Error(`Team not found: ${team.slug}`)
+      setMembers(teamData.members ?? [])
+    } catch (e) {
+      setLoadError(`Couldn't load the members: ${errorText(e)}`)
     }
-    loadMembers()
   }, [team.slug, getTeam])
 
-  // Search for people
   useEffect(() => {
-    if (!searchTerm.trim()) {
-      setSearchResults([])
-      return
-    }
+    load()
+  }, [load])
 
-    const timer = setTimeout(async () => {
-      setSearching(true)
-      try {
-        const people = await listPeople({ search: searchTerm, limit: 10 })
-        // Filter out existing members
-        const memberIds = new Set(members.map(m => m.id))
-        setSearchResults(people.filter(p => !memberIds.has(p.id)))
-      } catch {
-        // Ignore search errors
-      } finally {
-        setSearching(false)
-      }
-    }, 300)
+  const handleAdd = (person: Person) => run(async () => {
+    await addMember(team.slug, person.identifier)
+    setMembers(prev => [...(prev ?? []), { id: person.id, identifier: person.identifier, display_name: person.display_name }])
+    setHasChanges(true)
+  })
 
-    return () => clearTimeout(timer)
-  }, [searchTerm, listPeople, members])
-
-  const handleAddMember = async (person: Person) => {
-    setError(null)
-    const result = await addMember(team.slug, person.identifier)
-    if (result.success) {
-      setMembers(prev => [...prev, {
-        id: person.id,
-        identifier: person.identifier,
-        display_name: person.display_name,
-      }])
-      setSearchTerm('')
-      setSearchResults([])
-      setHasChanges(true)
-    } else {
-      setError(result.error || 'Failed to add member')
-    }
-  }
-
-  const handleRemoveMember = async (member: TeamMember) => {
-    setError(null)
-    const result = await removeMember(team.slug, member.identifier)
-    if (result.success) {
-      setMembers(prev => prev.filter(m => m.id !== member.id))
-      setHasChanges(true)
-    } else {
-      setError(result.error || 'Failed to remove member')
-    }
-  }
-
-  const handleMemberClick = async (member: TeamMember) => {
-    setSelectedMember({ identifier: member.identifier, person: null, loading: true })
-    try {
-      const person = await getPerson(member.identifier, true)
-      setSelectedMember({ identifier: member.identifier, person, loading: false })
-    } catch {
-      setSelectedMember({ identifier: member.identifier, person: null, loading: false })
-    }
-  }
+  const handleRemove = (member: TeamMember) => run(async () => {
+    await removeMember(team.slug, member.identifier)
+    setMembers(prev => (prev ?? []).filter(m => m.id !== member.id))
+    setHasChanges(true)
+  })
 
   const handleClose = () => onClose(hasChanges)
 
   return (
     <Modal title={`Members of ${team.name}`} onClose={handleClose}>
       <div className="space-y-4">
-        {error && <Notice tone="error">{error}</Notice>}
+        {notice}
 
-        {/* Search to add */}
-        <Field>
-          <Label>Add member</Label>
-          <Input
-            type="text"
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            placeholder="Search for people..."
-          />
-          {searching && <p className="text-xs text-slate-500 mt-1">Searching...</p>}
-          {searchResults.length > 0 && (
-            <div className="mt-2 border border-slate-200 rounded-lg max-h-40 overflow-y-auto">
-              {searchResults.map(person => (
-                <button
-                  key={person.id}
-                  type="button"
-                  className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center justify-between"
-                  onClick={() => handleAddMember(person)}
-                >
-                  <span>
-                    <span className="font-medium">{person.display_name}</span>
-                    <span className="text-slate-500 ml-2">@{person.identifier}</span>
-                  </span>
-                  <span className="text-primary text-sm">Add</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </Field>
+        {loadError ? <Notice tone="error" onRetry={load}>{loadError}</Notice>
+          : members === null ? <LoadingState message="Loading members..." /> : (
+          <>
+            <PersonSearch label="Add member" listPeople={listPeople}
+              exclude={new Set(members.map(m => m.id))} onAdd={handleAdd} />
 
-        {/* Current members */}
-        <div>
-          <h4 className="text-sm font-medium text-slate-700 mb-2">
-            Current Members ({members.length})
-          </h4>
-          {members.length === 0 ? (
-            <p className="text-sm text-slate-500">No members yet</p>
-          ) : (
-            <div className="space-y-2">
+            <SubList title={`Members (${members.length})`} empty="No members yet">
               {members.map(member => (
-                <div
-                  key={member.id}
-                  className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer transition-colors"
-                  onClick={() => handleMemberClick(member)}
-                >
-                  <div>
-                    <span className="font-medium">{member.display_name}</span>
-                    <span className="text-slate-500 text-sm ml-2">@{member.identifier}</span>
-                    {member.contributor_status && (
-                      <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">
-                        {member.contributor_status}
-                      </span>
-                    )}
-                    {member.role && (
-                      <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
-                        {member.role}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="text-red-600 text-sm hover:text-red-700"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleRemoveMember(member)
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
+                <Row key={member.id} title={member.display_name} meta={[`@${member.identifier}`]}
+                  onSelect={() => setSelected(member)}
+                  badges={<>
+                    {member.role && <Badge tone="primary">{member.role}</Badge>}
+                    {member.contributor_status && <Badge>{member.contributor_status}</Badge>}
+                  </>}
+                  actions={<ConfirmButton aria-label={`Remove ${member.display_name}`} onConfirm={() => handleRemove(member)}
+                    confirm={`Remove ${member.display_name} from ${team.name}? They lose access to its projects.`}>Remove</ConfirmButton>} />
               ))}
-            </div>
-          )}
-        </div>
+            </SubList>
+          </>
+        )}
 
         <FormActions>
           <Button variant="primary" type="button" onClick={handleClose}>
@@ -827,110 +552,62 @@ const MembersModal = ({
           </Button>
         </FormActions>
       </div>
-
-      {/* Person Details Popup */}
-      {selectedMember && (
-        <Modal title={selectedMember.person?.display_name || selectedMember.identifier} onClose={() => setSelectedMember(null)} size="md">
-          <div>
-              {selectedMember.loading ? (
-                <div className="text-center py-4 text-slate-500">Loading...</div>
-              ) : selectedMember.person ? (
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-lg font-medium text-slate-800">{selectedMember.person.display_name}</div>
-                    <div className="text-xs text-slate-500">@{selectedMember.person.identifier}</div>
-                  </div>
-
-                  {selectedMember.person.aliases && selectedMember.person.aliases.length > 0 && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">Also known as</div>
-                      <div className="flex flex-wrap gap-1">
-                        {selectedMember.person.aliases.map((alias, i) => (
-                          <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                            {alias}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedMember.person.contact_info && Object.keys(selectedMember.person.contact_info).length > 0 && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">Contact</div>
-                      <div className="space-y-1">
-                        {Object.entries(selectedMember.person.contact_info).map(([key, value]) => {
-                          if (typeof value !== 'string') return null
-                          return (
-                            <div key={key} className="text-sm">
-                              <span className="text-slate-500 capitalize">{key}: </span>
-                              <span className="text-slate-800">{value}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedMember.person.tags && selectedMember.person.tags.length > 0 && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">Tags</div>
-                      <div className="flex flex-wrap gap-1">
-                        {selectedMember.person.tags.map((tag, i) => (
-                          <span key={i} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Tidbits */}
-                  {selectedMember.person.tidbits && selectedMember.person.tidbits.length > 0 && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-2">Tidbits ({selectedMember.person.tidbits.length})</div>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {selectedMember.person.tidbits.map((tidbit: Tidbit) => (
-                          <div key={tidbit.id} className="bg-slate-50 rounded-lg p-3 text-sm">
-                            <div className="text-slate-700 whitespace-pre-wrap">{tidbit.content}</div>
-                            <div className="flex items-center gap-2 mt-2 text-xs text-slate-500">
-                              {tidbit.tidbit_type && (
-                                <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">
-                                  {tidbit.tidbit_type}
-                                </span>
-                              )}
-                              {tidbit.source && <span>{tidbit.source}</span>}
-                              {tidbit.inserted_at && (
-                                <span>{new Date(tidbit.inserted_at).toLocaleDateString()}</span>
-                              )}
-                            </div>
-                            {tidbit.tags && tidbit.tags.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {tidbit.tags.map((tag, i) => (
-                                  <Badge tone="info" key={i}>
-                                    {tag}
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-4">
-                  <div className="text-slate-500 mb-2">Could not load person details</div>
-                </div>
-              )}
-            </div>
-        </Modal>
-      )}
+      {selected && <PersonDetailsModal member={selected} getPerson={getPerson} onClose={() => setSelected(null)} />}
     </Modal>
   )
 }
 
-// Team Projects Management Modal
+type GetPerson = (identifier: string, includeTidbits?: boolean) => Promise<Person | null>
+
+const PersonDetailsModal = ({ member, getPerson, onClose }: { member: TeamMember; getPerson: GetPerson; onClose: () => void }) => {
+  const [person, setPerson] = useState<Person | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      const found = await getPerson(member.identifier, true)
+      if (!found) throw new Error(`Person not found: ${member.identifier}`)
+      setPerson(found)
+    } catch (e) {
+      setError(`Couldn't load ${member.display_name}: ${errorText(e)}`)
+    }
+  }, [member.identifier, member.display_name, getPerson])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const contacts = Object.entries(person?.contact_info ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  return (
+    <Modal title={person?.display_name || member.display_name} onClose={onClose} size="md">
+      {error ? <Notice tone="error" onRetry={load}>{error}</Notice>
+        : !person ? <LoadingState message="Loading person..." /> : (
+          <div className="space-y-4">
+            <DetailList items={[
+              ['Identifier', `@${person.identifier}`],
+              ['Also known as', person.aliases?.join(', ')],
+              ...contacts.map(([key, value]): [string, string] => [key.charAt(0).toUpperCase() + key.slice(1), value]),
+              ['Tags', !!person.tags?.length && <div className="flex flex-wrap gap-1">{person.tags.map(tag => <Badge key={tag}>{tag}</Badge>)}</div>],
+            ]} />
+            {!!person.tidbits?.length && (
+              <SubList title={`Tidbits (${person.tidbits.length})`} scroll>
+                {person.tidbits.map((tidbit: Tidbit) => (
+                  <Row key={tidbit.id} title={<span className="font-normal whitespace-pre-wrap">{tidbit.content}</span>}
+                    badges={<>
+                      {tidbit.tidbit_type && <Badge>{tidbit.tidbit_type}</Badge>}
+                      {tidbit.tags?.map(tag => <Badge key={tag} tone="info">{tag}</Badge>)}
+                    </>}
+                    meta={[tidbit.source, tidbit.inserted_at && new Date(tidbit.inserted_at).toLocaleDateString()]} />
+                ))}
+              </SubList>
+            )}
+          </div>
+        )}
+    </Modal>
+  )
+}
+
 const TeamProjectsModal = ({
   team,
   onClose,
@@ -942,64 +619,48 @@ const TeamProjectsModal = ({
   team: Team
   onClose: (hasChanges: boolean) => void
   getTeam: (team: string | number, includeMembers?: boolean, includeProjects?: boolean) => Promise<Team | null>
-  listProjects: (options?: { state?: string; include_children?: boolean }) => Promise<Project[]>
-  assignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
-  unassignTeam: (project: number, teamId: number) => Promise<{ success: boolean; error?: string }>
+  listProjects: (options?: { state?: 'open' | 'closed' }) => Promise<Project[]>
+  assignTeam: (project: number, teamId: number) => Promise<void>
+  unassignTeam: (project: number, teamId: number) => Promise<void>
 }) => {
-  const [assignedProjects, setAssignedProjects] = useState<TeamProject[]>([])
+  const [assignedProjects, setAssignedProjects] = useState<TeamProject[] | null>(null)
   const [allProjects, setAllProjects] = useState<Project[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
+  const { run, notice } = useActionNotice()
 
-  // Load data on mount
-  useEffect(() => {
-    const loadData = async () => {
-      setLoading(true)
-      try {
-        const [teamData, projects] = await Promise.all([
-          getTeam(team.slug, false, true),
-          listProjects({ state: 'open' }),
-        ])
-        setAssignedProjects(teamData?.projects || [])
-        setAllProjects(projects)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load data')
-      } finally {
-        setLoading(false)
-      }
+  const load = useCallback(async () => {
+    setLoadError(null)
+    try {
+      const [teamData, projects] = await Promise.all([
+        getTeam(team.slug, false, true),
+        listProjects({ state: 'open' }),
+      ])
+      if (!teamData) throw new Error(`Team not found: ${team.slug}`)
+      setAssignedProjects(teamData.projects ?? [])
+      setAllProjects(projects)
+    } catch (e) {
+      setLoadError(`Couldn't load the projects: ${errorText(e)}`)
     }
-    loadData()
   }, [team.slug, getTeam, listProjects])
 
-  const handleAssign = async (project: Project) => {
-    setError(null)
-    const result = await assignTeam(project.id, team.id)
-    if (result.success) {
-      setAssignedProjects(prev => [...prev, {
-        id: project.id,
-        title: project.title,
-        state: project.state,
-        repo_path: project.repo_path,
-      }])
-      setHasChanges(true)
-    } else {
-      setError(result.error || 'Failed to assign project')
-    }
-  }
+  useEffect(() => {
+    load()
+  }, [load])
 
-  const handleUnassign = async (project: TeamProject) => {
-    setError(null)
-    const result = await unassignTeam(project.id, team.id)
-    if (result.success) {
-      setAssignedProjects(prev => prev.filter(p => p.id !== project.id))
-      setHasChanges(true)
-    } else {
-      setError(result.error || 'Failed to unassign project')
-    }
-  }
+  const handleAssign = (project: Project) => run(async () => {
+    await assignTeam(project.id, team.id)
+    setAssignedProjects(prev => [...(prev ?? []), { id: project.id, title: project.title, state: project.state, repo_path: project.repo_path }])
+    setHasChanges(true)
+  })
 
-  const assignedIds = new Set(assignedProjects.map(p => p.id))
+  const handleUnassign = (project: TeamProject) => run(async () => {
+    await unassignTeam(project.id, team.id)
+    setAssignedProjects(prev => (prev ?? []).filter(p => p.id !== project.id))
+    setHasChanges(true)
+  })
+
+  const assignedIds = new Set(assignedProjects?.map(p => p.id))
   const availableProjects = allProjects.filter(p => !assignedIds.has(p.id))
 
   const handleClose = () => onClose(hasChanges)
@@ -1007,74 +668,26 @@ const TeamProjectsModal = ({
   return (
     <Modal title={`Projects for ${team.name}`} onClose={handleClose}>
       <div className="space-y-4">
-        {error && <Notice tone="error">{error}</Notice>}
+        {notice}
 
-        {loading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
-        ) : (
+        {loadError ? <Notice tone="error" onRetry={load}>{loadError}</Notice>
+          : assignedProjects === null ? <LoadingState message="Loading projects..." /> : (
           <>
-            {/* Assigned projects */}
-            <div>
-              <h4 className="text-sm font-medium text-slate-700 mb-2">
-                Assigned Projects ({assignedProjects.length})
-              </h4>
-              {assignedProjects.length === 0 ? (
-                <p className="text-sm text-slate-500">No projects assigned</p>
-              ) : (
-                <div className="space-y-2">
-                  {assignedProjects.map(project => (
-                    <div
-                      key={project.id}
-                      className="flex items-center justify-between py-2 px-3 bg-blue-50 rounded-lg"
-                    >
-                      <div>
-                        <span className="font-medium text-blue-900">{project.title}</span>
-                        {project.repo_path && (
-                          <span className="text-blue-600 text-sm ml-2">({project.repo_path})</span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="text-red-600 text-sm hover:text-red-700"
-                        onClick={() => handleUnassign(project)}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <SubList title={`Assigned projects (${assignedProjects.length})`} empty="No projects assigned">
+              {assignedProjects.map(project => (
+                <Row key={project.id} title={project.title} meta={[project.repo_path]}
+                  actions={<ConfirmButton aria-label={`Remove ${project.title}`} onConfirm={() => handleUnassign(project)}
+                    confirm={`Remove ${project.title} from ${team.name}? Members lose access to it through this team.`}>Remove</ConfirmButton>} />
+              ))}
+            </SubList>
 
-            {/* Available projects to add */}
             {availableProjects.length > 0 && (
-              <div>
-                <h4 className="text-sm font-medium text-slate-700 mb-2">
-                  Available projects
-                </h4>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {availableProjects.map(project => (
-                    <div
-                      key={project.id}
-                      className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg"
-                    >
-                      <div>
-                        <span className="font-medium">{project.title}</span>
-                        {project.repo_path && (
-                          <span className="text-slate-500 text-sm ml-2">({project.repo_path})</span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="text-primary text-sm hover:text-primary/80"
-                        onClick={() => handleAssign(project)}
-                      >
-                        Add
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <SubList title="Available projects" scroll>
+                {availableProjects.map(project => (
+                  <Row key={project.id} title={project.title} meta={[project.repo_path]}
+                    actions={<Button size="sm" aria-label={`Add ${project.title}`} onClick={() => handleAssign(project)}>Add</Button>} />
+                ))}
+              </SubList>
             )}
           </>
         )}

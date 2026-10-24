@@ -466,6 +466,8 @@ interface MultiSelectProps {
   id?: string
   placeholder?: string
   'aria-label'?: string
+  'aria-describedby'?: string
+  'aria-invalid'?: boolean
   /** Typed text that matches no option can be added as a value, as for free-form tags. */
   creatable?: boolean
   className?: string
@@ -532,6 +534,7 @@ export const MultiSelect = ({ options, value, onChange, id, placeholder, creatab
           </span>
         ))}
         <input ref={inputRef} id={id} role="combobox" aria-label={props['aria-label']} aria-expanded={open} aria-controls={listId}
+          aria-describedby={props['aria-describedby']} aria-invalid={props['aria-invalid']}
           aria-autocomplete="list" aria-activedescendant={open && choices[current] ? `${listId}-${current}` : undefined}
           className="flex-1 min-w-[8rem] bg-transparent px-1 py-0.5 outline-none placeholder:text-slate-500"
           value={query} placeholder={value.length ? undefined : placeholder}

@@ -10,8 +10,8 @@ const removeMember = vi.fn()
 const assignTeamToProject = vi.fn()
 const unassignTeamFromProject = vi.fn()
 const listPeople = vi.fn()
-const getPerson = vi.fn()
 const listProjects = vi.fn()
+const getPerson = vi.fn()
 
 vi.mock('@/hooks/useTeams', () => ({
   useTeams: () => ({
@@ -58,7 +58,9 @@ const team = (over: Record<string, unknown> = {}) => ({
   member_count: 2,
   is_active: true,
   discord_role_id: null,
-  github_team_id: null,
+  discord_guild_id: null,
+  github_org: null,
+  github_team_slug: null,
   members: [],
   projects: [],
   ...over,
@@ -70,13 +72,12 @@ beforeEach(() => {
   listPeople.mockResolvedValue([person()])
   listProjects.mockResolvedValue([])
   getTeam.mockResolvedValue(team())
-  getPerson.mockResolvedValue(person())
-  createTeam.mockResolvedValue({ success: true, team: team() })
-  updateTeam.mockResolvedValue({ success: true, team: team() })
-  addMember.mockResolvedValue({ success: true })
-  removeMember.mockResolvedValue({ success: true })
-  assignTeamToProject.mockResolvedValue({ success: true })
-  unassignTeamFromProject.mockResolvedValue({ success: true })
+  createTeam.mockResolvedValue({ team: team() })
+  updateTeam.mockResolvedValue({ team: team() })
+  addMember.mockResolvedValue(undefined)
+  removeMember.mockResolvedValue(undefined)
+  assignTeamToProject.mockResolvedValue(undefined)
+  unassignTeamFromProject.mockResolvedValue(undefined)
 })
 
 describe('TeamsPanel - load states', () => {
@@ -119,21 +120,20 @@ describe('TeamsPanel - load states', () => {
   })
 })
 
-// The search-result rows render display name + @identifier + "Add" inside one
-// button; match by the person's name substring to avoid brittle name concat.
-const clickPersonResult = async (
-  user: ReturnType<typeof renderWithUser>['user'],
-  name: string,
-) => {
-  const btn = await screen.findByRole(
-    'button',
-    {
-      name: (_n, el) =>
-        !!el.textContent?.includes(name) && !!el.textContent?.includes('Add'),
-    },
-    { timeout: 2000 },
-  )
-  await user.click(btn)
+const searchAndAdd = async (user: ReturnType<typeof renderWithUser>['user'], label: string, name: string) => {
+  await user.type(screen.getByLabelText(label), name.toLowerCase())
+  await user.click(await screen.findByRole('button', { name: `Add ${name}` }, { timeout: 2000 }))
+}
+
+const openEdit = async (user: ReturnType<typeof renderWithUser>['user']) => {
+  await screen.findByText('Engineering')
+  await user.click(screen.getByRole('button', { name: 'Edit' }))
+}
+
+const confirmIn = async (user: ReturnType<typeof renderWithUser>['user'], label: string) => {
+  await user.click(screen.getByRole('button', { name: label }))
+  const dialogs = screen.getAllByRole('dialog')
+  await user.click(within(dialogs[dialogs.length - 1]).getByRole('button', { name: 'Remove' }))
 }
 
 describe('TeamsPanel - create flow', () => {
@@ -158,7 +158,7 @@ describe('TeamsPanel - create flow', () => {
   })
 
   it('shows an error when team creation fails', async () => {
-    createTeam.mockResolvedValueOnce({ success: false, error: 'slug exists' })
+    createTeam.mockRejectedValueOnce(new Error('slug exists'))
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
@@ -176,12 +176,60 @@ describe('TeamsPanel - create flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'New team' }))
     await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
-    await user.type(screen.getByPlaceholderText('Search for people to add...'), 'bob')
-    await clickPersonResult(user, 'Bob')
+    createTeam.mockResolvedValueOnce({ team: team({ slug: 'team-x' }) })
+    await searchAndAdd(user, 'Initial members', 'Bob')
 
     await user.click(screen.getByRole('button', { name: 'Create team' }))
-    await waitFor(() => expect(createTeam).toHaveBeenCalled())
     await waitFor(() => expect(addMember).toHaveBeenCalledWith('team-x', 'bob'))
+  })
+
+  it("doesn't submit the form when Enter is pressed in the member search", async () => {
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'New team' }))
+    await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
+    await user.type(screen.getByLabelText('Initial members'), 'bob{Enter}')
+
+    expect(createTeam).not.toHaveBeenCalled()
+  })
+
+  it('creates teams with auto-sync off unless asked', async () => {
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'New team' }))
+    await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
+    await user.click(screen.getByRole('button', { name: 'Create team' }))
+
+    await waitFor(() => expect(createTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ auto_sync_discord: false, auto_sync_github: false })))
+  })
+
+  it('reports initial members that could not be added', async () => {
+    listPeople.mockResolvedValue([person({ id: 2, identifier: 'bob', display_name: 'Bob' })])
+    addMember.mockRejectedValueOnce(new Error('not allowed'))
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'New team' }))
+    await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
+    await searchAndAdd(user, 'Initial members', 'Bob')
+    await user.click(screen.getByRole('button', { name: 'Create team' }))
+
+    expect(await screen.findByText(/Couldn't add Bob: not allowed/)).toBeInTheDocument()
+  })
+
+  it('shows sync warnings returned by the save', async () => {
+    createTeam.mockResolvedValueOnce({ team: team(), warnings: ['Discord guild resolution failed: unknown'] })
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'New team' }))
+    await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
+    await user.click(screen.getByRole('button', { name: 'Create team' }))
+
+    expect(await screen.findByText(/Discord guild resolution failed: unknown/)).toBeInTheDocument()
   })
 })
 
@@ -209,13 +257,89 @@ describe('TeamsPanel - edit flow', () => {
   })
 
   it('shows an error when update fails', async () => {
-    updateTeam.mockResolvedValueOnce({ success: false, error: 'nope' })
+    updateTeam.mockRejectedValueOnce(new Error('nope'))
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByText('nope')).toBeInTheDocument()
+  })
+
+  it('sends Discord and GitHub links under the API names, keeping snowflakes as strings', async () => {
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.type(screen.getByLabelText('Server'), '1234567890123456789')
+    await user.type(screen.getByLabelText('Role'), '9876543210987654321')
+    await user.type(screen.getByLabelText('Organization'), 'acme')
+    await user.type(screen.getByLabelText('Team slug'), 'core')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({
+      guild: '1234567890123456789',
+      discord_role: '9876543210987654321',
+      github_org: 'acme',
+      github_team_slug: 'core',
+    })))
+  })
+
+  it('unlinks Discord when the server is cleared', async () => {
+    listTeams.mockResolvedValue([team({ discord_guild_id: '1234567890123456789', discord_role_id: '42' })])
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.clear(screen.getByLabelText('Server'))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ guild: '' })))
+  })
+
+  it('re-sends the Discord link when auto-sync is turned on, so a sync runs', async () => {
+    listTeams.mockResolvedValue([team({ discord_guild_id: '1', discord_role_id: '2', auto_sync_discord: false })])
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.click(screen.getByLabelText('Auto-sync membership changes to Discord'))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering',
+      expect.objectContaining({ guild: '1', discord_role: '2', auto_sync_discord: true })))
+  })
+
+  it('saves a cleared description and tags', async () => {
+    listTeams.mockResolvedValue([team({ tags: ['eng'] })])
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.clear(screen.getByLabelText('Description'))
+    await user.clear(screen.getByLabelText('Tags'))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ description: '', tags: [] })))
+  })
+
+  it('leaves unchanged links out of the save', async () => {
+    listTeams.mockResolvedValue([team({ discord_guild_id: '1', discord_role_id: '2', github_org: 'acme', github_team_slug: 'core' })])
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalled())
+    expect(updateTeam.mock.calls[0][1]).not.toHaveProperty('guild')
+    expect(updateTeam.mock.calls[0][1]).not.toHaveProperty('github_org')
+  })
+
+  it('refuses a Discord role without a server', async () => {
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.type(screen.getByLabelText('Role'), 'Engineers')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(await screen.findByText('Set the server too')).toBeInTheDocument()
+    expect(updateTeam).not.toHaveBeenCalled()
   })
 })
 
@@ -232,6 +356,18 @@ describe('TeamsPanel - archive flow', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Archive' }))
 
     await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', { is_active: false }))
+  })
+
+  it('shows why archiving failed and keeps the list', async () => {
+    updateTeam.mockRejectedValueOnce(new Error('Only team leads and admins can modify an existing team'))
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'Archive' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Archive' }))
+
+    expect(await screen.findByText('Only team leads and admins can modify an existing team')).toBeInTheDocument()
+    expect(screen.getByText('Engineering')).toBeInTheDocument()
   })
 
   it('cancels archiving', async () => {
@@ -264,36 +400,70 @@ describe('TeamsPanel - members modal', () => {
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Members' }))
-    expect(await screen.findByText('Current Members (1)')).toBeInTheDocument()
+    expect(await screen.findByText('Members (1)')).toBeInTheDocument()
 
-    await user.type(screen.getByPlaceholderText('Search for people...'), 'bob')
-    await clickPersonResult(user, 'Bob')
+    await searchAndAdd(user, 'Add member', 'Bob')
     await waitFor(() => expect(addMember).toHaveBeenCalledWith('engineering', 'bob'))
   })
 
-  it('removes a member', async () => {
+  it('removes a member only after confirmation', async () => {
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Members' }))
-    await screen.findByText('Current Members (1)')
+    await screen.findByText('Members (1)')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await confirmIn(user, 'Remove Alice')
     await waitFor(() => expect(removeMember).toHaveBeenCalledWith('engineering', 'alice'))
   })
 
   it('shows an error when adding a member fails', async () => {
-    addMember.mockResolvedValueOnce({ success: false, error: 'already a member' })
+    addMember.mockRejectedValueOnce(new Error('already a member'))
     listPeople.mockResolvedValue([person({ id: 2, identifier: 'bob', display_name: 'Bob' })])
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Members' }))
-    await screen.findByText('Current Members (1)')
-    await user.type(screen.getByPlaceholderText('Search for people...'), 'bob')
-    await clickPersonResult(user, 'Bob')
+    await screen.findByText('Members (1)')
+    await searchAndAdd(user, 'Add member', 'Bob')
 
     expect(await screen.findByText('already a member')).toBeInTheDocument()
+  })
+
+  it('shows a member\'s details when their row is selected', async () => {
+    getPerson.mockResolvedValue(person({ aliases: ['Al'], contact_info: { email: 'alice@x.com' } }))
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'Members' }))
+    await user.click(await screen.findByRole('button', { name: 'Alice' }))
+
+    expect(await screen.findByText('alice@x.com')).toBeInTheDocument()
+    expect(getPerson).toHaveBeenCalledWith('alice', true)
+  })
+
+  it('offers a retry when the members fail to load', async () => {
+    getTeam.mockRejectedValueOnce(new Error('teams down'))
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'Members' }))
+    expect(await screen.findByText("Couldn't load the members: teams down")).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByText('Members (1)')).toBeInTheDocument()
+  })
+
+  it('shows a failed people search instead of an empty result', async () => {
+    listPeople.mockResolvedValueOnce([]).mockRejectedValue(new Error('people down'))
+    const { user } = renderWithUser(<TeamsPanel />)
+    await screen.findByText('Engineering')
+
+    await user.click(screen.getByRole('button', { name: 'Members' }))
+    await screen.findByText('Members (1)')
+    await user.type(screen.getByLabelText('Add member'), 'bob')
+
+    expect(await screen.findByText('Search failed: people down', {}, { timeout: 2000 })).toBeInTheDocument()
   })
 })
 
@@ -312,10 +482,9 @@ describe('TeamsPanel - projects modal', () => {
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Projects' }))
-    expect(await screen.findByText('Assigned Projects (1)')).toBeInTheDocument()
-    expect(screen.getByText('Available')).toBeInTheDocument()
+    expect(await screen.findByText('Assigned projects (1)')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('button', { name: 'Add Available' }))
     await waitFor(() => expect(assignTeamToProject).toHaveBeenCalledWith(51, 10))
   })
 
@@ -324,22 +493,9 @@ describe('TeamsPanel - projects modal', () => {
     await screen.findByText('Engineering')
 
     await user.click(screen.getByRole('button', { name: 'Projects' }))
-    await screen.findByText('Assigned Projects (1)')
+    await screen.findByText('Assigned projects (1)')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await confirmIn(user, 'Remove Assigned')
     await waitFor(() => expect(unassignTeamFromProject).toHaveBeenCalledWith(50, 10))
-  })
-})
-
-describe('TeamsPanel - owner change', () => {
-  beforeEach(() => listTeams.mockResolvedValue([team()]))
-
-  it('assigns an owner via the owner popover', async () => {
-    const { user } = renderWithUser(<TeamsPanel />)
-    await screen.findByText('Engineering')
-
-    await user.click(screen.getByText('Set owner'))
-    await user.click(await screen.findByRole('button', { name: 'Alice' }))
-    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', { owner: 1 }))
   })
 })

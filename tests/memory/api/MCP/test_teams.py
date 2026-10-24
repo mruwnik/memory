@@ -760,6 +760,30 @@ async def test_upsert_with_discord_guild_by_id(db_session, admin_session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unlink, cleared",
+    [
+        ({"guild": ""}, ["discord_guild_id", "discord_role_id"]),
+        ({"guild": "123456789", "discord_role": ""}, ["discord_role_id"]),
+        ({"github_org": ""}, ["github_org", "github_team_slug", "github_team_id"]),
+        ({"github_org": "myorg", "github_team_slug": ""}, ["github_team_slug", "github_team_id"]),
+    ],
+)
+async def test_upsert_empty_string_unlinks_integration(db_session, admin_session, unlink, cleared):
+    db_session.add(Team(
+        name="Linked", slug="linked",
+        discord_guild_id=123456789, discord_role_id=555,
+        github_org="myorg", github_team_slug="myteam", github_team_id=42,
+    ))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await get_fn(upsert)(name="Linked", slug="linked", **unlink)
+
+    assert {f: result["team"][f] for f in cleared} == dict.fromkeys(cleared)
+
+
+@pytest.mark.asyncio
 async def test_upsert_with_discord_role_creates_role(db_session, admin_session, discord_bot):
     """Test upsert creates Discord role when it doesn't exist.
 

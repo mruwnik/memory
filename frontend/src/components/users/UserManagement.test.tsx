@@ -22,6 +22,7 @@ const user = (overrides = {}) => ({
 
 interface RouteState {
   users: any[]
+  scopes?: any[]
 }
 
 // Build a fetch implementation that serves /auth/me, /users, /users/scopes,
@@ -36,7 +37,7 @@ const installFetch = (
     const key = `${method} ${url.replace(/^.*(\/users.*|\/auth.*)$/, '$1')}`
 
     if (url.includes('/auth/me')) return mockResponse({ json: authMe })
-    if (url.endsWith('/users/scopes')) return mockResponse({ json: scopes })
+    if (url.endsWith('/users/scopes')) return mockResponse({ json: state.scopes ?? scopes })
 
     for (const [pattern, handler] of Object.entries(handlers)) {
       if (key.startsWith(pattern) || url.includes(pattern)) {
@@ -102,7 +103,7 @@ describe('UserManagement list states', () => {
     mockFetch(async (input) => {
       const url = String(input)
       if (url.includes('/auth/me')) return mockResponse({ json: authMe })
-      if (url.endsWith('/users/scopes')) return mockResponse({ json: scopes })
+      if (url.endsWith('/users/scopes')) return mockResponse({ json: state.scopes ?? scopes })
       return mockResponse({ status: 403, json: { detail: 'no' } })
     })
     renderWithRouter(<UserManagement />)
@@ -155,8 +156,7 @@ describe('UserManagement create flow', () => {
     const modal = modalByHeading('New user')
     await ue.type(fieldByLabel(modal, 'Name'), 'Carol')
     await ue.type(fieldByLabel(modal, 'Email'), 'carol@x.com')
-    await ue.type(fieldByLabel(modal, 'Password'), 'secretpw')
-    await ue.click(screen.getByRole('button', { name: 'Create user' }))
+    await ue.type(fieldByLabel(modal, 'Password'), 'secretpw{Enter}')
 
     await waitFor(() => expect(posted).toHaveLength(1))
     expect(posted[0]).toMatchObject({
@@ -256,6 +256,60 @@ describe('UserManagement edit flow', () => {
 
     await waitFor(() => expect(patched).toHaveLength(1))
     expect(patched[0]).toMatchObject({ name: 'Bobby' })
+  })
+})
+
+describe('UserManagement own account', () => {
+  it("won't let an admin untick their own full admin scope", async () => {
+    installFetch({
+      users: [user({ id: 1, name: 'Admin', scopes: ['*'] })],
+      scopes: [...scopes, { value: '*', label: 'All permissions', description: 'Everything', category: 'core' }],
+    })
+    const { user: ue } = renderWithRouter(<UserManagement />)
+    await screen.findByText('Admin')
+
+    await ue.click(screen.getByRole('button', { name: 'Edit' }))
+    const modal = modalByHeading('Edit user')
+
+    expect(within(modal).getByRole('group', { name: 'Scopes' })).toBeInTheDocument()
+    expect(within(modal).getByRole('checkbox', { name: 'All permissions' })).toBeDisabled()
+  })
+})
+
+describe('UserManagement reset password', () => {
+  it('sets a new password for another human user', async () => {
+    const posted: any[] = []
+    installFetch(
+      { users: [user({ id: 1, name: 'Admin' }), user({ id: 2, name: 'Bob' }), user({ id: 3, name: 'Botty', user_type: 'bot' })] },
+      { 'POST /users/2/reset-password': (init) => { posted.push(JSON.parse(init!.body as string)); return mockResponse({ json: { status: 'password_reset' } }) } },
+    )
+    const { user: ue } = renderWithRouter(<UserManagement />)
+    await screen.findByText('Bob')
+
+    expect(screen.getAllByRole('button', { name: 'Reset password' })).toHaveLength(1)
+    await ue.click(screen.getByRole('button', { name: 'Reset password' }))
+    const modal = modalByHeading('Reset password for Bob')
+    await ue.type(fieldByLabel(modal, 'New password'), 'newpass12')
+    await ue.type(fieldByLabel(modal, 'Confirm new password'), 'newpass12{Enter}')
+
+    expect(await screen.findByText('Password reset for Bob. They have been signed out everywhere.')).toBeInTheDocument()
+    expect(posted).toEqual([{ new_password: 'newpass12' }])
+  })
+
+  it('refuses mismatched passwords without calling the server', async () => {
+    const posted: any[] = []
+    installFetch(
+      { users: [user({ id: 2, name: 'Bob' })] },
+      { 'POST /users/2/reset-password': (init) => { posted.push(init); return mockResponse({ json: {} }) } },
+    )
+    const { user: ue } = renderWithRouter(<UserManagement />)
+    await ue.click(await screen.findByRole('button', { name: 'Reset password' }))
+    const modal = modalByHeading('Reset password for Bob')
+    await ue.type(fieldByLabel(modal, 'New password'), 'newpass12')
+    await ue.type(fieldByLabel(modal, 'Confirm new password'), 'other1234{Enter}')
+
+    expect(fieldByLabel(modal, 'Confirm new password')).toHaveAccessibleDescription('Passwords do not match')
+    expect(posted).toHaveLength(0)
   })
 })
 

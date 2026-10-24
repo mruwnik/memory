@@ -1,12 +1,14 @@
 """Tests for user management API endpoints."""
 
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 from memory.common import settings
-from memory.common.db.models import APIKey, APIKeyType, HumanUser
+from memory.common.db.models import APIKey, APIKeyType, HumanUser, UserSession
+from memory.common.db.models.users import verify_password
 
 
 @pytest.fixture
@@ -405,6 +407,31 @@ def test_update_user_with_invalid_scope(client: TestClient, admin_user, db_sessi
 
     assert response.status_code == 400
     assert "Invalid scopes" in response.json()["detail"]
+
+
+def test_update_user_refuses_removing_own_admin_scope(client: TestClient, admin_user, db_session):
+    response = client.patch(f"/users/{admin_user.id}", json={"scopes": ["read"]})
+
+    assert response.status_code == 400
+    assert "your own" in response.json()["detail"]
+    db_session.refresh(admin_user)
+    assert admin_user.scopes == ["*"]
+
+
+def test_reset_password_sets_it_and_signs_the_user_out(client: TestClient, admin_user, db_session):
+    target = HumanUser.create_with_password(email="reset@example.com", name="Reset Me", password="oldpass123")
+    db_session.add(target)
+    db_session.flush()
+    db_session.add(UserSession(user_id=target.id, expires_at=datetime.now() + timedelta(days=1)))
+    db_session.commit()
+
+    response = client.post(f"/users/{target.id}/reset-password", json={"new_password": "newpass123"})
+
+    assert response.status_code == 200
+    assert "newpass123" not in response.text
+    db_session.refresh(target)
+    assert verify_password("newpass123", target.password_hash or "")
+    assert db_session.query(UserSession).filter(UserSession.user_id == target.id).count() == 0
 
 
 def test_create_user_with_valid_scopes(client: TestClient, admin_user, db_session):

@@ -326,6 +326,10 @@ def update_user(
                 detail="Only users with full admin (*) scope can grant full admin scope",
             )
 
+        # Dropping your own * would lock you out of user management with no one to restore it
+        if target_user.id == user.id and SCOPE_ADMIN in user_scopes and SCOPE_ADMIN not in updates.scopes:
+            raise HTTPException(status_code=400, detail="You can't remove your own full admin (*) scope")
+
         target_user.scopes = updates.scopes
 
     db.commit()

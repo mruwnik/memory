@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderWithUser, screen, waitFor, within } from '@/test/utils'
 
 const listProjects = vi.fn()
@@ -9,11 +9,9 @@ const updateProject = vi.fn()
 const deleteProject = vi.fn()
 
 const listTeams = vi.fn()
-const listMembers = vi.fn()
 const listProjectTeams = vi.fn()
 const assignTeamToProject = vi.fn()
 const unassignTeamFromProject = vi.fn()
-const getTeam = vi.fn()
 
 const addJournalEntry = vi.fn()
 
@@ -31,11 +29,9 @@ vi.mock('@/hooks/useProjects', () => ({
 vi.mock('@/hooks/useTeams', () => ({
   useTeams: () => ({
     listTeams,
-    listMembers,
     listProjectTeams,
     assignTeamToProject,
     unassignTeamFromProject,
-    getTeam,
   }),
 }))
 
@@ -43,7 +39,11 @@ vi.mock('@/hooks/useJournal', () => ({
   useJournal: () => ({ addJournalEntry }),
 }))
 
-vi.mock('@/hooks/usePeople', () => ({}))
+const listPeople = vi.fn()
+
+vi.mock('@/hooks/usePeople', () => ({
+  usePeople: () => ({ listPeople }),
+}))
 
 import { ProjectsPanel } from './ProjectsPanel'
 
@@ -65,12 +65,6 @@ const project = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-const adminTeam = {
-  id: 100,
-  name: 'Admin',
-  slug: 'admin',
-  members: [{ id: 1, identifier: 'alice', display_name: 'Alice' }],
-}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -78,17 +72,14 @@ beforeEach(() => {
   listProjects.mockResolvedValue([])
   getProjectTree.mockResolvedValue([])
   getProject.mockResolvedValue({ project: project(), journal_entries: [] })
-  getTeam.mockImplementation(async (slug: string) =>
-    slug === 'admin' ? adminTeam : { id: 101, name: 'Internal', slug: 'internal', members: [] },
-  )
+  listPeople.mockResolvedValue([{ id: 1, identifier: 'alice', display_name: 'Alice', aliases: [], contact_info: {}, tags: [], created_at: null }])
   listTeams.mockResolvedValue([{ id: 5, name: 'Team A', slug: 'team-a' }])
-  listMembers.mockResolvedValue([])
   listProjectTeams.mockResolvedValue([])
-  createProject.mockResolvedValue({ success: true, project: project() })
-  updateProject.mockResolvedValue({ success: true, project: project() })
-  deleteProject.mockResolvedValue({ success: true, deleted_id: 1 })
-  assignTeamToProject.mockResolvedValue({ success: true })
-  unassignTeamFromProject.mockResolvedValue({ success: true })
+  createProject.mockResolvedValue(project())
+  updateProject.mockResolvedValue(project())
+  deleteProject.mockResolvedValue(undefined)
+  assignTeamToProject.mockResolvedValue(undefined)
+  unassignTeamFromProject.mockResolvedValue(undefined)
   addJournalEntry.mockResolvedValue({ status: 'ok', entry: { id: 1, content: 'x', created_at: '2024-01-01T00:00:00Z' } })
 })
 
@@ -149,9 +140,10 @@ describe('ProjectsPanel - create flow', () => {
 
     await user.click(screen.getAllByRole('button', { name: 'New project' })[0])
     await user.type(screen.getByPlaceholderText('Project name'), 'New')
-    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await user.click(screen.getByRole('button', { name: 'Create project' }))
 
-    expect(await screen.findByText('Please select at least one team')).toBeInTheDocument()
+    expect(screen.getByLabelText('Teams')).toHaveAccessibleDescription(
+      'Required: the teams whose members can access this project. Select at least one team')
     expect(createProject).not.toHaveBeenCalled()
   })
 
@@ -161,14 +153,30 @@ describe('ProjectsPanel - create flow', () => {
 
     await user.click(screen.getAllByRole('button', { name: 'New project' })[0])
     await user.type(screen.getByPlaceholderText('Project name'), 'New Proj')
-    await user.click(screen.getByLabelText(/Team A/))
-    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await user.type(screen.getByLabelText('Due date'), '2030-01-15')
+    await user.click(screen.getByLabelText('Teams'))
+    await user.click(screen.getByRole('option', { name: /Team A/ }))
+    await user.click(screen.getByRole('button', { name: 'Create project' }))
 
     await waitFor(() =>
       expect(createProject).toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'New Proj', team_ids: [5], state: 'open' }),
+        expect.objectContaining({ title: 'New Proj', team_ids: [5], state: 'open', due_on: '2030-01-15T00:00:00Z' }),
       ),
     )
+  })
+
+  it('keeps the form open with the reason when creating fails', async () => {
+    createProject.mockRejectedValueOnce(new Error('Team 5 not found'))
+    const { user } = renderWithUser(<ProjectsPanel />)
+    await screen.findByText(/No projects found/)
+
+    await user.click(screen.getAllByRole('button', { name: 'New project' })[0])
+    await user.type(screen.getByPlaceholderText('Project name'), 'New Proj')
+    await user.click(screen.getByLabelText('Teams'))
+    await user.click(screen.getByRole('option', { name: /Team A/ }))
+    await user.click(screen.getByRole('button', { name: 'Create project' }))
+
+    expect(await within(screen.getByRole('dialog')).findByText('Team 5 not found')).toBeInTheDocument()
   })
 })
 
@@ -182,11 +190,23 @@ describe('ProjectsPanel - edit flow', () => {
     const titleInput = screen.getByPlaceholderText('Project name')
     await user.clear(titleInput)
     await user.type(titleInput, 'Alpha Renamed')
-    await user.click(screen.getByRole('button', { name: 'Update' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
       expect(updateProject).toHaveBeenCalledWith(1, expect.objectContaining({ title: 'Alpha Renamed' })),
     )
+  })
+
+  it('offers anyone as the owner', async () => {
+    listProjects.mockResolvedValue([project()])
+    const { user } = renderWithUser(<ProjectsPanel />)
+    await screen.findByText('Alpha')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.selectOptions(screen.getByLabelText('Owner'), 'Alice')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateProject).toHaveBeenCalledWith(1, expect.objectContaining({ owner_id: 1 })))
   })
 
   it('restricts editable fields for GitHub-backed projects', async () => {
@@ -198,7 +218,7 @@ describe('ProjectsPanel - edit flow', () => {
     expect(screen.getByText(/This project is synced from GitHub/)).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Project name')).toBeDisabled()
 
-    await user.click(screen.getByRole('button', { name: 'Update' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(updateProject).toHaveBeenCalledTimes(1))
     const payload = updateProject.mock.calls[0][1]
     expect(payload).not.toHaveProperty('title')
@@ -223,6 +243,18 @@ describe('ProjectsPanel - delete flow', () => {
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteProject).toHaveBeenCalledWith(1))
+  })
+
+  it('shows why a delete failed', async () => {
+    deleteProject.mockRejectedValueOnce(new Error('Project has open tasks'))
+    listProjects.mockResolvedValue([project()])
+    const { user } = renderWithUser(<ProjectsPanel />)
+    await screen.findByText('Alpha')
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('Project has open tasks')).toBeInTheDocument()
   })
 
   it('warns about orphaning children in the confirm message', async () => {
@@ -250,55 +282,44 @@ describe('ProjectsPanel - teams modal', () => {
     await screen.findByText('Alpha')
 
     await user.click(screen.getByRole('button', { name: 'Teams' }))
-    expect(await screen.findByText('Assigned Teams (1)')).toBeInTheDocument()
-    expect(screen.getByText('Team B')).toBeInTheDocument()
+    expect(await screen.findByText('Assigned teams (1)')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('button', { name: 'Add Team B' }))
     await waitFor(() => expect(assignTeamToProject).toHaveBeenCalledWith(1, 6))
   })
 
-  it('unassigns an assigned team and shows an error when it fails', async () => {
-    unassignTeamFromProject.mockResolvedValueOnce({ success: false, error: 'last team' })
+  it('unassigns a team after confirmation and shows an error when it fails', async () => {
+    unassignTeamFromProject.mockRejectedValueOnce(new Error('last team'))
     const { user } = renderWithUser(<ProjectsPanel />)
     await screen.findByText('Alpha')
 
     await user.click(screen.getByRole('button', { name: 'Teams' }))
-    await screen.findByText('Assigned Teams (1)')
+    await screen.findByText('Assigned teams (1)')
 
-    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(screen.getByRole('button', { name: 'Remove Team A' }))
+    const dialogs = screen.getAllByRole('dialog')
+    await user.click(within(dialogs[dialogs.length - 1]).getByRole('button', { name: 'Remove' }))
+
+    expect(unassignTeamFromProject).toHaveBeenCalledWith(1, 5)
     expect(await screen.findByText('last team')).toBeInTheDocument()
   })
 })
 
-describe('ProjectsPanel - inline owner/due-date editing', () => {
-  beforeEach(() => listProjects.mockResolvedValue([project()]))
-
-  it('changes the owner via the owner popover', async () => {
-    const { user } = renderWithUser(<ProjectsPanel />)
-    await screen.findByText('Alpha')
-
-    // An ownerless project offers "Set owner"; admin team member Alice is selectable
-    await user.click(screen.getByRole('button', { name: 'Set owner' }))
-    await user.click(await screen.findByRole('button', { name: 'Alice' }))
-
-    await waitFor(() => expect(updateProject).toHaveBeenCalledWith(1, { owner_id: 1 }))
+describe('ProjectsPanel - due dates', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    process.env.TZ = 'UTC'
   })
 
-  it('sets a due date via the due-date popover', async () => {
-    const { user } = renderWithUser(<ProjectsPanel />)
-    await screen.findByText('Alpha')
+  it('shows the picked calendar day west of UTC, and is not overdue until that day ends', async () => {
+    process.env.TZ = 'America/Los_Angeles'
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 30, 20, 0))  // 8pm on the due day, already Oct 31 in UTC
+    listProjects.mockResolvedValue([project({ due_on: '2026-10-30T00:00:00Z' })])
+    renderWithUser(<ProjectsPanel />)
 
-    await user.click(screen.getByRole('button', { name: 'Set due date' }))
-    const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement
-    await user.type(dateInput, '2030-01-15')
-    await user.click(screen.getByRole('button', { name: 'Apply' }))
-
-    await waitFor(() =>
-      expect(updateProject).toHaveBeenCalledWith(
-        1,
-        expect.objectContaining({ clear_due_on: false }),
-      ),
-    )
+    expect(await screen.findByText('Due: Oct 30, 2026')).toBeInTheDocument()
+    expect(screen.getByText('Due soon')).toBeInTheDocument()
   })
 })
 
@@ -339,6 +360,39 @@ describe('ProjectsPanel - tree view', () => {
 })
 
 describe('ProjectsPanel - journal', () => {
+  it('fetches nothing until the journal is expanded', async () => {
+    listProjects.mockResolvedValue([project(), project({ id: 2, title: 'Beta' })])
+    renderWithUser(<ProjectsPanel />)
+    await screen.findByText('Beta')
+
+    expect(getProject).not.toHaveBeenCalled()
+  })
+
+  it('shows why the journal failed to load', async () => {
+    listProjects.mockResolvedValue([project()])
+    getProject.mockRejectedValueOnce(new Error('forbidden'))
+    const { user } = renderWithUser(<ProjectsPanel />)
+    await screen.findByText('Alpha')
+
+    await user.click(screen.getByRole('button', { name: /Journal/ }))
+
+    expect(await screen.findByText("Couldn't load the journal: forbidden")).toBeInTheDocument()
+  })
+
+  it('keeps the text and shows why adding an entry failed', async () => {
+    listProjects.mockResolvedValue([project()])
+    addJournalEntry.mockRejectedValueOnce(new Error('denied'))
+    const { user } = renderWithUser(<ProjectsPanel />)
+    await screen.findByText('Alpha')
+
+    await user.click(screen.getByRole('button', { name: /Journal/ }))
+    await user.type(await screen.findByPlaceholderText('Add a journal entry...'), 'New entry')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    expect(await screen.findByText("Couldn't add the entry: denied")).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Add a journal entry...')).toHaveValue('New entry')
+  })
+
   it('loads journal entries and adds a new one', async () => {
     listProjects.mockResolvedValue([project()])
     getProject.mockResolvedValue({

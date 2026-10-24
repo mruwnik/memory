@@ -43,6 +43,12 @@ describe('useTeams.listTeams', () => {
     const { listTeams } = setup()
     expect(await listTeams()).toEqual([])
   })
+
+  it('throws when the result carries an error', async () => {
+    mockFetchRoutes({ teams_list_all: mcpResult({ error: 'Not authenticated' }) })
+    const { listTeams } = setup()
+    await expect(listTeams()).rejects.toThrow('Not authenticated')
+  })
 })
 
 describe('useTeams.getTeam', () => {
@@ -63,10 +69,10 @@ describe('useTeams.getTeam', () => {
     expect(mcpArgsAt(fetchMock)).toEqual({ team: 5, include_members: false, include_projects: true })
   })
 
-  it('returns null when the result carries an error', async () => {
+  it('throws when the result carries an error', async () => {
     mockFetchRoutes({ teams_fetch: mcpResult({ error: 'forbidden' }) })
     const { getTeam } = setup()
-    expect(await getTeam('core')).toBeNull()
+    await expect(getTeam('core')).rejects.toThrow('forbidden')
   })
 
   it('returns null when team is absent', async () => {
@@ -88,8 +94,8 @@ describe('useTeams.createTeam', () => {
       description: 'd',
       owner: 'alice',
       tags: ['t'],
-      guild: 123,
-      discord_role: 456,
+      guild: '1234567890123456789',
+      discord_role: '9876543210987654321',
       auto_sync_discord: true,
       github_org: 'org',
       github_team_slug: 'gts',
@@ -101,17 +107,21 @@ describe('useTeams.createTeam', () => {
       name: 'Core',
       slug: 'core',
       owner: 'alice',
-      guild: 123,
-      discord_role: 456,
+      guild: '1234567890123456789',
+      discord_role: '9876543210987654321',
       auto_sync_discord: true,
       github_org: 'org',
+      github_team_slug: 'gts',
     })
   })
 
-  it('falls back to a generic error on empty result', async () => {
-    mockFetchRoutes({ teams_upsert: mcpResult(null) })
+  it.each([
+    [null, 'Failed to create team'],
+    [{ error: 'slug taken' }, 'slug taken'],
+  ])('throws when the upsert fails (%o)', async (result, message) => {
+    mockFetchRoutes({ teams_upsert: mcpResult(result) })
     const { createTeam } = setup()
-    expect(await createTeam({ name: 'X' })).toEqual({ success: false, error: 'Unknown error' })
+    await expect(createTeam({ name: 'X' })).rejects.toThrow(message)
   })
 })
 
@@ -145,17 +155,15 @@ describe('useTeams.updateTeam', () => {
     expect(mcpArgsAt(fetchMock)).toMatchObject({ name: 'Renamed', slug: 'core' })
   })
 
-  it('returns "Team not found" without upserting when the team is missing', async () => {
+  it('throws without upserting when the team is missing', async () => {
     const fetchMock = mockFetchRoutes({
       'auth/me': { json: { user_id: 1, scopes: ['*'] } },
-      teams_fetch: mcpResult({ error: 'missing' }),
+      teams_fetch: mcpResult({ error: 'Team not found: ghost' }),
       teams_upsert: mcpResult({ success: true }),
     })
     const { updateTeam } = setup()
 
-    const out = await updateTeam('ghost', { description: 'x' })
-
-    expect(out).toEqual({ success: false, error: 'Team not found' })
+    await expect(updateTeam('ghost', { description: 'x' })).rejects.toThrow('Team not found: ghost')
     const upsertCalls = mcpCallsTo(fetchMock, 'teams_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
@@ -166,19 +174,16 @@ describe('useTeams.addMember', () => {
     const fetchMock = mockFetchRoutes({ teams_team_add_member: mcpResult({ success: true }) })
     const { addMember } = setup()
 
-    const out = await addMember('core', 'bob')
+    await addMember('core', 'bob')
 
-    expect(out).toEqual({ success: true })
     expect(mcpArgsAt(fetchMock)).toEqual({ team: 'core', person: 'bob', role: 'member' })
   })
 
-  it('passes an explicit role and falls back to generic error on empty result', async () => {
-    const fetchMock = mockFetchRoutes({ teams_team_add_member: mcpResult(null) })
+  it('passes an explicit role and throws the server error', async () => {
+    const fetchMock = mockFetchRoutes({ teams_team_add_member: mcpResult({ error: 'Person not found: 2' }) })
     const { addMember } = setup()
 
-    const out = await addMember(1, 2, 'admin')
-
-    expect(out).toEqual({ success: false, error: 'Unknown error' })
+    await expect(addMember(1, 2, 'admin')).rejects.toThrow('Person not found: 2')
     expect(mcpArgsAt(fetchMock)).toEqual({ team: 1, person: 2, role: 'admin' })
   })
 })
@@ -188,16 +193,15 @@ describe('useTeams.removeMember', () => {
     const fetchMock = mockFetchRoutes({ teams_team_remove_member: mcpResult({ success: true }) })
     const { removeMember } = setup()
 
-    const out = await removeMember('core', 'bob')
+    await removeMember('core', 'bob')
 
-    expect(out).toEqual({ success: true })
     expect(mcpArgsAt(fetchMock)).toEqual({ team: 'core', person: 'bob' })
   })
 
-  it('falls back to a generic error on empty result', async () => {
+  it('throws a generic error on empty result', async () => {
     mockFetchRoutes({ teams_team_remove_member: mcpResult(null) })
     const { removeMember } = setup()
-    expect(await removeMember('core', 'bob')).toEqual({ success: false, error: 'Unknown error' })
+    await expect(removeMember('core', 'bob')).rejects.toThrow('Failed to remove member')
   })
 })
 
@@ -267,9 +271,8 @@ describe('useTeams.assignTeamToProject', () => {
     })
     const { assignTeamToProject } = setup()
 
-    const out = await assignTeamToProject(3, 9)
+    await assignTeamToProject(3, 9)
 
-    expect(out).toEqual({ success: true })
     const upsertCalls = mcpCallsTo(fetchMock, 'projects_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
@@ -282,10 +285,26 @@ describe('useTeams.assignTeamToProject', () => {
     })
     const { assignTeamToProject } = setup()
 
-    const out = await assignTeamToProject(3, 2)
+    await assignTeamToProject(3, 2)
 
-    expect(out).toEqual({ success: true })
     expect(mcpArgsAt(fetchMock)).toEqual({ project_id: 3, team_ids: [1, 2] })
+  })
+})
+
+describe('useTeams project team fetch failures', () => {
+  it.each([
+    ['assignTeamToProject' as const],
+    ['unassignTeamFromProject' as const],
+  ])('%s throws without rewriting the team list', async (fn) => {
+    const fetchMock = mockFetchRoutes({
+      'auth/me': { json: { user_id: 1, scopes: ['*'] } },
+      projects_fetch: mcpResult({ error: 'Project not found: 3' }),
+      projects_upsert: mcpResult({ success: true }),
+    })
+    const hook = setup()
+
+    await expect(hook[fn](3, 2)).rejects.toThrow('Project not found: 3')
+    expect(mcpCallsTo(fetchMock, 'projects_upsert')).toHaveLength(0)
   })
 })
 
@@ -298,9 +317,8 @@ describe('useTeams.unassignTeamFromProject', () => {
     })
     const { unassignTeamFromProject } = setup()
 
-    const out = await unassignTeamFromProject(3, 99)
+    await unassignTeamFromProject(3, 99)
 
-    expect(out).toEqual({ success: true })
     const upsertCalls = mcpCallsTo(fetchMock, 'projects_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
@@ -313,12 +331,7 @@ describe('useTeams.unassignTeamFromProject', () => {
     })
     const { unassignTeamFromProject } = setup()
 
-    const out = await unassignTeamFromProject(3, 7)
-
-    expect(out).toEqual({
-      success: false,
-      error: 'Cannot remove the last team - projects require at least one team',
-    })
+    await expect(unassignTeamFromProject(3, 7)).rejects.toThrow('Cannot remove the last team')
     const upsertCalls = mcpCallsTo(fetchMock, 'projects_upsert')
     expect(upsertCalls).toHaveLength(0)
   })
@@ -331,9 +344,8 @@ describe('useTeams.unassignTeamFromProject', () => {
     })
     const { unassignTeamFromProject } = setup()
 
-    const out = await unassignTeamFromProject(3, 1)
+    await unassignTeamFromProject(3, 1)
 
-    expect(out).toEqual({ success: true })
     expect(mcpArgsAt(fetchMock)).toEqual({ project_id: 3, team_ids: [2] })
   })
 })

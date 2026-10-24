@@ -108,12 +108,13 @@ describe('UserSettings password section gating', () => {
 })
 
 describe('UserSettings save profile', () => {
-  it('reports "No changes to save" when nothing changed', async () => {
+  it('offers Save only once something changed', async () => {
     install(me())
     const { user } = renderWithRouter(<UserSettings />)
-    await screen.findByDisplayValue('Ada')
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
-    expect(await screen.findByText('No changes to save')).toBeInTheDocument()
+    const nameInput = await screen.findByDisplayValue('Ada')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    await user.type(nameInput, 'x')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
   })
 
   it('PATCHes only the changed fields and shows success', async () => {
@@ -128,8 +129,7 @@ describe('UserSettings save profile', () => {
     const { user } = renderWithRouter(<UserSettings />)
     const nameInput = await screen.findByDisplayValue('Ada')
     await user.clear(nameInput)
-    await user.type(nameInput, 'Ada Lovelace')
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await user.type(nameInput, 'Ada Lovelace{Enter}')
 
     expect(await screen.findByText('Profile updated successfully')).toBeInTheDocument()
     await waitFor(() => expect(patched).toHaveLength(1))
@@ -160,7 +160,7 @@ describe('UserSettings change password', () => {
     await user.type(fieldByLabel(modal, 'New password'), 'newpass12')
     await user.type(fieldByLabel(modal, 'Confirm new password'), 'different')
     await user.click(within(modal).getByRole('button', { name: 'Change password' }))
-    expect(await screen.findByText('Passwords do not match')).toBeInTheDocument()
+    expect(fieldByLabel(modal, 'Confirm new password')).toHaveAccessibleDescription('Passwords do not match')
   })
 
   it('validates minimum password length', async () => {
@@ -170,9 +170,10 @@ describe('UserSettings change password', () => {
     const modal = modalByHeading('Change password')
     await user.type(fieldByLabel(modal, 'Current password'), 'oldpass12')
     await user.type(fieldByLabel(modal, 'New password'), 'short')
+    expect(fieldByLabel(modal, 'New password')).toHaveAccessibleDescription('At least 8 characters')
     await user.type(fieldByLabel(modal, 'Confirm new password'), 'short')
     await user.click(within(modal).getByRole('button', { name: 'Change password' }))
-    expect(await screen.findByText('Password must be at least 8 characters')).toBeInTheDocument()
+    expect(fieldByLabel(modal, 'New password')).toHaveAccessibleDescription('At least 8 characters Password must be at least 8 characters')
   })
 
   it('posts a valid password change and closes the modal with success', async () => {
@@ -188,8 +189,7 @@ describe('UserSettings change password', () => {
     const modal = modalByHeading('Change password')
     await user.type(fieldByLabel(modal, 'Current password'), 'oldpass12')
     await user.type(fieldByLabel(modal, 'New password'), 'newpass12')
-    await user.type(fieldByLabel(modal, 'Confirm new password'), 'newpass12')
-    await user.click(within(modal).getByRole('button', { name: 'Change password' }))
+    await user.type(fieldByLabel(modal, 'Confirm new password'), 'newpass12{Enter}')
 
     expect(await screen.findByText('Password changed successfully')).toBeInTheDocument()
     expect(posted[0]).toEqual({ current_password: 'oldpass12', new_password: 'newpass12' })
@@ -211,6 +211,19 @@ describe('UserSettings change password', () => {
 })
 
 describe('UserSettings API key', () => {
+  it('shows why generating a key failed inside the dialog', async () => {
+    install(me({ api_key_count: 1 }), authMe(), {
+      '/api-keys': (init) =>
+        init?.method === 'POST' ? mockResponse({ status: 500, json: { detail: 'key store down' } }) : undefined,
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    await user.click(await screen.findByRole('button', { name: /Regenerate API key/ }))
+    const modal = modalByHeading(/Regenerate API key/)
+    await user.click(within(modal).getByRole('button', { name: 'Regenerate' }))
+
+    expect(await within(modal).findByText(/key store down/)).toBeInTheDocument()
+  })
+
   it('generates a key and reveals it, then copies to clipboard', async () => {
     install(me({ api_key_count: 0 }), authMe(), {
       '/api-keys': (init) =>

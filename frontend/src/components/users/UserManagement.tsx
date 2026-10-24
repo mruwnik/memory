@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useId } from 'react'
 import {
   useUsers,
   type User,
@@ -7,8 +7,39 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Badge, Button, ConfirmButton, EmptyState, Field, FormActions, Input, Label, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, FormActions, Hint, Input, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
+import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
+
+const toggleScope = (scopes: string[], scope: string): string[] =>
+  scopes.includes(scope) ? scopes.filter((s) => s !== scope) : [...scopes, scope]
+
+const ScopeFieldset = ({ scopes, value, onChange, locked = [] }: {
+  scopes: ScopeInfo[]
+  value: string[]
+  onChange: (scopes: string[]) => void
+  /** Scopes that can't be unticked, with the reason shown in place of their description. */
+  locked?: string[]
+}) => {
+  const id = useId()
+  return (
+    <fieldset className="space-y-2">
+      <legend className="block text-sm font-medium text-slate-700 mb-2">Scopes</legend>
+      {scopes.map((scope) => {
+        const isLocked = locked.includes(scope.value) && value.includes(scope.value)
+        return (
+          <div key={scope.value}>
+            <Checkbox label={scope.label} checked={value.includes(scope.value)} disabled={isLocked}
+              aria-describedby={`${id}-${scope.value}`} onChange={() => onChange(toggleScope(value, scope.value))} />
+            <Hint id={`${id}-${scope.value}`} className="ml-6">
+              {isLocked ? "You can't remove this from yourself: you'd lose access to user management." : scope.description}
+            </Hint>
+          </div>
+        )
+      })}
+    </fieldset>
+  )
+}
 
 interface UserFormData {
   name: string
@@ -19,7 +50,7 @@ interface UserFormData {
 }
 
 const UserManagement = () => {
-  const { listUsers, listScopes, createUser, updateUser, deleteUser, regenerateApiKey } =
+  const { listUsers, listScopes, createUser, updateUser, deleteUser, regenerateApiKey, resetPassword } =
     useUsers()
   const { user: currentUser } = useAuth()
 
@@ -27,6 +58,8 @@ const UserManagement = () => {
   const [availableScopes, setAvailableScopes] = useState<ScopeInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [resettingUser, setResettingUser] = useState<User | null>(null)
 
   // Create modal state
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -79,7 +112,8 @@ const UserManagement = () => {
     loadData()
   }, [loadData])
 
-  const handleCreate = async () => {
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault()
     setCreateLoading(true)
     setCreateError(null)
 
@@ -101,8 +135,7 @@ const UserManagement = () => {
       }
 
       await createUser(data)
-      setShowCreateModal(false)
-      setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
+      closeCreateModal()
       await loadUsers()
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : 'Failed to create user')
@@ -111,7 +144,8 @@ const UserManagement = () => {
     }
   }
 
-  const handleEdit = async () => {
+  const handleEdit = async (e: React.FormEvent) => {
+    e.preventDefault()
     if (!editingUser) return
 
     setEditLoading(true)
@@ -119,8 +153,7 @@ const UserManagement = () => {
 
     try {
       await updateUser(editingUser.id, editForm)
-      setEditingUser(null)
-      setEditForm({})
+      closeEditModal()
       await loadUsers()
     } catch (e) {
       setEditError(e instanceof Error ? e.message : 'Failed to update user')
@@ -155,16 +188,21 @@ const UserManagement = () => {
     }
   }
 
+  const closeCreateModal = () => {
+    setShowCreateModal(false)
+    setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
+    setCreateError(null)
+  }
+
+  const closeEditModal = () => {
+    setEditingUser(null)
+    setEditForm({})
+    setEditError(null)
+  }
+
   const closeApiKeyModal = () => {
     setApiKeyUser(null)
     setNewApiKey(null)
-  }
-
-  const toggleScope = (scopes: string[], scope: string): string[] => {
-    if (scopes.includes(scope)) {
-      return scopes.filter((s) => s !== scope)
-    }
-    return [...scopes, scope]
   }
 
   if (loading) {
@@ -185,6 +223,7 @@ const UserManagement = () => {
         {error && (
           <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
         )}
+        {success && <Notice tone="success" onDismiss={() => setSuccess(null)}>{success}</Notice>}
 
         {users.length === 0 ? (
           <EmptyState message="No users found. Create your first user above." />
@@ -205,6 +244,9 @@ const UserManagement = () => {
                       {user.api_key_count > 0 ? 'Regenerate key' : 'Generate key'}
                     </Button>
                   )}
+                  {user.user_type === 'human' && user.id !== currentUser?.id && (
+                    <Button size="sm" onClick={() => setResettingUser(user)}>Reset password</Button>
+                  )}
                   <Button size="sm" onClick={() => {
                     setEditingUser(user)
                     setEditForm({ name: user.name, email: user.email, scopes: [...user.scopes] })
@@ -221,174 +263,109 @@ const UserManagement = () => {
         )}
       </Page>
 
-      {/* Create User Modal */}
       {showCreateModal && (
-        <Modal title="New user" onClose={() => {
-                  setShowCreateModal(false)
-                  setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
-                  setCreateError(null)
-                }} size="md">
-          {createError && (
-              <Notice tone="error" className="mb-4">{createError}</Notice>
+        <Modal title="New user" onClose={closeCreateModal} size="md">
+          <form onSubmit={handleCreate} className="space-y-4">
+            {createError && <Notice tone="error">{createError}</Notice>}
+
+            <Field label="User type">
+              <Select
+                value={createForm.user_type}
+                onChange={(e) =>
+                  setCreateForm({ ...createForm, user_type: e.target.value as 'human' | 'bot' })
+                }
+              >
+                <option value="human">Human</option>
+                <option value="bot">Bot</option>
+              </Select>
+            </Field>
+
+            <Field label="Name">
+              <Input
+                type="text"
+                autoComplete="off"
+                value={createForm.name}
+                onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+              />
+            </Field>
+
+            <Field label="Email">
+              <Input
+                type="email"
+                autoComplete="off"
+                value={createForm.email}
+                onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
+              />
+            </Field>
+
+            {createForm.user_type === 'human' && (
+              <Field label="Password" hint="At least 8 characters">
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                />
+              </Field>
             )}
 
-            <div className="space-y-4">
-              <Field label="User type">
-                <Select
-                  value={createForm.user_type}
-                  onChange={(e) =>
-                    setCreateForm({ ...createForm, user_type: e.target.value as 'human' | 'bot' })
-                  }
-                >
-                  <option value="human">Human</option>
-                  <option value="bot">Bot</option>
-                </Select>
-              </Field>
+            <ScopeFieldset scopes={availableScopes} value={createForm.scopes}
+              onChange={(scopes) => setCreateForm({ ...createForm, scopes })} />
 
-              <Field label="Name">
-                <Input
-                  type="text"
-                  value={createForm.name}
-                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                />
-              </Field>
-
-              <Field label="Email">
-                <Input
-                  type="email"
-                  value={createForm.email}
-                  onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                />
-              </Field>
-
-              {createForm.user_type === 'human' && (
-                <Field label="Password">
-                  <Input
-                    type="password"
-                    value={createForm.password}
-                    onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                  />
-                </Field>
-              )}
-
-              <div>
-                <Label className="mb-2">Scopes</Label>
-                <div className="space-y-2">
-                  {availableScopes.map((scope) => (
-                    <label key={scope.value} className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={createForm.scopes.includes(scope.value)}
-                        onChange={() =>
-                          setCreateForm({
-                            ...createForm,
-                            scopes: toggleScope(createForm.scopes, scope.value),
-                          })
-                        }
-                        className="mt-0.5"
-                      />
-                      <div>
-                        <span className="text-sm font-medium text-slate-700">{scope.label}</span>
-                        <p className="text-xs text-slate-500">{scope.description}</p>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <FormActions className="mt-6">
-              <Button
-                onClick={() => {
-                  setShowCreateModal(false)
-                  setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
-                  setCreateError(null)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button variant="primary"
-                onClick={handleCreate}
-                disabled={createLoading}
-              >
+            <FormActions>
+              <Button type="button" onClick={closeCreateModal}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={createLoading}>
                 {createLoading ? 'Creating...' : 'Create user'}
               </Button>
             </FormActions>
+          </form>
         </Modal>
       )}
 
-      {/* Edit User Modal */}
       {editingUser && (
-        <Modal title="Edit user" onClose={() => {
-                  setEditingUser(null)
-                  setEditForm({})
-                  setEditError(null)
-                }} size="md">
-          {editError && (
-              <Notice tone="error" className="mb-4">{editError}</Notice>
-            )}
+        <Modal title="Edit user" onClose={closeEditModal} size="md">
+          <form onSubmit={handleEdit} className="space-y-4">
+            {editError && <Notice tone="error">{editError}</Notice>}
 
-            <div className="space-y-4">
-              <Field label="Name">
-                <Input
-                  type="text"
-                  value={editForm.name || ''}
-                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                />
-              </Field>
+            <Field label="Name">
+              <Input
+                type="text"
+                autoComplete="off"
+                value={editForm.name || ''}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              />
+            </Field>
 
-              <Field label="Email">
-                <Input
-                  type="email"
-                  value={editForm.email || ''}
-                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                />
-              </Field>
+            <Field label="Email">
+              <Input
+                type="email"
+                autoComplete="off"
+                value={editForm.email || ''}
+                onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+              />
+            </Field>
 
-              <div>
-                <Label className="mb-2">Scopes</Label>
-                <div className="space-y-2">
-                  {availableScopes.map((scope) => (
-                    <label key={scope.value} className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={(editForm.scopes || []).includes(scope.value)}
-                        onChange={() =>
-                          setEditForm({
-                            ...editForm,
-                            scopes: toggleScope(editForm.scopes || [], scope.value),
-                          })
-                        }
-                        className="mt-0.5"
-                      />
-                      <div>
-                        <span className="text-sm font-medium text-slate-700">{scope.label}</span>
-                        <p className="text-xs text-slate-500">{scope.description}</p>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <ScopeFieldset scopes={availableScopes} value={editForm.scopes || []}
+              onChange={(scopes) => setEditForm({ ...editForm, scopes })}
+              locked={editingUser.id === currentUser?.id ? ['*'] : []} />
 
-            <FormActions className="mt-6">
-              <Button
-                onClick={() => {
-                  setEditingUser(null)
-                  setEditForm({})
-                  setEditError(null)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button variant="primary"
-                onClick={handleEdit}
-                disabled={editLoading}
-              >
+            <FormActions>
+              <Button type="button" onClick={closeEditModal}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={editLoading}>
                 {editLoading ? 'Saving...' : 'Save changes'}
               </Button>
             </FormActions>
+          </form>
         </Modal>
+      )}
+
+      {resettingUser && (
+        <ResetPasswordModal user={resettingUser} resetPassword={resetPassword}
+          onClose={() => setResettingUser(null)}
+          onDone={() => {
+            setSuccess(`Password reset for ${resettingUser.name}. They have been signed out everywhere.`)
+            setResettingUser(null)
+          }} />
       )}
 
       {/* API Key Modal */}
@@ -414,6 +391,51 @@ const UserManagement = () => {
         </Modal>
       )}
     </>
+  )
+}
+
+const ResetPasswordModal = ({ user, resetPassword, onClose, onDone }: {
+  user: User
+  resetPassword: (id: number, newPassword: string) => Promise<void>
+  onClose: () => void
+  onDone: () => void
+}) => {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitted(true)
+    setError(null)
+    if (!passwordIsValid(password, confirm)) return
+    setSaving(true)
+    try {
+      await resetPassword(user.id, password)
+      onDone()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to reset password')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={`Reset password for ${user.name}`} onClose={onClose} size="md">
+      <form onSubmit={handleSubmit} noValidate className="space-y-4">
+        {error && <Notice tone="error">{error}</Notice>}
+        <p className="text-sm text-slate-600">
+          {user.name} will be signed out everywhere and will need this password to log back in. Share it with them privately.
+        </p>
+        <NewPasswordFields password={password} confirm={confirm} submitted={submitted}
+          onPassword={setPassword} onConfirm={setConfirm} />
+        <FormActions>
+          <Button type="button" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Reset password'}</Button>
+        </FormActions>
+      </form>
+    </Modal>
   )
 }
 

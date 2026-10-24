@@ -105,22 +105,22 @@ describe('useProjects.getProject', () => {
     expect(mcpArgsAt(fetchMock)).toMatchObject({ include_teams: false, include_journal: false })
   })
 
-  it('returns { project: null } on error', async () => {
+  it('throws on error', async () => {
     mockFetchRoutes({ projects_fetch: mcpResult({ error: 'forbidden' }) })
     const { getProject } = setup()
-    expect(await getProject(1)).toEqual({ project: null })
+    await expect(getProject(1)).rejects.toThrow('forbidden')
   })
 })
 
 describe('useProjects.createProject', () => {
-  it('sends create fields, defaults state to open, returns success', async () => {
+  it('sends create fields, defaults state to open, returns the project', async () => {
     const project = { id: 5, title: 'New', state: 'open' }
     const fetchMock = mockFetchRoutes({ projects_upsert: mcpResult({ project }) })
     const { createProject } = setup()
 
     const out = await createProject({ title: 'New', team_ids: [1, 2] })
 
-    expect(out).toEqual({ success: true, project })
+    expect(out).toEqual(project)
     expect(mcpArgsAt(fetchMock)).toMatchObject({ title: 'New', team_ids: [1, 2], state: 'open' })
   })
 
@@ -131,22 +131,22 @@ describe('useProjects.createProject', () => {
     expect(mcpArgsAt(fetchMock)).toMatchObject({ state: 'closed', owner_id: 9, due_on: '2026-01-01' })
   })
 
-  it('returns failure when the result has an error', async () => {
+  it('throws when the result has an error', async () => {
     mockFetchRoutes({ projects_upsert: mcpResult({ error: 'bad' }) })
     const { createProject } = setup()
-    expect(await createProject({ title: 'T', team_ids: [1] })).toEqual({ success: false, error: 'bad' })
+    await expect(createProject({ title: 'T', team_ids: [1] })).rejects.toThrow('bad')
   })
 })
 
 describe('useProjects.updateProject', () => {
-  it('sends project_id and update fields, returns success', async () => {
+  it('sends project_id and update fields, returns the project', async () => {
     const project = { id: 3, title: 'Renamed' }
     const fetchMock = mockFetchRoutes({ projects_upsert: mcpResult({ project }) })
     const { updateProject } = setup()
 
     const out = await updateProject(3, { title: 'Renamed', clear_parent: true, clear_due_on: true })
 
-    expect(out).toEqual({ success: true, project })
+    expect(out).toEqual(project)
     expect(mcpArgsAt(fetchMock)).toMatchObject({
       project_id: 3,
       title: 'Renamed',
@@ -155,27 +155,26 @@ describe('useProjects.updateProject', () => {
     })
   })
 
-  it('returns failure on error', async () => {
+  it('throws on error', async () => {
     mockFetchRoutes({ projects_upsert: mcpResult({ error: 'conflict' }) })
     const { updateProject } = setup()
-    expect(await updateProject(1, { title: 'x' })).toEqual({ success: false, error: 'conflict' })
+    await expect(updateProject(1, { title: 'x' })).rejects.toThrow('conflict')
   })
 })
 
 describe('useProjects.deleteProject', () => {
-  it('returns success with deleted_id', async () => {
-    const fetchMock = mockFetchRoutes({ projects_delete: mcpResult({ deleted_id: 4 }) })
+  it('sends the project id', async () => {
+    const fetchMock = mockFetchRoutes({ projects_delete: mcpResult({ success: true, deleted_id: 4 }) })
     const { deleteProject } = setup()
 
-    const out = await deleteProject(4)
+    await deleteProject(4)
 
-    expect(out).toEqual({ success: true, deleted_id: 4 })
     expect(mcpArgsAt(fetchMock)).toEqual({ project_id: 4 })
   })
 
-  it('returns failure on error', async () => {
+  it('throws on error', async () => {
     mockFetchRoutes({ projects_delete: mcpResult({ error: 'in use' }) })
     const { deleteProject } = setup()
-    expect(await deleteProject(4)).toEqual({ success: false, error: 'in use' })
+    await expect(deleteProject(4)).rejects.toThrow('in use')
   })
 })

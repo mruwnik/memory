@@ -119,6 +119,15 @@ export const useUsers = () => {
     if (!response.ok) throw await apiError(response, 'Failed to change password')
   }, [apiCall])
 
+  // Admin-only; the server also signs the user out everywhere
+  const resetPassword = useCallback(async (id: number, newPassword: string): Promise<void> => {
+    const response = await apiCall(`/users/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ new_password: newPassword }),
+    })
+    if (!response.ok) throw await apiError(response, 'Failed to reset password')
+  }, [apiCall])
+
   return {
     listUsers,
     listScopes,
@@ -129,5 +138,6 @@ export const useUsers = () => {
     deleteUser,
     regenerateApiKey,
     changePassword,
+    resetPassword,
   }
 }

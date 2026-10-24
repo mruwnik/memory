@@ -3,6 +3,7 @@ import { useUsers, type User } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
 import { Badge, Button, Card, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
+import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
 
 const UserSettings = () => {
   const { getCurrentUser, updateUser, changePassword, regenerateApiKey } = useUsers()
@@ -30,6 +31,7 @@ const UserSettings = () => {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false)
   const [newApiKey, setNewApiKey] = useState<string | null>(null)
   const [apiKeyLoading, setApiKeyLoading] = useState(false)
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null)
 
   const loadUser = useCallback(async () => {
     setLoading(true)
@@ -50,8 +52,11 @@ const UserSettings = () => {
     loadUser()
   }, [loadUser])
 
-  const handleSaveProfile = async () => {
-    if (!user) return
+  const profileChanged = !!user && (name !== user.name || email !== user.email)
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!user || !profileChanged) return
 
     setSaving(true)
     setSaveMessage(null)
@@ -60,12 +65,6 @@ const UserSettings = () => {
       const updates: { name?: string; email?: string } = {}
       if (name !== user.name) updates.name = name
       if (email !== user.email) updates.email = email
-
-      if (Object.keys(updates).length === 0) {
-        setSaveMessage({ type: 'success', text: 'No changes to save' })
-        setSaving(false)
-        return
-      }
 
       const updated = await updateUser(user.id, updates)
       setUser(updated)
@@ -79,27 +78,28 @@ const UserSettings = () => {
     }
   }
 
-  const handleChangePassword = async () => {
+  const [passwordSubmitted, setPasswordSubmitted] = useState(false)
+
+  const closePasswordModal = () => {
+    setShowPasswordModal(false)
+    setCurrentPassword('')
+    setNewPassword('')
+    setConfirmPassword('')
     setPasswordError(null)
+    setPasswordSubmitted(false)
+  }
 
-    if (newPassword !== confirmPassword) {
-      setPasswordError('Passwords do not match')
-      return
-    }
-
-    if (newPassword.length < 8) {
-      setPasswordError('Password must be at least 8 characters')
-      return
-    }
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setPasswordError(null)
+    setPasswordSubmitted(true)
+    if (!passwordIsValid(newPassword, confirmPassword)) return
 
     setPasswordSaving(true)
 
     try {
       await changePassword({ current_password: currentPassword, new_password: newPassword })
-      setShowPasswordModal(false)
-      setCurrentPassword('')
-      setNewPassword('')
-      setConfirmPassword('')
+      closePasswordModal()
       setSaveMessage({ type: 'success', text: 'Password changed successfully' })
     } catch (e) {
       setPasswordError(e instanceof Error ? e.message : 'Failed to change password')
@@ -112,13 +112,14 @@ const UserSettings = () => {
     if (!user) return
 
     setApiKeyLoading(true)
+    setApiKeyError(null)
 
     try {
       const result = await regenerateApiKey(user.id)
       setNewApiKey(result.key)
       setUser({ ...user, api_key_count: (user.api_key_count || 0) + 1 })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to regenerate API key')
+      setApiKeyError(e instanceof Error ? e.message : 'Failed to generate API key')
     } finally {
       setApiKeyLoading(false)
     }
@@ -144,17 +145,17 @@ const UserSettings = () => {
         )}
 
         <Card title="Profile">
-          <div className="space-y-4">
+          <form onSubmit={handleSaveProfile} className="space-y-4">
             <Field label="Name">
-              <Input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+              <Input type="text" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
             <Field label="Email">
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
             <FormActions>
-              <Button variant="primary" onClick={handleSaveProfile} disabled={saving}>{saving ? 'Saving...' : 'Save changes'}</Button>
+              <Button variant="primary" type="submit" disabled={saving || !profileChanged}>{saving ? 'Saving...' : 'Save changes'}</Button>
             </FormActions>
-          </div>
+          </form>
         </Card>
 
         <Card title="Security" flush>
@@ -178,64 +179,29 @@ const UserSettings = () => {
         </Card>
       </Page>
 
-      {/* Password Change Modal */}
       {showPasswordModal && (
-        <Modal title="Change password" onClose={() => {
-                  setShowPasswordModal(false)
-                  setCurrentPassword('')
-                  setNewPassword('')
-                  setConfirmPassword('')
-                  setPasswordError(null)
-                }} size="md">
-          {passwordError && (
-              <Notice tone="error" className="mb-4">{passwordError}</Notice>
-            )}
+        <Modal title="Change password" onClose={closePasswordModal} size="md">
+          <form onSubmit={handleChangePassword} noValidate className="space-y-4">
+            {passwordError && <Notice tone="error">{passwordError}</Notice>}
 
-            <div className="space-y-4">
-              <Field label="Current password">
-                <Input
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                />
-              </Field>
+            {/* Lets password managers tell which account the new password belongs to */}
+            <input type="text" autoComplete="username" value={user?.email ?? ''} readOnly hidden />
 
-              <Field label="New password">
-                <Input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                />
-              </Field>
+            <Field label="Current password">
+              <Input type="password" autoComplete="current-password" value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)} />
+            </Field>
 
-              <Field label="Confirm new password">
-                <Input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-              </Field>
-            </div>
+            <NewPasswordFields password={newPassword} confirm={confirmPassword} submitted={passwordSubmitted}
+              onPassword={setNewPassword} onConfirm={setConfirmPassword} />
 
-            <div className="flex justify-end gap-3 mt-6">
-              <Button
-                onClick={() => {
-                  setShowPasswordModal(false)
-                  setCurrentPassword('')
-                  setNewPassword('')
-                  setConfirmPassword('')
-                  setPasswordError(null)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button variant="primary"
-                onClick={handleChangePassword}
-                disabled={passwordSaving}
-              >
+            <FormActions>
+              <Button type="button" onClick={closePasswordModal}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={passwordSaving}>
                 {passwordSaving ? 'Saving...' : 'Change password'}
               </Button>
-            </div>
+            </FormActions>
+          </form>
         </Modal>
       )}
 
@@ -243,16 +209,17 @@ const UserSettings = () => {
       {showApiKeyModal && (
         <Modal size="md"
           title={newApiKey ? 'New API key generated' : `${(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API key`}
-          onClose={newApiKey ? undefined : () => setShowApiKeyModal(false)}>
+          onClose={newApiKey ? undefined : () => { setShowApiKeyModal(false); setApiKeyError(null) }}>
           {!newApiKey ? (
             <div className="space-y-4">
+              {apiKeyError && <Notice tone="error">{apiKeyError}</Notice>}
               <p className="text-sm text-slate-600">
                 {(user?.api_key_count ?? 0) > 0
                   ? 'Are you sure you want to regenerate your API key? The current key will be invalidated and any integrations using it will stop working.'
                   : 'Generate an API key to use with integrations and CLI tools.'}
               </p>
               <FormActions>
-                <Button onClick={() => setShowApiKeyModal(false)}>Cancel</Button>
+                <Button onClick={() => { setShowApiKeyModal(false); setApiKeyError(null) }}>Cancel</Button>
                 <Button variant={(user?.api_key_count ?? 0) > 0 ? 'dangerSolid' : 'primary'} onClick={handleRegenerateApiKey} disabled={apiKeyLoading}>
                   {apiKeyLoading ? 'Generating...' : (user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'}
                 </Button>

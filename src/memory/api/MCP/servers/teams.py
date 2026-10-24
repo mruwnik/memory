@@ -357,6 +357,12 @@ async def ensure_discord_role(
         team.auto_sync_discord = auto_sync_discord
         return sync_info, warnings
 
+    if not guild:
+        team.discord_guild_id = None
+        team.discord_role_id = None
+        team.auto_sync_discord = auto_sync_discord
+        return sync_info, warnings
+
     try:
         resolved_guild_id = resolve_guild_id(session, guild)
     except ValueError as e:
@@ -369,7 +375,9 @@ async def ensure_discord_role(
     resolved_role_id = None
     role_created = False
 
-    if discord_role is not None:
+    if discord_role == "":
+        team.discord_role_id = None
+    elif discord_role is not None:
         try:
             bot_id = resolve_bot_id(None, session=session)
             resolved_role_id, role_created = discord_client.resolve_role(
@@ -525,9 +533,20 @@ async def ensure_github_team(
     if github_org is None:
         return sync_info, warnings
 
+    if not github_org:
+        team.github_org = None
+        team.github_team_slug = None
+        team.github_team_id = None
+        return sync_info, warnings
+
     team.github_org = github_org
 
     if github_team_slug is None:
+        return sync_info, warnings
+
+    if not github_team_slug:
+        team.github_team_slug = None
+        team.github_team_id = None
         return sync_info, warnings
 
     team.github_team_slug = github_team_slug
@@ -690,12 +709,13 @@ async def upsert(
         tags: Tags for categorization (e.g., ["engineering", "core"])
         owner: Person responsible for this team - can be person identifier or ID.
                Set to null to clear the owner.
-        guild: Discord guild - can be numeric ID or server name
-        discord_role: Discord role - can be numeric ID or role name (creates if doesn't exist)
+        guild: Discord guild - can be numeric ID or server name. "" unlinks Discord.
+        discord_role: Discord role - can be numeric ID or role name (creates if doesn't exist).
+            "" unlinks the role.
         auto_sync_discord: Whether to auto-sync membership to Discord.
             None (default) = off for new teams, unchanged for existing teams.
-        github_org: GitHub organization for team sync
-        github_team_slug: GitHub team slug - creates team if doesn't exist
+        github_org: GitHub organization for team sync. "" unlinks GitHub.
+        github_team_slug: GitHub team slug - creates team if doesn't exist. "" unlinks the team.
         auto_sync_github: Same semantics as auto_sync_discord, for GitHub.
         members: If provided, set team to exactly these members.
                  Pass [] to remove all members. Pass None to leave unchanged.
