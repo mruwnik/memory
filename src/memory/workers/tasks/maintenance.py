@@ -1096,6 +1096,7 @@ def reconcile_access_control(
     changed = 0
     batch_size = 100
     last_id = 0
+    written_by_parent: set[int] = set()
     with make_session() as session:
         while True:
             query = (
@@ -1114,11 +1115,16 @@ def reconcile_access_control(
             changed_ids = []
             for item in items:
                 reconciled += 1
+                if item.id in written_by_parent:
+                    continue
                 if reconcile_item(client, item, rewrite_payloads):
                     changed += 1
                     changed_ids.append(item.id)
+            # Without rewrite_payloads here, a derived item the sweep also
+            # covers is written once by whichever pass reaches it first.
             for item in derived_items(session, changed_ids):
-                reconcile_item(client, item, rewrite_payloads)
+                if reconcile_item(client, item, rewrite_payloads=False):
+                    written_by_parent.add(item.id)
 
             session.commit()
 

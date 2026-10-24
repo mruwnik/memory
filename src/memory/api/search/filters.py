@@ -137,8 +137,7 @@ class FilterSpec:
 #     Qdrant, so it is marked QDRANT_UNSUPPORTED (see QdrantUnsupported).
 #
 # WARNING: only "tags", "people" and the keys in qdrant.EXTRA_PAYLOAD_INDEXES
-# ("sender_email", "recipient_emails", "folder", "email_account_id") have a
-# Qdrant payload index (see qdrant.ensure_payload_indexes / create_payload_index).
+# have a Qdrant payload index (see qdrant.ensure_payload_indexes / create_payload_index).
 # Filtering an unindexed payload key may silently match nothing in Qdrant, so any
 # spec routed to Qdrant must target an indexed key (add it to
 # EXTRA_PAYLOAD_INDEXES) or be QDRANT_UNSUPPORTED.

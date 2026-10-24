@@ -2,7 +2,7 @@ import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy.orm import Session
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from typing import cast
 import pytest
 from PIL import Image
@@ -10,6 +10,12 @@ from memory.common import settings, chunker, extract, tokens
 from memory.common.content_processing import process_content_item
 from memory.common.db.models.source_item import (
     Chunk,
+    SourceItem,
+    add_pics,
+    chunk_mixed,
+    clean_filename,
+    handle_duplicate_sha256,
+    image_filenames,
 )
 from memory.common.db.models.source_items import (
     BlogPost,
@@ -21,12 +27,6 @@ from memory.common.db.models.source_items import (
     Meeting,
     Task,
 )
-from memory.common.db.models.source_item import (
-    SourceItem,
-    image_filenames,
-    add_pics,
-    clean_filename,
-)
 from memory.common.db.models.sources import (
     ArticleFeed,
     CalendarAccount,
@@ -35,6 +35,7 @@ from memory.common.db.models.sources import (
     GithubRepo,
     GoogleAccount,
     GoogleFolder,
+    Person,
     Project,
     TranscriptAccount,
 )
@@ -582,8 +583,6 @@ def test_subclass_deletion_cascades_from_source_item(db_session: Session):
 )
 def test_chunk_mixed_basic_cases(tmp_path, content, image_paths, expected_chunks):
     """Test chunk_mixed function with basic cases"""
-    from memory.common.db.models.source_item import chunk_mixed
-
     # Create test images if needed
     actual_image_paths = []
     for i, _ in enumerate(image_paths):
@@ -601,8 +600,6 @@ def test_chunk_mixed_basic_cases(tmp_path, content, image_paths, expected_chunks
 
 def test_chunk_mixed_with_images(tmp_path):
     """Test chunk_mixed function with images"""
-    from memory.common.db.models.source_item import chunk_mixed
-
     # Create test images
     image1 = tmp_path / "image1.png"
     image2 = tmp_path / "image2.jpg"
@@ -623,8 +620,6 @@ def test_chunk_mixed_with_images(tmp_path):
 
 def test_chunk_mixed_long_content(tmp_path):
     """Test chunk_mixed function with long content that gets chunked"""
-    from memory.common.db.models.source_item import chunk_mixed
-
     # Create long content
     long_content = "Lorem ipsum dolor sit amet, " * 50  # About 150 words
 
@@ -755,8 +750,6 @@ def test_handle_duplicate_sha256_clears_expunged_when_no_new_items(db_session: S
     reset path we must include at least one non-SourceItem pending change
     on the second flush.
     """
-    from memory.common.db.models.sources import Person
-
     # Flush 1: produce an expunge so session.info has a non-empty list
     db_session.add(SourceItem(sha256=b"x", content="a", modality="text"))
     db_session.add(SourceItem(sha256=b"x", content="b", modality="text"))
@@ -826,18 +819,12 @@ class _FakeMessage:
     # Bind the real methods off SourceItem so we test the actual algorithm,
     # not a hand-rolled clone.
     def resolve_access_control(self):
-        from memory.common.db.models.source_item import SourceItem
-
         return SourceItem.resolve_access_control(self)  # type: ignore[arg-type]
 
     def resolve_creator_id(self):
-        from memory.common.db.models.source_item import SourceItem
-
         return SourceItem.resolve_creator_id(self)  # type: ignore[arg-type]
 
     def apply_inherited_access_control(self):
-        from memory.common.db.models.source_item import SourceItem
-
         return SourceItem.apply_inherited_access_control(self)  # type: ignore[arg-type]
 
 
@@ -1068,9 +1055,6 @@ def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
     sha256. The fix tests ``items`` (the dict populated by the loop)
     instead, so all-None batches skip the DB query.
     """
-    from unittest.mock import MagicMock
-    from memory.common.db.models import source_item
-
     fake_session = MagicMock()
     fake_session.info = {}
     # Two items with no sha256 — items dict will stay empty.
@@ -1078,7 +1062,7 @@ def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
     item_b = SourceItem(sha256=None, content="b", modality="text")
     fake_session.new = [item_a, item_b]
 
-    source_item.handle_duplicate_sha256(fake_session, None, None)
+    handle_duplicate_sha256(fake_session, None, None)
 
     # The DB query MUST NOT have been issued.
     fake_session.query.assert_not_called()
@@ -1164,8 +1148,6 @@ def test_apply_inherited_access_control_public_default_subclass(db_session: Sess
     """A subclass with default_sensitivity='public' (BlogPost) is created as
     an ordinary inherited row — NOT flagged as an explicit override — and
     apply_inherited_access_control resolves it to the class default."""
-    from memory.common.db.models.source_items import BlogPost
-
     post = BlogPost(
         sha256=b"blogpost" + bytes(24),
         modality="blog",

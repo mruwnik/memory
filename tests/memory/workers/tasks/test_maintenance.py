@@ -1656,12 +1656,16 @@ def test_reconcile_access_control_rewrite_payloads_writes_unchanged_items(
     assert [c.args[3] for c in mock_set.call_args_list] == [expected] * rewrite_payloads
 
 
+@pytest.mark.parametrize("rewrite_payloads", [False, True])
+@pytest.mark.parametrize("child_age", [timedelta(0), timedelta(hours=5)])
 @pytest.mark.parametrize(
     "make_source", [email_account_with_attachment, transcript_account_with_task]
 )
 def test_reconcile_access_control_propagates_parent_override_to_derived_items(
-    db_session, qdrant, test_user, make_source
+    db_session, qdrant, test_user, make_source, child_age, rewrite_payloads
 ):
+    """A child outside the window still follows its moved parent, and a
+    child the sweep covers itself isn't written a second time."""
     project = Project(title="Derived Project", state="open")
     moved_to = Project(title="Moved", state="open")
     db_session.add_all([project, moved_to])
@@ -1671,19 +1675,40 @@ def test_reconcile_access_control_propagates_parent_override_to_derived_items(
     parent = child.get_data_source()
     parent.apply_inherited_access_control()
     child.apply_inherited_access_control()
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=child,
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="doc",
+    )
+    db_session.add(chunk)
     db_session.commit()
     db_session.execute(
         update(SourceItem)
         .where(SourceItem.id == child.id)
-        .values(updated_at=datetime.now(timezone.utc) - timedelta(hours=5))
+        .values(updated_at=datetime.now(timezone.utc) - child_age)
     )
     parent.project_id = moved_to.id
     db_session.commit()
 
-    reconcile_access_control(updated_within_seconds=3600)
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        reconcile_access_control(
+            updated_within_seconds=3600, rewrite_payloads=rewrite_payloads
+        )
 
     db_session.refresh(child)
     assert (child.project_id, child.creator_id) == (moved_to.id, test_user.id)
+    assert [c.args[2:] for c in mock_set.call_args_list] == [
+        (
+            str(chunk.id),
+            {
+                "project_id": moved_to.id,
+                "sensitivity": "internal",
+                "creator_id": test_user.id,
+            },
+        )
+    ]
 
 
 def make_task(db_session, user):

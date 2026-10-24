@@ -157,6 +157,8 @@ section has nothing in it:
   uploader. Updating a report keeps its first creator. Moving an account to a
   project its owner can't access no longer hides its content from them; remove
   the account instead.
+- Feed blog posts now also inherit their article feed's project and
+  sensitivity, not just its owner.
 - **Meetings become visible to their project**: meetings now inherit project
   and sensitivity from their transcript account (default `basic`), and their
   action-item tasks and email attachments from their parent. Synced meetings
@@ -168,6 +170,10 @@ section has nothing in it:
 - Qdrant: chunk payloads gain `creator_id`. Existing points get it from the
   post-deploy command below; until then owners find their items outside their
   projects through BM25 only.
+- Qdrant: `project_id`, `sensitivity` and `creator_id` payload indexes on every
+  collection, since every non-admin vector search filters on them. Workers
+  create them at startup; the first start after the update waits while they
+  are built, which is slower on a large instance.
 
 ### Migrations
 

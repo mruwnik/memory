@@ -28,6 +28,19 @@ def mock_qdrant_client():
         yield mock_client
 
 
+KEYWORD = qdrant_models.PayloadSchemaType.KEYWORD
+INTEGER = qdrant_models.PayloadSchemaType.INTEGER
+# Every non-admin vector search filters on these.
+ACCESS_INDEXES = {"project_id": INTEGER, "sensitivity": KEYWORD, "creator_id": INTEGER}
+
+
+def indexed_fields(client):
+    return {
+        call.kwargs["field_name"]: call.kwargs["field_schema"]
+        for call in client.create_payload_index.call_args_list
+    }
+
+
 def test_ensure_collection_exists_existing(mock_qdrant_client):
     mock_qdrant_client.get_collection.return_value = {}
     assert not ensure_collection_exists(mock_qdrant_client, "test_collection", 128)
@@ -48,26 +61,24 @@ def test_ensure_collection_exists_new(mock_qdrant_client):
 
     mock_qdrant_client.get_collection.assert_called_once_with("test_collection")
     mock_qdrant_client.create_collection.assert_called_once()
-    # tags (keyword) + people (integer) + the EXTRA_PAYLOAD_INDEXES mail keys
-    # (sender_email, recipient_emails, folder, email_account_id) + source_id.
-    assert mock_qdrant_client.create_payload_index.call_count == 7
-    indexed_fields = {
-        call.kwargs["field_name"]
-        for call in mock_qdrant_client.create_payload_index.call_args_list
+    assert indexed_fields(mock_qdrant_client) == {
+        "tags": KEYWORD,
+        "people": INTEGER,
+        "sender_email": KEYWORD,
+        "recipient_emails": KEYWORD,
+        "folder": KEYWORD,
+        "email_account_id": INTEGER,
+        "source_id": INTEGER,
+        **ACCESS_INDEXES,
     }
-    assert {
-        "sender_email",
-        "recipient_emails",
-        "folder",
-        "email_account_id",
-        "source_id",
-    } <= indexed_fields
 
 
 def test_initialize_collections(mock_qdrant_client):
     initialize_collections(mock_qdrant_client)
 
     assert mock_qdrant_client.get_collection.call_count == len(ALL_COLLECTIONS)
+    # Existing collections pick up indexes added after they were created.
+    assert ACCESS_INDEXES.items() <= indexed_fields(mock_qdrant_client).items()
 
 
 def test_upsert_vectors(mock_qdrant_client):

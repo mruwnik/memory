@@ -26,6 +26,10 @@ EXTRA_PAYLOAD_INDEXES: dict[str, "qdrant_models.PayloadSchemaType"] = {
     "email_account_id": qdrant_models.PayloadSchemaType.INTEGER,
     # Date-restricted searches filter on long source_id lists
     "source_id": qdrant_models.PayloadSchemaType.INTEGER,
+    # Every non-admin search filters on these (build_access_qdrant_filter)
+    "project_id": qdrant_models.PayloadSchemaType.INTEGER,
+    "sensitivity": qdrant_models.PayloadSchemaType.KEYWORD,
+    "creator_id": qdrant_models.PayloadSchemaType.INTEGER,
 }
 
 

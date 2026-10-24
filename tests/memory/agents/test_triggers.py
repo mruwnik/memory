@@ -47,9 +47,14 @@ def client():
 
 
 def backdate(client, trigger_id):
-    """Make every buffered item look as if it arrived two minutes ago."""
+    """Make every buffered item look as if it arrived two minutes earlier.
+
+    Shifting keeps arrival order: equal scores sort by member, i.e. by the
+    item id as a string.
+    """
     key = triggers.buffer_key(trigger_id)
-    client.zadd(key, {m: time.time() - 120 for m in client.zrange(key, 0, -1)})
+    buffered = client.zrange(key, 0, -1, withscores=True)
+    client.zadd(key, {m: score - 120 for m, score in buffered})
 
 
 def delivered_ids(call):
