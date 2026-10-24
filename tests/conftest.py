@@ -956,8 +956,6 @@ def mock_api_keys():
     # Generate a valid 32-byte hex key for encryption (64 hex chars)
     test_encryption_key = "0" * 64
     with (
-        patch.object(settings, "ANTHROPIC_API_KEY", "test-anthropic-key"),
-        patch.object(settings, "OPENAI_API_KEY", "test-openai-key"),
         patch.object(settings, "SECRETS_ENCRYPTION_KEY", test_encryption_key),
     ):
         yield

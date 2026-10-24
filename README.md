@@ -49,7 +49,7 @@ The installer will:
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 
@@ -256,7 +256,7 @@ Reports must be created with `allow_scripts=True` for this to load (set via the 
 
 ## Configuration
 
-Configuration lives in `.env` (or environment variables on the host). Key settings:
+Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic key, added under LLM API keys (`/ui/keys`); the server holds none. OpenAI keys can be stored but aren't used yet. Key settings:
 
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |
@@ -265,8 +265,6 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `DB_HOST`, `DB_PORT`              | `postgres` / `5432`  | PostgreSQL — set to `localhost` / `15432` for host-side dev   |
 | `REDIS_HOST`, `REDIS_PORT`        | `redis` / `6379`     | Celery broker + cache                                          |
 | `QDRANT_HOST`, `QDRANT_PORT`      | `qdrant` / `6333`    | Vector store (workers also accept `QDRANT_URL` for the full URL)|
-| `OPENAI_API_KEY`                  | required             | Misc LLM features (notes, observation extraction, …)          |
-| `ANTHROPIC_API_KEY`               | required             | Query analysis, HyDE expansion, summarization                  |
 | `VOYAGE_API_KEY`                  | required             | All embeddings + reranking                                     |
 | `TEXT_EMBEDDING_MODEL`            | `voyage-3-large`     | Voyage text embedding model (1024d)                            |
 | `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |

@@ -244,7 +244,7 @@ def test_rejects_unsafe_values_naming_variable_but_not_value(project, var, bad):
 
 def test_rerun_tightens_permissions_and_keeps_existing_optional_keys(project):
     (project / "secrets").mkdir()
-    (project / "secrets" / "openai_key.txt").write_text("hand-written")
+    (project / "secrets" / "secrets_encryption_key.txt").write_text("hand-written")
     (project / "secrets" / "postgres_password.txt").write_text("old-pg")
     (project / ".env").write_text("REDIS_PASSWORD=old\n")
     for f in [project / ".env", *(project / "secrets").iterdir()]:
@@ -255,15 +255,15 @@ def test_rerun_tightens_permissions_and_keeps_existing_optional_keys(project):
     result = install(project, REQUIRED)
 
     assert result.returncode == 0, result.stderr
-    assert (project / "secrets" / "openai_key.txt").read_text() == "hand-written"
+    assert (project / "secrets" / "secrets_encryption_key.txt").read_text() == "hand-written"
     files = [project / ".env", *(project / "secrets").glob("*.txt")]
     assert {mode(f) for f in files} == {0o600}
     assert mode(project / "secrets" / "previous") == 0o700
 
 
 BACKUP_VARS = ["S3_BACKUP_BUCKET", "S3_BACKUP_PREFIX", "S3_BACKUP_REGION", "BACKUP_ENCRYPTION_KEY"]
-# App name, OpenAI, Anthropic, Voyage, API port, deploy host, deploy dir
-PROMPTS_BEFORE_BACKUP = "\n" * 7
+# App name, Voyage, API port, deploy host, deploy dir
+PROMPTS_BEFORE_BACKUP = "\n" * 5
 PROMPTS_AFTER_BACKUP = "n\n"  # no SSH keys
 
 

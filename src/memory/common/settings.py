@@ -272,10 +272,6 @@ OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", 50))
 
 
 # LLM settings
-OPENAI_API_KEY = secret_env("OPENAI_API_KEY")
-ANTHROPIC_API_KEY = secret_env("ANTHROPIC_API_KEY")
-SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-5-5")
-
 DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES = int(
     os.getenv("DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES", 30)
 )
@@ -722,21 +718,13 @@ SUMMARIZER_BATCH_POLL_INTERVAL = int(os.getenv("SUMMARIZER_BATCH_POLL_INTERVAL",
 LATEST_RELEASE_URL = os.getenv("LATEST_RELEASE_URL", "")
 LATEST_RELEASE_CHECK_INTERVAL = int(os.getenv("LATEST_RELEASE_CHECK_INTERVAL", 6 * 60 * 60))
 
-LLM_PROVIDER_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
+def missing_required_settings(values: Any) -> list[str]:
+    """Empty settings that the api and workers can't run without.
 
-def missing_required_settings(values: Any, role: str) -> list[str]:
-    """Empty settings that the given process ("api" or "worker") can't run without.
-
-    Everything embeds via Voyage, and workers extract meetings and summarise
-    sessions via SUMMARIZER_MODEL on the server's key. The api gets no .env, so
-    its SUMMARIZER_MODEL is always the default, and its LLM calls (HyDE, query
-    analysis) are best-effort.
+    Everything embeds via Voyage. LLM calls run on users' own keys, so none are required.
     """
     required = ["VOYAGE_API_KEY"]
-    provider = values.SUMMARIZER_MODEL.split("/", 1)[0]
-    if role == "worker" and (key := LLM_PROVIDER_KEYS.get(provider)):
-        required.append(key)
     if values.S3_BACKUP_BUCKET:
         required.append("BACKUP_ENCRYPTION_KEY")
     return [name for name in required if not getattr(values, name)]
@@ -754,7 +742,7 @@ def require_settings(values: Any, role: str) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if missing := missing_required_settings(values, role):
+    if missing := missing_required_settings(values):
         why = (
             " S3_BACKUP_BUCKET is set, which turns on encrypted S3 backups;"
             " unset it to turn them off."

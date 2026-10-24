@@ -12,8 +12,6 @@ networks:
 # --------------------------------------------------------------------- secrets
 secrets:
   postgres_password: { file: ./secrets/postgres_password.txt }
-  openai_key: { file: ./secrets/openai_key.txt }
-  anthropic_key: { file: ./secrets/anthropic_key.txt }
   voyage_key: { file: ./secrets/voyage_key.txt }
   ssh_private_key: { file: ./secrets/ssh_private_key }
   ssh_public_key: { file: ./secrets/ssh_public_key }
@@ -57,8 +55,6 @@ x-worker-base: &worker-base
     POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     # DSNs are built in worker entrypoint from user + pw files
     QDRANT_URL: http://qdrant:6333
-    OPENAI_API_KEY_FILE: /run/secrets/openai_key
-    ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
     SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
     VOYAGE_API_KEY_FILE: /run/secrets/voyage_key
     DISCORD_COLLECTOR_SERVER_URL: ingest-hub
@@ -83,8 +79,6 @@ x-worker-base: &worker-base
   secrets:
     [
       postgres_password,
-      openai_key,
-      anthropic_key,
       voyage_key,
       ssh_private_key,
       ssh_public_key,
@@ -249,8 +243,6 @@ services:
       STATIC_DIR: "/app/static"
       VOYAGE_API_KEY_FILE: /run/secrets/voyage_key
       ENABLE_BM25_SEARCH: true
-      OPENAI_API_KEY_FILE: /run/secrets/openai_key
-      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
       SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
@@ -274,7 +266,7 @@ services:
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
       LATEST_RELEASE_URL: ${LATEST_RELEASE_URL:-}
     secrets:
-      [postgres_password, openai_key, anthropic_key, voyage_key, secrets_encryption_key]
+      [postgres_password, voyage_key, secrets_encryption_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
       # Socket for Claude session orchestrator
@@ -330,7 +322,7 @@ services:
     environment:
       <<: *worker-env
       AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-2}
-    secrets: [postgres_password, openai_key, anthropic_key, voyage_key, secrets_encryption_key]
+    secrets: [postgres_password, voyage_key, secrets_encryption_key]
     command:
       - sh
       - -c

@@ -8,7 +8,7 @@ ENV_FILE="$PROJECT_DIR/.env"
 
 # --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD,
 # VOYAGE_API_KEY. Optional, used instead of generating: POSTGRES_PASSWORD,
-# REDIS_PASSWORD, OPENAI_API_KEY, ANTHROPIC_API_KEY, APP_NAME, BACKUP_ENCRYPTION_KEY. Anything already installed is
+# REDIS_PASSWORD, APP_NAME, BACKUP_ENCRYPTION_KEY. Anything already installed is
 # kept. S3 backups need an explicit choice: S3_BACKUP_BUCKET (with optional
 # S3_BACKUP_PREFIX and S3_BACKUP_REGION) to enable them, or S3_BACKUP=off.
 NON_INTERACTIVE=false
@@ -30,7 +30,7 @@ if [ "$NON_INTERACTIVE" = true ]; then
     # Values land unquoted in .env and in sed expressions; ADMIN_PASSWORD only
     # travels through the environment, so it is unrestricted.
     for var in DOMAIN ADMIN_EMAIL VOYAGE_API_KEY POSTGRES_PASSWORD \
-        REDIS_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY APP_NAME S3_BACKUP_BUCKET \
+        REDIS_PASSWORD APP_NAME S3_BACKUP_BUCKET \
         S3_BACKUP_PREFIX S3_BACKUP_REGION BACKUP_ENCRYPTION_KEY KBNET_SUBNET \
         KBNET_GATEWAY; do
         if [[ ! "${!var:-}" =~ ^[A-Za-z0-9._@:/+-]*$ ]]; then
@@ -248,34 +248,6 @@ echo ""
 info "The following API keys are needed for core functionality."
 info "You can get them from the respective provider dashboards."
 echo ""
-
-# OpenAI - misc LLM-backed features
-prompt_if_missing "OPENAI_API_KEY" \
-    "OpenAI API Key (https://platform.openai.com/api-keys)
-    Used for: misc LLM-backed features (notes, observation extraction)" \
-    "true"
-
-# Also write to secrets file for Docker
-openai_key=$(get_env_value "OPENAI_API_KEY")
-if [ -n "$openai_key" ]; then
-    write_secret "openai_key.txt" "$openai_key"
-elif [ "$NON_INTERACTIVE" = true ] && ! secret_exists "openai_key.txt"; then
-    write_secret "openai_key.txt" ""
-fi
-
-# Anthropic - for query analysis, reranking, summarization
-prompt_if_missing "ANTHROPIC_API_KEY" \
-    "Anthropic API Key (https://console.anthropic.com/settings/keys)
-    Used for: query analysis, reranking, summarization" \
-    "true"
-
-# Also write to secrets file for Docker
-anthropic_key=$(get_env_value "ANTHROPIC_API_KEY")
-if [ -n "$anthropic_key" ]; then
-    write_secret "anthropic_key.txt" "$anthropic_key"
-elif [ "$NON_INTERACTIVE" = true ] && ! secret_exists "anthropic_key.txt"; then
-    write_secret "anthropic_key.txt" ""
-fi
 
 # Voyage AI - embeddings + reranking
 prompt_if_missing "VOYAGE_API_KEY" \
@@ -536,10 +508,6 @@ echo ""
 
 # Check what's configured
 missing=()
-if [ "$NON_INTERACTIVE" != true ]; then
-    [ -z "$(get_env_value 'OPENAI_API_KEY')" ] && missing+=("OPENAI_API_KEY")
-    [ -z "$(get_env_value 'ANTHROPIC_API_KEY')" ] && missing+=("ANTHROPIC_API_KEY")
-fi
 [ -z "$(get_env_value 'VOYAGE_API_KEY')" ] && missing+=("VOYAGE_API_KEY")
 
 if [ ${#missing[@]} -gt 0 ]; then

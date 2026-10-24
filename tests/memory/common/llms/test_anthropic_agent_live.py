@@ -1,6 +1,7 @@
 """Live checks of the Anthropic agent mapping. They cost money: run them by hand.
 
 ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY_FILE) must be set, plus --run-slow --run-live.
+Runs pay with that key, stored as the test user's provider key.
 """
 
 import os
@@ -11,7 +12,7 @@ import pytest
 
 from memory.agents.runner import execute_run
 from memory.common import settings
-from memory.common.db.models import AgentRun, AgentRunStep
+from memory.common.db.models import AgentRun, AgentRunStep, LLMProviderKey
 from memory.common.llms.anthropic_provider import ANTHROPIC_MODELS, AnthropicProvider
 from memory.common.llms.neutral import (
     AgentUsage,
@@ -26,7 +27,6 @@ from memory.common.llms.neutral import (
 from memory.common.llms.tools import ToolDefinition
 from tests.memory.agents.fakes import FakeHub
 
-# Read before tests/conftest.py replaces settings.ANTHROPIC_API_KEY with a dummy.
 KEY_FILE = os.getenv("ANTHROPIC_API_KEY_FILE")
 LIVE_KEY = os.getenv("ANTHROPIC_API_KEY") or (
     Path(KEY_FILE).read_text().strip() if KEY_FILE else ""
@@ -261,11 +261,17 @@ async def test_native_web_tools_leave_no_dangling_provider_calls():
 async def test_a_run_survives_trimming_on_a_live_model(
     db_session, regular_user, monkeypatch
 ):
-    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", LIVE_KEY)
+    key = LLMProviderKey(
+        user_id=regular_user.id, provider="anthropic", label="live", is_default=True
+    )
+    key.key = LIVE_KEY
+    db_session.add(key)
+    db_session.commit()
     monkeypatch.setattr(settings, "AGENT_CONTEXT_TRIM_AT_TOKENS", 0)
     monkeypatch.setattr(settings, "AGENT_CONTEXT_TRIM_TO_TOKENS", 0)
     run = AgentRun(
         user_id=regular_user.id,
+        provider_key_id=key.id,
         scopes=["read"],
         spec={
             "system_prompt": "Follow the instructions exactly. Make one tool call per turn.",

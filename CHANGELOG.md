@@ -41,14 +41,15 @@ section has nothing in it:
   tokens, client secrets and headers are encrypted with it). Registration fails
   with a clear error without it; nothing else changes.
 - The api and workers now check settings at startup and refuse to start,
-  listing everything that's missing. Both require `VOYAGE_API_KEY`. Workers
-  also require the key for `SUMMARIZER_MODEL`'s provider (`ANTHROPIC_API_KEY`
-  by default, or `OPENAI_API_KEY` for `openai/` models), which meeting
-  extraction and session summaries still run on; ingest summaries use users'
-  own keys instead. A working deployment already has these.
+  listing everything that's missing. Only `VOYAGE_API_KEY` is required;
+  `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are no longer read.
 
 ### Manual steps
 
+- Add your own Anthropic key under LLM API keys before or right after
+  updating, or ingest stops summarising and search drops HyDE and query
+  analysis. Claude sessions of users without a default Anthropic key stop being
+  summarised.
 - **Before updating**, let in-flight summary batches finish
   (`collect_summary_batches` runs every `SUMMARIZER_BATCH_POLL_INTERVAL`): the
   migration drops every queued summary request, since they were queued on the
@@ -260,8 +261,14 @@ section has nothing in it:
   Set `SUMMARIZER_USE_BATCH=false` to summarize inline as before. The
   `SUMMARIZER_BATCH_*` settings tune batch size, retries and the
   submit/poll intervals.
-- `SUMMARIZER_MODEL` now defaults to
-  `anthropic/claude-haiku-5-5`. Values set explicitly in `.env` are kept.
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SUMMARIZER_MODEL`, `RANKER_MODEL`,
+  `SESSION_SUMMARIZER_MODEL` and `MEETING_MODEL` are removed: every LLM call
+  runs a system agent (Agents → System agents) on a user's own key. Users need
+  a default Anthropic key (LLM API keys, `/ui/keys`) for summaries, search's LLM
+  steps, meeting notes and session summaries; Claude sessions of users without
+  a default Anthropic key stop being summarised. OpenAI keys can be stored but
+  aren't used yet. The `openai_key` / `anthropic_key` docker secrets can be
+  deleted.
 - `DISCORD_PROCESS_MESSAGES`, `DISCORD_MODEL` and `DISCORD_MAX_TOOL_CALLS` are
   removed; nothing read them. Delete them from `.env` if set.
 - New optional agent-run settings: `AGENT_MAX_TIMEOUT_SEC`

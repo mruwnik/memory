@@ -89,9 +89,6 @@ def test_build_redirect_allowlist_strips_whitespace_and_blanks():
 
 COMPLETE_SETTINGS = dict(
     VOYAGE_API_KEY="voyage",
-    ANTHROPIC_API_KEY="",
-    OPENAI_API_KEY="",
-    SUMMARIZER_MODEL="anthropic/claude-haiku-5-5",
     CELERY_QUEUE_PREFIX="memory",
     QUEUE_PREFIX="",
     S3_BACKUP_BUCKET="",
@@ -100,23 +97,18 @@ COMPLETE_SETTINGS = dict(
 
 
 @pytest.mark.parametrize(
-    "role, overrides, expected",
+    "overrides, expected",
     [
-        ("worker", {"ANTHROPIC_API_KEY": "sk"}, []),
-        ("worker", {}, ["ANTHROPIC_API_KEY"]),
-        ("worker", {"SUMMARIZER_MODEL": "openai/gpt-5", "OPENAI_API_KEY": "sk"}, []),
-        ("worker", {"SUMMARIZER_MODEL": "openai/gpt-5"}, ["OPENAI_API_KEY"]),
-        ("worker", {"VOYAGE_API_KEY": "", "ANTHROPIC_API_KEY": "sk"}, ["VOYAGE_API_KEY"]),
-        ("api", {}, []),
-        ("api", {"VOYAGE_API_KEY": ""}, ["VOYAGE_API_KEY"]),
-        ("worker", {"ANTHROPIC_API_KEY": "sk", "S3_BACKUP_BUCKET": "b"}, ["BACKUP_ENCRYPTION_KEY"]),
-        ("api", {"S3_BACKUP_BUCKET": "b", "BACKUP_ENCRYPTION_KEY": "k"}, []),
-        ("worker", {"ANTHROPIC_API_KEY": "sk", "BACKUP_ENCRYPTION_KEY": "k"}, []),
+        ({}, []),
+        ({"VOYAGE_API_KEY": ""}, ["VOYAGE_API_KEY"]),
+        ({"S3_BACKUP_BUCKET": "b"}, ["BACKUP_ENCRYPTION_KEY"]),
+        ({"S3_BACKUP_BUCKET": "b", "BACKUP_ENCRYPTION_KEY": "k"}, []),
+        ({"BACKUP_ENCRYPTION_KEY": "k"}, []),
     ],
 )
-def test_missing_required_settings(role, overrides, expected):
+def test_missing_required_settings(overrides, expected):
     values = SimpleNamespace(**{**COMPLETE_SETTINGS, **overrides})
-    assert missing_required_settings(values, role) == expected
+    assert missing_required_settings(values) == expected
 
 
 def test_require_settings_lists_every_missing_setting(capsys):
@@ -126,12 +118,11 @@ def test_require_settings_lists_every_missing_setting(capsys):
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "VOYAGE_API_KEY" in err
-    assert "ANTHROPIC_API_KEY" in err
 
 
 def test_bucket_without_key_names_both_variables_but_no_values(capsys):
     values = SimpleNamespace(
-        **{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk", "S3_BACKUP_BUCKET": "my-bucket"}
+        **{**COMPLETE_SETTINGS, "S3_BACKUP_BUCKET": "my-bucket"}
     )
     with pytest.raises(SystemExit) as exc:
         require_settings(values, "worker")
@@ -144,7 +135,7 @@ def test_bucket_without_key_names_both_variables_but_no_values(capsys):
 
 def test_removed_s3_backup_enabled_refuses_to_start(monkeypatch, capsys):
     monkeypatch.setenv("S3_BACKUP_ENABLED", "false")
-    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"})
+    values = SimpleNamespace(**COMPLETE_SETTINGS)
     with pytest.raises(SystemExit) as exc:
         require_settings(values, "worker")
     assert exc.value.code == 1
@@ -154,7 +145,7 @@ def test_removed_s3_backup_enabled_refuses_to_start(monkeypatch, capsys):
 
 
 def test_require_settings_rejects_unknown_role(capsys):
-    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"})
+    values = SimpleNamespace(**COMPLETE_SETTINGS)
     with pytest.raises(SystemExit) as exc:
         require_settings(values, "wroker")
     assert exc.value.code == 2
@@ -162,7 +153,7 @@ def test_require_settings_rejects_unknown_role(capsys):
 
 
 def test_require_settings_passes_when_complete():
-    require_settings(SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"}), "worker")
+    require_settings(SimpleNamespace(**COMPLETE_SETTINGS), "worker")
 
 
 @pytest.mark.parametrize(
@@ -172,7 +163,6 @@ def test_workers_on_the_routed_queues_start(worker_prefix, task_prefix):
     values = SimpleNamespace(
         **{
             **COMPLETE_SETTINGS,
-            "ANTHROPIC_API_KEY": "sk",
             "QUEUE_PREFIX": worker_prefix,
             "CELERY_QUEUE_PREFIX": task_prefix,
         }
@@ -195,7 +185,6 @@ def test_a_worker_listening_on_other_queues_refuses_to_start(
     values = SimpleNamespace(
         **{
             **COMPLETE_SETTINGS,
-            "ANTHROPIC_API_KEY": "sk",
             "QUEUE_PREFIX": worker_prefix,
             "CELERY_QUEUE_PREFIX": task_prefix,
         }
