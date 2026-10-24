@@ -272,6 +272,10 @@ section has nothing in it:
   concurrently, so telemetry writes keep flowing, but the build reads the whole
   table and can take a while on large instances. Events stored before it have
   no key.
+- `20261030_sync_failing_since`: adds nullable `sync_failing_since` to every
+  synced source table, and `sync_error` to `google_folders`, `github_repos` and
+  `article_feeds`. Fast. Errors already stored show without a start time until
+  the next sync.
 
 ### Post-deploy commands
 

@@ -244,19 +244,10 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
         try:
             credentials = _build_credentials(account, session)
         except Exception as e:
-            account.sync_error = str(e)
+            account.record_sync(e)
             account.active = False  # Disable until re-auth
             session.commit()
             return {"status": "error", "error": f"Token refresh failed: {e}"}
-
-        # Get OAuth config for client
-        client_id, client_secret, token_uri = _get_oauth_config(session)
-        client = GoogleDriveClient(
-            credentials,
-            client_id=client_id,
-            client_secret=client_secret,
-            token_uri=token_uri,
-        )
 
         # Determine sync window
         since = None if force_full else last_sync
@@ -266,6 +257,15 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
         is_single_doc = False
 
         try:
+            # Get OAuth config for client
+            client_id, client_secret, token_uri = _get_oauth_config(session)
+            client = GoogleDriveClient(
+                credentials,
+                client_id=client_id,
+                client_secret=client_secret,
+                token_uri=token_uri,
+            )
+
             google_id = cast(str, folder.folder_id)
 
             # Check if this is a single document or a folder
@@ -308,6 +308,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                     if modified_at and modified_at <= since:
                         logger.info("Document not modified since last sync, skipping")
                         folder.last_sync_at = now
+                        folder.record_sync(None)
                         session.commit()
                         return {
                             "status": "completed",
@@ -332,12 +333,15 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
 
             # Update sync timestamps
             folder.last_sync_at = now
+            folder.record_sync(None)
             account.last_sync_at = now
-            account.sync_error = None
+            account.record_sync(None)
             session.commit()
 
         except Exception as e:
-            account.sync_error = str(e)
+            # On the folder, so one missing folder neither hides behind nor
+            # overwrites the status of the account's other folders.
+            folder.record_sync(e)
             session.commit()
             raise
 

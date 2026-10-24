@@ -347,10 +347,10 @@ def finalize_sync(
         # first so the sync_error write can actually be committed instead
         # of cascading into PendingRollbackError and losing the status.
         db.rollback()
-        account.sync_error = str(error)  # type: ignore
+        account.record_sync(error)
     else:
         account.last_sync_at = datetime.now()  # type: ignore
-        account.sync_error = None  # type: ignore
+        account.record_sync(None)
     db.commit()
 
 

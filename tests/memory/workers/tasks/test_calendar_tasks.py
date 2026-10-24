@@ -609,6 +609,8 @@ def test_sync_calendar_account_incomplete_caldav_credentials(db_session):
 
     assert result["status"] == "error"
     assert "incomplete" in result["error"].lower()
+    db_session.refresh(account)
+    assert account.sync_error == "CalDAV credentials incomplete"
 
 
 @patch("memory.workers.tasks.calendar.fetch_caldav_events")

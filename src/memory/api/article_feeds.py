@@ -14,6 +14,7 @@ from memory.common.db.models.sources import ArticleFeed
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 from memory.parsers.feeds import get_feed_parser
 from memory.api.auth import get_current_user
+from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 
 router = APIRouter(prefix="/article-feeds", tags=["article-feeds"])
 
@@ -67,7 +68,7 @@ class ArticleFeedUpdate(BaseModel):
     active: bool | None = None
 
 
-class ArticleFeedResponse(BaseModel):
+class ArticleFeedResponse(SyncStatusResponse):
     id: int
     url: str
     title: str | None
@@ -101,6 +102,7 @@ def feed_to_response(feed: ArticleFeed) -> ArticleFeedResponse:
         active=cast(bool, feed.active),
         created_at=feed.created_at.isoformat() if feed.created_at else "",
         updated_at=feed.updated_at.isoformat() if feed.updated_at else "",
+        **sync_status_fields(feed),
     )
 
 

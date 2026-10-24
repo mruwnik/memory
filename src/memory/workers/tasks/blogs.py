@@ -117,6 +117,8 @@ def sync_article_feed(feed_id: int) -> dict:
             validate_public_url(cast(str, feed.url))
         except UnsafeURLError as exc:
             logger.warning(f"Feed {feed_id} URL rejected by SSRF gate: {exc}")
+            feed.record_sync(f"URL not allowed: {exc}")
+            session.commit()
             return {"status": "error", "error": f"URL not allowed: {exc}"}
 
         logger.info(f"Syncing feed: {feed.title} ({feed.url})")
@@ -124,12 +126,15 @@ def sync_article_feed(feed_id: int) -> dict:
         parser = get_feed_parser(cast(str, feed.url), last_checked_at)
         if not parser:
             logger.error(f"No parser available for feed: {feed.url}")
+            feed.record_sync("No parser available for feed")
+            session.commit()
             return {"status": "error", "error": "No parser available for feed"}
 
         articles_found = 0
         new_articles = 0
         errors = 0
         task_ids = []
+        error: Exception | None = None
 
         try:
             for feed_item in parser.parse_feed():
@@ -151,8 +156,10 @@ def sync_article_feed(feed_id: int) -> dict:
         except Exception as e:
             logger.error(f"Error parsing feed {feed.url}: {e}")
             errors += 1
+            error = e
 
         feed.last_checked_at = datetime.now(timezone.utc)  # type: ignore
+        feed.record_sync(error)
         session.commit()
 
         return {

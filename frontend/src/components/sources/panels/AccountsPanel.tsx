@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, GithubAccount, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
-import { SourceRow, StatusBadge, formatRelativeTime } from '../shared'
-import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, Textarea, buttonClass, useActionNotice } from '@/components/shared/ui'
+import { SourceRow, StatusBadge, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
+import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, Section, Select, Textarea, buttonClass, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const AccountsPanel = () => {
@@ -261,14 +261,14 @@ export const AccountsPanel = () => {
                     key={account.id}
                     title={account.name}
                     muted={!account.active}
-                    badges={<StatusBadge active={account.active} />}
+                    badges={<><StatusBadge active={account.active} /><SyncFailingBadge status={account} /></>}
                     meta={[account.email, `Last sync: ${formatRelativeTime(account.last_sync_at)}`]}
                     actions={<>
                       <Button size="sm" onClick={() => handleReauthorizeGoogle(account.id)}>Re-authorize</Button>
                       <ConfirmButton confirm={`Disconnect ${account.email}?`} onConfirm={() => handleDeleteGoogleAccount(account.id)}>Disconnect</ConfirmButton>
                     </>}
                   >
-                    {account.sync_error && <RowError>{account.sync_error}</RowError>}
+                    <SyncFailure status={account} />
                   </Row>
                 ))}
               </List>

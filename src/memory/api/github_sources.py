@@ -12,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common.access_control import has_admin_scope
 from memory.common import settings
 from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
@@ -62,7 +63,7 @@ class GithubAccountUpdate(BaseModel):
     active: bool | None = None
 
 
-class GithubRepoResponse(BaseModel):
+class GithubRepoResponse(SyncStatusResponse):
     id: int
     account_id: int
     github_id: int | None  # GitHub's numeric repo ID
@@ -157,6 +158,7 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         else None,
         active=cast(bool, repo.active),
         created_at=repo.created_at.isoformat() if repo.created_at else "",
+        **sync_status_fields(repo),
     )
 
 

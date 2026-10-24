@@ -56,6 +56,7 @@ const workspace = (over: Record<string, unknown> = {}) => ({
   sync_interval_seconds: 3600,
   last_sync_at: '2026-10-24T10:00:00Z',
   sync_error: null,
+  sync_failing_since: null,
   channel_count: 2,
   connected_users: 5,
   user_connected: true,
@@ -157,7 +158,7 @@ describe('SlackPanel - load states', () => {
   it('shows the workspace sync error', async () => {
     listWorkspaces.mockResolvedValue([workspace({ sync_error: 'rate limited' })])
     renderWithUser(<SlackPanel />)
-    expect(await screen.findByText('Error: rate limited')).toBeInTheDocument()
+    expect(await screen.findByText('Sync failing: rate limited')).toBeInTheDocument()
   })
 })
 

@@ -22,7 +22,7 @@ const githubAccount = {
 }
 
 const oauthConfig = { id: 1, name: 'cfg', client_id: 'abcdefghijklmnopqrstuvwxyz', project_id: 'my-proj', redirect_uris: [], created_at: '' }
-const googleAccount = { id: 8, name: 'GAcc', email: 'g@gmail.com', active: true, last_sync_at: null, sync_error: null, folders: [] }
+const googleAccount = { id: 8, name: 'GAcc', email: 'g@gmail.com', active: true, last_sync_at: null, sync_error: null, sync_failing_since: null, folders: [] }
 
 const routes = (opts: { github?: unknown[]; google?: unknown[]; config?: unknown } = {}) => ({
   '/github/accounts': { json: opts.github ?? [] },

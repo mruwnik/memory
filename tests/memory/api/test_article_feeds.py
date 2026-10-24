@@ -397,6 +397,8 @@ def test_feed_to_response_with_all_fields(db_session):
         check_interval=720,
         last_checked_at=now,
         active=True,
+        sync_error="404 Not Found",
+        sync_failing_since=now,
         created_at=now,
         updated_at=now,
     )
@@ -415,6 +417,8 @@ def test_feed_to_response_with_all_fields(db_session):
     assert response.active is True
     assert response.created_at == now.isoformat()
     assert response.updated_at == now.isoformat()
+    assert response.sync_error == "404 Not Found"
+    assert response.sync_failing_since == now.isoformat()
 
 
 def test_feed_to_response_with_minimal_fields(db_session):

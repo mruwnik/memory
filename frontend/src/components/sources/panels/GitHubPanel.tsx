@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import { TagsInput, IntervalInput, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
+import { TagsInput, IntervalInput, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, Label, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
@@ -125,6 +125,7 @@ export const GitHubPanel = () => {
                         {repo.track_issues && <Badge tone="info">Issues</Badge>}
                         {repo.track_prs && <Badge tone="primary">PRs</Badge>}
                         {repo.track_comments && <Badge tone="success">Comments</Badge>}
+                        <SyncFailingBadge status={repo} />
                       </>}
                       meta={[`Last sync: ${formatRelativeTime(repo.last_sync_at)}`]}
                       actions={<>
@@ -134,7 +135,9 @@ export const GitHubPanel = () => {
                         </Button>
                         <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => run(async () => { await handleDeleteRepo(account.id, repo.id); loadData() })}>Remove</ConfirmButton>
                       </>}
-                    />
+                    >
+                      <SyncFailure status={repo} />
+                    </Row>
                   ))}
                 </SubList>
                 <SubList

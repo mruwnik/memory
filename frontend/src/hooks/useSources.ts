@@ -2,8 +2,14 @@ import { useCallback } from 'react'
 import { useAuth, SERVER_URL } from './useAuth'
 import { apiError } from './apiError'
 
+/** Outcome of a source's latest sync; a failing streak keeps its start time until a sync succeeds. */
+export interface SyncStatus {
+  sync_error: string | null
+  sync_failing_since: string | null
+}
+
 // Types for Email Accounts
-export interface EmailAccount {
+export interface EmailAccount extends SyncStatus {
   id: number
   name: string
   email_address: string
@@ -23,7 +29,6 @@ export interface EmailAccount {
   folders: string[]
   tags: string[]
   last_sync_at: string | null
-  sync_error: string | null
   active: boolean  // sync enabled
   send_enabled: boolean
   created_at: string
@@ -105,7 +110,7 @@ export interface EmailAccountTestResult {
 }
 
 // Types for Article Feeds
-export interface ArticleFeed {
+export interface ArticleFeed extends SyncStatus {
   id: number
   url: string
   title: string | null
@@ -136,7 +141,7 @@ export interface ArticleFeedUpdate {
 }
 
 // Types for GitHub
-export interface GithubRepo {
+export interface GithubRepo extends SyncStatus {
   id: number
   account_id: number
   owner: string
@@ -281,7 +286,7 @@ export interface GoogleOAuthConfig {
 }
 
 // Types for Google Drive
-export interface GoogleFolder {
+export interface GoogleFolder extends SyncStatus {
   id: number
   folder_id: string
   folder_name: string
@@ -298,13 +303,12 @@ export interface GoogleFolder {
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
 }
 
-export interface GoogleAccount {
+export interface GoogleAccount extends SyncStatus {
   id: number
   name: string
   email: string
   active: boolean
   last_sync_at: string | null
-  sync_error: string | null
   folders: GoogleFolder[]
 }
 
@@ -367,7 +371,7 @@ export interface CalendarGoogleAccountInfo {
   email: string
 }
 
-export interface CalendarAccount {
+export interface CalendarAccount extends SyncStatus {
   id: number
   name: string
   calendar_type: 'caldav' | 'google'
@@ -381,7 +385,6 @@ export interface CalendarAccount {
   sync_past_days: number
   sync_future_days: number
   last_sync_at: string | null
-  sync_error: string | null
   active: boolean
   created_at: string
   updated_at: string
@@ -425,7 +428,7 @@ export interface CalendarAccountUpdate {
 }
 
 // Types for Transcript Accounts (Fireflies, etc.)
-export interface TranscriptAccount {
+export interface TranscriptAccount extends SyncStatus {
   id: number
   name: string
   provider: string
@@ -433,7 +436,6 @@ export interface TranscriptAccount {
   has_webhook_secret: boolean
   tags: string[]
   last_sync_at: string | null
-  sync_error: string | null
   active: boolean
   created_at: string
   updated_at: string

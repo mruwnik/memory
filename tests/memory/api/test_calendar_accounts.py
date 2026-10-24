@@ -560,6 +560,7 @@ def test_account_to_response_caldav(db_session):
         sync_future_days=90,
         last_sync_at=now,
         sync_error="Test error",
+        sync_failing_since=now,
         active=True,
         created_at=now,
         updated_at=now,
@@ -577,6 +578,7 @@ def test_account_to_response_caldav(db_session):
     assert response.tags == ["work"]
     assert response.last_sync_at == now.isoformat()
     assert response.sync_error == "Test error"
+    assert response.sync_failing_since == now.isoformat()
 
 
 def test_account_to_response_google_with_account(db_session, user):

@@ -33,6 +33,7 @@ from memory.api.auth import (
     require_scope,
     resolve_user_filter,
 )
+from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 
 router = APIRouter(prefix="/google-drive", tags=["google-drive"])
 
@@ -87,7 +88,7 @@ class FolderUpdate(BaseModel):
     sensitivity: str | None = None
 
 
-class FolderResponse(BaseModel):
+class FolderResponse(SyncStatusResponse):
     id: int
     folder_id: str
     folder_name: str
@@ -104,14 +105,32 @@ class FolderResponse(BaseModel):
     sensitivity: str
 
 
-class AccountResponse(BaseModel):
+class AccountResponse(SyncStatusResponse):
     id: int
     name: str
     email: str
     active: bool
     last_sync_at: str | None
-    sync_error: str | None
     folders: list[FolderResponse]
+
+
+def folder_to_response(folder: GoogleFolder) -> FolderResponse:
+    return FolderResponse(
+        id=cast(int, folder.id),
+        folder_id=cast(str, folder.folder_id),
+        folder_name=cast(str, folder.folder_name),
+        folder_path=cast(str | None, folder.folder_path),
+        recursive=cast(bool, folder.recursive),
+        include_shared=cast(bool, folder.include_shared),
+        tags=cast(list[str], folder.tags) or [],
+        check_interval=cast(int, folder.check_interval),
+        last_sync_at=(folder.last_sync_at.isoformat() if folder.last_sync_at else None),
+        active=cast(bool, folder.active),
+        exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
+        project_id=folder.project_id,
+        sensitivity=cast(str, folder.sensitivity) or "basic",
+        **sync_status_fields(folder),
+    )
 
 
 # OAuth State storage using Redis for multi-worker support
@@ -458,7 +477,7 @@ def google_callback(
         account.token_expires_at = credentials.expiry
         account.scopes = granted_scopes
         account.active = True
-        account.sync_error = None
+        account.record_sync(None)
 
         session.commit()
 
@@ -497,25 +516,9 @@ def list_accounts(
             last_sync_at=(
                 account.last_sync_at.isoformat() if account.last_sync_at else None
             ),
-            sync_error=cast(str | None, account.sync_error),
+            **sync_status_fields(account),
             folders=[
-                FolderResponse(
-                    id=cast(int, folder.id),
-                    folder_id=cast(str, folder.folder_id),
-                    folder_name=cast(str, folder.folder_name),
-                    folder_path=cast(str | None, folder.folder_path),
-                    recursive=cast(bool, folder.recursive),
-                    include_shared=cast(bool, folder.include_shared),
-                    tags=cast(list[str], folder.tags) or [],
-                    check_interval=cast(int, folder.check_interval),
-                    last_sync_at=(
-                        folder.last_sync_at.isoformat() if folder.last_sync_at else None
-                    ),
-                    active=cast(bool, folder.active),
-                    exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
-                    project_id=folder.project_id,
-                    sensitivity=cast(str, folder.sensitivity) or "basic",
-                )
+                folder_to_response(folder)
                 for folder in account.folders
             ],
         )
@@ -678,21 +681,7 @@ def add_folder(
     db.commit()
     db.refresh(new_folder)
 
-    return FolderResponse(
-        id=cast(int, new_folder.id),
-        folder_id=cast(str, new_folder.folder_id),
-        folder_name=cast(str, new_folder.folder_name),
-        folder_path=None,
-        recursive=cast(bool, new_folder.recursive),
-        include_shared=cast(bool, new_folder.include_shared),
-        tags=cast(list[str], new_folder.tags) or [],
-        check_interval=cast(int, new_folder.check_interval),
-        last_sync_at=None,
-        active=cast(bool, new_folder.active),
-        exclude_folder_ids=[],
-        project_id=new_folder.project_id,
-        sensitivity=cast(str, new_folder.sensitivity) or "basic",
-    )
+    return folder_to_response(new_folder)
 
 
 @router.patch("/accounts/{account_id}/folders/{folder_id}")
@@ -751,21 +740,7 @@ def update_folder(
     if access_changed:
         enqueue_access_control_propagation("google_folder", folder)
 
-    return FolderResponse(
-        id=cast(int, folder.id),
-        folder_id=cast(str, folder.folder_id),
-        folder_name=cast(str, folder.folder_name),
-        folder_path=cast(str | None, folder.folder_path),
-        recursive=cast(bool, folder.recursive),
-        include_shared=cast(bool, folder.include_shared),
-        tags=cast(list[str], folder.tags) or [],
-        check_interval=cast(int, folder.check_interval),
-        last_sync_at=(folder.last_sync_at.isoformat() if folder.last_sync_at else None),
-        active=cast(bool, folder.active),
-        exclude_folder_ids=cast(list[str], folder.exclude_folder_ids) or [],
-        project_id=folder.project_id,
-        sensitivity=cast(str, folder.sensitivity) or "basic",
-    )
+    return folder_to_response(folder)
 
 
 @router.delete("/accounts/{account_id}/folders/{folder_id}")

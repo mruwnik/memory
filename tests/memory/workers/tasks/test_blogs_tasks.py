@@ -245,6 +245,8 @@ def test_sync_article_feed_no_parser(mock_get_parser, sample_article_feed, db_se
     result = blogs.sync_article_feed(sample_article_feed.id)
 
     assert result == {"status": "error", "error": "No parser available for feed"}
+    db_session.refresh(sample_article_feed)
+    assert sample_article_feed.sync_error == "No parser available for feed"
 
 
 @patch("memory.workers.tasks.blogs.get_feed_parser")
@@ -304,6 +306,9 @@ def test_sync_article_feed_parser_error(
     assert result["articles_found"] == 0
     assert result["new_articles"] == 0
     assert result["errors"] == 1
+    db_session.refresh(sample_article_feed)
+    assert sample_article_feed.sync_error == "Parser error"
+    assert sample_article_feed.sync_failing_since is not None
 
 
 @patch("memory.workers.tasks.blogs.sync_article_feed")
@@ -336,11 +341,9 @@ def test_sync_all_article_feeds(mock_sync_delay, db_session):
 
     result = blogs.sync_all_article_feeds()
 
-    assert len(result) == 2  # Only active feeds
-    assert result[0]["feed_id"] == feed1.id
-    assert result[0]["task_id"] == "task-1"
-    assert result[1]["feed_id"] == feed2.id
-    assert result[1]["task_id"] == "task-2"
+    # The query has no ORDER BY, so compare without relying on row order.
+    assert sorted(r["feed_id"] for r in result) == sorted([feed1.id, feed2.id])
+    assert sorted(r["task_id"] for r in result) == ["task-1", "task-2"]
 
 
 @patch("memory.workers.tasks.blogs.get_archive_fetcher")

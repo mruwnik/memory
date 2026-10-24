@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { AccessSelects, SyncButton, formatRelativeTime } from '../shared'
+import { AccessSelects, SyncButton, SyncFailure, formatRelativeTime } from '../shared'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
@@ -342,7 +342,7 @@ const WorkspaceRow = ({
       </>}
     >
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
-      {workspace.sync_error && <RowError>Error: {workspace.sync_error}</RowError>}
+      <SyncFailure status={workspace} />
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels ({workspace.channel_count})</ExpandToggle>}
         empty={expanded && 'Loading channels...'}

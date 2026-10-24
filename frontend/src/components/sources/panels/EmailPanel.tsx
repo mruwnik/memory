@@ -90,7 +90,7 @@ export const EmailPanel = () => {
               subtitle={account.email_address}
               active={account.active}
               lastSyncAt={account.last_sync_at}
-              syncError={account.sync_error}
+              sync={account}
               meta={[
                 account.account_type === 'gmail' ? 'Gmail (OAuth)' : `${account.imap_server}:${account.imap_port}`,
                 !!account.folders?.length && `Folders: ${account.folders.join(', ')}`,

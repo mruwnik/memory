@@ -274,7 +274,7 @@ def run_walk(
         if walk is None:
             msg = f"unsupported provider: {account.provider}"
             logger.error(msg)
-            account.sync_error = msg
+            account.record_sync(msg)
             db.commit()
             return {"status": "error", "error": msg}
 
@@ -282,15 +282,21 @@ def run_walk(
             floor = floor_fn(account, db)
             dispatched = walk(account, db, floor=floor, max_pages=max_pages)
             account.last_sync_at = datetime.now(timezone.utc)
-            account.sync_error = None
+            account.record_sync(None)
             db.commit()
         except FirefliesError as exc:
             logger.exception(f"{label} failed for account {account_id}")
-            account.sync_error = str(exc)
+            account.record_sync(exc)
             db.commit()
             if exc.retryable:
                 raise
             return {"status": "error", "error": str(exc)}
+        except Exception as exc:
+            logger.exception(f"{label} failed for account {account_id}")
+            db.rollback()
+            account.record_sync(exc)
+            db.commit()
+            raise
 
         return {
             "status": "completed",

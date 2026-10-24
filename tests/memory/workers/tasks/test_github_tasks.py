@@ -869,6 +869,29 @@ def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_
 
 
 @patch("memory.workers.tasks.github.GithubClient")
+def test_sync_github_repo_records_failure_until_next_success(
+    mock_client_class, github_repo, db_session
+):
+    mock_client = Mock()
+    mock_client.get_repo.return_value = {"archived": False}
+    mock_client.fetch_issues.side_effect = [RuntimeError("401 Bad credentials"), iter([])]
+    mock_client.fetch_prs.return_value = iter([])
+    mock_client_class.return_value = mock_client
+
+    with pytest.raises(RuntimeError):
+        github.sync_github_repo(github_repo.id)
+    db_session.refresh(github_repo)
+
+    assert github_repo.sync_error == "401 Bad credentials"
+    assert github_repo.sync_failing_since is not None
+
+    github.sync_github_repo(github_repo.id)
+    db_session.refresh(github_repo)
+
+    assert (github_repo.sync_error, github_repo.sync_failing_since) == (None, None)
+
+
+@patch("memory.workers.tasks.github.GithubClient")
 def test_sync_github_repo_with_labels_filter(
     mock_client_class, github_account, db_session
 ):
@@ -1860,6 +1883,7 @@ def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
 
     db_session.refresh(repo)
     assert repo.active is False
+    assert repo.sync_error == "Repository no longer exists on GitHub"
 
     db_session.refresh(open_project)
     assert open_project.state == "closed"

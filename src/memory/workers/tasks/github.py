@@ -577,6 +577,18 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
     to avoid re-fetching, or doing the archival check on a slower cadence,
     if API rate limits become a concern.
     """
+    try:
+        return sync_repo(repo_id, force_full)
+    except Exception as e:
+        # Own session, so the failure survives the failed sync's rollback.
+        with make_session() as session:
+            if repo := session.get(GithubRepo, repo_id):
+                repo.record_sync(e)
+                session.commit()
+        raise
+
+
+def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
     logger.info(f"Syncing GitHub repo {repo_id}")
 
     with make_session() as session:
@@ -626,6 +638,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
         repo_data = client.get_repo(owner, name)
         if repo_data is None:
             logger.warning(f"Repo {repo.repo_path} no longer exists on GitHub")
+            repo.record_sync("Repository no longer exists on GitHub")
             repo.active = False  # type: ignore
             close_open_repo_projects(session, repo)
             session.commit()
@@ -709,6 +722,7 @@ def sync_github_repo(repo_id: int, force_full: bool = False) -> dict[str, Any]:
         repo.last_sync_at = now  # type: ignore
         if needs_full_sync or force_full:
             repo.last_full_sync_at = now  # type: ignore
+        repo.record_sync(None)
         session.commit()
 
         return {

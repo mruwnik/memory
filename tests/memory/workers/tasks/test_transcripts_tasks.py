@@ -432,19 +432,20 @@ def test_sync_transcript_account_records_fireflies_error(
     assert "boom" in (transcript_account.sync_error or "")
 
 
-def test_sync_transcript_account_retries_on_transient_fireflies_error(
-    db_session, transcript_account, patch_session, patch_send_task
+@pytest.mark.parametrize(
+    "error", [FirefliesError("transient blip", retryable=True), RuntimeError("transient blip")]
+)
+def test_sync_transcript_account_propagates_unhandled_errors(
+    error, db_session, transcript_account, patch_session, patch_send_task
 ):
-    """Retryable FirefliesError must propagate so Celery's autoretry_for
-    catches it; sync_error is recorded in either case."""
+    """Retryable and unexpected errors must propagate so Celery's autoretry_for
+    catches them; sync_error is recorded in either case."""
     fake_client = MagicMock()
-    fake_client.list_transcripts.side_effect = FirefliesError(
-        "transient blip", retryable=True
-    )
+    fake_client.list_transcripts.side_effect = error
     with patch(
         "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
     ):
-        with pytest.raises(FirefliesError):
+        with pytest.raises(type(error)):
             transcripts.sync_transcript_account(transcript_account.id)
     db_session.refresh(transcript_account)
     assert "transient blip" in (transcript_account.sync_error or "")

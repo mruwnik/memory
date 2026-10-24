@@ -20,6 +20,7 @@ const caldavAccount = {
   sync_future_days: 90,
   last_sync_at: null,
   sync_error: null,
+  sync_failing_since: null,
   active: true,
   created_at: '',
   updated_at: '',
@@ -27,7 +28,7 @@ const caldavAccount = {
   sensitivity: 'basic',
 }
 
-const gmailAccount = { id: 9, name: 'GA', email: 'cal@gmail.com', active: true, last_sync_at: null, sync_error: null, folders: [] }
+const gmailAccount = { id: 9, name: 'GA', email: 'cal@gmail.com', active: true, last_sync_at: null, sync_error: null, sync_failing_since: null, folders: [] }
 
 // mcp content maps via JSON.parse then hooks take [0]
 const mcp = (payload: unknown) => ({

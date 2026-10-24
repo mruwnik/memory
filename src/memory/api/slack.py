@@ -32,6 +32,7 @@ from memory.api.auth import (
     get_current_user,
     resolve_user_filter,
 )
+from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common import settings
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
@@ -118,14 +119,13 @@ class SlackWorkspaceApp(BaseModel):
     is_owner: bool
 
 
-class SlackWorkspaceResponse(BaseModel):
+class SlackWorkspaceResponse(SyncStatusResponse):
     id: str
     name: str
     domain: str | None
     collect_messages: bool
     sync_interval_seconds: int
     last_sync_at: str | None
-    sync_error: str | None
     channel_count: int
     connected_users: int  # Number of users with credentials for this workspace
     user_connected: bool  # Whether the current user has credentials
@@ -348,7 +348,7 @@ def workspace_to_response(
         collect_messages=ws.collect_messages,
         sync_interval_seconds=ws.sync_interval_seconds,
         last_sync_at=ws.last_sync_at.isoformat() if ws.last_sync_at else None,
-        sync_error=ws.sync_error,
+        **sync_status_fields(ws),
         channel_count=channel_count,
         connected_users=connected_users,
         user_connected=user_connected,
@@ -499,7 +499,7 @@ def _persist_oauth_credentials(
     creds.token_expires_at = token_expires_at
     creds.slack_user_id = authed_user.get("id")
 
-    workspace.sync_error = None
+    workspace.record_sync(None)
     db.commit()
 
 

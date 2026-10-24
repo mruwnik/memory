@@ -1,5 +1,6 @@
 """Tests for Google Drive OAuth API endpoints."""
 
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 
@@ -476,4 +477,29 @@ def test_delete_oauth_config_allowed_for_admin(client, db_session):
         .filter(GoogleOAuthConfig.name == "default")
         .count()
         == 0
+    )
+
+
+def test_list_accounts_reports_folder_sync_failure(client, db_session, user):
+    from memory.common.db.models.sources import GoogleAccount, GoogleFolder
+
+    since = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    account = GoogleAccount(user_id=user.id, name="Drive", email="drive@example.com")
+    db_session.add(
+        GoogleFolder(
+            account=account,
+            folder_id="gone",
+            folder_name="Gone",
+            sync_error="<HttpError 404 File not found>",
+            sync_failing_since=since,
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/google-drive/accounts")
+
+    folder = response.json()[0]["folders"][0]
+    assert (folder["sync_error"], folder["sync_failing_since"]) == (
+        "<HttpError 404 File not found>",
+        since.isoformat(),
     )

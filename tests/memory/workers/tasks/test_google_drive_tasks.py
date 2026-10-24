@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import GoogleDoc
+from memory.common.db.models.sources import GoogleAccount, GoogleFolder
 from memory.workers.tasks.google_drive import (
     _serialize_file_data,
     _deserialize_file_data,
     _needs_reindex,
     _create_google_doc,
     _update_existing_doc,
+    sync_google_folder,
 )
 from memory.parsers.google_drive import GoogleFileData
 from memory.common.db import connection as db_connection
@@ -292,3 +294,29 @@ def test_update_existing_doc_raises_on_qdrant_error(
     # Should raise to prevent partial state (orphaned vectors)
     with pytest.raises(IOError, match="Connection failed"):
         _update_existing_doc(session, mock_existing_doc, mock_folder, sample_file_data)
+
+
+@pytest.fixture
+def drive_folder(db_session, test_user) -> GoogleFolder:
+    account = GoogleAccount(user_id=test_user.id, name="Drive", email="drive@example.com")
+    folder = GoogleFolder(account=account, folder_id="gone", folder_name="Gone")
+    db_session.add(folder)
+    db_session.commit()
+    return folder
+
+
+@patch("memory.workers.tasks.google_drive._get_oauth_config", return_value=("id", "secret", "uri"))
+@patch("memory.workers.tasks.google_drive._build_credentials")
+@patch("memory.workers.tasks.google_drive.GoogleDriveClient")
+def test_sync_google_folder_records_failure_on_the_folder(
+    mock_client_class, _creds, _oauth, drive_folder, db_session
+):
+    mock_client_class.return_value.get_file_metadata.side_effect = Exception("<HttpError 404 File not found>")
+
+    with pytest.raises(Exception):
+        sync_google_folder(drive_folder.id)
+    db_session.expire_all()
+
+    assert drive_folder.sync_error == "<HttpError 404 File not found>"
+    assert drive_folder.sync_failing_since is not None
+    assert drive_folder.account.sync_error is None

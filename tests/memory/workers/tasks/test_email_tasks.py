@@ -651,7 +651,7 @@ def test_finalize_sync_error_rolls_back_before_commit():
     db = MagicMock()
     db.rollback.side_effect = lambda: order.append("rollback")
     db.commit.side_effect = lambda: order.append("commit")
-    account = MagicMock()
+    account = EmailAccount()
 
     finalize_sync(account, db, error=Exception("boom"))
 

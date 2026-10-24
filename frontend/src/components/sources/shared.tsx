@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { EmailAccountTestResult } from '../../hooks/useSources'
+import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
 import { Badge, Button, ConfirmButton, Input, Notice, Row, RowError, Select } from '@/components/shared/ui'
 
 // Format relative time
@@ -22,6 +22,17 @@ export const formatRelativeTime = (dateString: string | null): string => {
 export const StatusBadge = ({ active }: { active: boolean }) => (
   <Badge tone={active ? 'success' : 'neutral'}>{active ? 'Active' : 'Inactive'}</Badge>
 )
+
+const failingSince = (status: SyncStatus) =>
+  status.sync_failing_since ? `Sync failing since ${new Date(status.sync_failing_since).toLocaleString()}` : 'Sync failing'
+
+/** Flags a source whose latest sync failed, for a Row's badges. */
+export const SyncFailingBadge = ({ status }: { status: SyncStatus }) =>
+  status.sync_error ? <Badge tone="danger" title={failingSince(status)}>Sync failing</Badge> : null
+
+/** The latest sync error and when the failing streak began, for a Row's body. */
+export const SyncFailure = ({ status }: { status: SyncStatus }) =>
+  status.sync_error ? <RowError>{failingSince(status)}: {status.sync_error}</RowError> : null
 
 /** The row action that stops or restarts collection for a source shown with a StatusBadge. */
 export const PauseButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => (
@@ -201,7 +212,7 @@ interface SourceRowProps {
   meta?: React.ReactNode[]
   active: boolean
   lastSyncAt: string | null
-  syncError?: string | null
+  sync?: SyncStatus
   onToggleActive?: () => void
   onEdit?: () => void
   onDelete?: () => void
@@ -216,7 +227,7 @@ export const SourceRow = ({
   meta = [],
   active,
   lastSyncAt,
-  syncError,
+  sync,
   onToggleActive,
   onEdit,
   onDelete,
@@ -227,7 +238,7 @@ export const SourceRow = ({
   <Row
     title={title}
     muted={!active}
-    badges={<StatusBadge active={active} />}
+    badges={<><StatusBadge active={active} />{sync && <SyncFailingBadge status={sync} />}</>}
     meta={[subtitle, `Last sync: ${formatRelativeTime(lastSyncAt)}`, ...meta]}
     actions={<>
       {onSync && <SyncButton onSync={onSync} disabled={!active} />}
@@ -237,7 +248,7 @@ export const SourceRow = ({
       {onDelete && <ConfirmButton confirm={`Are you sure you want to delete "${title}"?`} onConfirm={onDelete} />}
     </>}
   >
-    {syncError && <RowError>{syncError}</RowError>}
+    {sync && <SyncFailure status={sync} />}
     {children}
   </Row>
 )

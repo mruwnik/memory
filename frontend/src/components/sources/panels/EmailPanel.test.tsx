@@ -20,6 +20,7 @@ const imapAccount = {
   tags: ['job'],
   last_sync_at: null,
   sync_error: null,
+  sync_failing_since: null,
   active: true,
   send_enabled: true,
   created_at: '',
@@ -28,7 +29,7 @@ const imapAccount = {
   sensitivity: 'basic',
 }
 
-const gmailAccount = { id: 5, name: 'Gmail Bob', email: 'bob@gmail.com', active: true, last_sync_at: null, sync_error: null, folders: [] }
+const gmailAccount = { id: 5, name: 'Gmail Bob', email: 'bob@gmail.com', active: true, last_sync_at: null, sync_error: null, sync_failing_since: null, folders: [] }
 
 const baseRoutes = (emailAccounts: unknown[] = []) => ({
   '/email-accounts': { json: emailAccounts },
@@ -82,7 +83,7 @@ describe('EmailPanel load states', () => {
   it('shows a sync error banner when present', async () => {
     mockFetchRoutes(baseRoutes([{ ...imapAccount, sync_error: 'auth failed' }]))
     renderWithUser(<EmailPanel />)
-    await waitFor(() => expect(screen.getByText('auth failed')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Sync failing: auth failed')).toBeInTheDocument())
   })
 })
 

@@ -12,6 +12,7 @@ from memory.api.auth import (
     get_user_account,
     resolve_user_filter,
 )
+from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import SYNC_CALENDAR_ACCOUNT, app as celery_app
 from memory.common.data_source_access import (
@@ -138,7 +139,7 @@ class GoogleAccountInfo(BaseModel):
     email: str
 
 
-class CalendarAccountResponse(BaseModel):
+class CalendarAccountResponse(SyncStatusResponse):
     id: int
     name: str
     calendar_type: str
@@ -152,7 +153,6 @@ class CalendarAccountResponse(BaseModel):
     sync_past_days: int
     sync_future_days: int
     last_sync_at: str | None
-    sync_error: str | None
     active: bool
     created_at: str
     updated_at: str
@@ -185,7 +185,7 @@ def account_to_response(account: CalendarAccount) -> CalendarAccountResponse:
         sync_past_days=cast(int, account.sync_past_days),
         sync_future_days=cast(int, account.sync_future_days),
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
-        sync_error=cast(str | None, account.sync_error),
+        **sync_status_fields(account),
         active=cast(bool, account.active),
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",

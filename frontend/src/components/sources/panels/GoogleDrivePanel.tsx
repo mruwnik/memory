@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { TagsInput, IntervalInput, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, SubList, cx, useActionNotice } from '@/components/shared/ui'
+import { TagsInput, IntervalInput, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, Select, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
@@ -97,9 +97,9 @@ export const GoogleDrivePanel = () => {
               key={account.id}
               title={account.email}
               muted={!account.active}
-              badges={<StatusBadge active={account.active} />}
+              badges={<><StatusBadge active={account.active} /><SyncFailingBadge status={account} /></>}
             >
-              {account.sync_error && <RowError>{account.sync_error}</RowError>}
+              <SyncFailure status={account} />
               <SubList
                 title={`Synced folders (${account.folders.length})`}
                 actions={<>
@@ -123,6 +123,7 @@ export const GoogleDrivePanel = () => {
                         {folder.recursive && <Badge tone="info">Recursive</Badge>}
                         {folder.include_shared && <Badge tone="primary">Shared</Badge>}
                         {folder.exclude_folder_ids.length > 0 && <Badge tone="warning">{folder.exclude_folder_ids.length} excluded</Badge>}
+                        <SyncFailingBadge status={folder} />
                       </>}
                       meta={[folder.folder_path, `Last sync: ${formatRelativeTime(folder.last_sync_at)}`]}
                       actions={<>
@@ -137,7 +138,9 @@ export const GoogleDrivePanel = () => {
                           Remove
                         </ConfirmButton>
                       </>}
-                    />
+                    >
+                      <SyncFailure status={folder} />
+                    </Row>
                   ))}
               </SubList>
             </Row>

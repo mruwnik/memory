@@ -41,6 +41,7 @@ const account = (over: Record<string, unknown> = {}) => ({
   tags: ['meetings'],
   last_sync_at: null,
   sync_error: null,
+  sync_failing_since: null,
   active: true,
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',

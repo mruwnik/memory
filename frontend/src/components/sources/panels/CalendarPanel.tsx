@@ -137,7 +137,7 @@ export const CalendarPanel = () => {
                   : `CalDAV: ${account.caldav_url}`}
                 active={account.active}
                 lastSyncAt={account.last_sync_at}
-                syncError={account.sync_error}
+                sync={account}
                 onToggleActive={() => handleToggleActive(account)}
                 onEdit={() => setEditingAccount(account)}
                 onDelete={() => handleDelete(account.id)}

@@ -36,6 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.db.models.sync_status import SyncStatusMixin
 
 if TYPE_CHECKING:
     from memory.common.db.models.users import User
@@ -161,7 +162,7 @@ class SlackApp(Base):
         return user.id is not None and self.created_by_user_id == user.id
 
 
-class SlackWorkspace(Base):
+class SlackWorkspace(SyncStatusMixin, Base):
     """A Slack workspace (team) metadata.
 
     This represents a Slack workspace that one or more Memory users have connected to.
@@ -187,7 +188,6 @@ class SlackWorkspace(Base):
 
     # Sync status
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

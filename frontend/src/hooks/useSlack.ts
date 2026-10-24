@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import type { SlackAppSetupState } from './useSlackWizard'
+import type { SyncStatus } from './useSources'
 import { apiError } from './apiError'
 
 // Types for Slack Workspaces
@@ -11,14 +12,13 @@ export interface SlackWorkspaceApp {
   is_owner: boolean
 }
 
-export interface SlackWorkspace {
+export interface SlackWorkspace extends SyncStatus {
   id: string
   name: string
   domain: string | null
   collect_messages: boolean
   sync_interval_seconds: number
   last_sync_at: string | null
-  sync_error: string | null
   channel_count: number
   connected_users: number
   user_connected: boolean

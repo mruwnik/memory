@@ -487,6 +487,8 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                 caldav_password = cast(str, account.caldav_password)
 
                 if not all([caldav_url, caldav_username, caldav_password]):
+                    account.record_sync("CalDAV credentials incomplete")
+                    session.commit()
                     return {"status": "error", "error": "CalDAV credentials incomplete"}
 
                 events = fetch_caldav_events(
@@ -502,6 +504,8 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                     account, calendar_ids, since, until, session
                 )
             else:
+                account.record_sync(f"Unknown calendar type: {calendar_type}")
+                session.commit()
                 return {
                     "status": "error",
                     "error": f"Unknown calendar type: {calendar_type}",
@@ -518,11 +522,11 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                     logger.error(f"Error queuing event {event_data.get('title')}: {e}")
 
             account.last_sync_at = now
-            account.sync_error = None
+            account.record_sync(None)
             session.commit()
 
         except Exception as e:
-            account.sync_error = str(e)
+            account.record_sync(e)
             session.commit()
             raise
 

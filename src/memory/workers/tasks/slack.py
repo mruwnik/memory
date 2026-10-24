@@ -291,13 +291,13 @@ def sync_slack_workspace(
         # Get valid credentials for this workspace
         credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
         if not credentials:
-            workspace.sync_error = "No valid credentials - users need to re-authorize"
+            workspace.record_sync("No valid credentials - users need to re-authorize")
             session.commit()
             return {"status": "error", "error": "No valid credentials"}
 
         access_token = credentials.access_token
         if not access_token:
-            workspace.sync_error = "No access token"
+            workspace.record_sync("No access token")
             session.commit()
             return {"status": "error", "error": "No access token"}
 
@@ -309,7 +309,7 @@ def sync_slack_workspace(
                     workspace.name = auth_response.get("team", workspace.name)
                 except SlackAPIError as e:
                     if e.error in ("token_expired", "invalid_auth", "token_revoked"):
-                        workspace.sync_error = f"Token invalid: {e.error}"
+                        workspace.record_sync(f"Token invalid: {e.error}")
                         session.commit()
                         return {"status": "error", "error": e.error}
                     raise
@@ -343,7 +343,7 @@ def sync_slack_workspace(
 
                 # Update sync status
                 workspace.last_sync_at = datetime.now(timezone.utc)
-                workspace.sync_error = None
+                workspace.record_sync(None)
                 session.commit()
 
                 # Trigger channel syncs for enabled channels (skip if already syncing)
@@ -375,12 +375,12 @@ def sync_slack_workspace(
                 }
 
         except SlackAPIError as e:
-            workspace.sync_error = str(e)
+            workspace.record_sync(e)
             session.commit()
             logger.error(f"Slack API error syncing workspace {workspace_id}: {e}")
             return {"status": "error", "error": str(e)}
         except Exception as e:
-            workspace.sync_error = str(e)
+            workspace.record_sync(e)
             session.commit()
             logger.exception(f"Unexpected error syncing workspace {workspace_id}: {e}")
             return {"status": "error", "error": str(e)}

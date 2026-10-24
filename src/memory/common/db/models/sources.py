@@ -33,6 +33,7 @@ from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validat
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.db.models.sync_status import SyncStatusMixin
 from memory.common import settings
 from memory.common.scopes import STORABLE_SENSITIVITY_CHECK_SQL
 
@@ -103,7 +104,7 @@ class Book(Base):
         return data
 
 
-class ArticleFeed(Base):
+class ArticleFeed(SyncStatusMixin, Base):
     __tablename__ = "article_feeds"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "article_feed"
@@ -171,7 +172,7 @@ class ArticleFeed(Base):
     )
 
 
-class EmailAccount(Base):
+class EmailAccount(SyncStatusMixin, Base):
     __tablename__ = "email_accounts"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "email_account"
@@ -232,7 +233,6 @@ class EmailAccount(Base):
         ARRAY(Text), nullable=False, server_default="{}"
     )
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )  # sync enabled
@@ -392,7 +392,7 @@ class GithubAccount(Base):
     )
 
 
-class GithubRepo(Base):
+class GithubRepo(SyncStatusMixin, Base):
     """Tracked GitHub repository configuration."""
 
     __tablename__ = "github_repos"
@@ -817,7 +817,7 @@ class GoogleOAuthConfig(Base):
         }
 
 
-class GoogleAccount(Base):
+class GoogleAccount(SyncStatusMixin, Base):
     """Google authentication credentials for Drive API access."""
 
     __tablename__ = "google_accounts"
@@ -878,9 +878,6 @@ class GoogleAccount(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    sync_error: Mapped[str | None] = mapped_column(
-        Text, nullable=True
-    )  # Last error message if any
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -904,7 +901,7 @@ class GoogleAccount(Base):
     )
 
 
-class GoogleFolder(Base):
+class GoogleFolder(SyncStatusMixin, Base):
     """Tracked Google Drive folder configuration."""
 
     __tablename__ = "google_folders"
@@ -1000,7 +997,7 @@ class GoogleFolder(Base):
     )
 
 
-class CalendarAccount(Base):
+class CalendarAccount(SyncStatusMixin, Base):
     """Calendar source for syncing events (CalDAV, Google Calendar, etc.)."""
 
     __tablename__ = "calendar_accounts"
@@ -1079,7 +1076,6 @@ class CalendarAccount(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Status
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
@@ -1125,7 +1121,7 @@ class CalendarAccount(Base):
     )
 
 
-class TranscriptAccount(Base):
+class TranscriptAccount(SyncStatusMixin, Base):
     """A meeting-transcript provider account (Fireflies, Granola, Otter, ...).
 
     Stores per-user credentials and sync state for transcript ingestion.
@@ -1185,7 +1181,6 @@ class TranscriptAccount(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

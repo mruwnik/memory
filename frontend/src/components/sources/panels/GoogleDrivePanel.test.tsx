@@ -54,6 +54,7 @@ const acct = (over: Record<string, unknown> = {}) => ({
   active: true,
   last_sync_at: null,
   sync_error: null,
+  sync_failing_since: null,
   folders: [],
   ...over,
 })
@@ -113,16 +114,21 @@ describe('GoogleDrivePanel - load states', () => {
     expect(screen.getByText('Synced folders (0)')).toBeInTheDocument()
   })
 
-  it('renders folder badges and an account sync error', async () => {
+  it('renders folder badges and sync errors', async () => {
     listGoogleAccounts.mockResolvedValue([
       acct({
         sync_error: 'token expired',
-        folders: [folder({ recursive: true, include_shared: true, exclude_folder_ids: ['x', 'y'] })],
+        folders: [folder({
+          recursive: true, include_shared: true, exclude_folder_ids: ['x', 'y'],
+          sync_error: 'File not found', sync_failing_since: '2026-10-20T00:00:00+00:00',
+        })],
       }),
     ])
     renderWithUser(<GoogleDrivePanel />)
     expect(await screen.findByText('Docs')).toBeInTheDocument()
-    expect(screen.getByText('token expired')).toBeInTheDocument()
+    expect(screen.getByText('Sync failing: token expired')).toBeInTheDocument()
+    expect(screen.getByText(/^Sync failing since .+: File not found$/)).toBeInTheDocument()
+    expect(screen.getAllByText('Sync failing')).toHaveLength(2)
     expect(screen.getByText('Recursive')).toBeInTheDocument()
     expect(screen.getByText('Shared')).toBeInTheDocument()
     expect(screen.getByText('2 excluded')).toBeInTheDocument()
