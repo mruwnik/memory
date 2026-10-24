@@ -29,7 +29,6 @@ from memory.common.llms.neutral import (
     ToolResult,
 )
 from memory.common.llms.tools import ToolDefinition
-from memory.common.llms.usage import InMemoryUsageTracker
 
 PRICING = Pricing(input=Decimal("1"), output=Decimal("2"))
 RICH = ModelInfo(
@@ -84,9 +83,6 @@ class ScriptedProvider(BaseLLMProvider):
     script: list[ScriptItem] = []
     requests: list[dict] = []
     keys: dict = {}
-
-    def __init__(self, api_key: str, model: str):
-        super().__init__(api_key, model, usage_tracker=InMemoryUsageTracker(configs={}))
 
     def check_request(
         self, tool_choice: str, params: GenerationParams, replay: list[Replay | None]

@@ -8,7 +8,7 @@ from typing import Any, Literal
 import anthropic
 
 from memory.common import settings
-from memory.common.llms.base import BaseLLMProvider, Usage
+from memory.common.llms.base import BaseLLMProvider
 from memory.common.llms.neutral import (
     AgentUsage,
     Capabilities,
@@ -332,13 +332,6 @@ class AnthropicProvider(BaseLLMProvider):
             async with client.messages.stream(**kwargs) as stream:
                 msg = await stream.get_final_message()
         usage = self.agent_usage(msg)
-        self.log_usage(
-            Usage(
-                input_tokens=usage.context_tokens,
-                output_tokens=usage.output_tokens,
-                total_tokens=usage.context_tokens + usage.output_tokens,
-            )
-        )
         blocks = [b.to_dict() for b in msg.content]
         return self.agent_completion(
             blocks, msg.stop_reason or "", usage, pricing.cost(usage)

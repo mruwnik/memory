@@ -271,19 +271,6 @@ DEFAULT_CHUNK_TOKENS = int(os.getenv("DEFAULT_CHUNK_TOKENS", 512))
 OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", 50))
 
 
-# LLM settings
-DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES = int(
-    os.getenv("DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES", 30)
-)
-DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS = int(
-    os.getenv("DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS", 1_000_000)
-)
-DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS = int(
-    os.getenv("DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS", 1_000_000)
-)
-LLM_USAGE_REDIS_PREFIX = os.getenv("LLM_USAGE_REDIS_PREFIX", "llm_usage")
-
-
 # Agent runs
 # Per-run cap for runs on a user's own provider key whose agent sets no max_cost_usd.
 AGENT_DEFAULT_USER_KEY_RUN_COST_USD = Decimal(

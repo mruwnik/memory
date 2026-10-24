@@ -274,6 +274,10 @@ section has nothing in it:
   `anthropic_key` docker secrets can be deleted.
 - `DISCORD_PROCESS_MESSAGES`, `DISCORD_MODEL` and `DISCORD_MAX_TOOL_CALLS` are
   removed; nothing read them. Delete them from `.env` if set.
+- `DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES`, `DEFAULT_LLM_RATE_LIMIT_MAX_INPUT_TOKENS`,
+  `DEFAULT_LLM_RATE_LIMIT_MAX_OUTPUT_TOKENS` and `LLM_USAGE_REDIS_PREFIX` are
+  removed; nothing enforced them. Each key's daily cap limits spend instead.
+  The `llm_usage*` Redis keys can be deleted.
 - New optional agent-run settings: `AGENT_MAX_TIMEOUT_SEC`
   (1800), `AGENT_MAX_WAIT_SEC` (300), `AGENT_LLM_TIMEOUT_SEC` (600, per model
   request), `AGENT_TOOL_RESULT_MAX_CHARS` (50000), `AGENT_CONTEXT_TRIM_AT_TOKENS`

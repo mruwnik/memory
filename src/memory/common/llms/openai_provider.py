@@ -12,7 +12,7 @@ import openai
 from openai.types.responses import ResponseUsage
 
 from memory.common import settings
-from memory.common.llms.base import BaseLLMProvider, Usage
+from memory.common.llms.base import BaseLLMProvider
 from memory.common.llms.neutral import (
     AgentUsage,
     Capabilities,
@@ -300,13 +300,6 @@ class OpenAIProvider(BaseLLMProvider):
             raise ValueError("openai returned a response without usage")
         items = [i.to_dict() for i in response.output]
         usage = self.agent_usage(response.usage, items)
-        self.log_usage(
-            Usage(
-                input_tokens=usage.context_tokens,
-                output_tokens=usage.output_tokens,
-                total_tokens=usage.context_tokens + usage.output_tokens,
-            )
-        )
         details = response.incomplete_details
         return self.agent_completion(
             items,
