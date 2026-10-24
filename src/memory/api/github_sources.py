@@ -261,7 +261,9 @@ def list_all_repos(
             name=cast(str, repo.name),
             repo_path=repo.repo_path,
         )
-        for repo in query.all()
+        for repo in sorted(
+            query.all(), key=lambda r: f"{r.owner}/{r.name}".casefold()
+        )
     ]
 
 

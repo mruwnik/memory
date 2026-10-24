@@ -596,6 +596,29 @@ def test_list_repos_empty_when_no_repos(client, db_session, user):
     assert response.json() == []
 
 
+def test_list_all_repos_sorted_case_insensitively(client, db_session, user):
+    account = GithubAccount(
+        user_id=user.id, name="Test Account", auth_type="pat", access_token="token123"
+    )
+    db_session.add(account)
+    db_session.commit()
+    db_session.add_all(
+        GithubRepo(account_id=account.id, owner=owner, name=name)
+        for owner, name in [("zed", "b"), ("Alpha", "Z"), ("alpha", "a"), ("Beta", "c")]
+    )
+    db_session.commit()
+
+    response = client.get("/github/repos")
+
+    assert response.status_code == 200
+    assert [r["repo_path"] for r in response.json()] == [
+        "alpha/a",
+        "Alpha/Z",
+        "Beta/c",
+        "zed/b",
+    ]
+
+
 # ====== /github/projects access-control tests ======
 #
 # `GithubProject.account_id -> GithubAccount.user_id` is the ownership
