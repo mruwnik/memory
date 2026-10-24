@@ -255,8 +255,25 @@ CHUNK_SCORE = SystemAgent(
     result_schema=SCORE_SCHEMA,
 )
 
+SESSION_SUMMARY = SystemAgent(
+    slug="system:session-summary",
+    title="Claude session summaries",
+    description="Writes a one-line summary of each Claude Code session.",
+    use="sessions",
+    model="anthropic/claude-haiku-5-5",
+    system_prompt=(
+        "You are summarizing a coding session between a user and an AI assistant.\n"
+        "Write a concise 1-2 sentence summary of what was accomplished in this session.\n"
+        "Focus on the main task or goal, not the individual steps.\n"
+        "Be specific about what was built, fixed, or discussed.\n"
+        'Do not start with "The user" or "In this session" - just describe what was done.'
+    ),
+    max_output_tokens=1024,
+)
+
 SYSTEM_AGENTS: dict[str, SystemAgent] = {
-    a.slug: a for a in (SUMMARISE, MEETING_EXTRACT, HYDE, QUERY_ANALYSIS, CHUNK_SCORE)
+    a.slug: a
+    for a in (SUMMARISE, MEETING_EXTRACT, HYDE, QUERY_ANALYSIS, CHUNK_SCORE, SESSION_SUMMARY)
 }
 
 # Every ingest agent runs on this provider, so one explicit key per source serves them all.

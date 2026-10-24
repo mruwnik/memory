@@ -8,13 +8,15 @@ Provides scheduled tasks for:
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
+from memory.agents.call import LLMError, Record, run_agent_sync
+from memory.agents.provider_keys import Credential, credential, personal_key
+from memory.agents.system import SESSION_SUMMARY
 from memory.common import settings
 from memory.common.celery_app import (
     app,
@@ -31,13 +33,10 @@ from memory.common.content_processing import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import Session, SessionSegment
 from memory.common.jobs import tracked_task
-from memory.common.llms import create_provider, Message, MessageRole, LLMSettings
+from memory.common.llms import PROVIDER_ERRORS
 from memory.parsers import claude_sessions
 
 logger = logging.getLogger(__name__)
-
-# Model to use for session summarization
-SUMMARIZER_MODEL = os.getenv("SESSION_SUMMARIZER_MODEL", settings.SUMMARIZER_MODEL)
 
 # Maximum conversation length to send to the summarizer (in characters)
 MAX_CONVERSATION_LENGTH = 50000
@@ -92,50 +91,24 @@ def extract_conversation_text(transcript_path: str) -> str:
     return "\n\n".join(messages)
 
 
-def generate_summary(conversation: str) -> str:
-    """
-    Generate a summary of the conversation using an LLM.
-
-    Args:
-        conversation: The extracted conversation text
-
-    Returns:
-        A 1-2 sentence summary of what was done in the session
-    """
+def generate_summary(conversation: str, key: Credential) -> str:
+    """A 1-2 sentence summary of what was done in the session, or "" if none could be made."""
     if not conversation.strip():
         return ""
-
-    # Truncate if too long
     if len(conversation) > MAX_CONVERSATION_LENGTH:
         conversation = conversation[:MAX_CONVERSATION_LENGTH] + "\n\n[... truncated ...]"
-
-    provider = create_provider(model=SUMMARIZER_MODEL)
-
-    system_prompt = """You are summarizing a coding session between a user and an AI assistant.
-Write a concise 1-2 sentence summary of what was accomplished in this session.
-Focus on the main task or goal, not the individual steps.
-Be specific about what was built, fixed, or discussed.
-Do not start with "The user" or "In this session" - just describe what was done."""
-
-    messages = [
-        Message(
-            role=MessageRole.USER,
-            content=f"Summarize this coding session:\n\n{conversation}",
-        )
-    ]
-
-    llm_settings = LLMSettings(temperature=0.3, max_tokens=1024)
-
     try:
-        response = provider.generate(
-            messages=messages,
-            system_prompt=system_prompt,
-            settings=llm_settings,
+        result = run_agent_sync(
+            SESSION_SUMMARY.slug,
+            f"Summarize this coding session:\n\n{conversation}",
+            user=key.user_id,
+            key=key,
+            record=Record.COST,
         )
-        return response.strip()
-    except Exception as e:
+    except (LLMError, *PROVIDER_ERRORS) as e:
         logger.error(f"Failed to generate summary: {e}")
         return ""
+    return result.text.strip()
 
 
 @app.task(name=SUMMARIZE_SESSION)
@@ -179,13 +152,16 @@ def summarize_session(session_id: str) -> dict:
                 logger.info(f"Session {session_id} summary is already fresh, skipping")
                 return {"status": "skipped", "message": "Summary already fresh"}
 
-        # Extract conversation and generate summary
+        found = personal_key(db, session.user_id, SESSION_SUMMARY)
+        if found is None:
+            return {"status": "skipped", "message": "No key"}
+
         conversation = extract_conversation_text(session.transcript_path)
         if not conversation:
             logger.info(f"Session {session_id} has no conversation content")
             return {"status": "skipped", "message": "No conversation content"}
 
-        summary = generate_summary(conversation)
+        summary = generate_summary(conversation, credential(found))
         if not summary:
             logger.warning(f"Failed to generate summary for session {session_id}")
             return {"status": "error", "message": "Summary generation failed"}
@@ -219,6 +195,7 @@ def summarize_stale_sessions() -> dict:
     errors = 0
 
     with make_session() as db:
+        keyed: dict[int, bool] = {}
         # Get all sessions with transcripts
         sessions = db.query(Session).filter(Session.transcript_path.isnot(None)).all()
 
@@ -242,6 +219,14 @@ def summarize_stale_sessions() -> dict:
             )
 
             if not needs_update:
+                skipped += 1
+                continue
+
+            if session.user_id not in keyed:
+                keyed[session.user_id] = (
+                    personal_key(db, session.user_id, SESSION_SUMMARY) is not None
+                )
+            if not keyed[session.user_id]:
                 skipped += 1
                 continue
 

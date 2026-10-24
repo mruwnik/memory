@@ -9,10 +9,12 @@ from unittest.mock import patch
 
 import pytest
 
+from memory.agents.provider_keys import credential
 from memory.common import settings
 from memory.common.db.models import Chunk, Session, SessionSegment, SourceItem
 from memory.workers.tasks import sessions as sessions_tasks
 from memory.workers.tasks.maintenance import cleanup_old_claude_sessions
+from tests.memory.agents.fakes import reply
 
 
 def make_event(event_type: str, text: str, timestamp: str) -> dict:
@@ -290,3 +292,62 @@ def test_index_session_halts_watermark_on_embedding_failure(
     assert recovery["created"] >= 1
     assert coding_session.indexed_up_to == 12
     assert coding_session.indexed_at is not None
+
+
+def test_summaries_use_the_session_owners_key(db_session, llm_key, scripted_llm):
+    scripted_llm.script = [reply("Fixed the login loop.")]
+
+    summary = sessions_tasks.generate_summary(
+        "user: fix it\nassistant: done", credential(llm_key)
+    )
+
+    assert summary == "Fixed the login loop."
+    assert scripted_llm.requests[0]["api_key"] == "sk-test-default"
+
+
+def queued_by_stale_sweep(coding_session, sessions_dir, monkeypatch) -> tuple[list, dict]:
+    write_transcript(sessions_dir / coding_session.transcript_path, make_events(4))
+    queued = []
+    monkeypatch.setattr(
+        sessions_tasks.summarize_session, "delay", lambda session_id: queued.append(session_id)
+    )
+    return queued, sessions_tasks.summarize_stale_sessions()
+
+
+def test_stale_sessions_of_owners_with_a_key_are_queued(
+    indexing_env, coding_session, sessions_dir, llm_key, monkeypatch
+):
+    queued, result = queued_by_stale_sweep(coding_session, sessions_dir, monkeypatch)
+
+    assert (queued, result["queued"]) == ([str(coding_session.id)], 1)
+
+
+def test_stale_sessions_of_owners_without_a_key_are_not_queued(
+    indexing_env, coding_session, sessions_dir, monkeypatch
+):
+    queued, result = queued_by_stale_sweep(coding_session, sessions_dir, monkeypatch)
+
+    assert (queued, result["queued"]) == ([], 0)
+
+
+def test_summarize_session_stores_the_summary(
+    indexing_env, coding_session, sessions_dir, llm_key, scripted_llm
+):
+    write_transcript(sessions_dir / coding_session.transcript_path, make_events(4))
+    scripted_llm.script = [reply("Fixed the login loop.")]
+
+    result = sessions_tasks.summarize_session(str(coding_session.id))
+
+    assert result == {"status": "success", "summary": "Fixed the login loop."}
+    assert coding_session.summary == "Fixed the login loop."
+    assert coding_session.summary_updated_at is not None
+
+
+def test_summarizing_a_session_without_a_key_is_skipped(
+    indexing_env, coding_session, sessions_dir, scripted_llm
+):
+    write_transcript(sessions_dir / coding_session.transcript_path, make_events(4))
+
+    result = sessions_tasks.summarize_session(str(coding_session.id))
+
+    assert result == {"status": "skipped", "message": "No key"}
