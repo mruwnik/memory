@@ -141,16 +141,12 @@ def regular_client(app_client, db_session, user):
         finally:
             pass
 
-    # Save original auth override (the admin one from app_client)
-    original_auth = app.dependency_overrides.get(get_current_user)
-
+    saved = dict(app.dependency_overrides)
     # Override with non-admin user
     app.dependency_overrides[get_current_user] = mock_get_current_user
     app.dependency_overrides[get_session] = get_test_session
 
     yield test_client
 
-    # Restore admin user override
-    if original_auth:
-        app.dependency_overrides[get_current_user] = original_auth
-    # Session cleanup is done by the client fixture
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(saved)

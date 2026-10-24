@@ -25,11 +25,13 @@ def check_client(app_client, db_session, user, fake_redis):
     user.scopes = ["check"]
     db_session.flush()
 
+    saved = dict(app.dependency_overrides)
     app.dependency_overrides[get_session] = get_test_session
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[get_check_redis] = lambda: fake_redis
     yield test_client
     app.dependency_overrides.clear()
+    app.dependency_overrides.update(saved)
 
 
 def test_submit_returns_job_id(check_client):
