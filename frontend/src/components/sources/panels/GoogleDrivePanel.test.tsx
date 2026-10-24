@@ -117,21 +117,32 @@ describe('GoogleDrivePanel - load states', () => {
   it('renders folder badges and sync errors', async () => {
     listGoogleAccounts.mockResolvedValue([
       acct({
-        sync_error: 'token expired',
+        sync_error: 'token expired', sync_failing_since: new Date(Date.now() - 9 * 86_400_000).toISOString(),
         folders: [folder({
           recursive: true, include_shared: true, exclude_folder_ids: ['x', 'y'],
-          sync_error: 'File not found', sync_failing_since: '2026-10-20T00:00:00+00:00',
+          sync_error: 'File not found', sync_failing_since: new Date(Date.now() - 3 * 86_400_000).toISOString(),
         })],
       }),
     ])
     renderWithUser(<GoogleDrivePanel />)
     expect(await screen.findByText('Docs')).toBeInTheDocument()
-    expect(screen.getByText('Sync failing: token expired')).toBeInTheDocument()
-    expect(screen.getByText(/^Sync failing since .+: File not found$/)).toBeInTheDocument()
+    expect(screen.getByText(/^Sync failing since [^()]+: token expired$/)).toBeInTheDocument()
+    expect(screen.getByText(/^Sync failing since .+ \(3d ago\): File not found$/)).toBeInTheDocument()
     expect(screen.getAllByText('Sync failing')).toHaveLength(2)
     expect(screen.getByText('Recursive')).toBeInTheDocument()
     expect(screen.getByText('Shared')).toBeInTheDocument()
     expect(screen.getByText('2 excluded')).toBeInTheDocument()
+  })
+
+  it('shortens a long sync error until asked for the rest', async () => {
+    const error = `HttpError 500 ${'backendError '.repeat(40)}end of error`
+    listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ sync_error: error })] })])
+    const { user } = renderWithUser(<GoogleDrivePanel />)
+    expect(await screen.findByText(/^Sync failing: HttpError 500 .*…$/)).toBeInTheDocument()
+    expect(screen.queryByText(/end of error/)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show full error' }))
+    expect(screen.getByText(`Sync failing: ${error}`)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument()
   })
 })
 

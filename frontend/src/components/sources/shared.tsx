@@ -23,16 +23,35 @@ export const StatusBadge = ({ active }: { active: boolean }) => (
   <Badge tone={active ? 'success' : 'neutral'}>{active ? 'Active' : 'Inactive'}</Badge>
 )
 
-const failingSince = (status: SyncStatus) =>
-  status.sync_failing_since ? `Sync failing since ${new Date(status.sync_failing_since).toLocaleString()}` : 'Sync failing'
+const SHORT_ERROR = 200
+
+const failingSince = (since: string | null) => {
+  if (!since) return 'Sync failing'
+  const at = new Date(since)
+  const ago = formatRelativeTime(since)
+  // Beyond a week formatRelativeTime gives the bare date, which `at` already shows.
+  const suffix = ago === at.toLocaleDateString() ? '' : ` (${ago})`
+  return `Sync failing since ${at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}${suffix}`
+}
 
 /** Flags a source whose latest sync failed, for a Row's badges. */
 export const SyncFailingBadge = ({ status }: { status: SyncStatus }) =>
-  status.sync_error ? <Badge tone="danger" title={failingSince(status)}>Sync failing</Badge> : null
+  status.sync_error ? <Badge tone="danger">Sync failing</Badge> : null
 
 /** The latest sync error and when the failing streak began, for a Row's body. */
-export const SyncFailure = ({ status }: { status: SyncStatus }) =>
-  status.sync_error ? <RowError>{failingSince(status)}: {status.sync_error}</RowError> : null
+export const SyncFailure = ({ status }: { status: SyncStatus }) => {
+  const [full, setFull] = useState(false)
+  const error = status.sync_error
+  if (!error) return null
+  // Errors run to 1000 characters and would otherwise bury the row's actions.
+  const long = error.length > SHORT_ERROR
+  return (
+    <RowError>
+      {failingSince(status.sync_failing_since)}: {long && !full ? `${error.slice(0, SHORT_ERROR)}…` : error}
+      {long && <> <Button variant="link" size="sm" onClick={() => setFull(!full)}>{full ? 'Show less' : 'Show full error'}</Button></>}
+    </RowError>
+  )
+}
 
 /** The row action that stops or restarts collection for a source shown with a StatusBadge. */
 export const PauseButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => (
