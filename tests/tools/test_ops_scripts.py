@@ -1,6 +1,7 @@
 import io
 import os
 import pathlib
+import re
 import shutil
 import stat
 import subprocess
@@ -70,6 +71,13 @@ echo "==> Updating v1 -> $4"
 echo "ERROR: Key (email)=(someone@example.com) already exists"
 echo "UPDATE RESULT: ok (exit 0)"
 """
+# FAKE_UNITS: the timers that exist; FAKE_FAILED: units that have failed.
+FAKE_SYSTEMCTL = """#!/usr/bin/env bash
+case "$1" in
+    is-enabled) [[ ,${FAKE_UNITS:-}, == *,$2,* ]] && echo enabled || { echo not-found; exit 1; } ;;
+    is-failed) [[ ,${FAKE_FAILED:-}, == *,$3,* ]] ;;
+esac
+"""
 FAKE_SHUTDOWN = """#!/usr/bin/env bash
 echo "shutdown $*" >> "$FAKE_LOG"
 """
@@ -114,6 +122,7 @@ def box(tmp_path):
         "shutdown": FAKE_SHUTDOWN,
         "aws": FAKE_AWS,
         "chown": FAKE_CHOWN,
+        "systemctl": FAKE_SYSTEMCTL,
     }.items():
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
@@ -236,12 +245,14 @@ def test_status_reports_update_failure_and_backup_markers(box):
     state_dir.mkdir()
     (state_dir / "update-failed").write_text("v2 something sensitive")
     (state_dir / "last-backup").write_text("failed row text")
+    (state_dir / "last-update-check").write_text("failed 2026-01-01T00:00:00Z")
 
     code, output = ops(box, "status")
 
     assert code == 0, output
     assert "update_failed=yes" in output
     assert "last_backup=failed" in output
+    assert "last_update_check=failed" in output
     assert "something sensitive" not in output
     assert "row text" not in output
 
@@ -321,6 +332,8 @@ def test_restore_picks_newest_complete_set_and_loads_decrypted_data(box, backup_
     assert log.index("--storage-snapshot /restore/full.snapshot --force-snapshot") < log.index("dropdb")
     assert "chown -R 1000:1000" in log
     assert (box.parent / "calls.log.fernet").read_text() == "fernet-bytes"
+    # .env may not hold the key (on EC2 it lives only in ops.env)
+    assert "-e BACKUP_ENCRYPTION_KEY --entrypoint python worker" in log
     assert (box / "memory_files" / "emails" / "a.eml").read_text() == "mail"
     assert (box / "memory_files" / "ebooks" / "b.epub").read_text() == "book"
     assert not state(box, "restore-failed").exists()
@@ -851,3 +864,27 @@ def test_read_only_scripts_work_against_the_local_compose_stack(local_stack, scr
 @pytest.mark.parametrize("script", sorted((REPO_ROOT / "tools" / "ops").glob("*.sh")), ids=lambda p: p.name)
 def test_ops_scripts_have_no_double_braces_ssm_would_read_as_parameters(script):
     assert "{{" not in script.read_text()
+
+
+def test_status_reports_timers_and_a_failed_update_service(box):
+    code, output = ops(
+        box,
+        "status",
+        FAKE_UNITS="memory-update.timer,memory-backup.timer",
+        FAKE_FAILED="memory-update.service",
+    )
+
+    assert code == 0, output
+    lines = output.splitlines()
+    assert "memory-update.timer=enabled" in lines
+    assert "memory-backup.timer=enabled" in lines
+    assert "memory-reboot.timer=missing" in lines
+    assert "update_service_failed=yes" in lines
+
+
+def test_status_reports_the_data_and_root_disks(box):
+    code, output = ops(box, "status", DISK_PATH=str(box))
+
+    assert code == 0, output
+    assert re.search(r"^disk_used_pct=\d+%$", output, re.M)
+    assert re.search(r"^root_disk_used_pct=\d+%$", output, re.M)

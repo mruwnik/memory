@@ -166,7 +166,7 @@ def test_dry_run_does_not_record_first_sightings(clone, allowed, signed_tag):
 
     code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
 
-    assert code != 0
+    assert "Already up to date" in output, output
     assert not (clone.parent / "state" / "seen-tags").exists()
 
 

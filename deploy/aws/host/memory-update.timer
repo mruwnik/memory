@@ -1,0 +1,10 @@
+[Unit]
+Description=memory: nightly app update
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+# Enabled by tools/install.sh --non-interactive (COMPOSE_FILE in .env) for a
+# reverse proxy on the host. A published port reaches the api from the gateway
+# of its default-gateway network: this makes that kbnet, at a fixed address the
+# api trusts (FORWARDED_ALLOW_IPS, RATE_LIMIT_TRUSTED_PROXIES). Each stack on a
+# host needs its own KBNET_SUBNET. gw_priority needs Docker Engine 28+.
+networks:
+  kbnet:
+    ipam:
+      config:
+        - subnet: ${KBNET_SUBNET:-10.213.47.0/24}
+          gateway: ${KBNET_GATEWAY:-10.213.47.1}
+
+services:
+  api:
+    networks:
+      kbnet:
+        gw_priority: 1

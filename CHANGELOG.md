@@ -86,8 +86,32 @@ section has nothing in it:
   restore never worked: Qdrant has no API to restore full snapshots. The new one
   tars the Qdrant volume to `backups/pre-restore-qdrant-*.tar.gz`, then starts
   Qdrant on the snapshot (`--storage-snapshot`), and puts the tarball back if that fails.
-- `tools/backup_databases.sh` now also uploads the file storage directory
-  (`FILE_STORAGE_DIR`, default `/app/memory_files`) as `files-<date>.tar.gz.enc`.
+- `tools/backup_databases.sh` with `MAX_BACKUPS=0` keeps every backup, for a
+  bucket whose lifecycle rule expires them.
+- Automatic release selection counts an installed, signed tag as up to date
+  whatever its age, so the night after an install that skipped the delay
+  doesn't fail.
+- `tools/ops/restore-latest-backup.sh` hands `BACKUP_ENCRYPTION_KEY` to the
+  worker container that decrypts file backups, so the key no longer has to be
+  in `.env`.
+- `tools/install.sh` creates the external `memory-api-<MEMORY_STACK>` Docker
+  network if it is missing; before, `docker compose up` failed on a new host
+  until it was created by hand. The first user it creates now has full access.
+  `tools/add_user.py --admin` grants the `*` scope; without it users get `read`.
+- `RATE_LIMIT_TRUSTED_PROXIES` accepts CIDRs, like `FORWARDED_ALLOW_IPS`
+  already did (the rate limiter matched exact IPs only).
+- `tools/install.sh --non-interactive` now adds `deploy/aws/compose.proxy.yaml`
+  through `COMPOSE_FILE` in `.env`. It pins the `kbnet` subnet and gateway
+  (`KBNET_SUBNET`, `KBNET_GATEWAY`; default `10.213.47.0/24`, `.1`) and makes
+  kbnet the api's gateway network, and both trust settings become loopback
+  plus that gateway. Docker hands a host proxy's loopback connections to the
+  api from that gateway, so before this the api saw every client as the
+  gateway: one rate-limit bucket for everyone, and `X-Forwarded-Proto`
+  ignored. The override needs Docker Engine 28 or later, and each stack on a
+  host its own `KBNET_SUBNET`. The base compose file and other installs are
+  unchanged.
+- New EC2 first-boot script `deploy/aws/bootstrap.sh` and nightly host jobs in
+  `deploy/aws/host/` (update, backup, reboot window); see deploy/aws/README.md.
 - MCP tools gated on "has any items" (organizer task and calendar tools,
   deadlines, books, observations) are still hidden from tool listings while
   their table is empty, but calling one no longer fails with "Access denied";

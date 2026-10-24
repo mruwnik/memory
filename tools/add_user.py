@@ -6,6 +6,7 @@ import secrets
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import HumanUser, BotUser, User
 from memory.common.people import find_or_create_person
+from memory.common.scopes import SCOPE_ADMIN
 
 
 if __name__ == "__main__":
@@ -25,6 +26,9 @@ if __name__ == "__main__":
         help="Do nothing if a user with this email already exists",
     )
     parser.add_argument("--bot", action="store_true", help="Create a bot user")
+    parser.add_argument(
+        "--admin", action="store_true", help="Grant full access (the * scope)"
+    )
     parser.add_argument(
         "--api-key",
         type=str,
@@ -60,6 +64,8 @@ if __name__ == "__main__":
             else:
                 print(f"Human user {args.email} created (no API key)")
 
+        if args.admin:
+            user.scopes = [SCOPE_ADMIN]
         session.add(user)
         session.commit()
         session.refresh(user)

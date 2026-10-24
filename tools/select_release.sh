@@ -14,6 +14,7 @@
 #
 # Exits 3 ("up to date" on stderr) when automatic selection finds the newest
 # qualifying tag is HEAD or an ancestor of it, so the timer never downgrades.
+# Such a tag needs a valid signature but no minimum age.
 #
 # Env: STATE_DIR (default /var/lib/memory) holds seen-tags, "<tag sha> <epoch>" lines,
 #      and skip-tags, tags that automatic selection passes over (see tools/ops/rollback.sh).
@@ -113,12 +114,16 @@ fi
 while read -r tag; do
     # Rolled back from; update.sh forgets a tag once it is installed on request.
     grep -qxF -- "$tag" "$SKIP" 2> /dev/null && continue
-    if check_tag "$tag" 2> /dev/null; then
-        # Never downgrade: the newest qualifying tag is already installed.
-        if git merge-base --is-ancestor "refs/tags/$tag^{commit}" HEAD 2> /dev/null; then
+    # Never downgrade. An installed tag's age doesn't matter, so a first install
+    # that skipped the delay is up to date too.
+    if git merge-base --is-ancestor "refs/tags/$tag^{commit}" HEAD 2> /dev/null; then
+        if MIN_AGE_HOURS=0 check_tag "$tag" 2> /dev/null; then
             echo "up to date: $tag is installed or older than the checkout" >&2
             exit 3
         fi
+        continue
+    fi
+    if check_tag "$tag" 2> /dev/null; then
         echo "$tag"
         exit 0
     fi

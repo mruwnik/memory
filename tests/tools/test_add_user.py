@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from memory.common.db.models.users import HumanUser
+from memory.common.scopes import SCOPE_ADMIN
 
 ADD_USER = pathlib.Path(__file__).parents[2] / "tools" / "add_user.py"
 
@@ -35,3 +36,12 @@ def test_if_missing_skips_existing_user_instead_of_failing(db_session, monkeypat
     assert exit_info.value.code == 0
     user = db_session.query(HumanUser).filter_by(email="dup@example.com").one()
     assert user.is_valid_password("first-pw")
+
+
+@pytest.mark.parametrize("flags, scopes", [([], ["read"]), (["--admin"], [SCOPE_ADMIN])])
+def test_admin_flag_grants_full_access(db_session, monkeypatch, flags, scopes):
+    monkeypatch.setenv("ADD_USER_PASSWORD", "pw")
+
+    run_add_user(monkeypatch, "--email", "a@example.com", "--name", "A", "--no-api-key", *flags)
+
+    assert db_session.query(HumanUser).filter_by(email="a@example.com").one().scopes == scopes

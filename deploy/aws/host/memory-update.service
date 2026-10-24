@@ -1,0 +1,10 @@
+[Unit]
+Description=memory: install the newest signed, aged release
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# One nightly job at a time: an update stops the services a backup reads.
+ExecStart=/usr/bin/flock /run/lock/memory-nightly.lock /opt/memory/deploy/aws/host/nightly-update.sh
+TimeoutStartSec=2h

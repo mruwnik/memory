@@ -56,18 +56,21 @@ resource "aws_instance" "this" {
     kms_key_id  = aws_kms_key.this.arn
   }
 
-  user_data = templatefile("${path.module}/bootstrap.sh", {
+  # Gzipped to stay under the 16 KB user data limit. select_release.sh is
+  # embedded so the first release is chosen before any of the repo's code runs.
+  user_data_base64 = base64gzip(templatefile("${path.module}/bootstrap.sh", {
     region         = var.region
     ssm_prefix     = local.ssm_prefix
     install_dir    = local.install_dir
     data_volume_id = aws_ebs_volume.data.id
-  })
+    select_release = file("${path.module}/../../tools/select_release.sh")
+  }))
 
   # The OS updates itself, and bootstrap only runs on first boot: a new AMI or
   # user data must not replace a running instance. Config changes reach the box
   # through the SSM parameters instead.
   lifecycle {
-    ignore_changes = [ami, user_data]
+    ignore_changes = [ami, user_data_base64]
   }
 
   tags = { Name = "memory" }

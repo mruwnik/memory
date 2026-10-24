@@ -107,7 +107,7 @@ restore_files() {
     for name in $file_archives; do
         case "$name" in
             # The worker extracts as the app user already.
-            *.enc) src_cat "$name" | $COMPOSE run --rm --no-deps -T --entrypoint python worker -c "$FERNET" 2>>"$RESTORE_LOG" ;;
+            *.enc) src_cat "$name" | $COMPOSE run --rm --no-deps -T -e BACKUP_ENCRYPTION_KEY --entrypoint python worker -c "$FERNET" 2>>"$RESTORE_LOG" ;;
             *)
                 src_cat "$name" | decrypt | tar -xz -C "$FILES_DIR" 2>>"$RESTORE_LOG"
                 restored+=("$FILES_DIR/${name%%.tar.gz.*}") ;;

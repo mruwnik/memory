@@ -39,8 +39,9 @@ def project(tmp_path):
     fake = bin_dir / "docker"
     fake.write_text(
         f'#!/bin/sh\necho "$@" >> "{tmp_path}/docker.log"\n'
-        f'echo "$PWD" >> "{tmp_path}/docker.cwd"\n'
-        f'echo "$REDIS_PASSWORD$POSTGRES_PASSWORD$JWT_SECRET" >> "{tmp_path}/docker.env"\n'
+        f'[ "$1" != compose ] || echo "$PWD" >> "{tmp_path}/docker.cwd"\n'
+        f'[ "$1" != compose ] || echo "$REDIS_PASSWORD$POSTGRES_PASSWORD$JWT_SECRET" >> "{tmp_path}/docker.env"\n'
+        f'[ "$1 $2" != "network inspect" ] || grep -qx "$3" "{tmp_path}/docker.networks" 2>/dev/null\n'
     )
     fake.chmod(0o755)
     return tmp_path
@@ -98,16 +99,38 @@ def test_generates_secrets_with_owner_only_permissions(project):
     assert "BACKUP_ENCRYPTION_KEY" not in env
 
 
-def test_writes_reverse_proxy_settings(project):
-    result = install(project, REQUIRED)
+# Docker hands host-loopback connections to the api from kbnet's gateway, which
+# the proxy override pins; only that address is trusted, not the subnet.
+@pytest.mark.parametrize(
+    "supplied, subnet, gateway",
+    [
+        ({}, "10.213.47.0/24", "10.213.47.1"),
+        ({"KBNET_SUBNET": "10.99.0.0/24"}, "10.99.0.0/24", "10.99.0.1"),
+        ({"KBNET_SUBNET": "10.99.0.0/24", "KBNET_GATEWAY": "10.99.0.254"}, "10.99.0.0/24", "10.99.0.254"),
+    ],
+)
+def test_writes_reverse_proxy_settings(project, supplied, subnet, gateway):
+    result = install(project, {**REQUIRED, **supplied})
 
     assert result.returncode == 0, result.stderr
 
     env = read_env(project)
     assert env["SERVER_URL"] == "https://memory.example.com"
     assert env["API_PORT"] == "127.0.0.1:8000"
-    assert env["FORWARDED_ALLOW_IPS"] == "127.0.0.1,::1"
-    assert env["RATE_LIMIT_TRUSTED_PROXIES"] == "127.0.0.1,::1"
+    assert env["COMPOSE_FILE"] == "docker-compose.yaml:deploy/aws/compose.proxy.yaml"
+    assert (env["KBNET_SUBNET"], env["KBNET_GATEWAY"]) == (subnet, gateway)
+    assert env["FORWARDED_ALLOW_IPS"] == f"127.0.0.1,::1,{gateway}"
+    assert env["RATE_LIMIT_TRUSTED_PROXIES"] == f"127.0.0.1,::1,{gateway}"
+
+
+def test_keeps_an_existing_compose_file_setting(project):
+    (project / ".env").write_text("COMPOSE_FILE=custom.yaml\n")
+
+    result = install(project, REQUIRED)
+
+    assert result.returncode == 0, result.stderr
+    assert read_env(project)["COMPOSE_FILE"] == "custom.yaml"
+    assert "compose.proxy.yaml" in result.stdout
 
 
 def test_supplied_secrets_are_used(project):
@@ -160,6 +183,27 @@ def test_creates_first_user_with_password_passed_via_environment(project):
     assert len(add_user) == 1
     assert "--email owner@example.com" in add_user[0]
     assert "-e ADD_USER_PASSWORD" in add_user[0]
+    assert "--admin" in add_user[0]
+    # No key to print, so nothing secret can reach the caller's log.
+    assert "--no-api-key" in add_user[0]
+
+
+@pytest.mark.parametrize("existing, created", [("", True), ("memory-api-prod", False)])
+@pytest.mark.parametrize(
+    "env, stdin",
+    [(REQUIRED, None), ({}, "\n" * 7 + "n\n" + "n\n")],
+    ids=["non-interactive", "interactive"],
+)
+def test_creates_the_external_api_network_once(project, existing, created, env, stdin):
+    # The fake inspects successfully only the networks named in docker.networks.
+    (project / "docker.networks").write_text(existing)
+
+    result = install(project, env, interactive_input=stdin)
+
+    assert result.returncode == 0, result.stderr
+    calls = (project / "docker.log").read_text().splitlines()
+    assert ("network create memory-api-prod" in calls) == created
+    assert calls[:1] == ["network inspect memory-api-prod"]
 
 
 def test_runs_compose_in_the_project_directory_whatever_the_caller_cwd(project, tmp_path):

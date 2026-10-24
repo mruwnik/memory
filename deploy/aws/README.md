@@ -66,6 +66,37 @@ The instance reads its config from SSM. Changes to `release_signers`, `auto_upda
 
 `public_ip`, `url`, `admin_email`, `admin_password` (sensitive), `instance_id`, `instance_arn`, `instance_role_arn`, `kms_key_arn`, `backup_bucket`, `ops_output_bucket`, `ssm_prefix`, `documents` and `document_arns` (per action), `operator_role_arns` and `operator_actions` (per enabled role).
 
+## On the instance
+
+The first boot takes 10–20 minutes: it installs Docker, Caddy, the AWS CLI and unattended-upgrades, builds the images and starts the stack. Follow it in `/var/log/memory-bootstrap.log` (root only; it never contains secret values). To re-run it, for example after a failure, run `sudo memory-bootstrap`. It keeps whatever is already set up.
+
+Everything that must outlive the root disk is on the data volume, mounted at `/srv/memory`:
+
+| Path | Holds |
+|---|---|
+| `/opt/memory` → `/srv/memory/app` | The checkout, `.env`, `secrets/`, `memory_files/`, update dumps in `backups/` |
+| `/var/lib/memory` → `/srv/memory/state` | Update, restore and backup markers, first sightings of tags |
+| `/srv/memory/docker` | Docker's data root, including the Postgres, Qdrant and Redis volumes |
+
+`/etc/memory/` holds `allowed_signers` and `ops.env` (the backup key and bucket, read by the ops scripts and the nightly jobs), mode 600. `deploy/aws/host/configure.sh` renders them from SSM, along with the Caddyfile and the systemd units and timers from the checkout. Bootstrap runs it, and so does every nightly update, before and after updating. A re-apply or a new release therefore reaches the box without a new instance. Containers run as uid 1000, the instance's first user, which owns `.env`, `secrets/` and `memory_files/`. The code itself belongs to root. Bootstrap removes cloud-init's passwordless sudo for that user and, after the install, its docker and lxd groups (both root-equivalent). Admins get in through Session Manager's own `ssm-user`.
+
+The first install takes the newest signed release, however young. After that, a release has to be `update_delay_hours` old. A replacement instance on the same data volume starts the stack it finds.
+
+Nightly jobs, in instance time (UTC), each with up to 30 minutes of random delay and never two at once:
+
+| Time | Unit | Does |
+|---|---|---|
+| 01:30 | `memory-backup` | Backs up Postgres, Qdrant and the files to the backup bucket |
+| 03:30 | `memory-reboot` | Reboots if an upgrade needs it (`/run/reboot-required`) |
+| 04:30 | `memory-update` | Re-renders the host config from SSM, installs the newest qualifying release, then re-renders again from the new release |
+
+Their output is in the journal, for example `journalctl -u memory-update`. `status` reports the last update and backup results.
+
+- **OS updates.** unattended-upgrades installs updates from every configured origin (Ubuntu, Docker and Caddy). The reboot window above replaces its own automatic reboot.
+- **App updates.** The update job refreshes `allowed_signers` and the delay in `ops.env` on every run, so `update-to` uses them too, even with `auto_update` off. A changed `domain` reaches the Caddyfile the same way, but the app's `SERVER_URL` in `.env` keeps the domain it was installed with. A night with nothing to install leaves no update log. A tag that fails to install goes into `/var/lib/memory/skip-tags`. The job doesn't retry it, but still installs a newer release. `update-to` can install it explicitly. Each run writes `last-update-check` (ok or failed), which `status` reports along with the timers and a failed `memory-update` unit. Unattended upgrades wait for the nightly jobs and block them in turn, because an upgrade can restart dockerd.
+- **Backups.** Containers can't reach the instance role, so the backups run on the host. Its database dumps go through the compose `backup` service, with the role's short-lived credentials for that run only. Those are the instance role's full credentials, so that one container can do whatever the role can: read the SSM secrets, use the KMS key, and read and write the backup bucket. The job waits until the credentials have at least an hour left, so an upload can't outlive them. Private file directories are encrypted in a one-off worker container and uploaded by the host. The app's own S3 backup task stays off: `.env` has no backup bucket. The instance role can't delete, so nothing is pruned: the bucket's lifecycle expires old backups. A file deleted from a synced, unencrypted directory (ebooks, comics and the like) stays in the backup until it expires, and a restore brings it back.
+- **Disaster recovery.** `BACKUP_ENCRYPTION_KEY` and `SECRETS_ENCRYPTION_KEY` live in SSM, as well as on the box. Restoring into a fresh data volume needs both: the first decrypts the backups, the second the secrets stored in the database.
+
 ## Repair actions
 
 | Action | Role | Does |

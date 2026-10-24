@@ -46,31 +46,44 @@ def test_rate_limit_key_uses_direct_ip_when_no_trust(make_request):
     assert key == "203.0.113.7"
 
 
-def test_rate_limit_key_ignores_xff_from_untrusted_hop(make_request):
+@pytest.mark.parametrize(
+    "peer, trusted",
+    [
+        ("1.2.3.4", "10.0.0.5"),
+        ("1.2.3.4", "10.0.0.0/8"),
+        ("172.31.0.1", "172.30.0.0/16"),
+        ("testclient", "10.0.0.0/8"),
+        ("1.2.3.4", "not-an-ip,10.0.0.5"),
+    ],
+)
+def test_rate_limit_key_ignores_xff_from_untrusted_hop(make_request, peer, trusted):
     """An attacker connecting directly (not via the trusted proxy) cannot
     use ``X-Forwarded-For`` to rotate buckets."""
     from memory.common.rate_limit import rate_limit_key
 
-    request = make_request(
-        "1.2.3.4",
-        {"X-Forwarded-For": f"{99}.{99}.{99}.{99}"},
-    )
-    with patch(
-        "memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "10.0.0.5"
-    ):
+    request = make_request(peer, {"X-Forwarded-For": f"{99}.{99}.{99}.{99}"})
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", trusted):
         key = rate_limit_key(cast(Any, request))
-    assert key == "1.2.3.4"
+    assert key == peer
 
 
-def test_rate_limit_key_honors_xff_from_trusted_proxy(make_request):
+@pytest.mark.parametrize(
+    "peer, trusted",
+    [
+        ("10.0.0.5", "10.0.0.5"),
+        # docker-proxy forwards host-loopback connections from the bridge gateway
+        ("172.30.0.1", "127.0.0.1,::1,172.30.0.0/16"),
+        ("::1", "127.0.0.1,::1"),
+        ("10.0.0.5", "not-an-ip,10.0.0.0/24"),
+    ],
+)
+def test_rate_limit_key_honors_xff_from_trusted_proxy(make_request, peer, trusted):
     """Behind a real reverse proxy, the immediate hop is the proxy and
     the original client lives in ``X-Forwarded-For``."""
     from memory.common.rate_limit import rate_limit_key
 
-    request = make_request("10.0.0.5", {"X-Forwarded-For": "203.0.113.7"})
-    with patch(
-        "memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "10.0.0.5"
-    ):
+    request = make_request(peer, {"X-Forwarded-For": "203.0.113.7"})
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", trusted):
         key = rate_limit_key(cast(Any, request))
     assert key == "203.0.113.7"
 

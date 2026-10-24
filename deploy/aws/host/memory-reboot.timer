@@ -1,0 +1,9 @@
+[Unit]
+Description=memory: reboot window for unattended upgrades
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

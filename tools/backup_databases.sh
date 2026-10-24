@@ -8,7 +8,7 @@ BUCKET="${S3_BACKUP_BUCKET:?S3 backups are off: set S3_BACKUP_BUCKET (and BACKUP
 PREFIX="${S3_BACKUP_PREFIX:-memory}/databases"
 REGION="${S3_BACKUP_REGION:-eu-central-1}"
 PASSWORD="${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
-MAX_BACKUPS="${MAX_BACKUPS:-30}"  # Keep last N backups
+MAX_BACKUPS="${MAX_BACKUPS:-30}"  # Keep last N backups; 0 never prunes
 
 # Install AWS CLI if not present (postgres:15 image doesn't include it)
 if ! command -v aws >/dev/null 2>&1; then
@@ -38,6 +38,7 @@ error() {
 cleanup_old_backups() {
     local prefix=$1
     local pattern=$2  # e.g., "postgres-" or "qdrant-"
+    [ "$MAX_BACKUPS" -gt 0 ] || return 0
     
     log "Checking for old ${pattern} backups to clean up..."
 

@@ -1,0 +1,7 @@
+[Unit]
+Description=memory: reboot if an upgrade needs it
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/test -e /run/reboot-required
+ExecStart=/usr/bin/flock /run/lock/memory-nightly.lock /usr/bin/systemctl reboot

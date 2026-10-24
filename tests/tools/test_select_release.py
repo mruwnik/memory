@@ -328,10 +328,15 @@ def test_skip_tags_are_not_auto_selected_but_can_be_requested(repo, select, sign
     assert explicit.stdout.strip() == "v1.1.0"
 
 
-def test_automatic_selection_reports_up_to_date_instead_of_downgrading(repo, select, signed_tag):
-    signed_tag(repo, "v1.0.0", 100, "good")
+# A young installed tag is still up to date: the first install takes the
+# newest release without waiting out the delay.
+@pytest.mark.parametrize("installed_age", [100, 1])
+def test_automatic_selection_reports_up_to_date_instead_of_downgrading(
+    repo, select, signed_tag, installed_age
+):
+    signed_tag(repo, "v1.0.0", 1, "good")
     commit(repo, "installed later")
-    signed_tag(repo, "v1.1.0", 100, "good")
+    signed_tag(repo, "v1.1.0", installed_age, "good")
     commit(repo, "after the newest release")
 
     result = select(repo, installed_here=True)

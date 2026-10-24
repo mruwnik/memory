@@ -32,7 +32,8 @@ if [ "$NON_INTERACTIVE" = true ]; then
     # travels through the environment, so it is unrestricted.
     for var in DOMAIN ADMIN_EMAIL VOYAGE_API_KEY POSTGRES_PASSWORD JWT_SECRET \
         REDIS_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY APP_NAME S3_BACKUP_BUCKET \
-        S3_BACKUP_PREFIX S3_BACKUP_REGION BACKUP_ENCRYPTION_KEY; do
+        S3_BACKUP_PREFIX S3_BACKUP_REGION BACKUP_ENCRYPTION_KEY KBNET_SUBNET \
+        KBNET_GATEWAY; do
         if [[ ! "${!var:-}" =~ ^[A-Za-z0-9._@:/+-]*$ ]]; then
             echo "✗ $var contains characters outside A-Za-z0-9._@:/+-" >&2
             exit 1
@@ -343,8 +344,22 @@ if [ "$NON_INTERACTIVE" = true ]; then
     # only thing allowed to set X-Forwarded-*
     set_env_value "API_PORT" "127.0.0.1:8000"
     set_env_value "SERVER_URL" "https://$DOMAIN"
-    set_env_value "FORWARDED_ALLOW_IPS" "127.0.0.1,::1"
-    set_env_value "RATE_LIMIT_TRUSTED_PROXIES" "127.0.0.1,::1"
+    # Docker hands the proxy's loopback connections to the api from kbnet's
+    # gateway; the override pins it (deploy/aws/compose.proxy.yaml)
+    if [ -z "$(get_env_value 'COMPOSE_FILE')" ]; then
+        set_env_value "COMPOSE_FILE" "docker-compose.yaml:deploy/aws/compose.proxy.yaml"
+    elif [[ "$(get_env_value 'COMPOSE_FILE')" != *deploy/aws/compose.proxy.yaml* ]]; then
+        warn "COMPOSE_FILE is set without deploy/aws/compose.proxy.yaml; the proxy won't be trusted"
+    fi
+    kbnet_subnet="$(get_env_value 'KBNET_SUBNET')"
+    kbnet_subnet="${kbnet_subnet:-${KBNET_SUBNET:-10.213.47.0/24}}"
+    kbnet_base="${kbnet_subnet%/*}"
+    kbnet_gateway="$(get_env_value 'KBNET_GATEWAY')"
+    kbnet_gateway="${kbnet_gateway:-${KBNET_GATEWAY:-${kbnet_base%.*}.$(( ${kbnet_base##*.} + 1 ))}}"
+    set_env_value "KBNET_SUBNET" "$kbnet_subnet"
+    set_env_value "KBNET_GATEWAY" "$kbnet_gateway"
+    set_env_value "FORWARDED_ALLOW_IPS" "127.0.0.1,::1,$kbnet_gateway"
+    set_env_value "RATE_LIMIT_TRUSTED_PROXIES" "127.0.0.1,::1,$kbnet_gateway"
 fi
 
 success "Service defaults configured"
@@ -501,6 +516,18 @@ else
     fi
 fi
 
+# compose declares this network external, so `docker compose up` fails without it
+stack="${MEMORY_STACK:-$(get_env_value 'MEMORY_STACK')}"
+api_network="memory-api-${stack:-prod}"
+if ! command -v docker >/dev/null 2>&1; then
+    warn "docker not found - create network $api_network before starting the stack"
+elif docker network inspect "$api_network" >/dev/null 2>&1; then
+    success "Docker network $api_network exists"
+else
+    docker network create "$api_network" >/dev/null
+    success "Created Docker network $api_network"
+fi
+
 # Files written by earlier versions of this script may be looser
 chmod 600 "$ENV_FILE" "$SECRETS_DIR"/* 2>/dev/null || true
 
@@ -535,8 +562,8 @@ if [ "$NON_INTERACTIVE" != true ]; then
     info "Next steps:"
     echo "  1. Review configuration: $ENV_FILE"
     echo "  2. Start services: docker compose up -d"
-    echo "  3. Create a user: docker compose exec api python tools/add_user.py \\"
-    echo "       --email you@example.com --password yourpass --name 'Your Name'"
+    echo "  3. Create an admin: ADD_USER_PASSWORD=yourpass docker compose exec -e ADD_USER_PASSWORD api \\"
+    echo "       python tools/add_user.py --email you@example.com --name 'Your Name' --admin"
     echo "  4. Access the app: http://localhost:8000"
     echo ""
 fi
@@ -549,10 +576,10 @@ if [ "$NON_INTERACTIVE" = true ]; then
     cd "$PROJECT_DIR"
     # --wait blocks on the api healthcheck, which needs migrations to have run
     docker compose up -d --wait api
-    # The password travels through the environment, and add_user.py prints an
-    # API key, so neither ends up in argv, logs or output.
+    # The password travels through the environment and no API key is made, so
+    # neither ends up in argv, logs or output.
     ADD_USER_PASSWORD="$ADMIN_PASSWORD" docker compose exec -T -e ADD_USER_PASSWORD api \
         python tools/add_user.py --email "$ADMIN_EMAIL" --name "$ADMIN_EMAIL" \
-        --no-api-key --if-missing > /dev/null
+        --admin --no-api-key --if-missing > /dev/null
     success "First user ready: $ADMIN_EMAIL"
 fi
