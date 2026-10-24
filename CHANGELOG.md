@@ -174,6 +174,11 @@ section has nothing in it:
   collection, since every non-admin vector search filters on them. Workers
   create them at startup; the first start after the update waits while they
   are built, which is slower on a large instance.
+- **Security**: `/files/` and `/reports/` render only passive types inline (PDF,
+  plain text, raster images, audio, video); HTML, SVG, XML, JS and unknown
+  types download instead. Stored HTML (e.g. an email attachment) used to render
+  on memory's origin with the viewer's session. HTML reports opened through
+  `/reports/` are unchanged.
 
 ### Migrations
 

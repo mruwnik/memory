@@ -311,6 +311,53 @@ def validate_path_within_directory(
         raise HTTPException(status_code=403, detail="Access denied")
 
 
+# Stored files come from outside senders and uploads, so anything that could
+# run script on our origin (HTML, SVG, XML, JS, unknown types) is forced to
+# download; only passive types render inline.
+INLINE_SAFE_TYPES = frozenset(
+    {
+        "application/pdf",
+        "text/plain",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "image/bmp",
+    }
+)
+
+STRICT_SANDBOX_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; sandbox"
+)
+
+
+def guess_mime_type(file_path: pathlib.Path) -> str:
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    return mime_type or "application/octet-stream"
+
+
+def renders_inline(mime_type: str) -> bool:
+    return mime_type in INLINE_SAFE_TYPES or mime_type.startswith(("audio/", "video/"))
+
+
+def stored_file_response(file_path: pathlib.Path, download: bool) -> FileResponse:
+    mime_type = guess_mime_type(file_path)
+    inline = not download and renders_inline(mime_type)
+    response = FileResponse(
+        file_path,
+        media_type=mime_type,
+        filename=file_path.name,
+        content_disposition_type="inline" if inline else "attachment",
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Chrome's PDF viewer refuses to render under a sandbox CSP; PDF scripts
+    # run inside the viewer, not on our origin.
+    if mime_type != "application/pdf":
+        response.headers["Content-Security-Policy"] = STRICT_SANDBOX_CSP
+    return response
+
+
 @app.get("/ui{full_path:path}")
 async def serve_react_app(full_path: str):
     full_path = full_path.lstrip("/")
@@ -350,48 +397,34 @@ async def serve_report(
     if not user_can_access(user, report, project_roles):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    mime_type, _ = mimetypes.guess_type(str(file_path))
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-
-    if download:
-        return FileResponse(
-            file_path,
-            media_type=mime_type,
-            filename=file_path.name,
-            content_disposition_type="attachment",
-        )
+    mime_type = guess_mime_type(file_path)
+    if download or mime_type not in ("text/html", "application/xhtml+xml"):
+        return stored_file_response(file_path, download)
 
     response = FileResponse(file_path, media_type=mime_type)
-
-    # CSP for HTML reports
-    if mime_type in ("text/html", "application/xhtml+xml"):
-        # Check if report allows scripts (for system-generated interactive reports)
-        if report.allow_scripts:
-            # Build connect-src directive with allowed external URLs.
-            # Sanitize to prevent CSP directive injection via stored values.
-            connect_sources = ["'self'"]
-            if report.allowed_connect_urls:
-                connect_sources.extend(
-                    sanitize_csp_source_list(report.allowed_connect_urls)
-                )
-            connect_src = " ".join(connect_sources)
-
-            # Relaxed CSP for trusted system-generated reports with JavaScript
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'none'; "
-                "style-src 'unsafe-inline'; "
-                "img-src data: blob:; "
-                "script-src 'self' 'unsafe-inline'; "
-                f"connect-src {connect_src}; "
-                "sandbox allow-scripts allow-same-origin"
+    # Check if report allows scripts (for system-generated interactive reports)
+    if report.allow_scripts:
+        # Build connect-src directive with allowed external URLs.
+        # Sanitize to prevent CSP directive injection via stored values.
+        connect_sources = ["'self'"]
+        if report.allowed_connect_urls:
+            connect_sources.extend(
+                sanitize_csp_source_list(report.allowed_connect_urls)
             )
-        else:
-            # Strict CSP for user-uploaded reports - no scripts allowed
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; sandbox"
-            )
-        response.headers["X-Content-Type-Options"] = "nosniff"
+        connect_src = " ".join(connect_sources)
+
+        # Relaxed CSP for trusted system-generated reports with JavaScript
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; "
+            "style-src 'unsafe-inline'; "
+            "img-src data: blob:; "
+            "script-src 'self' 'unsafe-inline'; "
+            f"connect-src {connect_src}; "
+            "sandbox allow-scripts allow-same-origin"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = STRICT_SANDBOX_CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
 
     return response
 
@@ -427,18 +460,7 @@ async def serve_file(
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    mime_type, _ = mimetypes.guess_type(str(file_path))
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-
-    if download:
-        return FileResponse(
-            file_path,
-            media_type=mime_type,
-            filename=file_path.name,
-            content_disposition_type="attachment",
-        )
-    return FileResponse(file_path, media_type=mime_type)
+    return stored_file_response(file_path, download)
 
 
 async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:

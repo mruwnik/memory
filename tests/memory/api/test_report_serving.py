@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.common import settings
-from memory.common.db.models import Report
+from memory.common.db.models import Report, SourceItem
 
 
 # === Serving endpoint tests ===
@@ -113,6 +113,82 @@ def test_serve_report_access_denied(client: TestClient, db_session):
         response = client.get("/reports/restricted.html")
 
     assert response.status_code == 403
+
+
+def add_report_file(db_session, name: str, body: bytes):
+    (settings.REPORT_STORAGE_DIR / name).write_bytes(body)
+    db_session.add(
+        Report(
+            modality="doc",
+            mime_type="application/octet-stream",
+            report_title=name,
+            report_format="other",
+            filename=f"reports/{name}",
+            sha256=name.encode().ljust(32, b"\0")[:32],
+        )
+    )
+    db_session.commit()
+
+
+@pytest.mark.parametrize(
+    "name, body, disposition, sandboxed",
+    [
+        ("evil.html", b"<script>alert(1)</script>", "attachment", True),
+        ("evil.htm", b"<script>alert(1)</script>", "attachment", True),
+        ("evil.xhtml", b"<script>alert(1)</script>", "attachment", True),
+        ("evil.svg", b"<svg onload='alert(1)'/>", "attachment", True),
+        ("evil.xml", b"<x/>", "attachment", True),
+        ("evil.js", b"alert(1)", "attachment", True),
+        ("evil.unknownext", b"<script>alert(1)</script>", "attachment", True),
+        ("doc.pdf", b"%PDF-1.4 fake", "inline", False),
+        ("pic.png", b"\x89PNG fake", "inline", True),
+        ("pic.jpg", b"fake", "inline", True),
+        ("notes.txt", b"<script>alert(1)</script>", "inline", True),
+        ("clip.mp3", b"fake", "inline", True),
+        ("clip.mp4", b"fake", "inline", True),
+    ],
+)
+def test_serve_file_never_renders_active_content_inline(
+    client: TestClient, db_session, name, body, disposition, sandboxed
+):
+    add_report_file(db_session, name, body)
+
+    response = client.get(f"/files/reports/{name}")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"].split(";")[0] == disposition
+    csp = response.headers.get("content-security-policy", "")
+    assert ("sandbox" in csp) is sandboxed
+    assert ("default-src 'none'" in csp) is sandboxed
+
+
+@pytest.mark.parametrize("name", ["evil.svg", "evil.xml", "evil.js", "evil.unknownext"])
+def test_serve_report_non_html_active_types_are_attachments(
+    client: TestClient, db_session, name
+):
+    add_report_file(db_session, name, b"<svg onload='alert(1)'/>")
+
+    response = client.get(f"/reports/{name}")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert "sandbox" in response.headers["content-security-policy"]
+
+
+def test_serve_file_download_forces_attachment(client: TestClient, db_session):
+    (settings.FILE_STORAGE_DIR / "pic.png").write_bytes(b"\x89PNG fake")
+    db_session.add(
+        SourceItem(modality="photo", filename="pic.png", sha256=b"\x07" * 32)
+    )
+    db_session.commit()
+
+    response = client.get("/files/pic.png?download=true")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 # === Upload endpoint tests ===
