@@ -117,12 +117,12 @@ describe('ConfigSources create environment', () => {
 })
 
 describe('ConfigSources delete flows', () => {
-  it('deletes an environment after confirm() returns true', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('deletes an environment after confirming', async () => {
     const mock = mockFetchRoutes(routes([environment], []))
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByText('Dev Env')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/claude/environments/100') && (init as RequestInit)?.method === 'DELETE',
@@ -131,12 +131,12 @@ describe('ConfigSources delete flows', () => {
     })
   })
 
-  it('does not delete an environment when confirm() returns false', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('does not delete an environment when the dialog is cancelled', async () => {
     const mock = mockFetchRoutes(routes([environment], []))
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByText('Dev Env')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
     const del = mock.mock.calls.find(
       ([url, init]) => String(url).includes('/claude/environments/100') && (init as RequestInit)?.method === 'DELETE',
     )
@@ -144,13 +144,13 @@ describe('ConfigSources delete flows', () => {
   })
 
   it('deletes a snapshot via the raw fetch endpoint after confirm', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const mock = mockFetchRoutes(routes([], [snapshot]))
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByRole('tab', { name: /Snapshots \(1\)/ })).toBeInTheDocument())
     await user.click(screen.getByRole('tab', { name: /Snapshots \(1\)/ }))
     await screen.findByText('Base Snap')
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/claude/snapshots/200') && (init as RequestInit)?.method === 'DELETE',

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, ArticleFeed } from '@/hooks/useSources'
-import { SourceCard, TagsInput, IntervalInput } from '../shared'
-import { Button, Card, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, Textarea } from '@/components/shared/ui'
+import { SourceRow, TagsInput, IntervalInput } from '../shared'
+import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const FeedsPanel = () => {
@@ -81,7 +81,7 @@ export const FeedsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadFeeds} />
 
   return (
-    <Card title="RSS Feeds" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Feed</Button></>}>
+    <Section title="RSS Feeds" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Feed</Button>}>
       {feeds.length === 0 ? (
         <EmptyState
           message="No RSS feeds configured"
@@ -89,9 +89,9 @@ export const FeedsPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className="space-y-3">
+        <List>
           {feeds.map(feed => (
-            <SourceCard
+            <SourceRow
               key={feed.id}
               title={feed.title || feed.url}
               subtitle={feed.url}
@@ -105,9 +105,9 @@ export const FeedsPanel = () => {
               {feed.description && (
                 <p className="text-sm text-slate-500 mt-1">{feed.description}</p>
               )}
-            </SourceCard>
+            </SourceRow>
           ))}
-        </div>
+        </List>
       )}
 
       {showForm && (
@@ -124,7 +124,7 @@ export const FeedsPanel = () => {
           onCancel={() => setEditingFeed(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

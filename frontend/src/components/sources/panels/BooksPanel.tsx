@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useBooks, Book } from '@/hooks/useBooks'
-import { Card, EmptyState, ErrorState, LoadingState, Notice, buttonClass } from '@/components/shared/ui'
+import { Badge, EmptyState, ErrorState, List, LoadingState, Notice, Row, Section, buttonClass } from '@/components/shared/ui'
 
 export const BooksPanel = () => {
   const { listBooks, uploadBook } = useBooks()
@@ -55,75 +55,43 @@ export const BooksPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadBooks} />
 
   return (
-    <Card title="Books" actions={<><div className="flex items-center gap-3">
-          <span className="text-sm text-slate-500">{books.length} books</span>
-          <label className={buttonClass('secondary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
-            {uploading ? 'Uploading...' : 'Upload Books'}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".epub,.pdf,.mobi,.azw,.azw3"
-              multiple
-              onChange={handleUpload}
-              disabled={uploading}
-              className="hidden"
-            />
-          </label>
-        </div></>}>
-
+    <Section
+      title="Books"
+      description={`${books.length} books`}
+      actions={
+        <label className={buttonClass('primary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
+          {uploading ? 'Uploading...' : 'Upload Books'}
+          <input ref={fileInputRef} type="file" accept=".epub,.pdf,.mobi,.azw,.azw3" multiple
+            onChange={handleUpload} disabled={uploading} className="hidden" />
+        </label>
+      }
+    >
       {uploadError && <Notice tone="error">{uploadError}</Notice>}
       {uploadSuccess && <Notice tone="success">{uploadSuccess}</Notice>}
 
       {books.length === 0 ? (
-        <EmptyState
-          message="No books indexed yet"
-          actionLabel="Upload Books"
-          onAction={() => fileInputRef.current?.click()}
-        />
+        <EmptyState message="No books indexed yet" actionLabel="Upload Books" onAction={() => fileInputRef.current?.click()} />
       ) : (
-        <div className="space-y-3">
+        <List>
           {books.map(book => (
-            <div key={book.id} className="border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition-colors">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-slate-800 truncate">
-                    {book.file_path ? (
-                      <a
-                        href={`/files/${book.file_path}?download=true`}
-                        title="Download book"
-                        className="text-primary hover:underline"
-                      >
-                        {book.title}
-                      </a>
-                    ) : (
-                      book.title
-                    )}
-                  </h4>
-                  {book.author && (
-                    <p className="text-sm text-slate-600 truncate">by {book.author}</p>
-                  )}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
-                {book.publisher && <span>Publisher: {book.publisher}</span>}
-                {book.total_pages && <span>{book.total_pages} pages</span>}
-                {book.section_count > 0 && <span>{book.section_count} sections</span>}
-                {book.language && <span>Language: {book.language}</span>}
-              </div>
-              {book.tags && book.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {book.tags.map(tag => (
-                    <span key={tag} className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+            <Row
+              key={book.id}
+              title={book.file_path
+                ? <a href={`/files/${book.file_path}?download=true`} title="Download book" className="text-primary hover:underline">{book.title}</a>
+                : book.title}
+              badges={book.tags?.map(tag => <Badge key={tag}>{tag}</Badge>)}
+              meta={[
+                book.author && `by ${book.author}`,
+                book.publisher && `Publisher: ${book.publisher}`,
+                book.total_pages && `${book.total_pages} pages`,
+                book.section_count > 0 && `${book.section_count} sections`,
+                book.language && `Language: ${book.language}`,
+              ]}
+            />
           ))}
-        </div>
+        </List>
       )}
-    </Card>
+    </Section>
   )
 }
 

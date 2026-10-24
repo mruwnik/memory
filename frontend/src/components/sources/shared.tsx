@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { EmailAccountTestResult } from '../../hooks/useSources'
-import { Button, ConfirmDialog, Input } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Input, Notice, Row, RowError, Select } from '@/components/shared/ui'
 
 // Format relative time
 export const formatRelativeTime = (dateString: string | null): string => {
@@ -19,50 +19,22 @@ export const formatRelativeTime = (dateString: string | null): string => {
   return date.toLocaleDateString()
 }
 
-// Status Badge
+// Active/inactive state; with onClick it is a switch that toggles the source.
 interface StatusBadgeProps {
   active: boolean
   onClick?: () => void
 }
 
 export const StatusBadge = ({ active, onClick }: StatusBadgeProps) => {
-  const className = `px-2 py-1 rounded text-xs font-medium ${
-    active ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
-  }`
-
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        role="switch"
-        aria-checked={active}
-        className={`${className} cursor-pointer hover:opacity-80`}
-        onClick={onClick}
-      >
-        {active ? 'Active' : 'Inactive'}
-      </button>
-    )
-  }
-
-  return <span className={className}>{active ? 'Active' : 'Inactive'}</span>
+  const badge = <Badge tone={active ? 'success' : 'neutral'}>{active ? 'Active' : 'Inactive'}</Badge>
+  if (!onClick) return badge
+  return (
+    <button type="button" role="switch" aria-checked={active} onClick={onClick}
+      className="rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-primary">
+      {badge}
+    </button>
+  )
 }
-
-// Sync Status
-interface SyncStatusProps {
-  lastSyncAt: string | null
-  syncError?: string | null
-}
-
-export const SyncStatus = ({ lastSyncAt, syncError }: SyncStatusProps) => (
-  <div className="flex items-center gap-2 text-sm text-slate-500 my-2">
-    <span>Last sync: {formatRelativeTime(lastSyncAt)}</span>
-    {syncError && (
-      <span className="text-red-600 cursor-help" title={syncError}>
-        Error
-      </span>
-    )}
-  </div>
-)
 
 // Sync Button
 interface SyncButtonProps {
@@ -84,7 +56,7 @@ export const SyncButton = ({ onSync, disabled, label = 'Sync' }: SyncButtonProps
   }
 
   return (
-    <Button variant="primary" size="sm"
+    <Button size="sm"
       onClick={handleSync}
       disabled={disabled || syncing}
     >
@@ -119,7 +91,7 @@ export const TestConnectionButton = ({ onTest, onResult, disabled }: TestConnect
   }
 
   return (
-    <div className="space-y-2 my-2">
+    <div className="space-y-2">
       <Button size="sm"
         type="button"
         onClick={handleTest}
@@ -127,15 +99,7 @@ export const TestConnectionButton = ({ onTest, onResult, disabled }: TestConnect
       >
         {testing ? 'Testing…' : 'Test Connection'}
       </Button>
-      {result && (
-        <div
-          className={`py-2 px-3 rounded text-sm ${
-            result.status === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-          }`}
-        >
-          {result.message}
-        </div>
-      )}
+      {result && <Notice tone={result.status === 'success' ? 'success' : 'error'}>{result.message}</Notice>}
     </div>
   )
 }
@@ -237,10 +201,12 @@ export const IntervalInput = ({ value, onChange, label = 'Check interval' }: Int
   )
 }
 
-// Source Card wrapper
-interface SourceCardProps {
+// A connected source in a panel's List
+interface SourceRowProps {
   title: string
   subtitle?: string
+  /** Facts after the subtitle and last sync time. */
+  meta?: React.ReactNode[]
   active: boolean
   lastSyncAt: string | null
   syncError?: string | null
@@ -252,9 +218,10 @@ interface SourceCardProps {
   children?: React.ReactNode
 }
 
-export const SourceCard = ({
+export const SourceRow = ({
   title,
   subtitle,
+  meta = [],
   active,
   lastSyncAt,
   syncError,
@@ -264,52 +231,44 @@ export const SourceCard = ({
   onSync,
   additionalActions,
   children,
-}: SourceCardProps) => {
-  const [confirmDelete, setConfirmDelete] = useState(false)
+}: SourceRowProps) => (
+  <Row
+    title={title}
+    muted={!active}
+    badges={<StatusBadge active={active} onClick={onToggleActive} />}
+    meta={[subtitle, `Last sync: ${formatRelativeTime(lastSyncAt)}`, ...meta]}
+    actions={<>
+      {onSync && <SyncButton onSync={onSync} disabled={!active} />}
+      {additionalActions}
+      {onEdit && <Button size="sm" onClick={onEdit}>Edit</Button>}
+      {onDelete && <ConfirmButton confirm={`Are you sure you want to delete "${title}"?`} onConfirm={onDelete} />}
+    </>}
+  >
+    {syncError && <RowError>{syncError}</RowError>}
+    {children}
+  </Row>
+)
 
-  return (
-    <div className={`bg-white p-4 rounded-lg shadow-sm border-l-4 ${active ? 'border-green-500' : 'border-slate-300 opacity-60'}`}>
-      <div className="flex items-start justify-between mb-2">
-        <div className="flex-1 min-w-0">
-          <h4 className="font-semibold text-slate-800 truncate">{title}</h4>
-          {subtitle && <p className="text-sm text-slate-500 truncate">{subtitle}</p>}
-        </div>
-        <StatusBadge active={active} onClick={onToggleActive} />
-      </div>
+const SENSITIVITIES = ['public', 'basic', 'internal', 'confidential'] as const
 
-      <SyncStatus lastSyncAt={lastSyncAt} syncError={syncError} />
-
-      {children}
-
-      <div className="flex gap-2 mt-3 flex-wrap">
-        {onSync && <SyncButton onSync={onSync} disabled={!active} />}
-        {additionalActions}
-        {onEdit && (
-          <Button size="sm"
-            onClick={onEdit}
-          >
-            Edit
-          </Button>
-        )}
-        {onDelete && (
-          <Button variant="danger" size="sm"
-            onClick={() => setConfirmDelete(true)}
-          >
-            Delete
-          </Button>
-        )}
-      </div>
-
-      {confirmDelete && (
-        <ConfirmDialog
-          message={`Are you sure you want to delete "${title}"?`}
-          onConfirm={() => {
-            onDelete?.()
-            setConfirmDelete(false)
-          }}
-          onCancel={() => setConfirmDelete(false)}
-        />
-      )}
-    </div>
-  )
-}
+/** Project and sensitivity pickers for a chat workspace, server or channel row. */
+export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onProject, onSensitivity }: {
+  projectId: number | null | undefined
+  sensitivity: string
+  projects: { id: number; title: string }[]
+  disabled: boolean
+  onProject: (id: number | undefined) => void
+  onSensitivity: (s: typeof SENSITIVITIES[number]) => void
+}) => (
+  <>
+    <Select className="w-auto py-1 text-xs" value={projectId || ''} disabled={disabled} title="Project" aria-label="Project"
+      onChange={e => onProject(e.target.value ? parseInt(e.target.value) : undefined)}>
+      <option value="">No project</option>
+      {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+    </Select>
+    <Select className="w-auto py-1 text-xs" value={sensitivity} disabled={disabled} title="Sensitivity" aria-label="Sensitivity"
+      onChange={e => onSensitivity(e.target.value as typeof SENSITIVITIES[number])}>
+      {SENSITIVITIES.map(v => <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>)}
+    </Select>
+  </>
+)

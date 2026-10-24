@@ -5,9 +5,7 @@ import {
 } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { usd } from './KeyPicker'
-import {
-  Badge, Button, Card, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, ListItem, Notice, Page, Section, Select,
-} from '@/components/shared/ui'
+import { Badge, Button, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select } from '@/components/shared/ui'
 
 type Keys = Record<KeyProvider, ProviderKey[]>
 type Save = (body: KeyUpsert) => Promise<void>
@@ -121,34 +119,29 @@ function KeyRow({ entry, onSave, onMakeDefault, onDelete }: {
   const cap = entry.max_cost_usd_per_day ? `${usd(entry.max_cost_usd_per_day)}/day cap` : `${usd(DEFAULT_KEY_DAILY_CAP_USD)}/day default cap`
 
   return (
-    <ListItem>
-      <div className="min-w-0 space-y-0.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium text-slate-800">{entry.label}</span>
-          <span className="font-mono text-xs text-slate-600">••••{entry.key_hint}</span>
-          {entry.is_default && <Badge tone="primary">Default</Badge>}
-          {entry.status === 'ok' ? <Badge tone="success">OK</Badge> : <Badge tone="danger">Rejected</Badge>}
-        </div>
-        <div className="text-xs text-slate-600">
-          {entry.last_used_at ? `Used ${formatRelativeTime(entry.last_used_at)}` : 'Never used'} · {cap}
-        </div>
-        {entry.status === 'invalid' && (
-          <div className="text-xs text-red-700">
-            {entry.status_detail ?? `${PROVIDER_NAMES[entry.provider]} rejected this key.`} Runs that use it fail until you replace it.
-          </div>
-        )}
-      </div>
-      {edit === null && (
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => setEdit('label')}>Rename</Button>
-          <Button size="sm" onClick={() => setEdit('key')}>Replace key</Button>
-          <Button size="sm" onClick={() => setEdit('cap')}>Daily cap</Button>
-          {!entry.is_default && <Button size="sm" onClick={onMakeDefault}>Make default</Button>}
-          <Button size="sm" variant="danger" onClick={onDelete}>Delete</Button>
-        </div>
+    <Row
+      title={entry.label}
+      badges={<>
+        <span className="font-mono text-xs text-slate-600">••••{entry.key_hint}</span>
+        {entry.is_default && <Badge tone="primary">Default</Badge>}
+        {entry.status === 'ok' ? <Badge tone="success">OK</Badge> : <Badge tone="danger">Rejected</Badge>}
+      </>}
+      meta={[entry.last_used_at ? `Used ${formatRelativeTime(entry.last_used_at)}` : 'Never used', cap]}
+      actions={edit === null && <>
+        <Button size="sm" onClick={() => setEdit('label')}>Rename</Button>
+        <Button size="sm" onClick={() => setEdit('key')}>Replace key</Button>
+        <Button size="sm" onClick={() => setEdit('cap')}>Daily cap</Button>
+        {!entry.is_default && <Button size="sm" onClick={onMakeDefault}>Make default</Button>}
+        <Button size="sm" variant="danger" onClick={onDelete}>Delete</Button>
+      </>}
+    >
+      {entry.status === 'invalid' && (
+        <RowError>
+          {entry.status_detail ?? `${PROVIDER_NAMES[entry.provider]} rejected this key.`} Runs that use it fail until you replace it.
+        </RowError>
       )}
       {edit && <EditKeyForm entry={entry} edit={edit} onSave={onSave} onDone={() => setEdit(null)} />}
-    </ListItem>
+    </Row>
   )
 }
 
@@ -210,22 +203,18 @@ export default function KeysPage() {
           ? "Agents with no key of yours for their model's provider use the server's key."
           : "Agents need a key of yours for their model's provider to run."}
       </>}
-      actions={
-        <Button variant={adding ? 'secondary' : 'primary'} aria-expanded={adding} onClick={() => setAdding(a => !a)}>
-          {adding ? 'Close' : 'Add key'}
-        </Button>
-      }
+      actions={<Button variant="primary" onClick={() => setAdding(true)}>Add key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}
       onRetry={load}
     >
       {adding && (
-        <Card>
+        <Modal title="Add API key" onClose={() => setAdding(false)} size="xl">
           <AddKeyForm onSave={async body => {
             await save(body)
             setAdding(false)
           }} />
-        </Card>
+        </Modal>
       )}
       {outcome && <Notice tone={outcome.tone} onDismiss={() => setOutcome(null)}>{outcome.message}</Notice>}
       {actionError && <Notice tone="error" onDismiss={() => setActionError(null)}>{actionError}</Notice>}

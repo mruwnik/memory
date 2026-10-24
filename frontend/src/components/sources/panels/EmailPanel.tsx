@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { SourceCard, TagsInput, TestConnectionButton } from '../shared'
-import { Button, Card, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
+import { SourceRow, TagsInput, TestConnectionButton } from '../shared'
+import { Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
@@ -72,7 +72,7 @@ export const EmailPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
-    <Card title="Email Accounts" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button></>}>
+    <Section title="Email Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button>}>
       {accounts.length === 0 ? (
         <EmptyState
           message="No email accounts configured"
@@ -80,38 +80,30 @@ export const EmailPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className="space-y-3">
+        <List>
           {accounts.map(account => (
-            <SourceCard
+            <SourceRow
               key={account.id}
               title={account.name}
               subtitle={account.email_address}
               active={account.active}
               lastSyncAt={account.last_sync_at}
+              syncError={account.sync_error}
+              meta={[
+                account.account_type === 'gmail' ? 'Gmail (OAuth)' : `${account.imap_server}:${account.imap_port}`,
+                !!account.folders?.length && `Folders: ${account.folders.join(', ')}`,
+              ]}
               onToggleActive={() => handleToggleActive(account)}
               onEdit={() => setEditingAccount(account)}
               onDelete={() => handleDelete(account.id)}
               onSync={() => handleSync(account.id)}
             >
-              <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
-                {account.account_type === 'gmail' ? (
-                  <span>Type: Gmail (OAuth)</span>
-                ) : (
-                  <span>Server: {account.imap_server}:{account.imap_port}</span>
-                )}
-                {account.folders && account.folders.length > 0 && (
-                  <span>Folders: {account.folders.join(', ')}</span>
-                )}
-              </div>
               {account.account_type !== 'gmail' && (
                 <TestConnectionButton onTest={() => testEmailAccount({ id: account.id })} />
               )}
-              {account.sync_error && (
-                <Notice tone="error">{account.sync_error}</Notice>
-              )}
-            </SourceCard>
+            </SourceRow>
           ))}
-        </div>
+        </List>
       )}
 
       {showForm && (
@@ -132,7 +124,7 @@ export const EmailPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

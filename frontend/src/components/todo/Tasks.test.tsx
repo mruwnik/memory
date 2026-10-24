@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen, waitFor } from '@/test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import type { TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
 import Tasks from './Tasks'
@@ -34,7 +34,6 @@ beforeEach(() => {
   createTask.mockReset().mockResolvedValue(undefined)
   updateTask.mockReset().mockResolvedValue(undefined)
   deleteTask.mockReset().mockResolvedValue(undefined)
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
 describe('Tasks page', () => {
@@ -123,18 +122,18 @@ describe('Tasks page', () => {
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(screen.getByText('delete me')).toBeInTheDocument())
     await user.click(screen.getByTitle('Delete'))
-    expect(window.confirm).toHaveBeenCalled()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     expect(deleteTask).toHaveBeenCalledWith(9)
     await waitFor(() => expect(screen.queryByText('delete me')).not.toBeInTheDocument())
   })
 
   it('does not delete when confirmation is declined', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
     listTasks.mockResolvedValue([makeTask({ id: 9, task_title: 'keep me' })])
     const user = userEvent.setup()
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(screen.getByText('keep me')).toBeInTheDocument())
     await user.click(screen.getByTitle('Delete'))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
     expect(deleteTask).not.toHaveBeenCalled()
   })
 

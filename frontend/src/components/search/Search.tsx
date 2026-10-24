@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMCP } from '@/hooks/useMCP'
 import { SearchResult } from './results'
 import SearchForm, { SearchParams } from './SearchForm'
-import { EmptyState, LoadingState, Page } from '@/components/shared/ui'
+import { EmptyState, List, LoadingState, Page } from '@/components/shared/ui'
 
 const SearchResults = ({ results, isLoading }: { results: any[], isLoading: boolean }) => {
     if (isLoading) {
@@ -16,9 +16,9 @@ const SearchResults = ({ results, isLoading }: { results: any[], isLoading: bool
                 </div>
             )}
 
-            {results.map((result, index) => <SearchResult key={index} result={result} />)}
-
-            {results.length === 0 && <EmptyState message="No results found" />}
+            {results.length === 0
+                ? <EmptyState message="No results found" />
+                : <List>{results.map((result, index) => <SearchResult key={index} result={result} />)}</List>}
         </div>
     )
 }

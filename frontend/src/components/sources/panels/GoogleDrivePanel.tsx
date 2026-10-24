@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { TagsInput, IntervalInput, StatusBadge, SyncStatus, SyncButton } from '../shared'
-import { Button, Card, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, LoadingState, Modal, Notice, Select, cx } from '@/components/shared/ui'
+import { TagsInput, IntervalInput, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, SubList, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
@@ -81,106 +81,64 @@ export const GoogleDrivePanel = () => {
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
-  // Show message if no accounts connected
-  if (accounts.length === 0) {
-    return (
-      <Card title="Google Drive">
-        <EmptyState
-          message="No Google accounts connected. Add a Google account in the Accounts tab first."
-        />
-      </Card>
-    )
-  }
-
   return (
-    <Card title="Google Drive Folders">
-      <div className="space-y-3">
-        {accounts.map(account => (
-          <div key={account.id} className="border border-slate-200 rounded-lg p-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <h4 className="font-medium text-slate-800 truncate">{account.email}</h4>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <StatusBadge active={account.active} />
-              </div>
-            </div>
-
-            {account.sync_error && (
-              <Notice tone="error">{account.sync_error}</Notice>
-            )}
-
-            <div className="mt-4 pt-4 border-t border-slate-100">
-              <div className="flex items-center justify-between mb-3">
-                <h5 className="text-sm font-medium text-slate-700">Synced Folders ({account.folders.length})</h5>
-                <div className="flex gap-2">
-                  <Button variant="primary" className="text-xs py-1 px-2" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</Button>
-                  <Button className="text-xs py-1 px-2" onClick={() => setAddingFolderTo(account.id)}>Add by ID</Button>
-                </div>
-              </div>
-
-              {account.folders.length === 0 ? (
-                <p className="text-sm text-slate-400 italic">No folders configured for sync</p>
-              ) : (
-                <div className="space-y-2">
+    <Section title="Google Drive Folders">
+      {accounts.length === 0 ? (
+        <EmptyState message="No Google accounts connected. Add a Google account in the Accounts tab first." />
+      ) : (
+        <List>
+          {accounts.map(account => (
+            <Row
+              key={account.id}
+              title={account.email}
+              muted={!account.active}
+              badges={<StatusBadge active={account.active} />}
+            >
+              {account.sync_error && <RowError>{account.sync_error}</RowError>}
+              <SubList
+                title={`Synced Folders (${account.folders.length})`}
+                actions={<>
+                  <Button size="sm" onClick={() => setBrowsingFoldersFor(account.id)}>Browse & Add</Button>
+                  <Button size="sm" onClick={() => setAddingFolderTo(account.id)}>Add by ID</Button>
+                </>}
+                empty="No folders configured for sync"
+              >
                   {account.folders.map(folder => (
-                    <div key={folder.id} className={cx(
-                      'flex flex-wrap items-center gap-3 p-3 rounded border',
-                      folder.active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50 opacity-60'
-                    )}>
-                      <div className="flex-1 min-w-0">
-                        <a
-                          className="font-medium text-primary hover:underline"
-                          href={`https://drive.google.com/open?id=${folder.folder_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                    <Row
+                      key={folder.id}
+                      muted={!folder.active}
+                      title={
+                        <a className="text-primary hover:underline" href={`https://drive.google.com/open?id=${folder.folder_id}`}
+                          target="_blank" rel="noopener noreferrer">
                           {folder.folder_name}
                         </a>
-                        {folder.folder_path && <span className="block text-xs text-slate-500">{folder.folder_path}</span>}
-                        <SyncStatus lastSyncAt={folder.last_sync_at} />
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {folder.recursive && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">Recursive</span>}
-                        {folder.include_shared && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded">Shared</span>}
-                        {folder.exclude_folder_ids.length > 0 && (
-                          <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded">
-                            {folder.exclude_folder_ids.length} excluded
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <SyncButton
-                          onSync={() => handleSyncFolder(account.id, folder.id)}
-                          disabled={!folder.active || !account.active}
-                          label="Sync"
-                        />
+                      }
+                      badges={<>
+                        {!folder.active && <Badge>Disabled</Badge>}
+                        {folder.recursive && <Badge tone="info">Recursive</Badge>}
+                        {folder.include_shared && <Badge tone="primary">Shared</Badge>}
+                        {folder.exclude_folder_ids.length > 0 && <Badge tone="warning">{folder.exclude_folder_ids.length} excluded</Badge>}
+                      </>}
+                      meta={[folder.folder_path, `Last sync: ${formatRelativeTime(folder.last_sync_at)}`]}
+                      actions={<>
+                        <SyncButton onSync={() => handleSyncFolder(account.id, folder.id)} disabled={!folder.active || !account.active} label="Sync" />
                         {folder.recursive && (
-                          <Button size="sm"
-                            onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}
-                          >
-                            Exclusions
-                          </Button>
+                          <Button size="sm" onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}>Exclusions</Button>
                         )}
-                        <Button size="sm"
-                          onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}
-                        >
+                        <Button size="sm" onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}>
                           {folder.active ? 'Disable' : 'Enable'}
                         </Button>
-                        <Button variant="danger" size="sm"
-                          onClick={() => handleDeleteFolder(account.id, folder.id)}
-                        >
+                        <ConfirmButton confirm={`Remove "${folder.folder_name}" from sync?`} onConfirm={() => handleDeleteFolder(account.id, folder.id)}>
                           Remove
-                        </Button>
-                      </div>
-                    </div>
+                        </ConfirmButton>
+                      </>}
+                    />
                   ))}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+              </SubList>
+            </Row>
+          ))}
+        </List>
+      )}
 
       {addingFolderTo && (
         <GoogleFolderForm
@@ -207,7 +165,7 @@ export const GoogleDrivePanel = () => {
           onCancel={() => setManagingExclusionsFor(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

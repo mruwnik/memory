@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAgents, type AgentSchedule } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
-import { Button, Input, List, ListItem, Notice, Section, Textarea } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Input, List, Notice, Row, Section, Textarea } from '@/components/shared/ui'
 
 export function Schedules({ definitionId }: { definitionId: number }) {
   const { listSchedules, saveSchedule, deleteSchedule } = useAgents()
@@ -31,11 +31,6 @@ export function Schedules({ definitionId }: { definitionId: number }) {
     setInput('')
   })
 
-  const remove = (s: AgentSchedule) => {
-    if (!window.confirm('Delete this schedule and its history?')) return
-    act(() => deleteSchedule(s.id))
-  }
-
   return (
     <Section title="Schedules" description="Cron is in UTC. Each run uses the saved version of this agent.">
       {error && <Notice tone="error">{error}</Notice>}
@@ -44,24 +39,20 @@ export function Schedules({ definitionId }: { definitionId: number }) {
       {!!schedules?.length && (
         <List>
           {schedules.map(s => (
-            <ListItem key={s.id}>
-              <span className="min-w-0">
-                <code className="mr-2">{s.cron_expression ?? 'once'}</code>
-                <span className="text-slate-700 break-words">{s.data.input}</span>
-                <span className="block text-xs text-slate-600">
-                  {s.enabled ? `next ${formatRelativeTime(s.next_scheduled_time)}` : s.cron_expression ? 'paused' : 'done'}
-                </span>
-              </span>
-              <span className="flex gap-2 shrink-0">
+            <Row
+              key={s.id}
+              title={<span className="font-normal break-words">{s.data.input}</span>}
+              badges={<Badge><code>{s.cron_expression ?? 'once'}</code></Badge>}
+              meta={[s.enabled ? `next ${formatRelativeTime(s.next_scheduled_time)}` : s.cron_expression ? 'paused' : 'done']}
+              actions={<>
                 {(s.enabled || s.cron_expression) && (
-                  <Button size="sm"
-                    onClick={() => act(() => saveSchedule({ definitionId, enabled: !s.enabled, taskId: s.id }))}>
+                  <Button size="sm" onClick={() => act(() => saveSchedule({ definitionId, enabled: !s.enabled, taskId: s.id }))}>
                     {s.enabled ? 'Pause' : 'Resume'}
                   </Button>
                 )}
-                <Button variant="danger" size="sm" onClick={() => remove(s)}>Delete</Button>
-              </span>
-            </ListItem>
+                <ConfirmButton confirm="Delete this schedule and its history?" onConfirm={() => act(() => deleteSchedule(s.id))} />
+              </>}
+            />
           ))}
         </List>
       )}

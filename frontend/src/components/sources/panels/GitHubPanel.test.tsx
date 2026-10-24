@@ -112,6 +112,7 @@ describe('GitHubPanel repo actions', () => {
     const { user } = renderWithUser(<GitHubPanel />)
     await waitFor(() => expect(screen.getByText('octocat/hello')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/repos/50') && (init as RequestInit)?.method === 'DELETE',
@@ -211,6 +212,7 @@ describe('GitHubPanel project actions', () => {
     const { user } = renderWithUser(<GitHubPanel />)
     await waitFor(() => expect(screen.getByText(/Roadmap/)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/github/projects/70') && (init as RequestInit)?.method === 'DELETE',

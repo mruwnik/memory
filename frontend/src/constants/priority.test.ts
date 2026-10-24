@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   PRIORITY_ORDER,
-  PRIORITY_COLORS,
-  PRIORITY_TEXT_COLORS,
+  dueLabel,
 } from './priority'
 
 describe('PRIORITY_ORDER', () => {
@@ -19,24 +18,14 @@ describe('PRIORITY_ORDER', () => {
   })
 })
 
-describe('PRIORITY_COLORS', () => {
+describe('dueLabel', () => {
+  const now = new Date(2030, 5, 15, 12)
   it.each([
-    ['urgent', 'bg-[var(--color-urgent)]'],
-    ['high', 'bg-[var(--color-high)]'],
-    ['medium', 'bg-[var(--color-medium)]'],
-    ['low', 'bg-[var(--color-low)]'],
-  ])('maps %s to a bg var class', (key, expected) => {
-    expect(PRIORITY_COLORS[key]).toBe(expected)
-  })
-})
-
-describe('PRIORITY_TEXT_COLORS', () => {
-  it.each([
-    ['urgent', 'text-[var(--color-urgent)]'],
-    ['high', 'text-[var(--color-high)]'],
-    ['medium', 'text-[var(--color-medium)]'],
-    ['low', 'text-[var(--color-low)]'],
-  ])('maps %s to a text var class', (key, expected) => {
-    expect(PRIORITY_TEXT_COLORS[key]).toBe(expected)
+    [new Date(2030, 5, 14, 23).toISOString(), 'Overdue', 'danger'],
+    [new Date(2030, 5, 15, 1).toISOString(), 'Today', 'warning'],
+    [new Date(2030, 5, 16, 22).toISOString(), 'Tomorrow', 'info'],
+    [new Date(2030, 5, 20, 9).toISOString(), 'Jun 20', 'neutral'],
+  ])('labels %s as %s', (due, text, tone) => {
+    expect(dueLabel(due, now)).toEqual({ text, tone })
   })
 })

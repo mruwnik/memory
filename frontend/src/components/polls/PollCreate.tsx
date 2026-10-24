@@ -8,7 +8,7 @@ import {
   formatTimezone,
   toUTCDatetime,
 } from '../../utils/timezones'
-import { Button, Card, Input, Label, Notice, Page, Select, Textarea } from '@/components/shared/ui'
+import { Button, Card, Field, FieldRow, Input, Notice, Page, Select, Textarea } from '@/components/shared/ui'
 
 // Get tomorrow's date as default start
 function getDefaultStartDate(): string {
@@ -96,10 +96,7 @@ export const PollCreate: React.FC = () => {
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
 
-        <div className="mb-4">
-          <Label htmlFor="title" className="mb-1">
-            Poll Title *
-          </Label>
+        <Field label="Poll Title *">
           <Input
             type="text"
             id="title"
@@ -109,12 +106,9 @@ export const PollCreate: React.FC = () => {
             placeholder="e.g., Team Planning Meeting"
             required
           />
-        </div>
+        </Field>
 
-        <div className="mb-4">
-          <Label htmlFor="description" className="mb-1">
-            Description
-          </Label>
+        <Field label="Description">
           <Textarea
             id="description"
             name="description"
@@ -123,13 +117,10 @@ export const PollCreate: React.FC = () => {
             placeholder="Optional description or agenda"
             rows={3}
           />
-        </div>
+        </Field>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <Label htmlFor="date_start" className="mb-1">
-              Start Date *
-            </Label>
+        <FieldRow>
+          <Field label="Start Date *">
             <Input
               type="date"
               id="date_start"
@@ -138,12 +129,9 @@ export const PollCreate: React.FC = () => {
               onChange={handleChange}
               required
             />
-          </div>
+          </Field>
 
-          <div>
-            <Label htmlFor="date_end" className="mb-1">
-              End Date *
-            </Label>
+          <Field label="End Date *">
             <Input
               type="date"
               id="date_end"
@@ -152,14 +140,11 @@ export const PollCreate: React.FC = () => {
               onChange={handleChange}
               required
             />
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <Label htmlFor="time_start" className="mb-1">
-              Start Hour
-            </Label>
+        <FieldRow>
+          <Field label="Start Hour">
             <Select
               id="time_start"
               name="time_start"
@@ -170,12 +155,9 @@ export const PollCreate: React.FC = () => {
                 <option key={i} value={i}>{formatHour(i)}</option>
               ))}
             </Select>
-          </div>
+          </Field>
 
-          <div>
-            <Label htmlFor="time_end" className="mb-1">
-              End Hour
-            </Label>
+          <Field label="End Hour">
             <Select
               id="time_end"
               name="time_end"
@@ -186,14 +168,11 @@ export const PollCreate: React.FC = () => {
                 <option key={i + 1} value={i + 1}>{formatHour(i + 1)}</option>
               ))}
             </Select>
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <Label htmlFor="slot_duration" className="mb-1">
-              Time Slot Duration
-            </Label>
+        <FieldRow>
+          <Field label="Time Slot Duration">
             <Select
               id="slot_duration"
               name="slot_duration"
@@ -204,12 +183,9 @@ export const PollCreate: React.FC = () => {
               <option value={30}>30 minutes</option>
               <option value={60}>1 hour</option>
             </Select>
-          </div>
+          </Field>
 
-          <div>
-            <Label htmlFor="timezone" className="mb-1">
-              Your Timezone
-            </Label>
+          <Field label="Your Timezone">
             <Select
               id="timezone"
               name="timezone"
@@ -223,8 +199,8 @@ export const PollCreate: React.FC = () => {
                 <option key={tz} value={tz}>{formatTimezone(tz)}</option>
               ))}
             </Select>
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
         <p className="text-sm text-slate-500 mb-6">
           Times will be converted to UTC and displayed in each respondent's local timezone.

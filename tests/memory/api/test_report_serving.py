@@ -3,6 +3,7 @@
 from io import BytesIO
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from memory.common import settings
@@ -62,6 +63,29 @@ def test_serve_report_404_not_found(client: TestClient, user):
     response = client.get("/reports/nonexistent.html")
 
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("path", ["..%2Fsecret.html", "%2E%2E%2Fsecret.html"])
+def test_serve_report_rejects_paths_outside_reports_dir(
+    client: TestClient, user, db_session, path
+):
+    """A file outside the reports dir is not served, even with a matching DB row."""
+    (settings.FILE_STORAGE_DIR / "secret.html").write_text("<h1>Secret</h1>")
+    db_session.add(
+        Report(
+            modality="doc",
+            mime_type="text/html",
+            report_title="Secret",
+            report_format="html",
+            filename="secret.html",
+            sha256=b"\x03" * 32,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/reports/{path}")
+
+    assert response.status_code == 403
 
 
 def test_serve_report_access_denied(client: TestClient, db_session):

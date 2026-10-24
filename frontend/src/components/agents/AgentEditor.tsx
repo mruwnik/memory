@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { defaultSpec, useAgents, type AgentRun, type AgentSpec, type Catalog } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { SpecEditor } from './SpecEditor'
 import { StatusBadge } from './StatusBadge'
 import { Schedules } from './Schedules'
 import { Triggers } from './Triggers'
-import { Button, Field, FieldRow, Input, List, ListItem, Notice, Page, Section, Textarea } from '@/components/shared/ui'
+import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea } from '@/components/shared/ui'
 
 export default function AgentEditor() {
   const { id } = useParams()
@@ -77,7 +77,7 @@ export default function AgentEditor() {
   }
 
   const remove = async () => {
-    if (definitionId === undefined || !window.confirm(`Delete agent "${name}"? Its runs are kept.`)) return
+    if (definitionId === undefined) return
     try {
       await deleteDefinition(definitionId)
       navigate('/ui/agents')
@@ -91,7 +91,8 @@ export default function AgentEditor() {
   if (!catalog || !spec) return <Page back={back} title={isNew ? 'New agent' : 'Agent'} loading="Loading agent..." error={error} />
 
   return (
-    <Page back={back} title={name || (isNew ? 'New agent' : 'Untitled agent')}>
+    <Page back={back} title={name || (isNew ? 'New agent' : 'Untitled agent')}
+      actions={!isNew && <ConfirmButton size="md" confirm={`Delete agent "${name}"? Its runs are kept.`} onConfirm={remove}>Delete agent</ConfirmButton>}>
       {error && <Notice tone="error">{error}</Notice>}
       <FieldRow>
         <Field label="Name"><Input maxLength={100} value={name} onChange={e => setName(e.target.value)} /></Field>
@@ -104,13 +105,12 @@ export default function AgentEditor() {
         </Notice>
       )}
       <SpecEditor value={spec} catalog={catalog} onChange={setSpec} onValidityChange={setJsonValid} />
-      <div className="flex flex-wrap items-center gap-2 pb-6 border-b border-slate-200">
+      <FormActions className="items-center pb-6 border-b border-slate-200">
+        {!isNew && dirty && <span className="text-xs text-slate-600">Unsaved changes</span>}
         <Button variant="primary" disabled={!jsonValid || (!dirty && changedTools.length === 0)} onClick={save}>
           {isNew ? 'Create agent' : 'Save'}
         </Button>
-        {!isNew && dirty && <span className="text-xs text-slate-600">Unsaved changes</span>}
-        {!isNew && <Button variant="danger" className="ml-auto" onClick={remove}>Delete agent</Button>}
-      </div>
+      </FormActions>
       {!isNew && (
         <Section title="Run">
           <Textarea aria-label="Run input" className="h-24" placeholder="What should the agent do?"
@@ -122,13 +122,8 @@ export default function AgentEditor() {
           {!!runs.length && (
             <List>
               {runs.map(r => (
-                <ListItem key={r.id}>
-                  <Link to={`/ui/agents/runs/${r.id}`} className="text-primary truncate min-w-0 flex-1">{r.input}</Link>
-                  <span className="flex items-center gap-2 shrink-0 text-xs text-slate-600">
-                    <StatusBadge status={r.status} />
-                    {formatRelativeTime(r.created_at)} · ${r.cost_usd}
-                  </span>
-                </ListItem>
+                <Row key={r.id} to={`/ui/agents/runs/${r.id}`} title={r.input} badges={<StatusBadge status={r.status} />}
+                  meta={[formatRelativeTime(r.created_at), `$${r.cost_usd}`]} />
               ))}
             </List>
           )}

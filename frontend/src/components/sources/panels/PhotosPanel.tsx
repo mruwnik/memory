@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useSources } from '@/hooks/useSources'
-import { Button, Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, buttonClass } from '@/components/shared/ui'
+import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, buttonClass , Section } from '@/components/shared/ui'
 
 interface Photo {
   id: number
@@ -105,9 +105,8 @@ export const PhotosPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadPhotos} />
 
   return (
-    <Card title="Photos" actions={<><div className="flex items-center gap-3">
-          <span className="text-sm text-slate-500">{photos.length} photos</span>
-          <label className={buttonClass('secondary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
+    <Section title="Photos" description={`${photos.length} photos`} actions={
+          <label className={buttonClass('primary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
             {uploading ? 'Uploading...' : 'Upload Photos'}
             <input
               ref={fileInputRef}
@@ -119,8 +118,7 @@ export const PhotosPanel = () => {
               className="hidden"
             />
           </label>
-        </div></>}>
-
+        }>
       {uploadError && <Notice tone="error">{uploadError}</Notice>}
       {uploadSuccess && <Notice tone="success">{uploadSuccess}</Notice>}
 
@@ -133,7 +131,7 @@ export const PhotosPanel = () => {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {photos.map(photo => (
-            <div key={photo.id} className="group relative border border-slate-200 rounded-lg overflow-hidden hover:border-slate-300 transition-colors">
+            <div key={photo.id} className="group relative bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               {photo.file_path && (
                 <div className="aspect-square bg-slate-100">
                   <img
@@ -175,7 +173,7 @@ export const PhotosPanel = () => {
           onCancel={() => setPhotoToDelete(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

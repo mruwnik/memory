@@ -1,5 +1,5 @@
 import React from 'react'
-import { Card } from '@/components/shared/ui'
+import { Stat, StatGrid } from '@/components/shared/ui'
 
 interface SummaryCardsProps {
   totalEvents: number
@@ -27,57 +27,20 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
   const diskDetail = formatUsedTotal(diskTotalGb, diskFreeGb, gbToHuman)
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-      <Card className="text-center">
-        <span className="block text-2xl font-bold text-slate-800">{formatNumber(totalEvents)}</span>
-        <span className="text-sm text-slate-500">Total Events</span>
-      </Card>
-
-      <Card className="text-center">
-        <span className={`block text-2xl font-bold ${getSuccessRateColor(successRate)}`}>
-          {successRate}%
-        </span>
-        <span className="text-sm text-slate-500">Success Rate</span>
-      </Card>
-
-      <Card className="text-center">
-        <span className="block text-2xl font-bold text-slate-800">{formatDuration(avgDuration)}</span>
-        <span className="text-sm text-slate-500">Avg Duration</span>
-      </Card>
-
+    <StatGrid>
+      <Stat label="Total Events" value={formatNumber(totalEvents)} />
+      <Stat label="Success Rate" value={`${successRate}%`} tone={successRateTone(successRate)} />
+      <Stat label="Avg Duration" value={formatDuration(avgDuration)} />
       {cpuPercent !== undefined && (
-        <Card className="text-center">
-          <span className={`block text-2xl font-bold ${getUsageColor(cpuPercent)}`}>
-            {cpuPercent.toFixed(1)}%
-          </span>
-          <span className="text-sm text-slate-500">{hasSystemCpu ? 'System CPU' : 'Process CPU'}</span>
-        </Card>
+        <Stat label={hasSystemCpu ? 'System CPU' : 'Process CPU'} value={`${cpuPercent.toFixed(1)}%`} tone={usageTone(cpuPercent)} />
       )}
-
       {memoryPercent !== undefined && (
-        <Card className="text-center">
-          <span className={`block text-2xl font-bold ${getUsageColor(memoryPercent)}`}>
-            {memoryPercent.toFixed(1)}%
-          </span>
-          <span className="text-sm text-slate-500">Memory Usage</span>
-          {memoryDetail && (
-            <span className="block text-xs text-slate-400 mt-1">{memoryDetail}</span>
-          )}
-        </Card>
+        <Stat label="Memory Usage" value={`${memoryPercent.toFixed(1)}%`} tone={usageTone(memoryPercent)} hint={memoryDetail} />
       )}
-
       {diskPercent !== undefined && (
-        <Card className="text-center">
-          <span className={`block text-2xl font-bold ${getUsageColor(diskPercent)}`}>
-            {diskPercent.toFixed(1)}%
-          </span>
-          <span className="text-sm text-slate-500">Disk Usage</span>
-          {diskDetail && (
-            <span className="block text-xs text-slate-400 mt-1">{diskDetail}</span>
-          )}
-        </Card>
+        <Stat label="Disk Usage" value={`${diskPercent.toFixed(1)}%`} tone={usageTone(diskPercent)} hint={diskDetail} />
       )}
-    </div>
+    </StatGrid>
   )
 }
 
@@ -95,17 +58,9 @@ const formatDuration = (ms: number): string => {
   return `${(ms / 60000).toFixed(1)}m`
 }
 
-const getSuccessRateColor = (rate: number): string => {
-  if (rate >= 95) return 'text-success'
-  if (rate >= 80) return 'text-warning'
-  return 'text-danger'
-}
+const successRateTone = (rate: number) => rate >= 95 ? 'success' : rate >= 80 ? 'warning' : 'danger'
 
-const getUsageColor = (percent: number): string => {
-  if (percent <= 60) return 'text-success'
-  if (percent <= 80) return 'text-warning'
-  return 'text-danger'
-}
+const usageTone = (percent: number) => percent <= 60 ? 'success' : percent <= 80 ? 'warning' : 'danger'
 
 // Format "used / total" given total and free/available, using a unit-aware formatter.
 const formatUsedTotal = (

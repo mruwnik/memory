@@ -15,7 +15,7 @@ import { RecentEventsTable } from './RecentEventsTable'
 import { ToolBreakdownChart } from './ToolBreakdownChart'
 import { SessionBreakdownChart } from './SessionBreakdownChart'
 import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
-import { Button, Card, Notice, Page, ToggleGroup } from '@/components/shared/ui'
+import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, ToggleGroup, Toolbar } from '@/components/shared/ui'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 
@@ -108,82 +108,49 @@ const Telemetry: React.FC = () => {
   return (
     <Page
       title="Claude Code Telemetry"
-      actions={<>
-        <div className="flex flex-wrap items-center gap-3">
-          <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithTelemetry} />
-          <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-          <Button variant="primary"
-            onClick={loadData}
-
-            disabled={loading}
-          >
-            {loading ? 'Loading...' : 'Refresh'}
-          </Button>
-          {lastRefresh && (
-            <span className="text-sm text-slate-500">
-              Updated {formatTimestamp(lastRefresh.toISOString())}
-            </span>
-          )}
-        </div>
-      </>}
       width="wide"
     >
-      {error && (
-        <Notice tone="error" onRetry={loadData}>{error}</Notice>
-      )}
+      <Toolbar actions={<>
+        {lastRefresh && <span className="text-sm text-slate-600">Updated {formatTimestamp(lastRefresh.toISOString())}</span>}
+        <RefreshButton onClick={loadData} loading={loading} label="Refresh telemetry" />
+      </>}>
+        <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+        <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithTelemetry} />
+      </Toolbar>
 
-      {loading && !tokenUsage && (
-        <div className="text-center py-12 text-slate-500">
-          <p>Loading telemetry...</p>
-        </div>
-      )}
+      {error && <Notice tone="error" onRetry={loadData}>{error}</Notice>}
+
+      {loading && !tokenUsage && <LoadingState message="Loading telemetry..." />}
 
       {tokenUsage && (
         <>
-          <section className="mb-8">
-            <TelemetrySummaryCards
-              totalTokens={totalTokens}
-              totalCost={totalCost}
-              totalSessions={totalSessions}
-              eventCount={eventCount}
-            />
-          </section>
-
-          <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <TelemetrySummaryCards
+            totalTokens={totalTokens}
+            totalCost={totalCost}
+            totalSessions={totalSessions}
+            eventCount={eventCount}
+          />
+          <CardGrid>
             <Card title="Token Usage">
               <TokenUsageChart data={tokenUsage} />
             </Card>
-
             <Card title="Cost Over Time">
               <CostChart data={costUsage} />
             </Card>
-          </section>
-
-          <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <Card title="Session Activity">
               <SessionActivityChart data={sessionActivity} />
             </Card>
-
             <Card title="Recent Events">
               <RecentEventsTable events={recentEvents?.events ?? []} />
             </Card>
-          </section>
-
-          <section className="mb-8">
-            <Card title="Token Usage by Tool">
+            <Card title="Token Usage by Tool" className="lg:col-span-2">
               <ToolBreakdownChart data={toolUsage} />
             </Card>
-          </section>
-
-          <section className="mb-8">
-            <Card title="Session Breakdown">
-              <p className="text-sm text-slate-500 mb-4">
-                Token consumption by individual session. Sessions are categorized by usage volume:
-                high (top 20%), medium (next 30%), and low (bottom 50%).
-              </p>
+            <Card title="Session Breakdown" className="lg:col-span-2"
+              description="Token consumption by individual session. Sessions are categorized by usage volume: high (top 20%), medium (next 30%), and low (bottom 50%).">
               <SessionBreakdownChart data={sessionStats} />
             </Card>
-          </section>
+          </CardGrid>
         </>
       )}
     </Page>

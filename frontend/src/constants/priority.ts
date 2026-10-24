@@ -1,4 +1,5 @@
-// Priority-related constants used across task components
+// Priority and due-date presentation shared by task views
+import type { Tone } from '@/components/shared/ui'
 
 export const PRIORITY_ORDER: Record<string, number> = {
   urgent: 0,
@@ -7,17 +8,20 @@ export const PRIORITY_ORDER: Record<string, number> = {
   low: 3,
 }
 
-// Tailwind v4 uses CSS variables from @theme, requiring var() syntax
-export const PRIORITY_COLORS: Record<string, string> = {
-  urgent: 'bg-[var(--color-urgent)]',
-  high: 'bg-[var(--color-high)]',
-  medium: 'bg-[var(--color-medium)]',
-  low: 'bg-[var(--color-low)]',
+export const PRIORITY_TONES: Record<string, Tone> = {
+  urgent: 'danger',
+  high: 'warning',
+  medium: 'info',
+  low: 'neutral',
 }
 
-export const PRIORITY_TEXT_COLORS: Record<string, string> = {
-  urgent: 'text-[var(--color-urgent)]',
-  high: 'text-[var(--color-high)]',
-  medium: 'text-[var(--color-medium)]',
-  low: 'text-[var(--color-low)]',
+/** "Overdue", "Today", "Tomorrow" or a short date, with the tone to show it in. */
+export const dueLabel = (dueDate: string, now = new Date()): { text: string; tone: Tone } => {
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const date = new Date(dueDate)
+  const days = Math.round((day(date) - day(now)) / 86400000)
+  if (days < 0) return { text: 'Overdue', tone: 'danger' }
+  if (days === 0) return { text: 'Today', tone: 'warning' }
+  if (days === 1) return { text: 'Tomorrow', tone: 'info' }
+  return { text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), tone: 'neutral' }
 }

@@ -10,7 +10,7 @@ import {
   formatSlotTime,
 } from '../../utils/timezones'
 import { useAuth } from '../../hooks/useAuth'
-import { Button, ButtonLink, Card, Modal, Notice, Page, Select } from '@/components/shared/ui'
+import { Button, ButtonLink, Card, List, Modal, Notice, Page, Row, Section, Select, Stat, StatGrid } from '@/components/shared/ui'
 import { PollStatusBadge } from './PollStatusBadge'
 
 export const PollResults: React.FC = () => {
@@ -313,9 +313,9 @@ export const PollResults: React.FC = () => {
 
         {/* Finalized Banner */}
         {poll.finalized_time && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-6 text-center">
-            <h2 className="text-lg font-semibold text-green-800 mb-2">Meeting Scheduled</h2>
-            <p className="text-green-700 text-lg">
+          <Notice tone="success">
+            <h2 className="font-semibold">Meeting Scheduled</h2>
+            <p className="text-lg">
               {new Date(poll.finalized_time).toLocaleString('en-US', {
                 timeZone: displayTimezone,
                 weekday: 'long',
@@ -326,42 +326,28 @@ export const PollResults: React.FC = () => {
                 minute: '2-digit',
               })}
             </p>
-          </div>
+          </Notice>
         )}
 
         {/* Summary Stats */}
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <Card className="text-center">
-            <div className="text-3xl font-bold text-primary">{responseCount}</div>
-            <div className="text-sm text-slate-500">Responses</div>
-          </Card>
-          {displayBestSlots.length > 0 && (
-            <Card className="text-center">
-              <div className="text-3xl font-bold text-primary">{displayBestSlots[0].available_count}</div>
-              <div className="text-sm text-slate-500">Max Available</div>
-            </Card>
-          )}
-        </div>
+        <StatGrid>
+          <Stat label="Responses" value={responseCount} />
+          {displayBestSlots.length > 0 && <Stat label="Max Available" value={displayBestSlots[0].available_count} />}
+        </StatGrid>
 
-        {/* Best Times */}
         {displayBestSlots.length > 0 && (
-          <Card title="Best Times" className="mb-6">
-            <ul className="space-y-2">
+          <Section title="Best Times">
+            <List>
               {displayBestSlots.map((slot, i) => (
-                <li key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                  <span className="font-medium text-slate-700">{formatSlot(slot)}</span>
-                  <span className="text-sm text-slate-500">
-                    {slot.available_count} available
-                    {slot.if_needed_count > 0 && ` (+${slot.if_needed_count} if needed)`}
-                  </span>
-                </li>
+                <Row key={i} title={formatSlot(slot)}
+                  meta={[`${slot.available_count} available`, slot.if_needed_count > 0 && `+${slot.if_needed_count} if needed`]} />
               ))}
-            </ul>
-          </Card>
+            </List>
+          </Section>
         )}
 
         {/* Availability Heatmap */}
-        <Card title="Availability Heatmap" className="mb-6">
+        <Card title="Availability Heatmap">
           <PollGrid
             datetimeStart={new Date(poll.datetime_start)}
             datetimeEnd={new Date(poll.datetime_end)}
@@ -373,7 +359,7 @@ export const PollResults: React.FC = () => {
             readonly={true}
           />
 
-          <div className="flex items-center justify-center gap-2 mt-4 text-sm text-slate-500">
+          <div className="flex items-center justify-center gap-2 mt-4 text-sm text-slate-600">
             <span>Fewer</span>
             <div className="w-24 h-3 bg-gradient-to-r from-slate-100 via-green-200 to-green-500 rounded" />
             <span>More Available</span>
@@ -381,9 +367,9 @@ export const PollResults: React.FC = () => {
         </Card>
 
         {/* Respondents */}
-        <Card title={<>Respondents ({responseCount})</>} className="mb-6">
+        <Card title={<>Respondents ({responseCount})</>}>
           {responseCount === 0 ? (
-            <p className="text-slate-500">No responses yet. Be the first to add your availability!</p>
+            <p className="text-slate-600">No responses yet. Be the first to add your availability!</p>
           ) : (
             <p className="text-slate-600">
               {responseCount} {responseCount === 1 ? 'person has' : 'people have'} responded to this poll.

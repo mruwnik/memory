@@ -1,5 +1,5 @@
 // The app's page template and UI primitives. See frontend/STYLE.md for when to use which.
-import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode } from 'react'
+import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { Link, type LinkProps } from 'react-router-dom'
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ')
@@ -69,16 +69,22 @@ export const Section = ({ title, description, actions, children, className }: Se
 
 interface CardProps extends Omit<ComponentProps<'div'>, 'title'> {
   title?: ReactNode
+  description?: ReactNode
   actions?: ReactNode
   /** No padding, for cards whose content (tables, tab strips) runs edge to edge. */
   flush?: boolean
 }
 
-export const Card = ({ title, actions, flush, className, children, ...props }: CardProps) => (
+export const Card = ({ title, description, actions, flush, className, children, ...props }: CardProps) => (
   <div className={cx('bg-white rounded-xl border border-slate-200 shadow-sm', !flush && 'p-4 md:p-6', className)} {...props}>
     {(title || actions) && (
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-        {title && <h2 className="text-lg font-semibold text-slate-800">{title}</h2>}
+      <div className={cx('flex flex-wrap items-center justify-between gap-2', flush ? 'px-4 py-3' : 'mb-4')}>
+        {title && (
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+            {description && <div className="text-sm text-slate-600">{description}</div>}
+          </div>
+        )}
         {actions && <div className="flex flex-wrap items-center gap-2 ml-auto">{actions}</div>}
       </div>
     )}
@@ -86,12 +92,247 @@ export const Card = ({ title, actions, flush, className, children, ...props }: C
   </div>
 )
 
-export const List = ({ className, ...props }: ComponentProps<'ul'>) => (
-  <ul className={cx('divide-y divide-slate-100 bg-white rounded-xl border border-slate-200 shadow-sm', className)} {...props} />
+// ---- Collections ----
+
+interface ToolbarProps {
+  children?: ReactNode
+  /** Right-aligned: refresh and bulk actions. A page's create action goes in Page `actions`, not here. */
+  actions?: ReactNode
+  /** Number of selected rows; when non-zero the toolbar shows it with a Clear button before the actions. */
+  selected?: number
+  onClearSelection?: () => void
+}
+
+/** Search and filters for the collection below it. Sits directly under the page header, never inside a Card. */
+export const Toolbar = ({ children, actions, selected, onClearSelection }: ToolbarProps) => (
+  <div className="flex flex-wrap items-center gap-2">
+    {children}
+    <div className="flex flex-wrap items-center gap-2 ml-auto">
+      {!!selected && (
+        <>
+          <span className="text-sm text-slate-600">{selected} selected</span>
+          {onClearSelection && <Button variant="ghost" size="sm" onClick={onClearSelection}>Clear</Button>}
+        </>
+      )}
+      {actions}
+    </div>
+  </div>
 )
 
-export const ListItem = ({ className, ...props }: ComponentProps<'li'>) => (
-  <li className={cx('px-4 py-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm', className)} {...props} />
+export const RefreshButton = ({ onClick, loading, label = 'Refresh' }: { onClick: () => void; loading?: boolean; label?: string }) => (
+  <Button size="icon" onClick={onClick} disabled={loading} title={label} aria-label={label}>
+    <span aria-hidden="true" className={cx(loading && 'animate-spin motion-reduce:animate-none')}>&#8635;</span>
+  </Button>
+)
+
+export const List = ({ flush, className, ...props }: ComponentProps<'ul'> & { flush?: boolean }) => (
+  <ul className={cx('divide-y divide-slate-100', !flush && 'bg-white rounded-xl border border-slate-200 shadow-sm', className)} {...props} />
+)
+
+interface RowProps {
+  title: ReactNode
+  /** The title links here, and the whole row header is clickable. */
+  to?: string
+  /** The title is a button, and the whole row header is clickable: selects the item or toggles its detail. */
+  onSelect?: () => void
+  /** Highlight the row as the one shown in the detail pane. */
+  selected?: boolean
+  /** With `onSelect`: the row toggles inline detail (its children), announced via aria-expanded. */
+  expanded?: boolean
+  /** Before the content: a selection checkbox or an avatar. */
+  leading?: ReactNode
+  badges?: ReactNode
+  /** Short facts (time, counts, owner) joined with a middle dot; falsy entries are dropped. */
+  meta?: ReactNode[]
+  /** Trailing buttons; on phones they sit under the meta line. */
+  actions?: ReactNode
+  /** Archived, inactive or closed items: the title is greyed; say why with a badge. */
+  muted?: boolean
+  /** Description, errors, or expanded detail, under the header. */
+  children?: ReactNode
+  className?: string
+}
+
+const STRETCH = 'text-left focus-visible:outline-none after:absolute after:inset-0 after:rounded focus-visible:after:outline-2 focus-visible:after:outline-primary'
+
+/** One item in a `List`: title, badges, meta line, trailing actions, then optional body. */
+export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, meta, actions, muted, children, className }: RowProps) => {
+  const facts = meta?.filter(m => m !== null && m !== undefined && m !== false && m !== '')
+  const titleClass = cx('font-medium break-words', muted ? 'text-slate-500' : 'text-slate-800', (to || onSelect) && STRETCH)
+  return (
+    <li className={cx('flex gap-3 px-4 py-3 text-sm', selected ? 'bg-primary/10' : (to || onSelect) && 'hover:bg-slate-50', className)}>
+      {leading && <div className="shrink-0 pt-0.5">{leading}</div>}
+      <div className="flex-1 min-w-0 space-y-2">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-x-4 gap-y-2">
+          <div className="relative flex-1 min-w-0 space-y-0.5">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              {to ? <Link to={to} className={titleClass} aria-current={selected || undefined}>{title}</Link>
+                : onSelect ? <button type="button" onClick={onSelect} className={titleClass} aria-current={selected || undefined} aria-expanded={expanded}>{title}</button>
+                : <span className={titleClass}>{title}</span>}
+              {badges}
+            </div>
+            {!!facts?.length && (
+              <div className="flex flex-wrap gap-x-1.5 text-xs text-slate-500">
+                {facts.map((m, i) => <span key={i}>{i > 0 && <span aria-hidden="true" className="mr-1.5">·</span>}{m}</span>)}
+              </div>
+            )}
+          </div>
+          {actions && <div className="relative flex flex-wrap items-center gap-2">{actions}</div>}
+        </div>
+        {children}
+      </div>
+    </li>
+  )
+}
+
+/** An item's error inside a Row: the failure reason of a job, sync or run. */
+export const RowError = ({ children }: { children: ReactNode }) => (
+  <p className="text-sm text-red-700 whitespace-pre-wrap break-words">{children}</p>
+)
+
+/** Previous/next paging under a List, for collections fetched a page at a time. */
+export const Pager = ({ page, hasMore, onPage }: { page: number; hasMore: boolean; onPage: (page: number) => void }) => (
+  <nav aria-label="Pagination" className="flex items-center justify-between gap-2">
+    <Button onClick={() => onPage(Math.max(0, page - 1))} disabled={page === 0}>Previous</Button>
+    <span className="text-sm text-slate-600">Page {page + 1}{hasMore ? '' : ' (last)'}</span>
+    <Button onClick={() => onPage(page + 1)} disabled={!hasMore}>Next</Button>
+  </nav>
+)
+
+// ---- Details and stats ----
+
+/** Label/value facts about one item. Entries with an empty value are dropped. */
+export const DetailList = ({ items, className }: { items: [ReactNode, ReactNode][]; className?: string }) => (
+  <dl className={cx('grid grid-cols-1 sm:grid-cols-[minmax(7rem,max-content)_1fr] gap-x-6 gap-y-1 sm:gap-y-2 text-sm', className)}>
+    {items.filter(([, v]) => v !== null && v !== undefined && v !== false && v !== '').map(([label, value], i) => (
+      <div key={i} className="contents">
+        <dt className="text-slate-500 pt-1 sm:pt-0">{label}</dt>
+        <dd className="text-slate-800 min-w-0 break-words">{value}</dd>
+      </div>
+    ))}
+  </dl>
+)
+
+const STAT_TONES = { neutral: 'text-slate-800', success: 'text-green-700', warning: 'text-amber-700', danger: 'text-red-700', info: 'text-blue-700' }
+
+// Columns per tile count, so rows fill evenly instead of leaving one tile on its own line
+const STAT_COLUMNS = ['grid-cols-1', 'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-2 lg:grid-cols-4', 'grid-cols-2 lg:grid-cols-5', 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-6']
+
+/** Headline numbers at the top of a dashboard-like page. Children are `Stat`s. */
+export const StatGrid = ({ children }: { children: ReactNode }) => (
+  <dl className={cx('grid gap-3', STAT_COLUMNS[Math.min(Children.toArray(children).length, 6)])}>{children}</dl>
+)
+
+export const Stat = ({ label, value, hint, tone = 'neutral' }: { label: ReactNode; value: ReactNode; hint?: ReactNode; tone?: keyof typeof STAT_TONES }) => (
+  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 min-w-0">
+    <dt className="text-xs font-medium text-slate-600">{label}</dt>
+    <dd className={cx('mt-1 text-2xl font-semibold tabular-nums break-words', STAT_TONES[tone])}>{value}</dd>
+    {hint && <dd className="mt-0.5 text-xs text-slate-500">{hint}</dd>}
+  </div>
+)
+
+/** Dashboard panels (charts, recent-activity tables) in two columns on wide screens. Children are Cards; `lg:col-span-2` widens one. */
+export const CardGrid = ({ children }: { children: ReactNode }) => (
+  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{children}</div>
+)
+
+/** A collapsible block for secondary detail (commands, history, advanced options). */
+export const Disclosure = ({ summary, children, className, ...props }: Omit<ComponentProps<'details'>, 'title'> & { summary: ReactNode }) => (
+  <details className={cx('group bg-white rounded-xl border border-slate-200', className)} {...props}>
+    <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50 rounded-xl">
+      <span aria-hidden="true" className="text-slate-500 transition-transform group-open:rotate-90 motion-reduce:transition-none">▸</span>
+      {summary}
+    </summary>
+    <div className="px-4 pb-4">{children}</div>
+  </details>
+)
+
+interface SubListProps {
+  /** Heading of the nested collection; an ExpandToggle when it can be collapsed. */
+  title: ReactNode
+  actions?: ReactNode
+  /** Shown instead of the list when there are no rows. */
+  empty?: ReactNode
+  /** `Row`s. */
+  children?: ReactNode
+  /** Below the rows, e.g. a form that adds one. */
+  footer?: ReactNode
+  /** Scroll the rows past a fixed height, for collections that grow without bound. */
+  scroll?: boolean
+}
+
+/** A collection nested inside a Row: an item's repos, folders, servers or run history. */
+export const SubList = ({ title, actions, empty, children, footer, scroll }: SubListProps) => (
+  <div className="border-t border-slate-100 pt-2 space-y-1">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 className="text-sm font-medium text-slate-700">{title}</h3>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+    {Children.toArray(children).length > 0
+      ? <List flush className={cx('[&>li]:px-0', scroll && 'max-h-48 overflow-y-auto')}>{children}</List>
+      : empty && <Hint>{empty}</Hint>}
+    {footer}
+  </div>
+)
+
+/** Shows or hides a nested collection under a Row (servers of a bot, journal of a project). */
+export const ExpandToggle = ({ expanded, onClick, children }: { expanded: boolean; onClick: () => void; children: ReactNode }) => (
+  <button type="button" aria-expanded={expanded} onClick={onClick}
+    className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-primary rounded">
+    <span aria-hidden="true" className={cx('text-slate-500 transition-transform motion-reduce:transition-none', expanded && 'rotate-90')}>▸</span>
+    {children}
+  </button>
+)
+
+// ---- Master-detail ----
+
+/** Title bar of a pane in a SplitView: the list's heading, or the selected item's title and actions. */
+export const PaneHeader = ({ title, actions }: { title: ReactNode; actions?: ReactNode }) => (
+  <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-slate-200">
+    <h2 className="text-sm font-semibold text-slate-700 min-w-0 break-words">{title}</h2>
+    {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+  </div>
+)
+
+interface SplitViewProps {
+  /** Shown above the list as a PaneHeader. */
+  listTitle?: ReactNode
+  /** Usually a flush `List` of `Row`s with `onSelect`/`selected`. */
+  list: ReactNode
+  /** The selected item, or null. */
+  detail: ReactNode
+  /** What the detail pane shows when nothing is selected; below `md` it sits under the list. */
+  placeholder?: ReactNode
+  /** Narrow screens show the list or the detail; this returns from the detail to the list. */
+  onBack: () => void
+  backLabel?: string
+}
+
+/** A list beside the selected item's detail, inside a `Page fill width="full"`. Below `md` it shows the detail alone, or the list above the placeholder. */
+export const SplitView = ({ listTitle, list, detail, placeholder, onBack, backLabel = 'Back to list' }: SplitViewProps) => (
+  <div className={cx('h-full flex md:flex-row bg-white rounded-xl border border-slate-200 shadow-sm',
+    detail ? 'overflow-hidden' : 'flex-col overflow-y-auto md:overflow-hidden')}>
+    <div className={cx('w-full shrink-0 md:w-80 md:border-r border-slate-200 flex-col', detail ? 'hidden md:flex' : 'flex border-b md:border-b-0')}>
+      {listTitle && <PaneHeader title={listTitle} />}
+      <div className="flex-1 md:overflow-y-auto">{list}</div>
+    </div>
+    <div className={cx('flex-1 min-w-0 flex flex-col', detail ? 'overflow-hidden' : 'md:overflow-hidden')}>
+      {detail ? (
+        <>
+          <button type="button" onClick={onBack} className="md:hidden text-left px-4 py-2 text-sm text-slate-600 hover:text-primary border-b border-slate-200">
+            <span aria-hidden="true">← </span>{backLabel}
+          </button>
+          {detail}
+        </>
+      ) : (
+        <div className="flex-1 md:overflow-y-auto">
+          {typeof placeholder === 'string' || !placeholder
+            ? <div className="h-full flex items-center justify-center p-6 text-slate-600">{placeholder}</div>
+            : placeholder}
+        </div>
+      )}
+    </div>
+  </div>
 )
 
 export const Table = ({ className, ...props }: ComponentProps<'table'>) => (
@@ -343,12 +584,15 @@ interface EmptyStateProps {
   message: ReactNode
   actionLabel?: string
   onAction?: () => void
+  /** An action that isn't a button, such as a ButtonLink. */
+  action?: ReactNode
 }
 
-export const EmptyState = ({ message, actionLabel, onAction }: EmptyStateProps) => (
+export const EmptyState = ({ message, actionLabel, onAction, action }: EmptyStateProps) => (
   <div className="rounded-xl border border-dashed border-slate-300 py-10 px-4 text-center text-slate-600">
     <div>{message}</div>
     {actionLabel && onAction && <Button variant="primary" className="mt-4" onClick={onAction}>{actionLabel}</Button>}
+    {action && <div className="mt-4">{action}</div>}
   </div>
 )
 
@@ -424,18 +668,13 @@ interface ModalProps {
 
 const FOCUSABLE = 'a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-export const Modal = ({ title, onClose, children, size = 'lg', className }: ModalProps) => {
-  const titleId = useId()
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const bodyRef = useRef<HTMLDivElement>(null)
-  useEscape(onClose)
-
-  // Focus the first control on open, keep Tab inside the dialog, and restore focus on close.
+// Focus `initial` (else the dialog's first control) on open, keep Tab inside the dialog, and restore focus on close.
+function useDialogFocus(dialogRef: RefObject<HTMLElement | null>, initial: () => HTMLElement | null | undefined) {
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null
     const dialog = dialogRef.current
     const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
-    ;(bodyRef.current?.querySelector<HTMLElement>(FOCUSABLE) ?? focusable()[0])?.focus()
+    ;(initial() ?? focusable()[0])?.focus()
     const trapTab = (e: KeyboardEvent) => {
       const items = focusable()
       if (e.key !== 'Tab' || !items.length) return
@@ -454,12 +693,20 @@ export const Modal = ({ title, onClose, children, size = 'lg', className }: Moda
       previouslyFocused?.focus()
     }
   }, [])
+}
+
+/** Closes only via × or Escape: a stray backdrop click must not discard a half-filled form. */
+export const Modal = ({ title, onClose, children, size = 'lg', className }: ModalProps) => {
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEscape(onClose)
+  useDialogFocus(dialogRef, () => bodyRef.current?.querySelector<HTMLElement>(FOCUSABLE))
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
-        className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto', MODAL_SIZES[size], className)}
-        onClick={e => e.stopPropagation()}>
+        className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto', MODAL_SIZES[size], className)}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h2>
           <button aria-label="Close" className="text-slate-500 hover:text-slate-700 text-2xl leading-none" onClick={onClose}>&times;</button>
@@ -478,16 +725,39 @@ interface ConfirmDialogProps {
   confirmLabel?: string
 }
 
+interface ConfirmButtonProps extends Omit<ButtonProps, 'onClick'> {
+  /** The question in the dialog. */
+  confirm: string
+  onConfirm: () => void | Promise<void>
+  confirmLabel?: string
+}
+
+/** A button that asks before acting: the one way to confirm deletes and other destructive actions. */
+export const ConfirmButton = ({ confirm, onConfirm, confirmLabel, variant = 'danger', size = 'sm', children = 'Delete', ...props }: ConfirmButtonProps) => {
+  const [asking, setAsking] = useState(false)
+  return (
+    <>
+      <Button variant={variant} size={size} onClick={() => setAsking(true)} {...props}>{children}</Button>
+      {asking && (
+        <ConfirmDialog message={confirm} confirmLabel={confirmLabel ?? (typeof children === 'string' ? children : 'Confirm')}
+          onCancel={() => setAsking(false)}
+          onConfirm={async () => { setAsking(false); await onConfirm() }} />
+      )}
+    </>
+  )
+}
+
 export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabel = 'Confirm' }: ConfirmDialogProps) => {
   const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   useEscape(onCancel)
   // Cancel is the safer default focus for destructive confirmations
-  useEffect(() => cancelRef.current?.focus(), [])
+  useDialogFocus(dialogRef, () => cancelRef.current)
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full">
         {title && <h2 id={titleId} className="text-lg font-semibold text-slate-900 mb-2">{title}</h2>}
         <p id={title ? undefined : titleId} className="text-slate-800 mb-4">{message}</p>
         <div className="flex justify-end gap-2">

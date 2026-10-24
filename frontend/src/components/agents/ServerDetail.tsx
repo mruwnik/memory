@@ -4,7 +4,7 @@ import { useAgents, type ExternalServer, type ToolDiff } from '@/hooks/useAgents
 import { formatRelativeTime } from '@/components/sources/shared'
 import { ServerForm } from './ServerForm'
 import { ServerStatusBadge } from './ServerStatusBadge'
-import { Badge, Button, Card, EmptyState, List, ListItem, Notice, Page, Section } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, DetailList, Disclosure, EmptyState, List, Modal, Notice, Page, Row, Section } from '@/components/shared/ui'
 
 const diffSummary = (diff: ToolDiff) =>
   [
@@ -62,25 +62,21 @@ export default function ServerDetail() {
   const disconnect = () => act(async () => {
     setServer(await disconnectServer(server.id))
   })
-  const remove = () => {
-    if (!window.confirm(`Delete MCP server "${server.name}"?`)) return
-    act(async () => {
-      await deleteServer(server.id)
-      navigate('/ui/agents/servers')
-    })
-  }
+  const remove = () => act(async () => {
+    await deleteServer(server.id)
+    navigate('/ui/agents/servers')
+  })
 
   return (
     <Page
       back={back}
       title={<>{server.name} <ServerStatusBadge status={server.status} /></>}
-      description={<span className="font-mono break-all">{server.url} · {server.transport}</span>}
       actions={<>
         <Button disabled={busy} onClick={refresh}>Refresh tools</Button>
         {server.auth_type === 'oauth' && <Button disabled={busy} onClick={reauthorize}>Re-authorize</Button>}
         {server.has_token && <Button disabled={busy} onClick={disconnect}>Disconnect</Button>}
-        <Button disabled={busy} aria-expanded={editing} onClick={() => setEditing(e => !e)}>{editing ? 'Cancel edit' : 'Edit'}</Button>
-        <Button variant="danger" disabled={busy} onClick={remove}>Delete</Button>
+        <Button disabled={busy} onClick={() => setEditing(true)}>Edit</Button>
+        <ConfirmButton size="md" disabled={busy} confirm={`Delete MCP server "${server.name}"?`} onConfirm={remove} />
       </>}
     >
     {params.get('connected') && server.status === 'connected' && <Notice tone="success">Connected.</Notice>}
@@ -94,14 +90,20 @@ export default function ServerDetail() {
       </Notice>
     )}
 
+    <DetailList items={[
+      ['URL', <span className="font-mono break-all">{server.url}</span>],
+      ['Transport', server.transport],
+      ['Tools refreshed', server.tools_refreshed_at && formatRelativeTime(server.tools_refreshed_at)],
+    ]} />
+
     {editing && (
-      <Card>
+      <Modal title={`Edit ${server.name}`} onClose={() => setEditing(false)}>
         <ServerForm server={server} onSubmit={async values => {
           const result = await upsertServer({ ...values, serverId: server.id })
           setServer(result.server)
           return result
         }} />
-      </Card>
+      </Modal>
     )}
 
     <Section title="Tools">
@@ -109,18 +111,17 @@ export default function ServerDetail() {
       {!!server.tools.length && (
         <List>
           {server.tools.map(tool => (
-            <ListItem key={tool.name} className="block space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono">{tool.name}</span>
-                {tool.read_only ? <Badge tone="success">read-only</Badge> : <Badge>side effects</Badge>}
-                {tool.changed_at && <span className="text-xs text-slate-600">as of {formatRelativeTime(tool.changed_at)}</span>}
-              </div>
-              <div className="text-slate-600">{tool.description}</div>
-              <details>
-                <summary className="text-xs text-slate-600 cursor-pointer">Input schema</summary>
+            <Row
+              key={tool.name}
+              title={<span className="font-mono">{tool.name}</span>}
+              badges={tool.read_only ? <Badge tone="success">read-only</Badge> : <Badge>side effects</Badge>}
+              meta={[tool.changed_at && `as of ${formatRelativeTime(tool.changed_at)}`]}
+            >
+              {tool.description && <p className="text-slate-600">{tool.description}</p>}
+              <Disclosure summary="Input schema" className="border-0 bg-transparent">
                 <pre className="text-xs bg-slate-50 p-2 rounded overflow-x-auto">{JSON.stringify(tool.input_schema, null, 2)}</pre>
-              </details>
-            </ListItem>
+              </Disclosure>
+            </Row>
           ))}
         </List>
       )}

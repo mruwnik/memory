@@ -129,8 +129,9 @@ describe('DiscordPanel bot actions', () => {
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Remove' }))
-    expect(await screen.findByText(/Are you sure you want to remove "KB Bot"/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/Remove "KB Bot"\?/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/discord/bots/bot-1') && (init as RequestInit)?.method === 'DELETE',

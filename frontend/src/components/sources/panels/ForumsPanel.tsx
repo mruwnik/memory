@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { Button, Card, Field, Input, Notice } from '@/components/shared/ui'
+import { Button, Card, Checkbox, Field, FieldRow, FormActions, Input, Notice } from '@/components/shared/ui'
 
 export const ForumsPanel = () => {
   const { apiCall } = useAuth()
@@ -51,72 +51,29 @@ export const ForumsPanel = () => {
   }
 
   return (
-    <Card title="Forums (LessWrong)">
-      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-        <h4 className="font-medium text-slate-800 mb-2">Sync Settings</h4>
-        <p className="text-sm text-slate-600 mb-4">
-          Configure and trigger synchronization of posts from LessWrong. Posts matching your criteria will be indexed for search.
-        </p>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+    <Card title="Forums (LessWrong)"
+      description="Configure and trigger synchronization of posts from LessWrong. Posts matching your criteria will be indexed for search.">
+      <div className="space-y-4">
+        <FieldRow className="md:grid-cols-4">
           <Field label="Days Back">
-            <Input
-              type="number"
-              value={daysBack}
-              onChange={e => setDaysBack(parseInt(e.target.value) || 30)}
-              min={1}
-              max={365}
-            />
+            <Input type="number" value={daysBack} onChange={e => setDaysBack(parseInt(e.target.value) || 30)} min={1} max={365} />
           </Field>
           <Field label="Min Karma">
-            <Input
-              type="number"
-              value={minKarma}
-              onChange={e => setMinKarma(parseInt(e.target.value) || 0)}
-              min={0}
-            />
+            <Input type="number" value={minKarma} onChange={e => setMinKarma(parseInt(e.target.value) || 0)} min={0} />
           </Field>
           <Field label="Posts per request">
-            <Input
-              type="number"
-              value={limit}
-              onChange={e => setLimit(parseInt(e.target.value) || 50)}
-              min={1}
-              max={100}
-            />
+            <Input type="number" value={limit} onChange={e => setLimit(parseInt(e.target.value) || 50)} min={1} max={100} />
           </Field>
           <Field label="Max Items">
-            <Input
-              type="number"
-              value={maxItems}
-              onChange={e => setMaxItems(parseInt(e.target.value) || 1000)}
-              min={1}
-              max={10000}
-            />
+            <Input type="number" value={maxItems} onChange={e => setMaxItems(parseInt(e.target.value) || 1000)} min={1} max={10000} />
           </Field>
-        </div>
-
-        <div className="flex items-center gap-2 mb-4">
-          <input
-            type="checkbox"
-            id="af-only"
-            checked={af}
-            onChange={e => setAf(e.target.checked)}
-          />
-          <label htmlFor="af-only" className="text-sm text-slate-700">
-            Alignment Forum only
-          </label>
-        </div>
-
-        <Button variant="primary"
-          onClick={handleSync}
-          disabled={syncing}
-        >
-          {syncing ? 'Syncing...' : 'Sync LessWrong'}
-        </Button>
-
+        </FieldRow>
+        <Checkbox label="Alignment Forum only" checked={af} onChange={e => setAf(e.target.checked)} />
         {syncError && <Notice tone="error">{syncError}</Notice>}
         {syncSuccess && <Notice tone="success">{syncSuccess}</Notice>}
+        <FormActions>
+          <Button variant="primary" onClick={handleSync} disabled={syncing}>{syncing ? 'Syncing...' : 'Sync LessWrong'}</Button>
+        </FormActions>
       </div>
     </Card>
   )

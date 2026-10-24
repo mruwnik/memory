@@ -81,7 +81,7 @@ describe('CeleryOverview', () => {
     renderWithRouter(<CeleryOverview />)
     await waitFor(() => expect(screen.getByText('Recent Failures')).toBeInTheDocument())
     expect(screen.queryByText('boom traceback')).not.toBeInTheDocument()
-    await user.click(screen.getByText('Show details'))
+    await user.click(screen.getByRole('button', { name: 'alpha' }))
     expect(screen.getByText('boom traceback')).toBeInTheDocument()
   })
 

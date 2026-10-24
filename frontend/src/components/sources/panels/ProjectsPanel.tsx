@@ -3,7 +3,7 @@ import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate, Jo
 import { useTeams, Team, TeamMember } from '@/hooks/useTeams'
 import { useJournal } from '@/hooks/useJournal'
 import { Person } from '@/hooks/usePeople'
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select, Textarea, ToggleGroup, cx } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, cx, EmptyState, ExpandToggle, Field, FormActions, Hint, Input, Label, List, Modal, Notice, Page, Row, Select, SubList, Textarea, ToggleGroup, Toolbar } from '@/components/shared/ui'
 
 // Team members popover component
 interface TeamMembersPopoverProps {
@@ -262,7 +262,6 @@ export const ProjectsPanel = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
-  const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [managingTeams, setManagingTeams] = useState<Project | null>(null)
   const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(() => {
     const saved = localStorage.getItem('projects-collapsed-nodes')
@@ -361,9 +360,8 @@ export const ProjectsPanel = () => {
     loadData()
   }
 
-  const handleDelete = async (id: number) => {
-    await deleteProject(id)
-    setDeletingProject(null)
+  const handleDelete = async (project: Project) => {
+    await deleteProject(project.id)
     loadData()
   }
 
@@ -438,38 +436,28 @@ export const ProjectsPanel = () => {
 
   const filteredTree = filterTreeNodes(tree)
 
-  if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={loadData} />
-
   return (
-    <Card actions={<><div className="flex items-center gap-2">
-          {/* Search filter */}
-          <Input
-            type="text"
-            placeholder="Search projects..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-48 py-1.5"
-          />
-          {/* State filter */}
-          <Select
-            value={stateFilter}
-            onChange={e => setStateFilter(e.target.value as 'all' | 'open' | 'closed')}
-            className="w-auto py-1.5"
-          >
-            <option value="all">All</option>
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-          </Select>
-          {/* View toggle - show if there's hierarchy or user is in tree mode */}
-          {showViewToggle && (
-            <ToggleGroup label="View mode" value={viewMode} onChange={setViewMode}
-              options={[{ value: 'tree', label: 'Tree' }, { value: 'list', label: 'List' }]} />
-          )}
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
-            New Project
-          </Button>
-        </div></>}>
+    <Page
+      title="Projects"
+      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New Project</Button>}
+      width="wide"
+      loading={loading}
+      error={error}
+      onRetry={loadData}
+    >
+      <Toolbar>
+        <Input type="search" placeholder="Search projects..." aria-label="Search projects" value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)} className="sm:w-64" />
+        <Select value={stateFilter} onChange={e => setStateFilter(e.target.value as 'all' | 'open' | 'closed')} className="w-auto" aria-label="State">
+          <option value="all">All</option>
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+        </Select>
+        {showViewToggle && (
+          <ToggleGroup label="View mode" value={viewMode} onChange={setViewMode}
+            options={[{ value: 'tree', label: 'Tree' }, { value: 'list', label: 'List' }]} />
+        )}
+      </Toolbar>
 
       {projects.length === 0 ? (
         <EmptyState
@@ -478,14 +466,14 @@ export const ProjectsPanel = () => {
           onAction={() => setShowCreateModal(true)}
         />
       ) : viewMode === 'tree' && hasHierarchy ? (
-        <div className="space-y-3">
-          {filteredTree.length === 0 && searchQuery ? (
-            <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
-          ) : (
+        filteredTree.length === 0 && searchQuery ? (
+          <EmptyState message={`No projects match "${searchQuery}"`} />
+        ) : (
+          <List>
             <ProjectTree
               nodes={filteredTree}
               onEdit={setEditingProject}
-              onDelete={setDeletingProject}
+              onDelete={handleDelete}
               onManageTeams={setManagingTeams}
               onChangeOwner={handleChangeOwner}
               onChangeDueDate={handleChangeDueDate}
@@ -497,14 +485,13 @@ export const ProjectsPanel = () => {
               getProject={getProject}
               addJournalEntry={addJournalEntry}
             />
-          )}
-        </div>
+          </List>
+        )
+      ) : filteredProjects.length === 0 && searchQuery ? (
+        <EmptyState message={`No projects match "${searchQuery}"`} />
       ) : (
-        <div className="space-y-3">
-          {filteredProjects.length === 0 && searchQuery ? (
-            <p className="text-sm text-slate-500 p-4">No projects match "{searchQuery}"</p>
-          ) : (
-            filteredProjects.map(project => {
+        <List>
+          {filteredProjects.map(project => {
               // For list view, compute inherited owner from parent chain
               const getInheritedOwner = (p: Project): typeof project.owner => {
                 if (p.owner) return p.owner
@@ -516,11 +503,11 @@ export const ProjectsPanel = () => {
               }
               const inheritedOwner = project.owner ? null : getInheritedOwner(project)
               return (
-                <ProjectCard
+                <ProjectRow
                   key={project.id}
                   project={project}
                   onEdit={() => setEditingProject(project)}
-                  onDelete={() => setDeletingProject(project)}
+                  onDelete={() => handleDelete(project)}
                   onManageTeams={() => setManagingTeams(project)}
                   onChangeOwner={handleChangeOwner}
                   onChangeDueDate={handleChangeDueDate}
@@ -531,9 +518,8 @@ export const ProjectsPanel = () => {
                   addJournalEntry={addJournalEntry}
                 />
               )
-            })
-          )}
-        </div>
+            })}
+        </List>
       )}
 
       {showCreateModal && (
@@ -558,31 +544,6 @@ export const ProjectsPanel = () => {
         />
       )}
 
-      {deletingProject && (
-        deletingProject.repo_path ? (
-          <Modal title="Cannot Delete" onClose={() => setDeletingProject(null)}>
-            <p className="text-slate-600 mb-4">
-              GitHub-backed projects cannot be deleted. Close them in GitHub instead.
-            </p>
-            <FormActions>
-              <Button onClick={() => setDeletingProject(null)}>
-                OK
-              </Button>
-            </FormActions>
-          </Modal>
-        ) : (
-          <ConfirmDialog
-            message={`Are you sure you want to delete "${deletingProject.title}"? ${
-              deletingProject.children_count > 0
-                ? `Its ${deletingProject.children_count} child project(s) will become top-level.`
-                : ''
-            }`}
-            onConfirm={() => handleDelete(deletingProject.id)}
-            onCancel={() => setDeletingProject(null)}
-          />
-        )
-      )}
-
       {managingTeams && (
         <ProjectTeamsModal
           project={managingTeams}
@@ -598,7 +559,7 @@ export const ProjectsPanel = () => {
           unassignTeam={unassignTeamFromProject}
         />
       )}
-    </Card>
+    </Page>
   )
 }
 
@@ -624,97 +585,75 @@ interface ProjectTreeProps {
 const ProjectTree = ({ nodes, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, projects, collapsedNodes, onToggleCollapse, listMembers, availablePeople, inheritedOwner, depth = 0, getProject, addJournalEntry }: ProjectTreeProps) => {
   if (nodes.length === 0) return null
 
-  return (
-    <div className={depth > 0 ? 'ml-6 border-l border-slate-200 pl-4' : ''}>
-      {nodes.map(node => {
-        // Try to find full project data, fall back to node data
-        const project = projects.find(p => p.id === node.id)
-        const projectData: Project = project || {
-          id: node.id,
-          title: node.title,
-          description: node.description,
-          state: node.state as 'open' | 'closed',
-          repo_path: node.repo_path,
-          github_id: null,
-          number: null,
-          parent_id: node.parent_id,
-          children_count: node.children.length,
-          owner_id: null,
-          due_on: null,
-          doc_url: node.doc_url,
-        }
-        const hasChildren = node.children.length > 0
-        const isCollapsed = collapsedNodes.has(node.id)
+  const rows = nodes.map(node => {
+    // Try to find full project data, fall back to node data
+    const project = projects.find(p => p.id === node.id)
+    const projectData: Project = project || {
+      id: node.id,
+      title: node.title,
+      description: node.description,
+      state: node.state as 'open' | 'closed',
+      repo_path: node.repo_path,
+      github_id: null,
+      number: null,
+      parent_id: node.parent_id,
+      children_count: node.children.length,
+      owner_id: null,
+      due_on: null,
+      doc_url: node.doc_url,
+    }
+    const hasChildren = node.children.length > 0
+    const isCollapsed = collapsedNodes.has(node.id)
+    // Children inherit this node's owner, or whatever this node inherited
+    const ownerToPassDown = projectData.owner || inheritedOwner
 
-        // Calculate effective owner for this node (own owner or inherited)
-        const nodeOwner = projectData.owner || null
-        // Pass down: if this node has an owner, children inherit it; otherwise pass down what we inherited
-        const ownerToPassDown = nodeOwner || inheritedOwner
-
-        return (
-          <div key={node.id} className="mb-2">
-            <div className="flex items-start gap-1">
-              {/* Collapse/expand toggle */}
-              {hasChildren ? (
-                <button
-                  type="button"
-                  onClick={() => onToggleCollapse(node.id)}
-                  className="mt-3 w-5 h-5 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors flex-shrink-0"
-                  title={isCollapsed ? 'Expand' : 'Collapse'}
-                >
-                  <svg
-                    className={cx('w-4 h-4 transition-transform', isCollapsed ? '' : 'rotate-90')}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              ) : (
-                <div className="w-5 flex-shrink-0" /> // Spacer for alignment
-              )}
-              <div className="flex-1">
-                <ProjectCard
-                  project={projectData}
-                  onEdit={() => onEdit(projectData)}
-                  onDelete={() => onDelete(projectData)}
-                  onManageTeams={() => onManageTeams(projectData)}
-                  onChangeOwner={onChangeOwner}
-                  onChangeDueDate={onChangeDueDate}
-                  listMembers={listMembers}
-                  availablePeople={availablePeople}
-                  inheritedOwner={inheritedOwner}
-                  compact
-                  getProject={getProject}
-                  addJournalEntry={addJournalEntry}
-                />
-              </div>
-            </div>
-            {hasChildren && !isCollapsed && (
-              <ProjectTree
-                nodes={node.children}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onManageTeams={onManageTeams}
-                onChangeOwner={onChangeOwner}
-                onChangeDueDate={onChangeDueDate}
-                projects={projects}
-                collapsedNodes={collapsedNodes}
-                onToggleCollapse={onToggleCollapse}
-                listMembers={listMembers}
-                availablePeople={availablePeople}
-                inheritedOwner={ownerToPassDown}
-                depth={depth + 1}
-                getProject={getProject}
-                addJournalEntry={addJournalEntry}
-              />
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
+    return (
+      <ProjectRow
+        key={node.id}
+        project={projectData}
+        onEdit={() => onEdit(projectData)}
+        onDelete={() => onDelete(projectData)}
+        onManageTeams={() => onManageTeams(projectData)}
+        onChangeOwner={onChangeOwner}
+        onChangeDueDate={onChangeDueDate}
+        listMembers={listMembers}
+        availablePeople={availablePeople}
+        inheritedOwner={inheritedOwner}
+        compact
+        getProject={getProject}
+        addJournalEntry={addJournalEntry}
+        leading={hasChildren && (
+          <Button variant="ghost" size="icon" className="w-7 h-7 text-base" onClick={() => onToggleCollapse(node.id)}
+            aria-expanded={!isCollapsed} aria-label={isCollapsed ? `Expand ${projectData.title}` : `Collapse ${projectData.title}`}>
+            <span aria-hidden="true" className={cx('inline-block transition-transform motion-reduce:transition-none', !isCollapsed && 'rotate-90')}>▸</span>
+          </Button>
+        )}
+      >
+        {hasChildren && !isCollapsed && (
+          <List flush className="border-l border-slate-200 [&>li]:pr-0">
+            <ProjectTree
+              nodes={node.children}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onManageTeams={onManageTeams}
+              onChangeOwner={onChangeOwner}
+              onChangeDueDate={onChangeDueDate}
+              projects={projects}
+              collapsedNodes={collapsedNodes}
+              onToggleCollapse={onToggleCollapse}
+              listMembers={listMembers}
+              availablePeople={availablePeople}
+              inheritedOwner={ownerToPassDown}
+              depth={depth + 1}
+              getProject={getProject}
+              addJournalEntry={addJournalEntry}
+            />
+          </List>
+        )}
+      </ProjectRow>
+    )
+  })
+  return <>{rows}</>
 }
 
 // Due date warning levels
@@ -801,75 +740,33 @@ const JournalSection = ({ projectId, getProject, addJournalEntry }: JournalSecti
   }
 
   return (
-    <div className="mt-3 pt-3 border-t border-slate-100">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800 transition-colors"
-      >
-        <svg
-          className={cx('w-3 h-3 transition-transform', expanded ? 'rotate-90' : '')}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-        Journal{' '}
-        <span className="text-slate-400">
-          ({loading ? '...' : entries.length})
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="mt-2">
-          {loading ? (
-            <p className="text-xs text-slate-400">Loading entries...</p>
-          ) : (
-            <>
-              {entries.length === 0 ? (
-                <p className="text-xs text-slate-400 italic mb-2">No journal entries yet</p>
-              ) : (
-                <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
-                  {entries.map(entry => (
-                    <div key={entry.id} className="text-xs bg-slate-50 rounded p-2">
-                      <div className="text-slate-700 whitespace-pre-wrap">{entry.content}</div>
-                      <div className="text-slate-400 mt-1 flex items-center gap-2">
-                        <span>{formatDate(entry.created_at)}</span>
-                        {entry.private && (
-                          <span className="bg-amber-100 text-amber-700 px-1 rounded">private</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} className="flex gap-2">
-                <Input
-                  type="text"
-                  value={newEntry}
-                  onChange={e => setNewEntry(e.target.value)}
-                  placeholder="Add a journal entry..."
-                  className="flex-1 text-xs"
-                  disabled={submitting}
-                />
-                <Button variant="primary" size="sm"
-                  type="submit"
-                  disabled={!newEntry.trim() || submitting}
-                >
-                  {submitting ? '...' : 'Add'}
-                </Button>
-              </form>
-            </>
-          )}
-        </div>
+    <SubList
+      title={<ExpandToggle expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        Journal <span className="font-normal text-slate-500">({loading ? '...' : entries.length})</span>
+      </ExpandToggle>}
+      empty={expanded && (loading ? 'Loading entries...' : 'No journal entries yet')}
+      scroll
+      footer={expanded && !loading && (
+        <form onSubmit={handleSubmit} className="flex gap-2 pt-1">
+          <Input type="text" value={newEntry} onChange={e => setNewEntry(e.target.value)} placeholder="Add a journal entry..."
+            aria-label="New journal entry" className="flex-1" disabled={submitting} />
+          <Button variant="primary" size="sm" type="submit" disabled={!newEntry.trim() || submitting}>{submitting ? '...' : 'Add'}</Button>
+        </form>
       )}
-    </div>
+    >
+      {expanded && !loading && entries.map(entry => (
+        <Row
+          key={entry.id}
+          title={<span className="font-normal whitespace-pre-wrap">{entry.content}</span>}
+          badges={entry.private && <Badge tone="warning">private</Badge>}
+          meta={[formatDate(entry.created_at)]}
+        />
+      ))}
+    </SubList>
   )
 }
 
-// Project card component
+// Project row component
 interface ProjectCardProps {
   project: Project
   onEdit: () => void
@@ -883,9 +780,13 @@ interface ProjectCardProps {
   compact?: boolean
   getProject?: (id: number, options: { includeJournal?: boolean }) => Promise<{ project: Project | null; journal_entries?: JournalEntry[] }>
   addJournalEntry?: (targetId: number, content: string, targetType: 'project') => Promise<{ status: string; entry: JournalEntry }>
+  /** The tree view's collapse toggle. */
+  leading?: React.ReactNode
+  /** The tree view's child projects. */
+  children?: React.ReactNode
 }
 
-const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, listMembers, availablePeople, inheritedOwner, compact, getProject, addJournalEntry }: ProjectCardProps) => {
+const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, onChangeDueDate, listMembers, availablePeople, inheritedOwner, compact, getProject, addJournalEntry, leading, children }: ProjectCardProps) => {
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
   const dueWarning = getDueWarningLevel(project.due_on)
@@ -931,219 +832,102 @@ const ProjectCard = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, 
     }
   }
 
+  const teamLimit = compact ? 2 : 3
   return (
-    <div
-      className={cx(
-        'border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition-colors',
-        !isOpen && 'opacity-60',
-        compact && 'p-3'
-      )}
+    <Row
+      leading={leading}
+      title={project.title}
+      muted={!isOpen}
+      badges={<>
+        <Badge tone={isOpen ? 'success' : 'neutral'}>{project.state}</Badge>
+        {isGithubBacked && <Badge tone="primary">GitHub</Badge>}
+        {/* Due warnings only matter for open projects */}
+        {isOpen && dueWarning === 'critical' && (
+          <Badge tone="danger" title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}>
+            {project.due_on && new Date(project.due_on) < new Date() ? 'Overdue' : 'Due soon'}
+          </Badge>
+        )}
+        {isOpen && dueWarning === 'caution' && (
+          <Badge tone="warning" title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}>Due in 2-3 weeks</Badge>
+        )}
+        {isOpen && dueWarning === 'no-date' && <Badge title="No due date set">No due date</Badge>}
+      </>}
+      meta={[
+        <span className="relative">
+          Owner:{' '}
+          <button type="button" onClick={handleOwnerClick}
+            className={cx('rounded px-1 hover:bg-slate-100',
+              effectiveOwner ? (isInheritedOwner ? 'italic text-slate-600' : 'text-slate-700') : 'bg-amber-50 text-amber-800')}
+            title={isInheritedOwner ? 'Inherited from parent' : effectiveOwner ? 'Click to change' : 'No owner - click to assign'}>
+            {effectiveOwner
+              ? `${effectiveOwner.display_name || effectiveOwner.identifier}${isInheritedOwner ? ' (inherited)' : ''}`
+              : 'None'}
+          </button>
+          {showOwnerSelector && onChangeOwner && availablePeople && (
+            <OwnerSelectorPopover currentOwnerId={project.owner_id} availablePeople={availablePeople}
+              onSelect={handleOwnerSelect} onClose={() => setShowOwnerSelector(false)} />
+          )}
+        </span>,
+        <span className="relative">
+          Due:{' '}
+          <button type="button" onClick={handleDueDateClick} className="rounded px-1 text-slate-700 hover:bg-slate-100" title="Click to set due date">
+            {project.due_on ? formatDueDate(project.due_on) : 'None'}
+          </button>
+          {showDueDateSelector && onChangeDueDate && (
+            <DueDateSelectorPopover currentDueOn={project.due_on} onSelect={handleDueDateSelect}
+              onClose={() => setShowDueDateSelector(false)} />
+          )}
+        </span>,
+        project.children_count > 0 && `${project.children_count} child${project.children_count !== 1 ? 'ren' : ''}`,
+        isGithubBacked && (
+          <a href={`https://github.com/${project.repo_path}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+            {project.repo_path}
+          </a>
+        ),
+        isGithubBacked && project.number && (
+          <a href={`https://github.com/${project.repo_path}/milestone/${project.number}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+            Milestone #{project.number}
+          </a>
+        ),
+        // Only http(s) doc links are rendered
+        project.doc_url && /^https?:\/\//.test(project.doc_url) && (
+          <a href={project.doc_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" title={project.doc_url}>Doc</a>
+        ),
+      ]}
+      actions={<>
+        <Button size="sm" onClick={onManageTeams}>Teams</Button>
+        <Button size="sm" onClick={onEdit}>Edit</Button>
+        <ConfirmButton onConfirm={onDelete} disabled={isGithubBacked}
+          title={isGithubBacked ? 'GitHub-backed projects cannot be deleted; close them in GitHub instead' : undefined}
+          confirm={`Delete "${project.title}"?${project.children_count > 0 ? ` Its ${project.children_count} child project(s) will become top-level.` : ''}`} />
+      </>}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h4 className={cx('font-medium text-slate-800 truncate', compact && 'text-sm')}>
-              {project.title}
-            </h4>
-            {/* Badges */}
-            <Badge tone={isOpen ? 'success' : 'neutral'}>{project.state}</Badge>
-            {isGithubBacked && (
-              <Badge tone="primary">
-                GitHub
-              </Badge>
-            )}
-            {/* Warning indicators - only show for open projects */}
-            {isOpen && dueWarning === 'critical' && (
-              <Badge
-                tone="danger"
-                title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}
-              >
-                🔴 {project.due_on && new Date(project.due_on) < new Date() ? 'Overdue' : 'Due soon'}
-              </Badge>
-            )}
-            {isOpen && dueWarning === 'caution' && (
-              <Badge
-                tone="warning"
-                title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}
-              >
-                🟡 Due in 2-3 weeks
-              </Badge>
-            )}
-            {isOpen && dueWarning === 'no-date' && (
-              <Badge
-                title="No due date set"
-              >
-                No due date
-              </Badge>
-            )}
-          </div>
-          {project.description && !compact && (
-            <p className="text-sm text-slate-500 mt-1 line-clamp-2">
-              {project.description}
-            </p>
-          )}
-          {isGithubBacked && (
-            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-              <a
-                href={`https://github.com/${project.repo_path}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-purple-600 hover:text-purple-700 hover:underline"
-                onClick={e => e.stopPropagation()}
-              >
-                {project.repo_path}
-              </a>
-              {project.number && (
-                <>
-                  <span className="text-slate-300">·</span>
-                  <a
-                    href={`https://github.com/${project.repo_path}/milestone/${project.number}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-purple-600 hover:text-purple-700 hover:underline"
-                    onClick={e => e.stopPropagation()}
-                  >
-                    Milestone #{project.number}
-                  </a>
-                </>
-              )}
-            </p>
-          )}
-          {/* Doc link - only shown when a doc URL exists and has a safe scheme */}
-          {project.doc_url && /^https?:\/\//.test(project.doc_url) && (
-            <div className="flex items-center gap-2 mt-1">
-              <a
-                href={project.doc_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
-                onClick={e => e.stopPropagation()}
-                title={project.doc_url}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Doc
-              </a>
-            </div>
-          )}
-          {/* Owner and due date info - always show owner */}
-          <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
-            <span className="relative">
-              Owner:{' '}
-              <span
-                onClick={handleOwnerClick}
-                className={cx(
-                  'cursor-pointer px-1.5 py-0.5 rounded',
-                  effectiveOwner
-                    ? isInheritedOwner
-                      ? 'bg-slate-100 text-slate-600 hover:bg-slate-200 italic'
-                      : 'text-slate-700 hover:bg-slate-100'
-                    : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                )}
-                title={isInheritedOwner ? 'Inherited from parent' : effectiveOwner ? 'Click to change' : 'No owner - click to assign'}
-              >
-                {effectiveOwner
-                  ? `${effectiveOwner.display_name || effectiveOwner.identifier}${isInheritedOwner ? ' (inherited)' : ''}`
-                  : 'None'}
-              </span>
-              {showOwnerSelector && onChangeOwner && availablePeople && (
-                <OwnerSelectorPopover
-                  currentOwnerId={project.owner_id}
-                  availablePeople={availablePeople}
-                  onSelect={handleOwnerSelect}
-                  onClose={() => setShowOwnerSelector(false)}
-                />
+      {project.description && !compact && <p className="text-slate-600 line-clamp-2">{project.description}</p>}
+      {!!project.teams?.length && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-slate-500">Teams:</span>
+          {project.teams.slice(0, teamLimit).map(team => (
+            <span key={team.id} className="relative">
+              <button type="button" onClick={e => handleTeamClick(e, team)} className="rounded hover:opacity-80">
+                <Badge tone="success">{team.name}</Badge>
+              </button>
+              {expandedTeam?.id === team.id && listMembers && (
+                <TeamMembersPopover team={team} onClose={() => setExpandedTeam(null)} listMembers={listMembers} />
               )}
             </span>
-            <span className="relative">
-              Due:{' '}
-              <span
-                onClick={handleDueDateClick}
-                className={cx(
-                  'cursor-pointer px-1.5 py-0.5 rounded',
-                  project.due_on
-                    ? 'text-slate-700 hover:bg-slate-100'
-                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                )}
-                title="Click to set due date"
-              >
-                {project.due_on ? formatDueDate(project.due_on) : 'None'}
-              </span>
-              {showDueDateSelector && onChangeDueDate && (
-                <DueDateSelectorPopover
-                  currentDueOn={project.due_on}
-                  onSelect={handleDueDateSelect}
-                  onClose={() => setShowDueDateSelector(false)}
-                />
-              )}
-            </span>
-          </div>
-          {project.teams && project.teams.length > 0 && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap relative">
-              <span className="text-xs text-slate-500">Teams:</span>
-              {project.teams.slice(0, compact ? 2 : 3).map(team => (
-                <span
-                  key={team.id}
-                  className="relative"
-                >
-                  <span
-                    className="bg-green-50 text-green-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-green-100"
-                    onClick={(e) => handleTeamClick(e, team)}
-                  >
-                    {team.name}
-                  </span>
-                  {expandedTeam?.id === team.id && listMembers && (
-                    <TeamMembersPopover
-                      team={team}
-                      onClose={() => setExpandedTeam(null)}
-                      listMembers={listMembers}
-                    />
-                  )}
-                </span>
-              ))}
-              {project.teams.length > (compact ? 2 : 3) && (
-                <span
-                  className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
-                  onClick={onManageTeams}
-                  title={project.teams.slice(compact ? 2 : 3).map(t => t.name).join(', ')}
-                >
-                  +{project.teams.length - (compact ? 2 : 3)} more
-                </span>
-              )}
-            </div>
+          ))}
+          {project.teams.length > teamLimit && (
+            <Button variant="link" size="sm" onClick={onManageTeams} title={project.teams.slice(teamLimit).map(t => t.name).join(', ')}>
+              +{project.teams.length - teamLimit} more
+            </Button>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {project.children_count > 0 && (
-            <span className="text-xs text-slate-500">
-              {project.children_count} child{project.children_count !== 1 ? 'ren' : ''}
-            </span>
-          )}
-          <Button size="sm" onClick={onManageTeams}>
-            Teams
-          </Button>
-          <Button size="sm" onClick={onEdit}>
-            Edit
-          </Button>
-          <Button variant="danger" size="sm" className={cx(isGithubBacked && 'opacity-50 cursor-not-allowed')}
-            onClick={onDelete}
-            title={isGithubBacked ? 'GitHub-backed projects cannot be deleted' : undefined}
-          >
-            Delete
-          </Button>
-        </div>
-      </div>
-
-      {/* Journal section */}
-      {getProject && addJournalEntry && (
-        <JournalSection
-          projectId={project.id}
-          getProject={getProject}
-          addJournalEntry={addJournalEntry}
-        />
       )}
-    </div>
+      {getProject && addJournalEntry && (
+        <JournalSection projectId={project.id} getProject={getProject} addJournalEntry={addJournalEntry} />
+      )}
+      {children}
+    </Row>
   )
 }
 

@@ -98,6 +98,26 @@ describe('NotesPage', () => {
     expect(saveNote.mock.calls[0][0]).toBe('readme.md')
   })
 
+  it.each([
+    ['going back to the list', () => screen.getByRole('button', { name: 'Files' })],
+    ['selecting another file', () => screen.getByText('other.md')],
+  ])('asks before discarding unsaved edits when %s', async (_, target) => {
+    listNotes.mockResolvedValue([['/notes/readme.md', '/notes/other.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    await user.click(await screen.findByText('readme.md'))
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByRole('textbox'), '!')
+
+    await user.click(target())
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('textbox')).toHaveValue('# Hello\n\nbody!')
+
+    await user.click(target())
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
+    await waitFor(() => expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument())
+  })
+
   it('auto-selects and loads a file from the ?file= URL param', async () => {
     listNotes.mockResolvedValue([['/notes/readme.md']])
     renderWithRouter(<NotesPage />, { initialEntries: ['/ui/notes?file=readme.md'] })

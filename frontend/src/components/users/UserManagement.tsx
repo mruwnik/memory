@@ -7,7 +7,7 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Button, Card, Input, Label, Modal, Notice, Page, Select } from '@/components/shared/ui'
+import { Badge, Button, EmptyState, Field, Input, Label, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
 
 interface UserFormData {
   name: string
@@ -180,7 +180,7 @@ const UserManagement = () => {
   }
 
   if (loading) {
-    return <Page title="User Management" width="narrow" loading />
+    return <Page title="User Management" width="default" loading />
   }
 
   return (
@@ -188,15 +188,7 @@ const UserManagement = () => {
       <Page
         title="User Management"
         actions={<>
-          <Button variant="primary"
-            onClick={() => setShowCreateModal(true)}
-
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add User
-          </Button>
+          <Button variant="primary" onClick={() => setShowCreateModal(true)}>Add User</Button>
         </>}
         width="narrow"
       >
@@ -206,90 +198,39 @@ const UserManagement = () => {
           <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
         )}
 
-        {/* User list */}
-        <div className="space-y-4">
-          {users.length === 0 ? (
-            <Card className="text-center text-slate-500">
-              No users found. Create your first user above.
-            </Card>
-          ) : (
-            users.map((user) => (
-              <Card key={user.id}>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-4">
-                    {/* User type badge */}
-                    <div
-                      className={`px-2 py-1 rounded text-xs font-medium ${
-                        user.user_type === 'human'
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-purple-100 text-purple-700'
-                      }`}
-                    >
-                      {user.user_type === 'human' ? 'Human' : 'Bot'}
-                    </div>
-
-                    <div>
-                      <h3 className="font-semibold text-slate-800">
-                        {user.name}
-                        {user.id === currentUser?.id && (
-                          <span className="ml-2 text-xs text-slate-500">(you)</span>
-                        )}
-                      </h3>
-                      <p className="text-sm text-slate-500">{user.email}</p>
-
-                      {/* Scopes */}
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {user.scopes.map((scope) => (
-                          <span
-                            key={scope}
-                            className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs"
-                          >
-                            {scope}
-                          </span>
-                        ))}
-                      </div>
-
-                      {/* API Key status */}
-                      {user.api_key_count > 0 && (
-                        <p className="text-xs text-slate-400 mt-2">Has API key configured</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-2">
-                    {user.user_type === 'bot' && (
-                      <Button size="sm"
-                        onClick={() => setApiKeyUser(user)}
-                      >
-                        {user.api_key_count > 0 ? 'Regenerate Key' : 'Generate Key'}
-                      </Button>
-                    )}
-                    <Button size="sm"
-                      onClick={() => {
-                        setEditingUser(user)
-                        setEditForm({
-                          name: user.name,
-                          email: user.email,
-                          scopes: [...user.scopes],
-                        })
-                      }}
-                    >
-                      Edit
+        {users.length === 0 ? (
+          <EmptyState message="No users found. Create your first user above." />
+        ) : (
+          <List>
+            {users.map((user) => (
+              <Row
+                key={user.id}
+                title={<>{user.name}{user.id === currentUser?.id && <span className="ml-2 text-xs font-normal text-slate-500">(you)</span>}</>}
+                badges={<>
+                  <Badge tone={user.user_type === 'human' ? 'info' : 'primary'}>{user.user_type === 'human' ? 'Human' : 'Bot'}</Badge>
+                  {user.scopes.map(scope => <Badge key={scope}>{scope}</Badge>)}
+                </>}
+                meta={[user.email, user.api_key_count > 0 && 'Has API key configured']}
+                actions={<>
+                  {user.user_type === 'bot' && (
+                    <Button size="sm" onClick={() => setApiKeyUser(user)}>
+                      {user.api_key_count > 0 ? 'Regenerate Key' : 'Generate Key'}
                     </Button>
-                    {user.id !== currentUser?.id && (
-                      <Button variant="danger" size="sm"
-                        onClick={() => setDeletingUser(user)}
-                      >
-                        Delete
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ))
-          )}
-        </div>
+                  )}
+                  <Button size="sm" onClick={() => {
+                    setEditingUser(user)
+                    setEditForm({ name: user.name, email: user.email, scopes: [...user.scopes] })
+                  }}>
+                    Edit
+                  </Button>
+                  {user.id !== currentUser?.id && (
+                    <Button variant="danger" size="sm" onClick={() => setDeletingUser(user)}>Delete</Button>
+                  )}
+                </>}
+              />
+            ))}
+          </List>
+        )}
       </Page>
 
       {/* Create User Modal */}
@@ -304,8 +245,7 @@ const UserManagement = () => {
             )}
 
             <div className="space-y-4">
-              <div>
-                <Label className="mb-1">User Type</Label>
+              <Field label="User Type">
                 <Select
                   value={createForm.user_type}
                   onChange={(e) =>
@@ -315,35 +255,32 @@ const UserManagement = () => {
                   <option value="human">Human</option>
                   <option value="bot">Bot</option>
                 </Select>
-              </div>
+              </Field>
 
-              <div>
-                <Label className="mb-1">Name</Label>
+              <Field label="Name">
                 <Input
                   type="text"
                   value={createForm.name}
                   onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
                 />
-              </div>
+              </Field>
 
-              <div>
-                <Label className="mb-1">Email</Label>
+              <Field label="Email">
                 <Input
                   type="email"
                   value={createForm.email}
                   onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
                 />
-              </div>
+              </Field>
 
               {createForm.user_type === 'human' && (
-                <div>
-                  <Label className="mb-1">Password</Label>
+                <Field label="Password">
                   <Input
                     type="password"
                     value={createForm.password}
                     onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
                   />
-                </div>
+                </Field>
               )}
 
               <div>
@@ -404,23 +341,21 @@ const UserManagement = () => {
             )}
 
             <div className="space-y-4">
-              <div>
-                <Label className="mb-1">Name</Label>
+              <Field label="Name">
                 <Input
                   type="text"
                   value={editForm.name || ''}
                   onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                 />
-              </div>
+              </Field>
 
-              <div>
-                <Label className="mb-1">Email</Label>
+              <Field label="Email">
                 <Input
                   type="email"
                   value={editForm.email || ''}
                   onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                 />
-              </div>
+              </Field>
 
               <div>
                 <Label className="mb-2">Scopes</Label>

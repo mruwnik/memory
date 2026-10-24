@@ -143,6 +143,7 @@ describe('GoogleDrivePanel - folder row actions', () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(deleteGoogleFolder).toHaveBeenCalledWith(1, 100))
   })
 

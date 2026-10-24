@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useClaude, Snapshot, Environment, CreateEnvironmentRequest } from '../../hooks/useClaude'
-import { Button, EmptyState, Input, Label, LoadingState, Modal, Notice, Page, Select, Tabs, Textarea, ToggleGroup } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, Field, Input, Label, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, Select, Tabs, Textarea, ToggleGroup, type Tone, Toolbar } from '@/components/shared/ui'
 
 interface SnapshotSummary {
   skills: string[]
@@ -64,8 +64,6 @@ const ConfigSources = () => {
   }, [loadData])
 
   const handleDeleteSnapshot = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this snapshot?')) return
-
     setDeletingId(`snap-${id}`)
     try {
       const response = await fetch(`/claude/snapshots/${id}`, {
@@ -82,8 +80,6 @@ const ConfigSources = () => {
   }
 
   const handleDeleteEnvironment = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this environment? All data in the volume will be lost.')) return
-
     setDeletingId(`env-${id}`)
     try {
       await deleteEnvironment(id)
@@ -166,23 +162,17 @@ const ConfigSources = () => {
     }
   }
 
-  const SUBSCRIPTION_COLORS: Record<string, string> = {
-    max: 'bg-purple-100 text-purple-700',
-    pro: 'bg-blue-100 text-blue-700',
-    free: 'bg-slate-100 text-slate-700',
-  }
+  const SUBSCRIPTION_TONES: Record<string, Tone> = { max: 'primary', pro: 'info' }
 
   return (
     <Page
       title="Claude Configurations"
-      actions={<>
-        <Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>
-        <Button size="icon" onClick={() => loadData()} title="Refresh" aria-label="Refresh list">&#8635;</Button>
-      </>}
+      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>}
       width="wide"
     >
-      {/* Tabs */}
       <Tabs label="Sections" value={activeTab} onChange={setActiveTab} options={[{ value: 'environments', label: <>Environments ({environments.length})</> }, { value: 'snapshots', label: <>Snapshots ({snapshots.length})</> }]} />
+
+      <Toolbar actions={<RefreshButton onClick={() => loadData()} label="Refresh list" />} />
 
       <div className="space-y-4">
         {/* Error */}
@@ -210,55 +200,34 @@ const ConfigSources = () => {
 
             {/* Environment List */}
             {environments.length > 0 && (
-              <ul className="space-y-3">
+              <List>
                 {environments.map((env) => (
-                  <li key={env.id} className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-                    <div className="flex items-start gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-semibold text-slate-800">{env.name}</span>
-                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
-                            Persistent
-                          </span>
-                        </div>
-
-                        {env.description && (
-                          <div className="text-sm text-slate-600">{env.description}</div>
-                        )}
-
-                        <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
-                          <span>Created: {formatDate(env.created_at)}</span>
-                          <span>Last used: {formatDate(env.last_used_at)}</span>
-                          <span>{env.session_count} session{env.session_count !== 1 ? 's' : ''}</span>
-                          {env.size_bytes && <span>{formatSize(env.size_bytes)}</span>}
-                        </div>
-
-                        <div className="mt-2 text-xs text-slate-400 font-mono truncate">
-                          Volume: {env.volume_name}
-                        </div>
-                      </div>
-
-                      <div className="shrink-0 flex gap-2">
-                        <button
-                          onClick={() => {
-                            setResettingEnvId(env.id)
-                            setResetSnapshotId(env.initialized_from_snapshot_id)
-                          }}
-                          className="bg-yellow-50 text-yellow-600 py-1.5 px-3 rounded text-sm hover:bg-yellow-100"
-                        >
-                          Reset
-                        </button>
-                        <Button variant="danger" size="sm"
-                          onClick={() => handleDeleteEnvironment(env.id)}
-                          disabled={deletingId === `env-${env.id}`}
-                        >
-                          {deletingId === `env-${env.id}` ? 'Deleting...' : 'Delete'}
-                        </Button>
-                      </div>
-                    </div>
-                  </li>
+                  <Row
+                    key={env.id}
+                    title={env.name}
+                    badges={<Badge tone="success">Persistent</Badge>}
+                    meta={[
+                      `Created: ${formatDate(env.created_at)}`,
+                      `Last used: ${formatDate(env.last_used_at)}`,
+                      `${env.session_count} session${env.session_count !== 1 ? 's' : ''}`,
+                      env.size_bytes && formatSize(env.size_bytes),
+                      <span className="font-mono">Volume: {env.volume_name}</span>,
+                    ]}
+                    actions={<>
+                      <Button size="sm" onClick={() => {
+                        setResettingEnvId(env.id)
+                        setResetSnapshotId(env.initialized_from_snapshot_id)
+                      }}>Reset</Button>
+                      <ConfirmButton confirm={`Delete the environment "${env.name}"? All data in the volume will be lost.`}
+                        onConfirm={() => handleDeleteEnvironment(env.id)} disabled={deletingId === `env-${env.id}`}>
+                        {deletingId === `env-${env.id}` ? 'Deleting...' : 'Delete'}
+                      </ConfirmButton>
+                    </>}
+                  >
+                    {env.description && <p className="text-slate-600">{env.description}</p>}
+                  </Row>
                 ))}
-              </ul>
+              </List>
             )}
           </>
         )}
@@ -282,69 +251,38 @@ const ConfigSources = () => {
 
             {/* Snapshot List */}
             {snapshots.length > 0 && (
-              <ul className="space-y-3">
+              <List>
                 {snapshots.map((snapshot) => {
                   const summary = parseSummary(snapshot.summary)
-                  const mcpCount = summary?.mcp_servers?.length ?? 0
-                  const skillCount = summary?.skills?.length ?? 0
-                  const agentCount = summary?.agents?.length ?? 0
-                  const pluginCount = summary?.plugins?.length ?? 0
-
+                  const counts = ([['MCP server', summary?.mcp_servers], ['skill', summary?.skills], ['agent', summary?.agents], ['plugin', summary?.plugins]] as const)
+                    .map(([noun, items]) => items?.length ? `${items.length} ${noun}${items.length !== 1 ? 's' : ''}` : null)
                   return (
-                    <li key={snapshot.id} className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-                      <div className="flex items-start gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-semibold text-slate-800">{snapshot.name}</span>
-                            {snapshot.subscription_type && (
-                              <span
-                                className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                  SUBSCRIPTION_COLORS[snapshot.subscription_type.toLowerCase()] ?? 'bg-slate-100 text-slate-600'
-                                }`}
-                              >
-                                {snapshot.subscription_type}
-                              </span>
-                            )}
-                            <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
-                              Static
-                            </span>
-                          </div>
-
-                          {snapshot.claude_account_email && (
-                            <div className="text-sm text-slate-600">{snapshot.claude_account_email}</div>
-                          )}
-
-                          <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
-                            <span>{formatDate(snapshot.created_at)}</span>
-                            <span>{formatSize(snapshot.size)}</span>
-                            {mcpCount > 0 && (
-                              <span className="text-primary">
-                                {mcpCount} MCP server{mcpCount !== 1 ? 's' : ''}
-                              </span>
-                            )}
-                            {skillCount > 0 && <span>{skillCount} skill{skillCount !== 1 ? 's' : ''}</span>}
-                            {agentCount > 0 && <span>{agentCount} agent{agentCount !== 1 ? 's' : ''}</span>}
-                            {pluginCount > 0 && <span>{pluginCount} plugin{pluginCount !== 1 ? 's' : ''}</span>}
-                          </div>
-
-                          <div className="mt-2 text-xs text-slate-400 font-mono truncate">
-                            {snapshot.content_hash.slice(0, 16)}...
-                          </div>
-                        </div>
-
-                        <div className="shrink-0">
-                          <Button variant="danger" size="sm"
-                            onClick={() => handleDeleteSnapshot(snapshot.id)}
-                            disabled={deletingId === `snap-${snapshot.id}`}
-                          >
-                            {deletingId === `snap-${snapshot.id}` ? 'Deleting...' : 'Delete'}
-                          </Button>
-                        </div>
-                      </div>
-                    </li>
+                    <Row
+                      key={snapshot.id}
+                      title={snapshot.name}
+                      badges={<>
+                        {snapshot.subscription_type && (
+                          <Badge tone={SUBSCRIPTION_TONES[snapshot.subscription_type.toLowerCase()] ?? 'neutral'}>{snapshot.subscription_type}</Badge>
+                        )}
+                        <Badge tone="info">Static</Badge>
+                      </>}
+                      meta={[
+                        snapshot.claude_account_email,
+                        formatDate(snapshot.created_at),
+                        formatSize(snapshot.size),
+                        ...counts,
+                        <span className="font-mono">{snapshot.content_hash.slice(0, 16)}...</span>,
+                      ]}
+                      actions={
+                        <ConfirmButton confirm={`Delete the snapshot "${snapshot.name}"?`}
+                          onConfirm={() => handleDeleteSnapshot(snapshot.id)} disabled={deletingId === `snap-${snapshot.id}`}>
+                          {deletingId === `snap-${snapshot.id}` ? 'Deleting...' : 'Delete'}
+                        </ConfirmButton>
+                      }
+                    />
                   )
                 })}
-              </ul>
+              </List>
             )}
           </>
         )}
@@ -361,25 +299,23 @@ const ConfigSources = () => {
                   setNewEnvSourceEnvId(null)
                 }} size="md">
           <div className="space-y-4">
-              <div>
-                <Label className="mb-1">Name *</Label>
+              <Field label="Name *">
                 <Input
                   type="text"
                   value={newEnvName}
                   onChange={(e) => setNewEnvName(e.target.value)}
                   placeholder="My Development Environment"
                 />
-              </div>
+              </Field>
 
-              <div>
-                <Label className="mb-1">Description</Label>
+              <Field label="Description">
                 <Textarea
                   value={newEnvDescription}
                   onChange={(e) => setNewEnvDescription(e.target.value)}
                   placeholder="Optional description..."
                   rows={2}
                 />
-              </div>
+              </Field>
 
               <div>
                 <Label className="mb-1">Initialize from</Label>
@@ -454,8 +390,7 @@ const ConfigSources = () => {
               This will delete all current data in the environment and optionally reinitialize from a snapshot.
             </p>
 
-            <div>
-              <Label className="mb-1">Reinitialize from Snapshot</Label>
+            <Field label="Reinitialize from Snapshot">
               <Select
                 value={resetSnapshotId ?? ''}
                 onChange={(e) => setResetSnapshotId(e.target.value ? Number(e.target.value) : null)}
@@ -467,7 +402,7 @@ const ConfigSources = () => {
                   </option>
                 ))}
               </Select>
-            </div>
+            </Field>
 
             <div className="flex justify-end gap-3 mt-6">
               <Button

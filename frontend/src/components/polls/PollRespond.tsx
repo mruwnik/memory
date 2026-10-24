@@ -4,7 +4,7 @@ import { getPollBySlug, submitPollResponse, getPollResults, getResponseByToken, 
 import type { Poll, AvailabilitySlot, SlotAggregation, AvailabilityLevel } from '../../hooks/usePolls'
 import PollGrid from './PollGrid'
 import { getBrowserTimezone, COMMON_TIMEZONES, formatTimezone } from '../../utils/timezones'
-import { Button, ButtonLink, Card, Input, Label, Notice, Page, Select } from '@/components/shared/ui'
+import { Button, ButtonLink, Card, Field, FieldRow, Input, Notice, Page, Select, ToggleGroup } from '@/components/shared/ui'
 
 export const PollRespond: React.FC = () => {
   const { slug } = useParams<{ slug: string }>()
@@ -213,11 +213,8 @@ export const PollRespond: React.FC = () => {
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Name and Timezone */}
           <Card>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="respondentName" className="mb-1">
-                  Your Name *
-                </Label>
+            <FieldRow>
+              <Field label="Your Name *">
                 <Input
                   type="text"
                   id="respondentName"
@@ -226,12 +223,9 @@ export const PollRespond: React.FC = () => {
                   placeholder="Enter your name"
                   required
                 />
-              </div>
+              </Field>
 
-              <div>
-                <Label htmlFor="displayTimezone" className="mb-1">
-                  Your Timezone
-                </Label>
+              <Field label="Your Timezone">
                 <Select
                   id="displayTimezone"
                   value={displayTimezone}
@@ -244,40 +238,14 @@ export const PollRespond: React.FC = () => {
                     <option key={tz} value={tz}>{formatTimezone(tz)}</option>
                   ))}
                 </Select>
-              </div>
-            </div>
+              </Field>
+            </FieldRow>
           </Card>
 
           {/* Availability Level Selector */}
-          <Card>
-            <Label className="mb-2">Availability Level:</Label>
-            <div className="flex gap-2 mb-2">
-              <button
-                type="button"
-                className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
-                  currentLevel === 1
-                    ? 'bg-green-500 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-                onClick={() => setCurrentLevel(1)}
-              >
-                Available
-              </button>
-              <button
-                type="button"
-                className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
-                  currentLevel === 2
-                    ? 'bg-yellow-400 text-slate-800'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-                onClick={() => setCurrentLevel(2)}
-              >
-                If Needed
-              </button>
-            </div>
-            <p className="text-sm text-slate-500">
-              Click and drag on the grid to mark your availability
-            </p>
+          <Card title="Availability Level" description="Click and drag on the grid to mark your availability">
+            <ToggleGroup label="Availability level" value={String(currentLevel)} onChange={v => setCurrentLevel(Number(v) as typeof currentLevel)}
+              options={[{ value: '1', label: 'Available' }, { value: '2', label: 'If Needed' }]} />
           </Card>
 
           {/* Grid */}

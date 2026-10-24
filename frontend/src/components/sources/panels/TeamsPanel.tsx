@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { Badge, Button, Card, Checkbox, ConfirmDialog, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select, Textarea, cx } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, List, Page, Row, Toolbar, FieldRow, FormActions, Hint, Input, Label, Modal, Notice, Select, Textarea, cx } from '@/components/shared/ui'
 
 // Owner selector dropdown for teams
 interface OwnerSelectorPopoverProps {
@@ -108,7 +108,6 @@ export const TeamsPanel = () => {
   const [editingTeam, setEditingTeam] = useState<Team | null>(null)
   const [managingMembers, setManagingMembers] = useState<Team | null>(null)
   const [managingProjects, setManagingProjects] = useState<Team | null>(null)
-  const [archivingTeam, setArchivingTeam] = useState<Team | null>(null)
 
   const loadTeams = useCallback(async () => {
     setLoading(true)
@@ -168,20 +167,21 @@ export const TeamsPanel = () => {
 
   const handleArchive = async (team: Team) => {
     await updateTeam(team.slug, { is_active: false })
-    setArchivingTeam(null)
     loadTeams()
   }
 
-  if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={loadTeams} />
-
   return (
-    <Card actions={<><div className="flex items-center gap-2">
-          <Checkbox checked={showInactive} onChange={e => setShowInactive(e.target.checked)} label="Show archived" />
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
-            New Team
-          </Button>
-        </div></>}>
+    <Page
+      title="Teams"
+      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New Team</Button>}
+      width="wide"
+      loading={loading}
+      error={error}
+      onRetry={loadTeams}
+    >
+      <Toolbar>
+        <Checkbox checked={showInactive} onChange={e => setShowInactive(e.target.checked)} label="Show archived" />
+      </Toolbar>
 
       {teams.length === 0 ? (
         <EmptyState
@@ -190,20 +190,20 @@ export const TeamsPanel = () => {
           onAction={() => setShowCreateModal(true)}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+        <List>
           {teams.map(team => (
-            <TeamCard
+            <TeamRow
               key={team.id}
               team={team}
               onEdit={() => setEditingTeam(team)}
               onManageMembers={() => setManagingMembers(team)}
               onManageProjects={() => setManagingProjects(team)}
-              onArchive={() => setArchivingTeam(team)}
+              onArchive={() => handleArchive(team)}
               onChangeOwner={handleChangeOwner}
               availablePeople={availablePeople}
             />
           ))}
-        </div>
+        </List>
       )}
 
       {/* Create Modal */}
@@ -247,17 +247,6 @@ export const TeamsPanel = () => {
         />
       )}
 
-      {/* Archive Confirmation */}
-      {archivingTeam && (
-        <ConfirmDialog
-          title="Archive Team"
-          message={`Are you sure you want to archive "${archivingTeam.name}"? Members will lose access to projects through this team.`}
-          confirmLabel="Archive"
-          onConfirm={() => handleArchive(archivingTeam)}
-          onCancel={() => setArchivingTeam(null)}
-        />
-      )}
-
       {/* Manage Projects Modal */}
       {managingProjects && (
         <TeamProjectsModal
@@ -274,12 +263,11 @@ export const TeamsPanel = () => {
           unassignTeam={unassignTeamFromProject}
         />
       )}
-    </Card>
+    </Page>
   )
 }
 
-// Team Card Component
-const TeamCard = ({
+const TeamRow = ({
   team,
   onEdit,
   onManageMembers,
@@ -312,143 +300,47 @@ const TeamCard = ({
   }
 
   return (
-    <div className={cx(
-      'bg-white rounded-xl border border-slate-200 p-4 flex flex-col',
-      !team.is_active && 'opacity-60'
-    )}>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h4 className="font-semibold text-slate-800 truncate">{team.name}</h4>
-            {!team.is_active && (
-              <Badge>Archived</Badge>
-            )}
-          </div>
-          <p className="text-xs text-slate-500">@{team.slug}</p>
-        </div>
-      </div>
-
-      {/* Description */}
-      {team.description && (
-        <p className="text-sm text-slate-600 mb-3 line-clamp-2">{team.description}</p>
-      )}
-
-      {/* Tags */}
-      {team.tags && team.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-3">
-          {team.tags.slice(0, 3).map(tag => (
-            <span key={tag} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">
-              {tag}
-            </span>
-          ))}
-          {team.tags.length > 3 && (
-            <span className="text-xs text-slate-400">+{team.tags.length - 3}</span>
-          )}
-        </div>
-      )}
-
-      {/* Owner */}
-      <div className="text-xs text-slate-500 mb-2 relative">
-        Owner:{' '}
-        <span
-          onClick={handleOwnerClick}
-          className={cx(
-            'cursor-pointer px-1.5 py-0.5 rounded',
-            team.owner
-              ? 'text-slate-700 hover:bg-slate-100'
-              : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-          )}
-          title={team.owner ? 'Click to change' : 'No owner - click to assign'}
-        >
-          {team.owner
-            ? team.owner.display_name || team.owner.identifier
-            : 'None'}
-        </span>
-        {showOwnerSelector && onChangeOwner && availablePeople && (
-          <OwnerSelectorPopover
-            currentOwnerId={team.owner_id}
-            availablePeople={availablePeople}
-            onSelect={handleOwnerSelect}
-            onClose={() => setShowOwnerSelector(false)}
-          />
-        )}
-      </div>
-
-      {/* Stats row */}
-      <div className="flex items-center gap-3 text-xs text-slate-500 mb-3">
-        {team.member_count !== undefined && (
-          <span>{team.member_count} member{team.member_count !== 1 ? 's' : ''}</span>
-        )}
-        {team.discord_role_id && (
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 bg-indigo-500 rounded-full"></span>
-            Discord
-          </span>
-        )}
-        {team.github_team_id && (
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 bg-slate-800 rounded-full"></span>
-            GitHub
-          </span>
-        )}
-      </div>
-
-      {/* Projects */}
-      {team.projects && team.projects.length > 0 && (
-        <div className="flex items-center gap-1.5 mb-3 flex-wrap">
-          <span className="text-xs text-slate-500">Projects:</span>
-          {team.projects.slice(0, 2).map(project => (
-            <span
-              key={project.id}
-              className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs cursor-pointer hover:bg-blue-100"
-              onClick={onManageProjects}
-            >
-              {project.title}
-            </span>
-          ))}
-          {team.projects.length > 2 && (
-            <span
-              className="text-xs text-slate-500 cursor-pointer hover:text-slate-700"
-              onClick={onManageProjects}
-              title={team.projects.slice(2).map(p => p.title).join(', ')}
-            >
-              +{team.projects.length - 2} more
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Actions - pushed to bottom */}
-      <div className="mt-auto pt-3 border-t border-slate-100 flex flex-wrap gap-2">
-        <button
-          className="text-xs text-primary hover:text-primary/80 font-medium"
-          onClick={onManageMembers}
-        >
-          Members
-        </button>
-        <button
-          className="text-xs text-primary hover:text-primary/80 font-medium"
-          onClick={onManageProjects}
-        >
-          Projects
-        </button>
-        <button
-          className="text-xs text-primary hover:text-primary/80 font-medium"
-          onClick={onEdit}
-        >
-          Edit
-        </button>
-        {team.is_active && (
-          <button
-            className="text-xs text-red-600 hover:text-red-700 font-medium ml-auto"
-            onClick={onArchive}
-          >
-            Archive
+    <Row
+      title={team.name}
+      muted={!team.is_active}
+      badges={<>
+        {!team.is_active && <Badge>Archived</Badge>}
+        {team.discord_role_id && <Badge tone="info">Discord</Badge>}
+        {team.github_team_id && <Badge>GitHub</Badge>}
+      </>}
+      meta={[
+        `@${team.slug}`,
+        <span className="relative">
+          Owner:{' '}
+          <button type="button" onClick={handleOwnerClick}
+            className={cx('rounded px-1 hover:bg-slate-100', team.owner ? 'text-slate-700' : 'text-amber-800 bg-amber-50')}
+            title={team.owner ? 'Change owner' : 'No owner - assign one'}>
+            {team.owner ? team.owner.display_name || team.owner.identifier : 'None'}
           </button>
+          {showOwnerSelector && onChangeOwner && availablePeople && (
+            <OwnerSelectorPopover
+              currentOwnerId={team.owner_id}
+              availablePeople={availablePeople}
+              onSelect={handleOwnerSelect}
+              onClose={() => setShowOwnerSelector(false)}
+            />
+          )}
+        </span>,
+        team.member_count !== undefined && `${team.member_count} member${team.member_count !== 1 ? 's' : ''}`,
+        !!team.projects?.length && `Projects: ${team.projects.map(p => p.title).join(', ')}`,
+      ]}
+      actions={<>
+        <Button size="sm" onClick={onManageMembers}>Members</Button>
+        <Button size="sm" onClick={onManageProjects}>Projects</Button>
+        <Button size="sm" onClick={onEdit}>Edit</Button>
+        {team.is_active && (
+          <ConfirmButton confirm={`Archive "${team.name}"? Members will lose access to projects through this team.`} onConfirm={onArchive}>Archive</ConfirmButton>
         )}
-      </div>
-    </div>
+      </>}
+    >
+      {team.description && <p className="text-slate-600 line-clamp-2">{team.description}</p>}
+      {!!team.tags?.length && <div className="flex flex-wrap gap-1">{team.tags.map(tag => <Badge key={tag}>{tag}</Badge>)}</div>}
+    </Row>
   )
 }
 

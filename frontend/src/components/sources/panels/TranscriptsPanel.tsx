@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { SourceCard, TagsInput } from '../shared'
-import { Button, Card, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
+import { SourceRow, TagsInput } from '../shared'
+import { RowError, Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const TranscriptsPanel = () => {
@@ -84,7 +84,7 @@ export const TranscriptsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
-    <Card title="Transcript Accounts" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button></>}>
+    <Section title="Transcript Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button>}>
       {accounts.length === 0 ? (
         <EmptyState
           message="No transcript accounts configured. Connect Fireflies (or another supported provider) to ingest meeting transcripts."
@@ -92,9 +92,9 @@ export const TranscriptsPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className="space-y-3">
+        <List>
           {accounts.map(account => (
-            <SourceCard
+            <SourceRow
               key={account.id}
               title={account.name}
               subtitle={account.provider}
@@ -114,20 +114,15 @@ export const TranscriptsPanel = () => {
                   Full rescan
                 </Button>
               }
+              meta={[
+                !!account.tags?.length && `Tags: ${account.tags.join(', ')}`,
+                `Sensitivity: ${account.sensitivity}`,
+              ]}
             >
-              <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
-                <span>Provider: {account.provider}</span>
-                {account.tags && account.tags.length > 0 && (
-                  <span>Tags: {account.tags.join(', ')}</span>
-                )}
-                <span>Sensitivity: {account.sensitivity}</span>
-                {!account.has_api_key && (
-                  <span className="text-red-600">No API key set</span>
-                )}
-              </div>
-            </SourceCard>
+              {!account.has_api_key && <RowError>No API key set</RowError>}
+            </SourceRow>
           ))}
-        </div>
+        </List>
       )}
 
       {showForm && (
@@ -148,7 +143,7 @@ export const TranscriptsPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

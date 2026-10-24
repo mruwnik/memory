@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMCP } from '@/hooks/useMCP'
-import { Button, ErrorState, LoadingState, Page, Textarea, ToggleGroup } from '@/components/shared/ui'
+import { Button, ConfirmDialog, ErrorState, LoadingState, Page, PaneHeader, SplitView, Textarea, ToggleGroup } from '@/components/shared/ui'
 import { Markdown } from '@/components/shared/Markdown'
 
 interface TreeNode {
@@ -126,8 +126,10 @@ export const NotesPage = () => {
   const [loadingContent, setLoadingContent] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null)
 
   const hasChanges = editedContent !== null && editedContent !== fileContent
+  const leaveFile = (go: () => void) => hasChanges ? setPendingLeave(() => go) : go()
 
   // Get file path from URL
   const fileFromUrl = searchParams.get('file')
@@ -233,87 +235,74 @@ export const NotesPage = () => {
     })
   }
 
-  const handleSelectFile = (path: string) => {
+  const handleSelectFile = (path: string) => leaveFile(() => {
     setSelectedFile(path)
     loadFileContent(path)
-    // Update URL
     setSearchParams({ file: path })
-  }
+  })
 
   const tree = buildTree(files)
 
   return (
     <Page title="Notes" width="full" fill>
-      <div className="h-full flex overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm">
-        {/* File Browser Panel */}
-        <div className="w-80 shrink-0 border-r border-slate-200 flex flex-col">
-          <div className="px-4 py-3 border-b border-slate-200">
-            <h2 className="text-sm font-semibold text-slate-700">Files</h2>
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {loading ? (
-              <LoadingState />
-            ) : error ? (
-              <ErrorState message={error} />
-            ) : files.length === 0 ? (
-              <div className="p-4 text-center text-slate-600">No notes found</div>
-            ) : (
-              <FolderNode
-                name=""
-                node={tree}
-                path=""
-                expandedFolders={expandedFolders}
-                selectedFile={selectedFile}
-                onToggleFolder={handleToggleFolder}
-                onSelectFile={handleSelectFile}
-                depth={0}
-              />
-            )}
-          </div>
-        </div>
-
-        {/* Content Panel */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {selectedFile ? (
-            <>
-              <div className="px-6 py-3 border-b border-slate-200 flex flex-wrap gap-2 items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-700">{selectedFile}</h2>
-                <div className="flex items-center gap-3">
-                  {hasChanges && (
-                    <span className="text-xs text-amber-700">Unsaved changes</span>
-                  )}
-                  <ToggleGroup label="View mode" value={isEditing ? 'edit' : 'preview'} onChange={v => setIsEditing(v === 'edit')}
-                    options={[{ value: 'preview', label: 'Preview' }, { value: 'edit', label: 'Edit' }]} />
-                  <Button variant="primary" size="sm" onClick={handleSave} disabled={!hasChanges || saving}>
-                    {saving ? 'Saving...' : 'Save'}
-                  </Button>
-                </div>
-              </div>
-              <div className="flex-1 flex flex-col overflow-hidden p-4">
-                {loadingContent ? (
-                  <LoadingState message="Loading content..." />
-                ) : isEditing ? (
-                  <Textarea
-                    value={editedContent ?? ''}
-                    onChange={(e) => setEditedContent(e.target.value)}
-                    className="flex-1 font-mono leading-relaxed"
-                    spellCheck={false}
-                  />
-                ) : (
-                  <div className="flex-1 overflow-y-auto bg-white rounded-lg shadow-sm border border-slate-200 p-6">
-                    <Markdown className="text-slate-700">{editedContent ?? ''}</Markdown>
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-600">
-              Select a file to view its content
-            </div>
+      <SplitView
+        listTitle="Files"
+        list={loading ? <LoadingState />
+          : error ? <ErrorState message={error} />
+          : files.length === 0 ? <p className="p-4 text-center text-slate-600">No notes found</p>
+          : (
+            <FolderNode
+              name=""
+              node={tree}
+              path=""
+              expandedFolders={expandedFolders}
+              selectedFile={selectedFile}
+              onToggleFolder={handleToggleFolder}
+              onSelectFile={handleSelectFile}
+              depth={0}
+            />
           )}
-        </div>
-      </div>
+        detail={selectedFile && (
+          <>
+            <PaneHeader
+              title={selectedFile}
+              actions={<>
+                {hasChanges && <span className="text-xs text-amber-800">Unsaved changes</span>}
+                <ToggleGroup label="View mode" value={isEditing ? 'edit' : 'preview'} onChange={v => setIsEditing(v === 'edit')}
+                  options={[{ value: 'preview', label: 'Preview' }, { value: 'edit', label: 'Edit' }]} />
+                <Button variant="primary" size="sm" onClick={handleSave} disabled={!hasChanges || saving}>
+                  {saving ? 'Saving...' : 'Save'}
+                </Button>
+              </>}
+            />
+            <div className="flex-1 flex flex-col overflow-hidden p-4">
+              {loadingContent ? (
+                <LoadingState message="Loading content..." />
+              ) : isEditing ? (
+                <Textarea
+                  value={editedContent ?? ''}
+                  onChange={(e) => setEditedContent(e.target.value)}
+                  className="flex-1 font-mono leading-relaxed"
+                  aria-label="Note content"
+                  spellCheck={false}
+                />
+              ) : (
+                <div className="flex-1 overflow-y-auto">
+                  <Markdown className="text-slate-700">{editedContent ?? ''}</Markdown>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        placeholder="Select a file to view its content"
+        onBack={() => leaveFile(() => { setSelectedFile(null); setSearchParams({}) })}
+        backLabel="Files"
+      />
+      {pendingLeave && (
+        <ConfirmDialog message={`Discard unsaved changes to ${selectedFile}?`} confirmLabel="Discard"
+          onCancel={() => setPendingLeave(null)}
+          onConfirm={() => { setPendingLeave(null); pendingLeave() }} />
+      )}
     </Page>
   )
 }

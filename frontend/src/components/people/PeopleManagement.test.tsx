@@ -54,8 +54,8 @@ describe('PeopleManagement list states', () => {
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     renderWithRouter(<PeopleManagement />)
-    expect(await screen.findByRole('heading', { name: 'Alice' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Bob' })).toBeInTheDocument()
+    expect(await screen.findByText('Alice')).toBeInTheDocument()
+    expect(screen.getByText('Bob')).toBeInTheDocument()
     expect(screen.getByText('Showing 2 people')).toBeInTheDocument()
   })
 
@@ -119,7 +119,7 @@ describe('PeopleManagement edit flow', () => {
       people_upsert: mcpResult({ success: true }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = screen.getByRole('dialog')
@@ -133,7 +133,7 @@ describe('PeopleManagement edit flow', () => {
 })
 
 describe('PeopleManagement delete flow', () => {
-  it('confirms deletion via the modal and issues the delete call', async () => {
+  it('confirms deletion via the dialog and issues the delete call', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
       people_list_all: mcpResult([person()]),
@@ -141,11 +141,10 @@ describe('PeopleManagement delete flow', () => {
       people_delete: mcpResult({ deleted: true, identifier: 'alice', display_name: 'Alice' }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    expect(screen.getByRole('heading', { name: 'Delete Person' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Delete Person' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
 
     await waitFor(() => {
       const del = mcpCallsTo(fetchMock, 'people_delete')[0]
@@ -160,15 +159,12 @@ describe('PeopleManagement delete flow', () => {
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    expect(screen.getByRole('heading', { name: 'Delete Person' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
 
-    await waitFor(() =>
-      expect(screen.queryByRole('heading', { name: 'Delete Person' })).not.toBeInTheDocument(),
-    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     const del = mcpCallsTo(fetchMock, 'people_delete')[0]
     expect(del).toBeFalsy()
   })
@@ -182,7 +178,7 @@ describe('PeopleManagement search and tag filtering', () => {
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
     await user.type(screen.getByPlaceholderText(/Search by name/), 'bob')
 
@@ -201,7 +197,7 @@ describe('PeopleManagement search and tag filtering', () => {
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
     await user.click(screen.getByRole('combobox', { name: 'Filter by tag' }))
     await user.click(screen.getByRole('option', { name: 'vip' }))
@@ -237,14 +233,13 @@ describe('PeopleManagement team filter', () => {
       teams_fetch: mcpResult({ team: { id: 7, members: [{ id: 1, identifier: 'alice', display_name: 'Alice' }] } }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
-    await user.click(screen.getByRole('button', { name: /All Teams/ }))
-    await user.click(screen.getByRole('button', { name: /Eng/ }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Team' }), '7')
 
     // Only Alice (a member of team 7) remains after the team filter
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Bob' })).not.toBeInTheDocument())
-    expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Bob')).not.toBeInTheDocument())
+    expect(screen.getByText('Alice')).toBeInTheDocument()
     expect(mcpCallsTo(fetchMock, 'teams_fetch').length > 0).toBe(true)
   })
 })
@@ -261,9 +256,9 @@ describe('PeopleManagement merge flow', () => {
       people_merge: mcpResult({ success: true, merged_from: ['bob'] }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
-    const checkboxes = screen.getAllByTitle('Select for merge')
+    const checkboxes = screen.getAllByRole('checkbox', { name: /for merge/ })
     await user.click(checkboxes[0])
     await user.click(checkboxes[1])
     expect(screen.getByText('2 selected')).toBeInTheDocument()
@@ -285,9 +280,9 @@ describe('PeopleManagement merge flow', () => {
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
-    const checkboxes = screen.getAllByTitle('Select for merge')
+    const checkboxes = screen.getAllByRole('checkbox', { name: /for merge/ })
     await user.click(checkboxes[0])
     expect(screen.getByText('1 selected')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Clear' }))
@@ -304,9 +299,9 @@ describe('PeopleManagement expand', () => {
       people_fetch: mcpResult({ person: { teams: [{ id: 3, name: 'Eng' }] } }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
-    await screen.findByRole('heading', { name: 'Alice' })
+    await screen.findByText('Alice')
 
-    await user.click(screen.getByText('@alice'))
+    await user.click(screen.getByRole('button', { name: 'Alice' }))
 
     await waitFor(() => {
       expect(mcpCallsTo(fetchMock, 'people_fetch').length > 0).toBe(true)

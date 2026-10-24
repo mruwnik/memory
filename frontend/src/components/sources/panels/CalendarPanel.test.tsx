@@ -95,9 +95,9 @@ describe('CalendarPanel load states', () => {
     const { user } = renderWithUser(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     const calendarToggle = await screen.findByText('Work')
-    expect(screen.queryByText('Standup')).not.toBeInTheDocument()
+    expect(screen.getByText('Standup')).not.toBeVisible()
     await user.click(calendarToggle)
-    await waitFor(() => expect(screen.getByText('Standup')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Standup')).toBeVisible())
     expect(screen.getByText('Zoom')).toBeInTheDocument()
   })
 })
@@ -158,11 +158,12 @@ describe('CalendarPanel mutate flows', () => {
     })
   })
 
-  it('deletes the account immediately when Delete is clicked', async () => {
+  it('deletes the account after confirming', async () => {
     const mock = mockFetchRoutes(routes([caldavAccount]))
     const { user } = renderWithUser(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/calendar-accounts/2') && (init as RequestInit)?.method === 'DELETE',

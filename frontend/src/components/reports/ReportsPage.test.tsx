@@ -17,7 +17,7 @@ vi.mock('@/hooks/useReports', () => ({
 const makeReport = (o: Partial<Report> = {}): Report => ({
   id: 1,
   title: 'Quarterly',
-  filename: 'quarterly.html',
+  filename: 'reports/quarterly.html',
   tags: ['finance'],
   inserted_at: new Date().toISOString(),
   modality: 'report',
@@ -51,7 +51,7 @@ describe('ReportsPage', () => {
   it('lists reports with format badges and count', async () => {
     listReports.mockResolvedValue([
       makeReport({ id: 1, title: 'HTML one', metadata: { report_format: 'html' } }),
-      makeReport({ id: 2, title: 'PDF one', filename: 'r.pdf', mime_type: 'application/pdf', metadata: { report_format: 'pdf' } }),
+      makeReport({ id: 2, title: 'PDF one', filename: 'reports/r.pdf', mime_type: 'application/pdf', metadata: { report_format: 'pdf' } }),
     ])
     renderWithRouter(<ReportsPage />)
     await waitFor(() => expect(screen.getByText('2 reports')).toBeInTheDocument())
@@ -74,9 +74,7 @@ describe('ReportsPage', () => {
     renderWithRouter(<ReportsPage />)
     await waitFor(() => expect(screen.getByText('No reports yet.')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New Report' }))
-    const submitBtn = screen
-      .getAllByRole('button', { name: 'Create Report' })
-      .find((b) => (b as HTMLButtonElement).type === 'submit')!
+    const submitBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create Report' })
     await user.click(submitBtn)
     expect(await screen.findByText('Title and content are required')).toBeInTheDocument()
     expect(createReport).not.toHaveBeenCalled()
@@ -89,9 +87,7 @@ describe('ReportsPage', () => {
     await user.click(screen.getByRole('button', { name: 'New Report' }))
     await user.type(screen.getByPlaceholderText('Report title'), 'My Report')
     await user.type(screen.getByPlaceholderText(/My Report/), '<h1>Hi</h1>')
-    const submitBtn = screen
-      .getAllByRole('button', { name: 'Create Report' })
-      .find((b) => (b as HTMLButtonElement).type === 'submit')!
+    const submitBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create Report' })
     await user.click(submitBtn)
     await waitFor(() => expect(createReport).toHaveBeenCalled())
     expect(createReport.mock.calls[0][0]).toBe('My Report')
@@ -112,7 +108,7 @@ describe('ReportsPage', () => {
 
   it('shows an Open PDF action for PDF reports', async () => {
     listReports.mockResolvedValue([
-      makeReport({ id: 6, title: 'PDF report', filename: 'r.pdf', mime_type: 'application/pdf', metadata: { report_format: 'pdf' } }),
+      makeReport({ id: 6, title: 'PDF report', filename: 'reports/r.pdf', mime_type: 'application/pdf', metadata: { report_format: 'pdf' } }),
     ])
     const user = userEvent.setup()
     renderWithRouter(<ReportsPage />)
@@ -128,13 +124,13 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(screen.getByText('Delete me')).toBeInTheDocument())
     await user.click(screen.getByText('Delete me'))
     await user.click(await screen.findByRole('button', { name: 'Delete' }))
-    await user.click(await screen.findByRole('button', { name: 'Confirm' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteReport).toHaveBeenCalledWith(9))
   })
 
   it('edits an HTML report: fetches current content and re-creates with metadata', async () => {
-    mockFetch(async () => mockResponse({ text: '<h1>old</h1>', status: 200 }))
-    listReports.mockResolvedValue([makeReport({ id: 11, title: 'Editable', filename: 'e.html' })])
+    const fetchMock = mockFetch(async () => mockResponse({ text: '<h1>old</h1>', status: 200 }))
+    listReports.mockResolvedValue([makeReport({ id: 11, title: 'Editable', filename: 'reports/e.html' })])
     const user = userEvent.setup()
     renderWithRouter(<ReportsPage />)
     await waitFor(() => expect(screen.getByText('Editable')).toBeInTheDocument())
@@ -142,7 +138,8 @@ describe('ReportsPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
     await waitFor(() => expect(createReport).toHaveBeenCalled())
-    // 4th positional arg is the existing filename for upsert
+    expect(fetchMock).toHaveBeenCalledWith('/reports/e.html')
+    // 4th positional arg: the existing report's name within the reports directory
     expect(createReport.mock.calls.at(-1)?.[3]).toBe('e.html')
   })
 })

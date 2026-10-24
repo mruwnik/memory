@@ -7,26 +7,20 @@ import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
 import Combobox, { ComboOption } from '@/components/shared/Combobox'
 import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
-import { Button, EmptyState, Input, Label, LoadingState, Notice, Page, Select, Textarea, ToggleGroup } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
-
-const TYPE_COLORS: Record<string, string> = {
-  notification: 'bg-purple-100 text-purple-700',
-  claude_session: 'bg-indigo-100 text-indigo-700',
-  agent_run: 'bg-emerald-100 text-emerald-700',
-}
 
 const TYPE_LABELS: Record<string, string> = {
   claude_session: 'Claude Session',
   agent_run: 'Agent Run',
 }
 
-const EXECUTION_STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-yellow-100 text-yellow-700',
-  running: 'bg-blue-100 text-blue-700',
-  completed: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
+const EXECUTION_STATUS_TONES: Record<string, Tone> = {
+  pending: 'warning',
+  running: 'info',
+  completed: 'success',
+  failed: 'danger',
 }
 
 const CHANNELS = ['discord', 'slack', 'email'] as const
@@ -103,7 +97,7 @@ function formatDuration(start: string | null, end: string | null): string {
 
 const DataField = ({ label, value }: { label: string; value: string }) => (
   <span className="inline-flex items-center gap-1 text-xs bg-slate-50 border border-slate-200 rounded px-2 py-0.5">
-    <span className="text-slate-400">{label}</span>
+    <span className="text-slate-500">{label}</span>
     <span className="text-slate-700 font-mono">{value}</span>
   </span>
 )
@@ -295,61 +289,34 @@ const NotificationFields = ({ channel, target, onChannel, onTarget }: Notificati
   }
 
   return (
-    <div className="flex gap-3">
-      <div className="flex-1">
-        <Label>Channel</Label>
+    <FieldRow>
+      <Field label="Channel">
         <Select value={channel} onChange={e => handlePlatform(e.target.value)}>
           <option value="">Select...</option>
           {CHANNELS.map(c => (
             <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
           ))}
         </Select>
-      </div>
-      <div className="flex-1">
-        <Label>Target</Label>
+      </Field>
+      <Field label="Target" hint={channel === 'email' && "Email address (or a person's name to look up)."}>
         {isChat && (
-          <div className="mb-1">
-            <ToggleGroup label="Target type" value={mode} onChange={handleMode}
-              options={[{ value: 'channel', label: 'Channel' }, { value: 'dm', label: 'Direct message' }]} />
-          </div>
+          <ToggleGroup label="Target type" value={mode} onChange={handleMode}
+            options={[{ value: 'channel', label: 'Channel' }, { value: 'dm', label: 'Direct message' }]} />
         )}
-        {!channel && (
-          <Input type="text" value="" disabled placeholder="Select a channel first" />
-        )}
+        {!channel && <Input type="text" value="" disabled placeholder="Select a channel first" />}
         {channel === 'email' && (
-          <>
-            <Input
-              type="email"
-              value={target}
-              onChange={e => onTarget(e.target.value)}
-              placeholder="you@example.com"
-            />
-            <p className="text-xs text-slate-400 mt-1">Email address (or a person's name to look up).</p>
-          </>
+          <Input type="email" value={target} onChange={e => onTarget(e.target.value)} placeholder="you@example.com" />
         )}
         {isChat && mode === 'channel' && (
-          <Combobox
-            value={target}
-            onChange={v => onTarget(v)}
-            options={channelOptions}
-            loading={loadingChannels}
-            allowCustom
-            placeholder={`Search ${channel} channels…`}
-          />
+          <Combobox value={target} onChange={v => onTarget(v)} options={channelOptions} loading={loadingChannels}
+            allowCustom placeholder={`Search ${channel} channels…`} />
         )}
         {isChat && mode === 'dm' && (
-          <Combobox
-            value={target}
-            onChange={v => onTarget(v)}
-            options={peopleOptions}
-            loading={loadingPeople}
-            onQueryChange={searchPeople}
-            allowCustom
-            placeholder="Search people by name…"
-          />
+          <Combobox value={target} onChange={v => onTarget(v)} options={peopleOptions} loading={loadingPeople}
+            onQueryChange={searchPeople} allowCustom placeholder="Search people by name…" />
         )}
-      </div>
-    </div>
+      </Field>
+    </FieldRow>
   )
 }
 
@@ -388,45 +355,45 @@ interface SpawnConfigFieldsProps {
 }
 
 const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsProps) => (
-  <>
-    <div className="border-t border-slate-200 pt-3 mt-3">
-      <p className="text-xs font-semibold text-slate-600 mb-2">Spawn Config</p>
-    </div>
-    <div>
-      <Label>Environment</Label>
+  <fieldset className="space-y-4 border-t border-slate-200 pt-4">
+    <legend className="text-sm font-semibold text-slate-700 pr-2">Spawn config</legend>
+    <Field label="Environment">
       <Select value={state.envId ?? ''} onChange={e => setState(s => ({ ...s, envId: e.target.value ? Number(e.target.value) : null }))}>
         <option value="">Select environment...</option>
         {environments.map(env => (
           <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
         ))}
       </Select>
-    </div>
-    <div className="flex gap-3">
-      <div className="flex-1">
-        <Label>Repo URL</Label>
+    </Field>
+    <FieldRow>
+      <Field label="Repo URL">
         <Input type="text" value={state.repoUrl} onChange={e => setState(s => ({ ...s, repoUrl: e.target.value }))} placeholder="https://github.com/org/repo" />
-      </div>
-      <div className="flex-1">
-        <Label>Run ID</Label>
+      </Field>
+      <Field label="Run ID">
         <Input type="text" value={state.runId} onChange={e => setState(s => ({ ...s, runId: e.target.value }))} placeholder="custom-branch-name" />
-      </div>
-    </div>
-    <div>
-      <Label>Allowed Tools</Label>
+      </Field>
+    </FieldRow>
+    <Field label="Allowed Tools" hint="Comma-separated tool names">
       <Input type="text" value={state.allowedTools} onChange={e => setState(s => ({ ...s, allowedTools: e.target.value }))} placeholder="Bash, Read, Write, Edit, Grep, Glob" />
-      <p className="text-xs text-slate-400 mt-1">Comma-separated tool names</p>
-    </div>
-    <div>
-      <Label>Environment Variables</Label>
+    </Field>
+    <Field label="Environment Variables" hint="One per line: KEY=value">
       <Textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className="font-mono" />
-      <p className="text-xs text-slate-400 mt-1">One per line: KEY=value</p>
-    </div>
-    <div className="flex items-center gap-2">
-      <input type="checkbox" id="cf-playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
-      <label htmlFor="cf-playwright" className="text-xs text-slate-600">Enable Playwright</label>
-    </div>
-  </>
+    </Field>
+    <Checkbox label="Enable Playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
+  </fieldset>
 )
+
+const envText = (env: unknown) =>
+  env ? Object.entries(env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n') : ''
+
+const spawnStateOf = (config: Record<string, unknown>): SpawnConfigState => ({
+  envId: (config.environment_id as number) ?? null,
+  repoUrl: (config.repo_url as string) || '',
+  allowedTools: Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : '',
+  enablePlaywright: !!config.enable_playwright,
+  runId: (config.run_id as string) || '',
+  customEnvText: envText(config.custom_env),
+})
 
 const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
   const [topic, setTopic] = useState(task.topic || '')
@@ -439,17 +406,8 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
 
   const [message, setMessage] = useState(task.message || '')
 
-  // Spawn config fields (claude_session only)
-  const [envId, setEnvId] = useState<number | null>((config.environment_id as number) ?? null)
-  const [repoUrl, setRepoUrl] = useState((config.repo_url as string) || '')
-  const [allowedTools, setAllowedTools] = useState(
-    Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : ''
-  )
-  const [enablePlaywright, setEnablePlaywright] = useState(!!config.enable_playwright)
-  const [runId, setRunId] = useState((config.run_id as string) || '')
-  const [customEnvText, setCustomEnvText] = useState(
-    config.custom_env ? Object.entries(config.custom_env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n') : ''
-  )
+  const original = spawnStateOf(config)
+  const [spawn, setSpawn] = useState<SpawnConfigState>(original)
 
   // Load environments for dropdown
   const { listEnvironments } = useClaude()
@@ -468,32 +426,17 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
 
     if (isClaude) {
       const configUpdates: Record<string, unknown> = {}
-      const origRepo = (config.repo_url as string) || ''
-      const origTools = Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : ''
-      const origPlaywright = !!config.enable_playwright
-      const origRunId = (config.run_id as string) || ''
-      const origEnvId = (config.environment_id as number) ?? null
-      const origEnvText = config.custom_env
-        ? Object.entries(config.custom_env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n')
-        : ''
-
-      if (envId !== origEnvId) configUpdates.environment_id = envId
-      if (repoUrl !== origRepo) configUpdates.repo_url = repoUrl || null
-      if (allowedTools !== origTools) {
-        const tools = allowedTools.split(',').map(t => t.trim()).filter(Boolean)
+      if (spawn.envId !== original.envId) configUpdates.environment_id = spawn.envId
+      if (spawn.repoUrl !== original.repoUrl) configUpdates.repo_url = spawn.repoUrl || null
+      if (spawn.allowedTools !== original.allowedTools) {
+        const tools = spawn.allowedTools.split(',').map(t => t.trim()).filter(Boolean)
         configUpdates.allowed_tools = tools.length > 0 ? tools : null
       }
-      if (enablePlaywright !== origPlaywright) configUpdates.enable_playwright = enablePlaywright || null
-      if (runId !== origRunId) configUpdates.run_id = runId || null
-      if (customEnvText !== origEnvText) {
-        const envObj: Record<string, string> = {}
-        for (const line of customEnvText.split('\n')) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          const eqIdx = trimmed.indexOf('=')
-          if (eqIdx > 0) envObj[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1)
-        }
-        configUpdates.custom_env = Object.keys(envObj).length > 0 ? envObj : null
+      if (spawn.enablePlaywright !== original.enablePlaywright) configUpdates.enable_playwright = spawn.enablePlaywright || null
+      if (spawn.runId !== original.runId) configUpdates.run_id = spawn.runId || null
+      if (spawn.customEnvText !== original.customEnvText) {
+        const env = buildSpawnConfig({ ...spawn }).custom_env
+        configUpdates.custom_env = env ?? null
       }
 
       if (Object.keys(configUpdates).length > 0) updates.spawn_config = configUpdates
@@ -510,116 +453,25 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3">
-      <div>
-        <Label>Topic</Label>
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <Field label="Topic">
         <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
-      </div>
-      <div>
-        <Label>Cron Expression</Label>
-        <Input
-          type="text"
-          value={cronExpr}
-          onChange={e => setCronExpr(e.target.value)}
-          placeholder="0 9 * * *"
-          className="font-mono"
-        />
-        <p className="text-xs text-slate-400 mt-1">{describeCron(cronExpr)}</p>
-      </div>
-      <div>
-        <Label>{isClaude ? 'Initial Prompt' : 'Message'}</Label>
+      </Field>
+      <Field label="Cron Expression" hint={describeCron(cronExpr)}>
+        <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
+      </Field>
+      <Field label={isClaude ? 'Initial Prompt' : 'Message'}>
         <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={isClaude ? 4 : 2} />
-      </div>
-
-      {isClaude && (
-        <>
-          <div className="border-t border-slate-200 pt-3 mt-3">
-            <p className="text-xs font-semibold text-slate-600 mb-2">Spawn Config</p>
-          </div>
-          <div>
-            <Label>Environment</Label>
-            <Select
-              value={envId ?? ''}
-              onChange={e => setEnvId(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">Select environment...</option>
-              {environments.map(env => (
-                <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
-              ))}
-            </Select>
-          </div>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Label>Repo URL</Label>
-              <Input
-                type="text"
-                value={repoUrl}
-                onChange={e => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/org/repo"
-              />
-            </div>
-            <div className="flex-1">
-              <Label>Run ID</Label>
-              <Input
-                type="text"
-                value={runId}
-                onChange={e => setRunId(e.target.value)}
-                placeholder="custom-branch-name"
-              />
-            </div>
-          </div>
-          <div>
-            <Label>Allowed Tools</Label>
-            <Input
-              type="text"
-              value={allowedTools}
-              onChange={e => setAllowedTools(e.target.value)}
-              placeholder="Bash, Read, Write, Edit, Grep, Glob"
-            />
-            <p className="text-xs text-slate-400 mt-1">Comma-separated tool names</p>
-          </div>
-          <div>
-            <Label>Environment Variables</Label>
-            <Textarea
-              value={customEnvText}
-              onChange={e => setCustomEnvText(e.target.value)}
-              rows={3}
-              placeholder={"KEY=value\nANOTHER_KEY=value"}
-              className="font-mono"
-            />
-            <p className="text-xs text-slate-400 mt-1">One per line: KEY=value</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id={`playwright-${task.id}`}
-              checked={enablePlaywright}
-              onChange={e => setEnablePlaywright(e.target.checked)}
-            />
-            <label htmlFor={`playwright-${task.id}`} className="text-xs text-slate-600">Enable Playwright</label>
-          </div>
-        </>
-      )}
-
+      </Field>
+      {isClaude && <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
       {task.task_type === 'notification' && (
         <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="flex gap-2 pt-1">
-        <Button variant="primary" size="sm"
-          type="submit"
-          disabled={saving}
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </Button>
-        <Button size="sm"
-          type="button"
-          onClick={onCancel}
-          disabled={saving}
-        >
-          Cancel
-        </Button>
-      </div>
+      {error && <Notice tone="error">{error}</Notice>}
+      <FormActions>
+        <Button type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
+        <Button variant="primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+      </FormActions>
     </form>
   )
 }
@@ -674,46 +526,37 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 border border-slate-200 rounded-lg p-4 bg-slate-50">
-      <div className="flex gap-4">
-        <label className="text-sm"><input type="radio" checked={taskType === 'notification'} onChange={() => setTaskType('notification')} /> Notification</label>
-        <label className="text-sm"><input type="radio" checked={taskType === 'claude_session'} onChange={() => setTaskType('claude_session')} /> Claude session</label>
-      </div>
-      <div>
-        <Label>Topic</Label>
-        <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
-      </div>
-      <div className="flex gap-4">
-        <label className="text-sm"><input type="radio" checked={cadence === 'recurring'} onChange={() => setCadence('recurring')} /> Recurring</label>
-        <label className="text-sm"><input type="radio" checked={cadence === 'one_time'} onChange={() => setCadence('one_time')} /> One-time</label>
-      </div>
-      {cadence === 'recurring' ? (
-        <div>
-          <Label>Cron Expression</Label>
-          <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
-          <p className="text-xs text-slate-400 mt-1">{describeCron(cronExpr)}</p>
-        </div>
-      ) : (
-        <div>
-          <Label>Run at (local time)</Label>
-          <Input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} />
-        </div>
-      )}
-      <div>
-        <Label>{taskType === 'claude_session' ? 'Initial Prompt' : 'Message'}</Label>
-        <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} />
-      </div>
-      {taskType === 'notification'
-        ? <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
-        : <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="flex gap-2 pt-1">
-        <Button variant="primary" size="sm" type="submit" disabled={saving}>
-          {saving ? 'Creating...' : 'Create task'}
-        </Button>
-        <Button size="sm" type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
-      </div>
-    </form>
+    <Modal title="New scheduled task" onClose={onCancel} size="xl">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <ToggleGroup label="Task type" value={taskType} onChange={setTaskType}
+          options={[{ value: 'notification', label: 'Notification' }, { value: 'claude_session', label: 'Claude session' }]} />
+        <Field label="Topic">
+          <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
+        </Field>
+        <ToggleGroup label="Cadence" value={cadence} onChange={setCadence}
+          options={[{ value: 'recurring', label: 'Recurring' }, { value: 'one_time', label: 'One-time' }]} />
+        {cadence === 'recurring' ? (
+          <Field label="Cron Expression" hint={describeCron(cronExpr)}>
+            <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
+          </Field>
+        ) : (
+          <Field label="Run at (local time)">
+            <Input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} />
+          </Field>
+        )}
+        <Field label={taskType === 'claude_session' ? 'Initial Prompt' : 'Message'}>
+          <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} />
+        </Field>
+        {taskType === 'notification'
+          ? <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
+          : <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
+        {error && <Notice tone="error">{error}</Notice>}
+        <FormActions>
+          <Button type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={saving}>{saving ? 'Creating...' : 'Create task'}</Button>
+        </FormActions>
+      </form>
+    </Modal>
   )
 }
 
@@ -737,51 +580,38 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
     return () => { cancelled = true }
   }, [taskId, getExecutions])
 
-  if (loading) return <p className="text-xs text-slate-400 py-2">Loading history...</p>
-  if (!executions || executions.length === 0) {
-    return <p className="text-xs text-slate-400 py-2">No execution history</p>
-  }
+  if (loading) return <Hint>Loading history...</Hint>
+  if (!executions || executions.length === 0) return <Hint>No execution history</Hint>
 
   return (
-    <div className="mt-2 space-y-1">
+    <List flush className="border-t border-slate-100">
       {executions.map(ex => {
         const sessionId = (ex.data as Record<string, unknown> | null)?.session_id as string | undefined
         const runId = (ex.data as Record<string, unknown> | null)?.run_id as string | undefined
         return (
-          <div key={ex.id} className="border-t border-slate-100 py-1">
-            <div className="flex items-center gap-3 text-xs text-slate-600">
-              <span className="text-slate-400 w-20 shrink-0">{formatRelativeTime(ex.scheduled_time)}</span>
-              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${EXECUTION_STATUS_COLORS[ex.status] || 'bg-slate-100 text-slate-600'}`}>
-                {ex.status}
-              </span>
-              <span className="text-slate-400">{formatDuration(ex.started_at, ex.finished_at)}</span>
-              {sessionId && (
-                <span className="font-mono text-slate-500" title={sessionId}>
-                  session: {sessionId.length > 20 ? `${sessionId.slice(0, 20)}...` : sessionId}
-                </span>
-              )}
-              {runId && (
-                <Link to={`/ui/agents/runs/${runId}`} className="font-mono text-primary">view run</Link>
-              )}
-              {ex.error_message && (
-                <span className="text-red-500 truncate flex-1" title={ex.error_message}>{ex.error_message}</span>
-              )}
-            </div>
-            {ex.response && (
-              <p className="text-xs text-slate-500 mt-0.5 ml-[calc(5rem+0.75rem)] line-clamp-2" title={ex.response}>
-                {ex.response}
-              </p>
-            )}
-          </div>
+          <Row
+            key={ex.id}
+            className="px-0"
+            title={formatRelativeTime(ex.scheduled_time)}
+            badges={<Badge tone={EXECUTION_STATUS_TONES[ex.status] ?? 'neutral'}>{ex.status}</Badge>}
+            meta={[
+              formatDuration(ex.started_at, ex.finished_at),
+              sessionId && <span className="font-mono" title={sessionId}>session: {sessionId.length > 20 ? `${sessionId.slice(0, 20)}...` : sessionId}</span>,
+              runId && <Link to={`/ui/agents/runs/${runId}`} className="text-primary">view run</Link>,
+            ]}
+          >
+            {ex.error_message && <RowError>{ex.error_message}</RowError>}
+            {ex.response && <p className="text-xs text-slate-600 line-clamp-2" title={ex.response}>{ex.response}</p>}
+          </Row>
         )
       })}
-    </div>
+    </List>
   )
 }
 
-// --- Task Card ---
+// --- Task Row ---
 
-interface TaskCardProps {
+interface TaskRowProps {
   task: ScheduledTask
   onToggle: (taskId: string, enabled: boolean) => void
   onDelete: (taskId: string) => Promise<void>
@@ -789,14 +619,12 @@ interface TaskCardProps {
   getExecutions: (taskId: string) => Promise<TaskExecution[]>
 }
 
-const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCardProps) => {
+const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
   const [editing, setEditing] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const navigate = useNavigate()
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
 
   const handleSave = async (updates: UpdateTaskBody) => {
     setSaving(true)
@@ -811,28 +639,50 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
     }
   }
 
-  const handleDelete = async () => {
-    setDeleting(true)
-    try {
-      await onDelete(task.id)
-    } catch {
-      setDeleting(false)
-      setConfirmDelete(false)
-    }
-  }
-
   const typeLabel = TYPE_LABELS[task.task_type] ?? 'Notification'
 
   return (
-    <li className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-slate-200">
-      {editing ? (
-        <div>
-          <div className="flex items-center gap-2 mb-3">
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLORS[task.task_type] || 'bg-slate-100 text-slate-600'}`}>
-              {typeLabel}
-            </span>
-            <span className="text-sm font-medium text-slate-500">Editing</span>
-          </div>
+    <Row
+      title={task.topic || 'Untitled'}
+      badges={<>
+        <Badge tone="primary">{typeLabel}</Badge>
+        {getTaskStatus(task) === 'done' ? (
+          <Badge tone="info">Done</Badge>
+        ) : (
+          <StatusBadge
+            active={task.enabled}
+            onClick={() => {
+              // Agent schedules resume on the agent's page, which re-checks their tools and scopes.
+              if (task.task_type === 'agent_run' && !task.enabled) {
+                if (window.confirm("Agent schedules are resumed on the agent's page. Open it?")) {
+                  navigate(`/ui/agents/${task.data?.definition_id}`)
+                }
+                return
+              }
+              onToggle(task.id, !task.enabled)
+            }}
+          />
+        )}
+      </>}
+      meta={[
+        describeCron(task.cron_expression),
+        `Next: ${formatFutureTime(task.next_scheduled_time)}`,
+        `Created: ${formatRelativeTime(task.created_at)}`,
+        task.notification_channel && `${task.notification_channel}${task.notification_target ? `: ${task.notification_target}` : ''}`,
+      ]}
+      actions={<>
+        {task.task_type !== 'agent_run' && <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>}
+        <Button size="sm" variant={showHistory ? 'primary' : 'secondary'} aria-pressed={showHistory} onClick={() => setShowHistory(h => !h)}>
+          History
+        </Button>
+        <ConfirmButton confirm={`Delete "${task.topic || 'Untitled'}"?`} onConfirm={() => onDelete(task.id).catch(() => {})} />
+      </>}
+    >
+      {task.message && <p className="text-slate-600 line-clamp-2">{task.message}</p>}
+      <TaskDataFields task={task} />
+      {showHistory && <ExecutionHistory taskId={task.id} getExecutions={getExecutions} />}
+      {editing && (
+        <Modal title={`Edit ${typeLabel.toLowerCase()}`} onClose={() => { setEditing(false); setEditError(null) }} size="xl">
           <EditForm
             task={task}
             onSave={handleSave}
@@ -840,98 +690,9 @@ const TaskCard = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskCar
             saving={saving}
             error={editError}
           />
-        </div>
-      ) : (
-        <div>
-          <div className="flex items-start gap-3">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLORS[task.task_type] || 'bg-slate-100 text-slate-600'}`}>
-                  {typeLabel}
-                </span>
-                <span className="font-semibold text-slate-800 text-sm">{task.topic || 'Untitled'}</span>
-                {getTaskStatus(task) === 'done' ? (
-                  <span className="px-2 py-1 rounded text-xs font-medium bg-sky-100 text-sky-700">Done</span>
-                ) : (
-                  <StatusBadge
-                    active={task.enabled}
-                    onClick={() => {
-                      // Agent schedules resume on the agent's page, which re-checks their tools and scopes.
-                      if (task.task_type === 'agent_run' && !task.enabled) {
-                        if (window.confirm("Agent schedules are resumed on the agent's page. Open it?")) {
-                          navigate(`/ui/agents/${task.data?.definition_id}`)
-                        }
-                        return
-                      }
-                      onToggle(task.id, !task.enabled)
-                    }}
-                  />
-                )}
-              </div>
-
-              <div className="text-sm text-slate-500 mt-1">
-                {describeCron(task.cron_expression)}
-              </div>
-
-              {task.message && (
-                <p className="text-sm text-slate-600 mt-1 line-clamp-2">{task.message}</p>
-              )}
-
-              <TaskDataFields task={task} />
-
-              <div className="flex gap-4 mt-2 text-xs text-slate-400 flex-wrap">
-                <span>Next: {formatFutureTime(task.next_scheduled_time)}</span>
-                <span>Created: {formatRelativeTime(task.created_at)}</span>
-                {task.notification_channel && (
-                  <span>{task.notification_channel}{task.notification_target ? `: ${task.notification_target}` : ''}</span>
-                )}
-              </div>
-            </div>
-
-            <div className="shrink-0 flex gap-2">
-              {task.task_type !== 'agent_run' && (
-                <Button size="sm"
-                  onClick={() => setEditing(true)}
-                >
-                  Edit
-                </Button>
-              )}
-              <Button size="sm" variant={showHistory ? 'primary' : 'secondary'} aria-pressed={showHistory} onClick={() => setShowHistory(h => !h)}>
-                History
-              </Button>
-              {confirmDelete ? (
-                <span className="flex items-center gap-1 text-sm">
-                  <span className="text-red-600">Delete?</span>
-                  <button
-                    onClick={handleDelete}
-                    disabled={deleting}
-                    className="text-red-600 font-medium hover:underline"
-                  >
-                    {deleting ? '...' : 'Yes'}
-                  </button>
-                  <button
-                    onClick={() => setConfirmDelete(false)}
-                    className="text-slate-500 hover:underline"
-                  >
-                    No
-                  </button>
-                </span>
-              ) : (
-                <Button variant="danger" size="sm"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {showHistory && (
-            <ExecutionHistory taskId={task.id} getExecutions={getExecutions} />
-          )}
-        </div>
+        </Modal>
       )}
-    </li>
+    </Row>
   )
 }
 
@@ -1014,63 +775,32 @@ const ScheduledTasks = () => {
   return (
     <Page
       title="Scheduled Tasks"
-      description={<>
-        <div className="flex gap-3 text-sm">
-          <span className="text-green-600 font-medium">{enabledCount} active</span>
-          {disabledCount > 0 && <span className="text-slate-500">{disabledCount} disabled</span>}
-        </div>
-      </>}
+      description={<span className="flex flex-wrap gap-x-3">
+        <span>{enabledCount} active</span>
+        {disabledCount > 0 && <span>{disabledCount} disabled</span>}
+      </span>}
+      actions={<Button variant="primary" onClick={() => setShowCreate(true)}>+ New task</Button>}
       width="wide"
     >
-      <div className="space-y-4">
-        <div className="flex gap-2 items-center">
-          <ToggleGroup label="Filter" options={FILTERS} value={typeFilter} onChange={setTypeFilter} />
-          <Button size="icon"
-            onClick={() => loadTasks()}
-                
-            title="Refresh"
-            aria-label="Refresh task list"
-          >
-            &#8635;
-          </Button>
-          <Button variant="primary" onClick={() => setShowCreate(v => !v)}>
-            {showCreate ? 'Close' : '+ New task'}
-          </Button>
-        </div>
+      {showCreate && <CreateForm onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />}
 
-        {error && (
-          <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>
-        )}
+      <Toolbar actions={<RefreshButton onClick={() => loadTasks()} label="Refresh task list" />}>
+        <ToggleGroup label="Type" options={FILTERS} value={typeFilter} onChange={setTypeFilter} />
+      </Toolbar>
 
-        {loading && <LoadingState message="Loading scheduled tasks..." />}
+      {error && <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>}
 
-        {showCreate && (
-          <div className="mb-4">
-            <CreateForm onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />
-          </div>
-        )}
-
-        {!loading && tasks.length === 0 && (
-          <EmptyState message={typeFilter === 'all'
-              ? 'No scheduled tasks'
-              : `No ${typeFilter === 'notification' ? 'notification' : 'Claude session'} tasks`} />
-        )}
-
-        {!loading && tasks.length > 0 && (
-          <ul className="space-y-3">
+      {loading ? <LoadingState message="Loading scheduled tasks..." />
+        : tasks.length === 0 ? <EmptyState message={typeFilter === 'all'
+            ? 'No scheduled tasks'
+            : `No ${typeFilter === 'notification' ? 'notification' : 'Claude session'} tasks`} />
+        : (
+          <List>
             {tasks.map(task => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                onToggle={handleToggle}
-                onDelete={handleDelete}
-                onUpdate={handleUpdate}
-                getExecutions={getExecutions}
-              />
+              <TaskRow key={task.id} task={task} onToggle={handleToggle} onDelete={handleDelete} onUpdate={handleUpdate} getExecutions={getExecutions} />
             ))}
-          </ul>
+          </List>
         )}
-      </div>
     </Page>
   )
 }

@@ -188,8 +188,9 @@ describe('SlackPanel - workspace actions', () => {
     await screen.findByText('Acme')
 
     await user.click(screen.getByRole('button', { name: 'Disconnect' }))
-    expect(screen.getByText(/Are you sure you want to disconnect "Acme"/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/Disconnect "Acme"\?/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Disconnect' }))
     await waitFor(() => expect(deleteWorkspace).toHaveBeenCalledWith('W1'))
   })
 
@@ -224,7 +225,7 @@ describe('SlackPanel - channels', () => {
     await screen.findByText('general')
 
     // collect_messages is null (inherit) -> next should be true
-    const channelRow = screen.getByText('general').closest('div')!.parentElement as HTMLElement
+    const channelRow = screen.getByText('general').closest('li')!
     await user.click(within(channelRow).getByRole('button', { name: /Inherit/ }))
     await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('C1', { collect_messages: true }))
   })
@@ -237,7 +238,7 @@ describe('SlackPanel - channels', () => {
     await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
     await screen.findByText('general')
 
-    const channelRow = screen.getByText('general').closest('div')!.parentElement as HTMLElement
+    const channelRow = screen.getByText('general').closest('li')!
     const selects = within(channelRow).getAllByRole('combobox')
     await user.selectOptions(selects[0], '9')
     await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('C1', { project_id: 9 }))
@@ -249,8 +250,9 @@ describe('SlackPanel - channels', () => {
     await screen.findByText('Acme')
 
     await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
-    expect(await screen.findByText('old (archived)')).toBeInTheDocument()
-    const channelRow = screen.getByText('old (archived)').closest('div')!.parentElement as HTMLElement
+    expect(await screen.findByText('old')).toBeInTheDocument()
+    const channelRow = screen.getByText('old').closest('li')!
+    expect(within(channelRow).getByText('Archived')).toBeInTheDocument()
     within(channelRow).getAllByRole('combobox').forEach(sel => expect(sel).toBeDisabled())
   })
 })

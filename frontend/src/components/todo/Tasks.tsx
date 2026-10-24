@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTasks, TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
-import { PRIORITY_ORDER, PRIORITY_COLORS } from '@/constants/priority'
-import { Button, EmptyState, Input, LoadingState, Notice, Page, Select, ToggleGroup } from '@/components/shared/ui'
+import { PRIORITY_ORDER, PRIORITY_TONES, dueLabel } from '@/constants/priority'
+import { Badge, Button, Card, ConfirmButton, EmptyState, FieldRow, Input, List, LoadingState, Notice, Page, Row, Select, ToggleGroup, Toolbar, cx } from '@/components/shared/ui'
 
 type StatusFilter = 'active' | 'completed' | 'all'
 
@@ -68,7 +68,6 @@ const Tasks = () => {
   }
 
   const handleDelete = async (taskId: number) => {
-    if (!confirm('Are you sure you want to delete this task?')) return
     try {
       await deleteTask(taskId)
       setTasks(prev => prev.filter(t => t.id !== taskId))
@@ -120,193 +119,97 @@ const Tasks = () => {
     setEditTitle('')
   }
 
-  const formatDueDate = (dueDate: string) => {
-    const date = new Date(dueDate)
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const tomorrow = new Date(today)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    const taskDate = new Date(date)
-    taskDate.setHours(0, 0, 0, 0)
-
-    if (taskDate.getTime() < today.getTime()) {
-      return { text: 'Overdue', className: 'text-[var(--color-danger)] font-medium' }
-    }
-    if (taskDate.getTime() === today.getTime()) {
-      return { text: 'Today', className: 'text-[var(--color-high)] font-medium' }
-    }
-    if (taskDate.getTime() === tomorrow.getTime()) {
-      return { text: 'Tomorrow', className: 'text-[var(--color-medium)]' }
-    }
-    return {
-      text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      className: 'text-slate-500'
-    }
-  }
-
   const activeCount = tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length
   const completedCount = tasks.filter(t => t.status === 'done').length
 
   return (
     <Page
       title="Tasks"
-      description={<>
-        <div className="flex gap-4 text-sm text-slate-600">
-          <span>{activeCount} active</span>
-          <span>{completedCount} completed</span>
-        </div>
-      </>}
+      description={<span className="flex gap-3"><span>{activeCount} active</span><span>{completedCount} completed</span></span>}
       width="narrow"
     >
-      <div className="space-y-6">
-        {/* Add Task Form */}
-        <form onSubmit={handleAddTask} className="bg-white p-6 rounded-xl shadow-md">
-          <div className="flex gap-3 mb-4">
-            <Input
-              type="text"
-              placeholder="What needs to be done?"
-              value={newTaskTitle}
-              onChange={(e) => setNewTaskTitle(e.target.value)}
-              disabled={isAdding}
-              className="flex-1 text-base"
-            />
-            <Button variant="primary"
-              type="submit"
-              disabled={isAdding || !newTaskTitle.trim()}
-            >
-              Add Task
-            </Button>
+      <Card>
+        <form onSubmit={handleAddTask} className="space-y-3">
+          <div className="flex gap-2">
+            <Input type="text" placeholder="What needs to be done?" aria-label="New task" value={newTaskTitle}
+              onChange={(e) => setNewTaskTitle(e.target.value)} disabled={isAdding} className="flex-1" />
+            <Button variant="primary" type="submit" disabled={isAdding || !newTaskTitle.trim()}>Add Task</Button>
           </div>
-          <div className="flex gap-3">
-            <Select
-              value={newTaskPriority}
-              onChange={(e) => setNewTaskPriority(e.target.value)}
-            >
+          <FieldRow>
+            <Select value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value)} aria-label="Priority">
               <option value="">No priority</option>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
               <option value="urgent">Urgent</option>
             </Select>
-            <Input
-              type="date"
-              value={newTaskDueDate}
-              onChange={(e) => setNewTaskDueDate(e.target.value)}
-            />
-          </div>
+            <Input type="date" value={newTaskDueDate} onChange={(e) => setNewTaskDueDate(e.target.value)} aria-label="Due date" />
+          </FieldRow>
         </form>
+      </Card>
 
-        {/* Filters */}
+      <Toolbar>
         <ToggleGroup label="Filter tasks" value={statusFilter} onChange={setStatusFilter} options={[
           { value: 'active', label: 'Active' }, { value: 'completed', label: 'Completed' }, { value: 'all', label: 'All' },
         ]} />
+      </Toolbar>
 
-        {/* Error */}
-        {error && (
-          <Notice tone="error" onRetry={loadTasks}>{error}</Notice>
-        )}
+      {error && <Notice tone="error" onRetry={loadTasks}>{error}</Notice>}
 
-        {/* Loading */}
-        {loading && <LoadingState message="Loading tasks..." />}
-
-        {/* Empty State */}
-        {!loading && !error && tasks.length === 0 && (
+      {loading ? <LoadingState message="Loading tasks..." />
+        : !error && tasks.length === 0 ? (
           <EmptyState message={statusFilter === 'completed'
-              ? 'No completed tasks yet'
-              : statusFilter === 'active'
-              ? 'No active tasks. Add one above!'
-              : 'No tasks yet. Add one above!'} />
-        )}
-
-        {/* Task List */}
-        {!loading && tasks.length > 0 && (
-          <ul className="space-y-2">
-            {tasks.map(task => (
-              <li
-                key={task.id}
-                className={`bg-white p-4 rounded-lg shadow-sm flex items-center gap-4 ${
-                  task.status === 'done' ? 'opacity-60' : ''
-                }`}
-              >
-                <button
-                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
-                    task.status === 'done'
-                      ? 'bg-success border-success text-white'
-                      : 'border-slate-300 hover:border-primary'
-                  }`}
-                  onClick={() => task.status !== 'done' && handleComplete(task.id)}
-                  title={task.status === 'done' ? 'Completed' : 'Mark as complete'}
-                  disabled={task.status === 'done'}
-                >
-                  {task.status === 'done' && <span className="text-sm">✓</span>}
-                </button>
-
-                <div className="flex-1 min-w-0">
-                  {editingTask === task.id ? (
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        className="flex-1"
-                        autoFocus
+            ? 'No completed tasks yet'
+            : statusFilter === 'active'
+            ? 'No active tasks. Add one above!'
+            : 'No tasks yet. Add one above!'} />
+        ) : tasks.length > 0 && (
+          <List>
+            {tasks.map(task => {
+              const done = task.status === 'done'
+              const due = task.due_date && dueLabel(task.due_date)
+              return (
+                <Row
+                  key={task.id}
+                  muted={done}
+                  leading={
+                    <button type="button"
+                      className={cx('w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors',
+                        done ? 'bg-success border-success text-white' : 'border-slate-300 hover:border-primary')}
+                      onClick={() => !done && handleComplete(task.id)}
+                      title={done ? 'Completed' : 'Mark as complete'}
+                      aria-label={done ? 'Completed' : `Mark "${task.task_title}" as complete`}
+                      disabled={done}
+                    >
+                      {done && <span aria-hidden="true" className="text-sm">✓</span>}
+                    </button>
+                  }
+                  title={editingTask === task.id ? (
+                    <span className="flex gap-2">
+                      <Input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} className="flex-1" autoFocus
+                        aria-label="Task title"
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') handleSaveEdit(task.id)
                           if (e.key === 'Escape') handleCancelEdit()
-                        }}
-                      />
-                      <Button variant="link" onClick={() => handleSaveEdit(task.id)}>Save</Button>
-                      <button onClick={handleCancelEdit} className="text-sm text-slate-500 hover:underline">Cancel</button>
-                    </div>
-                  ) : (
-                    <>
-                      <span className={`block truncate ${task.status === 'done' ? 'line-through text-slate-400' : 'text-slate-800'}`}>
-                        {task.task_title}
-                      </span>
-                      <div className="flex gap-2 mt-1 flex-wrap">
-                        {task.priority && (
-                          <span className={`${PRIORITY_COLORS[task.priority]} text-white text-xs px-2 py-0.5 rounded`}>
-                            {task.priority}
-                          </span>
-                        )}
-                        {task.due_date && (
-                          <span className={`text-xs ${formatDueDate(task.due_date).className}`}>
-                            {formatDueDate(task.due_date).text}
-                          </span>
-                        )}
-                        {task.status === 'in_progress' && (
-                          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">In Progress</span>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {editingTask !== task.id && (
-                  <div className="flex gap-2">
-                    {task.status !== 'done' && (
-                      <button
-                        onClick={() => handleStartEdit(task)}
-                        className="text-slate-400 hover:text-slate-600 p-1"
-                        title="Edit"
-                      >
-                        ✎
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleDelete(task.id)}
-                      className="text-slate-400 hover:text-danger p-1"
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+                        }} />
+                      <Button size="sm" variant="primary" onClick={() => handleSaveEdit(task.id)}>Save</Button>
+                      <Button size="sm" onClick={handleCancelEdit}>Cancel</Button>
+                    </span>
+                  ) : <span className={cx(done && 'line-through')}>{task.task_title}</span>}
+                  badges={editingTask !== task.id && <>
+                    {task.priority && <Badge tone={PRIORITY_TONES[task.priority] ?? 'neutral'}>{task.priority}</Badge>}
+                    {task.status === 'in_progress' && <Badge tone="info">In Progress</Badge>}
+                    {due && <Badge tone={due.tone}>{due.text}</Badge>}
+                  </>}
+                  actions={editingTask !== task.id && <>
+                    {!done && <Button size="sm" onClick={() => handleStartEdit(task)} title="Edit">Edit</Button>}
+                    <ConfirmButton confirm={`Delete "${task.task_title}"?`} onConfirm={() => handleDelete(task.id)} title="Delete" />
+                  </>}
+                />
+              )
+            })}
+          </List>
         )}
-      </div>
     </Page>
   )
 }

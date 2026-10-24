@@ -12,7 +12,7 @@ import { SummaryCards } from './SummaryCards'
 import { SystemHealthChart } from './SystemHealthChart'
 import { TaskDurationChart } from './TaskDurationChart'
 import { McpUsageChart } from './McpUsageChart'
-import { Button, Card, Notice, Page, ToggleGroup } from '@/components/shared/ui'
+import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, ToggleGroup, Toolbar } from '@/components/shared/ui'
 
 // System metrics are sampled minutely - 7 days max keeps memory reasonable
 const SYSTEM_METRICS_MAX_HOURS = 168
@@ -102,70 +102,45 @@ const Metrics: React.FC = () => {
   return (
     <Page
       title="System Metrics"
-      actions={<>
-        <div className="flex flex-wrap items-center gap-3">
-          <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-          <RefreshIntervalSelector value={refreshInterval} onChange={setRefreshInterval} />
-          <Button variant="primary"
-            onClick={loadData}
-
-            disabled={loading}
-          >
-            {loading ? 'Loading...' : 'Refresh'}
-          </Button>
-          {lastRefresh && (
-            <span className="text-sm text-slate-500">
-              Updated {formatTimestamp(lastRefresh.toISOString())}
-            </span>
-          )}
-        </div>
-      </>}
       width="wide"
     >
-      {error && (
-        <Notice tone="error" onRetry={loadData}>{error}</Notice>
-      )}
+      <Toolbar actions={<>
+        {lastRefresh && <span className="text-sm text-slate-600">Updated {formatTimestamp(lastRefresh.toISOString())}</span>}
+        <RefreshButton onClick={loadData} loading={loading} label="Refresh metrics" />
+      </>}>
+        <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+        <RefreshIntervalSelector value={refreshInterval} onChange={setRefreshInterval} />
+      </Toolbar>
 
-      {loading && !summary && (
-        <div className="text-center py-12 text-slate-500">
-          <p>Loading metrics...</p>
-        </div>
-      )}
+      {error && <Notice tone="error" onRetry={loadData}>{error}</Notice>}
+
+      {loading && !summary && <LoadingState message="Loading metrics..." />}
 
       {summary && (
         <>
-          <section className="mb-8">
-            <SummaryCards
-              totalEvents={totalEvents}
-              successRate={successRate}
-              avgDuration={avgDuration}
-              systemMetrics={systemData?.latest ?? {}}
-            />
-          </section>
-
-          <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <SummaryCards
+            totalEvents={totalEvents}
+            successRate={successRate}
+            avgDuration={avgDuration}
+            systemMetrics={systemData?.latest ?? {}}
+          />
+          <CardGrid>
             <Card title="System Health" className="lg:col-span-2">
               {systemData && <SystemHealthChart data={systemData} />}
             </Card>
-
             <Card title="Task Performance">
-              {summary && <TaskDurationChart data={summary.metrics.filter(m => m.metric_type === 'task')} />}
+              <TaskDurationChart data={summary.metrics.filter(m => m.metric_type === 'task')} />
             </Card>
-
             <Card title="MCP Tool Usage">
-              {summary && <McpUsageChart data={summary.metrics.filter(m => m.metric_type === 'mcp_call')} />}
+              <McpUsageChart data={summary.metrics.filter(m => m.metric_type === 'mcp_call')} />
             </Card>
-          </section>
-
-          <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card title="Recent Task Executions">
               <TaskTable events={taskData?.events ?? []} />
             </Card>
-
             <Card title="Recent MCP Calls">
               <McpTable events={mcpData?.events ?? []} />
             </Card>
-          </section>
+          </CardGrid>
         </>
       )}
     </Page>

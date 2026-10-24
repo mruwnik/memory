@@ -4,7 +4,7 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
-import { Button, Card, LoadingState, Modal, Notice, Page } from '@/components/shared/ui'
+import { Button, Card, LoadingState, Modal, Notice, Page, buttonClass } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -280,16 +280,16 @@ const Calendar = () => {
     <Page
       title={<>{MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}</>}
       actions={<>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {/* User Filter Dropdown (Admin only) */}
           {isAdmin && users.length > 0 && (
             <div className="relative">
               <button
                 onClick={() => setShowUserFilter(!showUserFilter)}
-                className="px-3 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50 text-sm flex items-center gap-2"
+                className={buttonClass('secondary')} aria-haspopup="true"
               >
                 <span>Users</span>
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-500">
                   ({enabledUsers.size}/{users.length})
                 </span>
               </button>
@@ -329,7 +329,7 @@ const Calendar = () => {
                           <span className="text-sm text-slate-700 truncate">
                             {user.name}
                             {user.id === currentUser?.id && (
-                              <span className="text-slate-400 ml-1">(you)</span>
+                              <span className="text-slate-500 ml-1">(you)</span>
                             )}
                           </span>
                         </label>
@@ -344,10 +344,10 @@ const Calendar = () => {
           <div className="relative">
             <button
               onClick={() => setShowCalendarFilter(!showCalendarFilter)}
-              className="px-3 h-9 bg-white border border-slate-200 rounded-md hover:bg-slate-50 text-sm flex items-center gap-2"
+              className={buttonClass('secondary')} aria-haspopup="true"
             >
               <span>Calendars</span>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-slate-500">
                 ({enabledCalendars.size}/{calendarNames.length})
               </span>
             </button>
@@ -392,9 +392,9 @@ const Calendar = () => {
               </>
             )}
           </div>
-          <Button size="icon" onClick={goToPreviousMonth}>&lt;</Button>
-          <button onClick={goToToday} className="px-4 h-9 bg-primary text-white rounded-md hover:bg-primary-dark">Today</button>
-          <Button size="icon" onClick={goToNextMonth}>&gt;</Button>
+          <Button size="icon" onClick={goToPreviousMonth} aria-label="Previous month">&lt;</Button>
+          <Button onClick={goToToday}>Today</Button>
+          <Button size="icon" onClick={goToNextMonth} aria-label="Next month">&gt;</Button>
         </div>
       </>}
       width="wide"

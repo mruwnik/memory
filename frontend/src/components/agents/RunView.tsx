@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { TERMINAL_STATUSES, useAgents, type AgentRun, type Block, type RunStep } from '@/hooks/useAgents'
 import { StatusBadge } from './StatusBadge'
-import { Button, Notice, Page } from '@/components/shared/ui'
+import { Badge, Button, DetailList, List, Notice, Page, Row, Section, type Tone } from '@/components/shared/ui'
 
 const POLL_MS = 2000
 const PAGE_SIZE = 100
@@ -23,7 +23,7 @@ function BlockView({ block }: { block: Block }) {
     case 'tool_call':
       return (
         <div className="text-sm">
-          <span className="font-mono text-indigo-700">{block.name}</span>
+          <span className="font-mono text-primary-dark">{block.name}</span>
           {block.executed_by === 'provider' && <span className="ml-2 text-xs text-slate-600">(run by provider)</span>}
           <pre className="bg-slate-50 p-2 rounded text-xs overflow-x-auto">{JSON.stringify(block.input, null, 2)}</pre>
         </div>
@@ -43,11 +43,11 @@ function BlockView({ block }: { block: Block }) {
 const contextTokens = (usage: Record<string, number>) =>
   (usage.input_tokens ?? 0) + (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0)
 
-const KIND_STYLE: Record<RunStep['kind'], string> = {
-  user: 'border-l-4 border-slate-300',
-  assistant: 'border-l-4 border-indigo-300',
-  tool_results: 'border-l-4 border-teal-300',
-  notice: 'border-l-4 border-amber-300 text-amber-800 text-sm',
+const KIND_TONES: Record<RunStep['kind'], Tone> = {
+  user: 'neutral',
+  assistant: 'primary',
+  tool_results: 'info',
+  notice: 'warning',
 }
 
 /** Steps not already held: overlapping polls can return the same page twice. */
@@ -117,17 +117,6 @@ function RunView({ runId }: { runId: string }) {
     <Page
       back={back}
       title={<>Run <StatusBadge status={run.status} /></>}
-      description={
-        <span className="flex flex-wrap gap-x-4 gap-y-1">
-          <span className="font-mono">{run.model}</span>
-          <span>${run.cost_usd} of ${run.max_cost_usd}</span>
-          <span>{run.num_turns} turns</span>
-          <span>
-            {contextTokens(run.usage)} context ({run.usage.cache_read_tokens ?? 0} cached) / {run.usage.output_tokens ?? 0} out tokens
-          </span>
-          <span>trigger: {run.trigger_kind}</span>
-        </span>
-      }
       actions={<>
         <Button aria-pressed={run.starred} onClick={() => act(() => starRun(run.id, !run.starred))}>
           {run.starred ? '★ Starred' : '☆ Star'}
@@ -135,6 +124,13 @@ function RunView({ runId }: { runId: string }) {
         {live && <Button variant="danger" onClick={() => act(() => cancelRun(run.id))}>Cancel run</Button>}
       </>}
     >
+    <DetailList items={[
+      ['Model', <span className="font-mono">{run.model}</span>],
+      ['Cost', `$${run.cost_usd} of $${run.max_cost_usd}`],
+      ['Turns', run.num_turns],
+      ['Tokens', `${contextTokens(run.usage)} context (${run.usage.cache_read_tokens ?? 0} cached) / ${run.usage.output_tokens ?? 0} out`],
+      ['Trigger', run.trigger_kind],
+    ]} />
     {error && <Notice tone="error">{error}</Notice>}
     {run.error && <Notice tone="error">{run.error}</Notice>}
     {run.result && (
@@ -142,15 +138,19 @@ function RunView({ runId }: { runId: string }) {
         {typeof run.result.text === 'string' ? run.result.text : JSON.stringify(run.result, null, 2)}
       </Notice>
     )}
-    {run.steps_purged_at && <div className="text-sm text-slate-600">Transcript deleted after 90 days (star a run to keep its transcript).</div>}
-    <ol className="space-y-2">
-      {steps.map(step => (
-        <li key={step.seq} className={`bg-white rounded-lg border border-slate-200 p-3 space-y-2 ${KIND_STYLE[step.kind]}`}>
-          <div className="text-xs text-slate-600">#{step.seq} {step.kind}{step.cost_usd ? ` · $${step.cost_usd}` : ''}</div>
-          {step.content.map((block, i) => <BlockView key={i} block={block} />)}
-        </li>
-      ))}
-    </ol>
+    <Section title="Transcript"
+      description={run.steps_purged_at && 'Transcript deleted after 90 days (star a run to keep its transcript).'}>
+      {steps.length > 0 && (
+        <List>
+          {steps.map(step => (
+            <Row key={step.seq} title={`#${step.seq}`} badges={<Badge tone={KIND_TONES[step.kind]}>{step.kind}</Badge>}
+              meta={[step.cost_usd && `$${step.cost_usd}`]}>
+              {step.content.map((block, i) => <BlockView key={i} block={block} />)}
+            </Row>
+          ))}
+        </List>
+      )}
+    </Section>
     {live && <div role="status" className="text-sm text-slate-600">running…</div>}
   </Page>
 )

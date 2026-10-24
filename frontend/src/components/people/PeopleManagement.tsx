@@ -4,7 +4,7 @@ import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
-import { Button, Card, Field, Input, Label, Modal, MultiSelect, Notice, Page } from '@/components/shared/ui'
+import { Button, EmptyState, Input, Label, List, Modal, MultiSelect, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
 
 const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople } = usePeople()
@@ -25,7 +25,6 @@ const PeopleManagement = () => {
 
   // All teams for filter dropdown
   const [allTeams, setAllTeams] = useState<Team[]>([])
-  const [showTeamFilter, setShowTeamFilter] = useState(false)
 
   // Person details with tidbits (keyed by identifier)
   const [personDetails, setPersonDetails] = useState<Record<string, Person>>({})
@@ -44,9 +43,6 @@ const PeopleManagement = () => {
   const [editLoading, setEditLoading] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
-  // Delete confirmation
-  const [deletingPerson, setDeletingPerson] = useState<Person | null>(null)
-  const [deleteLoading, setDeleteLoading] = useState(false)
 
   // Merge state
   const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set())
@@ -143,19 +139,12 @@ const PeopleManagement = () => {
     }
   }
 
-  const handleDelete = async () => {
-    if (!deletingPerson) return
-
-    setDeleteLoading(true)
-
+  const handleDelete = async (person: Person) => {
     try {
-      await deletePerson(deletingPerson.identifier)
-      setDeletingPerson(null)
+      await deletePerson(person.identifier)
       await loadPeople()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete person')
-    } finally {
-      setDeleteLoading(false)
     }
   }
 
@@ -235,196 +224,71 @@ const PeopleManagement = () => {
     }
   }
 
-  if (loading && people.length === 0) {
-    return <Page title="People" width="narrow" loading />
-  }
-
   return (
     <>
       <Page
         title="People"
-        actions={<>
-          {/* Merge controls */}
-          {selectedForMerge.size > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-600">
-                {selectedForMerge.size} selected
-              </span>
-              <button
-                onClick={clearMergeSelection}
-                className="text-sm text-slate-500 hover:text-slate-700"
-              >
-                Clear
-              </button>
-              {selectedForMerge.size >= 2 && (
-                <button
-                  onClick={() => {
-                    setMergePrimaryId(Array.from(selectedForMerge)[0])
-                    setShowMergeModal(true)
-                  }}
-                  className="bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
-                  Merge
-                </button>
-              )}
-            </div>
-          )}
-          <Button variant="primary"
-            onClick={() => setShowCreateModal(true)}
-
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Person
-          </Button>
-        </>}
-        width="narrow"
+        description={people.length > 0 && `Showing ${people.length} ${people.length === 1 ? 'person' : 'people'}`}
+        actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>Add Person</Button>}
+        width="default"
+        loading={loading && people.length === 0}
       >
+        {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
 
-        {/* Error message */}
-        {error && (
-          <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
-        )}
-
-        {/* Search and filters */}
-        <div className="mb-6 space-y-4">
-          <div className="flex gap-4">
-            <div className="flex-1">
-              <Input
-                type="text"
-                placeholder="Search by name, alias, or notes..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-
-            {/* Team Filter Dropdown */}
-            {allTeams.length > 0 && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowTeamFilter(!showTeamFilter)}
-                  className={`px-4 py-2 bg-white border rounded-lg text-sm flex items-center gap-2 hover:bg-slate-50 transition-colors ${
-                    teamFilter !== null ? 'border-primary text-primary' : 'border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  <span>
-                    {teamFilter !== null
-                      ? allTeams.find(t => t.id === teamFilter)?.name || 'Team'
-                      : 'All Teams'}
-                  </span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {showTeamFilter && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-40"
-                      onClick={() => setShowTeamFilter(false)}
-                    />
-                    <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64 max-h-80 overflow-auto">
-                      <button
-                        onClick={() => {
-                          setTeamFilter(null)
-                          setShowTeamFilter(false)
-                        }}
-                        className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 ${
-                          teamFilter === null ? 'bg-primary/10 text-primary' : 'text-slate-700'
-                        }`}
-                      >
-                        All Teams
-                      </button>
-                      <div className="border-t border-slate-100">
-                        {allTeams.map(team => (
-                          <button
-                            key={team.id}
-                            onClick={() => {
-                              setTeamFilter(team.id)
-                              setShowTeamFilter(false)
-                            }}
-                            className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex items-center justify-between ${
-                              teamFilter === team.id ? 'bg-primary/10 text-primary' : 'text-slate-700'
-                            }`}
-                          >
-                            <span>{team.name}</span>
-                            {team.member_count !== undefined && (
-                              <span className="text-xs text-slate-400">{team.member_count}</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
+        <Toolbar
+          selected={selectedForMerge.size}
+          onClearSelection={clearMergeSelection}
+          actions={<>
+            {selectedForMerge.size >= 2 && (
+              <Button onClick={() => {
+                setMergePrimaryId(Array.from(selectedForMerge)[0])
+                setShowMergeModal(true)
+              }}>Merge</Button>
             )}
-
-            <Button
-              onClick={loadPeople}
-              disabled={loading}
-            >
-              {loading ? 'Loading...' : 'Refresh'}
-            </Button>
-          </div>
-
+            <RefreshButton onClick={loadPeople} loading={loading} label="Refresh people" />
+          </>}
+        >
+          <Input type="search" placeholder="Search by name, alias, or notes..." aria-label="Search people" value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)} className="sm:w-72" />
+          {allTeams.length > 0 && (
+            <Select className="w-auto" aria-label="Team" value={teamFilter ?? ''}
+              onChange={e => setTeamFilter(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">All Teams</option>
+              {allTeams.map(team => (
+                <option key={team.id} value={team.id}>{team.name}{team.member_count !== undefined ? ` (${team.member_count})` : ''}</option>
+              ))}
+            </Select>
+          )}
           {allTags.length > 0 && (
-            <Field label="Filter by tag" className="max-w-md">
-              <MultiSelect options={allTags} value={tagFilter} onChange={setTagFilter} placeholder="Any tag" />
-            </Field>
+            <MultiSelect options={allTags} value={tagFilter} onChange={setTagFilter} placeholder="Any tag" aria-label="Filter by tag" className="sm:w-64" />
           )}
-        </div>
+        </Toolbar>
 
-        {/* People list */}
-        <div className="space-y-4">
-          {people.length === 0 ? (
-            <Card className="text-center text-slate-500">
-              {searchTerm || tagFilter.length > 0
-                ? 'No people found matching your search.'
-                : 'No people tracked yet. Add your first person above.'}
-            </Card>
-          ) : (
-            people.map((person) => (
-              <div key={person.identifier} className="flex items-start gap-3">
-                {/* Selection checkbox for merge */}
-                <div className="pt-6">
-                  <input
-                    type="checkbox"
-                    checked={selectedForMerge.has(person.identifier)}
-                    onChange={() => toggleMergeSelection(person.identifier)}
-                    className="text-purple-600 cursor-pointer"
-                    title="Select for merge"
-                  />
-                </div>
-                <div className="flex-1">
-                  <PersonCard
-                    person={person}
-                    expanded={expandedIdentifier === person.identifier}
-                    onToggleExpand={() => toggleExpanded(person.identifier)}
-                    onEdit={() => setEditingPerson(person)}
-                    onDelete={() => setDeletingPerson(person)}
-                    teams={personTeams[person.identifier]}
-                    teamsLoading={teamsLoading[person.identifier]}
-                    tidbits={personDetails[person.identifier]?.tidbits}
-                    tidbitsLoading={detailsLoading[person.identifier]}
-                  />
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* Summary */}
-        {people.length > 0 && (
-          <div className="mt-6 text-sm text-slate-500 text-center">
-            Showing {people.length} {people.length === 1 ? 'person' : 'people'}
-          </div>
+        {people.length === 0 ? (
+          <EmptyState message={searchTerm || tagFilter.length > 0
+            ? 'No people found matching your search.'
+            : 'No people tracked yet. Add your first person above.'} />
+        ) : (
+          <List>
+            {people.map((person) => (
+              <PersonCard
+                key={person.identifier}
+                person={person}
+                select={
+                  <input type="checkbox" checked={selectedForMerge.has(person.identifier)}
+                    onChange={() => toggleMergeSelection(person.identifier)} aria-label={`Select ${person.display_name} for merge`} />
+                }
+                expanded={expandedIdentifier === person.identifier}
+                onToggleExpand={() => toggleExpanded(person.identifier)}
+                onEdit={() => setEditingPerson(person)}
+                onDelete={() => handleDelete(person)}
+                teams={personTeams[person.identifier]}
+                teamsLoading={teamsLoading[person.identifier]}
+                tidbits={personDetails[person.identifier]?.tidbits}
+                tidbitsLoading={detailsLoading[person.identifier]}
+              />
+            ))}
+          </List>
         )}
       </Page>
 
@@ -460,30 +324,6 @@ const PeopleManagement = () => {
         />
       )}
 
-      {/* Delete Confirmation Modal */}
-      {deletingPerson && (
-        <Modal title="Delete Person" onClose={() => setDeletingPerson(null)} size="md">
-          <p className="text-sm text-slate-600 mb-4">
-              Are you sure you want to delete <strong>{deletingPerson.display_name}</strong>? This action cannot
-              be undone.
-            </p>
-
-            <div className="flex justify-end gap-3">
-              <Button
-                onClick={() => setDeletingPerson(null)}
-              >
-                Cancel
-              </Button>
-              <Button variant="dangerSolid"
-                onClick={handleDelete}
-                disabled={deleteLoading}
-              >
-                {deleteLoading ? 'Deleting...' : 'Delete Person'}
-              </Button>
-            </div>
-        </Modal>
-      )}
-
       {/* Merge Modal */}
       {showMergeModal && (
         <Modal title="Merge People" onClose={() => setShowMergeModal(false)}>
@@ -502,10 +342,10 @@ const PeopleManagement = () => {
                   return (
                     <label
                       key={identifier}
-                      className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
                         mergePrimaryId === identifier
-                          ? 'bg-purple-50 border border-purple-200'
-                          : 'bg-slate-50 hover:bg-slate-100'
+                          ? 'bg-primary/10 border-primary/30'
+                          : 'border-slate-200 hover:bg-slate-50'
                       }`}
                     >
                       <input
@@ -513,7 +353,6 @@ const PeopleManagement = () => {
                         name="primary"
                         checked={mergePrimaryId === identifier}
                         onChange={() => setMergePrimaryId(identifier)}
-                        className="text-purple-600"
                       />
                       <div>
                         <div className="font-medium text-slate-800">
@@ -545,7 +384,7 @@ const PeopleManagement = () => {
               >
                 Cancel
               </Button>
-              <Button
+              <Button variant="primary"
                 onClick={handleMerge}
                 disabled={mergeLoading || !mergePrimaryId}
               >

@@ -5,11 +5,11 @@ import {
   TaskActivity,
   TaskActivityEntry,
 } from '@/hooks/useCelery'
-import { Card, Page } from '@/components/shared/ui'
+import { Badge, Page, Row, Section, Stat, StatGrid, SubList, Table, type Tone } from '@/components/shared/ui'
 
-const STATUS_COLORS: Record<string, string> = {
-  success: 'bg-green-100 text-green-700 border-green-200',
-  failure: 'bg-red-100 text-red-700 border-red-200',
+const STATUS_TONES: Record<string, Tone> = {
+  success: 'success',
+  failure: 'danger',
 }
 
 function formatRelativeTime(iso: string | null): string {
@@ -138,37 +138,17 @@ const CeleryOverview = () => {
     <Page title="Celery Tasks" width="wide" loading={loading && 'Loading Celery overview...'} error={error && `Error: ${error}`}>
         {/* Task Metrics Summary Cards */}
         {totals && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card className="text-center">
-              <div className="text-3xl font-bold text-slate-800">{totals.total}</div>
-              <div className="text-sm text-gray-500 mt-1">Tasks ({activity?.hours || 24}h)</div>
-            </Card>
-            <Card className="text-center">
-              <div className="text-3xl font-bold text-green-600">{totals.success}</div>
-              <div className="text-sm text-gray-500 mt-1">Succeeded</div>
-            </Card>
-            <Card className="text-center">
-              <div className="text-3xl font-bold text-red-600">{totals.failure}</div>
-              <div className="text-sm text-gray-500 mt-1">Failed</div>
-            </Card>
-            <Card className="text-center">
-              <div className="text-3xl font-bold text-slate-800">
-                {totals.avg_duration_ms !== null
-                  ? formatDuration(totals.avg_duration_ms)
-                  : '-'}
-              </div>
-              <div className="text-sm text-gray-500 mt-1">Avg Duration</div>
-            </Card>
-          </div>
+          <StatGrid>
+            <Stat label={`Tasks (${activity?.hours || 24}h)`} value={totals.total} />
+            <Stat label="Succeeded" value={totals.success} tone="success" />
+            <Stat label="Failed" value={totals.failure} tone={totals.failure ? 'danger' : 'neutral'} />
+            <Stat label="Avg Duration" value={totals.avg_duration_ms !== null ? formatDuration(totals.avg_duration_ms) : '-'} />
+          </StatGrid>
         )}
 
         {/* Beat Schedule */}
-        <section>
-          <h2 className="text-slate-800 text-xl font-semibold mb-4">
-            Beat Schedule ({schedule.length} tasks)
-          </h2>
-          <Card flush className="overflow-hidden">
-            <table className="w-full text-left">
+        <Section title={`Beat Schedule (${schedule.length} tasks)`}>
+          <Table>
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <SortHeader<BeatScheduleEntry> label="Name" column="name" {...beatSort} />
@@ -183,7 +163,7 @@ const CeleryOverview = () => {
                   <tr key={entry.key} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm">
                       <div className="font-medium text-slate-800">{entry.name}</div>
-                      <div className="text-xs text-slate-400 font-mono">{entry.task}</div>
+                      <div className="text-xs text-slate-500 font-mono">{entry.task}</div>
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-600">
                       {entry.schedule_display}
@@ -193,16 +173,9 @@ const CeleryOverview = () => {
                     </td>
                     <td className="px-4 py-3 text-sm">
                       {entry.last_status ? (
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium border ${
-                            STATUS_COLORS[entry.last_status] ||
-                            'bg-gray-100 text-gray-700 border-gray-200'
-                          }`}
-                        >
-                          {entry.last_status}
-                        </span>
+                        <Badge tone={STATUS_TONES[entry.last_status] ?? 'neutral'}>{entry.last_status}</Badge>
                       ) : (
-                        <span className="text-slate-400">-</span>
+                        <span className="text-slate-500">-</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-600">
@@ -211,20 +184,14 @@ const CeleryOverview = () => {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </Card>
-        </section>
+          </Table>
+        </Section>
 
         {/* Task Activity */}
         {activity && (
-          <section>
-            <h2 className="text-slate-800 text-xl font-semibold mb-4">
-              Task Activity (last {activity.hours}h)
-            </h2>
-
+          <Section title={`Task Activity (last ${activity.hours}h)`}>
             {activity.by_task.length > 0 && (
-              <Card flush className="overflow-hidden mb-6">
-                <table className="w-full text-left">
+              <Table>
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
                       <SortHeader<TaskActivityEntry> label="Task" column="task" {...activitySort} />
@@ -242,7 +209,7 @@ const CeleryOverview = () => {
                           <div className="font-medium text-slate-800 capitalize">
                             {shortTaskName(row.task)}
                           </div>
-                          <div className="text-xs text-slate-400 font-mono">{row.task}</div>
+                          <div className="text-xs text-slate-500 font-mono">{row.task}</div>
                         </td>
                         <td className="px-4 py-3 text-sm text-right font-medium text-slate-800">
                           {row.total}
@@ -262,62 +229,33 @@ const CeleryOverview = () => {
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </Card>
+              </Table>
             )}
 
             {activity.recent_failures.length > 0 && (
-              <div>
-                <h3 className="text-slate-700 text-lg font-medium mb-3">
-                  Recent Failures
-                </h3>
-                <div className="space-y-2">
-                  {activity.recent_failures.map((failure, idx) => (
-                    <Card
-                      key={`${failure.task}-${failure.timestamp}`}
-                      className="border-red-100 cursor-pointer"
-                      onClick={() =>
-                        setExpandedFailure(expandedFailure === idx ? null : idx)
-                      }
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
-                            {shortTaskName(failure.task)}
-                          </span>
-                          <span className="text-sm text-slate-500">
-                            {formatRelativeTime(failure.timestamp)}
-                          </span>
-                          {failure.duration_ms !== null && (
-                            <span className="text-xs text-slate-400">
-                              ({formatDuration(failure.duration_ms)})
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-slate-400 text-sm">
-                          {expandedFailure === idx ? 'Hide' : 'Show'} details
-                        </span>
-                      </div>
-                      {expandedFailure === idx && (
-                        <div className="mt-3 space-y-2">
-                          {failure.error && (
-                            <pre className="p-3 bg-red-50 rounded text-xs text-red-800 overflow-x-auto whitespace-pre-wrap">
-                              {failure.error}
-                            </pre>
-                          )}
-                          {failure.labels && Object.keys(failure.labels).length > 0 && (
-                            <pre className="p-3 bg-slate-50 rounded text-xs text-slate-600 overflow-x-auto whitespace-pre-wrap">
-                              {JSON.stringify(failure.labels, null, 2)}
-                            </pre>
-                          )}
-                        </div>
-                      )}
-                    </Card>
-                  ))}
-                </div>
-              </div>
+              <SubList title="Recent Failures">
+                {activity.recent_failures.map((failure, idx) => (
+                  <Row
+                    key={`${failure.task}-${failure.timestamp}`}
+                    title={shortTaskName(failure.task)}
+                    onSelect={() => setExpandedFailure(expandedFailure === idx ? null : idx)}
+                    expanded={expandedFailure === idx}
+                    badges={<Badge tone="danger">failure</Badge>}
+                    meta={[formatRelativeTime(failure.timestamp), failure.duration_ms !== null && formatDuration(failure.duration_ms)]}
+                  >
+                    {expandedFailure === idx && failure.error && (
+                      <pre className="p-3 bg-red-50 rounded text-xs text-red-800 overflow-x-auto whitespace-pre-wrap">{failure.error}</pre>
+                    )}
+                    {expandedFailure === idx && failure.labels && Object.keys(failure.labels).length > 0 && (
+                      <pre className="p-3 bg-slate-50 rounded text-xs text-slate-600 overflow-x-auto whitespace-pre-wrap">
+                        {JSON.stringify(failure.labels, null, 2)}
+                      </pre>
+                    )}
+                  </Row>
+                ))}
+              </SubList>
             )}
-          </section>
+          </Section>
         )}
     </Page>
   )

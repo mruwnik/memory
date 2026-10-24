@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useDockerLogs, ContainerInfo, LogsResponse } from '../../hooks/useDockerLogs'
-import { Badge, Button, Card, Checkbox, Input, Notice, Page, Tabs, ToggleGroup } from '@/components/shared/ui'
+import { Badge, Card, Checkbox, Input, Notice, Page, RefreshButton, Tabs, ToggleGroup, Toolbar } from '@/components/shared/ui'
 
 // Custom hook for debouncing values
 function useDebounce<T>(value: T, delay: number): T {
@@ -167,14 +167,14 @@ export default function DockerLogs() {
   return (
     <Page
       title="Docker Logs"
-      actions={<>
+      width="wide"
+    >
+      <Toolbar actions={<RefreshButton onClick={loadLogs} loading={loading} label="Refresh logs" />}>
         <ToggleGroup label="Time range" options={TIME_RANGES} value={timeRange} onChange={setTimeRange} />
         <span className="text-sm text-slate-600">Auto:</span>
         <ToggleGroup label="Auto refresh" options={REFRESH_INTERVALS} value={refreshInterval} onChange={setRefreshInterval} />
-        <Button variant="primary" onClick={loadLogs} disabled={loading}>{loading ? 'Loading...' : 'Refresh'}</Button>
-      </>}
-      width="wide"
-    >
+      </Toolbar>
+
       {error && (
         <Notice tone="error" onRetry={loadLogs}>{error}</Notice>
       )}
@@ -186,19 +186,20 @@ export default function DockerLogs() {
             label: <>{getDisplayName(c.name)} <Badge tone={c.status.toLowerCase().includes('up') ? 'success' : 'neutral'}>{c.status}</Badge></>,
           }))} />
 
-        <div className="p-4 border-b border-slate-200 flex gap-4 items-center">
+        <div className="p-4 border-b border-slate-200 flex flex-wrap gap-4 items-center">
           <Input
-            type="text"
+            type="search"
             placeholder="Filter logs..."
+            aria-label="Filter logs"
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
-            className="flex-1 max-w-md"
+            className="sm:w-72"
           />
 
           <Checkbox checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} label="Auto-scroll" />
 
           {logs && (
-            <span className="text-sm text-slate-500">
+            <span className="text-sm text-slate-600">
               {logs.lines.toLocaleString()} lines
             </span>
           )}
@@ -206,16 +207,16 @@ export default function DockerLogs() {
 
         <pre
           ref={logViewerRef}
-          className="bg-slate-900 text-slate-100 p-4 font-mono text-sm overflow-auto h-[600px] whitespace-pre-wrap"
+          className="bg-slate-900 text-slate-100 p-4 font-mono text-sm overflow-auto h-[60vh] min-h-80 whitespace-pre-wrap"
         >
           {loading && !logs ? (
-            <span className="text-slate-500">Loading logs...</span>
+            <span className="text-slate-400">Loading logs...</span>
           ) : logs?.logs ? (
             logs.logs.split('\n').map((line, i) => (
               <LogLine key={i} line={line} filterText={filterText} />
             ))
           ) : (
-            <span className="text-slate-500">No logs available</span>
+            <span className="text-slate-400">No logs available</span>
           )}
         </pre>
       </Card>

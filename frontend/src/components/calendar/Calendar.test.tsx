@@ -80,7 +80,7 @@ describe('Calendar', () => {
     renderWithRouter(<Calendar />)
     await waitFor(() => expect(getEventsForMonths).toHaveBeenCalled())
     const before = getEventsForMonths.mock.calls.length
-    await user.click(screen.getByRole('button', { name: '<' }))
+    await user.click(screen.getByRole('button', { name: 'Previous month' }))
     await waitFor(() => expect(getEventsForMonths.mock.calls.length).toBeGreaterThan(before))
   })
 
@@ -155,7 +155,7 @@ describe('Calendar', () => {
     renderWithRouter(<Calendar />)
     await waitFor(() => expect(getEventsForMonths).toHaveBeenCalled())
     // Move away first, then click Today.
-    await user.click(screen.getByRole('button', { name: '>' }))
+    await user.click(screen.getByRole('button', { name: 'Next month' }))
     const before = getEventsForMonths.mock.calls.length
     await user.click(screen.getByRole('button', { name: 'Today' }))
     await waitFor(() => expect(getEventsForMonths.mock.calls.length).toBeGreaterThan(before))

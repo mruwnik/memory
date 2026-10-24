@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSecrets, Secret, SecretWithValue } from '@/hooks/useSecrets'
-import { Button, Card, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Modal, Notice, Textarea } from '@/components/shared/ui'
+import { Button, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Modal, Notice, Textarea , ConfirmButton, List, Row, Section } from '@/components/shared/ui'
 
 export const SecretsPanel = () => {
   const { listSecrets, createSecret, updateSecret, deleteSecret, getSecretValue } = useSecrets()
@@ -58,9 +58,6 @@ export const SecretsPanel = () => {
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this secret? This action cannot be undone.')) {
-      return
-    }
     try {
       await deleteSecret(id)
       setRevealedSecrets(prev => {
@@ -115,27 +112,17 @@ export const SecretsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadSecrets} />
 
   return (
-    <Card>
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-lg font-semibold text-slate-800">Secrets</h3>
-          <p className="text-sm text-slate-500 mt-1">
-            Encrypted storage for API keys, tokens, and other sensitive values
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => setShowForm(true)}>Add Secret</Button>
-      </div>
-
+    <Section
+      title="Secrets"
+      description="Encrypted storage for API keys, tokens, and other sensitive values"
+      actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Secret</Button>}
+    >
       {secrets.length === 0 ? (
-        <EmptyState
-          message="No secrets configured"
-          actionLabel="Add Secret"
-          onAction={() => setShowForm(true)}
-        />
+        <EmptyState message="No secrets configured" actionLabel="Add Secret" onAction={() => setShowForm(true)} />
       ) : (
-        <div className="space-y-3">
+        <List>
           {secrets.map(secret => (
-            <SecretCard
+            <SecretRow
               key={secret.id}
               secret={secret}
               revealedValue={revealedSecrets[secret.id]}
@@ -146,28 +133,16 @@ export const SecretsPanel = () => {
               onDelete={() => handleDelete(secret.id)}
             />
           ))}
-        </div>
+        </List>
       )}
 
-      {showForm && (
-        <SecretForm
-          onSubmit={handleCreate}
-          onCancel={() => setShowForm(false)}
-        />
-      )}
-
-      {editingSecret && (
-        <SecretForm
-          secret={editingSecret}
-          onSubmit={handleUpdate}
-          onCancel={() => setEditingSecret(null)}
-        />
-      )}
-    </Card>
+      {showForm && <SecretForm onSubmit={handleCreate} onCancel={() => setShowForm(false)} />}
+      {editingSecret && <SecretForm secret={editingSecret} onSubmit={handleUpdate} onCancel={() => setEditingSecret(null)} />}
+    </Section>
   )
 }
 
-interface SecretCardProps {
+interface SecretRowProps {
   secret: Secret
   revealedValue?: string
   isRevealing?: boolean
@@ -177,75 +152,31 @@ interface SecretCardProps {
   onDelete: () => void
 }
 
-const SecretCard = ({
-  secret,
-  revealedValue,
-  isRevealing,
-  onToggleReveal,
-  onCopy,
-  onEdit,
-  onDelete,
-}: SecretCardProps) => {
-  return (
-    <Card>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <h4 className="font-medium text-slate-800 font-mono">{secret.name}</h4>
-        </div>
-        {secret.description && (
-          <p className="text-sm text-slate-500 mt-1">{secret.description}</p>
-        )}
-        <div className="mt-2 flex items-center gap-2">
-          <div className="flex-1 font-mono text-sm bg-slate-100 rounded px-2 py-1 overflow-hidden">
-            {revealedValue ? (
-              <span className="text-slate-800 break-all">{revealedValue}</span>
-            ) : (
-              <span className="text-slate-400">{'*'.repeat(24)}</span>
-            )}
-          </div>
-          <button
-            onClick={onToggleReveal}
-            disabled={isRevealing}
-            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded"
-            title={revealedValue ? 'Hide value' : 'Reveal value'}
-          >
-            {isRevealing ? (
-              <LoadingIcon />
-            ) : revealedValue ? (
-              <EyeOffIcon />
-            ) : (
-              <EyeIcon />
-            )}
-          </button>
-          <button
-            onClick={onCopy}
-            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded"
-            title="Copy to clipboard"
-          >
-            <CopyIcon />
-          </button>
-        </div>
-        <p className="text-xs text-slate-400 mt-2">
-          Updated {new Date(secret.updated_at).toLocaleDateString()}
-        </p>
+const SecretRow = ({ secret, revealedValue, isRevealing, onToggleReveal, onCopy, onEdit, onDelete }: SecretRowProps) => (
+  <Row
+    title={<span className="font-mono">{secret.name}</span>}
+    meta={[secret.description, `Updated ${new Date(secret.updated_at).toLocaleDateString()}`]}
+    actions={<>
+      <Button size="sm" onClick={onEdit} title="Edit secret">Edit</Button>
+      <ConfirmButton confirm={`Delete the secret "${secret.name}"? This action cannot be undone.`} onConfirm={onDelete} title="Delete secret" />
+    </>}
+  >
+    <div className="flex items-center gap-2">
+      <div className="flex-1 min-w-0 font-mono text-sm bg-slate-100 rounded px-2 py-1">
+        {revealedValue
+          ? <span className="text-slate-800 break-all">{revealedValue}</span>
+          : <span className="text-slate-500" aria-label="Hidden value">{'*'.repeat(24)}</span>}
       </div>
-      <div className="flex items-start gap-1 ml-4">
-        <Button size="sm"
-          onClick={onEdit}
-          title="Edit secret"
-        >
-          Edit
-        </Button>
-        <Button variant="danger" size="sm"
-          onClick={onDelete}
-          title="Delete secret"
-        >
-          Delete
-        </Button>
-      </div>
-    </Card>
-  )
-}
+      <Button variant="ghost" size="icon" onClick={onToggleReveal} disabled={isRevealing}
+        title={revealedValue ? 'Hide value' : 'Reveal value'} aria-label={revealedValue ? 'Hide value' : 'Reveal value'}>
+        {isRevealing ? <LoadingIcon /> : revealedValue ? <EyeOffIcon /> : <EyeIcon />}
+      </Button>
+      <Button variant="ghost" size="icon" onClick={onCopy} title="Copy to clipboard" aria-label="Copy to clipboard">
+        <CopyIcon />
+      </Button>
+    </div>
+  </Row>
+)
 
 // Simple inline icons
 const EyeIcon = () => (

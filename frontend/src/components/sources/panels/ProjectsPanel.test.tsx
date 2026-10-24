@@ -207,14 +207,12 @@ describe('ProjectsPanel - edit flow', () => {
 })
 
 describe('ProjectsPanel - delete flow', () => {
-  it('blocks deleting GitHub-backed projects with an explainer modal', async () => {
+  it('disables Delete for GitHub-backed projects', async () => {
     listProjects.mockResolvedValue([project({ repo_path: 'org/repo' })])
-    const { user } = renderWithUser(<ProjectsPanel />)
+    renderWithUser(<ProjectsPanel />)
     await screen.findByText('Alpha')
 
-    await user.click(screen.getByRole('button', { name: 'Delete' }))
-    expect(await screen.findByText('Cannot Delete')).toBeInTheDocument()
-    expect(deleteProject).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled()
   })
 
   it('deletes a standalone project after confirmation', async () => {
@@ -223,7 +221,7 @@ describe('ProjectsPanel - delete flow', () => {
     await screen.findByText('Alpha')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteProject).toHaveBeenCalledWith(1))
   })
 

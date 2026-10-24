@@ -16,7 +16,7 @@ import {
   type Environment,
 } from '../../hooks/useClaude'
 import { useUsers, type User } from '../../hooks/useUsers'
-import { Notice } from '@/components/shared/ui'
+import { Badge, Card, LoadingState, Notice } from '@/components/shared/ui'
 
 const REFRESH_MS = 10_000
 const HISTORY_MAX = 240 // ~2h at 30s cadence
@@ -136,13 +136,7 @@ const GlobalSummary: React.FC<{ snap: FleetStats }> = ({ snap }) => {
   if (!snap.global) return null
   const { running, max, memory_mb, cpus } = snap.global
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-4">
-      <div className="flex items-baseline justify-between mb-3">
-        <h3 className="text-sm font-semibold text-slate-700">Cluster</h3>
-        <span className="text-xs text-slate-500 font-mono">
-          {running} / {max} containers
-        </span>
-      </div>
+    <Card title="Cluster" actions={<span className="text-xs text-slate-600 font-mono">{running} / {max} containers</span>}>
       <div className="space-y-3">
         <Bar
           used={cpus.used}
@@ -159,23 +153,13 @@ const GlobalSummary: React.FC<{ snap: FleetStats }> = ({ snap }) => {
           format={formatMb}
         />
       </div>
-    </div>
+    </Card>
   )
 }
 
-const StatusPill: React.FC<{ status: string }> = ({ status }) => {
-  const cls =
-    status === 'running'
-      ? 'bg-green-100 text-green-700'
-      : status === 'exited'
-        ? 'bg-slate-100 text-slate-600'
-        : 'bg-yellow-100 text-yellow-700'
-  return (
-    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cls}`}>
-      {status}
-    </span>
-  )
-}
+const StatusPill: React.FC<{ status: string }> = ({ status }) => (
+  <Badge tone={status === 'running' ? 'success' : status === 'exited' ? 'neutral' : 'warning'}>{status}</Badge>
+)
 
 const ContainerRow: React.FC<{
   c: ContainerStatsEntry
@@ -447,9 +431,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
   }
   if (!snap) {
     return (
-      <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm text-slate-500">
-        Loading fleet stats…
-      </div>
+      <LoadingState message="Loading fleet stats…" />
     )
   }
 
@@ -458,17 +440,10 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
     <div className="space-y-4">
       {snap.global && <GlobalSummary snap={snap} />}
 
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-        <div className="px-4 py-2 border-b border-slate-200 flex items-baseline justify-between">
-          <h3 className="text-sm font-semibold text-slate-700">
-            Containers <span className="text-slate-400 font-normal">({containers.length})</span>
-          </h3>
-          <span className="text-xs text-slate-500 font-mono">
-            updated {new Date(snap.ts).toLocaleTimeString()}
-          </span>
-        </div>
+      <Card flush className="overflow-hidden" title={<>Containers <span className="text-slate-500 font-normal">({containers.length})</span></>}
+        actions={<span className="text-xs text-slate-600 font-mono">updated {new Date(snap.ts).toLocaleTimeString()}</span>}>
         {containers.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-slate-500 text-center">
+          <div className="px-4 py-6 text-sm text-slate-600 text-center border-t border-slate-200">
             No containers running.
           </div>
         ) : (
@@ -502,7 +477,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
             </tbody>
           </table>
         )}
-      </div>
+      </Card>
     </div>
   )
 }

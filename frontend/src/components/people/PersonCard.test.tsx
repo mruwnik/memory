@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@/test/utils'
+import { render, screen, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import PersonCard from './PersonCard'
 import type { Person, Tidbit } from '../../hooks/usePeople'
@@ -67,7 +67,7 @@ beforeEach(() => {
 describe('PersonCard basic rendering', () => {
   it('renders display name, identifier handle, and avatar initial', () => {
     render(<PersonCard {...baseProps} person={makePerson()} />)
-    expect(screen.getByRole('heading', { name: 'Alice Chen' })).toBeInTheDocument()
+    expect(screen.getByText('Alice Chen')).toBeInTheDocument()
     expect(screen.getByText('@alice_chen')).toBeInTheDocument()
     expect(screen.getByText('A')).toBeInTheDocument()
   })
@@ -92,43 +92,43 @@ describe('PersonCard actions', () => {
     expect(baseProps.onEdit).toHaveBeenCalledTimes(1)
   })
 
-  it('invokes onDelete when Delete is clicked', async () => {
+  it('invokes onDelete once Delete is confirmed', async () => {
     const user = userEvent.setup()
     render(<PersonCard {...baseProps} person={makePerson()} />)
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(baseProps.onDelete).not.toHaveBeenCalled()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     expect(baseProps.onDelete).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('PersonCard expand affordance', () => {
-  it('does not toggle expand on body click when there are no details', async () => {
-    const user = userEvent.setup()
+  it('has no expand toggle when there are no details', () => {
     render(<PersonCard {...baseProps} person={makePerson()} />)
-    await user.click(screen.getByText('@alice_chen'))
-    expect(baseProps.onToggleExpand).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Alice Chen' })).not.toBeInTheDocument()
   })
 
   it.each([
     ['aliases', makePerson({ aliases: ['ali'] })],
     ['contact_info', makePerson({ contact_info: { email: 'a@x.com' } })],
-  ])('toggles expand on body click when person has %s', async (_label, person) => {
+  ])('toggles expand from the name when person has %s', async (_label, person) => {
     const user = userEvent.setup()
     render(<PersonCard {...baseProps} person={person} />)
-    await user.click(screen.getByText('@alice_chen'))
+    await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
     expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
   })
 
   it('toggles expand when teams are present', async () => {
     const user = userEvent.setup()
     render(<PersonCard {...baseProps} person={makePerson()} teams={[makeTeam()]} />)
-    await user.click(screen.getByText('@alice_chen'))
+    await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
     expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
   })
 
   it('toggles expand when tidbits are present', async () => {
     const user = userEvent.setup()
     render(<PersonCard {...baseProps} person={makePerson()} tidbits={[makeTidbit()]} />)
-    await user.click(screen.getByText('@alice_chen'))
+    await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
     expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
   })
 
@@ -177,7 +177,7 @@ describe('PersonCard expanded details', () => {
         expanded
       />,
     )
-    expect(screen.getByText('Contact Information')).toBeInTheDocument()
+    expect(screen.getByText('Email')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'a@x.com' })).toHaveAttribute('href', 'mailto:a@x.com')
     expect(screen.getByRole('link', { name: '+1 555-1234' })).toHaveAttribute('href', 'tel:+1 555-1234')
     expect(screen.getByText('https://a.dev')).toBeInTheDocument()

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import { TagsInput, IntervalInput, StatusBadge, SyncStatus, SyncButton } from '../shared'
-import { Button, Card, Checkbox, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Modal, Notice, cx } from '@/components/shared/ui'
+import { TagsInput, IntervalInput, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, Label, List, LoadingState, Modal, Notice, Row, Section, SubList, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GitHubPanel = () => {
@@ -89,140 +89,80 @@ export const GitHubPanel = () => {
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
-  // Require accounts to be set up first
-  if (accounts.length === 0) {
-    return (
-      <Card title="GitHub">
-        <EmptyState
-          message="No GitHub accounts configured. Add a GitHub account in the Accounts tab first."
-        />
-      </Card>
-    )
-  }
-
   return (
-    <Card title="GitHub">
-      <div className="space-y-3">
-        {accounts.map(account => {
-          const projects = accountProjects[account.id] || []
-          return (
-            <div key={account.id} className="border border-slate-200 rounded-lg p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-slate-800 truncate">{account.name}</h4>
-                  <p className="text-sm text-slate-600 truncate">
-                    {account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
-                    {account.verified_login
-                      ? ` · verified as ${account.verified_login}`
-                      : ' · unverified'}
-                    {!account.active && ' (disabled)'}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <StatusBadge active={account.active} />
-                </div>
-              </div>
-
-              {/* Repositories Section */}
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-3">
-                  <h5 className="text-sm font-medium text-slate-700">Repositories ({account.repos.length})</h5>
-                  <Button variant="primary" size="sm"
-                    onClick={() => setAddingRepoTo(account.id)}
-                    disabled={!account.active}
-                  >
-                    Add Repo
-                  </Button>
-                </div>
-
-                {account.repos.length === 0 ? (
-                  <p className="text-sm text-slate-400 italic">No repositories tracked</p>
-                ) : (
-                  <div className="space-y-2">
-                    {[...account.repos].sort((a, b) => a.repo_path.localeCompare(b.repo_path)).map(repo => (
-                      <div key={repo.id} className={cx(
-                        'flex flex-wrap items-center gap-3 p-3 rounded border',
-                        repo.active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50 opacity-60'
-                      )}>
-                        <div className="flex-1 min-w-0">
-                          <span className="font-medium text-slate-800">{repo.repo_path}</span>
-                          <SyncStatus lastSyncAt={repo.last_sync_at} />
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {repo.track_issues && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">Issues</span>}
-                          {repo.track_prs && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded">PRs</span>}
-                          {repo.track_comments && <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">Comments</span>}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <SyncButton
-                            onSync={() => handleSyncRepo(account.id, repo.id)}
-                            disabled={!repo.active || !account.active}
-                            label="Sync"
-                          />
-                          <Button size="sm"
-                            onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)}
-                          >
-                            {repo.active ? 'Disable' : 'Enable'}
-                          </Button>
-                          <Button variant="danger" size="sm"
-                            onClick={() => handleDeleteRepo(account.id, repo.id)}
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Projects Section */}
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-3">
-                  <h5 className="text-sm font-medium text-slate-700">Projects ({projects.length})</h5>
-                  <Button variant="primary" size="sm"
-                    onClick={() => setAddingProjectTo(account.id)}
-                    disabled={!account.active}
-                  >
-                    Add Project
-                  </Button>
-                </div>
-
-                {projects.length === 0 ? (
-                  <p className="text-sm text-slate-400 italic">No projects tracked</p>
-                ) : (
-                  <div className="space-y-2">
-                    {projects.map(project => (
-                      <div key={project.id} className="flex flex-wrap items-center gap-3 p-3 rounded border border-slate-200 bg-white">
-                        <div className="flex-1 min-w-0">
-                          <a href={project.url} target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">
-                            {project.owner_login}/#{project.number} - {project.title}
-                          </a>
-                          <SyncStatus lastSyncAt={project.last_sync_at} />
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded">{project.items_total_count} items</span>
-                          {project.fields.slice(0, 3).map(field => (
-                            <span key={field.id} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded">{field.name}</span>
-                          ))}
-                          {project.fields.length > 3 && (
-                            <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded">+{project.fields.length - 3}</span>
-                          )}
-                        </div>
-                        <Button variant="danger" size="sm"
-                          onClick={() => handleDeleteProject(project.id)}
-                        >
-                          Remove
+    <Section title="GitHub">
+      {accounts.length === 0 ? (
+        <EmptyState message="No GitHub accounts configured. Add a GitHub account in the Accounts tab first." />
+      ) : (
+        <List>
+          {accounts.map(account => {
+            const projects = accountProjects[account.id] || []
+            return (
+              <Row
+                key={account.id}
+                title={account.name}
+                muted={!account.active}
+                badges={<StatusBadge active={account.active} />}
+                meta={[
+                  account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App',
+                  account.verified_login ? `verified as ${account.verified_login}` : 'unverified',
+                ]}
+              >
+                <SubList
+                  title={`Repositories (${account.repos.length})`}
+                  actions={<Button size="sm" onClick={() => setAddingRepoTo(account.id)} disabled={!account.active}>Add Repo</Button>}
+                  empty="No repositories tracked"
+                >
+                  {[...account.repos].sort((a, b) => a.repo_path.localeCompare(b.repo_path)).map(repo => (
+                    <Row
+                      key={repo.id}
+                      title={repo.repo_path}
+                      muted={!repo.active}
+                      badges={<>
+                        {!repo.active && <Badge>Disabled</Badge>}
+                        {repo.track_issues && <Badge tone="info">Issues</Badge>}
+                        {repo.track_prs && <Badge tone="primary">PRs</Badge>}
+                        {repo.track_comments && <Badge tone="success">Comments</Badge>}
+                      </>}
+                      meta={[`Last sync: ${formatRelativeTime(repo.last_sync_at)}`]}
+                      actions={<>
+                        <SyncButton onSync={() => handleSyncRepo(account.id, repo.id)} disabled={!repo.active || !account.active} label="Sync" />
+                        <Button size="sm" onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)}>
+                          {repo.active ? 'Disable' : 'Enable'}
                         </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+                        <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => handleDeleteRepo(account.id, repo.id)}>Remove</ConfirmButton>
+                      </>}
+                    />
+                  ))}
+                </SubList>
+                <SubList
+                  title={`Projects (${projects.length})`}
+                  actions={<Button size="sm" onClick={() => setAddingProjectTo(account.id)} disabled={!account.active}>Add Project</Button>}
+                  empty="No projects tracked"
+                >
+                  {projects.map(project => (
+                    <Row
+                      key={project.id}
+                      title={
+                        <a href={project.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                          {project.owner_login}/#{project.number} - {project.title}
+                        </a>
+                      }
+                      badges={<>
+                        <Badge>{project.items_total_count} items</Badge>
+                        {project.fields.slice(0, 3).map(field => <Badge key={field.id}>{field.name}</Badge>)}
+                        {project.fields.length > 3 && <Badge>+{project.fields.length - 3}</Badge>}
+                      </>}
+                      meta={[`Last sync: ${formatRelativeTime(project.last_sync_at)}`]}
+                      actions={<ConfirmButton confirm={`Stop tracking ${project.title}?`} onConfirm={() => handleDeleteProject(project.id)}>Remove</ConfirmButton>}
+                    />
+                  ))}
+                </SubList>
+              </Row>
+            )
+          })}
+        </List>
+      )}
 
       {addingRepoTo && (() => {
         const account = accounts.find(a => a.id === addingRepoTo)
@@ -249,7 +189,7 @@ export const GitHubPanel = () => {
           onCancel={() => setAddingProjectTo(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

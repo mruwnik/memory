@@ -3,6 +3,7 @@ import {
   renderWithRouter,
   screen,
   waitFor,
+  within,
   setAuthCookies,
   clearCookies,
   mcpToolFromRequest,
@@ -162,8 +163,8 @@ describe('PollList - delete flow', () => {
     await screen.findByText('Doomed')
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     // Confirmation appears in place of the plain delete button.
-    expect(screen.getByText('Delete?')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Yes' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(screen.queryByText('Doomed')).not.toBeInTheDocument())
   })
 
@@ -172,7 +173,7 @@ describe('PollList - delete flow', () => {
     const { user } = renderWithRouter(<PollList />)
     await screen.findByText('Keep Me')
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'No' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByText('Delete?')).not.toBeInTheDocument()
     expect(screen.getByText('Keep Me')).toBeInTheDocument()
   })
@@ -185,7 +186,7 @@ describe('PollList - delete flow', () => {
     const { user } = renderWithRouter(<PollList />)
     await screen.findByText('Stubborn')
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'Yes' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     expect(
       await screen.findByText(/MCP polling_delete_poll failed|nope/),
     ).toBeInTheDocument()

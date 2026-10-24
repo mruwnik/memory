@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
-import { StatusBadge, SyncStatus, SyncButton } from '../shared'
-import { Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, cx } from '@/components/shared/ui'
+import { AccessSelects, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
+import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const DiscordPanel = () => {
@@ -35,7 +35,6 @@ export const DiscordPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [addingBot, setAddingBot] = useState(false)
-  const [deletingBot, setDeletingBot] = useState<DiscordBot | null>(null)
   const [usersByBot, setUsersByBot] = useState<Record<string, BotUser[]>>({})
   const [allUsers, setAllUsers] = useState<User[]>([])
   const [managingUsersBot, setManagingUsersBot] = useState<DiscordBot | null>(null)
@@ -86,7 +85,6 @@ export const DiscordPanel = () => {
 
   const handleDeleteBot = async (bot: DiscordBot) => {
     await deleteBot(bot.id)
-    setDeletingBot(null)
     loadData()
   }
 
@@ -203,10 +201,7 @@ export const DiscordPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <Card title="Discord" actions={<><Button variant="primary" onClick={() => setAddingBot(true)}>
-          Add Bot
-        </Button></>}>
-
+    <Section title="Discord" actions={<Button variant="primary" onClick={() => setAddingBot(true)}>Add Bot</Button>}>
       {bots.length === 0 ? (
         <EmptyState
           message="No Discord bots configured. Add a bot to start collecting messages."
@@ -214,9 +209,9 @@ export const DiscordPanel = () => {
           onAction={() => setAddingBot(true)}
         />
       ) : (
-        <div className="space-y-3">
+        <List>
           {bots.map(bot => (
-            <BotCard
+            <BotRow
               key={bot.id}
               bot={bot}
               servers={servers}
@@ -233,7 +228,7 @@ export const DiscordPanel = () => {
               }}
               onToggleActive={() => handleToggleBotActive(bot)}
               onRefresh={() => handleRefreshMetadata(bot.id)}
-              onDelete={() => setDeletingBot(bot)}
+              onDelete={() => handleDeleteBot(bot)}
               onToggleServerCollect={handleToggleServerCollect}
               onUpdateServer={handleUpdateServer}
               onToggleChannelCollect={handleToggleChannelCollect}
@@ -242,23 +237,13 @@ export const DiscordPanel = () => {
               onManageUsers={() => handleManageUsers(bot)}
             />
           ))}
-        </div>
+        </List>
       )}
 
       {addingBot && (
         <AddBotForm
           onAdd={handleAddBot}
           onCancel={() => setAddingBot(false)}
-        />
-      )}
-
-      {deletingBot && (
-        <ConfirmDialog
-          message={`Are you sure you want to remove "${deletingBot.name}"? ${
-            'This will revoke your access to this bot.'
-          }`}
-          onConfirm={() => handleDeleteBot(deletingBot)}
-          onCancel={() => setDeletingBot(null)}
         />
       )}
 
@@ -272,7 +257,7 @@ export const DiscordPanel = () => {
           onClose={() => setManagingUsersBot(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 
@@ -296,7 +281,7 @@ interface BotCardProps {
   onManageUsers: () => Promise<void>
 }
 
-const BotCard = ({
+const BotRow = ({
   bot,
   servers,
   channelsByServer,
@@ -316,89 +301,41 @@ const BotCard = ({
   onManageUsers,
 }: BotCardProps) => {
   return (
-    <div className="border border-slate-200 rounded-lg p-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <h4 className="font-medium text-slate-800 truncate">{bot.name}</h4>
-          <div className="flex items-center gap-2 text-sm text-slate-500 mt-1">
-            <span className={cx(
-              'w-2 h-2 rounded-full',
-              bot.connected ? 'bg-green-500' : 'bg-red-500'
-            )} />
-            <span>{bot.connected ? 'Connected' : 'Disconnected'}</span>
-            {bot.updated_at && (
-              <>
-                <span className="text-slate-300">|</span>
-                <SyncStatus lastSyncAt={bot.updated_at} />
-              </>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <StatusBadge active={bot.is_active} onClick={onToggleActive} />
-        </div>
-      </div>
-
-      <div className="flex gap-2 mt-3">
-        <SyncButton
-          onSync={onRefresh}
-          disabled={!bot.is_active}
-          label="Refresh Metadata"
-        />
-        <button
-          className="px-3 py-1.5 text-sm rounded bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
-          onClick={onGetInviteUrl}
-        >
-          Add to Server
-        </button>
-        <Button size="sm"
-          onClick={onManageUsers}
-        >
-          Manage Users
-        </Button>
-        <Button variant="danger" size="sm" onClick={onDelete}>
-          Remove
-        </Button>
-      </div>
-
-      {/* Servers section */}
-      <div className="mt-4 pt-4 border-t border-slate-100">
-        <button
-          className="flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-slate-900"
-          onClick={onToggleExpand}
-        >
-          <span className={cx('transition-transform', expanded && 'rotate-90')}>
-            ▶
-          </span>
-          Servers ({servers.length})
-        </button>
-
-        {expanded && servers.length === 0 && (
-          <p className="text-sm text-slate-400 italic mt-2 ml-5">
-            No servers found. Click "Refresh Metadata" to sync.
-          </p>
-        )}
-
-        {expanded && servers.length > 0 && (
-          <div className="mt-2 ml-5 space-y-2">
-            {servers.map(server => (
-              <ServerCard
-                key={server.id}
-                server={server}
-                channels={channelsByServer[server.id] || []}
-                projects={projects}
-                expanded={expandedServer === server.id}
-                onToggleExpand={() => onExpandServer(server.id)}
-                onToggleCollect={() => onToggleServerCollect(server)}
-                onUpdate={(updates) => onUpdateServer(server, updates)}
-                onToggleChannelCollect={onToggleChannelCollect}
-                onUpdateChannel={onUpdateChannel}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+    <Row
+      title={bot.name}
+      muted={!bot.is_active}
+      badges={<>
+        <StatusBadge active={bot.is_active} onClick={onToggleActive} />
+        <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>
+      </>}
+      meta={[bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`]}
+      actions={<>
+        <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh Metadata" />
+        <Button size="sm" onClick={onGetInviteUrl}>Add to Server</Button>
+        <Button size="sm" onClick={onManageUsers}>Manage Users</Button>
+        <ConfirmButton confirm={`Remove "${bot.name}"? This will revoke your access to this bot.`} onConfirm={onDelete}>Remove</ConfirmButton>
+      </>}
+    >
+      <SubList
+        title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Servers ({servers.length})</ExpandToggle>}
+        empty={expanded && 'No servers found. Click "Refresh Metadata" to sync.'}
+      >
+        {expanded && servers.map(server => (
+            <ServerRow
+              key={server.id}
+              server={server}
+              channels={channelsByServer[server.id] || []}
+              projects={projects}
+              expanded={expandedServer === server.id}
+              onToggleExpand={() => onExpandServer(server.id)}
+              onToggleCollect={() => onToggleServerCollect(server)}
+              onUpdate={(updates) => onUpdateServer(server, updates)}
+              onToggleChannelCollect={onToggleChannelCollect}
+              onUpdateChannel={onUpdateChannel}
+            />
+          ))}
+      </SubList>
+    </Row>
   )
 }
 
@@ -414,7 +351,7 @@ interface ServerCardProps {
   onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<void>
 }
 
-const ServerCard = ({
+const ServerRow = ({
   server,
   channels,
   projects,
@@ -456,100 +393,34 @@ const ServerCard = ({
   }
 
   return (
-    <div className="border border-slate-200 rounded p-3 bg-white">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-slate-800">{server.name}</span>
-            {server.member_count && (
-              <span className="text-xs text-slate-500">
-                {server.member_count} members
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-slate-500">
-            {server.channel_count} channels
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <select
-            className={cx(
-              'text-xs py-1 px-1 rounded border border-slate-200 bg-white',
-              updating && 'opacity-50'
-            )}
-            value={server.project_id || ''}
-            onChange={e => handleProjectChange(e.target.value ? parseInt(e.target.value) : undefined)}
-            disabled={updating}
-            title="Project"
-          >
-            <option value="">No project</option>
-            {projects.map(p => (
-              <option key={p.id} value={p.id}>{p.title}</option>
-            ))}
-          </select>
-          <select
-            className={cx(
-              'text-xs py-1 px-1 rounded border border-slate-200 bg-white',
-              updating && 'opacity-50'
-            )}
-            value={server.sensitivity}
-            onChange={e => handleSensitivityChange(e.target.value as any)}
-            disabled={updating}
-            title="Sensitivity"
-          >
-            <option value="public">Public</option>
-            <option value="basic">Basic</option>
-            <option value="internal">Internal</option>
-            <option value="confidential">Confidential</option>
-          </select>
-          <button
-            className={cx(
-              'px-3 py-1 rounded text-sm',
-              server.collect_messages
-                ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
-              toggling && 'opacity-50'
-            )}
-            onClick={handleToggle}
-            disabled={toggling}
-          >
-            {server.collect_messages ? 'Collecting' : 'Not Collecting'}
-          </button>
-        </div>
-      </div>
-
-      {/* Channels section */}
-      <div className="mt-2 pt-2 border-t border-slate-100">
-        <button
-          className="flex items-center gap-2 text-xs font-medium text-slate-600 hover:text-slate-800"
-          onClick={onToggleExpand}
-        >
-          <span className={cx('transition-transform', expanded && 'rotate-90')}>
-            ▶
-          </span>
-          Channels
-        </button>
-
-        {expanded && (
-          <div className="mt-2 space-y-1">
-            {channels.length === 0 ? (
-              <p className="text-xs text-slate-400 italic ml-4">Loading...</p>
-            ) : (
-              channels.map(channel => (
-                <ChannelRow
-                  key={channel.id}
-                  channel={channel}
-                  projects={projects}
-                  serverCollecting={server.collect_messages}
-                  onToggle={() => onToggleChannelCollect(channel)}
-                  onUpdate={(updates) => onUpdateChannel(channel, updates)}
-                />
-              ))
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    <Row
+      title={server.name}
+      meta={[server.member_count ? `${server.member_count} members` : null, `${server.channel_count} channels`]}
+      actions={<>
+        <AccessSelects projectId={server.project_id} sensitivity={server.sensitivity} projects={projects} disabled={updating}
+          onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
+        <Button size="sm" variant={server.collect_messages ? 'primary' : 'secondary'} aria-pressed={server.collect_messages}
+          onClick={handleToggle} disabled={toggling}>
+          {server.collect_messages ? 'Collecting' : 'Not Collecting'}
+        </Button>
+      </>}
+    >
+      <SubList
+        title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels</ExpandToggle>}
+        empty={expanded && 'Loading...'}
+      >
+        {expanded && channels.map(channel => (
+            <ChannelRow
+              key={channel.id}
+              channel={channel}
+              projects={projects}
+              serverCollecting={server.collect_messages}
+              onToggle={() => onToggleChannelCollect(channel)}
+              onUpdate={(updates) => onUpdateChannel(channel, updates)}
+            />
+          ))}
+      </SubList>
+    </Row>
   )
 }
 
@@ -606,78 +477,22 @@ const ChannelRow = ({ channel, projects, serverCollecting, onToggle, onUpdate }:
   }[channel.channel_type] || '#'
 
   return (
-    <div className="flex items-center justify-between py-1 px-2 ml-4 rounded hover:bg-slate-50 gap-2">
-      <div className="flex items-center gap-2 text-sm flex-1 min-w-0">
-        <span className="text-slate-400">{typeIcon}</span>
-        <span className="text-slate-700 truncate">{channel.name}</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <select
-          className={cx(
-            'text-xs py-0.5 px-1 rounded border border-slate-200 bg-white',
-            updating && 'opacity-50'
-          )}
-          value={channel.project_id || ''}
-          onChange={e => handleProjectChange(e.target.value ? parseInt(e.target.value) : undefined)}
-          disabled={updating}
-          title="Project"
-        >
-          <option value="">No project</option>
-          {projects.map(p => (
-            <option key={p.id} value={p.id}>{p.title}</option>
-          ))}
-        </select>
-        <select
-          className={cx(
-            'text-xs py-0.5 px-1 rounded border border-slate-200 bg-white',
-            updating && 'opacity-50'
-          )}
-          value={channel.sensitivity}
-          onChange={e => handleSensitivityChange(e.target.value as any)}
-          disabled={updating}
-          title="Sensitivity"
-        >
-          <option value="public">Public</option>
-          <option value="basic">Basic</option>
-          <option value="internal">Internal</option>
-          <option value="confidential">Confidential</option>
-        </select>
-        <button
-          className={cx(
-            'px-2 py-0.5 rounded text-xs flex items-center gap-1',
-            toggling && 'opacity-50',
-            // Colors based on state
-            isInheriting
-              ? effectivelyCollecting
-                ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-              : channel.collect_messages
-                ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                : 'bg-red-50 text-red-600 hover:bg-red-100'
-          )}
-          onClick={handleToggle}
-          disabled={toggling}
-          title={
-            isInheriting
-              ? `Inheriting from server (${serverCollecting ? 'collecting' : 'not collecting'})`
-              : channel.collect_messages
-                ? 'Explicitly collecting'
-                : 'Explicitly not collecting'
-          }
-        >
-          {/* Status indicator */}
-          <span className={cx(
-            'w-2 h-2 rounded-full',
-            isInheriting ? 'border border-current' : 'bg-current'
-          )} />
+    <Row
+      className="py-2"
+      title={<><span aria-hidden="true" className="text-slate-500 mr-1">{typeIcon}</span><span>{channel.name}</span></>}
+      actions={<>
+        <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={updating}
+          onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
+        <Button size="sm" onClick={handleToggle} disabled={toggling}
+          title={isInheriting
+            ? `Inheriting from server (${serverCollecting ? 'collecting' : 'not collecting'})`
+            : channel.collect_messages ? 'Explicitly collecting' : 'Explicitly not collecting'}>
           {isInheriting
             ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
-            : channel.collect_messages
-              ? 'Collecting'
-              : 'Skipping'}
-        </button>
-      </div>
-    </div>
+            : channel.collect_messages ? 'Collecting' : 'Skipping'}
+        </Button>
+      </>}
+    />
   )
 }
 

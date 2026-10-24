@@ -95,7 +95,7 @@ describe('TranscriptsPanel - load states', () => {
     listTranscriptAccounts.mockResolvedValue([account()])
     renderWithUser(<TranscriptsPanel />)
     expect(await screen.findByText('My Fireflies')).toBeInTheDocument()
-    expect(screen.getByText('Provider: fireflies')).toBeInTheDocument()
+    expect(screen.getByText('fireflies')).toBeInTheDocument()
     expect(screen.getByText('Tags: meetings')).toBeInTheDocument()
     expect(screen.getByText('Sensitivity: basic')).toBeInTheDocument()
   })
@@ -221,7 +221,7 @@ describe('TranscriptsPanel - row actions', () => {
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteTranscriptAccount).toHaveBeenCalledWith(1))
   })
 

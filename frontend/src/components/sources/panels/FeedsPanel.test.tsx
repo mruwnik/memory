@@ -119,7 +119,7 @@ describe('FeedsPanel mutate flows', () => {
     const { user } = renderWithUser(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/article-feeds/7') && (init as RequestInit)?.method === 'DELETE',

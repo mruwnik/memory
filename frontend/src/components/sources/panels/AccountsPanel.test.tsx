@@ -170,7 +170,7 @@ describe('AccountsPanel github actions', () => {
     const { user } = renderWithUser(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/github/accounts/4') && (init as RequestInit)?.method === 'DELETE',

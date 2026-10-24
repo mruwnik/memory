@@ -10,7 +10,7 @@ import {
   toUTCDatetime,
   fromUTCToLocal,
 } from '../../utils/timezones'
-import { Button, Card, Input, Label, Notice, Page, Select, Textarea } from '@/components/shared/ui'
+import { Button, Card, Field, FieldRow, Input, Label, Notice, Page, Select, Textarea } from '@/components/shared/ui'
 
 interface FormData {
   title: string
@@ -125,10 +125,7 @@ export const PollEdit: React.FC = () => {
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
 
-        <div className="mb-4">
-          <Label htmlFor="title" className="mb-1">
-            Poll Title *
-          </Label>
+        <Field label="Poll Title *">
           <Input
             type="text"
             id="title"
@@ -138,12 +135,9 @@ export const PollEdit: React.FC = () => {
             placeholder="e.g., Team Planning Meeting"
             required
           />
-        </div>
+        </Field>
 
-        <div className="mb-4">
-          <Label htmlFor="description" className="mb-1">
-            Description
-          </Label>
+        <Field label="Description">
           <Textarea
             id="description"
             name="description"
@@ -152,7 +146,7 @@ export const PollEdit: React.FC = () => {
             placeholder="Optional description or agenda"
             rows={3}
           />
-        </div>
+        </Field>
 
         <div className="mb-4">
           <Label htmlFor="status" className="mb-1">
@@ -175,11 +169,8 @@ export const PollEdit: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <Label htmlFor="date_start" className="mb-1">
-              Start Date *
-            </Label>
+        <FieldRow>
+          <Field label="Start Date *">
             <Input
               type="date"
               id="date_start"
@@ -188,12 +179,9 @@ export const PollEdit: React.FC = () => {
               onChange={handleChange}
               required
             />
-          </div>
+          </Field>
 
-          <div>
-            <Label htmlFor="date_end" className="mb-1">
-              End Date *
-            </Label>
+          <Field label="End Date *">
             <Input
               type="date"
               id="date_end"
@@ -202,14 +190,11 @@ export const PollEdit: React.FC = () => {
               onChange={handleChange}
               required
             />
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <Label htmlFor="time_start" className="mb-1">
-              Start Hour
-            </Label>
+        <FieldRow>
+          <Field label="Start Hour">
             <Select
               id="time_start"
               name="time_start"
@@ -220,12 +205,9 @@ export const PollEdit: React.FC = () => {
                 <option key={i} value={i}>{formatHour(i)}</option>
               ))}
             </Select>
-          </div>
+          </Field>
 
-          <div>
-            <Label htmlFor="time_end" className="mb-1">
-              End Hour
-            </Label>
+          <Field label="End Hour">
             <Select
               id="time_end"
               name="time_end"
@@ -236,10 +218,10 @@ export const PollEdit: React.FC = () => {
                 <option key={i + 1} value={i + 1}>{formatHour(i + 1)}</option>
               ))}
             </Select>
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        <FieldRow>
           <div>
             <Label htmlFor="slot_duration" className="mb-1">
               Time Slot Duration
@@ -263,10 +245,7 @@ export const PollEdit: React.FC = () => {
             )}
           </div>
 
-          <div>
-            <Label htmlFor="timezone" className="mb-1">
-              Display Timezone
-            </Label>
+          <Field label="Display Timezone">
             <Select
               id="timezone"
               name="timezone"
@@ -280,8 +259,8 @@ export const PollEdit: React.FC = () => {
                 <option key={tz} value={tz}>{formatTimezone(tz)}</option>
               ))}
             </Select>
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
 
         <p className="text-sm text-slate-500 mb-6">
           Times will be converted to UTC and displayed in each respondent's local timezone.

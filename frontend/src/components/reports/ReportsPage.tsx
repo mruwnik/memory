@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useReports, type Report } from '@/hooks/useReports'
 import { TagsInput } from '../sources/shared'
-import { Badge, Button, Checkbox, ConfirmDialog, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Notice, Page, Textarea, ToggleGroup, buttonClass, cx } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Page, PaneHeader, Row, SplitView, Textarea, ToggleGroup, buttonClass } from '@/components/shared/ui'
 import { formatRelativeTime } from '../sources/shared'
 
 type FormMode = 'html' | 'upload'
@@ -27,7 +27,6 @@ const ReportsPage = () => {
   const [allowedConnectUrls, setAllowedConnectUrls] = useState<string[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [queued, setQueued] = useState(false)
-  const [deletingReport, setDeletingReport] = useState<Report | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState('')
@@ -126,15 +125,13 @@ const ReportsPage = () => {
     setSearchParams({ id: String(report.id) })
   }
 
-  const handleDelete = async () => {
-    if (!deletingReport) return
+  const handleDelete = async (report: Report) => {
     setDeleting(true)
     try {
-      await deleteReport(deletingReport.id)
-      if (String(deletingReport.id) === selectedId) {
+      await deleteReport(report.id)
+      if (String(report.id) === selectedId) {
         setSearchParams({})
       }
-      setDeletingReport(null)
       await loadReports()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete report')
@@ -168,7 +165,7 @@ const ReportsPage = () => {
         editTitle.trim(),
         content,
         editTags.length ? editTags : undefined,
-        selectedReport.filename,
+        reportName(selectedReport) ?? undefined,
         editAllowScripts || undefined,
         editAllowedConnectUrls  // Always send the array, even if empty
       )
@@ -191,277 +188,157 @@ const ReportsPage = () => {
     report.metadata?.report_title || report.title || report.filename || `Report #${report.id}`
 
   const reportUrl = (report: Report): string | null => {
-    if (!report.filename) return null
-    return `/reports/${report.filename}`
+    const name = reportName(report)
+    return name && `/reports/${name}`
   }
+
+  const closeForm = () => { setShowForm(false); resetForm() }
 
   return (
     <Page
       title="Reports"
       width="full"
       fill
-      actions={
-        <Button variant={showForm ? 'secondary' : 'primary'} onClick={() => { setShowForm(!showForm); resetForm() }}>
-          {showForm ? 'Cancel' : 'New Report'}
-        </Button>
-      }
+      actions={<Button variant="primary" onClick={() => { resetForm(); setShowForm(true) }}>New Report</Button>}
     >
-      <div className="h-full flex overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm">
-        {/* Left panel — Report list */}
-        <div className="w-80 shrink-0 border-r border-slate-200 flex flex-col">
-          {showForm && (
-            <div className="border-b border-slate-200 p-4">
-              <form onSubmit={handleSubmit} className="space-y-4">
-                {/* Mode toggle */}
-                <ToggleGroup label="Report source" value={formMode} onChange={setFormMode}
-                  options={[{ value: 'html', label: 'Write HTML' }, { value: 'upload', label: 'Upload File' }]} />
-
-                <Field label="Title">
-                  <Input
-                    type="text"
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
-                    placeholder="Report title"
+      <SplitView
+        listTitle={<>
+          {loading ? 'Loading...' : `${reports.length} report${reports.length !== 1 ? 's' : ''}`}
+          {queued && <span className="block text-xs font-normal text-amber-800 mt-1">Report queued for processing...</span>}
+        </>}
+        list={loading ? <LoadingState />
+          : error ? <ErrorState message={error} onRetry={loadReports} />
+          : reports.length === 0 ? <div className="p-4"><EmptyState message="No reports yet." actionLabel="Create Report" onAction={() => setShowForm(true)} /></div>
+          : (
+            <List flush>
+              {reports.map(report => {
+                const format = reportFormat(report)
+                return (
+                  <Row
+                    key={report.id}
+                    title={reportTitle(report)}
+                    onSelect={() => handleSelectReport(report)}
+                    selected={String(report.id) === selectedId}
+                    badges={<Badge tone={format === 'pdf' ? 'danger' : 'info'}>{format.toUpperCase()}</Badge>}
+                    meta={[formatRelativeTime(report.inserted_at), (report.tags?.length ?? 0) > 0 && report.tags.slice(0, 3).join(', ')]}
                   />
-                </Field>
-
-                {formMode === 'html' ? (
-                  <Field label="HTML Content">
-                    <Textarea
-                      value={htmlContent}
-                      onChange={e => setHtmlContent(e.target.value)}
-                      className="h-32 font-mono text-xs"
-                      placeholder="<h1>My Report</h1>&#10;<p>Content here...</p>"
-                    />
-                  </Field>
-                ) : (
-                  <Field>
-                    <Label>File (.html, .htm, .pdf)</Label>
-                    <input
-                      type="file"
-                      accept=".html,.htm,.pdf"
-                      onChange={e => setFile(e.target.files?.[0] || null)}
-                      className="text-sm text-slate-600"
-                    />
-                  </Field>
-                )}
-
-                <Field label="Tags">
-                  <TagsInput tags={tags} onChange={setTags} />
-                </Field>
-
-                <Checkbox checked={allowScripts} onChange={e => setAllowScripts(e.target.checked)} label="Allow scripts" />
-
-                {allowScripts && (
-                  <Field>
-                    <Label>
-                      Allowed External URLs
-                      <span className="text-xs text-slate-500 ml-2">(for CSP connect-src)</span>
-                    </Label>
-                    <TagsInput
-                      tags={allowedConnectUrls}
-                      onChange={setAllowedConnectUrls}
-                      placeholder="https://example.com/api/"
-                    />
-                    <p className="text-xs text-slate-500 mt-1">
-                      External URLs this report can connect to (e.g., for calling external MCP servers)
-                    </p>
-                  </Field>
-                )}
-
-                {formError && <Notice tone="error">{formError}</Notice>}
-
-                <FormActions>
-                  <Button variant="primary" type="submit" disabled={submitting}>
-                    {submitting ? 'Saving...' : formMode === 'html' ? 'Create Report' : 'Upload'}
-                  </Button>
-                </FormActions>
-              </form>
-            </div>
+                )
+              })}
+            </List>
           )}
-
-          <div className="px-4 py-3 border-b border-slate-200">
-            <h2 className="text-sm font-semibold text-slate-700">
-              {loading ? 'Loading...' : `${reports.length} report${reports.length !== 1 ? 's' : ''}`}
-            </h2>
-            {queued && (
-              <p className="text-xs text-amber-600 mt-1">Report queued for processing...</p>
-            )}
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {loading ? (
-              <LoadingState />
-            ) : error ? (
-              <ErrorState message={error} onRetry={loadReports} />
-            ) : reports.length === 0 ? (
-              <EmptyState
-                message="No reports yet."
-                actionLabel="Create Report"
-                onAction={() => setShowForm(true)}
-              />
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {reports.map(report => {
-                  const isSelected = String(report.id) === selectedId
-                  const format = reportFormat(report)
-                  return (
-                    <button
-                      key={report.id}
-                      onClick={() => handleSelectReport(report)}
-                      className={cx(
-                        'w-full text-left px-4 py-3 transition-colors',
-                        isSelected ? 'bg-primary/10' : 'hover:bg-slate-50'
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="flex-1 font-medium text-sm text-slate-800 truncate">
-                          {reportTitle(report)}
-                        </span>
-                        <Badge tone={format === 'pdf' ? 'danger' : 'info'}>{format.toUpperCase()}</Badge>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs text-slate-500">
-                          {formatRelativeTime(report.inserted_at)}
-                        </span>
-                        {(report.tags?.length ?? 0) > 0 && (
-                          <span className="text-xs text-slate-500 truncate">
-                            {report.tags.slice(0, 3).join(', ')}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right panel — Viewer */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {selectedReport ? (
-            <>
-              <div className="px-6 py-3 border-b border-slate-200 bg-white flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-700 truncate">
-                  {reportTitle(selectedReport)}
-                </h2>
-                <div className="flex items-center gap-2">
-                  {reportUrl(selectedReport) && reportFormat(selectedReport) === 'pdf' && (
-                    <a
-                      href={reportUrl(selectedReport)!}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={buttonClass('secondary', 'sm')}
-                    >
-                      Open PDF
-                    </a>
-                  )}
-                  {reportFormat(selectedReport) === 'html' && (
-                    <Button size="sm"
-                      onClick={() => startEditing(selectedReport)}
-                    >
-                      Edit
-                    </Button>
-                  )}
-                  <Button variant="danger" size="sm"
-                    onClick={() => setDeletingReport(selectedReport)}
-                    disabled={deleting}
-                  >
-                    Delete
-                  </Button>
+        detail={selectedReport && (
+          <>
+            <PaneHeader
+              title={reportTitle(selectedReport)}
+              actions={<>
+                {reportUrl(selectedReport) && reportFormat(selectedReport) === 'pdf' && (
+                  <a href={reportUrl(selectedReport)!} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}>Open PDF</a>
+                )}
+                {reportFormat(selectedReport) === 'html' && <Button size="sm" onClick={() => startEditing(selectedReport)}>Edit</Button>}
+                <ConfirmButton confirm={`Delete "${reportTitle(selectedReport)}"?`} onConfirm={() => handleDelete(selectedReport)} disabled={deleting} />
+              </>}
+            />
+            <div className="flex-1 overflow-hidden">
+              {!reportUrl(selectedReport) ? (
+                <div className="flex items-center justify-center h-full text-slate-600">Report file not available</div>
+              ) : reportFormat(selectedReport) === 'pdf' ? (
+                <div className="flex flex-col items-center justify-center gap-4 h-full text-slate-600">
+                  <p className="text-lg">PDF Report</p>
+                  <a href={reportUrl(selectedReport)!} target="_blank" rel="noopener noreferrer" className={buttonClass('primary')}>Open in new tab</a>
                 </div>
-              </div>
-              {editing && (
-                <div className="px-6 py-3 border-b border-slate-200 bg-slate-50">
-                  <form onSubmit={handleEditSubmit} className="space-y-3">
-                    <Field label="Title">
-                      <Input
-                        type="text"
-                        value={editTitle}
-                        onChange={e => setEditTitle(e.target.value)}
-                      />
-                    </Field>
-                    <Field label="Tags">
-                      <TagsInput tags={editTags} onChange={setEditTags} />
-                    </Field>
-                    <Checkbox checked={editAllowScripts} onChange={e => setEditAllowScripts(e.target.checked)} label="Allow scripts" />
-                    {editAllowScripts && (
-                      <Field>
-                        <Label>
-                          Allowed External URLs
-                          <span className="text-xs text-slate-500 ml-2">(for CSP connect-src)</span>
-                        </Label>
-                        <TagsInput
-                          tags={editAllowedConnectUrls}
-                          onChange={setEditAllowedConnectUrls}
-                          placeholder="https://example.com/api/"
-                        />
-                        <p className="text-xs text-slate-500 mt-1">
-                          External URLs this report can connect to
-                        </p>
-                      </Field>
-                    )}
-                    {editError && <Notice tone="error">{editError}</Notice>}
-                    <div className="flex items-center gap-2">
-                      <Button variant="primary" type="submit" disabled={editSubmitting}>
-                        {editSubmitting ? 'Saving...' : 'Save Changes'}
-                      </Button>
-                      <Button type="button" onClick={() => setEditing(false)}>
-                        Cancel
-                      </Button>
-                    </div>
-                  </form>
-                </div>
+              ) : (
+                <iframe
+                  src={reportUrl(selectedReport)!}
+                  sandbox={selectedReport.metadata?.allow_scripts ? "allow-same-origin allow-scripts" : "allow-same-origin"}
+                  className="w-full h-full border-none"
+                  title={reportTitle(selectedReport)}
+                />
               )}
-              <div className="flex-1 overflow-hidden bg-white">
-                {reportUrl(selectedReport) ? (
-                  reportFormat(selectedReport) === 'pdf' ? (
-                    <div className="flex items-center justify-center h-full text-slate-500">
-                      <div className="text-center">
-                        <p className="text-lg mb-4">PDF Report</p>
-                        <a
-                          href={reportUrl(selectedReport)!}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={buttonClass('primary')}
-                        >
-                          Open in new tab
-                        </a>
-                      </div>
-                    </div>
-                  ) : (
-                    <iframe
-                      src={reportUrl(selectedReport)!}
-                      sandbox={selectedReport.metadata?.allow_scripts ? "allow-same-origin allow-scripts" : "allow-same-origin"}
-                      className="w-full h-full border-none"
-                      title={reportTitle(selectedReport)}
-                    />
-                  )
-                ) : (
-                  <div className="flex items-center justify-center h-full text-slate-500">
-                    Report file not available
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-600">
-              Select a report to view
             </div>
-          )}
-        </div>
-      </div>
+          </>
+        )}
+        placeholder="Select a report to view"
+        onBack={() => setSearchParams({})}
+        backLabel="Reports"
+      />
 
-      {deletingReport && (
-        <ConfirmDialog
-          message={`Are you sure you want to delete "${reportTitle(deletingReport)}"?`}
-          onConfirm={handleDelete}
-          onCancel={() => setDeletingReport(null)}
-        />
+      {showForm && (
+        <Modal title="New Report" onClose={closeForm}>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <ToggleGroup label="Report source" value={formMode} onChange={setFormMode}
+              options={[{ value: 'html', label: 'Write HTML' }, { value: 'upload', label: 'Upload File' }]} />
+            <Field label="Title">
+              <Input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Report title" />
+            </Field>
+            {formMode === 'html' ? (
+              <Field label="HTML Content">
+                <Textarea value={htmlContent} onChange={e => setHtmlContent(e.target.value)} className="h-40 font-mono text-xs"
+                  placeholder="<h1>My Report</h1>&#10;<p>Content here...</p>" />
+              </Field>
+            ) : (
+              <Field label="File (.html, .htm, .pdf)">
+                <input type="file" accept=".html,.htm,.pdf" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm text-slate-600" />
+              </Field>
+            )}
+            <ReportAccessFields tags={tags} onTags={setTags} allowScripts={allowScripts} onAllowScripts={setAllowScripts}
+              urls={allowedConnectUrls} onUrls={setAllowedConnectUrls} />
+            {formError && <Notice tone="error">{formError}</Notice>}
+            <FormActions>
+              <Button type="button" onClick={closeForm}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={submitting}>
+                {submitting ? 'Saving...' : formMode === 'html' ? 'Create Report' : 'Upload'}
+              </Button>
+            </FormActions>
+          </form>
+        </Modal>
+      )}
+
+      {editing && selectedReport && (
+        <Modal title="Edit Report" onClose={() => setEditing(false)}>
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <Field label="Title">
+              <Input type="text" value={editTitle} onChange={e => setEditTitle(e.target.value)} />
+            </Field>
+            <ReportAccessFields tags={editTags} onTags={setEditTags} allowScripts={editAllowScripts} onAllowScripts={setEditAllowScripts}
+              urls={editAllowedConnectUrls} onUrls={setEditAllowedConnectUrls} />
+            {editError && <Notice tone="error">{editError}</Notice>}
+            <FormActions>
+              <Button type="button" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={editSubmitting}>{editSubmitting ? 'Saving...' : 'Save Changes'}</Button>
+            </FormActions>
+          </form>
+        </Modal>
       )}
     </Page>
   )
 }
+
+// `filename` is relative to the storage root; /reports/ and reports_upsert take the name inside the
+// reports directory, which is flat.
+const reportName = (report: Report) => report.filename?.split('/').pop() ?? null
+
+interface ReportAccessFieldsProps {
+  tags: string[]
+  onTags: (tags: string[]) => void
+  allowScripts: boolean
+  onAllowScripts: (allow: boolean) => void
+  urls: string[]
+  onUrls: (urls: string[]) => void
+}
+
+const ReportAccessFields = ({ tags, onTags, allowScripts, onAllowScripts, urls, onUrls }: ReportAccessFieldsProps) => (
+  <>
+    <Field label="Tags">
+      <TagsInput tags={tags} onChange={onTags} />
+    </Field>
+    <Checkbox checked={allowScripts} onChange={e => onAllowScripts(e.target.checked)} label="Allow scripts" />
+    {allowScripts && (
+      <Field label="Allowed External URLs (for CSP connect-src)"
+        hint="External URLs this report can connect to (e.g., for calling external MCP servers)">
+        <TagsInput tags={urls} onChange={onUrls} placeholder="https://example.com/api/" />
+      </Field>
+    )}
+  </>
+)
 
 export default ReportsPage

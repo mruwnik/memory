@@ -5,7 +5,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import ClaudeFleetStats, { SessionStatsPanel, sessionDisplay } from './ClaudeFleetStats'
-import { Badge, Button, Input, Label, Notice, Page, Select, Textarea, ToggleGroup } from '@/components/shared/ui'
+import { Badge, Button, DetailList, Disclosure, Field, Input, Label, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -37,11 +37,11 @@ interface ScreenMessage {
   stats?: ContainerStats | null
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  running: 'bg-green-100 text-green-700',
-  created: 'bg-blue-100 text-blue-700',
-  exited: 'bg-slate-100 text-slate-600',
-  paused: 'bg-yellow-100 text-yellow-700',
+const STATUS_TONES: Record<string, Tone> = {
+  running: 'success',
+  created: 'info',
+  exited: 'neutral',
+  paused: 'warning',
 }
 
 const formatMb = (mb: number): string => {
@@ -498,11 +498,25 @@ const ClaudeSessions = () => {
     setShowNewSession(true)
   }
 
-  // Render helpers
-  const getStatusColor = (status: string | null) => {
-    if (!status) return 'bg-slate-100 text-slate-600'
-    return STATUS_COLORS[status.toLowerCase()] || 'bg-slate-100 text-slate-600'
-  }
+  // Shown while no session is selected. Admins see global capacity and every
+  // container; non-admins see only their own.
+  const fleet = (
+            <div className="max-w-4xl p-4 md:p-6">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+                <h2 className="text-lg font-semibold text-slate-800">Fleet Overview</h2>
+                <p className="text-sm text-slate-600">
+                  Select a session for details, or click a row below to see its history.
+                </p>
+              </div>
+              <ClaudeFleetStats
+                selectedSessionId={null}
+                onSelectContainer={(id) => navigate(`/ui/claude/${id}`)}
+                environments={environments}
+                hasAdminScope={hasScope('*')}
+                currentUserId={authUser?.id ?? null}
+              />
+            </div>
+  )
 
   return (
     <Page
@@ -514,70 +528,39 @@ const ClaudeSessions = () => {
     >
       <div className="h-full flex flex-col gap-4">
       {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
-      <div className="flex-1 min-h-0 flex overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm">
-        {/* Sidebar - Sessions list */}
-        <aside className="w-72 shrink-0 border-r border-slate-200 flex flex-col">
-          <div className="p-4 border-b border-slate-200">
-            <h2 className="text-sm font-medium text-slate-600">Active Sessions</h2>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {sessions.length === 0 ? (
-              <div className="p-4 text-sm text-slate-500 text-center">No active sessions</div>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {sessions.map((session) => (
-                  <li
-                    key={session.session_id}
-                    className={`p-3 cursor-pointer hover:bg-slate-50 ${
-                      selectedSession?.session_id === session.session_id ? 'bg-primary/5 border-l-2 border-primary' : ''
-                    }`}
-                    onClick={() => handleSelectSession(session)}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-sm text-slate-800 truncate">{session.session_id}</div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className={`text-xs px-2 py-0.5 rounded ${getStatusColor(session.status)}`}>
-                            {session.status || 'unknown'}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleKillSession(session.session_id)
-                        }}
-                        disabled={killingId === session.session_id}
-                        className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 disabled:opacity-50"
-                        title="Kill session"
-                      >
-                        {killingId === session.session_id ? (
-                          <span className="text-xs">...</span>
-                        ) : (
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M6 18L18 6M6 6l12 12"
-                            />
-                          </svg>
-                        )}
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </aside>
-
-        {/* Main panel */}
-        <div className="flex-1 min-w-0 p-6 overflow-y-auto">
-          {showNewSession ? (
-            // New session form
+      <div className="flex-1 min-h-0">
+      <SplitView
+        listTitle="Active Sessions"
+        list={sessions.length === 0 ? (
+          <p className="p-4 text-sm text-slate-600 text-center">No active sessions</p>
+        ) : (
+          <List flush>
+            {sessions.map((session) => (
+              <Row
+                key={session.session_id}
+                title={<span className="font-mono">{session.session_id}</span>}
+                onSelect={() => handleSelectSession(session)}
+                selected={selectedSession?.session_id === session.session_id}
+                badges={<Badge tone={STATUS_TONES[session.status?.toLowerCase() ?? ''] ?? 'neutral'}>{session.status || 'unknown'}</Badge>}
+                actions={
+                  <Button variant="ghost" size="sm" onClick={() => handleKillSession(session.session_id)}
+                    disabled={killingId === session.session_id} title="Kill session" aria-label={`Kill session ${session.session_id}`}>
+                    {killingId === session.session_id ? '...' : <span aria-hidden="true">&times;</span>}
+                  </Button>
+                }
+              />
+            ))}
+          </List>
+        )}
+        placeholder={fleet}
+        onBack={() => { setShowNewSession(false); selectSession(null) }}
+        backLabel="Sessions"
+        detail={
+          showNewSession ? (
+            <>
+            <PaneHeader title="Start New Session" />
+            <div className="flex-1 overflow-y-auto p-4 md:p-6">
             <div className="max-w-xl">
-              <h2 className="text-xl font-semibold text-slate-800 mb-6">Start New Session</h2>
 
               {snapshots.length === 0 && environments.length === 0 ? (
                 <Notice tone="warning">
@@ -592,8 +575,7 @@ const ClaudeSessions = () => {
               ) : (
                 <div className="space-y-6">
                   {/* Config source selection (grouped: environments + snapshots) */}
-                  <div>
-                    <Label className="mb-2">Configuration *</Label>
+                  <Field label="Configuration *" hint={<>{selectedConfig?.type === 'environment' ? 'Environment: State persists across sessions' : 'Snapshot: Fresh extraction each time'}</>}>
                     <Select
                       value={selectedConfig ? `${selectedConfig.type}:${selectedConfig.id}` : ''}
                       onChange={(e) => {
@@ -627,16 +609,10 @@ const ClaudeSessions = () => {
                         </optgroup>
                       )}
                     </Select>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {selectedConfig?.type === 'environment'
-                        ? 'Environment: State persists across sessions'
-                        : 'Snapshot: Fresh extraction each time'}
-                    </p>
-                  </div>
+                  </Field>
 
                   {/* Repo selection */}
-                  <div>
-                    <Label className="mb-2">Repository (optional)</Label>
+                  <Field label="Repository (optional)" hint="The repo will be cloned into the workspace">
                     <Select
                       value={selectedRepoUrl}
                       onChange={(e) => setSelectedRepoUrl(e.target.value)}
@@ -648,15 +624,11 @@ const ClaudeSessions = () => {
                         </option>
                       ))}
                     </Select>
-                    <p className="text-xs text-slate-500 mt-1">The repo will be cloned into the workspace</p>
-                  </div>
+                  </Field>
 
                   {/* Branch ID (only shown when repo selected) */}
                   {selectedRepoUrl && (
-                    <div>
-                      <Label className="mb-2">
-                        Branch ID (optional)
-                      </Label>
+                    <Field label="Branch ID (optional)" hint={<>Git branch will be <code className="bg-slate-100 px-1 rounded">claude/{runId || '<session-id>'}</code>. Leave blank for auto-generated ID.</>}>
                       <Input
                         type="text"
                         value={runId}
@@ -665,15 +637,11 @@ const ClaudeSessions = () => {
                         pattern="[a-zA-Z0-9_-]+"
                         className="font-mono"
                       />
-                      <p className="text-xs text-slate-500 mt-1">
-                        Git branch will be <code className="bg-slate-100 px-1 rounded">claude/{runId || '<session-id>'}</code>. Leave blank for auto-generated ID.
-                      </p>
-                    </div>
+                    </Field>
                   )}
 
                   {/* GitHub Token */}
-                  <div>
-                    <Label className="mb-2">GitHub Token (optional)</Label>
+                  <Field label="GitHub Token (optional)" hint="PAT for HTTPS clone, or a secret name. Cached in localStorage.">
                     <Input
                       type="password"
                       value={githubToken}
@@ -681,14 +649,10 @@ const ClaudeSessions = () => {
                       placeholder="ghp_... or secret name"
                       className="font-mono"
                     />
-                    <p className="text-xs text-slate-500 mt-1">
-                      PAT for HTTPS clone, or a secret name. Cached in localStorage.
-                    </p>
-                  </div>
+                  </Field>
 
                   {/* GitHub Token Write */}
-                  <div>
-                    <Label className="mb-2">GitHub Write Token (optional)</Label>
+                  <Field label="GitHub Write Token (optional)" hint="Write token for differ (push, PR creation). Cached in localStorage.">
                     <Input
                       type="password"
                       value={githubTokenWrite}
@@ -696,10 +660,7 @@ const ClaudeSessions = () => {
                       placeholder="ghp_... or secret name"
                       className="font-mono"
                     />
-                    <p className="text-xs text-slate-500 mt-1">
-                      Write token for differ (push, PR creation). Cached in localStorage.
-                    </p>
-                  </div>
+                  </Field>
 
                   {/* Playwright toggle */}
                   <div className="flex items-center gap-3">
@@ -716,8 +677,7 @@ const ClaudeSessions = () => {
                   </div>
 
                   {/* Dev channels server */}
-                  <div>
-                    <Label className="mb-2">Dev Channels Server (optional)</Label>
+                  <Field label="Dev Channels Server (optional)" hint="Launches Claude with --dangerously-load-development-channels. Leave blank to disable.">
                     <Input
                       type="text"
                       value={devChannelsServer}
@@ -725,10 +685,7 @@ const ClaudeSessions = () => {
                       placeholder="http://channels.internal:3000"
                       className="font-mono"
                     />
-                    <p className="text-xs text-slate-500 mt-1">
-                      Launches Claude with --dangerously-load-development-channels. Leave blank to disable.
-                    </p>
-                  </div>
+                  </Field>
 
                   {/* Pre-approved Tools */}
                   <div>
@@ -770,20 +727,14 @@ const ClaudeSessions = () => {
                   </div>
 
                   {/* Initial Prompt */}
-                  <div>
-                    <Label className="mb-2">
-                      Initial Prompt (optional)
-                    </Label>
+                  <Field label="Initial Prompt (optional)" hint="If provided, Claude will start processing this prompt immediately.">
                     <Textarea
                       value={initialPrompt}
                       onChange={(e) => setInitialPrompt(e.target.value)}
                       placeholder="Start Claude with this prompt..."
                       rows={3}
                     />
-                    <p className="text-xs text-slate-500 mt-1">
-                      If provided, Claude will start processing this prompt immediately.
-                    </p>
-                  </div>
+                  </Field>
 
                   {/* Cron Schedule */}
                   <div>
@@ -884,68 +835,40 @@ const ClaudeSessions = () => {
                 </div>
               )}
             </div>
+            </div>
+            </>
           ) : selectedSession ? (
             // Selected session details
             (() => {
               const display = sessionDisplay(selectedSession.session_id, environments, users)
               return (
-            <div className="h-full flex flex-col">
-              {/* Header */}
-              <div className="flex items-center gap-3 mb-4">
-                <button
-                  onClick={() => selectSession(null)}
-                  className="text-sm text-slate-600 hover:text-slate-800 underline-offset-2 hover:underline"
-                  title="Back to fleet overview"
-                >
-                  ← Fleet
-                </button>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-xl font-semibold text-slate-800 truncate">{display.title}</h2>
-                  {display.subtitle && (
-                    <div className="text-xs text-slate-500">{display.subtitle}</div>
-                  )}
-                </div>
-                <span className={`text-sm px-3 py-1 rounded ${getStatusColor(selectedSession.status)}`}>
-                  {selectedSession.status || 'unknown'}
-                </span>
-                <Button variant="danger"
-                  onClick={() => handleKillSession(selectedSession.session_id)}
-                  disabled={killingId === selectedSession.session_id}
-                >
+            <>
+            <PaneHeader
+              title={<>{display.title}{display.subtitle && <span className="block text-xs font-normal text-slate-500">{display.subtitle}</span>}</>}
+              actions={<>
+                <Badge tone={STATUS_TONES[selectedSession.status?.toLowerCase() ?? ''] ?? 'neutral'}>{selectedSession.status || 'unknown'}</Badge>
+                <Button variant="ghost" size="sm" onClick={() => selectSession(null)} title="Back to fleet overview">Fleet overview</Button>
+                <Button variant="danger" size="sm" onClick={() => handleKillSession(selectedSession.session_id)} disabled={killingId === selectedSession.session_id}>
                   {killingId === selectedSession.session_id ? 'Killing...' : 'Kill Session'}
                 </Button>
-              </div>
-
-              {/* Session info row */}
-              <div className="flex gap-4 mb-4">
-                <div className="bg-white rounded-lg border border-slate-200 px-4 py-3 flex-1">
-                  <div className="text-xs text-slate-500 mb-1">Session ID</div>
-                  <div className="font-mono text-sm text-slate-800">{selectedSession.session_id}</div>
-                </div>
-                <div className="bg-white rounded-lg border border-slate-200 px-4 py-3 flex-1">
-                  <div className="text-xs text-slate-500 mb-1">Container</div>
-                  <div className="font-mono text-sm text-slate-800">{selectedSession.container_name || 'N/A'}</div>
-                </div>
-              </div>
+              </>}
+            />
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-4">
+              <DetailList items={[
+                ['Session ID', <span className="font-mono">{selectedSession.session_id}</span>],
+                ['Container', <span className="font-mono">{selectedSession.container_name || 'N/A'}</span>],
+              ]} />
 
               {/* Resource stats — collapsed by default; the chart polls only
                   while expanded (mounted) so closed panels are zero cost. */}
-              <details className="mb-4 bg-white rounded-lg border border-slate-200">
-                <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50">
-                  Resource Stats
-                </summary>
-                <div className="px-4 pb-4">
-                  <SessionStatsPanel sessionId={selectedSession.session_id} />
-                </div>
-              </details>
+              <Disclosure summary="Resource Stats">
+                <SessionStatsPanel sessionId={selectedSession.session_id} />
+              </Disclosure>
 
               {/* Attach commands (collapsible) */}
               {attachInfo && (
-                <details className="mb-4 bg-white rounded-lg border border-slate-200">
-                  <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50">
-                    Connect Commands
-                  </summary>
-                  <div className="px-4 pb-4 space-y-3">
+                <Disclosure summary="Connect Commands">
+                  <div className="space-y-3">
                     <div>
                       <div className="text-xs text-slate-500 mb-1">Attach to Claude (interactive)</div>
                       <code className="block bg-slate-900 text-green-400 px-3 py-2 rounded text-sm font-mono">
@@ -963,7 +886,7 @@ const ClaudeSessions = () => {
                       <kbd className="bg-slate-100 px-1 rounded">Ctrl+Q</kbd>
                     </p>
                   </div>
-                </details>
+                </Disclosure>
               )}
 
               {/* Terminal screen */}
@@ -972,18 +895,11 @@ const ClaudeSessions = () => {
                   <div className="text-sm font-medium text-slate-700 flex items-center gap-2">
                     <span>Terminal</span>
                     {wsConnected ? (
-                      <span className="flex items-center gap-1 text-xs text-green-600">
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                        Connected
-                      </span>
+                      <Badge tone="success">Connected</Badge>
                     ) : wsError ? (
-                      <span className="text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded">
-                        {wsError}
-                      </span>
+                      <Badge tone="danger">{wsError}</Badge>
                     ) : (
-                      <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-600 rounded">
-                        Connecting...
-                      </span>
+                      <Badge tone="warning">Connecting...</Badge>
                     )}
                   </div>
                   {containerStats && <ContainerStatsBadge stats={containerStats} />}
@@ -1010,14 +926,8 @@ const ClaudeSessions = () => {
 
               {/* Differ code review panel */}
               {selectedSession?.differ && (
-                <details className="mt-4 bg-white rounded-lg border border-slate-200">
-                  <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                    Code Review (Differ)
-                  </summary>
-                  <div className="border-t border-slate-200">
+                <Disclosure summary="Code Review (Differ)">
+                  <div>
                     <iframe
                       src={getDifferUrl(selectedSession.session_id)}
                       className="w-full border-0 rounded-b-lg"
@@ -1026,32 +936,15 @@ const ClaudeSessions = () => {
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                     />
                   </div>
-                </details>
+                </Disclosure>
               )}
             </div>
+            </>
               )
             })()
-          ) : (
-            // Empty state — show fleet-wide resource overview while no session
-            // is selected. Admins see global capacity + every container; non-
-            // admins see only their own.
-            <div className="max-w-4xl">
-              <div className="flex items-baseline justify-between mb-4">
-                <h2 className="text-xl font-semibold text-slate-800">Fleet Overview</h2>
-                <p className="text-sm text-slate-500">
-                  Select a session for details, or click a row below to see its history.
-                </p>
-              </div>
-              <ClaudeFleetStats
-                selectedSessionId={null}
-                onSelectContainer={(id) => navigate(`/ui/claude/${id}`)}
-                environments={environments}
-                hasAdminScope={hasScope('*')}
-                currentUserId={authUser?.id ?? null}
-              />
-            </div>
-          )}
-        </div>
+          ) : null
+        }
+      />
       </div>
       </div>
     </Page>

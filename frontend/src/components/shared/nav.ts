@@ -29,7 +29,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'AI',
     items: [
-      { to: '/ui/claude', title: 'Claude Sessions', description: 'Spawn and manage Claude Code containers' },
+      { to: '/ui/claude', title: 'Claude Sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions' },
       { to: '/ui/snapshots', title: 'Claude Configurations', description: 'Manage Claude Code configurations' },
     ],
   },

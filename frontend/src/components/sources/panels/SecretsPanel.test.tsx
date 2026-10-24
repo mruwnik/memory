@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithUser, screen, waitFor } from '@/test/utils'
+import { renderWithUser, screen, waitFor, within } from '@/test/utils'
 
 // --- Hook mock ---
 const listSecrets = vi.fn()
@@ -135,30 +135,30 @@ describe('SecretsPanel - delete flow', () => {
   beforeEach(() => listSecrets.mockResolvedValue([secret()]))
 
   it('deletes after confirm is accepted', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { user } = renderWithUser(<SecretsPanel />)
     await screen.findByText('api-key')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteSecret).toHaveBeenCalledWith(1))
   })
 
   it('does not delete when confirm is rejected', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
     const { user } = renderWithUser(<SecretsPanel />)
     await screen.findByText('api-key')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
     expect(deleteSecret).not.toHaveBeenCalled()
   })
 
   it('surfaces a delete error', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     deleteSecret.mockRejectedValueOnce(new Error('cannot delete'))
     const { user } = renderWithUser(<SecretsPanel />)
     await screen.findByText('api-key')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     expect(await screen.findByText('cannot delete')).toBeInTheDocument()
   })
 })

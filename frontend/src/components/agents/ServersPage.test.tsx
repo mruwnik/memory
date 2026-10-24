@@ -28,6 +28,6 @@ describe('ServersPage', () => {
     await waitFor(() => expect(screen.getByRole('link', { name: 'raspberry' })).toHaveAttribute('href', '/ui/agents/servers/4'))
     expect(screen.getByText('192.168.1.20:8080')).toBeInTheDocument()
     expect(screen.getByText('Needs re-auth')).toBeInTheDocument()
-    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.getByText('2 tools')).toBeInTheDocument()
   })
 })

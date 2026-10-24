@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen, waitFor } from '@/test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import type { CheckJob } from '@/hooks/useCheck'
 import { Check } from './index'
@@ -155,7 +155,7 @@ describe('Check', () => {
     renderWithRouter(<Check />)
     await waitFor(() => expect(screen.getByText('is the sky blue?')).toBeInTheDocument())
     await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Yes' }))
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteJob).toHaveBeenCalledWith('chk_1'))
     await waitFor(() => expect(screen.queryByText('is the sky blue?')).not.toBeInTheDocument())
   })

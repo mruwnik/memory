@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Person, PersonCreate, PersonUpdate } from '../../hooks/usePeople'
-import { Button, Input, Label, Modal, Notice, Textarea } from '@/components/shared/ui'
+import { Button, Input, Label, Modal, Notice, Textarea, Field } from '@/components/shared/ui'
 
 interface PersonFormModalProps {
   title: string
@@ -121,11 +121,7 @@ const PersonFormModal = ({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Basic Info */}
-          <div>
-            <Label htmlFor="person-display-name" className="mb-1">
-              Display Name <span className="text-red-500" aria-hidden="true">*</span>
-              <span className="sr-only">(required)</span>
-            </Label>
+          <Field label={<>Display Name <span className="text-red-500" aria-hidden="true">*</span> <span className="sr-only">(required)</span></>}>
             <Input
               id="person-display-name"
               type="text"
@@ -134,7 +130,7 @@ const PersonFormModal = ({
               required
               placeholder="e.g., Alice Chen"
             />
-          </div>
+          </Field>
 
           <div>
             <Label htmlFor="person-identifier" className="mb-1">
@@ -161,10 +157,7 @@ const PersonFormModal = ({
             )}
           </div>
 
-          <div>
-            <Label htmlFor="person-aliases" className="mb-1">
-              Aliases
-            </Label>
+          <Field label="Aliases" hint="Comma-separated alternative names or handles">
             <Input
               id="person-aliases"
               type="text"
@@ -172,15 +165,9 @@ const PersonFormModal = ({
               onChange={(e) => setForm({ ...form, aliases: e.target.value })}
               placeholder="e.g., @alice_c, alice.chen@work.com"
             />
-            <p className="text-xs text-slate-400 mt-1">
-              Comma-separated alternative names or handles
-            </p>
-          </div>
+          </Field>
 
-          <div>
-            <Label htmlFor="person-tags" className="mb-1">
-              Tags
-            </Label>
+          <Field label="Tags" hint="Comma-separated tags for categorization">
             <Input
               id="person-tags"
               type="text"
@@ -188,10 +175,7 @@ const PersonFormModal = ({
               onChange={(e) => setForm({ ...form, tags: e.target.value })}
               placeholder="e.g., work, friend, engineering"
             />
-            <p className="text-xs text-slate-400 mt-1">
-              Comma-separated tags for categorization
-            </p>
-          </div>
+          </Field>
 
           {/* Contact Info Section */}
           <div className="pt-2">
@@ -251,10 +235,7 @@ const PersonFormModal = ({
           </div>
 
           {/* Add a tidbit */}
-          <div>
-            <Label htmlFor="person-notes" className="mb-1">
-              Add a note
-            </Label>
+          <Field label="Add a note">
             <Textarea
               id="person-notes"
               value={form.notes}
@@ -262,7 +243,7 @@ const PersonFormModal = ({
               rows={4}
               placeholder="Saved as a tidbit. Existing tidbits are shown on the person card."
             />
-          </div>
+          </Field>
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { defaultSpec, useAgents, type AgentSpec, type Catalog } from '@/hooks/useAgents'
 import { SpecEditor } from './SpecEditor'
-import { Button, Field, Notice, Page, Textarea } from '@/components/shared/ui'
+import { Button, Field, FormActions, Notice, Page, Textarea } from '@/components/shared/ui'
 
 export default function AdHocRun() {
   const navigate = useNavigate()
@@ -45,7 +45,7 @@ export default function AdHocRun() {
       <Field label="Run input">
         <Textarea className="h-24" placeholder="What should the agent do?" value={input} onChange={e => setInput(e.target.value)} />
       </Field>
-      <div className="flex flex-wrap gap-2">
+      <FormActions>
         <Button variant="primary" disabled={!input.trim() || !jsonValid}
           onClick={() => act(async () => navigate(`/ui/agents/runs/${(await startRun({ input, spec })).run_id}`))}>Run</Button>
         <Button disabled={!jsonValid}
@@ -53,7 +53,7 @@ export default function AdHocRun() {
             const name = window.prompt('Name for this agent')
             if (name) navigate(`/ui/agents/${(await saveDefinition({ name, description: '', spec })).id}`)
           })}>Save as agent</Button>
-      </div>
+      </FormActions>
     </Page>
   )
 }

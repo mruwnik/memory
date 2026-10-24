@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { emptyTriggerConfig, useAgents, type AgentTrigger, type TriggerConfig } from '@/hooks/useAgents'
-import { Badge, Button, Checkbox, Field, FieldRow, Input, List, ListItem, MultiSelect, Notice, Section, Textarea } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, Field, FieldRow, FormActions, Input, List, Modal, MultiSelect, Notice, Row, Section, Textarea } from '@/components/shared/ui'
 
 const splitList = (text: string) => text.split(',').map(s => s.trim()).filter(Boolean)
 
@@ -54,7 +54,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
   })
 
   return (
-    <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-4">
+    <div className="space-y-4">
       <Field label="Source types" hint="None means any type. At least one filter, here or below, is required.">
         <MultiSelect options={sourceTypes} value={types} onChange={setTypes} placeholder="Any type" />
       </Field>
@@ -82,10 +82,10 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
         <Textarea className="h-20" value={template} onChange={e => setTemplate(e.target.value)} />
       </Field>
       <Checkbox label="Also fire when a matching item is edited" checked={onEdit} onChange={e => setOnEdit(e.target.checked)} />
-      <div className="flex gap-2">
-        <Button variant="primary" onClick={save}>Save trigger</Button>
+      <FormActions>
         <Button onClick={onCancel}>Cancel</Button>
-      </div>
+        <Button variant="primary" onClick={save}>Save trigger</Button>
+      </FormActions>
     </div>
   )
 }
@@ -114,11 +114,6 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
     }
   }
 
-  const remove = (t: AgentTrigger) => {
-    if (!window.confirm('Delete this trigger?')) return
-    act(() => deleteTrigger(t.id))
-  }
-
   return (
     <Section
       title="Triggers"
@@ -132,6 +127,8 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
       {error && <Notice tone="error">{error}</Notice>}
       {warnings.map(w => <Notice key={w} tone="warning">{w}</Notice>)}
       {editing !== null && (
+        <Modal title={editing === 'new' ? 'New trigger' : 'Edit trigger'} onClose={() => setEditing(null)} size="xl">
+        {error && <Notice tone="error" className="mb-4">{error}</Notice>}
         <TriggerForm
           initial={editing === 'new' ? emptyTriggerConfig() : editing.config}
           sourceTypes={sourceTypes}
@@ -145,28 +142,29 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
             setWarnings(saved.warnings ?? [])
           })}
         />
+        </Modal>
       )}
       {triggers === null && !error && <p className="text-sm text-slate-600">Loading triggers...</p>}
       {triggers?.length === 0 && <p className="text-sm text-slate-600">No triggers.</p>}
       {!!triggers?.length && (
         <List>
           {triggers.map(t => (
-            <ListItem key={t.id} className="items-start">
-              <span className="min-w-0">
-                <span className="text-slate-700">{describeTrigger(t.config)}</span>
-                {t.state.tripped && (
-                  <Badge tone="warning" className="mt-1 whitespace-normal">Tripped: {t.state.tripped.reason}</Badge>
-                )}
-                {!t.enabled && !t.state.tripped && <span className="block text-xs text-slate-600">paused</span>}
-              </span>
-              <span className="flex gap-2 shrink-0">
+            <Row
+              key={t.id}
+              title={<span className="font-normal">{describeTrigger(t.config)}</span>}
+              muted={!t.enabled}
+              badges={<>
+                {t.state.tripped && <Badge tone="warning" className="whitespace-normal">Tripped: {t.state.tripped.reason}</Badge>}
+                {!t.enabled && !t.state.tripped && <Badge>paused</Badge>}
+              </>}
+              actions={<>
                 <Button size="sm" onClick={() => act(() => saveTrigger({ definitionId, enabled: !t.enabled, triggerId: t.id }))}>
                   {t.enabled ? 'Pause' : 'Enable'}
                 </Button>
                 <Button size="sm" onClick={() => { setWarnings([]); setEditing(t) }}>Edit</Button>
-                <Button variant="danger" size="sm" onClick={() => remove(t)}>Delete</Button>
-              </span>
-            </ListItem>
+                <ConfirmButton confirm="Delete this trigger?" onConfirm={() => act(() => deleteTrigger(t.id))} />
+              </>}
+            />
           ))}
         </List>
       )}

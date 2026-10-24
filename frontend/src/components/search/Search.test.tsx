@@ -58,8 +58,8 @@ describe('Search', () => {
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'query')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     await waitFor(() => expect(screen.getByText('Found 2 results')).toBeInTheDocument())
-    expect(screen.getByRole('heading', { name: 'alpha.txt' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'beta.txt' })).toBeInTheDocument()
+    expect(screen.getByText('alpha.txt')).toBeInTheDocument()
+    expect(screen.getByText('beta.txt')).toBeInTheDocument()
   })
 
   it('uses the singular result wording for one result', async () => {

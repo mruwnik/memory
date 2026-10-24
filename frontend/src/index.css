@@ -4,14 +4,9 @@
 @theme {
   --color-primary: #5a67d8;
   --color-primary-dark: #4c51bf;
-  --color-secondary: #764ba2;
   --color-success: #16a34a;
   --color-warning: #ca8a04;
   --color-danger: #dc2626;
-  --color-urgent: #dc2626;
-  --color-high: #ea580c;
-  --color-medium: #ca8a04;
-  --color-low: #16a34a;
 }
 
 @layer base {

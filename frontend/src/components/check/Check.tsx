@@ -1,22 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useCheck, PAGE_LIMIT, CheckJob, CheckMode, CheckStatus, AskBody } from '@/hooks/useCheck'
 import { formatRelativeTime } from '@/components/sources/shared'
-import { Button, EmptyState, Label, LoadingState, Notice, Page, Select, Textarea, ToggleGroup } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, Field, FormActions, Hint, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
 
-const STATUS_COLORS: Record<CheckStatus, string> = {
-  queued: 'bg-yellow-100 text-yellow-700',
-  in_flight: 'bg-blue-100 text-blue-700',
-  ok: 'bg-green-100 text-green-700',
-  error: 'bg-red-100 text-red-700',
-  expired: 'bg-slate-100 text-slate-500',
-}
-
-const MODE_COLORS: Record<CheckMode, string> = {
-  verify: 'bg-purple-100 text-purple-700',
-  research: 'bg-indigo-100 text-indigo-700',
-  link: 'bg-teal-100 text-teal-700',
-  'deep-dive': 'bg-amber-100 text-amber-700',
-  'investigation-team': 'bg-rose-100 text-rose-700',
+const STATUS_TONES: Record<CheckStatus, Tone> = {
+  queued: 'warning',
+  in_flight: 'info',
+  ok: 'success',
+  error: 'danger',
+  expired: 'neutral',
 }
 
 const STATUS_LABELS: Record<CheckStatus, string> = {
@@ -44,19 +36,17 @@ const MODES: CheckMode[] = ['research', 'verify', 'link', 'deep-dive', 'investig
 // for link-mode a list of `sources`/`links`. We render those nicely and fall
 // back to JSON for anything we don't recognise, so an answer is never hidden.
 
-const VERDICT_COLORS: { match: string; cls: string }[] = [
-  { match: 'true', cls: 'bg-green-100 text-green-700' },
-  { match: 'false', cls: 'bg-red-100 text-red-700' },
-  { match: 'mixed', cls: 'bg-yellow-100 text-yellow-700' },
-  { match: 'partial', cls: 'bg-yellow-100 text-yellow-700' },
-  { match: 'uncertain', cls: 'bg-slate-100 text-slate-600' },
+const VERDICT_TONES: { match: string; tone: Tone }[] = [
+  { match: 'true', tone: 'success' },
+  { match: 'false', tone: 'danger' },
+  { match: 'mixed', tone: 'warning' },
+  { match: 'partial', tone: 'warning' },
 ]
 
-function verdictColor(verdict: string): string {
+function verdictTone(verdict: string): Tone {
   const key = verdict.toLowerCase().trim()
   // `true` is checked before `false` so "likely true" doesn't fall through.
-  const hit = VERDICT_COLORS.find(({ match }) => key.includes(match))
-  return hit?.cls ?? 'bg-slate-100 text-slate-500'
+  return VERDICT_TONES.find(({ match }) => key.includes(match))?.tone ?? 'neutral'
 }
 
 function formatConfidence(c: unknown): string | null {
@@ -127,18 +117,16 @@ const AnswerView = ({ result }: AnswerViewProps) => {
       {(verdict || confidence || verdictReason) && (
         <div className="flex items-center gap-2 flex-wrap">
           {verdict && (
-            <span className={`px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wide ${verdictColor(verdict)}`}>
-              {verdict}
-            </span>
+            <Badge tone={verdictTone(verdict)} className="uppercase">{verdict}</Badge>
           )}
           {confidence && <span className="text-xs text-slate-500">{confidence} confidence</span>}
-          {verdictReason && <span className="text-xs text-slate-400 italic">{verdictReason}</span>}
+          {verdictReason && <span className="text-xs text-slate-500 italic">{verdictReason}</span>}
         </div>
       )}
       {summary && <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{summary}</p>}
       {sources.length > 0 && (
         <div>
-          <p className="text-xs font-medium text-slate-400 mb-1">Sources</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">Sources</p>
           <ul className="space-y-0.5">
             {sources.map((s, i) => (
               <li key={i} className="text-xs break-words">
@@ -185,124 +173,56 @@ const AskForm = ({ onAsk, onCancel, saving, error }: AskFormProps) => {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 border border-slate-200 rounded-lg p-4 bg-slate-50">
-      <div>
-        <Label>Question</Label>
-        <Textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          rows={3}
-          placeholder="What would you like to verify, research, or link?"
-          autoFocus
-        />
-      </div>
-      <div>
-        <Label>Mode</Label>
-        <Select value={mode} onChange={e => setMode(e.target.value as CheckMode)}>
-          {MODES.map(m => (
-            <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>
-          ))}
-        </Select>
-      </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="flex gap-2 pt-1">
-        <Button variant="primary" size="sm"
-          type="submit"
-          disabled={saving || !text.trim()}
-        >
-          {saving ? 'Submitting...' : 'Ask'}
-        </Button>
-        <Button size="sm"
-          type="button"
-          onClick={onCancel}
-          disabled={saving}
-        >
-          Cancel
-        </Button>
-      </div>
-    </form>
+    <Modal title="New question" onClose={onCancel}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <Field label="Question">
+          <Textarea value={text} onChange={e => setText(e.target.value)} rows={3}
+            placeholder="What would you like to verify, research, or link?" autoFocus />
+        </Field>
+        <Field label="Mode">
+          <Select value={mode} onChange={e => setMode(e.target.value as CheckMode)}>
+            {MODES.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+          </Select>
+        </Field>
+        {error && <Notice tone="error">{error}</Notice>}
+        <FormActions>
+          <Button type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={saving || !text.trim()}>{saving ? 'Submitting...' : 'Ask'}</Button>
+        </FormActions>
+      </form>
+    </Modal>
   )
 }
 
-// --- Job Card ---
+// --- Job Row ---
 
-interface JobCardProps {
+interface JobRowProps {
   job: CheckJob
   onDelete: (jobId: string) => Promise<void>
 }
 
-const JobCard = ({ job, onDelete }: JobCardProps) => {
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-
-  const handleDelete = async () => {
-    setDeleting(true)
-    try {
-      await onDelete(job.job_id)
-    } catch {
-      setDeleting(false)
-      setConfirmDelete(false)
-    }
-  }
-
+const JobRow = ({ job, onDelete }: JobRowProps) => {
   // Only surface the answer for a successful job: an errored job can carry a
   // partial result, and showing both an Answer and the red error line is confusing.
   const result =
     job.status === 'ok' && job.result && Object.keys(job.result).length > 0 ? job.result : null
 
   return (
-    <li className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-slate-200">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${MODE_COLORS[job.mode] || 'bg-slate-100 text-slate-600'}`}>
-              {job.mode}
-            </span>
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[job.status] || 'bg-slate-100 text-slate-600'}`}>
-              {STATUS_LABELS[job.status] || job.status}
-            </span>
-          </div>
-
-          <p className="text-sm font-medium text-slate-800 whitespace-pre-wrap break-words">{job.text}</p>
-
-          {result && (
-            <div className="mt-2 border-t border-slate-100 pt-2">
-              <p className="text-xs font-medium text-slate-400 mb-1">Answer</p>
-              <AnswerView result={result} />
-            </div>
-          )}
-
-          {job.status === 'error' && job.error && (
-            <p className="text-sm text-red-600 mt-2 whitespace-pre-wrap break-words">{job.error}</p>
-          )}
-
-          <div className="flex gap-4 mt-2 text-xs text-slate-400 flex-wrap">
-            <span>Asked: {formatRelativeTime(job.submitted_at)}</span>
-            {job.completed_at && <span>Answered: {formatRelativeTime(job.completed_at)}</span>}
-          </div>
-        </div>
-
-        <div className="shrink-0">
-          {confirmDelete ? (
-            <span className="flex items-center gap-1 text-sm">
-              <span className="text-red-600">Delete?</span>
-              <button onClick={handleDelete} disabled={deleting} className="text-red-600 font-medium hover:underline">
-                {deleting ? '...' : 'Yes'}
-              </button>
-              <button onClick={() => setConfirmDelete(false)} className="text-slate-500 hover:underline">
-                No
-              </button>
-            </span>
-          ) : (
-            <Button variant="danger" size="sm"
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete
-            </Button>
-          )}
-        </div>
-      </div>
-    </li>
+    <Row
+      title={<span className="whitespace-pre-wrap">{job.text}</span>}
+      badges={<>
+        <Badge>{job.mode}</Badge>
+        <Badge tone={STATUS_TONES[job.status] ?? 'neutral'}>{STATUS_LABELS[job.status] || job.status}</Badge>
+      </>}
+      meta={[
+        `Asked ${formatRelativeTime(job.submitted_at)}`,
+        job.completed_at && `Answered ${formatRelativeTime(job.completed_at)}`,
+      ]}
+      actions={<ConfirmButton confirm="Delete this question?" onConfirm={() => onDelete(job.job_id).catch(() => {})} />}
+    >
+      {result && <AnswerView result={result} />}
+      {job.status === 'error' && job.error && <RowError>{job.error}</RowError>}
+    </Row>
   )
 }
 
@@ -388,60 +308,26 @@ const Check = () => {
   return (
     <Page
       title="Check Questions"
-      description={<>
-        <div className="flex gap-3 text-sm">
-          {pendingCount > 0 && <span className="text-blue-600 font-medium">{pendingCount}{countSuffix} pending</span>}
-          <span className="text-green-600 font-medium">{answeredCount}{countSuffix} answered</span>
-        </div>
-      </>}
+      description={<span className="flex flex-wrap gap-x-3">
+        {pendingCount > 0 && <span>{pendingCount}{countSuffix} pending</span>}
+        <span>{answeredCount}{countSuffix} answered</span>
+      </span>}
+      actions={<Button variant="primary" onClick={() => setShowAsk(true)}>+ New question</Button>}
       width="wide"
     >
-      <div className="space-y-4">
-        <div className="flex gap-2 items-center flex-wrap">
-          <ToggleGroup label="Filter" options={FILTERS} value={statusFilter} onChange={setStatusFilter} />
-          <Button size="icon"
-            onClick={() => loadJobs()}
-                
-            title="Refresh"
-            aria-label="Refresh question list"
-          >
-            &#8635;
-          </Button>
-          <Button variant="primary" onClick={() => setShowAsk(v => !v)}>
-            {showAsk ? 'Close' : '+ New question'}
-          </Button>
-        </div>
+      {showAsk && <AskForm onAsk={handleAsk} onCancel={() => setShowAsk(false)} saving={asking} error={askError} />}
 
-        {error && (
-          <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>
-        )}
+      <Toolbar actions={<RefreshButton onClick={() => loadJobs()} label="Refresh question list" />}>
+        <ToggleGroup label="Status" options={FILTERS} value={statusFilter} onChange={setStatusFilter} />
+      </Toolbar>
 
-        {showAsk && (
-          <div className="mb-4">
-            <AskForm onAsk={handleAsk} onCancel={() => setShowAsk(false)} saving={asking} error={askError} />
-          </div>
-        )}
+      {error && <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>}
 
-        {!loading && atCap && (
-          <p className="text-xs text-slate-400">
-            Showing the {PAGE_LIMIT} most recent questions.
-          </p>
-        )}
+      {!loading && atCap && <Hint>Showing the {PAGE_LIMIT} most recent questions.</Hint>}
 
-        {loading && <LoadingState message="Loading questions..." />}
-
-        {!loading && visibleJobs.length === 0 && (
-          <EmptyState message={statusFilter === 'all' ? 'No questions yet' : `No ${statusFilter} questions`} />
-        )}
-
-        {!loading && visibleJobs.length > 0 && (
-          <ul className="space-y-3">
-            {visibleJobs.map(job => (
-              <JobCard key={job.job_id} job={job} onDelete={handleDelete} />
-            ))}
-          </ul>
-        )}
-      </div>
+      {loading ? <LoadingState message="Loading questions..." />
+        : visibleJobs.length === 0 ? <EmptyState message={statusFilter === 'all' ? 'No questions yet' : `No ${statusFilter} questions`} />
+        : <List>{visibleJobs.map(job => <JobRow key={job.job_id} job={job} onDelete={handleDelete} />)}</List>}
     </Page>
   )
 }

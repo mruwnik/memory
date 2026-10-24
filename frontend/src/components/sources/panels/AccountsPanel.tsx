@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, GithubAccount, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
-import { SourceCard, StatusBadge, SyncStatus } from '../shared'
-import { Button, Card, EmptyState, ErrorState, Field, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, Textarea, buttonClass, cx } from '@/components/shared/ui'
+import { SourceRow, StatusBadge, formatRelativeTime } from '../shared'
+import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, Textarea, buttonClass } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const AccountsPanel = () => {
@@ -196,39 +196,43 @@ export const AccountsPanel = () => {
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
-  return (
-    <Card>
-      {/* GitHub Accounts Section */}
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-slate-800">GitHub Accounts</h3>
-        <Button variant="primary" onClick={() => setShowGithubForm(true)}>Add Account</Button>
-      </div>
+  const uploadButton = (label: string) => (
+    <label className={buttonClass('secondary', 'sm')}>
+      {uploadingConfig ? 'Uploading...' : label}
+      <input type="file" accept=".json" onChange={handleConfigUpload} disabled={uploadingConfig} className="hidden" />
+    </label>
+  )
 
-      {githubAccounts.length === 0 ? (
-        <EmptyState
-          message="No GitHub accounts configured. Add an account to track repositories."
-          actionLabel="Add GitHub Account"
-          onAction={() => setShowGithubForm(true)}
-        />
-      ) : (
-        <div className="space-y-3">
-          {githubAccounts.map(account => (
-            <SourceCard
-              key={account.id}
-              title={account.name}
-              subtitle={`${account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}${account.repos.length > 0 ? ` • ${account.repos.length} repos tracked` : ''}`}
-              active={account.active}
-              lastSyncAt={account.last_sync_at}
-              onToggleActive={() => handleToggleGithubActive(account)}
-              onEdit={() => setEditingGithubAccount(account)}
-              onDelete={() => handleDeleteGithubAccount(account.id)}
-              additionalActions={
-                <Button size="sm" onClick={() => handleValidateGithubAccount(account.id)}>Validate</Button>
-              }
-            />
-          ))}
-        </div>
-      )}
+  return (
+    <>
+      <Section title="GitHub Accounts" actions={<Button variant="primary" onClick={() => setShowGithubForm(true)}>Add Account</Button>}>
+        {githubAccounts.length === 0 ? (
+          <EmptyState
+            message="No GitHub accounts configured. Add an account to track repositories."
+            actionLabel="Add GitHub Account"
+            onAction={() => setShowGithubForm(true)}
+          />
+        ) : (
+          <List>
+            {githubAccounts.map(account => (
+              <SourceRow
+                key={account.id}
+                title={account.name}
+                subtitle={account.auth_type === 'pat' ? 'Personal Access Token' : 'GitHub App'}
+                meta={[account.repos.length > 0 && `${account.repos.length} repos tracked`]}
+                active={account.active}
+                lastSyncAt={account.last_sync_at}
+                onToggleActive={() => handleToggleGithubActive(account)}
+                onEdit={() => setEditingGithubAccount(account)}
+                onDelete={() => handleDeleteGithubAccount(account.id)}
+                additionalActions={
+                  <Button size="sm" onClick={() => handleValidateGithubAccount(account.id)}>Validate</Button>
+                }
+              />
+            ))}
+          </List>
+        )}
+      </Section>
 
       {showGithubForm && (
         <GitHubAccountForm
@@ -245,85 +249,56 @@ export const AccountsPanel = () => {
         />
       )}
 
-      {/* Google Accounts Section */}
-      <div className="flex items-center justify-between mb-4 mt-8">
-        <h3 className="text-lg font-semibold text-slate-800">Google Accounts</h3>
-        {oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect Account</Button>}
-      </div>
-
-      {/* OAuth Config required first */}
-      {oauthConfig === null ? (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-          <h4 className="font-medium text-slate-800 mb-2">OAuth Configuration Required</h4>
-          <p className="text-sm text-slate-600 mb-2">Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).</p>
-          <Hint className="mb-4">Get this from the Google Cloud Console under APIs & Services → Credentials.</Hint>
-          <label className={buttonClass('secondary', 'md', 'inline-block')}>
-            {uploadingConfig ? 'Uploading...' : 'Upload Credentials JSON'}
-            <input
-              type="file"
-              accept=".json"
-              onChange={handleConfigUpload}
-              disabled={uploadingConfig}
-              className="hidden"
-            />
-          </label>
-        </div>
-      ) : (
-        <>
-          <details className="border border-slate-200 rounded-lg">
-            <summary className="p-3 cursor-pointer hover:bg-slate-50 font-medium text-slate-700">OAuth Configuration</summary>
-            <div className="p-4 pt-0">
-              <p className="text-sm text-slate-600 mb-1"><strong>Project:</strong> {oauthConfig.project_id}</p>
-              <p className="text-sm text-slate-600 mb-3"><strong>Client ID:</strong> {oauthConfig.client_id.substring(0, 20)}...</p>
-              <div className="flex gap-2">
-                <label className={buttonClass('secondary', 'md', 'text-xs')}>
-                  {uploadingConfig ? 'Uploading...' : 'Replace Config'}
-                  <input
-                    type="file"
-                    accept=".json"
-                    onChange={handleConfigUpload}
-                    disabled={uploadingConfig}
-                    className="hidden"
-                  />
-                </label>
-                <Button variant="danger" size="sm" className="text-xs" onClick={handleDeleteConfig}>
-                  Delete Config
-                </Button>
-              </div>
-            </div>
-          </details>
-
-          {googleAccounts.length === 0 ? (
-            <EmptyState
-              message="No Google accounts connected. Connect an account to use Gmail, Calendar, or Drive."
-              actionLabel="Connect Google Account"
-              onAction={handleConnectGoogle}
-            />
-          ) : (
-            <div className="space-y-3 mt-4">
-              {googleAccounts.map(account => (
-                <div key={account.id} className={cx('border border-slate-200 rounded-lg p-4', !account.active && 'opacity-60')}>
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <SyncStatus lastSyncAt={account.last_sync_at} />
-                      <h4 className="font-medium text-slate-800 truncate">{account.name}</h4>
-                      <p className="text-sm text-slate-600 truncate">{account.email}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      <StatusBadge active={account.active} />
-                      <Button size="sm" onClick={() => handleReauthorizeGoogle(account.id)}>Re-authorize</Button>
-                      <Button variant="danger" size="sm" onClick={() => handleDeleteGoogleAccount(account.id)}>Disconnect</Button>
-                    </div>
-                  </div>
-                  {account.sync_error && (
-                    <Notice tone="error">{account.sync_error}</Notice>
-                  )}
+      <Section title="Google Accounts" actions={oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect Account</Button>}>
+        {oauthConfig === null ? (
+          <Card title="OAuth Configuration Required"
+            description="Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).">
+            <Hint className="mb-4">Get this from the Google Cloud Console under APIs & Services → Credentials.</Hint>
+            {uploadButton('Upload Credentials JSON')}
+          </Card>
+        ) : (
+          <>
+            <Disclosure summary="OAuth Configuration">
+              <div className="space-y-3">
+                <DetailList items={[
+                  ['Project', oauthConfig.project_id],
+                  ['Client ID', `${oauthConfig.client_id.substring(0, 20)}...`],
+                ]} />
+                <div className="flex flex-wrap gap-2">
+                  {uploadButton('Replace Config')}
+                  <ConfirmButton confirm="Delete the Google OAuth configuration?" onConfirm={handleDeleteConfig}>Delete Config</ConfirmButton>
                 </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
+              </div>
+            </Disclosure>
+
+            {googleAccounts.length === 0 ? (
+              <EmptyState
+                message="No Google accounts connected. Connect an account to use Gmail, Calendar, or Drive."
+                actionLabel="Connect Google Account"
+                onAction={handleConnectGoogle}
+              />
+            ) : (
+              <List>
+                {googleAccounts.map(account => (
+                  <Row
+                    key={account.id}
+                    title={account.name}
+                    muted={!account.active}
+                    badges={<StatusBadge active={account.active} />}
+                    meta={[account.email, `Last sync: ${formatRelativeTime(account.last_sync_at)}`]}
+                    actions={<>
+                      <Button size="sm" onClick={() => handleReauthorizeGoogle(account.id)}>Re-authorize</Button>
+                      <ConfirmButton confirm={`Disconnect ${account.email}?`} onConfirm={() => handleDeleteGoogleAccount(account.id)}>Disconnect</ConfirmButton>
+                    </>}
+                  >
+                    {account.sync_error && <RowError>{account.sync_error}</RowError>}
+                  </Row>
+                ))}
+              </List>
+            )}
+          </>
+        )}
+      </Section>
 
       {/* Google Scope Selection Modal */}
       {showScopeModal && availableScopes && (
@@ -363,7 +338,7 @@ export const AccountsPanel = () => {
           </div>
         </Modal>
       )}
-    </Card>
+    </>
   )
 }
 

@@ -228,9 +228,7 @@ describe('TeamsPanel - archive flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Archive' }))
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByText(/Are you sure you want to archive "Engineering"/)).toBeInTheDocument()
-    // The dialog renders its own "Archive Team" title and an "Archive" confirm button.
-    expect(within(dialog).getByText('Archive Team')).toBeInTheDocument()
+    expect(within(dialog).getByText(/Archive "Engineering"\?/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Archive' }))
 
     await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', { is_active: false }))

@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
-import { TagsInput, IntervalInput, StatusBadge, SyncStatus, SyncButton } from '../shared'
-import { Button, Card, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
+import { SourceRow, TagsInput, IntervalInput } from '../shared'
+import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 interface GroupedEvents {
@@ -22,7 +22,6 @@ export const CalendarPanel = () => {
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [events, setEvents] = useState<CalendarEvent[]>([])
-  const [expandedCalendars, setExpandedCalendars] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -91,16 +90,6 @@ export const CalendarPanel = () => {
     loadData()
   }
 
-  const toggleCalendar = (calendarName: string) => {
-    const newExpanded = new Set(expandedCalendars)
-    if (newExpanded.has(calendarName)) {
-      newExpanded.delete(calendarName)
-    } else {
-      newExpanded.add(calendarName)
-    }
-    setExpandedCalendars(newExpanded)
-  }
-
   const getEventsForAccount = (accountId: number): GroupedEvents => {
     return events
       .filter(event => event.calendar_account_id === accountId)
@@ -126,7 +115,7 @@ export const CalendarPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
-    <Card title="Calendar Accounts" actions={<><Button variant="primary" onClick={() => setShowForm(true)}>Add Calendar</Button></>}>
+    <Section title="Calendar Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Calendar</Button>}>
       {accounts.length === 0 ? (
         <EmptyState
           message="No calendar accounts configured"
@@ -134,93 +123,49 @@ export const CalendarPanel = () => {
           onAction={() => setShowForm(true)}
         />
       ) : (
-        <div className="space-y-3">
-          {accounts.map(account => (
-            <div key={account.id} className="border border-slate-200 rounded-lg p-4">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-slate-800">{account.name}</h4>
-                  <p className="text-sm text-slate-500">
-                    {account.calendar_type === 'google'
-                      ? `Google Calendar (${account.google_account?.email || 'linked'})`
-                      : `CalDAV: ${account.caldav_url}`
-                    }
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 ml-4 flex-shrink-0">
-                  <StatusBadge active={account.active} onClick={() => handleToggleActive(account)} />
-                  <SyncButton onSync={() => handleSync(account.id)} disabled={!account.active} label="Sync" />
-                  <Button size="sm" onClick={() => setEditingAccount(account)}>Edit</Button>
-                  <Button variant="danger" size="sm" onClick={() => handleDelete(account.id)}>Delete</Button>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-3 text-xs text-slate-500 mb-3">
-                <span>Type: {account.calendar_type === 'google' ? 'Google Calendar' : 'CalDAV'}</span>
-                <SyncStatus lastSyncAt={account.last_sync_at} />
-                {account.sync_error && (
-                  <span className="text-red-600">Error: {account.sync_error}</span>
-                )}
-              </div>
-
-              {/* Events grouped by calendar */}
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <h5 className="text-sm font-medium text-slate-700 mb-2">Calendars & Events</h5>
-                {(() => {
-                  const accountEvents = getEventsForAccount(account.id)
-                  return Object.keys(accountEvents).length === 0 ? (
-                    <p className="text-sm text-slate-400 italic">No events synced yet</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {Object.entries(accountEvents).map(([calendarName, calEvents]) => (
-                        <div key={calendarName} className="border border-slate-100 rounded">
-                          <button
-                            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 transition-colors"
-                            onClick={() => toggleCalendar(calendarName)}
-                          >
-                            <span className="text-slate-400 text-xs">
-                              {expandedCalendars.has(calendarName) ? '▼' : '▶'}
-                            </span>
-                            <span className="flex-1 font-medium text-sm text-slate-700">{calendarName}</span>
-                            <span className="text-xs text-slate-400">{calEvents.length} events</span>
-                          </button>
-                          {expandedCalendars.has(calendarName) && (
-                            <div className="px-3 pb-3 space-y-2">
-                              {calEvents.map((event, idx) => (
-                                <div
-                                  key={`${event.id}-${idx}`}
-                                  className={`flex gap-4 py-2 border-t border-slate-100 text-sm ${event.all_day ? 'bg-slate-50 -mx-3 px-3' : ''}`}
-                                >
-                                  <div className="flex-shrink-0 w-24">
-                                    <div className="text-slate-700">{formatEventDate(event.start_time)}</div>
-                                    {!event.all_day ? (
-                                      <div className="text-slate-400 text-xs">{formatEventTime(event.start_time)}</div>
-                                    ) : (
-                                      <div className="text-xs text-primary font-medium">All day</div>
-                                    )}
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <div className="font-medium text-slate-800 truncate">{event.event_title}</div>
-                                    {event.location && <div className="text-xs text-slate-500 truncate">{event.location}</div>}
-                                    {event.recurrence_rule && (
-                                      <span className="inline-block mt-1 px-1.5 py-0.5 bg-primary/10 text-primary text-xs rounded">
-                                        Recurring
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+        <List>
+          {accounts.map(account => {
+            const accountEvents = Object.entries(getEventsForAccount(account.id))
+            return (
+              <SourceRow
+                key={account.id}
+                title={account.name}
+                subtitle={account.calendar_type === 'google'
+                  ? `Google Calendar (${account.google_account?.email || 'linked'})`
+                  : `CalDAV: ${account.caldav_url}`}
+                active={account.active}
+                lastSyncAt={account.last_sync_at}
+                syncError={account.sync_error}
+                onToggleActive={() => handleToggleActive(account)}
+                onEdit={() => setEditingAccount(account)}
+                onDelete={() => handleDelete(account.id)}
+                onSync={() => handleSync(account.id)}
+              >
+                {accountEvents.length === 0 ? (
+                  <Hint>No events synced yet</Hint>
+                ) : accountEvents.map(([calendarName, calEvents]) => (
+                  <Disclosure key={calendarName} summary={<>{calendarName} <span className="font-normal text-slate-500">· {calEvents.length} events</span></>}>
+                    <List flush>
+                      {calEvents.map((event, idx) => (
+                        <Row
+                          key={`${event.id}-${idx}`}
+                          className="px-0"
+                          title={event.event_title}
+                          badges={event.recurrence_rule && <Badge tone="primary">Recurring</Badge>}
+                          meta={[
+                            formatEventDate(event.start_time),
+                            event.all_day ? 'All day' : formatEventTime(event.start_time),
+                            event.location,
+                          ]}
+                        />
                       ))}
-                    </div>
-                  )
-                })()}
-              </div>
-            </div>
-          ))}
-        </div>
+                    </List>
+                  </Disclosure>
+                ))}
+              </SourceRow>
+            )
+          })}
+        </List>
       )}
 
       {showForm && (
@@ -241,7 +186,7 @@ export const CalendarPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
-    </Card>
+    </Section>
   )
 }
 

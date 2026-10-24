@@ -47,8 +47,7 @@ describe('KeysPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Add key' }))
     await user.type(screen.getByLabelText('Label'), 'personal')
     await user.type(screen.getByLabelText('API key'), 'sk-ant-secret')
-    // The header button now reads Close, so this is the form's submit.
-    await user.click(screen.getByRole('button', { name: 'Add key' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add key' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('anthropic rejected this key')
     expect(upsertKey).toHaveBeenCalledWith({ provider: 'anthropic', label: 'personal', key: 'sk-ant-secret' })
     expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password')

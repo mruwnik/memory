@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useUsers, type User } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Button, Input, Label, Modal, Notice, Page } from '@/components/shared/ui'
+import { Badge, Button, Card, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
 
 const UserSettings = () => {
   const { getCurrentUser, updateUser, changePassword, regenerateApiKey } = useUsers()
@@ -146,104 +146,43 @@ const UserSettings = () => {
         width="narrow"
       >
 
-        {/* Save message */}
         {saveMessage && (
-          <div
-            className={`mb-6 p-4 rounded-lg ${
-              saveMessage.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-            }`}
-          >
-            {saveMessage.text}
-          </div>
+          <Notice tone={saveMessage.type === 'success' ? 'success' : 'error'} onDismiss={() => setSaveMessage(null)}>{saveMessage.text}</Notice>
         )}
 
-        {/* Profile Section */}
-        <section className="bg-white rounded-xl shadow-md p-6 mb-6">
-          <h2 className="text-lg font-semibold text-slate-800 mb-4">Profile</h2>
-
+        <Card title="Profile">
           <div className="space-y-4">
-            <div>
-              <Label className="mb-1">Name</Label>
-              <Input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <Label className="mb-1">Email</Label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-
-            <Button variant="primary"
-              onClick={handleSaveProfile}
-              disabled={saving}
-            >
-              {saving ? 'Saving...' : 'Save Changes'}
-            </Button>
+            <Field label="Name">
+              <Input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label="Email">
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </Field>
+            <FormActions>
+              <Button variant="primary" onClick={handleSaveProfile} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</Button>
+            </FormActions>
           </div>
-        </section>
+        </Card>
 
-        {/* Security Section */}
-        <section className="bg-white rounded-xl shadow-md p-6 mb-6">
-          <h2 className="text-lg font-semibold text-slate-800 mb-4">Security</h2>
-
-          <div className="space-y-4">
-            {/* Password */}
+        <Card title="Security" flush>
+          <List flush className="border-t border-slate-100">
             {authUser?.user_type === 'human' && (
-              <div className="flex items-center justify-between py-3 border-b border-slate-100">
-                <div>
-                  <p className="font-medium text-slate-800">Password</p>
-                  <p className="text-sm text-slate-500">Change your account password</p>
-                </div>
-                <Button
-                  onClick={() => setShowPasswordModal(true)}
-                >
-                  Change Password
-                </Button>
-              </div>
+              <Row title="Password" meta={['Change your account password']}
+                actions={<Button size="sm" onClick={() => setShowPasswordModal(true)}>Change Password</Button>} />
             )}
-
-            {/* API Key */}
-            <div className="flex items-center justify-between py-3">
-              <div>
-                <p className="font-medium text-slate-800">API Key</p>
-                <p className="text-sm text-slate-500">
-                  {(user?.api_key_count ?? 0) > 0 ? 'You have an API key configured' : 'No API key configured'}
-                </p>
-              </div>
-              <Button
-                onClick={() => setShowApiKeyModal(true)}
-              >
+            <Row title="API Key"
+              meta={[(user?.api_key_count ?? 0) > 0 ? 'You have an API key configured' : 'No API key configured']}
+              actions={<Button size="sm" onClick={() => setShowApiKeyModal(true)}>
                 {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key
-              </Button>
-            </div>
-          </div>
-        </section>
+              </Button>} />
+          </List>
+        </Card>
 
-        {/* Permissions Section */}
-        <section className="bg-white rounded-xl shadow-md p-6">
-          <h2 className="text-lg font-semibold text-slate-800 mb-4">Permissions</h2>
-
-          <div>
-            <p className="text-sm text-slate-500 mb-2">Your current scopes:</p>
-            <div className="flex flex-wrap gap-2">
-              {user?.scopes.map((scope) => (
-                <span
-                  key={scope}
-                  className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-sm"
-                >
-                  {scope}
-                </span>
-              ))}
-            </div>
+        <Card title="Permissions" description="Your current scopes:">
+          <div className="flex flex-wrap gap-2">
+            {user?.scopes.map((scope) => <Badge key={scope}>{scope}</Badge>)}
           </div>
-        </section>
+        </Card>
       </Page>
 
       {/* Password Change Modal */}
@@ -260,32 +199,29 @@ const UserSettings = () => {
             )}
 
             <div className="space-y-4">
-              <div>
-                <Label className="mb-1">Current Password</Label>
+              <Field label="Current Password">
                 <Input
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
                 />
-              </div>
+              </Field>
 
-              <div>
-                <Label className="mb-1">New Password</Label>
+              <Field label="New Password">
                 <Input
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                 />
-              </div>
+              </Field>
 
-              <div>
-                <Label className="mb-1">Confirm New Password</Label>
+              <Field label="Confirm New Password">
                 <Input
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                 />
-              </div>
+              </Field>
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
@@ -312,65 +248,36 @@ const UserSettings = () => {
 
       {/* API Key Modal */}
       {showApiKeyModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4">
-            {!newApiKey ? (
-              <>
-                <h3 className="text-lg font-semibold text-slate-800 mb-4">
-                  {(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key
-                </h3>
-
-                <p className="text-sm text-slate-600 mb-4">
-                  {(user?.api_key_count ?? 0) > 0
-                    ? 'Are you sure you want to regenerate your API key? The current key will be invalidated and any integrations using it will stop working.'
-                    : 'Generate an API key to use with integrations and CLI tools.'}
-                </p>
-
-                <div className="flex justify-end gap-3">
-                  <Button
-                    onClick={() => setShowApiKeyModal(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button variant="primary"
-                    onClick={handleRegenerateApiKey}
-                    disabled={apiKeyLoading}
-                  >
-                    {apiKeyLoading ? 'Generating...' : (user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'}
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h3 className="text-lg font-semibold text-slate-800 mb-4">New API Key Generated</h3>
-
-                <p className="text-sm text-slate-600 mb-4">
-                  Copy your new API key now. It won't be shown again.
-                </p>
-
-                <div className="bg-slate-100 p-3 rounded-lg mb-4">
-                  <code className="text-sm text-slate-800 break-all">{newApiKey}</code>
-                </div>
-
-                <div className="flex justify-end gap-3">
-                  <Button
-                    onClick={() => copyToClipboard(newApiKey)}
-                  >
-                    Copy
-                  </Button>
-                  <Button variant="primary"
-                    onClick={() => {
-                      setShowApiKeyModal(false)
-                      setNewApiKey(null)
-                    }}
-                  >
-                    Done
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <Modal size="md"
+          title={newApiKey ? 'New API Key Generated' : `${(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key`}
+          onClose={() => { setShowApiKeyModal(false); setNewApiKey(null) }}>
+          {!newApiKey ? (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">
+                {(user?.api_key_count ?? 0) > 0
+                  ? 'Are you sure you want to regenerate your API key? The current key will be invalidated and any integrations using it will stop working.'
+                  : 'Generate an API key to use with integrations and CLI tools.'}
+              </p>
+              <FormActions>
+                <Button onClick={() => setShowApiKeyModal(false)}>Cancel</Button>
+                <Button variant="primary" onClick={handleRegenerateApiKey} disabled={apiKeyLoading}>
+                  {apiKeyLoading ? 'Generating...' : (user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'}
+                </Button>
+              </FormActions>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">Copy your new API key now. It won't be shown again.</p>
+              <div className="bg-slate-100 p-3 rounded-lg">
+                <code className="text-sm text-slate-800 break-all">{newApiKey}</code>
+              </div>
+              <FormActions>
+                <Button onClick={() => copyToClipboard(newApiKey)}>Copy</Button>
+                <Button variant="primary" onClick={() => { setShowApiKeyModal(false); setNewApiKey(null) }}>Done</Button>
+              </FormActions>
+            </div>
+          )}
+        </Modal>
       )}
     </>
   )

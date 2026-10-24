@@ -75,7 +75,7 @@ describe('EmailPanel load states', () => {
     renderWithUser(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     expect(screen.getByText('work@example.com')).toBeInTheDocument()
-    expect(screen.getByText('Server: imap.example.com:993')).toBeInTheDocument()
+    expect(screen.getByText('imap.example.com:993')).toBeInTheDocument()
     expect(screen.getByText('Folders: INBOX, Sent')).toBeInTheDocument()
   })
 
@@ -188,7 +188,7 @@ describe('EmailPanel mutate flows', () => {
     const { user } = renderWithUser(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
-    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
       const del = fetchMock.mock.calls.find(
         ([url, init]) => String(url).includes('/email-accounts/1') && (init as RequestInit)?.method === 'DELETE',

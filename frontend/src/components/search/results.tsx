@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import { SERVER_URL } from '@/hooks/useAuth'
-import { Card } from '@/components/shared/ui'
+import { Badge, DetailList, Disclosure, Row } from '@/components/shared/ui'
 
 export type SearchItem = {
     filename: string
@@ -11,158 +11,80 @@ export type SearchItem = {
     metadata: any
 }
 
-export const Tag = ({ tags }: { tags: string[] }) => {
-    return (
-        <div className="flex flex-wrap gap-1.5 my-2">
-            {tags?.map((tag: string, index: number) => (
-                <span key={index} className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">{tag}</span>
-            ))}
-        </div>
-    )
-}
+const fileUrl = (filename: string) => `${SERVER_URL}/files/${filename}`
 
-export const TextResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
-    return (
-        <Card title={filename || metadata?.title || metadata?.url || 'Untitled'} className="mb-4">
-            <Tag tags={tags} />
-            <Metadata metadata={metadata} />
-            {content && <p className="text-gray-600 mt-3 whitespace-pre-wrap">{content}</p>}
-            {chunks && chunks.length > 0 && (
-                <details className="mt-4 border-t border-slate-100 pt-4">
-                    <summary className="cursor-pointer text-sm font-medium text-slate-600">Relevant sections:</summary>
-                    <div className="mt-3 space-y-3">
-                        {chunks.map(({preview, score}, chunkIndex) => (
-                            <div key={chunkIndex} className="bg-slate-50 p-3 rounded-lg">
-                                <div className="text-xs text-primary font-medium mb-1">Score: {(score || 0).toFixed(3)}</div>
-                                <p className="text-sm text-gray-600">{preview}</p>
-                            </div>
-                        ))}
-                    </div>
-                </details>
-            )}
-        </Card>
-    )
-}
-
-export const MarkdownResult = ({ filename, content, chunks, tags, metadata }: SearchItem) => {
-    return (
-        <Card title={filename || metadata?.title || metadata?.url || 'Untitled'} className="mb-4">
-            <Tag tags={tags} />
-            <Metadata metadata={metadata} />
-            {content && (
-                <div className="prose prose-sm max-w-none mt-3">
-                    <ReactMarkdown>{content}</ReactMarkdown>
-                </div>
-            )}
-            {chunks && chunks.length > 0 && (
-                <details className="mt-4 border-t border-slate-100 pt-4">
-                    <summary className="cursor-pointer text-sm font-medium text-slate-600">Relevant sections:</summary>
-                    <div className="mt-3 space-y-3">
-                        {chunks.map(({preview, score}, chunkIndex) => (
-                            <div key={chunkIndex} className="bg-slate-50 p-3 rounded-lg">
-                                <div className="text-xs text-primary font-medium mb-1">Score: {(score || 0).toFixed(3)}</div>
-                                <p className="text-sm text-gray-600">{preview}</p>
-                            </div>
-                        ))}
-                    </div>
-                </details>
-            )}
-        </Card>
-    )
-}
-
-export const ImageResult = ({ filename, tags, metadata }: SearchItem) => {
-    const title = metadata?.title || filename || 'Untitled'
-
-    return (
-        <Card title={title} className="mb-4">
-            <Tag tags={tags} />
-            <Metadata metadata={metadata} />
-            <div className="mt-4">
-                <img src={`${SERVER_URL}/files/${filename}`} alt={title} className="max-w-full h-auto rounded-lg"/>
-            </div>
-        </Card>
-    )
-}
-
-const MetadataItem = ({ item, value }: { item: string, value: any }) => {
-    if (item === "url") {
-        return <li><a href={value} className="text-primary hover:underline">{value}</a></li>
-    }
-    if (item === "filename") {
-        return <li><a href={`${SERVER_URL}/files/${value}`} className="text-primary hover:underline">{value}</a></li>
-    }
-    if (typeof value === 'string') {
-        return <li><span className="text-slate-500">{item}:</span> {value}</li>
-    }
-    return <li><span className="text-slate-500">{item}:</span> {JSON.stringify(value)}</li>
-}
+const metadataValue = (key: string, value: unknown) =>
+    key === 'url' ? <a href={value as string} className="text-primary hover:underline break-all">{value as string}</a>
+        : key === 'filename' ? <a href={fileUrl(value as string)} className="text-primary hover:underline">{value as string}</a>
+        : typeof value === 'string' ? value
+        : JSON.stringify(value)
 
 export const Metadata = ({ metadata }: { metadata: any }) => {
     if (!metadata) return null
-    return (
-        <div className="text-sm text-gray-600 mt-2">
-            <ul className="list-none space-y-1">
-                {Object.entries(metadata).filter(([key, value]) => ![null, undefined].includes(value as any)).map(([key, value]) => (
-                    <MetadataItem key={key} item={key} value={value} />
-                ))}
-            </ul>
-        </div>
-    )
+    return <DetailList items={Object.entries(metadata).map(([key, value]): [string, React.ReactNode] =>
+        [key, value === null || value === undefined ? null : metadataValue(key, value)])} />
 }
 
-export const PDFResult = ({ filename, content, tags, metadata }: SearchItem) => {
-    return (
-        <Card title={filename || 'Untitled'} className="mb-4">
-            <Tag tags={tags} />
-            <a href={`${SERVER_URL}/files/${filename}`} className="text-primary hover:underline">View PDF</a>
-            <Metadata metadata={metadata} />
-            {content && (
-                <div className="mt-4">
-                    <details>
-                        <summary className="cursor-pointer text-sm font-medium text-slate-600">View Source</summary>
-                        <div className="prose prose-sm max-w-none mt-3">
-                            <ReactMarkdown>{content}</ReactMarkdown>
-                        </div>
-                    </details>
-                </div>
-            )}
-        </Card>
-    )
-}
+const Markdown = ({ children }: { children: string }) => (
+    <div className="prose prose-sm max-w-none"><ReactMarkdown>{children}</ReactMarkdown></div>
+)
 
-export const EmailResult = ({ content, tags, metadata }: SearchItem) => {
-    return (
-        <Card title={metadata?.title || metadata?.subject || 'Untitled'} className="mb-4">
-            <Tag tags={tags} />
-            <Metadata metadata={metadata} />
-            {content && (
-                <div className="prose prose-sm max-w-none mt-3">
-                    <ReactMarkdown>{content}</ReactMarkdown>
-                </div>
-            )}
-        </Card>
-    )
-}
+const Chunks = ({ chunks }: { chunks: any[] }) => (
+    <Disclosure summary="Relevant sections">
+        <ul className="space-y-3">
+            {chunks.map(({ preview, score }, i) => (
+                <li key={i} className="bg-slate-50 p-3 rounded-lg">
+                    <div className="text-xs text-primary-dark font-medium mb-1">Score: {(score || 0).toFixed(3)}</div>
+                    <p className="text-sm text-slate-600">{preview}</p>
+                </li>
+            ))}
+        </ul>
+    </Disclosure>
+)
+
+// How each kind of result is titled and what its body shows
+const KINDS: { match: string; title: (r: SearchItem) => string; body: (r: SearchItem, title: string) => React.ReactNode }[] = [
+    {
+        match: 'image/',
+        title: r => r.metadata?.title || r.filename,
+        body: (r, title) => <img src={fileUrl(r.filename)} alt={title} className="max-w-full h-auto rounded-lg" />,
+    },
+    {
+        match: 'text/markdown',
+        title: r => r.filename || r.metadata?.title || r.metadata?.url,
+        body: r => r.content && <Markdown>{r.content}</Markdown>,
+    },
+    {
+        match: 'text/',
+        title: r => r.filename || r.metadata?.title || r.metadata?.url,
+        body: r => r.content && <p className="text-slate-600 whitespace-pre-wrap">{r.content}</p>,
+    },
+    {
+        match: 'application/pdf',
+        title: r => r.filename,
+        body: r => <>
+            <a href={fileUrl(r.filename)} className="text-primary hover:underline">View PDF</a>
+            {r.content && <Disclosure summary="View Source"><Markdown>{r.content}</Markdown></Disclosure>}
+        </>,
+    },
+    {
+        match: 'message/rfc822',
+        title: r => r.metadata?.title || r.metadata?.subject,
+        body: r => r.content && <Markdown>{r.content}</Markdown>,
+    },
+]
 
 export const SearchResult = ({ result }: { result: SearchItem }) => {
-    if (result.mime_type?.startsWith('image/')) {
-        return <ImageResult {...result} />
-    }
-    if (result.mime_type?.startsWith('text/markdown')) {
-        return <MarkdownResult {...result} />
-    }
-    if (result.mime_type?.startsWith('text/')) {
-        return <TextResult {...result} />
-    }
-    if (result.mime_type?.startsWith('application/pdf')) {
-        return <PDFResult {...result} />
-    }
-    if (result.mime_type?.startsWith('message/rfc822')) {
-        return <EmailResult {...result} />
-    }
-    console.log(result)
-    return null
+    const kind = KINDS.find(k => result.mime_type?.startsWith(k.match))
+    if (!kind) return null
+    const title = kind.title(result) || 'Untitled'
+    return (
+        <Row title={title} badges={result.tags?.map((tag, i) => <Badge key={i}>{tag}</Badge>)}>
+            <Metadata metadata={result.metadata} />
+            {kind.body(result, title)}
+            {result.chunks?.length > 0 && <Chunks chunks={result.chunks} />}
+        </Row>
+    )
 }
 
 export default SearchResult
