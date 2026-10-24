@@ -231,6 +231,8 @@ interface SourceRowProps {
   meta?: React.ReactNode[]
   active: boolean
   lastSyncAt: string | null
+  /** Feeds record attempts, not successes, so they say "Last checked". */
+  lastSyncLabel?: string
   sync?: SyncStatus
   onToggleActive?: () => void
   onEdit?: () => void
@@ -246,6 +248,7 @@ export const SourceRow = ({
   meta = [],
   active,
   lastSyncAt,
+  lastSyncLabel = 'Last sync',
   sync,
   onToggleActive,
   onEdit,
@@ -258,7 +261,7 @@ export const SourceRow = ({
     title={title}
     muted={!active}
     badges={<><StatusBadge active={active} />{sync && <SyncFailingBadge status={sync} />}</>}
-    meta={[subtitle, `Last sync: ${formatRelativeTime(lastSyncAt)}`, ...meta]}
+    meta={[subtitle, `${lastSyncLabel}: ${formatRelativeTime(lastSyncAt)}`, ...meta]}
     actions={<>
       {onSync && <SyncButton onSync={onSync} disabled={!active} />}
       {onToggleActive && <PauseButton active={active} onClick={onToggleActive} />}

@@ -97,6 +97,7 @@ export const FeedsPanel = () => {
               subtitle={feed.url}
               active={feed.active}
               lastSyncAt={feed.last_checked_at}
+              lastSyncLabel="Last checked"
               sync={feed}
               onToggleActive={() => handleToggleActive(feed)}
               onEdit={() => setEditingFeed(feed)}

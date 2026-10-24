@@ -50,6 +50,7 @@ describe('FeedsPanel load states', () => {
     renderWithUser(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     expect(screen.getByText('A blog')).toBeInTheDocument()
+    expect(screen.getByText(/Last checked:/)).toBeInTheDocument()
   })
 
   it('falls back to the url as the title when title is empty', async () => {
