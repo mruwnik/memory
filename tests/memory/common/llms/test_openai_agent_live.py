@@ -48,6 +48,10 @@ def make_run(db_session, user, tools, input, max_cost):
     return run
 
 
+def output_item_types(step: AgentRunStep) -> list[str]:
+    return [b.get("type", "?") for b in ((step.replay or {}).get("blocks") or [])]
+
+
 def finished_run(db_session, run):
     db_session.expire_all()
     finished = db_session.get(AgentRun, run.id)
@@ -57,6 +61,8 @@ def finished_run(db_session, run):
         f"\nLIVE RUN {finished.id}: {finished.status}, {finished.num_turns} turns, "
         f"usage {finished.usage}, cost ${finished.cost_usd}"
     )
+    for s in sorted(steps, key=lambda s: s.seq):
+        print(f"  step {s.seq} {s.kind}: {output_item_types(s)}")
     return finished, steps
 
 
@@ -92,12 +98,13 @@ async def test_a_native_web_search_run_is_billed_and_replays(db_session, regular
         "then call the echo tool with that version, then reply with it.",
         Decimal("0.10"),
     )
-    hub = FakeHub({"echo": lambda i: ("noted", False)})
+    hub = FakeHub({"echo": lambda i: ("noted", False)}, native=("web_search",))
 
     await execute_run(run.id, hub.factory())
 
-    finished, _ = finished_run(db_session, run)
+    finished, steps = finished_run(db_session, run)
     assert finished.status == "done", finished.error
-    assert finished.usage["web_searches"] >= 1
+    item_types = [output_item_types(s) for s in sorted(steps, key=lambda s: s.seq)]
+    assert finished.usage["web_searches"] >= 1, item_types
     assert finished.usage["input_tokens"] >= 0
     assert finished.cost_usd >= Decimal("0.01")

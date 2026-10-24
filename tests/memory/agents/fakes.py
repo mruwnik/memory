@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from decimal import Decimal
 
+from memory.agents.builtins import BUILTIN_DEFS
 from memory.common.llms.anthropic_provider import ANTHROPIC_MODELS
 from memory.common.llms.base import BaseLLMProvider
 from memory.common.llms.neutral import (
@@ -214,10 +215,19 @@ def searched_reply(query: str, results: str, text: str) -> Completion:
 
 
 class FakeHub:
-    """A ToolHub whose tools are plain functions; records what was called."""
+    """A ToolHub whose tools are plain functions; records what was called.
 
-    def __init__(self, handlers: dict[str, Callable[[dict], tuple[str, bool]]]):
+    `native` builtins are offered to the model but never called here, as the
+    provider runs them.
+    """
+
+    def __init__(
+        self,
+        handlers: dict[str, Callable[[dict], tuple[str, bool]]],
+        native: tuple[str, ...] = (),
+    ):
         self.handlers = handlers
+        self.native = native
         self.calls: list[str] = []
         self.opened_with: dict = {}
 
@@ -225,7 +235,7 @@ class FakeHub:
         return [
             ToolDefinition(name=n, description=n, input_schema={"type": "object"})
             for n in sorted(self.handlers)
-        ]
+        ] + [BUILTIN_DEFS[n] for n in self.native]
 
     def notices(self) -> list[str]:
         return []
