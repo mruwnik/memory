@@ -9,6 +9,7 @@
 set -Eeuo pipefail
 declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
+take_lock
 
 tag=${POSITIONAL[0]:-}
 if ! [[ $tag =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then

@@ -9,6 +9,7 @@
 set -Eeuo pipefail
 declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
+take_lock
 
 shopt -s nullglob
 before=$(free_bytes)

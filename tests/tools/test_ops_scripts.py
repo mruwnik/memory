@@ -67,7 +67,7 @@ FAKE_CHOWN = """#!/usr/bin/env bash
 echo "chown $*" >> "$FAKE_LOG"
 """
 FAKE_UPDATE = """#!/usr/bin/env bash
-echo "update.sh $*" >> "$FAKE_LOG"
+echo "update.sh $* lock_held=${MEMORY_LOCK_HELD:-}" >> "$FAKE_LOG"
 echo "==> Updating v1 -> $4"
 echo "ERROR: Key (email)=(someone@example.com) already exists"
 echo "UPDATE RESULT: ok (exit 0)"
@@ -109,14 +109,13 @@ def git(cwd, *args):
 
 
 @pytest.fixture
-def box(tmp_path):
+def box(tmp_path, lock_bin):
     """A repo with tools/ops, fake compose/docker/aws/shutdown, and a secret-laden .env."""
     repo = tmp_path / "repo"
     (repo / "tools").mkdir(parents=True)
     shutil.copytree(REPO_ROOT / "tools" / "ops", repo / "tools" / "ops")
     (repo / ".env").write_text("".join(f"{k}={v}\n" for k, v in SECRETS.items()))
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir = lock_bin
     for name, body in {
         "compose": FAKE_COMPOSE,
         "docker": FAKE_DOCKER,
@@ -150,6 +149,7 @@ def ops(box, script, *args, **env):
             "DOCKER": str(tmp / "bin" / "docker"),
             "OPS_ENV": str(tmp / "no-ops.env"),
             "STATE_DIR": str(tmp / "state"),
+            "LOCK_FILE": str(tmp / "nightly.lock"),
             "HEALTH_TIMEOUT": "10",
             "HEALTH_POLL": "0.2",
             **env,
@@ -846,7 +846,7 @@ def test_update_to_passes_flags_and_prints_only_steps_and_result(box):
 
     assert code == 0, output
     assert (
-        "update.sh --require-signed /etc/x/signers --min-age-hours 72 v1.2.3"
+        "update.sh --require-signed /etc/x/signers --min-age-hours 72 v1.2.3 lock_held=1"
         in calls(box)
     )
     assert "UPDATE RESULT: ok" in output
@@ -860,6 +860,32 @@ def test_update_to_rejects_anything_but_a_release_tag(box, tag):
 
     assert code != 0
     assert "update.sh" not in calls(box)
+
+
+@pytest.mark.parametrize(
+    "script, args",
+    [
+        ("update-to", ["v1.2.3"]),
+        ("rollback", ["--yes"]),
+        ("restore-latest-backup", ["--yes"]),
+        ("restart", []),
+        ("reboot", ["--yes"]),
+        ("disk-cleanup", []),
+    ],
+)
+def test_mutating_scripts_refuse_while_the_nightly_lock_is_held(box, held_lock, script, args):
+    code, output = ops(box, script, *args)
+
+    assert code != 0
+    assert "busy" in output
+    assert calls(box) == ""
+
+
+def test_a_unit_that_holds_the_lock_can_run_the_scripts(box, held_lock):
+    code, output = ops(box, "reboot", "--yes", MEMORY_LOCK_HELD="1")
+
+    assert code == 0, output
+    assert "shutdown -r +1" in calls(box)
 
 
 def test_restart_rejects_unknown_service(box):

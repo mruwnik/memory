@@ -47,7 +47,7 @@ The Terraform state holds every generated secret. Use a remote backend with encr
 | `voyage_api_key` | required | Embeddings key, stored as a SecureString |
 | `release_signers` | required | SSH public keys whose signed `v*` tags auto-install |
 | `region` | `eu-central-1` | |
-| `instance_type` | `t3.large` | 2 vCPU and 8 GB, enough for light use. Use `t3.xlarge` for heavy Claude-session or agent use |
+| `instance_type` | `t3.large` | 2 vCPU and 8 GB, enough for light use. Use `t3.xlarge` for heavy agent use |
 | `disk_gb` | `100` | Data volume |
 | `availability_zone` | `null` | AZ for the subnet and data volume. Null takes the first available AZ at creation. Later changes are ignored, because moving AZ would replace the data volume |
 | `route53_zone_id` | `null` | Create the A record in this zone |
@@ -104,11 +104,13 @@ Their output is in the journal, for example `journalctl -u memory-update`. `stat
 | `status` | observe | Version, health, migrations, containers, disk, memory, last update and backup, pending reboot |
 | `logs [lines]` | observe | The last error records of the api and worker containers (default 100 lines each), through a redaction filter |
 | `restart [service]` | maintain | Restarts one compose service, or all of them |
-| `update-to <tag>` | maintain | Runs the same signature and age checks as the nightly update, then updates |
+| `update-to <tag>` | maintain | Runs the same signature and age checks as the nightly update, then updates; refuses a tag older than the installed one (`rollback` goes back) |
 | `disk-cleanup` | maintain | Prunes old images, build cache and old dumps |
 | `reboot` | maintain | Reboots in one minute |
 | `rollback` | recover | Restores the pre-update dump and checks out the previous version |
 | `restore-latest-backup` | recover | Restores the newest backup, after keeping a fresh dump |
+
+Every action except `status` and `logs` refuses with "busy" while another one, or a nightly job, is running.
 
 Each document embeds `tools/ops/lib.sh` and the action's script as they were when you ran `terraform apply`. A new release can't change what a document does. When the scripts change, the next plan shows the diff and you decide whether to apply it.
 

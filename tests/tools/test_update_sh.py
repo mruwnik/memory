@@ -38,22 +38,27 @@ def clone(tmp_path):
     return clone
 
 
-def dry_run(clone, *args, cwd=None):
+def update(clone, *args, cwd=None, path="", lock_file=None):
     result = subprocess.run(
-        ["bash", str(clone / "tools" / "update.sh"), "--dry-run", *args],
+        ["bash", str(clone / "tools" / "update.sh"), *args],
         cwd=cwd or clone,
         env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "PATH": f"{path}/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "COMPOSE": "echo compose",
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
             "STATE_DIR": str(clone.parent / "state"),
+            "LOCK_FILE": lock_file or str(clone.parent / "nightly.lock"),
         },
         capture_output=True,
         text=True,
         timeout=60,
     )
     return result.returncode, result.stdout + result.stderr
+
+
+def dry_run(clone, *args, cwd=None):
+    return update(clone, "--dry-run", *args, cwd=cwd)
 
 
 def write_state(clone, target_sha):
@@ -193,3 +198,34 @@ def test_up_to_date_with_an_unfinished_update_reports_failure(clone, allowed, si
 
     assert code != 0
     assert "did not finish" in output
+
+
+@pytest.mark.parametrize("extra, ok", [([], False), (["--allow-downgrade"], True)])
+def test_explicit_older_release_needs_allow_downgrade(clone, allowed, signed_tag, extra, ok):
+    signed_tag(clone, "v0.0.8", 100, "good")
+    git(clone, "checkout", "--quiet", "--detach", "v0.0.10")
+
+    code, output = dry_run(
+        clone, "--require-signed", str(allowed), "--min-age-hours", "48", *extra, "v0.0.8"
+    )
+
+    assert (code == 0) is ok, output
+    assert ("-> v0.0.8" in output) is ok
+
+
+def test_update_refuses_while_the_nightly_lock_is_held(clone, lock_bin, held_lock):
+    head_before = git(clone, "rev-parse", "HEAD")
+
+    code, output = update(clone, path=f"{lock_bin}:")
+
+    assert code != 0
+    assert "busy" in output
+    assert not (clone / "backups").exists()
+    assert git(clone, "rev-parse", "HEAD") == head_before
+
+
+def test_update_runs_without_flock_or_a_lock_directory(clone):
+    code, output = update(clone, lock_file=str(clone.parent / "missing" / "nightly.lock"))
+
+    assert "busy" not in output
+    assert "No such file" not in output

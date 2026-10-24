@@ -6,7 +6,8 @@
 # Env: COMPOSE, DOCKER, BACKUP_DIR, KEEP_BACKUPS, HEALTH_TIMEOUT as in
 #      tools/update.sh; STATE_DIR (default /var/lib/memory) holds on-box state;
 #      MEMORY_ROOT is the checkout when this file is embedded outside one
-#      (default /opt/memory; ignored inside a checkout); OPS_ENV (default /etc/memory/ops.env) is sourced first.
+#      (default /opt/memory; ignored inside a checkout); OPS_ENV (default /etc/memory/ops.env) is sourced first;
+#      LOCK_FILE (default /run/lock/memory-nightly.lock), see take_lock.
 #
 # The ops scripts run through SSM documents whose output the operator can
 # read, so anything they print must be a number, a state or a fixed string:
@@ -87,6 +88,20 @@ require_yes() {
     [[ $YES == 1 || $DRY_RUN == 1 ]] && return
     echo "$(basename "$0") is destructive; pass --yes to confirm (or --dry-run to preview)" >&2
     exit 2
+}
+
+# The nightly units hold the same lock through flock(1), so a mutating script
+# never runs alongside an update, backup, restore, reboot or apt upgrade.
+# MEMORY_LOCK_HELD=1, set by such a unit or exported here for the scripts this
+# one runs, keeps them from refusing a lock their caller holds.
+LOCK_FILE=${LOCK_FILE:-/run/lock/memory-nightly.lock}
+take_lock() {
+    [[ $DRY_RUN == 1 || ${MEMORY_LOCK_HELD:-} == 1 ]] && return
+    # Hosts without flock(1) or /run/lock (macOS) run no timers to contend with.
+    command -v flock > /dev/null && [[ -d ${LOCK_FILE%/*} ]] || return 0
+    exec 9>>"$LOCK_FILE"
+    flock -n 9 || { echo "busy: an update, backup, restore or reboot is running; try again later" >&2; exit 1; }
+    export MEMORY_LOCK_HELD=1
 }
 
 log() { echo "==> $*"; }

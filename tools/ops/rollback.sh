@@ -11,6 +11,7 @@ set -Eeuo pipefail
 declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
 require_yes
+take_lock
 
 HEAD_SHA=$(git rev-parse HEAD)
 PREVIOUS=""

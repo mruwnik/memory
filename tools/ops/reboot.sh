@@ -6,5 +6,6 @@ set -Eeuo pipefail
 declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
 require_yes
+take_lock
 
 run shutdown -r +1

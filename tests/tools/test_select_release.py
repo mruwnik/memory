@@ -145,24 +145,40 @@ def test_errors_with_no_tags(repo, select):
 
 
 @pytest.mark.parametrize(
-    "who, age, seen, ok",
+    "who, age, seen, ok, expected",
     [
-        ("good", 100, -1, True),
-        (None, 100, -1, False),
-        ("stranger", 100, -1, False),
-        ("lightweight", 100, -1, False),
-        ("good", 1, -1, False),
-        ("good", 100, 0, False),
-        ("good", 100, None, False),
+        ("good", 100, -1, True, "v2.0.0"),
+        (None, 100, -1, False, ""),
+        ("stranger", 100, -1, False, ""),
+        ("lightweight", 100, -1, False, ""),
+        ("good", 1, -1, False, ""),
+        ("good", 100, 0, False, ""),
+        ("good", 100, None, False, ""),
     ],
 )
-def test_explicit_ref_gets_the_same_checks(repo, select, signed_tag, who, age, seen, ok):
+def test_explicit_ref_gets_the_same_checks(repo, select, signed_tag, who, age, seen, ok, expected):
     signed_tag(repo, "v2.0.0", age, who, seen)
 
     result = select(repo, "v2.0.0")
 
     assert (result.returncode == 0) is ok, result.stderr
-    assert result.stdout.strip() == "v2.0.0" * ok
+    assert result.stdout.strip() == expected
+
+
+def test_explicit_older_tag_on_another_branch_is_refused_as_a_downgrade(repo, select, signed_tag):
+    signed_tag(repo, "v1.0.0", 100, "good")
+    run(repo, "git", "checkout", "-q", "-b", "next")
+    commit(repo, "next")
+    signed_tag(repo, "v1.1.0", 100, "good")
+    run(repo, "git", "checkout", "-q", "-b", "hotfix", "v1.0.0")
+    commit(repo, "hotfix")
+    signed_tag(repo, "v1.0.1", 100, "good")
+    run(repo, "git", "checkout", "-q", "next")
+
+    result = select(repo, "v1.0.1", installed_here=True)
+
+    assert result.returncode != 0
+    assert "refusing to downgrade" in result.stderr
 
 
 def test_explicit_prerelease_tag_is_allowed_after_the_checks(repo, select, signed_tag):
@@ -346,12 +362,22 @@ def test_automatic_selection_reports_up_to_date_instead_of_downgrading(
     assert "up to date" in result.stderr
 
 
-def test_explicit_older_tag_is_still_allowed(repo, select, signed_tag):
+# The checkout's own tag passes: re-running update-to resumes an unfinished update.
+@pytest.mark.parametrize(
+    "ref, extra, ok",
+    [
+        ("v1.0.0", [], False),
+        ("v1.0.0", ["--allow-downgrade"], True),
+        ("v1.1.0", [], True),
+    ],
+)
+def test_explicit_older_tag_needs_allow_downgrade(repo, select, signed_tag, ref, extra, ok):
     signed_tag(repo, "v1.0.0", 100, "good")
     commit(repo, "installed later")
     signed_tag(repo, "v1.1.0", 100, "good")
 
-    result = select(repo, "v1.0.0", installed_here=True)
+    result = select(repo, *extra, ref, installed_here=True)
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "v1.0.0"
+    assert (result.returncode == 0) is ok, result.stderr
+    assert result.stdout.strip() == ref * ok
+    assert ("downgrade" in result.stderr) is (not ok)

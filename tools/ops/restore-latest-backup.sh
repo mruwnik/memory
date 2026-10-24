@@ -17,6 +17,7 @@ set -Eeuo pipefail
 declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
 require_yes
+take_lock
 
 SOURCE=${BACKUP_SOURCE:-}
 FILES_DIR=$ROOT/memory_files

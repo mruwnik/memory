@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Update this deployment to a release. See UPDATING.md.
 #
-#   tools/update.sh [--dry-run] [--require-signed ALLOWED_SIGNERS] [--min-age-hours N] [REF]
+#   tools/update.sh [--dry-run] [--require-signed ALLOWED_SIGNERS] [--min-age-hours N]
+#                   [--allow-downgrade] [REF]
 #       REF defaults to the newest v* release tag. The two flags restrict the
 #       choice, and an explicit REF, to tags signed by a key in ALLOWED_SIGNERS
-#       and at least N hours old (tools/select_release.sh).
+#       and at least N hours old, and refuse an explicit REF older than the
+#       checkout unless --allow-downgrade (tools/select_release.sh).
 #
 # Env: COMPOSE (default "docker compose"), DOCKER (default docker, or podman
 #      when COMPOSE starts with podman), REMOTE (default origin),
@@ -26,6 +28,7 @@ DRY_RUN=0
 REF=""
 TARGET=""
 SELECT_ARGS=()
+ALLOW_DOWNGRADE=""
 while (($#)); do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
@@ -35,7 +38,8 @@ while (($#)); do
             SELECT_ARGS+=("$1" "$path"); shift 2 ;;
         --min-age-hours)
             SELECT_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        --allow-downgrade) ALLOW_DOWNGRADE=--allow-downgrade; shift ;;
+        -h|--help) sed -n '2,/^set /p' "$0" | sed '$d'; exit 0 ;;
         -*) echo "unknown option: $1" >&2; exit 2 ;;
         *) REF=$1; shift ;;
     esac
@@ -45,6 +49,8 @@ if ! [[ $MIN_FREE_GB =~ ^[1-9][0-9]*$ ]]; then
     echo "MIN_FREE_GB must be a positive integer, got '$MIN_FREE_GB'" >&2
     exit 2
 fi
+
+take_lock
 
 if [[ $DRY_RUN == 0 ]]; then
     mkdir -p "$BACKUP_DIR"
@@ -118,6 +124,7 @@ git fetch --tags --force "$REMOTE"
 
 if ((${#SELECT_ARGS[@]})); then
     ((DRY_RUN)) && SELECT_ARGS+=(--no-record)
+    SELECT_ARGS+=(${ALLOW_DOWNGRADE:+"$ALLOW_DOWNGRADE"})
     select_err=$(mktemp)
     select_rc=0
     REF=$(tools/select_release.sh "${SELECT_ARGS[@]}" ${REF:+"$REF"} 2> "$select_err") || select_rc=$?

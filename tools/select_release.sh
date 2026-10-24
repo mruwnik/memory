@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Print the release tag to install, or fail. Run inside the repo checkout.
 #
-#   tools/select_release.sh [--require-signed ALLOWED_SIGNERS] [--min-age-hours N] [--no-record] [REF]
+#   tools/select_release.sh [--require-signed ALLOWED_SIGNERS] [--min-age-hours N] [--no-record]
+#                           [--allow-downgrade] [REF]
 #
 # Without REF, the newest vMAJOR.MINOR.PATCH tag that passes the checks. With
-# REF, that v* tag if it passes (a non-v* ref is refused when a check is on). --require-signed accepts only annotated tags
+# REF, that v* tag if it passes (a non-v* ref is refused when a check is on) and
+# is not older than the checkout, unless --allow-downgrade: the operators' update-to
+# can't pass it, so rollback.sh stays their only way back. --require-signed accepts only annotated tags
 # with a valid SSH signature from a key in the allowed_signers file whose
 # embedded name matches the ref. --min-age-hours accepts only tags at least that
 # old: the later of the tag date and when this host first saw the tag object, so
@@ -28,12 +31,14 @@ ALLOWED=""
 MIN_AGE_HOURS=0
 REF=""
 RECORD=1
+ALLOW_DOWNGRADE=0
 while (($#)); do
     case "$1" in
         --require-signed) ALLOWED=${2:?--require-signed needs a file}; shift 2 ;;
         --min-age-hours) MIN_AGE_HOURS=${2:?--min-age-hours needs a number}; shift 2 ;;
         --no-record) RECORD=0; shift ;;
-        -h|--help) sed -n "2,20p" "$0"; exit 0 ;;
+        --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
+        -h|--help) sed -n '2,/^set /p' "$0" | sed '$d'; exit 0 ;;
         -*) echo "unknown option: $1" >&2; exit 2 ;;
         *) REF=$1; shift ;;
     esac
@@ -106,6 +111,15 @@ if [[ -n $REF ]]; then
             exit 1
         fi
         check_tag "$REF"
+    fi
+    # HEAD itself passes: re-running the same update resumes it. The version
+    # comparison catches an older tag on a branch that isn't HEAD's ancestor.
+    current=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2> /dev/null || true)
+    if ((!ALLOW_DOWNGRADE)) && [[ $(git rev-parse "$REF^{commit}") != "$(git rev-parse HEAD)" ]] \
+        && { git merge-base --is-ancestor "$REF^{commit}" HEAD 2> /dev/null \
+            || [[ -n $current && $REF != "$current" && $(printf '%s\n%s\n' "$REF" "$current" | sort -V | head -n1) == "$REF" ]]; }; then
+        echo "$REF is older than the checkout; refusing to downgrade (tools/ops/rollback.sh goes back)" >&2
+        exit 1
     fi
     echo "$REF"
     exit 0

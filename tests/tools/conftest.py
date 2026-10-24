@@ -1,3 +1,4 @@
+import fcntl
 import os
 import subprocess
 import time
@@ -9,6 +10,15 @@ GIT_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
 }
+
+# flock(1) -n FD, which macOS lacks: locks the caller's open file description.
+FAKE_FLOCK = """#!/usr/bin/env python3
+import fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[-1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)
+"""
 
 
 def keygen(path):
@@ -70,6 +80,24 @@ def signed_tag(keys, state_dir):
             f.write(f"{sha} {int(time.time()) - seen_hours * 3600}\n")
 
     return make
+
+
+@pytest.fixture
+def lock_bin(tmp_path):
+    """tmp_path/bin holding a flock(1); scripts get LOCK_FILE=tmp_path/nightly.lock."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "flock").write_text(FAKE_FLOCK)
+    (bin_dir / "flock").chmod(0o755)
+    return bin_dir
+
+
+@pytest.fixture
+def held_lock(tmp_path):
+    """The nightly lock, held as a systemd unit's flock(1) would hold it."""
+    with open(tmp_path / "nightly.lock", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 def pytest_configure(config):

@@ -3,6 +3,7 @@
 # of its default-gateway network: this makes that kbnet, at a fixed address the
 # api trusts (FORWARDED_ALLOW_IPS, RATE_LIMIT_TRUSTED_PROXIES). Each stack on a
 # host needs its own KBNET_SUBNET. gw_priority needs Docker Engine 28+.
+# Keep this path: COMPOSE_FILE in installed .env files names it, across rollbacks too.
 networks:
   kbnet:
     ipam:

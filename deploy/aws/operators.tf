@@ -20,11 +20,12 @@ locals {
       role       = "maintain"
       args       = "{{ tag }}"
       parameters = { tag = { type = "String", allowedPattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$", description = "Release tag, vX.Y.Z" } }
+      timeout    = 14400
     }
     disk-cleanup          = { role = "maintain", args = "", parameters = {} }
     reboot                = { role = "maintain", args = "--yes", parameters = {} }
-    rollback              = { role = "recover", args = "--yes", parameters = {} }
-    restore-latest-backup = { role = "recover", args = "--yes", parameters = {} }
+    rollback              = { role = "recover", args = "--yes", parameters = {}, timeout = 14400 }
+    restore-latest-backup = { role = "recover", args = "--yes", parameters = {}, timeout = 14400 }
   }
 
   document_content = { for a, v in local.actions : a => yamlencode({
@@ -35,7 +36,8 @@ locals {
       action = "aws:runShellScript"
       name   = replace(a, "-", "_")
       inputs = {
-        timeoutSeconds = 3600
+        # SIGKILL at the timeout skips the scripts' failure traps, so the long ones get room.
+        timeoutSeconds = lookup(v, "timeout", 3600)
         runCommand = [templatefile("${path.module}/ops-document.sh.tftpl", {
           action      = a
           args        = v.args

@@ -42,7 +42,7 @@ Once `v*` tags exist, `tools/update.sh` with no argument picks the newest one.
 Any tag, branch or sha also works.
 
 To follow only releases you trust, pass an `allowed_signers` file (one
-`* <ssh public key>` line per release signer) and a minimum age:
+`* namespaces="git" <ssh public key>` line per release signer) and a minimum age:
 
 ```bash
 tools/update.sh --require-signed /etc/memory/allowed_signers --min-age-hours 48
@@ -54,7 +54,8 @@ when this host first saw the tag, recorded in `$STATE_DIR/seen-tags` (default
 `/var/lib/memory`), so a signer can't backdate a tag past the delay. Only
 annotated, SSH-signed tags whose embedded name matches are accepted, and
 automatic selection considers only `vMAJOR.MINOR.PATCH` tags. An explicit `REF`
-must be a `v*` tag and pass the same checks. A tag never seen before counts as
+must be a `v*` tag and pass the same checks, and must not be older than the
+checkout unless you also pass `--allow-downgrade`. A tag never seen before counts as
 first seen now; `--dry-run` does not record sightings. The selection lives in `tools/select_release.sh`,
 which prints the chosen tag or exits nonzero.
 
@@ -215,13 +216,15 @@ through fixed SSM documents). Output is numbers and states only, except for
 | `status.sh` | Health, containers, disk, memory, last update and backup results, pending reboot |
 | `logs.sh [LINES]` | The last ERROR records and traceback shapes of api and worker, scrubbed of quoted values, URLs, emails and credentials |
 | `restart.sh [service]` | Restart one service or all |
-| `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`); prints step and result lines only |
+| `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`), refusing a tag older than the checkout; prints step and result lines only |
 | `rollback.sh --yes` | The commands above, from the update state or `last-good`; refuses unless the record is for the current checkout, and skips the tag it leaves |
 | `restore-latest-backup.sh --yes` | Restore the newest complete S3 set (Qdrant, then Postgres, then files); first keeps a fresh `pre-restore-*.dump` and a `pre-restore-qdrant-*.tar.gz` |
 | `disk-cleanup.sh` | Prune old images, build cache and dumps beyond `KEEP_BACKUPS` |
 | `reboot.sh --yes` | `shutdown -r +1` |
 
-All take `--dry-run`. On-box state is in `$STATE_DIR` (default
+All take `--dry-run`. `update.sh` and every script here but `status.sh` and
+`logs.sh` refuse with "busy" while another one, or a nightly unit, holds
+`/run/lock/memory-nightly.lock`. On-box state is in `$STATE_DIR` (default
 `/var/lib/memory`): `update-failed` (written by `tools/update.sh`),
 `restore-failed` and `restore.log` (owner-only details of a failed restore or
 rollback), `skip-tags`, and `last-backup` (the nightly backup timer writes `ok`

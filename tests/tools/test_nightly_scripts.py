@@ -236,6 +236,8 @@ def test_configure_renders_ssm_config_units_and_caddy(host):
     assert "flock /run/lock/memory-nightly.lock" in (
         tmp / "units" / "apt-daily-upgrade.service.d" / "memory.conf"
     ).read_text()
+    # update.sh would otherwise refuse the lock its unit holds.
+    assert "Environment=MEMORY_LOCK_HELD=1" in (tmp / "units" / "memory-update.service").read_text()
     timers = " ".join(u for u in units if u.endswith(".timer"))
     assert call_lines(host, "systemctl") == [
         "systemctl reload-or-restart caddy",
