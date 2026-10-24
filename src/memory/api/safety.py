@@ -49,8 +49,8 @@ def validate_disable_auth_safety() -> None:
     prod_signals: list[str] = []
     if not is_loopback_url(settings.SERVER_URL):
         prod_signals.append(f"SERVER_URL={settings.SERVER_URL!r} is not loopback")
-    if settings.S3_BACKUP_ENABLED:
-        prod_signals.append("S3_BACKUP_ENABLED=true")
+    if settings.S3_BACKUP_BUCKET:
+        prod_signals.append("S3_BACKUP_BUCKET is set")
     non_loopback_redirects = [
         p
         for p in settings.OAUTH_REDIRECT_URI_ALLOWLIST

@@ -294,7 +294,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                             task_ids.append(task.id)
                             docs_synced += 1
                     except Exception as e:
-                        logger.error(f"Error fetching file {file_meta.get('name')}: {e}")
+                        logger.error(f"Error fetching file {file_meta.get('id')}: {e}")
                         continue
             else:
                 # It's a single document - sync it directly
@@ -328,7 +328,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                         task_ids.append(task.id)
                         docs_synced = 1
                 except Exception as e:
-                    logger.error(f"Error fetching document {file_metadata.get('name')}: {e}")
+                    logger.error(f"Error fetching document {file_metadata.get('id')}: {e}")
                     raise
 
             # Update sync timestamps

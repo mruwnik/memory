@@ -164,8 +164,8 @@ def parse_ebook(file_path: str | Path) -> Ebook:
 
     try:
         doc = pymupdf.open(str(path))
-    except pymupdf.FileNotFoundError as e:
-        logger.error(f"Error opening ebook {path}: {e}")
+    except pymupdf.FileNotFoundError:
+        logger.exception("Error opening ebook")
         raise
 
     try:

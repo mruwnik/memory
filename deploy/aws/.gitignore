@@ -1,0 +1,5 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+# Holds voyage_api_key.
+*.tfvars

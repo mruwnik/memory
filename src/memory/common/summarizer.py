@@ -1,6 +1,5 @@
 import json
 import logging
-import traceback
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -153,9 +152,8 @@ def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list
         )
         result = json.loads(response)
         summary, tags = result["summary"], result["tags"]
-    except Exception as e:
-        traceback.print_exc()
-        logger.error(f"Summarization failed: {e}")
+    except Exception:
+        logger.exception("Summarization failed")
 
     summary_tokens = tokens.approx_token_count(summary)
     if summary_tokens > target_tokens * 1.5:

@@ -1,0 +1,9 @@
+[Unit]
+Description=memory: back up the databases and files to S3
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock /run/lock/memory-nightly.lock /opt/memory/deploy/aws/host/nightly-backup.sh
+TimeoutStartSec=4h

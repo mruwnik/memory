@@ -41,6 +41,24 @@ tools/update.sh origin/master
 Once `v*` tags exist, `tools/update.sh` with no argument picks the newest one.
 Any tag, branch or sha also works.
 
+To follow only releases you trust, pass an `allowed_signers` file (one
+`* namespaces="git" <ssh public key>` line per release signer) and a minimum age:
+
+```bash
+tools/update.sh --require-signed /etc/memory/allowed_signers --min-age-hours 48
+```
+
+`update.sh` then takes the newest `v*` tag with a valid SSH signature from one of
+those keys that is at least 48 hours old. Age is the later of the tag date and
+when this host first saw the tag, recorded in `$STATE_DIR/seen-tags` (default
+`/var/lib/memory`), so a signer can't backdate a tag past the delay. Only
+annotated, SSH-signed tags whose embedded name matches are accepted, and
+automatic selection considers only `vMAJOR.MINOR.PATCH` tags. An explicit `REF`
+must be a `v*` tag and pass the same checks, and must not be older than the
+checkout unless you also pass `--allow-downgrade`. A tag never seen before counts as
+first seen now; `--dry-run` does not record sightings. The selection lives in `tools/select_release.sh`,
+which prints the chosen tag or exits nonzero.
+
 **AI agents:** the update takes minutes (image builds, migrations, health
 polling), which is longer than most tool-call timeouts. A killed run leaves
 the stack half-updated. Start it detached in its own session (`setsid` where
@@ -187,6 +205,31 @@ Qdrant even though their Postgres rows are gone. The periodic
 `clean-all-collections` maintenance task deletes those orphaned vectors. To
 run it now, queue it as in section 3 with `maintenance clean-all-collections`.
 
+### Repair scripts
+
+`tools/ops/` holds the repair actions, run as root on the box (or by an operator
+through fixed SSM documents). Output is numbers and states only, except for
+`logs.sh` (see *Trust limits* in [deploy/aws/README.md](deploy/aws/README.md)).
+
+| Script | Does |
+|---|---|
+| `status.sh` | Health, containers, disk, memory, last update and backup results, pending reboot |
+| `logs.sh [LINES]` | The last ERROR records and traceback shapes of api and worker, scrubbed of quoted values, URLs, emails and credentials |
+| `restart.sh [service]` | Restart one service or all |
+| `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`), refusing a tag older than the checkout; prints step and result lines only |
+| `rollback.sh --yes` | The commands above, from the update state or `last-good`; refuses unless the record is for the current checkout, and skips the tag it leaves |
+| `restore-latest-backup.sh --yes` | Restore the newest complete S3 set (Qdrant, then Postgres, then files); first keeps a fresh `pre-restore-*.dump` and a `pre-restore-qdrant-*.tar.gz` |
+| `disk-cleanup.sh` | Prune old images, build cache and dumps beyond `KEEP_BACKUPS` |
+| `reboot.sh --yes` | `shutdown -r +1` |
+
+All take `--dry-run`. `update.sh` and every script here but `status.sh` and
+`logs.sh` refuse with "busy" while another one, or a nightly unit, holds
+`/run/lock/memory-nightly.lock`. On-box state is in `$STATE_DIR` (default
+`/var/lib/memory`): `update-failed` (written by `tools/update.sh`),
+`restore-failed` and `restore.log` (owner-only details of a failed restore or
+rollback), `skip-tags`, and `last-backup` (the nightly backup timer writes `ok`
+or `failed` as its first word). `status.sh` reports the markers.
+
 ## 5. When a migration fails
 
 `update.sh` stops right after the failed `migrate` run, and the app services
@@ -224,6 +267,13 @@ stay stopped.
   commands. Post-deploy commands must be safe to re-run.
 - Tag releases as `vMAJOR.MINOR.PATCH`. `update.sh` picks the newest `v*` tag,
   and `update_available` compares tags numerically.
+- Cut a release with `tools/release.sh [--push] vX.Y.Z`. It needs a clean
+  checkout of master, a `## vX.Y.Z` section in CHANGELOG.md (rename
+  `Unreleased`) and passing tests, then creates an SSH-signed annotated tag
+  (`SIGNING_KEY` or git's `user.signingkey`). It pushes master and the tag only
+  with `--push`. The default test command is the venv's
+  `pytest --run-slow -n 3 --dist loadfile`; local master must equal
+  `$REMOTE/master`.
 
 ## Update notifications (optional)
 

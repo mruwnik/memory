@@ -49,6 +49,8 @@ The installer will:
 
 Re-run it any time — it skips anything already configured.
 
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `JWT_SECRET`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+
 ### 2. Start the stack
 
 ```bash
@@ -70,8 +72,10 @@ The simplest path is to run `add_user.py` inside the API container, which alread
 
 ```bash
 docker compose exec api python tools/add_user.py \
-  --email you@example.com --password 'yourpass' --name 'Your Name'
+  --email you@example.com --password 'yourpass' --name 'Your Name' --admin
 ```
+
+`--admin` gives the user full access (the `*` scope). Without it, a new user gets the default `read` scope.
 
 If you'd rather run it on the host (e.g. as part of a script), `pip install -e ".[all]"` first — but note that the host CLI needs to reach Postgres, which is **not** exposed by default. See [Local development](#local-development-without-docker-for-the-app) for how to publish the data-service ports. The other extras defined in `setup.py` are `api`, `common`, `dev`, `ingesters`, `workers`, and `all` (a superset).
 
@@ -131,6 +135,8 @@ RATE_LIMIT_TRUSTED_PROXIES=10.89.0.0/24
 # Public origin used for OAuth redirects, CORS, and cookie scoping.
 SERVER_URL=https://memory.example.com
 ```
+
+A proxy on the same host that talks to a published port (for example `API_PORT=127.0.0.1:8000`) doesn't arrive from loopback. Docker forwards it from the gateway of the api's default-gateway network, which has no fixed address. `deploy/aws/compose.proxy.yaml` fixes that. It makes `kbnet` that network, at `KBNET_SUBNET`/`KBNET_GATEWAY` (default `10.213.47.0/24` and `10.213.47.1`), and needs Docker Engine 28 or later. `tools/install.sh --non-interactive` enables it with `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml` in `.env` and trusts `127.0.0.1,::1,$KBNET_GATEWAY`. Give each stack on one host its own subnet.
 
 The `docker-compose.yaml` passes both variables through to the container with safe loopback defaults (`127.0.0.1,::1`), so you don't need to touch the compose file — setting them in `.env` is enough. Restart with `docker compose up -d --build` to apply.
 
@@ -265,8 +271,12 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |
 | `RERANK_MODEL`                    | `rerank-2.5`         | Voyage reranker used after candidate retrieval                 |
 | `FILE_STORAGE_DIR`                | `/tmp/memory_files`  | Where uploaded content is stored                               |
+| `S3_BACKUP_BUCKET`                | unset (backups off)  | Bucket for daily encrypted backups; setting it turns them on and requires `BACKUP_ENCRYPTION_KEY` (the workers refuse to start without it). The workers also need AWS credentials |
+| `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION` | `memory` / `eu-central-1` | Key prefix inside the bucket and the bucket's region |
+| `BACKUP_ENCRYPTION_KEY`           | unset                | Passphrase for the backups; `tools/install.sh` generates one when you choose S3 backups. Keep a copy elsewhere: backups can't be decrypted without it |
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|
 | `RATE_LIMIT_TRUSTED_PROXIES`      | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for the rate-limit bucket key          |
+| `KBNET_SUBNET`, `KBNET_GATEWAY`   | `10.213.47.0/24`, `.1` | Internal network's address with `deploy/aws/compose.proxy.yaml`; give each stack on a host its own |
 | `ONE_TIME_KEY_RATE_LIMIT`         | `10/hour`            | Rolling-window cap on one-time keys minted per user (MCP)      |
 | `ONE_TIME_KEY_TTL_SECONDS`        | `3600`               | Seconds until an unused one-time key expires                   |
 | `ENABLE_BM25_SEARCH`              | `true`               | Postgres BM25 alongside vector search                          |

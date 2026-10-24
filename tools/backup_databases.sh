@@ -3,18 +3,18 @@
 
 set -euo pipefail
 
+# Configuration - read from environment; there is no default bucket
+BUCKET="${S3_BACKUP_BUCKET:?S3 backups are off: set S3_BACKUP_BUCKET (and BACKUP_ENCRYPTION_KEY) to enable them}"
+PREFIX="${S3_BACKUP_PREFIX:-memory}/databases"
+REGION="${S3_BACKUP_REGION:-eu-central-1}"
+PASSWORD="${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
+MAX_BACKUPS="${MAX_BACKUPS:-30}"  # Keep last N backups; 0 never prunes
+
 # Install AWS CLI if not present (postgres:15 image doesn't include it)
 if ! command -v aws >/dev/null 2>&1; then
     echo "Installing AWS CLI, wget, and jq..."
     apt-get update -qq && apt-get install -y -qq awscli wget jq >/dev/null 2>&1
 fi
-
-# Configuration - read from environment or use defaults
-BUCKET="${S3_BACKUP_BUCKET:-equistamp-memory-backup}"
-PREFIX="${S3_BACKUP_PREFIX:-Daniel}/databases"
-REGION="${S3_BACKUP_REGION:-eu-central-1}"
-PASSWORD="${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
-MAX_BACKUPS="${MAX_BACKUPS:-30}"  # Keep last N backups
 
 # Service names (docker-compose network)
 POSTGRES_HOST="${POSTGRES_HOST:-postgres}"
@@ -38,6 +38,7 @@ error() {
 cleanup_old_backups() {
     local prefix=$1
     local pattern=$2  # e.g., "postgres-" or "qdrant-"
+    [ "$MAX_BACKUPS" -gt 0 ] || return 0
     
     log "Checking for old ${pattern} backups to clean up..."
 

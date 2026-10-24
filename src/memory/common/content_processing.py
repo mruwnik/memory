@@ -187,10 +187,9 @@ def embed_source_item(
                 f"No chunks generated for {type(source_item).__name__}: {getattr(source_item, 'title', 'unknown')}"
             )
             return 0
-    except Exception as e:
+    except Exception:
         source_item.embed_status = "FAILED"  # type: ignore
-        logger.error(f"Failed to embed {type(source_item).__name__}: {e}")
-        logger.error(traceback.format_exc())
+        logger.exception(f"Failed to embed {type(source_item).__name__}")
         return 0
 
 
@@ -282,11 +281,10 @@ def push_to_qdrant(source_items: Sequence[SourceItem]):
                 f"Successfully stored embeddings for: {getattr(item, 'title', 'unknown')}"
             )
 
-    except Exception as e:
+    except Exception:
         for item in items_to_process:
             item.embed_status = "FAILED"  # type: ignore
-        logger.error(f"Failed to push embeddings to Qdrant: {e}")
-        logger.error(traceback.format_exc())
+        logger.exception("Failed to push embeddings to Qdrant")
         raise
 
 
@@ -375,11 +373,10 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         logger.info(
             f"Successfully processed {type(item).__name__}: {getattr(item, 'title', 'unknown')} ({chunks_count} chunks embedded)"
         )
-    except Exception as e:
+    except Exception:
         status = "failed"
         item.embed_status = "FAILED"  # type: ignore
-        logger.error(f"Failed to push embeddings to Qdrant: {e}")
-        logger.error(traceback.format_exc())
+        logger.exception("Failed to push embeddings to Qdrant")
     session.commit()
     if status == "processed":
         queue_trigger_match(item.id)
@@ -485,9 +482,8 @@ def safe_task_execution(
         except Exception as e:
             status = "failure"
             error_message = str(e)
-            logger.error(f"Task {func.__name__} failed: {e}")
+            logger.exception(f"Task {func.__name__} failed")
             traceback_str = traceback.format_exc()
-            logger.error(traceback_str)
 
             # Check if this is a bound task and if retries are exhausted
             task_self = args[0] if args and hasattr(args[0], "request") else None

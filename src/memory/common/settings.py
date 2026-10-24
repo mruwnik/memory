@@ -565,12 +565,12 @@ DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN = int(
 SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 3600))  # seconds (1 hour)
 
 
-# S3 Backup settings
-S3_BACKUP_BUCKET = os.getenv("S3_BACKUP_BUCKET", "equistamp-memory-backup")
-S3_BACKUP_PREFIX = os.getenv("S3_BACKUP_PREFIX", "Daniel")
+# S3 backups are on only when S3_BACKUP_BUCKET is set, and then need
+# BACKUP_ENCRYPTION_KEY (checked at startup by require_settings).
+S3_BACKUP_BUCKET = os.getenv("S3_BACKUP_BUCKET", "")
+S3_BACKUP_PREFIX = os.getenv("S3_BACKUP_PREFIX", "memory")
 S3_BACKUP_REGION = os.getenv("S3_BACKUP_REGION", "eu-central-1")
 BACKUP_ENCRYPTION_KEY = secret_env("BACKUP_ENCRYPTION_KEY")
-S3_BACKUP_ENABLED = boolean_env("S3_BACKUP_ENABLED", bool(BACKUP_ENCRYPTION_KEY))
 S3_BACKUP_INTERVAL = int(
     os.getenv("S3_BACKUP_INTERVAL", 60 * 60 * 24)
 )  # Daily by default
@@ -736,6 +736,8 @@ def missing_required_settings(values: Any, role: str) -> list[str]:
     provider = values.SUMMARIZER_MODEL.split("/", 1)[0]
     if role == "worker" and (key := LLM_PROVIDER_KEYS.get(provider)):
         required.append(key)
+    if values.S3_BACKUP_BUCKET:
+        required.append("BACKUP_ENCRYPTION_KEY")
     return [name for name in required if not getattr(values, name)]
 
 
@@ -743,10 +745,24 @@ def require_settings(values: Any, role: str) -> None:
     if role not in ("api", "worker"):
         print(f"Unknown role {role!r}: expected 'api' or 'worker'", file=sys.stderr)
         raise SystemExit(2)
+    if "S3_BACKUP_ENABLED" in os.environ:
+        print(
+            "Refusing to start: S3_BACKUP_ENABLED was removed. Backups now run exactly "
+            "when S3_BACKUP_BUCKET is set: remove S3_BACKUP_ENABLED, and unset "
+            "S3_BACKUP_BUCKET to keep backups off.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     if missing := missing_required_settings(values, role):
+        why = (
+            " S3_BACKUP_BUCKET is set, which turns on encrypted S3 backups;"
+            " unset it to turn them off."
+            if "BACKUP_ENCRYPTION_KEY" in missing
+            else ""
+        )
         print(
             f"Refusing to start: missing required settings: {', '.join(missing)}. "
-            "Set them in .env, or for secrets as NAME_FILE pointing at a file.",
+            f"Set them in .env, or for secrets as NAME_FILE pointing at a file.{why}",
             file=sys.stderr,
         )
         raise SystemExit(1)

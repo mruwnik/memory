@@ -1,53 +1,56 @@
 #!/usr/bin/env bash
 # Update this deployment to a release. See UPDATING.md.
 #
-#   tools/update.sh [--dry-run] [REF]    REF defaults to the newest v* release tag
+#   tools/update.sh [--dry-run] [--require-signed ALLOWED_SIGNERS] [--min-age-hours N]
+#                   [--allow-downgrade] [REF]
+#       REF defaults to the newest v* release tag. The two flags restrict the
+#       choice, and an explicit REF, to tags signed by a key in ALLOWED_SIGNERS
+#       and at least N hours old, and refuse an explicit REF older than the
+#       checkout unless --allow-downgrade (tools/select_release.sh).
 #
 # Env: COMPOSE (default "docker compose"), DOCKER (default docker, or podman
 #      when COMPOSE starts with podman), REMOTE (default origin),
 #      BACKUP_DIR (default ./backups), KEEP_BACKUPS (default 5),
-#      MIN_FREE_GB (default 5), HEALTH_TIMEOUT seconds (default 300).
+#      MIN_FREE_GB (default 5), HEALTH_TIMEOUT seconds (default 300), STATE_DIR
+#      (default /var/lib/memory). Shared defaults live in tools/ops/lib.sh.
+#      A failed update leaves $STATE_DIR/update-failed; a success removes it.
 set -Eeuo pipefail
 umask 077
 
-cd "$(dirname "$0")/.."
+CALLER_DIR=$PWD
+# shellcheck source=ops/lib.sh
+source "$(dirname "$0")/ops/lib.sh"
 
-COMPOSE=${COMPOSE:-docker compose}
-DOCKER=${DOCKER:-$([[ $COMPOSE == podman* ]] && echo podman || echo docker)}
 REMOTE=${REMOTE:-origin}
-BACKUP_DIR=${BACKUP_DIR:-backups}
-KEEP_BACKUPS=${KEEP_BACKUPS:-5}
 MIN_FREE_GB=${MIN_FREE_GB:-5}
-HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-300}
-DB_USER=${DB_USER:-kb}
-DB_NAME=${DB_NAME:-kb}
-APP_SERVICES=(api worker agents-worker ingest-hub)
-STATE=$BACKUP_DIR/update-in-progress
-LAST_GOOD=$BACKUP_DIR/last-good
 
 DRY_RUN=0
 REF=""
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run) DRY_RUN=1 ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
-        -*) echo "unknown option: $arg" >&2; exit 2 ;;
-        *) REF=$arg ;;
+TARGET=""
+SELECT_ARGS=()
+ALLOW_DOWNGRADE=""
+while (($#)); do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --require-signed)
+            path=${2:?$1 needs a file}
+            [[ $path == /* ]] || path=$CALLER_DIR/$path
+            SELECT_ARGS+=("$1" "$path"); shift 2 ;;
+        --min-age-hours)
+            SELECT_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+        --allow-downgrade) ALLOW_DOWNGRADE=--allow-downgrade; shift ;;
+        -h|--help) sed -n '2,/^set /p' "$0" | sed '$d'; exit 0 ;;
+        -*) echo "unknown option: $1" >&2; exit 2 ;;
+        *) REF=$1; shift ;;
     esac
 done
 
-for n in KEEP_BACKUPS MIN_FREE_GB HEALTH_TIMEOUT; do
-    if ! [[ ${!n} =~ ^[1-9][0-9]*$ ]]; then
-        echo "$n must be a positive integer, got '${!n}'" >&2
-        exit 2
-    fi
-done
+if ! [[ $MIN_FREE_GB =~ ^[1-9][0-9]*$ ]]; then
+    echo "MIN_FREE_GB must be a positive integer, got '$MIN_FREE_GB'" >&2
+    exit 2
+fi
 
-log() { echo "==> $*"; }
-run() {
-    echo "+ $*"
-    [[ $DRY_RUN == 1 ]] || "$@"
-}
+take_lock
 
 if [[ $DRY_RUN == 0 ]]; then
     mkdir -p "$BACKUP_DIR"
@@ -98,57 +101,62 @@ save_state() {
 
 on_failure() {
     trap - ERR
-    local state
-    state=$(printf %q "$STATE")
+    [[ $DRY_RUN == 1 ]] || { mkdir -p "$STATE_DIR"; date -u +%FT%TZ > "$UPDATE_FAILED_MARKER"; }
     echo
     echo "!! Update failed or was interrupted. The stack may be partially updated."
+    if [[ -z $TARGET_SHA ]]; then
+        echo "!! The checkout was not changed; there is nothing to roll back."
+        return
+    fi
     echo "!! Rollback target: $PREVIOUS ($PREVIOUS_SHA). State: $STATE"
     if [[ -n $BACKUP && $MIGRATED == 1 ]]; then
-        local b
-        b=$(printf %q "$BACKUP")
-        cat <<EOF
-!! Migrations may have run. Postgres backup: $BACKUP
-!! Re-running tools/update.sh resumes with the same rollback target. To roll back
-!! instead, confirm with the owner first (this replaces the database), then run:
-   $COMPOSE exec -T postgres pg_restore --list < $b > /dev/null && \\
-   $COMPOSE stop ${APP_SERVICES[*]} && \\
-   $COMPOSE exec -T postgres dropdb -U $DB_USER --force $DB_NAME && \\
-   $COMPOSE exec -T postgres createdb -U $DB_USER $DB_NAME && \\
-   $COMPOSE exec -T postgres pg_restore -U $DB_USER -d $DB_NAME --no-owner < $b && \\
-   git checkout --detach $PREVIOUS_SHA && \\
-   APP_VERSION=$PREVIOUS $COMPOSE up -d --build
-EOF
+        echo "!! Migrations may have run. Postgres backup: $BACKUP"
+        echo "!! Re-running tools/update.sh resumes with the same rollback target. To roll back"
+        echo "!! instead, confirm with the owner first (this replaces the database), then run:"
     else
-        echo "!! Migrations did not run; the database is untouched. To go back:"
-        echo "   git checkout --detach $PREVIOUS_SHA && APP_VERSION=$PREVIOUS $COMPOSE up -d --build"
+        echo "!! Migrations did not run; the database is untouched. To go back, run:"
     fi
-    echo "!! Once /health reports $PREVIOUS again, remove the update state: rm -f $state"
-}
-
-wait_for_postgres() {
-    run $COMPOSE up -d --no-recreate postgres
-    [[ $DRY_RUN == 1 ]] && return
-    for _ in {1..30}; do
-        $COMPOSE exec -T postgres pg_isready -q -U "$DB_USER" && return
-        sleep 2
-    done
-    echo "Postgres did not become ready" >&2
-    return 1
+    echo "   tools/ops/rollback.sh --yes"
 }
 
 log "Fetching from $REMOTE"
 git fetch --tags --force "$REMOTE"
 
-if [[ -z $REF ]]; then
+if ((${#SELECT_ARGS[@]})); then
+    ((DRY_RUN)) && SELECT_ARGS+=(--no-record)
+    SELECT_ARGS+=(${ALLOW_DOWNGRADE:+"$ALLOW_DOWNGRADE"})
+    select_err=$(mktemp)
+    select_rc=0
+    REF=$(tools/select_release.sh "${SELECT_ARGS[@]}" ${REF:+"$REF"} 2> "$select_err") || select_rc=$?
+    if ((select_rc == 3)); then
+        log "Already up to date: $(cat "$select_err")"
+        rm -f "$select_err"
+        if [[ -f $STATE ]]; then
+            echo "but an earlier update did not finish: $STATE" >&2
+            exit 1
+        fi
+        exit 0
+    elif ((select_rc)); then
+        log "Release check failed: $(cat "$select_err")"
+        rm -f "$select_err"
+        exit 1
+    fi
+    rm -f "$select_err"
+    TARGET=$(git rev-parse --verify "refs/tags/$REF^{commit}")
+elif [[ -z $REF ]]; then
     REF=$(git tag --list 'v*' --sort=-v:refname | head -n1)
     if [[ -z $REF ]]; then
         echo "No release tags (v*) found; pass a ref explicitly, e.g. $REMOTE/master" >&2
         exit 1
     fi
 fi
-TARGET=$(git rev-parse --verify "$REF^{commit}")
+TARGET=${TARGET:-$(git rev-parse --verify "$REF^{commit}")}
 APP_VERSION=$(git describe --tags --always "$TARGET")
 export APP_VERSION
+if [[ ! -f $STATE && $TARGET == "$PREVIOUS_SHA" ]]; then
+    log "Already at $REF ($APP_VERSION); nothing to do"
+    exit 0
+fi
 log "Updating $PREVIOUS -> $REF ($APP_VERSION, $TARGET)"
 
 wait_for_postgres
@@ -213,43 +221,23 @@ if [[ $DRY_RUN == 1 ]]; then
 fi
 
 log "Waiting for /health to report healthy at the expected DB revision"
-CHECK='import json, urllib.request as u
-d = json.load(u.urlopen("http://localhost:8000/health", timeout=5))
-print(json.dumps(d))
-assert d["status"] == "healthy" and d["db_revision"] == d["expected_revision"] and d["version"] == "'"$APP_VERSION"'"'
-deadline=$((SECONDS + HEALTH_TIMEOUT))
-until status=$($COMPOSE exec -T api python -c "$CHECK" 2>/dev/null); do
-    if (( SECONDS >= deadline )); then
-        echo "Stack not healthy after ${HEALTH_TIMEOUT}s. Last response: ${status:-none}" >&2
-        false
-    fi
-    sleep 5
-done
+status=$(wait_healthy "$APP_VERSION" | tr '\n' ' ')
 log "Healthy: $status"
 
-container_states() {
-    local service id
-    for service in "${APP_SERVICES[@]}"; do
-        id=$($COMPOSE ps -q "$service")
-        if [[ -z $id ]]; then
-            echo "$service: missing"
-            continue
-        fi
-        echo "$service: $($DOCKER inspect -f '{{.State.Status}} restarts={{.RestartCount}}' "$id")"
-    done
-}
 log "Checking that app containers stay up"
-before=$(container_states)
+before=$(container_states "${APP_SERVICES[@]}")
 sleep 15
-after=$(container_states)
+after=$(container_states "${APP_SERVICES[@]}")
 echo "$after"
 if [[ $before != "$after" ]] || grep -qv ': running ' <<<"$after"; then
     echo "App containers are not stable. Before: $before" >&2
     false
 fi
 
-printf 'SHA=%q\nVERSION=%q\nBACKUP=%q\n' "$TARGET" "$APP_VERSION" "$BACKUP" > "$LAST_GOOD"
-rm -f "$STATE"
+printf 'SHA=%q\nVERSION=%q\nBACKUP=%q\nPREVIOUS=%q\nPREVIOUS_SHA=%q\n' \
+    "$TARGET" "$APP_VERSION" "$BACKUP" "$PREVIOUS" "$PREVIOUS_SHA" > "$LAST_GOOD"
+rm -f "$STATE" "$UPDATE_FAILED_MARKER"
+unskip_tag "$REF"
 trap - ERR INT TERM
 
 shopt -s nullglob

@@ -76,11 +76,8 @@ async def upsert(
                 "creator_id": creator_id,
             },
         )
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        logger.error(f"Error creating note: {e}")
+    except Exception:
+        logger.exception("Error creating note")
         raise
 
     return {

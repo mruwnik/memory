@@ -1,18 +1,34 @@
 #! /usr/bin/env python
 
 import argparse
+import os
 import secrets
 from memory.common.db.connection import make_session
-from memory.common.db.models.users import HumanUser, BotUser
+from memory.common.db.models.users import HumanUser, BotUser, User
 from memory.common.people import find_or_create_person
+from memory.common.scopes import SCOPE_ADMIN
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--email", type=str, required=True)
     parser.add_argument("--name", type=str, required=True)
-    parser.add_argument("--password", type=str, required=False)
+    parser.add_argument(
+        "--password",
+        type=str,
+        required=False,
+        default=os.environ.get("ADD_USER_PASSWORD"),
+        help="Password (defaults to $ADD_USER_PASSWORD, which keeps it out of argv)",
+    )
+    parser.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="Do nothing if a user with this email already exists",
+    )
     parser.add_argument("--bot", action="store_true", help="Create a bot user")
+    parser.add_argument(
+        "--admin", action="store_true", help="Grant full access (the * scope)"
+    )
     parser.add_argument(
         "--api-key",
         type=str,
@@ -27,6 +43,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with make_session() as session:
+        if args.if_missing and session.query(User).filter_by(email=args.email).first():
+            print(f"User {args.email} already exists")
+            raise SystemExit(0)
         if args.bot:
             user = BotUser.create_with_api_key(
                 name=args.name, email=args.email, api_key=args.api_key
@@ -45,6 +64,8 @@ if __name__ == "__main__":
             else:
                 print(f"Human user {args.email} created (no API key)")
 
+        if args.admin:
+            user.scopes = [SCOPE_ADMIN]
         session.add(user)
         session.commit()
         session.refresh(user)

@@ -12,7 +12,7 @@ def safe_disable_auth_settings(monkeypatch):
     """Default to a safe (loopback) configuration with DISABLE_AUTH=True."""
     monkeypatch.setattr(settings, "DISABLE_AUTH", True)
     monkeypatch.setattr(settings, "SERVER_URL", "http://localhost:8000")
-    monkeypatch.setattr(settings, "S3_BACKUP_ENABLED", False)
+    monkeypatch.setattr(settings, "S3_BACKUP_BUCKET", "")
     monkeypatch.setattr(
         settings,
         "OAUTH_REDIRECT_URI_ALLOWLIST",
@@ -25,7 +25,7 @@ def test_validate_disable_auth_off_does_nothing(monkeypatch):
     """When DISABLE_AUTH=False, the validator is a no-op even with prod signals."""
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
     monkeypatch.setattr(settings, "SERVER_URL", "https://memory.example.com")
-    monkeypatch.setattr(settings, "S3_BACKUP_ENABLED", True)
+    monkeypatch.setattr(settings, "S3_BACKUP_BUCKET", "some-bucket")
     monkeypatch.setattr(
         settings, "OAUTH_REDIRECT_URI_ALLOWLIST", ["https://app.example.com"]
     )
@@ -72,9 +72,9 @@ def test_non_loopback_server_url_blocks(safe_disable_auth_settings, monkeypatch,
         validate_disable_auth_safety()
 
 
-def test_s3_backup_enabled_blocks(safe_disable_auth_settings, monkeypatch):
-    monkeypatch.setattr(settings, "S3_BACKUP_ENABLED", True)
-    with pytest.raises(RuntimeError, match="S3_BACKUP_ENABLED"):
+def test_s3_backup_bucket_blocks(safe_disable_auth_settings, monkeypatch):
+    monkeypatch.setattr(settings, "S3_BACKUP_BUCKET", "some-bucket")
+    with pytest.raises(RuntimeError, match="S3_BACKUP_BUCKET"):
         validate_disable_auth_safety()
 
 
@@ -96,7 +96,7 @@ def test_wildcard_oauth_allowlist_blocks(safe_disable_auth_settings, monkeypatch
 
 def test_explicit_override_allows_prod(safe_disable_auth_settings, monkeypatch, caplog):
     monkeypatch.setattr(settings, "SERVER_URL", "https://memory.example.com")
-    monkeypatch.setattr(settings, "S3_BACKUP_ENABLED", True)
+    monkeypatch.setattr(settings, "S3_BACKUP_BUCKET", "some-bucket")
     monkeypatch.setattr(settings, "DISABLE_AUTH_CONFIRM", "yes-i-am-sure")
     with caplog.at_level("WARNING"):
         validate_disable_auth_safety()
@@ -116,7 +116,7 @@ def test_wrong_override_value_still_blocks(safe_disable_auth_settings, monkeypat
 
 def test_error_message_lists_all_signals(safe_disable_auth_settings, monkeypatch):
     monkeypatch.setattr(settings, "SERVER_URL", "https://memory.example.com")
-    monkeypatch.setattr(settings, "S3_BACKUP_ENABLED", True)
+    monkeypatch.setattr(settings, "S3_BACKUP_BUCKET", "some-bucket")
     monkeypatch.setattr(
         settings, "OAUTH_REDIRECT_URI_ALLOWLIST", ["https://app.example.com"]
     )
@@ -124,7 +124,7 @@ def test_error_message_lists_all_signals(safe_disable_auth_settings, monkeypatch
         validate_disable_auth_safety()
     msg = str(exc.value)
     assert "SERVER_URL" in msg
-    assert "S3_BACKUP_ENABLED" in msg
+    assert "S3_BACKUP_BUCKET" in msg
     assert "OAUTH_REDIRECT_URI_ALLOWLIST" in msg
 
 

@@ -25,8 +25,11 @@ def clone(tmp_path):
     git(tmp_path, "clone", "--quiet", str(REPO_ROOT), str(clone))
     git(tmp_path, "init", "--quiet", "--bare", str(tmp_path / "origin.git"))
     git(clone, "remote", "set-url", "origin", str(tmp_path / "origin.git"))
-    shutil.copy(REPO_ROOT / "tools" / "update.sh", clone / "tools" / "update.sh")
-    git(clone, "add", "tools/update.sh")
+    for script in ["update.sh", "select_release.sh"]:
+        shutil.copy(REPO_ROOT / "tools" / script, clone / "tools" / script)
+    (clone / "tools" / "ops").mkdir(exist_ok=True)
+    shutil.copy(REPO_ROOT / "tools" / "ops" / "lib.sh", clone / "tools" / "ops" / "lib.sh")
+    git(clone, "add", "tools")
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "update.sh under test")
     git(clone, "tag", "v0.0.9")
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "next release")
@@ -35,16 +38,27 @@ def clone(tmp_path):
     return clone
 
 
-def dry_run(clone):
+def update(clone, *args, cwd=None, path="", lock_file=None):
     result = subprocess.run(
-        ["bash", "tools/update.sh", "--dry-run"],
-        cwd=clone,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "COMPOSE": "echo compose"},
+        ["bash", str(clone / "tools" / "update.sh"), *args],
+        cwd=cwd or clone,
+        env={
+            "PATH": f"{path}/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "COMPOSE": "echo compose",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "STATE_DIR": str(clone.parent / "state"),
+            "LOCK_FILE": lock_file or str(clone.parent / "nightly.lock"),
+        },
         capture_output=True,
         text=True,
         timeout=60,
     )
     return result.returncode, result.stdout + result.stderr
+
+
+def dry_run(clone, *args, cwd=None):
+    return update(clone, "--dry-run", *args, cwd=cwd)
 
 
 def write_state(clone, target_sha):
@@ -114,3 +128,104 @@ def test_update_state_for_current_checkout_is_resumed(clone):
 
     assert code == 0, output
     assert "rollback target stays v0.0.1" in output
+
+
+def test_signed_old_tag_is_planned_when_signatures_are_required(clone, allowed, signed_tag):
+    git(clone, "checkout", "--quiet", "--detach", "v0.0.10")
+    signed_tag(clone, "v0.0.11", 100, "good")
+    git(clone, "checkout", "--quiet", "--detach", "v0.0.9")
+
+    code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
+
+    assert code == 0, output
+    assert "-> v0.0.11" in output
+
+
+@pytest.mark.parametrize("explicit", [[], ["v0.0.10"]], ids=["auto", "explicit"])
+def test_unsigned_tags_are_refused_before_anything_changes(clone, allowed, explicit):
+    head_before = git(clone, "rev-parse", "HEAD")
+
+    code, output = dry_run(
+        clone, "--require-signed", str(allowed), "--min-age-hours", "48", *explicit
+    )
+
+    assert code != 0
+    assert "Dry run complete" not in output
+    assert git(clone, "rev-parse", "HEAD") == head_before
+
+
+def test_relative_allowed_signers_path_is_resolved_from_the_callers_directory(
+    clone, allowed, signed_tag
+):
+    signed_tag(clone, "v0.0.11", 100, "good")
+
+    code, output = dry_run(
+        clone, "--require-signed", allowed.name, "--min-age-hours", "48", cwd=allowed.parent
+    )
+
+    assert code == 0, output
+
+
+def test_dry_run_does_not_record_first_sightings(clone, allowed, signed_tag):
+    signed_tag(clone, "v0.0.11", 100, "good", seen=None)
+
+    code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
+
+    assert "Already up to date" in output, output
+    assert not (clone.parent / "state" / "seen-tags").exists()
+
+
+def test_missing_allowed_signers_file_is_named_in_the_error(clone):
+    code, output = dry_run(clone, "--require-signed", "nope", "--min-age-hours", "48")
+
+    assert code != 0
+    assert "nope" in output
+
+
+def test_update_to_the_checked_out_commit_does_nothing(clone):
+    code, output = dry_run(clone, "v0.0.9")
+
+    assert code == 0, output
+    assert "Already at" in output
+    assert "migrate" not in output
+
+
+def test_up_to_date_with_an_unfinished_update_reports_failure(clone, allowed, signed_tag):
+    signed_tag(clone, "v0.0.11", 100, "good")  # tag at HEAD: installed
+    write_state(clone, git(clone, "rev-parse", "HEAD"))
+
+    code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
+
+    assert code != 0
+    assert "did not finish" in output
+
+
+@pytest.mark.parametrize("extra, ok", [([], False), (["--allow-downgrade"], True)])
+def test_explicit_older_release_needs_allow_downgrade(clone, allowed, signed_tag, extra, ok):
+    signed_tag(clone, "v0.0.8", 100, "good")
+    git(clone, "checkout", "--quiet", "--detach", "v0.0.10")
+
+    code, output = dry_run(
+        clone, "--require-signed", str(allowed), "--min-age-hours", "48", *extra, "v0.0.8"
+    )
+
+    assert (code == 0) is ok, output
+    assert ("-> v0.0.8" in output) is ok
+
+
+def test_update_refuses_while_the_nightly_lock_is_held(clone, lock_bin, held_lock):
+    head_before = git(clone, "rev-parse", "HEAD")
+
+    code, output = update(clone, path=f"{lock_bin}:")
+
+    assert code != 0
+    assert "busy" in output
+    assert not (clone / "backups").exists()
+    assert git(clone, "rev-parse", "HEAD") == head_before
+
+
+def test_update_runs_without_flock_or_a_lock_directory(clone):
+    code, output = update(clone, lock_file=str(clone.parent / "missing" / "nightly.lock"))
+
+    assert "busy" not in output
+    assert "No such file" not in output

@@ -187,7 +187,7 @@ async def delete(report_id: int) -> dict:
                     file_path.unlink()
                     logger.info("Deleted report file: %s", file_path)
                 except OSError as e:
-                    logger.error("Error deleting report file %s: %s", file_path, e)
+                    logger.error("Error deleting the file of report %d: %s", report_id, e)
 
         session.delete(report)
         session.commit()

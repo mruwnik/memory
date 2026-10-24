@@ -94,6 +94,8 @@ COMPLETE_SETTINGS = dict(
     SUMMARIZER_MODEL="anthropic/claude-haiku-5-5",
     CELERY_QUEUE_PREFIX="memory",
     QUEUE_PREFIX="",
+    S3_BACKUP_BUCKET="",
+    BACKUP_ENCRYPTION_KEY="",
 )
 
 
@@ -107,6 +109,9 @@ COMPLETE_SETTINGS = dict(
         ("worker", {"VOYAGE_API_KEY": "", "ANTHROPIC_API_KEY": "sk"}, ["VOYAGE_API_KEY"]),
         ("api", {}, []),
         ("api", {"VOYAGE_API_KEY": ""}, ["VOYAGE_API_KEY"]),
+        ("worker", {"ANTHROPIC_API_KEY": "sk", "S3_BACKUP_BUCKET": "b"}, ["BACKUP_ENCRYPTION_KEY"]),
+        ("api", {"S3_BACKUP_BUCKET": "b", "BACKUP_ENCRYPTION_KEY": "k"}, []),
+        ("worker", {"ANTHROPIC_API_KEY": "sk", "BACKUP_ENCRYPTION_KEY": "k"}, []),
     ],
 )
 def test_missing_required_settings(role, overrides, expected):
@@ -122,6 +127,30 @@ def test_require_settings_lists_every_missing_setting(capsys):
     err = capsys.readouterr().err
     assert "VOYAGE_API_KEY" in err
     assert "ANTHROPIC_API_KEY" in err
+
+
+def test_bucket_without_key_names_both_variables_but_no_values(capsys):
+    values = SimpleNamespace(
+        **{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk", "S3_BACKUP_BUCKET": "my-bucket"}
+    )
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "worker")
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "S3_BACKUP_BUCKET" in err
+    assert "BACKUP_ENCRYPTION_KEY" in err
+    assert "my-bucket" not in err
+
+
+def test_removed_s3_backup_enabled_refuses_to_start(monkeypatch, capsys):
+    monkeypatch.setenv("S3_BACKUP_ENABLED", "false")
+    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ANTHROPIC_API_KEY": "sk"})
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "worker")
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "S3_BACKUP_ENABLED" in err
+    assert "S3_BACKUP_BUCKET" in err
 
 
 def test_require_settings_rejects_unknown_role(capsys):

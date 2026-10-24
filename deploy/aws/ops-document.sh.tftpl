@@ -1,0 +1,10 @@
+set -eu
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+cat > "$d/lib.sh" <<'MEMORY_OPS_LIB'
+${lib}
+MEMORY_OPS_LIB
+cat > "$d/${action}.sh" <<'MEMORY_OPS_SCRIPT'
+${script}
+MEMORY_OPS_SCRIPT
+MEMORY_ROOT=${install_dir} bash "$d/${action}.sh" ${args}

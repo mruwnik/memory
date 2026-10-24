@@ -600,14 +600,8 @@ def test_check_git_command_does_not_double_log_on_failure(caplog):
                 with pytest.raises(RuntimeError):
                     notes.check_git_command(repo_root, "status")
 
-    # git_command emits exactly 3 ERROR records for a failure with
-    # non-empty stdout: "Git command failed", "stderr: ...",
-    # "stdout: ...". check_git_command must NOT emit another copy.
-    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
-    assert len(error_records) == 3, (
-        f"Expected exactly 3 error logs from git_command, got "
-        f"{len(error_records)}: {[r.getMessage() for r in error_records]}"
-    )
+    error_records = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert error_records == ["git status failed with exit 1"]
 
 
 @patch("memory.workers.tasks.notes.git_command")
@@ -664,50 +658,32 @@ def test_check_git_command_whitespace_handling(mock_git_command):
     )
 
 
-@patch("memory.workers.tasks.notes.subprocess.run")
-def test_git_command_logs_errors(mock_run):
-    """git_command logs error details (returncode, stderr, stdout) when
-    the underlying git invocation fails. (Was previously asserted on
-    check_git_command, but that function no longer duplicates the
-    logging — the work happens in git_command, the single source.)"""
-    mock_result = Mock()
-    mock_result.returncode = 128
-    mock_result.stdout = "some output"
-    mock_result.stderr = "fatal: repository not found"
-    mock_run.return_value = mock_result
+@pytest.mark.parametrize(
+    "stdout,warnings",
+    [
+        (
+            "[master 1a2b] Sync note secret.md: Private subject",
+            [
+                "git stderr: fatal: 'notes/secret.md' did not match",
+                "git stdout: [master 1a2b] Sync note secret.md: Private subject",
+            ],
+        ),
+        ("", ["git stderr: fatal: 'notes/secret.md' did not match"]),
+    ],
+)
+def test_git_command_keeps_git_output_out_of_error_records(caplog, stdout, warnings):
+    """Error records reach the appliance operator; git's output names notes."""
+    failing = Mock(returncode=128, stdout=stdout, stderr="fatal: 'notes/secret.md' did not match")
 
-    repo_root = pathlib.Path("/test/repo")
+    with patch("memory.workers.tasks.notes.subprocess.run", return_value=failing):
+        with patch.object(pathlib.Path, "exists", return_value=True):
+            with caplog.at_level("WARNING", logger="memory.workers.tasks.notes"):
+                notes.git_command(pathlib.Path("/test/repo"), "commit", "-m", "Sync note secret.md")
 
-    with patch.object(pathlib.Path, "exists", return_value=True):
-        with patch("memory.workers.tasks.notes.logger") as mock_logger:
-            notes.git_command(repo_root, "clone", "invalid-url")
-
-    mock_logger.error.assert_any_call("Git command failed: 128")
-    mock_logger.error.assert_any_call("stderr: fatal: repository not found")
-    mock_logger.error.assert_any_call("stdout: some output")
-
-
-@patch("memory.workers.tasks.notes.subprocess.run")
-def test_git_command_logs_errors_no_stdout(mock_run):
-    """git_command's stdout log line is suppressed when stdout is empty."""
-    mock_result = Mock()
-    mock_result.returncode = 1
-    mock_result.stdout = ""
-    mock_result.stderr = "error: command failed"
-    mock_run.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-
-    with patch.object(pathlib.Path, "exists", return_value=True):
-        with patch("memory.workers.tasks.notes.logger") as mock_logger:
-            notes.git_command(repo_root, "invalid-command")
-
-    mock_logger.error.assert_any_call("Git command failed: 1")
-    mock_logger.error.assert_any_call("stderr: error: command failed")
-    stdout_calls = [
-        call for call in mock_logger.error.call_args_list if "stdout:" in str(call)
+    assert [r.getMessage() for r in caplog.records if r.levelname == "ERROR"] == [
+        "git commit failed with exit 128"
     ]
-    assert len(stdout_calls) == 0
+    assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == warnings
 
 
 @patch("memory.workers.tasks.notes.settings")
@@ -1168,7 +1144,7 @@ def test_sync_notes_skips_all_profiles(mock_sync_note, mock_make_session, tmp_pa
         "emails/escape.md",  # inside FILE_STORAGE_DIR but not under notes/
     ],
 )
-def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path):
+def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path, caplog):
     """A path-traversal filename must be rejected before any DB or FS write."""
     from memory.common import settings
 
@@ -1192,6 +1168,10 @@ def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path):
 
     # Nothing should have been written.
     assert list(notes_dir.iterdir()) == []
+    # Error records reach the appliance operator; filenames carry note titles.
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any(m.startswith("Refusing to sync note") for m in errors)
+    assert not any(bad_filename.lstrip("/") in m for m in errors)
 
 
 def test_note_save_to_file_rejects_traversal_filename(tmp_path):

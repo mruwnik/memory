@@ -16,6 +16,27 @@ section has nothing in it:
 
 ### Required env vars
 
+- **Required action if you relied on the old backup defaults.** S3 backups no
+  longer default to a bucket: they run only when `S3_BACKUP_BUCKET` is set, and
+  `S3_BACKUP_ENABLED` is gone. An instance that had `BACKUP_ENCRYPTION_KEY` set
+  and nothing else was backing up to bucket `equistamp-memory-backup` under
+  prefix `Daniel`; after this update it stops backing up silently. To keep
+  backing up, set `S3_BACKUP_BUCKET` and `S3_BACKUP_PREFIX` in `.env` (the old
+  values, if you want your existing backups to stay in the same place) and keep
+  `BACKUP_ENCRYPTION_KEY`; setting a bucket without the key makes the
+  workers refuse to start. If you had
+  `S3_BACKUP_ENABLED=false` to keep backups off, remove it and unset
+  `S3_BACKUP_BUCKET`: the workers refuse to start while `S3_BACKUP_ENABLED` is set,
+  and a bucket alone turns backups on. If you had a bucket set without
+  `BACKUP_ENCRYPTION_KEY` (backups were off), either add the key or unset the
+  bucket, or the workers refuse to start. To check: `grep S3_BACKUP .env` should show
+  `S3_BACKUP_BUCKET`; while it is unset the `backup-all` task logs
+  "S3 backup is disabled". `S3_BACKUP_PREFIX` now defaults to
+  `memory` (was `Daniel`) and `tools/backup_databases.sh` and
+  `tools/restore_*` also have no default bucket. New installs choose explicitly:
+  `tools/install.sh` asks, and `--non-interactive` needs `S3_BACKUP_BUCKET` or
+  `S3_BACKUP=off`.
+
 - `SECRETS_ENCRYPTION_KEY` must be set to register external MCP servers (their
   tokens, client secrets and headers are encrypted with it). Registration fails
   with a clear error without it; nothing else changes.
@@ -43,6 +64,57 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- `tools/install.sh --non-interactive` installs from environment variables
+  without prompting and creates the first user (see the README). Both modes now
+  also generate `secrets/secrets_encryption_key.txt` when absent (compose mounts
+  it), and tighten `.env` and `secrets/` to owner-only permissions. `tools/add_user.py`
+  reads the password from `ADD_USER_PASSWORD` and accepts `--if-missing`.
+- `tools/update.sh` accepts `--require-signed <allowed_signers>` and
+  `--min-age-hours N` to install only signed, sufficiently old release tags
+  (age counts from when the host first saw the tag; state in `$STATE_DIR`).
+  Without them it behaves as before. New `tools/release.sh` cuts signed tags.
+- New repair scripts in `tools/ops/` (status, logs, restart, update-to, rollback,
+  restore-latest-backup, disk-cleanup, reboot); see UPDATING.md. `tools/update.sh`
+  now sources `tools/ops/lib.sh`, writes `$STATE_DIR/update-failed` when an update
+  fails (default `STATE_DIR=/var/lib/memory`), and `last-good` records the
+  previous version. `rollback.sh` adds the tag it leaves to `$STATE_DIR/skip-tags`,
+  which the automatic release selection passes over.
+  Automatic selection never returns a tag at or behind the checkout (exit 3,
+  "up to date"), and `update.sh` does nothing when the target is already checked out.
+- API log records now carry a level (`[time: LEVEL/logger] message`, as in the
+  workers), and app warnings and errors in the API go through it instead of
+  printing bare.
+- `tools/restore_databases.sh` is removed; use `tools/ops/restore-latest-backup.sh`
+  (set `BACKUP_SOURCE` to a local directory laid out like the bucket). Its Qdrant
+  restore never worked: Qdrant has no API to restore full snapshots. The new one
+  tars the Qdrant volume to `backups/pre-restore-qdrant-*.tar.gz`, then starts
+  Qdrant on the snapshot (`--storage-snapshot`), and puts the tarball back if that fails.
+- `tools/backup_databases.sh` with `MAX_BACKUPS=0` keeps every backup, for a
+  bucket whose lifecycle rule expires them.
+- Automatic release selection counts an installed, signed tag as up to date
+  whatever its age, so the night after an install that skipped the delay
+  doesn't fail.
+- `tools/ops/restore-latest-backup.sh` hands `BACKUP_ENCRYPTION_KEY` to the
+  worker container that decrypts file backups, so the key no longer has to be
+  in `.env`.
+- `tools/install.sh` creates the external `memory-api-<MEMORY_STACK>` Docker
+  network if it is missing; before, `docker compose up` failed on a new host
+  until it was created by hand. The first user it creates now has full access.
+  `tools/add_user.py --admin` grants the `*` scope; without it users get `read`.
+- `RATE_LIMIT_TRUSTED_PROXIES` accepts CIDRs, like `FORWARDED_ALLOW_IPS`
+  already did (the rate limiter matched exact IPs only).
+- `tools/install.sh --non-interactive` now adds `deploy/aws/compose.proxy.yaml`
+  through `COMPOSE_FILE` in `.env`. It pins the `kbnet` subnet and gateway
+  (`KBNET_SUBNET`, `KBNET_GATEWAY`; default `10.213.47.0/24`, `.1`) and makes
+  kbnet the api's gateway network, and both trust settings become loopback
+  plus that gateway. Docker hands a host proxy's loopback connections to the
+  api from that gateway, so before this the api saw every client as the
+  gateway: one rate-limit bucket for everyone, and `X-Forwarded-Proto`
+  ignored. The override needs Docker Engine 28 or later, and each stack on a
+  host its own `KBNET_SUBNET`. The base compose file and other installs are
+  unchanged.
+- New EC2 first-boot script `deploy/aws/bootstrap.sh` and nightly host jobs in
+  `deploy/aws/host/` (update, backup, reboot window); see deploy/aws/README.md.
 - MCP tools gated on "has any items" (organizer task and calendar tools,
   deadlines, books, observations) are still hidden from tool listings while
   their table is empty, but calling one no longer fails with "Access denied";

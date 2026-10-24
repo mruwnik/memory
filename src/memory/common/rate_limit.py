@@ -16,6 +16,7 @@ should configure Redis HA.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import time
@@ -118,10 +119,26 @@ def check_rate_limit_spec(key: str, spec: str) -> bool:
     return check_rate_limit(key, limit, window)
 
 
-def _trusted_proxies() -> set[str]:
-    """Parse RATE_LIMIT_TRUSTED_PROXIES at call time so tests can patch it."""
+def is_trusted_proxy(host: str) -> bool:
+    """Whether ``host`` matches RATE_LIMIT_TRUSTED_PROXIES: ``*``, an exact
+    entry, or an address inside a CIDR entry. Parsed at call time so tests
+    can patch it."""
     raw = settings.RATE_LIMIT_TRUSTED_PROXIES or ""
-    return {p.strip() for p in raw.split(",") if p.strip()}
+    entries = {p.strip() for p in raw.split(",") if p.strip()}
+    if "*" in entries or host in entries:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    for entry in entries:
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            continue
+        if address in network:
+            return True
+    return False
 
 
 def rate_limit_key(request: "Request") -> str:
@@ -133,7 +150,8 @@ def rate_limit_key(request: "Request") -> str:
     fresh bucket per request and defeat the rate limit.
 
     Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
-    configured trusted proxy (``RATE_LIMIT_TRUSTED_PROXIES``). The
+    configured trusted proxy (``RATE_LIMIT_TRUSTED_PROXIES``: addresses
+    or CIDRs, like Uvicorn's ``--forwarded-allow-ips``). The
     ``"*"`` wildcard exists for parity with Uvicorn's
     ``--forwarded-allow-ips=*`` default but explicitly opts out of the
     spoofing protection — operators behind a real proxy should list its
@@ -144,8 +162,7 @@ def rate_limit_key(request: "Request") -> str:
     silently inherits the spoofing bypass.
     """
     immediate = request.client.host if request.client else "unknown"
-    trusted = _trusted_proxies()
-    if "*" in trusted or immediate in trusted:
+    if is_trusted_proxy(immediate):
         xff = request.headers.get("x-forwarded-for", "")
         if xff:
             # Left-most entry is the original client per RFC 7239 §5.2.
