@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -109,7 +109,6 @@ const AuthWrapper = () => {
     { path: '/ui/agents/runs/new', element: <AdHocRun />, scope: 'agents' },
     { path: '/ui/agents/runs/:runId', element: <RunView />, scope: 'agents' },
     { path: '/ui/agents/:id', element: <AgentEditor />, scope: 'agents' },
-    { path: '/ui/logs', element: <DockerLogs /> },
     { path: '/ui/snapshots', element: <ConfigSources /> },
     { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions' },
     { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions' },

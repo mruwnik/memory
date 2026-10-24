@@ -40,7 +40,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/telemetry', title: 'Telemetry', description: 'Claude Code usage, tokens, costs, and sessions' },
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and Claude sessions' },
-      { to: '/ui/logs', title: 'Docker logs', description: 'View API and worker container logs' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted API keys and tokens' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },

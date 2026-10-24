@@ -49,7 +49,6 @@ from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.source_items import router as source_items_router
 from memory.api.sessions import router as sessions_router
-from memory.api.docker_logs import router as docker_logs_router
 from memory.api.claude_snapshots import router as claude_snapshots_router
 from memory.api.claude_environments import router as claude_environments_router
 from memory.api.cloud_claude import router as cloud_claude_router
@@ -116,7 +115,6 @@ tags_metadata = [
     {"name": "metrics", "description": "System metrics and statistics"},
     {"name": "telemetry", "description": "Usage telemetry"},
     {"name": "polls", "description": "Create and manage polls"},
-    {"name": "docker-logs", "description": "Docker container log access"},
     {"name": "claude-snapshots", "description": "Claude conversation snapshots"},
     {"name": "claude-environments", "description": "Claude environment management"},
     {"name": "cloud-claude", "description": "Cloud Claude integration"},
@@ -498,7 +496,6 @@ app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(source_items_router)
 app.include_router(sessions_router)
-app.include_router(docker_logs_router)
 app.include_router(claude_snapshots_router)
 app.include_router(claude_environments_router)
 app.include_router(cloud_claude_router)

@@ -21,7 +21,6 @@ describe('Dashboard', () => {
     ['Reports', '/ui/reports'],
     ['Calendar', '/ui/calendar'],
     ['Tasks', '/ui/tasks'],
-    ['Docker logs', '/ui/logs'],
     ['Scheduled tasks', '/ui/scheduled-tasks'],
   ])('links the %s card to %s', (label, href) => {
     renderDashboard()

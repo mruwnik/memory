@@ -39,7 +39,6 @@ vi.mock('@/components', () => ({
   Tasks: () => <div>TASKS</div>,
   NotesPage: () => <div>NOTES</div>,
   Jobs: () => <div>JOBS</div>,
-  DockerLogs: () => <div>LOGS</div>,
   ConfigSources: () => <div>SNAPSHOTS</div>,
   CeleryOverview: () => <div>CELERY</div>,
   ScheduledTasks: () => <div>SCHEDULED</div>,
