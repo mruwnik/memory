@@ -32,9 +32,10 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
 from memory.common.db.models.base import Base
+from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.sync_status import SyncStatusMixin
 
@@ -162,7 +163,7 @@ class SlackApp(Base):
         return user.id is not None and self.created_by_user_id == user.id
 
 
-class SlackWorkspace(SyncStatusMixin, Base):
+class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
     """A Slack workspace (team) metadata.
 
     This represents a Slack workspace that one or more Memory users have connected to.
@@ -216,6 +217,24 @@ class SlackWorkspace(SyncStatusMixin, Base):
         Index("slack_workspaces_collect_idx", "collect_messages"),
         Index("slack_workspaces_project_idx", "project_id"),
     )
+
+    @property
+    def llm_registrant_id(self) -> int | None:
+        """The creator of the oldest Slack app synced into this workspace."""
+        session = object_session(self)
+        if session is None:
+            return None
+        return (
+            session.query(SlackApp.created_by_user_id)
+            .join(SlackUserCredentials, SlackUserCredentials.slack_app_id == SlackApp.id)
+            .filter(
+                SlackUserCredentials.workspace_id == self.id,
+                SlackApp.created_by_user_id.is_not(None),
+            )
+            .order_by(SlackApp.id)
+            .limit(1)
+            .scalar()
+        )
 
 
 class SlackUserCredentials(Base):
@@ -377,3 +396,7 @@ class SlackChannel(Base):
         if self.collect_messages is not None:
             return self.collect_messages
         return self.workspace.collect_messages
+
+    @property
+    def llm_key_holder(self) -> SlackWorkspace | None:
+        return self.workspace

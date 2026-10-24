@@ -500,6 +500,11 @@ class DiscordMessage(SourceItem):
             chain.append(self.channel.server)
         return chain
 
+    @property
+    def llm_registrant_id(self) -> int | None:
+        """DMs have no server to name a registrant, but the bot that collected them does."""
+        return self.bot.created_by_user_id if self.bot else None
+
 
 class SlackMessage(SourceItem):
     """Slack message collected from a channel or DM.

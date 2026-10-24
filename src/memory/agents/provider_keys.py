@@ -12,7 +12,8 @@ import httpx
 
 from memory.common import settings
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import KeyStatus, LLMProviderKey, User
+from memory.agents.system import SystemAgent
+from memory.common.db.models import KeyStatus, LLMProviderKey, SourceItem, User
 from memory.common.llms.registry import split_model
 from memory.common.notify import notify_user_now
 
@@ -99,6 +100,37 @@ def default_key(db: DBSession, user_id: int, provider: str) -> LLMProviderKey | 
         )
         .one_or_none()
     )
+
+
+def usable(key: LLMProviderKey | None) -> LLMProviderKey | None:
+    return key if key is not None and key.status == KeyStatus.OK else None
+
+
+def personal_key(db: DBSession, user_id: int, agent: SystemAgent) -> LLMProviderKey | None:
+    """The user's usable default key for `agent`'s provider: what their searches and
+    their own items use."""
+    return usable(default_key(db, user_id, agent.provider))
+
+
+def ingest_key(db: DBSession, item: SourceItem, agent: SystemAgent) -> LLMProviderKey | None:
+    """The key that pays for `agent` on `item`, or None when no LLM work may run on it.
+
+    The governing source's "no LLM" choice, or its explicit key when that belongs to
+    the source's owner or registrant, wins. Otherwise the
+    default key of whoever brought the item in: its creator, or for Slack and Discord
+    items (which have none) whoever registered the app or bot.
+    """
+    holder = item.llm_key_holder
+    if holder is not None and holder.llm_disabled:
+        return None
+    registrant = (holder and holder.llm_registrant_id) or item.llm_registrant_id
+    if holder is not None and holder.llm_key_id is not None:
+        key = db.get(LLMProviderKey, holder.llm_key_id)
+        # A source may only spend its own owner's keys.
+        if key is not None and key.user_id in (holder.content_owner_id, registrant):
+            return usable(key) if key.provider == agent.provider else None
+    owner = item.resolve_creator_id() or registrant
+    return personal_key(db, owner, agent) if owner is not None else None
 
 
 def choose_key(

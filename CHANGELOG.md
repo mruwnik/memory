@@ -446,6 +446,9 @@ section has nothing in it:
 - `20261029_key_names_per_user`: renames same-named keys of one user (`name (provider)`)
   and makes names unique per user. Fast.
 - `20261029_llm_spend`: new table for per-key LLM spend outside agent runs. Fast.
+- `20261029_source_llm_keys`: adds `llm_key_id`/`llm_disabled` to every source table and
+  `discord_bots.created_by_user_id` (backfilled with each bot's lowest-id authorized user).
+  Fast.
 
 ### Post-deploy commands
 

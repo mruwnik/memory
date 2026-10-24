@@ -18,7 +18,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
@@ -33,6 +33,36 @@ class KeyStatus(StrEnum):
 
 def iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+class LLMKeyChoice:
+    """Which provider key pays for LLM work on a source's items.
+
+    Unset (no key, not disabled): the default key of whoever brought each item in.
+    """
+
+    @declared_attr
+    def llm_key_id(cls) -> Mapped[int | None]:
+        return mapped_column(
+            Integer, ForeignKey("llm_provider_keys.id", ondelete="SET NULL"), nullable=True
+        )
+
+    llm_disabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
+    @property
+    def llm_key_holder(self) -> "LLMKeyChoice":
+        return self
+
+    @property
+    def content_owner_id(self) -> int | None:
+        return None
+
+    @property
+    def llm_registrant_id(self) -> int | None:
+        """Who pays by default for items that have no creator."""
+        return None
 
 
 class LLMProviderKey(Base):

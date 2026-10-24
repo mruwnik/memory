@@ -32,6 +32,7 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validates
 
 from memory.common.db.models.base import Base
+from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.sync_status import SyncStatusMixin
 from memory.common import settings
@@ -104,7 +105,7 @@ class Book(Base):
         return data
 
 
-class ArticleFeed(SyncStatusMixin, Base):
+class ArticleFeed(SyncStatusMixin, LLMKeyChoice, Base):
     __tablename__ = "article_feeds"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "article_feed"
@@ -172,7 +173,7 @@ class ArticleFeed(SyncStatusMixin, Base):
     )
 
 
-class EmailAccount(SyncStatusMixin, Base):
+class EmailAccount(SyncStatusMixin, LLMKeyChoice, Base):
     __tablename__ = "email_accounts"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "email_account"
@@ -304,7 +305,7 @@ class EmailAccount(SyncStatusMixin, Base):
         return value
 
 
-class GithubAccount(Base):
+class GithubAccount(LLMKeyChoice, Base):
     """GitHub authentication credentials for API access."""
 
     __tablename__ = "github_accounts"
@@ -334,6 +335,11 @@ class GithubAccount(Base):
     private_key_encrypted: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True
     )  # PEM key
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.user_id
 
     @property
     def access_token(self) -> str | None:
@@ -482,6 +488,10 @@ class GithubRepo(SyncStatusMixin, Base):
     def content_owner_id(self) -> int | None:
         """User who owns content synced from this source."""
         return self.account.user_id
+
+    @property
+    def llm_key_holder(self) -> GithubAccount:
+        return self.account
 
 
 class Project(Base):
@@ -901,7 +911,7 @@ class GoogleAccount(SyncStatusMixin, Base):
     )
 
 
-class GoogleFolder(SyncStatusMixin, Base):
+class GoogleFolder(SyncStatusMixin, LLMKeyChoice, Base):
     """Tracked Google Drive folder configuration."""
 
     __tablename__ = "google_folders"
@@ -997,7 +1007,7 @@ class GoogleFolder(SyncStatusMixin, Base):
     )
 
 
-class CalendarAccount(SyncStatusMixin, Base):
+class CalendarAccount(SyncStatusMixin, LLMKeyChoice, Base):
     """Calendar source for syncing events (CalDAV, Google Calendar, etc.)."""
 
     __tablename__ = "calendar_accounts"
@@ -1121,7 +1131,7 @@ class CalendarAccount(SyncStatusMixin, Base):
     )
 
 
-class TranscriptAccount(SyncStatusMixin, Base):
+class TranscriptAccount(SyncStatusMixin, LLMKeyChoice, Base):
     """A meeting-transcript provider account (Fireflies, Granola, Otter, ...).
 
     Stores per-user credentials and sync state for transcript ingestion.

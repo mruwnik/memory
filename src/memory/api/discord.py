@@ -274,7 +274,7 @@ def create_bot(
         return bot_to_response(existing)
 
     # Create new bot
-    bot = DiscordBot(id=bot_id, name=data.name)
+    bot = DiscordBot(id=bot_id, name=data.name, created_by_user_id=user.id)
     bot.token = data.token
     bot.authorized_users.append(user)
 

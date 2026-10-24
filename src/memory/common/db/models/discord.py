@@ -31,6 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
+from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
@@ -64,6 +65,9 @@ class DiscordBot(Base):
     token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -99,7 +103,7 @@ class DiscordBot(Base):
         return user in self.authorized_users
 
 
-class DiscordServer(Base):
+class DiscordServer(LLMKeyChoice, Base):
     """Discord server (guild) metadata and collection settings."""
 
     __tablename__ = "discord_servers"
@@ -147,6 +151,10 @@ class DiscordServer(Base):
         Index("discord_servers_project_idx", "project_id"),
         Index("discord_servers_bot_idx", "bot_id"),
     )
+
+    @property
+    def llm_registrant_id(self) -> int | None:
+        return self.bot.created_by_user_id if self.bot else None
 
 
 class DiscordChannel(Base):
@@ -206,6 +214,10 @@ class DiscordChannel(Base):
         if self.server:
             return self.server.collect_messages
         return False
+
+    @property
+    def llm_key_holder(self) -> DiscordServer | None:
+        return self.server
 
 
 class DiscordUser(Base):

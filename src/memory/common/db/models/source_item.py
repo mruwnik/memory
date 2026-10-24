@@ -43,6 +43,7 @@ import memory.common.collections as collections
 import memory.common.chunker as chunker
 import memory.common.summarizer as summarizer
 from memory.common.db.models.base import Base
+from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.scopes import STORABLE_SENSITIVITY_CHECK_SQL
 from memory.common.scopes import SensitivityLevelLiteral as SensitivityLevel
 
@@ -792,6 +793,22 @@ class SourceItem(AccessControlMixin, Base):
             sensitivity = self.default_sensitivity
 
         return project_id, sensitivity
+
+    @property
+    def llm_key_holder(self) -> LLMKeyChoice | None:
+        """The source whose LLM key setting governs this item: the first along its chain.
+
+        Parent items (an attachment's message, a task's meeting) defer to their own chain.
+        """
+        holders = (
+            getattr(source, "llm_key_holder", None) for source in self.get_data_source_chain()
+        )
+        return next((h for h in holders if h is not None), None)
+
+    @property
+    def llm_registrant_id(self) -> int | None:
+        """Who pays by default when neither a creator nor a source's registrant is known."""
+        return None
 
     def resolve_creator_id(self) -> int | None:
         """The item's own creator, else the first owner along the source chain.
