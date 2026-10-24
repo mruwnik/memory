@@ -6,7 +6,7 @@ from memory.common.db.models import HumanUser, LLMProviderKey
 from memory.common.llms import registry
 from memory.common import safe_http
 from memory.common.safe_http import NetworkPolicy
-from tests.memory.agents.fake_mcp import run_fake_mcp
+from tests.memory.agents.fake_mcp import add_server, run_fake_mcp
 from tests.memory.agents.fakes import FakePoor, FakeRich, ScriptedProvider
 
 
@@ -68,3 +68,12 @@ async def fake_mcp(request, monkeypatch, loopback_allowed):
     monkeypatch.setattr(AppStatus, "should_exit_event", None)
     async with run_fake_mcp(auth, transport) as fake:
         yield fake
+
+
+@pytest.fixture
+def connected_server(db_session, regular_user):
+    server = add_server(db_session, regular_user, "https://mcp.example.com/mcp")
+    server.status = "connected"
+    server.tools = [{"name": "kept", "description": "", "read_only": True}]
+    db_session.commit()
+    return server

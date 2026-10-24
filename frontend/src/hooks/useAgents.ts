@@ -58,6 +58,19 @@ export interface AgentDefinition {
   triggers?: { total: number; enabled: number; tripped: number }
   // External tools whose schema changed after this definition was saved.
   changed_tools?: string[]
+  // Why it can't run as configured; empty when it can.
+  problems?: string[]
+}
+
+export interface SystemAgentEntry {
+  slug: string
+  title: string
+  description: string
+  use: 'ingest' | 'search' | 'sessions'
+  model: string
+  provider: string
+  has_key: boolean
+  problem: string | null
 }
 
 export type Block =
@@ -281,6 +294,10 @@ export const useAgents = () => {
     async () => (await call<{ definitions: AgentDefinition[] }>('agent_list_all')).definitions,
     [call],
   )
+  const listSystemAgents = useCallback(
+    async () => (await call<{ agents: SystemAgentEntry[] }>('agent_system_list')).agents,
+    [call],
+  )
   const getDefinition = useCallback((id: number) => call<AgentDefinition>('agent_fetch', { definition_id: id }), [call])
   const saveDefinition = useCallback(
     (body: { name: string; description: string; spec: AgentSpec; id?: number }) =>
@@ -407,7 +424,7 @@ export const useAgents = () => {
   const deleteKey = useCallback((keyId: number) => call<KeyDeleteResult>('agent_key_delete', { key_ref: keyId }), [call])
 
   return {
-    listDefinitions, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
+    listDefinitions, listSystemAgents, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
     listSchedules, saveSchedule, deleteSchedule, listTriggers, saveTrigger, deleteTrigger,
     listServers, upsertServer, authorizeServer, refreshServerTools, disconnectServer, deleteServer,
     listKeys, upsertKey, deleteKey,

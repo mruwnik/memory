@@ -3,8 +3,10 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import ValidationError
+
 from memory.agents.caps import CapExceeded, check_run_rate, resolve_run_cap
-from memory.agents.provider_keys import choose_key
+from memory.agents.provider_keys import KeyUnavailable, choose_key
 from memory.agents.spec import (
     MAX_TEXT_CHARS,
     AgentSpec,
@@ -20,6 +22,7 @@ from memory.common.db.models import (
     AgentRun,
     APIKey,
     ExternalMCPServer,
+    LLMProviderKey,
     ServerStatus,
     User,
 )
@@ -51,6 +54,55 @@ def server_errors(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
     return errors
 
 
+SERVER_KEY_GONE = "set to the server's key, which no longer exists; pick one of your keys"
+
+
+def missing_tools(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
+    problems = []
+    for external in spec.mcp_servers:
+        server = db.get(ExternalMCPServer, external.server_id)
+        if server is None or server.user_id != user_id:
+            continue
+        offered = {t["name"] for t in server.tools}
+        problems += [
+            f"tool '{t}' is no longer offered by MCP server '{server.name}'"
+            for t in external.tools
+            if t not in offered
+        ]
+    return problems
+
+
+def start_problems(
+    db: DBSession, user_id: int, spec: AgentSpec
+) -> tuple[LLMProviderKey | None, list[str]]:
+    """The key that pays for a run of `spec`, and what stops one starting. Tools a
+    server stopped offering are left out: the cached list only refreshes when a run
+    opens the server, so refusing on it would block the agent for good."""
+    try:
+        key, key_problems = choose_key(db, user_id, spec.model, spec.provider_key), []
+    except KeyUnavailable as e:
+        key, key_problems = None, [str(e)]
+    return key, spec_errors(spec) + key_problems + server_errors(db, user_id, spec)
+
+
+def run_problems(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
+    """Why `spec` can't run as configured; empty when it can."""
+    return start_problems(db, user_id, spec)[1] + missing_tools(db, user_id, spec)
+
+
+def stored_spec_problems(db: DBSession, user_id: int, spec: dict[str, Any]) -> list[str]:
+    if spec.get("provider_key") == "server":
+        return [SERVER_KEY_GONE]
+    try:
+        parsed = AgentSpec.model_validate(spec)
+    except ValidationError as e:
+        details = "; ".join(
+            f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors()
+        )
+        return [f"invalid spec: {details}"]
+    return run_problems(db, user_id, parsed)
+
+
 def enqueue_run(
     db: DBSession,
     *,
@@ -76,11 +128,10 @@ def enqueue_run(
         raise ValueError(f"unknown user {user_id}")
     # The scopes this principal has over HTTP, so a run can do what its owner could.
     scopes = system_scopes(TokenLookup(user=user, api_key_record=api_key))
-    provider_key = choose_key(db, user_id, spec.model, spec.provider_key)
     # Checked here too so cron doesn't start runs that would fail at hub open.
-    errors = spec_errors(spec)
-    if errors := errors + server_errors(db, user_id, spec):
-        raise SpecInvalid(errors)
+    provider_key, problems = start_problems(db, user_id, spec)
+    if problems or provider_key is None:
+        raise SpecInvalid(problems)
     if definition is not None:
         # Serialises a definition's enqueues until this run is committed, so
         # concurrent starts can't all pass the rate check or the dedupe lookup.

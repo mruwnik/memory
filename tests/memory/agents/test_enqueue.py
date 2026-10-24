@@ -4,7 +4,12 @@ from decimal import Decimal
 import pytest
 
 from memory.agents.caps import CapExceeded
-from memory.agents.enqueue import SpecInvalid, TriggerInfo, enqueue_run
+from memory.agents.enqueue import (
+    SpecInvalid,
+    TriggerInfo,
+    enqueue_run,
+    stored_spec_problems,
+)
 from memory.agents.spec import AgentSpec
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
@@ -488,4 +493,68 @@ def test_without_a_key_for_the_models_provider_no_run_starts(db_session, regular
             input="hi",
             trigger=MANUAL,
         )
+    assert db_session.query(AgentRun).count() == 0
+
+
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        (
+            {"system_prompt": "x", "model": "anthropic/m", "provider_key": "server"},
+            "set to the server's key, which no longer exists; pick one of your keys",
+        ),
+        (
+            {"system_prompt": "x", "model": "anthropic/m", "provider_key": 99999},
+            "is not yours or was deleted",
+        ),
+        (
+            {
+                "system_prompt": "x",
+                "model": "anthropic/m",
+                "mcp_servers": [{"server_id": 99999, "tools": ["t"]}],
+            },
+            "MCP server 99999 is not yours",
+        ),
+        (
+            {"system_prompt": "x", "model": "anthropic/m", "bogus": "secret prompt"},
+            "invalid spec: bogus: Extra inputs are not permitted",
+        ),
+    ],
+)
+def test_stored_spec_problems_name_what_stops_an_agent(
+    db_session, regular_user, fake_providers, spec, expected
+):
+    problems = stored_spec_problems(db_session, regular_user.id, spec)
+
+    assert any(expected in p for p in problems), problems
+
+
+def test_runnable_agents_have_no_problems(db_session, regular_user, fake_providers):
+    assert stored_spec_problems(db_session, regular_user.id, {"system_prompt": "x", "model": "anthropic/m"}) == []
+
+
+def test_tools_a_server_stopped_offering_are_a_problem(
+    db_session, regular_user, fake_providers, connected_server
+):
+    spec = {
+        "system_prompt": "x",
+        "model": "anthropic/m",
+        "mcp_servers": [{"server_id": connected_server.id, "tools": ["gone"]}],
+    }
+
+    assert stored_spec_problems(db_session, regular_user.id, spec) == [
+        f"tool 'gone' is no longer offered by MCP server '{connected_server.name}'"
+    ]
+
+
+def test_enqueue_refuses_what_stops_an_agent(db_session, regular_user, fake_providers):
+    with pytest.raises(SpecInvalid, match="API key 99999 is not yours or was deleted"):
+        enqueue_run(
+            db_session,
+            user_id=regular_user.id,
+            spec=spec(provider_key=99999),
+            input="hi",
+            trigger=MANUAL,
+        )
+
     assert db_session.query(AgentRun).count() == 0

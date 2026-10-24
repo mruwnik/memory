@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
+from memory.agents.enqueue import TriggerInfo, enqueue_run
+from memory.agents.spec import AgentSpec
 from memory.api.MCP.servers import agent
 from memory.common import settings
 from memory.common.db.models import (
@@ -345,3 +347,74 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
         "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
         "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),
     }
+
+
+@pytest.mark.asyncio
+async def test_system_agents_are_listed_with_whether_the_viewer_can_pay(
+    db_session, regular_user, user_session, llm_key
+):
+    with mcp_auth_context(user_session.id, scopes=["agents"]):
+        listed = (await agent.system_list.fn())["agents"]
+
+    entry = next(a for a in listed if a["slug"] == "system:summarise")
+    assert (entry["has_key"], entry["problem"], entry["provider"]) == (True, None, "anthropic")
+
+
+@pytest.mark.asyncio
+async def test_system_agents_without_a_default_key_show_the_fix(
+    db_session, regular_user, user_session
+):
+    with mcp_auth_context(user_session.id, scopes=["agents"]):
+        listed = (await agent.system_list.fn())["agents"]
+
+    assert {a["problem"] for a in listed} == {
+        "add a default anthropic key to run this; until then it is skipped"
+    }
+
+
+@pytest.mark.asyncio
+async def test_listed_definitions_carry_their_problems(
+    db_session, regular_user, user_session, fake_providers
+):
+    db_session.add(
+        AgentDefinition(
+            user_id=regular_user.id,
+            name="old",
+            description="",
+            spec={"system_prompt": "x", "model": "anthropic/m", "provider_key": "server"},
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id, scopes=["agents"]):
+        (definition,) = (await agent.list_all.fn())["definitions"]
+
+    assert definition["problems"] == [
+        "set to the server's key, which no longer exists; pick one of your keys"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tools_missing_from_the_cache_are_flagged_but_do_not_stop_runs(
+    db_session, regular_user, user_session, fake_providers, connected_server
+):
+    spec = SPEC | {"mcp_servers": [{"server_id": connected_server.id, "tools": ["gone"]}]}
+    definition = AgentDefinition(user_id=regular_user.id, name="d", description="", spec=spec)
+    db_session.add(definition)
+    db_session.commit()
+
+    run = enqueue_run(
+        db_session,
+        user_id=regular_user.id,
+        spec=AgentSpec.model_validate(spec),
+        input="go",
+        trigger=TriggerInfo(kind="cron"),
+        definition=definition,
+    )
+    with mcp_auth_context(user_session.id, scopes=["agents"]):
+        (listed,) = (await agent.list_all.fn())["definitions"]
+
+    assert run.status == "pending"
+    assert listed["problems"] == [
+        f"tool 'gone' is no longer offered by MCP server '{connected_server.name}'"
+    ]

@@ -31,14 +31,22 @@ from memory.agents.external import (
     refresh_tool_cache,
     save,
 )
-from memory.agents.enqueue import SpecInvalid, TriggerInfo, enqueue_run
+from memory.agents.enqueue import (
+    SpecInvalid,
+    TriggerInfo,
+    enqueue_run,
+    stored_spec_problems,
+)
 from memory.agents.mcp_client import memory_tools
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
     choose_key,
+    default_key,
     resolve_key_ref,
+    usable,
 )
+from memory.agents.system import SYSTEM_AGENTS
 from memory.agents.triggers import (
     INGEST,
     Batch,
@@ -330,9 +338,41 @@ async def list_all() -> dict:
                     "last_run": last.serialize() if last else None,
                     "triggers": summaries[d.id],
                     "changed_tools": changed_tools(db, d),
+                    "problems": stored_spec_problems(db, user_id, d.spec),
                 }
             )
     return {"definitions": result}
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS))
+async def system_list() -> dict:
+    """The system agents memory runs for you (summaries, search steps): their
+    model, and whether you have a default key for its provider. They are defined
+    by memory and can't be edited."""
+    user_id, _ = caller()
+    with make_session() as db:
+        has_key = {
+            provider: usable(default_key(db, user_id, provider)) is not None
+            for provider in {a.provider for a in SYSTEM_AGENTS.values()}
+        }
+    return {
+        "agents": [
+            {
+                "slug": a.slug,
+                "title": a.title,
+                "description": a.description,
+                "use": a.use,
+                "model": a.model,
+                "provider": a.provider,
+                "has_key": has_key[a.provider],
+                "problem": None
+                if has_key[a.provider]
+                else f"add a default {a.provider} key to run this; until then it is skipped",
+            }
+            for a in SYSTEM_AGENTS.values()
+        ]
+    }
 
 
 @agent_mcp.tool()

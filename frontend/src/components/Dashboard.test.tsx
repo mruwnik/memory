@@ -23,7 +23,7 @@ describe('Dashboard', () => {
     ['Tasks', '/ui/tasks'],
     ['Scheduled tasks', '/ui/scheduled-tasks'],
   ])('links the %s card to %s', (label, href) => {
-    renderDashboard()
+    renderDashboard(() => true)
     const heading = screen.getByText(label)
     const link = heading.closest('a')
     expect(link).toHaveAttribute('href', href)
