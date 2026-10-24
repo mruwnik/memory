@@ -21,9 +21,9 @@ const run = (o = {}) => ({
   created_at: null, started_at: null, finished_at: null, steps_purged_at: null, ...o,
 })
 
-const view = () => renderWithRouter(
+const view = (path = '/ui/agents/runs/r1') => renderWithRouter(
   <Routes><Route path="/ui/agents/runs/:runId" element={<RunView />} /></Routes>,
-  { initialEntries: ['/ui/agents/runs/r1'] },
+  { initialEntries: [path] },
 )
 
 beforeEach(() => {
@@ -126,6 +126,18 @@ describe('RunView', () => {
     expect(screen.getByText(/12,345 context/)).toBeInTheDocument()
   })
 
+  it.each([
+    ['/ui/agents/runs/r1', 3, 'Runs', '/ui/agents/runs'],
+    ['/ui/agents/runs/r1?from=agent', 3, 'digest', '/ui/agents/3'],
+    ['/ui/agents/runs/r1?from=agent', null, 'Runs', '/ui/agents/runs'],
+  ])('from %s, a run of agent %s goes back to %s', async (path, definitionId, label, href) => {
+    waitRun.mockResolvedValueOnce({ run: run({ status: 'done', definition_id: definitionId }), steps: [] })
+    view(path)
+    await screen.findByRole('heading', { name: /digest|Ad-hoc/ })
+    // The back link comes first, above the run's details.
+    await waitFor(() => expect(screen.getAllByRole('link', { name: label })[0]).toHaveAttribute('href', href))
+  })
+
   it('titles a run without an agent as ad-hoc', async () => {
     waitRun.mockResolvedValueOnce({ run: run({ status: 'done' }), steps: [] })
     view()
@@ -139,6 +151,7 @@ describe('RunView', () => {
     const { user } = view()
     await user.click(await screen.findByRole('button', { name: 'Cancel run' }))
     expect(cancelRun).not.toHaveBeenCalled()
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Keep running' })).toBeInTheDocument()
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel run' }))
     expect(cancelRun).toHaveBeenCalledWith('r1')
   })

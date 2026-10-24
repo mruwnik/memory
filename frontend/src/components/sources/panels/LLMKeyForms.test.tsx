@@ -58,7 +58,7 @@ const openEdit = async (Panel: ComponentType, routes: Record<string, MockRespons
   const { user } = renderWithRouter(<Panel />)
   await user.click(await screen.findByRole('button', { name: 'Edit' }))
   const dialog = await screen.findByRole('dialog')
-  await within(dialog).findByRole('option', { name: 'work (••••ab12)' })
+  await within(dialog).findByRole('option', { name: 'work (Anthropic ••••ab12)' })
   return { fetchMock, user, dialog }
 }
 
@@ -83,7 +83,7 @@ describe('LLM key in source forms', () => {
     const { fetchMock, user, dialog } = await openEdit(Panel, routes)
     const select = within(dialog).getByLabelText('LLM key')
     await user.selectOptions(select, '7')
-    expect(select).toHaveDisplayValue('work (••••ab12)')
+    expect(select).toHaveDisplayValue('work (Anthropic ••••ab12)')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(patchBody(fetchMock, url)).toMatchObject({ llm_key: 7 }))
   })

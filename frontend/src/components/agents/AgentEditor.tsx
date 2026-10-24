@@ -9,6 +9,9 @@ import { Triggers } from './Triggers'
 import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 
+// agent_fetch reports another user's agent like a missing one; useMCP turns access denials into a permission message.
+const NOT_FOUND = /unknown agent definition|permission|failed \(40[34]\)/i
+
 const snapshot = (name: string, description: string, spec: AgentSpec | null) => JSON.stringify({ name, description, spec })
 
 // The app uses BrowserRouter, not a data router, so useBlocker isn't available: only reloads and closing the tab are guarded.
@@ -33,6 +36,7 @@ export default function AgentEditor() {
   const [runs, setRuns] = useState<AgentRun[]>([])
   const [input, setInput] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [missing, setMissing] = useState(false)
   const [runsError, setRunsError] = useState<string | null>(null)
   const [valid, setValid] = useState(true)
   const [saved, setSaved] = useState<string | null>(null)
@@ -64,7 +68,7 @@ export default function AgentEditor() {
         setChangedTools(d.changed_tools ?? [])
         setSaved(snapshot(d.name, d.description, d.spec))
       })
-      .catch(e => setLoadError(e.message))
+      .catch(e => NOT_FOUND.test(e.message) ? setMissing(true) : setLoadError(e.message))
   }, [loadCatalog, getDefinition, isNew, definitionId, validId])
   useEffect(load, [load])
 
@@ -87,7 +91,7 @@ export default function AgentEditor() {
 
   const run = () => running.submit(async () => {
     const { run_id } = await startRun({ input, definitionId })
-    navigate(`/ui/agents/runs/${run_id}`)
+    navigate(`/ui/agents/runs/${run_id}?from=agent`)
   })
 
   const remove = () => act(async () => {
@@ -97,7 +101,7 @@ export default function AgentEditor() {
   })
 
   const back = { to: '/ui/agents', label: 'Agents' }
-  if (!validId) return <Page back={back} title="Agent" error="This agent doesn't exist or isn't yours" />
+  if (!validId || missing) return <Page back={back} title="Agent" error="This agent doesn't exist or isn't yours" />
   if (!catalog || !spec) return <Page back={back} title={isNew ? 'New agent' : 'Agent'} loading="Loading agent..." error={loadError} onRetry={load} />
 
   return (
@@ -138,7 +142,7 @@ export default function AgentEditor() {
           {!!runs.length && (
             <List>
               {runs.map(r => (
-                <Row key={r.id} to={`/ui/agents/runs/${r.id}`} title={r.input} badges={<StatusBadge status={r.status} />}
+                <Row key={r.id} to={`/ui/agents/runs/${r.id}?from=agent`} title={r.input} badges={<StatusBadge status={r.status} />}
                   meta={[formatRelativeTime(r.created_at), formatCost(r.cost_usd)]} />
               ))}
             </List>

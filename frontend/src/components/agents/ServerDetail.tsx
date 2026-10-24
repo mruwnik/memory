@@ -82,7 +82,7 @@ export default function ServerDetail() {
         <Button disabled={busy} onClick={refresh}>Refresh tools</Button>
         {server.auth_type === 'oauth' && <Button disabled={busy} onClick={reauthorize}>Re-authorize</Button>}
         {server.has_token && (
-          <ConfirmButton size="md" variant="secondary" disabled={busy} onConfirm={disconnect}
+          <ConfirmButton size="md" disabled={busy} onConfirm={disconnect}
             confirm={`Disconnect ${server.name}? Agents using it fail until you authorize it again.`}>
             Disconnect
           </ConfirmButton>

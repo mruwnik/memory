@@ -12,7 +12,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
   const [cron, setCron] = useState('0 9 * * *')
   const [input, setInput] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<number | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
   const adding = useSubmit()
 
@@ -22,7 +22,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
   }, [listSchedules, definitionId])
   useEffect(() => { reload() }, [reload])
 
-  const act = async (id: number, action: () => Promise<unknown>) => {
+  const act = async (id: string, action: () => Promise<unknown>) => {
     setBusyId(id)
     await run(async () => { await action(); await reload() })
     setBusyId(null)

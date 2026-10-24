@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem, LLMKeyChoice } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { IntervalInput, PauseButton, ProjectSelect, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField } from '../LLMKeyField'
 
@@ -86,10 +86,16 @@ export const GoogleDrivePanel = () => {
     loadData()
   })
 
-  const handleFolderLLMKey = (accountId: number, folderId: number, llm_key: LLMKeyChoice) => run(async () => {
-    await updateGoogleFolder(accountId, folderId, { llm_key })
-    loadData()
-  })
+  // One folder's LLM key saves at a time; its failure shows in that folder's row.
+  const folderLLM = useSubmit()
+  const [llmFolderId, setLlmFolderId] = useState<number>()
+  const handleFolderLLMKey = (accountId: number, folderId: number, llm_key: LLMKeyChoice) => {
+    setLlmFolderId(folderId)
+    return folderLLM.submit(async () => {
+      await updateGoogleFolder(accountId, folderId, { llm_key })
+      loadData()
+    })
+  }
 
   const handleSyncFolder = (accountId: number, folderId: number) => run(async () => {
     await syncGoogleFolder(accountId, folderId)
@@ -153,6 +159,7 @@ export const GoogleDrivePanel = () => {
                         </ConfirmButton>
                       </>}
                     >
+                      {llmFolderId === folder.id && folderLLM.error && <RowError>{folderLLM.error}</RowError>}
                       <SyncFailure status={folder} />
                     </Row>
                   ))}

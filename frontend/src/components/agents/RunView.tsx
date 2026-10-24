@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { TERMINAL_STATUSES, useAgents, type AgentRun, type Block, type RunStep } from '@/hooks/useAgents'
 import { StatusBadge, TRIGGER_LABELS } from './StatusBadge'
 import { Badge, Button, ConfirmButton, DetailList, Disclosure, List, Notice, Page, Row, Section, useActionNotice, type Tone } from '@/components/shared/ui'
@@ -74,6 +74,8 @@ export default function RunViewPage() {
 
 function RunView({ runId }: { runId: string }) {
   const { waitRun, cancelRun, starRun, getDefinition } = useAgents()
+  // Agent pages link here with ?from=agent, so Back returns to the agent rather than all runs.
+  const fromAgent = useSearchParams()[0].get('from') === 'agent'
   const [run, setRun] = useState<AgentRun | null>(null)
   const [steps, setSteps] = useState<RunStep[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -124,10 +126,11 @@ function RunView({ runId }: { runId: string }) {
   }, [definitionId, getDefinition])
 
   const retry = () => setAttempt(n => n + 1)
-  const back = { to: '/ui/agents/runs', label: 'Runs' }
-  if (!run) return <Page back={back} title="Run" loading="Loading run..." error={error} onRetry={retry} />
+  const runs = { to: '/ui/agents/runs', label: 'Runs' }
+  if (!run) return <Page back={runs} title="Run" loading="Loading run..." error={error} onRetry={retry} />
   const live = !TERMINAL_STATUSES.includes(run.status)
   const agent = run.definition_id === null ? null : agentName ?? `Agent ${run.definition_id}`
+  const back = agent && fromAgent ? { to: `/ui/agents/${run.definition_id}`, label: agent } : runs
 
   return (
     <Page
@@ -138,7 +141,7 @@ function RunView({ runId }: { runId: string }) {
           <span aria-hidden="true">{run.starred ? '★' : '☆'}</span> Star
         </Button>
         {live && (
-          <ConfirmButton size="md" confirm="Cancel this run? It stops now and can't be resumed." confirmLabel="Cancel run"
+          <ConfirmButton size="md" confirm="Cancel this run? It stops now and can't be resumed." confirmLabel="Cancel run" cancelLabel="Keep running"
             onConfirm={() => act(async () => setRun(await cancelRun(run.id)))}>Cancel run</ConfirmButton>
         )}
       </>}

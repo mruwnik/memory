@@ -757,17 +757,19 @@ export const Notice = ({ tone, onRetry, onDismiss, className, children, ...props
   </div>
 )
 
-/** Runs a form's submit or a button's action, tracking busy state (to disable it) and keeping its error message. */
+/** Runs a form's submit or a button's action, tracking busy state (to disable it) and keeping its error message. `submit` resolves to whether it succeeded. */
 export const useSubmit = () => {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const submit = useCallback(async (work: () => Promise<void>) => {
+  const submit = useCallback(async (work: () => Promise<unknown>) => {
     setBusy(true)
     setError(null)
     try {
       await work()
+      return true
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      return false
     } finally {
       setBusy(false)
     }
@@ -987,23 +989,25 @@ interface ConfirmDialogProps {
   onCancel: () => void
   title?: string
   confirmLabel?: string
+  cancelLabel?: string
 }
 
 interface ConfirmButtonProps extends Omit<ButtonProps, 'onClick'> {
   /** The question in the dialog. */
   confirm: string
-  onConfirm: () => void | Promise<void>
+  onConfirm: () => unknown
   confirmLabel?: string
+  cancelLabel?: string
 }
 
 /** A button that asks before acting: the one way to confirm deletes and other destructive actions. */
-export const ConfirmButton = ({ confirm, onConfirm, confirmLabel, variant = 'danger', size = 'sm', children = 'Delete', ...props }: ConfirmButtonProps) => {
+export const ConfirmButton = ({ confirm, onConfirm, confirmLabel, cancelLabel, variant = 'danger', size = 'sm', children = 'Delete', ...props }: ConfirmButtonProps) => {
   const [asking, setAsking] = useState(false)
   return (
     <>
       <Button variant={variant} size={size} onClick={() => setAsking(true)} {...props}>{children}</Button>
       {asking && (
-        <ConfirmDialog message={confirm} confirmLabel={confirmLabel ?? (typeof children === 'string' ? children : 'Confirm')}
+        <ConfirmDialog message={confirm} confirmLabel={confirmLabel ?? (typeof children === 'string' ? children : 'Confirm')} cancelLabel={cancelLabel}
           onCancel={() => setAsking(false)}
           onConfirm={async () => { setAsking(false); await onConfirm() }} />
       )}
@@ -1011,7 +1015,7 @@ export const ConfirmButton = ({ confirm, onConfirm, confirmLabel, variant = 'dan
   )
 }
 
-export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabel = 'Confirm' }: ConfirmDialogProps) => {
+export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabel = 'Confirm', cancelLabel = 'Cancel' }: ConfirmDialogProps) => {
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -1025,7 +1029,7 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabe
         {title && <h2 id={titleId} className="text-lg font-semibold text-slate-900 mb-2">{title}</h2>}
         <p id={title ? undefined : titleId} className="text-slate-800 mb-4">{message}</p>
         <div className="flex justify-end gap-2">
-          <button ref={cancelRef} className={buttonClass('secondary')} onClick={onCancel}>Cancel</button>
+          <button ref={cancelRef} className={buttonClass('secondary')} onClick={onCancel}>{cancelLabel}</button>
           <Button variant="dangerSolid" onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>

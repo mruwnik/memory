@@ -4,7 +4,7 @@ import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
 
@@ -121,10 +121,11 @@ export const SlackPanel = () => {
     }
   })
 
-  const handleUpdateWorkspace = (workspace: SlackWorkspace, updates: SlackWorkspaceUpdate) => run(async () => {
+  // The row shows a failed update next to the workspace.
+  const handleUpdateWorkspace = async (workspace: SlackWorkspace, updates: SlackWorkspaceUpdate) => {
     await updateWorkspace(workspace.id, updates)
     loadData()
-  })
+  }
 
   const handleSync = (workspace: SlackWorkspace) => run(async () => {
     await triggerSync(workspace.id)
@@ -263,7 +264,7 @@ const WorkspaceRow = ({
   onUpdateChannel,
 }: WorkspaceCardProps) => {
   const [toggling, handleToggle] = useBusy(onToggleCollect)
-  const [updating, update] = useBusy(onUpdateWorkspace)
+  const update = useSubmit()
 
   const status = collectionStatus(workspace)
   const eventlessApps = workspace.apps.filter(app => !EVENTS_LIVE.includes(app.setup_state))
@@ -286,9 +287,9 @@ const WorkspaceRow = ({
         workspace.last_sync_at && `Last sync: ${formatRelativeTime(workspace.last_sync_at)}`,
       ]}
       actions={<>
-        <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={updating}
-          onChange={update} />
-        <LLMKeyField compact value={workspace.llm_key} onChange={llm_key => update({ llm_key })} />
+        <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={update.busy}
+          onChange={changes => update.submit(() => onUpdateWorkspace(changes))} />
+        <LLMKeyField compact value={workspace.llm_key} onChange={llm_key => update.submit(() => onUpdateWorkspace({ llm_key }))} />
         <PauseButton active={workspace.collect_messages} onClick={handleToggle} disabled={toggling} />
         {eventlessApps.filter(app => app.is_owner).map(app => (
           <Button key={app.id} size="sm" onClick={() => onResumeSetup(app)} title={`Resume the setup wizard for ${app.name}`}>
@@ -299,6 +300,7 @@ const WorkspaceRow = ({
         <ConfirmButton confirm={`Disconnect "${workspace.name}"? This will stop collecting messages from this workspace.`} onConfirm={onDisconnect}>Disconnect</ConfirmButton>
       </>}
     >
+      {update.error && <RowError>{update.error}</RowError>}
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       <SyncFailure status={workspace} />
       <SubList

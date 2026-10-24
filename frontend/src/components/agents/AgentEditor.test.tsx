@@ -59,9 +59,16 @@ describe('AgentEditor', () => {
     expect(create.parentElement).toHaveTextContent('max_runs_per_hour too high')
   })
 
-  it("explains an agent id that can't exist", () => {
-    renderAt('/ui/agents/abc')
-    expect(screen.getByRole('alert')).toHaveTextContent("This agent doesn't exist or isn't yours")
+  it.each([
+    ['a non-numeric id', '/ui/agents/abc', 'unused'],
+    ['an unknown id', '/ui/agents/99999', 'unknown agent definition 99999'],
+    ["someone else's agent", '/ui/agents/5', "You don't have permission for this. Ask an admin to grant you access."],
+  ])('explains %s, with no retry', async (_, path, error) => {
+    agents.getDefinition.mockRejectedValue(new Error(error))
+    agents.listRuns.mockResolvedValue([])
+    renderAt(path)
+    expect(await screen.findByRole('alert')).toHaveTextContent("This agent doesn't exist or isn't yours")
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Agents/ })).toHaveAttribute('href', '/ui/agents')
   })
 })

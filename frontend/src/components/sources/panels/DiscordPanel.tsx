@@ -4,7 +4,7 @@ import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
 import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const DiscordPanel = () => {
@@ -140,12 +140,11 @@ export const DiscordPanel = () => {
     }
   })
 
-  const handleUpdateServer = (server: DiscordServer, updates: DiscordServerUpdate) => run(async () => {
+  // The row shows a failed update next to the server.
+  const handleUpdateServer = async (server: DiscordServer, updates: DiscordServerUpdate) => {
     await updateServer(server.id, updates)
-    // Refresh servers
-    const serversData = await listServers()
-    setServers(serversData)
-  })
+    setServers(await listServers())
+  }
 
   const handleUpdateChannel = (channel: DiscordChannel, updates: DiscordChannelUpdate) => run(async () => {
     const updatedChannel = await updateChannel(channel.id, updates)
@@ -330,7 +329,7 @@ const ServerRow = ({
   onUpdateChannel,
 }: ServerCardProps) => {
   const [toggling, handleToggle] = useBusy(onToggleCollect)
-  const [updating, update] = useBusy(onUpdate)
+  const update = useSubmit()
 
   return (
     <Row
@@ -338,12 +337,13 @@ const ServerRow = ({
       badges={<Badge tone={server.collect_messages ? 'success' : 'neutral'}>{server.collect_messages ? 'Collecting' : 'Paused'}</Badge>}
       meta={[server.member_count ? `${server.member_count} members` : null, `${server.channel_count} channels`]}
       actions={<>
-        <AccessSelects projectId={server.project_id} sensitivity={server.sensitivity} projects={projects} disabled={updating}
-          onChange={update} />
-        <LLMKeyField compact value={server.llm_key} onChange={llm_key => update({ llm_key })} />
+        <AccessSelects projectId={server.project_id} sensitivity={server.sensitivity} projects={projects} disabled={update.busy}
+          onChange={changes => update.submit(() => onUpdate(changes))} />
+        <LLMKeyField compact value={server.llm_key} onChange={llm_key => update.submit(() => onUpdate({ llm_key }))} />
         <PauseButton active={server.collect_messages} onClick={handleToggle} disabled={toggling} />
       </>}
     >
+      {update.error && <RowError>{update.error}</RowError>}
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels</ExpandToggle>}
         {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}
