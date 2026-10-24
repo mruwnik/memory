@@ -16,6 +16,27 @@ section has nothing in it:
 
 ### Required env vars
 
+- **Required action if you relied on the old backup defaults.** S3 backups no
+  longer default to a bucket: they run only when `S3_BACKUP_BUCKET` is set, and
+  `S3_BACKUP_ENABLED` is gone. An instance that had `BACKUP_ENCRYPTION_KEY` set
+  and nothing else was backing up to bucket `equistamp-memory-backup` under
+  prefix `Daniel`; after this update it stops backing up silently. To keep
+  backing up, set `S3_BACKUP_BUCKET` and `S3_BACKUP_PREFIX` in `.env` (the old
+  values, if you want your existing backups to stay in the same place) and keep
+  `BACKUP_ENCRYPTION_KEY`; setting a bucket without the key makes the
+  workers refuse to start. If you had
+  `S3_BACKUP_ENABLED=false` to keep backups off, remove it and unset
+  `S3_BACKUP_BUCKET`: the workers refuse to start while `S3_BACKUP_ENABLED` is set,
+  and a bucket alone turns backups on. If you had a bucket set without
+  `BACKUP_ENCRYPTION_KEY` (backups were off), either add the key or unset the
+  bucket, or the workers refuse to start. To check: `grep S3_BACKUP .env` should show
+  `S3_BACKUP_BUCKET`; while it is unset the `backup-all` task logs
+  "S3 backup is disabled". `S3_BACKUP_PREFIX` now defaults to
+  `memory` (was `Daniel`) and `tools/backup_databases.sh` and
+  `tools/restore_*` also have no default bucket. New installs choose explicitly:
+  `tools/install.sh` asks, and `--non-interactive` needs `S3_BACKUP_BUCKET` or
+  `S3_BACKUP=off`.
+
 - `SECRETS_ENCRYPTION_KEY` must be set to register external MCP servers (their
   tokens, client secrets and headers are encrypted with it). Registration fails
   with a clear error without it; nothing else changes.

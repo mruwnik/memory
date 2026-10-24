@@ -13,6 +13,12 @@ REQUIRED = {
     "ADMIN_EMAIL": "owner@example.com",
     "ADMIN_PASSWORD": "admin-pw-Zk3v9QeXr7",
     "VOYAGE_API_KEY": "voyage-key-Hq82LmPz41",
+    "S3_BACKUP": "off",
+}
+S3 = {
+    "S3_BACKUP_BUCKET": "my-backups",
+    "S3_BACKUP_PREFIX": "kb",
+    "S3_BACKUP_REGION": "us-east-1",
 }
 SUPPLIED = {
     "POSTGRES_PASSWORD": "pg-supplied-Aa11Bb22",
@@ -40,16 +46,18 @@ def project(tmp_path):
     return tmp_path
 
 
-def install(project, env, *args, cwd=None):
+def install(project, env, *args, cwd=None, interactive_input=None):
+    flags = [] if interactive_input is not None else ["--non-interactive"]
     return subprocess.run(
-        ["bash", str(project / "tools" / "install.sh"), "--non-interactive", *args],
+        ["bash", str(project / "tools" / "install.sh"), *flags, *args],
         cwd=cwd or project,
         env={
             "PATH": f"{project / 'bin'}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "HOME": str(project),
             **env,
         },
-        stdin=subprocess.DEVNULL,
+        input=interactive_input,
+        stdin=None if interactive_input is not None else subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=60,
@@ -206,3 +214,166 @@ def test_rerun_tightens_permissions_and_keeps_existing_optional_keys(project):
     assert (project / "secrets" / "openai_key.txt").read_text() == "hand-written"
     modes = {mode(f) for f in [project / ".env", *(project / "secrets").iterdir()]}
     assert modes == {0o600}
+
+
+BACKUP_VARS = ["S3_BACKUP_BUCKET", "S3_BACKUP_PREFIX", "S3_BACKUP_REGION", "BACKUP_ENCRYPTION_KEY"]
+# App name, OpenAI, Anthropic, Voyage, API port, deploy host, deploy dir
+PROMPTS_BEFORE_BACKUP = "\n" * 7
+PROMPTS_AFTER_BACKUP = "n\n"  # no SSH keys
+
+
+def test_non_interactive_without_backup_choice_fails_naming_variables_and_writes_nothing(project):
+    env = {k: v for k, v in REQUIRED.items() if k != "S3_BACKUP"}
+
+    result = install(project, env)
+
+    assert result.returncode != 0
+    assert "S3_BACKUP_BUCKET" in result.stderr
+    assert "S3_BACKUP=off" in result.stderr
+    assert sorted(p.name for p in project.iterdir()) == ["bin", "tools"]
+
+
+@pytest.mark.parametrize("bad", ["on", "yes", "OFF "])
+def test_non_interactive_rejects_unknown_backup_choice(project, bad):
+    result = install(project, {**REQUIRED, "S3_BACKUP": bad})
+
+    assert result.returncode != 0
+    assert "S3_BACKUP" in result.stderr
+    assert sorted(p.name for p in project.iterdir()) == ["bin", "tools"]
+
+
+def test_backup_off_configures_no_backup_destination(project):
+    result = install(project, REQUIRED)
+
+    assert result.returncode == 0, result.stderr
+    env = read_env(project)
+    assert [v for v in BACKUP_VARS if v in env] == []
+
+
+def test_non_interactive_bucket_enables_backups_with_generated_key(project):
+    env = {k: v for k, v in REQUIRED.items() if k != "S3_BACKUP"}
+
+    result = install(project, {**env, **S3})
+
+    assert result.returncode == 0, result.stderr
+    written = read_env(project)
+    assert {k: written[k] for k in S3} == S3
+    assert len(written["BACKUP_ENCRYPTION_KEY"]) == 32
+    assert written["BACKUP_ENCRYPTION_KEY"] not in result.stdout + result.stderr
+
+
+def test_non_interactive_bucket_uses_supplied_key_and_defaults_prefix(project):
+    env = {k: v for k, v in REQUIRED.items() if k != "S3_BACKUP"}
+
+    result = install(
+        project, {**env, "S3_BACKUP_BUCKET": "b", "BACKUP_ENCRYPTION_KEY": "supplied-Kk99"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    written = read_env(project)
+    assert written["BACKUP_ENCRYPTION_KEY"] == "supplied-Kk99"
+    assert written["S3_BACKUP_PREFIX"] == "memory"
+
+
+@pytest.mark.parametrize("var", ["S3_BACKUP_BUCKET", "S3_BACKUP_PREFIX", "BACKUP_ENCRYPTION_KEY"])
+def test_rejects_unsafe_backup_values_naming_variable_but_not_value(project, var):
+    env = {k: v for k, v in REQUIRED.items() if k != "S3_BACKUP"}
+
+    result = install(project, {**env, "S3_BACKUP_BUCKET": "b", var: "a b"})
+
+    assert result.returncode != 0
+    assert var in result.stderr
+    assert sorted(p.name for p in project.iterdir()) == ["bin", "tools"]
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        pytest.param("S3_BACKUP=off\n", id="off"),
+        pytest.param("S3_BACKUP_BUCKET=old\nBACKUP_ENCRYPTION_KEY=oldkey\n", id="bucket"),
+    ],
+)
+def test_non_interactive_rerun_keeps_existing_choice_without_it_being_supplied(project, existing):
+    (project / ".env").write_text(existing)
+    env = {k: v for k, v in REQUIRED.items() if k != "S3_BACKUP"}
+
+    result = install(project, env)
+
+    assert result.returncode == 0, result.stderr
+    kept = read_env(project)
+    assert {k: kept[k] for k in read_env_text(existing)} == read_env_text(existing)
+
+
+def read_env_text(text):
+    return dict(line.split("=", 1) for line in text.splitlines())
+
+
+@pytest.mark.parametrize(
+    "answers, expected",
+    [
+        pytest.param("n\n", {"S3_BACKUP": "off"}, id="no"),
+        pytest.param("\nmaybe\nN\n", {"S3_BACKUP": "off"}, id="reprompts-until-valid"),
+        pytest.param(
+            "y\nmy-bucket\n\nus-west-2\n",
+            {
+                "S3_BACKUP_BUCKET": "my-bucket",
+                "S3_BACKUP_PREFIX": "memory",
+                "S3_BACKUP_REGION": "us-west-2",
+            },
+            id="yes",
+        ),
+    ],
+)
+def test_interactive_requires_an_explicit_backup_choice(project, answers, expected):
+    stdin = PROMPTS_BEFORE_BACKUP + answers + PROMPTS_AFTER_BACKUP
+
+    result = install(project, {}, interactive_input=stdin)
+
+    assert result.returncode == 0, result.stderr
+    written = read_env(project)
+    assert {k: written[k] for k in expected} == expected
+    assert ("BACKUP_ENCRYPTION_KEY" in written) == ("S3_BACKUP_BUCKET" in expected)
+
+
+@pytest.mark.parametrize(
+    "existing", ["S3_BACKUP=off\n", "S3_BACKUP_BUCKET=old\nBACKUP_ENCRYPTION_KEY=oldkey\n"]
+)
+def test_interactive_rerun_keeps_choice_without_asking(project, existing):
+    (project / ".env").write_text(existing)
+    # Fewer blank answers than prompts would be consumed if it asked again
+    stdin = PROMPTS_BEFORE_BACKUP + PROMPTS_AFTER_BACKUP
+
+    result = install(project, {}, interactive_input=stdin)
+
+    assert result.returncode == 0, result.stderr
+    assert "back up" not in result.stdout.lower()
+    kept = read_env(project)
+    assert {k: kept[k] for k in read_env_text(existing)} == read_env_text(existing)
+
+
+@pytest.mark.parametrize(
+    "existing, supplied",
+    [
+        ("S3_BACKUP_BUCKET=old\nBACKUP_ENCRYPTION_KEY=k\n", {"S3_BACKUP_BUCKET": "new"}),
+        ("S3_BACKUP_BUCKET=old\nBACKUP_ENCRYPTION_KEY=k\n", {"S3_BACKUP": "off"}),
+    ],
+)
+def test_rerun_warns_when_supplied_choice_differs_from_env(project, existing, supplied):
+    (project / ".env").write_text(existing)
+    env = {k: v for k, v in REQUIRED.items() if k != "S3_BACKUP"}
+
+    result = install(project, {**env, **supplied})
+
+    assert result.returncode == 0, result.stderr
+    assert "Ignoring supplied" in result.stdout
+    assert read_env(project)["S3_BACKUP_BUCKET"] == "old"
+
+
+def test_interactive_validates_env_supplied_backup_key(project):
+    stdin = PROMPTS_BEFORE_BACKUP + "y\nb\n\n\n"
+
+    result = install(project, {"BACKUP_ENCRYPTION_KEY": "a b"}, interactive_input=stdin)
+
+    assert result.returncode != 0
+    assert "BACKUP_ENCRYPTION_KEY" in result.stderr
+    assert "a b" not in result.stdout + result.stderr

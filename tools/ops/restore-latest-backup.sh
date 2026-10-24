@@ -18,9 +18,6 @@ declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
 require_yes
 
-BUCKET=${S3_BACKUP_BUCKET:-equistamp-memory-backup}
-PREFIX=${S3_BACKUP_PREFIX:-Daniel}
-REGION=${S3_BACKUP_REGION:-eu-central-1}
 SOURCE=${BACKUP_SOURCE:-}
 FILES_DIR=$ROOT/memory_files
 APP_UID=${APP_UID:-1000}
@@ -38,6 +35,12 @@ if [[ -z $BACKUP_ENCRYPTION_KEY ]]; then
 fi
 : "${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
 export BACKUP_ENCRYPTION_KEY
+BUCKET=$(config_value S3_BACKUP_BUCKET)
+PREFIX=$(config_value S3_BACKUP_PREFIX)
+PREFIX=${PREFIX:-memory}
+REGION=$(config_value S3_BACKUP_REGION)
+REGION=${REGION:-eu-central-1}
+[[ -n $SOURCE || -n $BUCKET ]] || { echo "S3_BACKUP_BUCKET not set and no BACKUP_SOURCE given" >&2; exit 1; }
 
 # Directories print with a trailing slash, like `aws s3 ls`.
 src_ls() {

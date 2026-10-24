@@ -49,7 +49,7 @@ The installer will:
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `JWT_SECRET`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, starts the api, and creates the admin user if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `JWT_SECRET`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, starts the api, and creates the admin user if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 
@@ -267,6 +267,9 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |
 | `RERANK_MODEL`                    | `rerank-2.5`         | Voyage reranker used after candidate retrieval                 |
 | `FILE_STORAGE_DIR`                | `/tmp/memory_files`  | Where uploaded content is stored                               |
+| `S3_BACKUP_BUCKET`                | unset (backups off)  | Bucket for daily encrypted backups; setting it turns them on and requires `BACKUP_ENCRYPTION_KEY` (the workers refuse to start without it). The workers also need AWS credentials |
+| `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION` | `memory` / `eu-central-1` | Key prefix inside the bucket and the bucket's region |
+| `BACKUP_ENCRYPTION_KEY`           | unset                | Passphrase for the backups; `tools/install.sh` generates one when you choose S3 backups. Keep a copy elsewhere: backups can't be decrypted without it |
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|
 | `RATE_LIMIT_TRUSTED_PROXIES`      | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for the rate-limit bucket key          |
 | `ONE_TIME_KEY_RATE_LIMIT`         | `10/hour`            | Rolling-window cap on one-time keys minted per user (MCP)      |

@@ -45,12 +45,11 @@ class BackupError(Exception):
 def aws_credentials_available() -> bool:
     """Whether boto3 can resolve AWS credentials in the worker environment.
 
-    ``S3_BACKUP_ENABLED`` is inferred purely from ``BACKUP_ENCRYPTION_KEY``
-    being set — it says nothing about whether AWS credentials are actually
-    present. Without this preflight a worker with a valid encryption key but
-    no credentials uploads nothing on every run while reporting success.
-    Resolving credentials up front turns that silent outage into an
-    immediate, loud failure.
+    Backups are enabled purely by ``S3_BACKUP_BUCKET`` being set — that says
+    nothing about whether AWS credentials are actually present. Without this
+    preflight a worker with a bucket but no credentials uploads nothing on
+    every run while reporting success. Resolving credentials up front turns
+    that silent outage into an immediate, loud failure.
     """
     try:
         return boto3.Session().get_credentials() is not None
@@ -380,8 +379,8 @@ def backup_all_to_s3():
 
     Uses a distributed lock to prevent concurrent backup operations.
     """
-    if not settings.S3_BACKUP_ENABLED:
-        logger.info("S3 backup is disabled")
+    if not settings.S3_BACKUP_BUCKET:
+        logger.info("S3 backup is disabled: S3_BACKUP_BUCKET is not set")
         return {"status": "disabled"}
 
     # Preflight: fail loudly if credentials can't be resolved rather than
@@ -389,7 +388,7 @@ def backup_all_to_s3():
     # credentials" while the task still reports success.
     if not aws_credentials_available():
         raise BackupError(
-            "S3 backup is enabled (BACKUP_ENCRYPTION_KEY is set) but AWS "
+            "S3 backup is enabled (S3_BACKUP_BUCKET is set) but AWS "
             "credentials could not be resolved. Set AWS_ACCESS_KEY_ID and "
             "AWS_SECRET_ACCESS_KEY (or attach an instance role) in the worker "
             "environment."

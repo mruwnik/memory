@@ -48,7 +48,6 @@ def mock_s3_client():
 def backup_settings():
     """Mock backup settings."""
     with (
-        patch.object(settings, "S3_BACKUP_ENABLED", True),
         patch.object(settings, "BACKUP_ENCRYPTION_KEY", "test-password-123"),
         patch.object(settings, "S3_BACKUP_BUCKET", "test-bucket"),
         patch.object(settings, "S3_BACKUP_PREFIX", "test-prefix"),
@@ -413,9 +412,8 @@ def test_backup_encrypted_data_integrity(
         assert note1_found, "note1.md not found in tarball"
 
 
-def test_backup_disabled():
-    """Test that backup returns early when disabled."""
-    with patch.object(settings, "S3_BACKUP_ENABLED", False):
+def test_backup_disabled_without_bucket():
+    with patch.object(settings, "S3_BACKUP_BUCKET", ""):
         result = backup.backup_all_to_s3()
 
     assert result["status"] == "disabled"

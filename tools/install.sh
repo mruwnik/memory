@@ -9,7 +9,9 @@ ENV_FILE="$PROJECT_DIR/.env"
 # --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD,
 # VOYAGE_API_KEY. Optional, used instead of generating: POSTGRES_PASSWORD,
 # JWT_SECRET, REDIS_PASSWORD, OPENAI_API_KEY,
-# ANTHROPIC_API_KEY, APP_NAME. Anything already installed is kept.
+# ANTHROPIC_API_KEY, APP_NAME, BACKUP_ENCRYPTION_KEY. Anything already installed is
+# kept. S3 backups need an explicit choice: S3_BACKUP_BUCKET (with optional
+# S3_BACKUP_PREFIX and S3_BACKUP_REGION) to enable them, or S3_BACKUP=off.
 NON_INTERACTIVE=false
 for arg in "$@"; do
     case "$arg" in
@@ -29,7 +31,8 @@ if [ "$NON_INTERACTIVE" = true ]; then
     # Values land unquoted in .env and in sed expressions; ADMIN_PASSWORD only
     # travels through the environment, so it is unrestricted.
     for var in DOMAIN ADMIN_EMAIL VOYAGE_API_KEY POSTGRES_PASSWORD JWT_SECRET \
-        REDIS_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY APP_NAME; do
+        REDIS_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY APP_NAME S3_BACKUP_BUCKET \
+        S3_BACKUP_PREFIX S3_BACKUP_REGION BACKUP_ENCRYPTION_KEY; do
         if [[ ! "${!var:-}" =~ ^[A-Za-z0-9._@:/+-]*$ ]]; then
             echo "✗ $var contains characters outside A-Za-z0-9._@:/+-" >&2
             exit 1
@@ -48,6 +51,20 @@ info() { echo -e "${CYAN}$1${NC}"; }
 success() { echo -e "${GREEN}✓ $1${NC}"; }
 warn() { echo -e "${YELLOW}⚠ $1${NC}"; }
 error() { echo -e "${RED}✗ $1${NC}"; }
+
+# Whether .env already records the S3 backup choice (a bucket, or off)
+backup_choice_made() {
+    [ -n "$(get_env_value 'S3_BACKUP_BUCKET')" ] || [ "$(get_env_value 'S3_BACKUP')" = off ]
+}
+
+# Whether this run's environment supplies exactly one valid choice
+backup_choice_supplied() {
+    if [ -n "${S3_BACKUP_BUCKET:-}" ]; then
+        [ -z "${S3_BACKUP:-}" ]
+    else
+        [ "${S3_BACKUP:-}" = off ]
+    fi
+}
 
 # Generate a random password/secret
 generate_secret() {
@@ -144,6 +161,14 @@ write_secret() {
     (umask 077 && echo -n "$value" > "$file")
     chmod 600 "$file"
 }
+
+# Fail before anything is written: backing up to S3 must be chosen, never assumed
+if [ "$NON_INTERACTIVE" = true ] && ! backup_choice_made; then
+    if ! backup_choice_supplied; then
+        error "Choose S3 backups with --non-interactive: set S3_BACKUP_BUCKET (optionally S3_BACKUP_PREFIX, S3_BACKUP_REGION) to back up to S3, or S3_BACKUP=off for no backups" >&2
+        exit 1
+    fi
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
@@ -358,6 +383,82 @@ else
         success "DEPLOY_DIR set to $deploy_dir"
     else
         info "DEPLOY_DIR skipped"
+    fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# S3 backups (explicit choice)
+# ─────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "─────────────────────────────────────────────────────────────────"
+echo "                          S3 Backups                             "
+echo "─────────────────────────────────────────────────────────────────"
+echo ""
+
+enable_backups() {
+    local bucket="$1" prefix="$2" region="$3"
+    if [[ ! "${BACKUP_ENCRYPTION_KEY:-}" =~ ^[A-Za-z0-9._@:/+-]*$ ]]; then
+        error "BACKUP_ENCRYPTION_KEY contains characters outside A-Za-z0-9._@:/+-" >&2
+        exit 1
+    fi
+    set_env_value "S3_BACKUP_BUCKET" "$bucket"
+    set_env_value "S3_BACKUP_PREFIX" "$prefix"
+    set_env_value "S3_BACKUP_REGION" "$region"
+    if [ -z "$(get_env_value 'BACKUP_ENCRYPTION_KEY')" ]; then
+        set_env_value "BACKUP_ENCRYPTION_KEY" "${BACKUP_ENCRYPTION_KEY:-$(generate_secret)}"
+        warn "BACKUP_ENCRYPTION_KEY is in .env: keep a copy elsewhere, backups can't be decrypted without it"
+    fi
+    info "The workers also need AWS credentials (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or an instance role)"
+    success "S3 backups go to s3://$bucket/$prefix"
+}
+
+# Ask until the answer is usable: value must be non-empty and use safe characters
+ask_backup_value() {
+    local var="$1" prompt="$2" default="${3:-}" answer
+    while true; do
+        read -r -p "$prompt" answer
+        answer="${answer:-$default}"
+        if [[ -n "$answer" && "$answer" =~ ^[A-Za-z0-9._@:/+-]+$ ]]; then
+            printf -v "$var" '%s' "$answer"
+            return 0
+        fi
+        warn "Use only A-Za-z0-9._@:/+- and don't leave it empty"
+    done
+}
+
+if backup_choice_made; then
+    success "S3 backups already configured"
+    if [ -n "${S3_BACKUP_BUCKET:-}" ] && [ "${S3_BACKUP_BUCKET}" != "$(get_env_value 'S3_BACKUP_BUCKET')" ]; then
+        warn "Ignoring supplied S3_BACKUP_BUCKET: .env already records a backup choice; edit .env to change it"
+    elif [ "${S3_BACKUP:-}" = off ] && [ -n "$(get_env_value 'S3_BACKUP_BUCKET')" ]; then
+        warn "Ignoring supplied S3_BACKUP=off: .env already has S3_BACKUP_BUCKET; edit .env to change it"
+    fi
+elif [ "$NON_INTERACTIVE" = true ]; then
+    if [ -n "${S3_BACKUP_BUCKET:-}" ]; then
+        enable_backups "$S3_BACKUP_BUCKET" "${S3_BACKUP_PREFIX:-memory}" "${S3_BACKUP_REGION:-eu-central-1}"
+    else
+        set_env_value "S3_BACKUP" "off"
+        info "S3 backups off"
+    fi
+else
+    info "Memory can back up its databases and files, encrypted, to an S3 bucket you own."
+    while true; do
+        read -r -p "Back up to S3? [y/n]: " backup_answer
+        case "$backup_answer" in
+            [Yy] | [Yy][Ee][Ss]) backup_on=true; break ;;
+            [Nn] | [Nn][Oo]) backup_on=false; break ;;
+            *) warn "Please answer y or n" ;;
+        esac
+    done
+    if [ "$backup_on" = true ]; then
+        ask_backup_value backup_bucket "S3 bucket: "
+        ask_backup_value backup_prefix "Key prefix inside the bucket [memory]: " memory
+        ask_backup_value backup_region "AWS region [eu-central-1]: " eu-central-1
+        enable_backups "$backup_bucket" "$backup_prefix" "$backup_region"
+    else
+        set_env_value "S3_BACKUP" "off"
+        info "S3 backups off"
     fi
 fi
 

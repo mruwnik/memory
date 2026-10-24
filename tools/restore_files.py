@@ -120,12 +120,12 @@ def main():
     )
     parser.add_argument(
         "--bucket",
-        default=os.getenv("S3_BACKUP_BUCKET", "equistamp-memory-backup"),
-        help="S3 bucket name",
+        default=os.getenv("S3_BACKUP_BUCKET"),
+        help="S3 bucket name (default: $S3_BACKUP_BUCKET)",
     )
     parser.add_argument(
         "--prefix",
-        default=os.getenv("S3_BACKUP_PREFIX", "Daniel"),
+        default=os.getenv("S3_BACKUP_PREFIX", "memory"),
         help="S3 prefix",
     )
     parser.add_argument(
@@ -135,6 +135,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if not args.bucket:
+        parser.error("no bucket: pass --bucket or set S3_BACKUP_BUCKET")
 
     # Get encryption key
     password = os.getenv("BACKUP_ENCRYPTION_KEY")
