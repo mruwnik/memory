@@ -32,6 +32,7 @@ describe('KeysPage', () => {
     ]))
     renderWithRouter(<KeysPage />)
     expect(await screen.findByText('personal')).toBeInTheDocument()
+    expect(screen.getByText('#1')).toBeInTheDocument()
     expect(screen.getByText('••••ab12')).toBeInTheDocument()
     expect(screen.getByText('Default')).toBeInTheDocument()
     expect(screen.getByText('Rejected')).toBeInTheDocument()

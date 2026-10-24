@@ -7,7 +7,7 @@ describe('activeItem', () => {
   it.each([
     ['/ui/agents', '', '/ui/agents'],
     ['/ui/agents/runs/12', '', '/ui/agents'],
-    ['/ui/agents/keys', '', '/ui/agents/keys'],
+    ['/ui/keys', '', '/ui/keys'],
     ['/ui/sources', '', '/ui/sources'],
     ['/ui/sources', '?tab=email', '/ui/sources'],
     ['/ui/sources', '?tab=secrets', '/ui/sources?tab=secrets'],

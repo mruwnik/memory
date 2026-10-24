@@ -189,9 +189,9 @@ async def test_updates_without_a_key_do_not_recheck(
     with mcp_auth_context(user_session.id):
         saved = await agent.key_upsert.fn(provider="anthropic", label="main", key=SECRET)
         updated = await agent.key_upsert.fn(
-            key_id=saved["id"], label="renamed", max_cost_usd_per_day="2.5"
+            key_ref=saved["id"], label="renamed", max_cost_usd_per_day="2.5"
         )
-        cleared = await agent.key_upsert.fn(key_id=saved["id"], max_cost_usd_per_day="")
+        cleared = await agent.key_upsert.fn(key_ref=saved["id"], max_cost_usd_per_day="")
 
     assert len(provider_api.requests) == 1
     assert (updated["label"], updated["max_cost_usd_per_day"]) == ("renamed", "2.500000")
@@ -205,7 +205,7 @@ async def test_replacing_a_key_rechecks_it_and_clears_invalid(
     old = add_key(db_session, regular_user, status="invalid", status_detail="rejected")
 
     with mcp_auth_context(user_session.id):
-        saved = await agent.key_upsert.fn(key_id=old.id, key="sk-new-5678")
+        saved = await agent.key_upsert.fn(key_ref=old.id, key="sk-new-5678")
 
     assert len(provider_api.requests) == 1
     assert (saved["key_hint"], saved["status"], saved["status_detail"]) == ("5678", "ok", None)
@@ -216,7 +216,7 @@ async def test_one_default_per_provider(db_session, regular_user, user_session, 
     with mcp_auth_context(user_session.id):
         first = await agent.key_upsert.fn(provider="anthropic", label="a", key=SECRET)
         second = await agent.key_upsert.fn(provider="anthropic", label="b", key=SECRET)
-        await agent.key_upsert.fn(key_id=second["id"], is_default=True)
+        await agent.key_upsert.fn(key_ref=second["id"], is_default=True)
         listed = await agent.key_list.fn()
 
     assert (first["is_default"], second["is_default"]) == (True, False)
@@ -233,8 +233,8 @@ async def test_one_default_per_provider(db_session, regular_user, user_session, 
         ({"provider": "mistral", "label": "m", "key": SECRET}, "provider must be one of"),
         ({"provider": "anthropic", "label": " ", "key": SECRET}, "label is required"),
         ({"provider": "anthropic", "label": "m"}, "key is required"),
-        ({"provider": "anthropic", "label": "main", "key": SECRET}, "already have an anthropic key named 'main'"),
-        ({"key_id": 99999, "label": "x"}, "unknown API key 99999"),
+        ({"provider": "anthropic", "label": "main", "key": SECRET}, "already have a key named 'main'"),
+        ({"key_ref": 99999, "label": "x"}, "unknown API key 99999"),
         ({"provider": "anthropic", "label": "m", "key": SECRET, "max_cost_usd_per_day": "-1"}, "max_cost_usd_per_day"),
     ],
 )
@@ -257,7 +257,7 @@ async def test_other_users_keys_are_unknown(
     with mcp_auth_context(user_session.id):
         listed = await agent.key_list.fn()
         with pytest.raises(ValueError, match=f"unknown API key {theirs.id}"):
-            await agent.key_delete.fn(key_id=theirs.id)
+            await agent.key_delete.fn(key_ref=theirs.id)
 
     assert listed["providers"] == {"anthropic": [], "openai": []}
 
@@ -277,7 +277,7 @@ async def test_deleting_a_pinned_key_names_the_agents_that_pinned_it(
     db_session.commit()
 
     with mcp_auth_context(user_session.id):
-        result = await agent.key_delete.fn(key_id=key.id)
+        result = await agent.key_delete.fn(key_ref=key.id)
 
     assert result == {"deleted": key.id, "pinned_by": ["digest"], "new_default": None}
     assert db_session.query(LLMProviderKey).count() == 0
@@ -330,11 +330,11 @@ def used(day: int) -> datetime:
 
 
 async def delete_key(key_id):
-    return await agent.key_delete.fn(key_id=key_id)
+    return await agent.key_delete.fn(key_ref=key_id)
 
 
 async def undefault_key(key_id):
-    return await agent.key_upsert.fn(key_id=key_id, is_default=False)
+    return await agent.key_upsert.fn(key_ref=key_id, is_default=False)
 
 
 @pytest.mark.asyncio
@@ -360,3 +360,42 @@ async def test_losing_the_default_promotes_the_most_recently_used_key(
 
     assert {k["label"]: k["is_default"] for k in listed["providers"]["anthropic"]} == expected
     assert listed["providers"]["openai"][0]["is_default"] is True
+
+
+@pytest.mark.parametrize("ref", ["by_id", "by_name"])
+def test_key_refs_resolve_by_id_or_name(db_session, regular_user, ref):
+    key = add_key(db_session, regular_user, "personal")
+    value = {"by_id": key.id, "by_name": "personal"}[ref]
+
+    assert provider_keys.resolve_key_ref(db_session, regular_user.id, value).id == key.id
+
+
+@pytest.mark.parametrize("ref", [99999, "nope"])
+def test_unknown_key_refs_are_refused(db_session, regular_user, admin_user, ref):
+    add_key(db_session, admin_user, "nope")
+
+    with pytest.raises(ValueError, match="unknown API key"):
+        provider_keys.resolve_key_ref(db_session, regular_user.id, ref)
+
+
+@pytest.mark.asyncio
+async def test_names_are_unique_across_providers(
+    db_session, regular_user, user_session, provider_api
+):
+    add_key(db_session, regular_user, "personal", provider="anthropic")
+
+    with mcp_auth_context(user_session.id, scopes=["teams"]):
+        with pytest.raises(ValueError, match="you already have a key named 'personal'"):
+            await agent.key_upsert.fn(provider="openai", label="personal", key="sk-openai")
+
+
+@pytest.mark.asyncio
+async def test_key_tools_need_no_agents_scope(
+    db_session, regular_user, user_session, provider_api
+):
+    with mcp_auth_context(user_session.id, scopes=["teams"]):
+        created = await agent.key_upsert.fn(provider="anthropic", label="personal", key=SECRET)
+        await agent.key_upsert.fn(key_ref="personal", max_cost_usd_per_day="5")
+        deleted = await agent.key_delete.fn(key_ref="personal")
+
+    assert deleted["deleted"] == created["id"]

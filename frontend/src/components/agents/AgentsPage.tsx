@@ -24,7 +24,7 @@ export default function AgentsPage() {
         <ButtonLink to="/ui/agents/new" variant="primary">New agent</ButtonLink>
         <ButtonLink to="/ui/agents/runs">Runs</ButtonLink>
         <ButtonLink to="/ui/agents/servers">MCP servers</ButtonLink>
-        <ButtonLink to="/ui/agents/keys">API keys</ButtonLink>
+        <ButtonLink to="/ui/keys">API keys</ButtonLink>
       </>}
       loading={definitions === null && 'Loading agents...'}
       error={error}

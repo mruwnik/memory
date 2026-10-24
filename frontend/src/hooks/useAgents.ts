@@ -395,7 +395,7 @@ export const useAgents = () => {
   const upsertKey = useCallback(
     (body: KeyUpsert) =>
       call<ProviderKey>('agent_key_upsert', {
-        ...(body.keyId !== undefined ? { key_id: body.keyId } : {}),
+        ...(body.keyId !== undefined ? { key_ref: body.keyId } : {}),
         ...(body.provider !== undefined ? { provider: body.provider } : {}),
         ...(body.label !== undefined ? { label: body.label } : {}),
         ...(body.key ? { key: body.key } : {}),
@@ -404,7 +404,7 @@ export const useAgents = () => {
       }),
     [call],
   )
-  const deleteKey = useCallback((keyId: number) => call<KeyDeleteResult>('agent_key_delete', { key_id: keyId }), [call])
+  const deleteKey = useCallback((keyId: number) => call<KeyDeleteResult>('agent_key_delete', { key_ref: keyId }), [call])
 
   return {
     listDefinitions, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,

@@ -104,7 +104,7 @@ const AuthWrapper = () => {
     { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
     { path: '/ui/check', element: <Check />, scope: 'check' },
     { path: '/ui/agents', element: <AgentsPage />, scope: 'agents' },
-    { path: '/ui/agents/keys', element: <KeysPage />, scope: 'agents' },
+    { path: '/ui/keys', element: <KeysPage /> },
     { path: '/ui/agents/servers', element: <ServersPage />, scope: 'agents' },
     { path: '/ui/agents/servers/:id', element: <ServerDetail />, scope: 'agents' },
     { path: '/ui/agents/runs', element: <AgentRuns />, scope: 'agents' },

@@ -126,7 +126,7 @@ function KeyRow({ entry, onSave, onMakeDefault, onDelete }: {
         {entry.is_default && <Badge tone="primary">Default</Badge>}
         {entry.status === 'ok' ? <Badge tone="success">OK</Badge> : <Badge tone="danger">Rejected</Badge>}
       </>}
-      meta={[entry.last_used_at ? `Used ${formatRelativeTime(entry.last_used_at)}` : 'Never used', cap]}
+      meta={[`#${entry.id}`, entry.last_used_at ? `Used ${formatRelativeTime(entry.last_used_at)}` : 'Never used', cap]}
       actions={edit === null && <>
         <Button size="sm" onClick={() => setEdit('label')}>Rename</Button>
         <Button size="sm" onClick={() => setEdit('key')}>Replace key</Button>
@@ -190,9 +190,8 @@ export default function KeysPage() {
 
   return (
     <Page
-      back={{ to: '/ui/agents', label: 'Agents' }}
-      title="API keys"
-      description="Your own provider keys for agent runs. The agent's caps and the key's daily cap apply. Agents need a key of yours for their model's provider to run."
+      title="LLM API keys"
+      description="Your Anthropic and OpenAI keys. They pay for summaries and other LLM work on items you own, for the LLM steps of your searches, and for your agents. Nothing LLM-backed runs without one. Tools refer to keys by name or id."
       actions={<Button variant="primary" onClick={() => setAdding(true)}>New key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}

@@ -37,6 +37,7 @@ from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
     choose_key,
+    resolve_key_ref,
 )
 from memory.agents.triggers import (
     INGEST,
@@ -1011,13 +1012,6 @@ def user_keys() -> dict[str, list[dict]]:
         }
 
 
-def owned_key(db: DBSession, key_id: int, user_id: int) -> LLMProviderKey:
-    key = db.get(LLMProviderKey, key_id)
-    if key is None or key.user_id != user_id:
-        raise ValueError(f"unknown API key {key_id}")
-    return key
-
-
 def daily_cap(value: str) -> Decimal | None:
     """'' clears the cap."""
     if value == "":
@@ -1047,12 +1041,9 @@ def key_checks_allowed(user_id: int) -> None:
         raise ValueError("too many API key checks this hour; try later")
 
 
-def label_taken(
-    db: DBSession, user_id: int, provider: str, label: str, key_id: int | None
-) -> bool:
+def label_taken(db: DBSession, user_id: int, label: str, key_id: int | None) -> bool:
     query = db.query(LLMProviderKey).filter(
         LLMProviderKey.user_id == user_id,
-        LLMProviderKey.provider == provider,
         LLMProviderKey.label == label,
     )
     if key_id is not None:
@@ -1103,28 +1094,29 @@ def promote_default(
 
 
 @agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
+@visible_when()
 async def key_list() -> dict:
     """Your LLM provider API keys by provider (never the keys themselves, only their
-    last 4 characters)."""
+    last 4 characters). They pay for your agent runs, LLM work on items you own, and
+    the LLM steps of your searches."""
     return {"providers": user_keys()}
 
 
 @agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
+@visible_when()
 async def key_upsert(
     provider: str | None = None,
     label: str | None = None,
     key: str | None = None,
     is_default: bool | None = None,
     max_cost_usd_per_day: str | None = None,
-    key_id: int | None = None,
+    key_ref: int | str | None = None,
 ) -> dict:
     """Add or update one of your LLM provider API keys for agent runs.
 
     Creating needs provider (anthropic or openai), label and key. A key is stored
-    only once its provider accepts it, and is never shown again. With key_id,
-    omitted fields are kept and a new key is checked again. Your first key for a
+    only once its provider accepts it, and is never shown again. With key_ref (a key's id or
+    name), omitted fields are kept and a new key is checked again. Your first key for a
     provider becomes its default; un-defaulting it makes your most recently used
     other key the default. max_cost_usd_per_day caps daily spend on this key (""
     removes the cap; with no cap here or on the agent, AGENT_DEFAULT_USER_KEY_DAILY_COST_USD
@@ -1135,24 +1127,25 @@ async def key_upsert(
     """
     user_id, _ = caller()
     with make_session() as db:
-        existing = owned_key(db, key_id, user_id).provider if key_id is not None else None
-    provider = existing or provider
+        existing = resolve_key_ref(db, user_id, key_ref) if key_ref is not None else None
+        key_id = existing.id if existing else None
+        provider = existing.provider if existing else provider
     if provider not in KEY_PROVIDERS:
         raise ValueError(f"provider must be one of {', '.join(KEY_PROVIDERS)}")
-    label = checked_label(label, required=key_id is None)
+    label = checked_label(label, required=existing is None)
     secret = (key or "").strip()
-    if key_id is None and not secret:
+    if existing is None and not secret:
         raise ValueError("key is required")
     cap = daily_cap(max_cost_usd_per_day) if max_cost_usd_per_day is not None else None
     with make_session() as db:
-        if label is not None and label_taken(db, user_id, provider, label, key_id):
-            raise ValueError(f"you already have an {provider} key named {label!r}")
+        if label is not None and label_taken(db, user_id, label, key_id):
+            raise ValueError(f"you already have a key named {label!r}")
     if secret:
         key_checks_allowed(user_id)
         await check_key(provider, secret)
     with make_session() as db:
         row = (
-            owned_key(db, key_id, user_id)
+            resolve_key_ref(db, user_id, key_id)
             if key_id is not None
             else LLMProviderKey(user_id=user_id, provider=provider)
         )
@@ -1180,15 +1173,15 @@ async def key_upsert(
 
 
 @agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def key_delete(key_id: int) -> dict:
+@visible_when()
+async def key_delete(key_ref: int | str) -> dict:
     """Delete one of your provider keys. Agents that pin it (`pinned_by`) fail
     until you pick another key for them. Deleting the default makes your most
     recently used other key for the provider the default (`new_default`)."""
     user_id, _ = caller()
     with make_session() as db:
-        found = owned_key(db, key_id, user_id)
-        provider = found.provider
+        found = resolve_key_ref(db, user_id, key_ref)
+        key_id, provider = found.id, found.provider
         definitions = db.query(AgentDefinition).filter(AgentDefinition.user_id == user_id)
         pinned_by = sorted(d.name for d in definitions if d.spec.get("provider_key") == key_id)
         db.delete(found)

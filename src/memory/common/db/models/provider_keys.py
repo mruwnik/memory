@@ -67,9 +67,7 @@ class LLMProviderKey(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "provider", "label", name="llm_provider_keys_user_provider_label"
-        ),
+        UniqueConstraint("user_id", "label", name="llm_provider_keys_user_label"),
         CheckConstraint(
             "provider IN ('anthropic', 'openai')", name="llm_provider_keys_provider"
         ),

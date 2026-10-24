@@ -256,7 +256,7 @@ section has nothing in it:
   `AGENT_MAX_TIMEOUT_SEC` plus 10 minutes.
 - New `agents` user scope gates the `agent_*` MCP tools and the Agents dashboard.
   Only `*` admins have it by default; grant it to anyone else who should use agents.
-- Users can add their own Anthropic/OpenAI API keys for agent runs (Agents → API
+- Users can add their own Anthropic/OpenAI API keys for agent runs (LLM API
   keys). Runs are capped per run by the agent's `max_cost_usd` or the new
   `AGENT_DEFAULT_USER_KEY_RUN_COST_USD` (1.00), and per key per day by the key's
   or the agent's daily cap, or else the new `AGENT_DEFAULT_USER_KEY_DAILY_COST_USD`
@@ -399,6 +399,8 @@ section has nothing in it:
   external MCP servers. `CHECK_ALLOW_PRIVATE_CALLBACKS=true` still opens private
   and LAN ranges, but loopback is now always refused, so a localhost callback
   receiver must listen on a LAN address instead.
+- The LLM API keys page moved to `/ui/keys` and is open to every user; key names are
+  now unique per user (tools accept a key's name or id).
 
 ### Migrations
 
@@ -441,6 +443,8 @@ section has nothing in it:
 - `20261029_user_keys_only`: pins agents set to the server's key to their owner's default
   key where one exists (the others lose the pin and are refused until their owner adds a
   key), removes the `llm_server_key` scope, drops `agent_runs.key_source`. Fast.
+- `20261029_key_names_per_user`: renames same-named keys of one user (`name (provider)`)
+  and makes names unique per user. Fast.
 
 ### Post-deploy commands
 

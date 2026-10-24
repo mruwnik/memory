@@ -74,7 +74,7 @@ describe('SpecEditor', () => {
   it('links to the keys page when no key can pay', () => {
     renderWithRouter(<SpecEditor value={sonnet} catalog={{ ...catalog, provider_keys: [] }} onChange={vi.fn()} />)
     expect(screen.getByRole('alert')).toHaveTextContent('Add an API key for Anthropic so this agent can run.')
-    expect(screen.getByRole('link', { name: 'Manage API keys' })).toHaveAttribute('href', '/ui/agents/keys')
+    expect(screen.getByRole('link', { name: 'Manage API keys' })).toHaveAttribute('href', '/ui/keys')
   })
 
   it.each([
