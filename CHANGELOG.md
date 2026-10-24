@@ -179,6 +179,35 @@ section has nothing in it:
   types download instead. Stored HTML (e.g. an email attachment) used to render
   on memory's origin with the viewer's session. HTML reports opened through
   `/reports/` are unchanged.
+- New `claude_sessions` user scope gates every Claude container route (`/claude/*`:
+  spawn, list, kill, attach, logs, stats, differ, terminal, environments,
+  snapshots, including `tools/claude_snapshot.py` uploads) and the
+  `claude_session_list`/`_list_dir`/`_pull_url`/`_push_url` MCP tools. The
+  migration grants it to users who own a Claude config snapshot or environment
+  (nobody else could spawn); `*` admins pass without it. Grant it to anyone else
+  who should use Claude sessions. An API key with its own scope list now needs
+  `claude_sessions` in that list, and REST routes gated on a scope now check an
+  API key's own scopes rather than its owner's (inline admin checks still see
+  the owner's `*`, a known gap).
+- Scheduling a `claude_session` task needs `claude_sessions`. Each run re-checks
+  that the user, and the API key that set it up, still hold it; if not, the run
+  fails, the schedule is disabled and its owner is notified.
+- A scheduled `claude_session` execution now stays `running` until its
+  container exits (`completed`; `failed` if the container is `dead`, or was
+  removed before its exit was seen), and the next run of that schedule waits
+  for it. The api checks this every `CLAUDE_MAINTENANCE_INTERVAL_SEC` (300),
+  then removes exited and dead containers through the orchestrator's
+  `/cleanup`, so files can no longer be pulled from an exited container after
+  that. Running containers are never touched. An execution still running after
+  `CLAUDE_SESSION_TIMEOUT_HOURS` (24) is marked `failed`, by the api or the
+  scheduler worker; its container keeps running. With
+  `CLAUDE_MAINTENANCE_INTERVAL_SEC=0`, or an api without the orchestrator
+  socket (logged at startup), nothing settles executions early, so each run of
+  a repeating schedule waits up to that timeout.
+- Check-queue callbacks now go through the same dial-time-checked client as
+  external MCP servers. `CHECK_ALLOW_PRIVATE_CALLBACKS=true` still opens private
+  and LAN ranges, but loopback is now always refused, so a localhost callback
+  receiver must listen on a LAN address instead.
 
 ### Migrations
 
@@ -198,6 +227,8 @@ section has nothing in it:
   none, in batches of 50,000 ids, committing after each batch. It can run while
   the app is up, and re-running it after a failure continues where it stopped.
   This is the access widening described above. Downgrading leaves the creators.
+- `20261028_claude_sessions_scope`: grants `claude_sessions` to users who own a
+  Claude config snapshot or environment. Fast.
 
 ### Post-deploy commands
 

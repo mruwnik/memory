@@ -27,14 +27,14 @@ from sqlalchemy import literal, select
 from sqlalchemy.orm import Query
 
 from memory.common.db.models.sources import Project, Team, project_teams, team_members
-from memory.common.scopes import SCOPE_ADMIN
+from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from sqlalchemy.orm.scoping import scoped_session
 
     from memory.common.db.models.source_item import SourceItem
-    from memory.common.db.models.users import User
+    from memory.common.db.models.users import APIKey, User
 
 
 # Protocols for duck-typed access control checks
@@ -149,6 +149,39 @@ def has_admin_scope(user: UserLike) -> bool:
     if scopes is None:
         scopes = []
     return SCOPE_ADMIN in scopes
+
+
+def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
+    """Resolve effective scopes for a request authenticated by API key.
+
+    Distinguishes "no override declared" from "explicit empty override"
+    so an admin-minted low-privilege key (``scopes=[]``) cannot collapse
+    back to the user's full system scopes via a truthiness fallback:
+
+    * ``scopes is None`` → inherit user scopes (or ``[SCOPE_READ]`` if
+      the user themselves has none).
+    * Non-empty list → use as-is.
+    * Explicit empty list → fail closed to ``[SCOPE_READ]`` only, never
+      the user's system scopes. This is the safe default for "this key
+      has no privileges beyond read."
+    """
+    override = api_key_record.scopes
+    if override is None:
+        # Intentional inherit-from-user. Default to [SCOPE_READ] if the
+        # user themselves has no scopes set (matches prior behaviour).
+        return list(user.scopes or []) or [SCOPE_READ]
+    # Explicit list — empty list means "no privileges beyond read",
+    # NOT "fall back to user.scopes". This is the security-critical
+    # distinction.
+    return list(override) or [SCOPE_READ]
+
+
+def credential_scopes(user: User, api_key: APIKey | None) -> list[str]:
+    """The system scopes a credential carries: an API key's own (see
+    ``resolve_api_key_scopes``), or a session's user scopes plus read/write."""
+    if api_key is not None:
+        return resolve_api_key_scopes(api_key, user)
+    return sorted(set(user.scopes or []) | {SCOPE_READ, SCOPE_WRITE})
 
 
 def get_user_project_roles(db: "Session | scoped_session[Session]", user: "User") -> dict[int, str]:

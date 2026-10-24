@@ -50,7 +50,7 @@ from memory.common import extract, settings
 from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import make_session
 from memory.common.db.models import CodingProject, Session, SessionSegment
-from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
+from memory.common.scopes import SCOPE_CLAUDE_SESSIONS, SCOPE_READ
 from memory.parsers import claude_sessions
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ def mint_for(
 
 
 @claude_mcp.tool()
-@visible_when(require_scopes(SCOPE_READ))
+@visible_when(require_scopes(SCOPE_CLAUDE_SESSIONS))
 async def session_list() -> list[dict[str, Any]]:
     """List the current user's claude-cloud sessions (running and recent).
 
@@ -163,7 +163,7 @@ async def session_list() -> list[dict[str, Any]]:
 
 
 @claude_mcp.tool()
-@visible_when(require_scopes(SCOPE_READ))
+@visible_when(require_scopes(SCOPE_CLAUDE_SESSIONS))
 async def session_list_dir(
     session_id: str,
     path: str = "/workspace",
@@ -201,7 +201,7 @@ async def session_list_dir(
 
 
 @claude_mcp.tool()
-@visible_when(require_scopes(SCOPE_READ))
+@visible_when(require_scopes(SCOPE_CLAUDE_SESSIONS))
 async def session_pull_url(
     session_id: str,
     path: str,
@@ -231,7 +231,7 @@ async def session_pull_url(
 
 
 @claude_mcp.tool()
-@visible_when(require_scopes(SCOPE_WRITE))
+@visible_when(require_scopes(SCOPE_CLAUDE_SESSIONS))
 async def session_push_url(
     session_id: str,
     path: str,

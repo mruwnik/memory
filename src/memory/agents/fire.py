@@ -15,9 +15,10 @@ from memory.agents.triggers import (
     edited_ids,
     render_input,
 )
-from memory.api.MCP.servers.meta import notify_user_now
+from memory.common.notify import notify_user_now
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import AgentTrigger, SourceItem, User
+from memory.common.scopes import SCOPE_AGENTS
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
         try:
             if trigger.via_api_key and trigger.api_key_id is None:
                 raise PrincipalRevoked("the API key that set up this trigger was deleted")
-            key = standing_key(db, owner, trigger.api_key_id)
+            key = standing_key(db, owner, trigger.api_key_id, SCOPE_AGENTS)
             run = enqueue_run(
                 db,
                 user_id=owner.id,

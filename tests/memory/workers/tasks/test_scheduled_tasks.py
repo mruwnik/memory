@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from memory.common.celery_app import START_CRON_RUN
-from memory.common.db.models import ScheduledTask, TaskExecution
+from memory.common.db.models import APIKey, ScheduledTask, TaskExecution
 from memory.common.db.models.discord import DiscordChannel, DiscordServer
 from memory.workers.tasks import scheduled_tasks
 
@@ -1287,3 +1287,129 @@ def test_send_notification_task_delivers_without_db(mock_deliver, sample_user):
     assert params.message == "**Hi**\n\nthere"
     assert params.user_id == sample_user.id
     assert params.data == {"discord_bot_id": 7}
+
+
+# ----- scheduled Claude sessions: lifecycle and principal re-check -----
+
+
+def due_session_execution(db_session, user, api_key_id=None):
+    task = ScheduledTask(
+        user_id=user.id,
+        task_type="claude_session",
+        topic="nightly",
+        message="Review the repo",
+        cron_expression="0 9 * * *",
+        # Already advanced past this execution, as run_scheduled_tasks does.
+        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1),
+        data={"spawn_config": {"environment_id": 1}, "api_key_id": api_key_id},
+    )
+    db_session.add(task)
+    db_session.flush()
+    execution = TaskExecution(task_id=task.id, scheduled_time=datetime(2026, 1, 1), status="pending")
+    db_session.add(execution)
+    db_session.commit()
+    return task, execution
+
+
+def spawn_ok(session_id="u1-e1-abc123"):
+    response = Mock(ok=True)
+    response.json.return_value = {"session_id": session_id}
+    return response
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_spawned_session_stays_running_until_the_container_exits(
+    mock_post, db_session, sample_user
+):
+    sample_user.scopes = ["claude_sessions"]
+    _, execution = due_session_execution(db_session, sample_user)
+    mock_post.return_value = spawn_ok()
+
+    scheduled_tasks.execute_scheduled_task(execution.id)
+
+    db_session.refresh(execution)
+    assert execution.status == "running"
+    assert execution.finished_at is None
+    assert execution.data == {"session_id": "u1-e1-abc123", "api_key_id": None}
+
+
+@pytest.mark.parametrize(
+    "user_scopes, key_state, allowed",
+    [
+        (["claude_sessions"], "none", True),
+        (["*"], "none", True),
+        (["claude_sessions"], "inherits", True),
+        (["read", "write", "schedule:write"], "none", False),
+        (["claude_sessions"], "revoked", False),
+        (["claude_sessions"], "deleted", False),
+        (["claude_sessions"], "narrowed", False),
+        (["read"], "inherits", False),
+    ],
+)
+@patch("memory.workers.tasks.scheduled_tasks.notify_user_now")
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_scheduled_session_rechecks_the_principal_at_fire_time(
+    mock_post, mock_notify, db_session, sample_user, user_scopes, key_state, allowed
+):
+    sample_user.scopes = user_scopes
+    key = APIKey.create(user_id=sample_user.id, scopes=["read"] if key_state == "narrowed" else None)
+    key.revoked = key_state == "revoked"
+    db_session.add(key)
+    db_session.flush()
+    key_ids = {"none": None, "deleted": key.id + 1000}
+    task, execution = due_session_execution(db_session, sample_user, key_ids.get(key_state, key.id))
+    mock_post.return_value = spawn_ok()
+
+    scheduled_tasks.execute_scheduled_task(execution.id)
+
+    db_session.refresh(execution)
+    db_session.refresh(task)
+    assert (execution.status == "running") is allowed
+    assert (execution.status == "failed") is not allowed
+    assert task.enabled is allowed
+    assert mock_post.called is allowed
+    assert mock_notify.call_count == (0 if allowed else 1)
+
+
+@patch("memory.workers.tasks.scheduled_tasks.notify_user_now")
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_revoked_schedule_notifies_its_owner_only_once(
+    mock_post, mock_notify, db_session, sample_user, no_celery_dispatch
+):
+    sample_user.scopes = ["read"]
+    task, execution = due_session_execution(db_session, sample_user)
+    scheduled_tasks.execute_scheduled_task(execution.id)
+
+    later = scheduled_tasks.run_scheduled_tasks()
+
+    db_session.refresh(task)
+    assert task.enabled is False
+    assert later["count"] == 0
+    assert mock_notify.call_count == 1
+    assert "claude_sessions" in mock_notify.call_args.kwargs["message"]
+
+
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
+@pytest.mark.parametrize(
+    "data, age_hours, recovered",
+    [
+        ({"session_id": "u1-e1-abc"}, 5, 0),
+        ({"session_id": "u1-e1-abc"}, 25, 1),
+        (None, 5, 1),
+    ],
+)
+def test_stale_recovery_gives_started_containers_the_session_timeout(
+    mock_send, db_session, sample_user, data, age_hours, recovered
+):
+    task, execution = due_session_execution(db_session, sample_user)
+    task.next_scheduled_time = None
+    execution.status = "running"
+    execution.started_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        hours=age_hours
+    )
+    execution.data = data
+    db_session.commit()
+
+    result = scheduled_tasks.run_scheduled_tasks()
+
+    assert result["recovered_stale"] == recovered

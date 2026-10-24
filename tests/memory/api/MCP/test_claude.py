@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from memory.api.MCP.servers import claude as claude_server  # noqa: F401 (registers checkers)
+from memory.api.MCP.visibility import get_visibility_checker
 from memory.api.orchestrator_client import SessionInfo as OrchSessionInfo
 from memory.api.search.types import SearchResult
 from memory.api.transfer_tokens import verify_token
@@ -17,6 +19,26 @@ from tests.conftest import mcp_auth_context
 
 
 SECRET = "claude-mcp-test-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "claude_session_list",
+        "claude_session_list_dir",
+        "claude_session_pull_url",
+        "claude_session_push_url",
+    ],
+)
+@pytest.mark.parametrize(
+    "scopes, visible",
+    [(["read", "write"], False), (["claude_sessions"], True), (["*"], True)],
+)
+async def test_container_tools_need_claude_sessions_scope(tool, scopes, visible):
+    checker = get_visibility_checker(tool)
+    assert checker is not None
+    assert await checker({"authenticated": True, "scopes": scopes}, None) is visible
 
 
 @pytest.fixture(autouse=True)

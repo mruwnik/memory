@@ -15,6 +15,7 @@ from memory.common.db.models import (
     User,
 )
 from memory.common.db.models.scheduled_tasks import ExecutionStatus
+from memory.common.scopes import SCOPE_AGENTS
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def enqueue_scheduled_run(
     user = db.get(User, task.user_id)
     if user is None:
         raise PrincipalRevoked(f"user {task.user_id} no longer exists")
-    key = standing_key(db, user, data.get("api_key_id"))
+    key = standing_key(db, user, data.get("api_key_id"), SCOPE_AGENTS)
     return enqueue_run(
         db,
         user_id=task.user_id,

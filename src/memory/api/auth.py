@@ -21,9 +21,13 @@ from memory.common.db.models import (
     User,
     UserSession,
 )
-from memory.common.access_control import get_user_project_roles, has_admin_scope
+from memory.common.access_control import (
+    credential_scopes,
+    get_user_project_roles,
+    has_admin_scope,
+)
 from memory.common.db.models.base import Base
-from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
+from memory.common.scopes import has_scope
 
 T = TypeVar("T", bound=Base)
 
@@ -349,31 +353,6 @@ def handle_api_key_use(key_record: APIKey, db: DBSession) -> bool:
     return True
 
 
-def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
-    """Resolve effective scopes for a request authenticated by API key.
-
-    Distinguishes "no override declared" from "explicit empty override"
-    so an admin-minted low-privilege key (``scopes=[]``) cannot collapse
-    back to the user's full system scopes via a truthiness fallback:
-
-    * ``scopes is None`` → inherit user scopes (or ``[SCOPE_READ]`` if
-      the user themselves has none).
-    * Non-empty list → use as-is.
-    * Explicit empty list → fail closed to ``[SCOPE_READ]`` only, never
-      the user's system scopes. This is the safe default for "this key
-      has no privileges beyond read."
-    """
-    override = api_key_record.scopes
-    if override is None:
-        # Intentional inherit-from-user. Default to [SCOPE_READ] if the
-        # user themselves has no scopes set (matches prior behaviour).
-        return list(user.scopes or []) or [SCOPE_READ]
-    # Explicit list — empty list means "no privileges beyond read",
-    # NOT "fall back to user.scopes". This is the security-critical
-    # distinction.
-    return list(override) or [SCOPE_READ]
-
-
 @dataclass
 class TokenLookup:
     """Result of looking up a bearer token.
@@ -456,20 +435,18 @@ def lookup_principal(
 
 def system_scopes(principal: TokenLookup) -> list[str]:
     """The system scopes that gate a principal's MCP tools; see ``verify_token``."""
-    if principal.api_key_record is not None:
-        return resolve_api_key_scopes(principal.api_key_record, principal.user)
-    return sorted(set(principal.user.scopes or []) | {SCOPE_READ, SCOPE_WRITE})
+    return credential_scopes(principal.user, principal.api_key_record)
 
 
 def authenticate_request(
     request: Request, db: DBSession, allowed_key_types: list[str] | None = None
-) -> tuple[User | None, str | None]:
-    """Authenticate a request and return user with auth method info.
+) -> tuple[User | None, APIKey | None]:
+    """Authenticate a request.
 
     Returns:
-        Tuple of (user, key_type) where:
+        Tuple of (user, api_key) where:
         - user: The authenticated User or None
-        - key_type: The API key type if authenticated via API key, None for session tokens
+        - api_key: The key that authenticated, None for session tokens
     """
     token = get_token(request)
     if not token:
@@ -477,9 +454,7 @@ def authenticate_request(
 
     # Check if this looks like an API key (various prefixes)
     if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
-        user, api_key = authenticate_by_api_key(token, db, allowed_key_types)
-        key_type = api_key.key_type if api_key else None
-        return user, key_type
+        return authenticate_by_api_key(token, db, allowed_key_types)
 
     # Otherwise treat as session token
     if session := get_user_session(request, db):
@@ -531,35 +506,24 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     return user
 
 
-def get_user_from_token(
-    token: str, db: DBSession, allowed_key_types: list[str] | None = None
-) -> User | None:
-    """Authenticate user from a token string.
-
-    Supports both session tokens (UUIDs) and API keys.
-    Useful for WebSocket authentication where tokens are passed via query params.
-
-    Args:
-        token: The token to authenticate.
-        db: Database session.
-        allowed_key_types: Optional list of allowed API key types. If None, all types allowed.
-    """
-    if not token:
+def get_user_from_token(token: str, db: DBSession, scope: str) -> User | None:
+    """The user a session token or API key authenticates as, if that credential
+    holds ``scope``. For WebSockets, which pass the token as a query param."""
+    principal = lookup_principal(token, db) if token else None
+    if principal is None or not has_scope(system_scopes(principal), scope):
         return None
+    return principal.user
 
-    # Check if this looks like an API key
-    if any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
-        user, _ = authenticate_by_api_key(token, db, allowed_key_types)
-        return user
 
-    # Otherwise treat as session token
-    session = db.get(UserSession, token)
-    if not session:
-        return None
-
-    if is_expired(session.expires_at):
-        return None
-    return session.user
+def request_api_key(request: Request, db: DBSession) -> APIKey | None:
+    """The API key that authenticated ``request``; None for a session token."""
+    if hasattr(request.state, "authenticated_user_id"):
+        key_id = getattr(request.state, "authenticated_api_key_id", None)
+        return db.get(APIKey, key_id) if key_id is not None else None
+    token = get_token(request)
+    if token and any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
+        return lookup_api_key(token, db)
+    return None
 
 
 def require_scope(scope: str):
@@ -571,9 +535,15 @@ def require_scope(scope: str):
             ...
     """
 
-    def checker(user: User = Depends(get_current_user)) -> User:
-        user_scopes = user.scopes or []
-        if SCOPE_ADMIN in user_scopes or scope in user_scopes:
+    def checker(
+        request: Request,
+        user: User = Depends(get_current_user),
+        db: DBSession = Depends(get_session),
+    ) -> User:
+        # An API key's own scopes apply, so a narrow key can't borrow its
+        # owner's wider grant.
+        principal = TokenLookup(user=user, api_key_record=request_api_key(request, db))
+        if has_scope(system_scopes(principal), scope):
             return user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
@@ -867,7 +837,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Validate session and get user
         with make_session() as session:
-            user, key_type = authenticate_request(request, session)
+            user, api_key = authenticate_request(request, session)
             if not user:
                 return Response(
                     content="Invalid or expired session",
@@ -878,7 +848,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             # Store auth info in request state so endpoints don't re-authenticate
             # (important for one-time keys which are consumed on first use)
             request.state.authenticated_user_id = user.id
-            request.state.authenticated_key_type = key_type  # None for session tokens
+            # Both None for session tokens
+            request.state.authenticated_key_type = api_key and api_key.key_type
+            request.state.authenticated_api_key_id = api_key and api_key.id
 
             # Log user ID instead of email for privacy
             logger.debug(f"Authenticated request from user_id={user.id} to {path}")

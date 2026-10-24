@@ -14,10 +14,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import require_scope
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import ClaudeConfigSnapshot, User
+from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 # Maximum snapshot file size (100 MB)
 MAX_SNAPSHOT_SIZE = 100 * 1024 * 1024
@@ -246,7 +247,7 @@ def get_snapshot_by_identifier(
 async def upload_snapshot(
     file: UploadFile = File(...),
     name: str = Form(...),
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> SnapshotResponse:
     """Upload a new config snapshot. Deduplicates by content hash."""
@@ -306,7 +307,7 @@ async def upload_snapshot(
 
 @router.get("/list")
 def list_snapshots(
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> list[SnapshotResponse]:
     """List all snapshots for the current user."""
@@ -322,7 +323,7 @@ def list_snapshots(
 @router.get("/{identifier}")
 def get_snapshot(
     identifier: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> SnapshotResponse:
     """Get a specific snapshot by ID or content hash.
@@ -340,7 +341,7 @@ def get_snapshot(
 @router.delete("/{identifier}")
 def delete_snapshot(
     identifier: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """Delete a snapshot by ID or content hash."""

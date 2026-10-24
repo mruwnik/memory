@@ -10,7 +10,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from sqlalchemy.pool import QueuePool
 
 from memory.api import auth
-from memory.api.auth import resolve_api_key_scopes
+from memory.common.access_control import resolve_api_key_scopes
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
     resolve_session_scopes,

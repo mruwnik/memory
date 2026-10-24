@@ -1,15 +1,20 @@
 """Tests for authentication helpers and OAuth callback."""
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from memory.api import auth
 from memory.api.auth import is_whitelisted_path
 from memory.common import settings
+from memory.common.db.models import APIKey, HumanUser, User, UserSession
+from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 
 # --- AuthenticationMiddleware whitelist matching ----------------------------
@@ -820,7 +825,6 @@ def test_handle_api_key_use_one_time_loser_returns_false():
 # ====== is_expired (tz-aware UTC handling) ======
 
 
-from datetime import datetime, timedelta, timezone  # noqa: E402
 
 
 def test_is_expired_naive_assumed_utc_in_past():
@@ -872,30 +876,6 @@ def test_is_expired_aware_non_utc_converts_correctly():
 def test_is_expired_none_treated_as_expired():
     """Defense-in-depth: a NULL expires_at is expired (fail-closed)."""
     assert auth.is_expired(None) is True
-
-
-def test_get_user_from_token_uses_is_expired():
-    """Smoke test: get_user_from_token reads session.user only when fresh."""
-    db = MagicMock()
-    session = MagicMock()
-    session.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
-    session.user = MagicMock()
-    db.get.return_value = session
-
-    result = auth.get_user_from_token("session-uuid", db)
-    assert result is None  # Expired → no user
-
-
-def test_get_user_from_token_returns_user_when_session_fresh():
-    db = MagicMock()
-    session = MagicMock()
-    session.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
-    user = MagicMock()
-    session.user = user
-    db.get.return_value = session
-
-    result = auth.get_user_from_token("session-uuid", db)
-    assert result is user
 
 
 # ====== create_user TOCTOU on duplicate email ======
@@ -988,3 +968,85 @@ def test_dummy_password_hash_actually_verifies():
     # would still return False but via a fast exception path.
     assert verify_password("any-password", auth.dummy_password_hash()) is False
     assert verify_password("", auth.dummy_password_hash()) is False
+
+
+# --- require_scope honours the credential, not just the user ----------------
+
+
+def scope_gated_client(with_middleware: bool) -> TestClient:
+    app = FastAPI()
+
+    @app.get("/gated")
+    def gated(user: User = auth.require_scope(SCOPE_CLAUDE_SESSIONS)):
+        return {"id": user.id}
+
+    if with_middleware:
+        app.add_middleware(auth.AuthenticationMiddleware)
+    return TestClient(app)
+
+
+def make_token(db_session, user_scopes, key_scopes, credential) -> str:
+    user = HumanUser(
+        name="Scoped", email="scoped@example.com",
+        password_hash="x", scopes=user_scopes,
+    )
+    db_session.add(user)
+    db_session.flush()
+    if credential == "session":
+        row = UserSession(user_id=user.id, expires_at=datetime.now() + timedelta(days=1))
+        db_session.add(row)
+        db_session.commit()
+        return row.id
+    key = APIKey.create(user_id=user.id, scopes=key_scopes)
+    key.revoked = credential == "revoked_key"
+    db_session.add(key)
+    db_session.commit()
+    return key.key
+
+
+SCOPE_CASES = [
+    ([SCOPE_CLAUDE_SESSIONS], None, "session", 200),
+    (["*"], None, "session", 200),
+    (["read", "write"], None, "session", 403),
+    ([SCOPE_CLAUDE_SESSIONS], None, "key", 200),
+    ([SCOPE_CLAUDE_SESSIONS], [SCOPE_CLAUDE_SESSIONS], "key", 200),
+    # A narrow key must not borrow its owner's wider grant.
+    (["*"], ["read"], "key", 403),
+    ([SCOPE_CLAUDE_SESSIONS], ["read"], "key", 403),
+    ([SCOPE_CLAUDE_SESSIONS], None, "revoked_key", 401),
+]
+
+
+@pytest.mark.parametrize("with_middleware", [True, False])
+@pytest.mark.parametrize("user_scopes, key_scopes, credential, expected", SCOPE_CASES)
+def test_require_scope_uses_the_credentials_scopes(
+    db_session, monkeypatch, with_middleware, user_scopes, key_scopes, credential, expected
+):
+    monkeypatch.setattr(settings, "DISABLE_AUTH", False)
+    token = make_token(db_session, user_scopes, key_scopes, credential)
+
+    response = scope_gated_client(with_middleware).get(
+        "/gated", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == expected
+
+
+
+@pytest.mark.parametrize("user_scopes, key_scopes, credential, expected", SCOPE_CASES)
+def test_websocket_token_uses_the_credentials_scopes(
+    db_session, user_scopes, key_scopes, credential, expected
+):
+    token = make_token(db_session, user_scopes, key_scopes, credential)
+
+    user = auth.get_user_from_token(token, db_session, SCOPE_CLAUDE_SESSIONS)
+
+    assert (user is not None) is (expected == 200)
+
+
+def test_websocket_token_rejects_expired_session(db_session):
+    token = make_token(db_session, ["*"], None, "session")
+    db_session.get(UserSession, token).expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.commit()
+
+    assert auth.get_user_from_token(token, db_session, SCOPE_CLAUDE_SESSIONS) is None

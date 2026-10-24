@@ -34,7 +34,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, get_user_from_token
+from memory.api.auth import get_user_from_token, require_scope
 from memory.api.transfer_tokens import (
     TransferTokenError,
     TransferTokenExpiredError,
@@ -61,6 +61,7 @@ from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
 from memory.api.claude_environments import mark_environment_used
 from memory.common.db.models.secrets import extract as extract_secret
+from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -493,7 +494,9 @@ class OrchestratorStatus(BaseModel):
 
 
 @router.get("/status")
-async def orchestrator_status() -> OrchestratorStatus:
+async def orchestrator_status(
+    _user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
+) -> OrchestratorStatus:
     """Check orchestrator availability and resource usage."""
     client = get_orchestrator_client()
     try:
@@ -511,7 +514,7 @@ async def orchestrator_status() -> OrchestratorStatus:
 
 @router.get("/stats")
 async def session_stats(
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict[str, Any]:
     """Live container resource snapshot.
 
@@ -538,7 +541,7 @@ async def session_stats_history(
     session_id: str | None = Query(None),
     since: str | None = Query(None),
     max_points: int = Query(1000, ge=1, le=10000, alias="max"),
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict[str, Any]:
     """Time-series ring buffer for the sampler.
 
@@ -574,7 +577,7 @@ async def session_stats_history(
 @router.get("/{session_id}/stats")
 async def container_stats(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict[str, Any]:
     """Live stats for a single container.
 
@@ -605,7 +608,7 @@ async def container_stats(
 @router.post("/spawn")
 async def spawn_session(
     request: SpawnRequest,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> SessionInfo:
     """Spawn a new Claude Code container session.
@@ -814,7 +817,7 @@ async def spawn_session(
 
 @router.get("/list")
 async def list_sessions(
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> list[SessionInfo]:
     """List active Claude sessions owned by the current user."""
     client = get_orchestrator_client()
@@ -843,7 +846,7 @@ async def list_sessions(
 @router.get("/{session_id}")
 async def get_session_info(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> SessionInfo:
     """Get details of a specific Claude session owned by the current user."""
     require_session_access(user, session_id)
@@ -872,7 +875,7 @@ async def get_session_info(
 @router.delete("/{session_id}")
 async def kill_session(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict:
     """Kill a Claude session owned by the current user."""
     require_session_access(user, session_id)
@@ -895,7 +898,7 @@ async def kill_session(
 @router.get("/{session_id}/panes")
 async def list_panes(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict:
     """List tmux panes for a Claude session, plus container resource stats.
 
@@ -917,7 +920,7 @@ async def list_panes(
 @router.get("/{session_id}/attach")
 async def get_attach_commands(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict:
     """Get commands to attach to a session owned by the current user.
 
@@ -1140,7 +1143,7 @@ async def transfer_push(request: Request) -> dict:
 async def get_session_logs(
     session_id: str,
     tail: int = 100,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ) -> dict:
     """Get logs for a Claude session.
 
@@ -1241,7 +1244,7 @@ async def proxy_differ(
     session_id: str,
     path: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
 ):
     """Reverse-proxy HTTP requests to the differ server inside a container.
 
@@ -1362,7 +1365,7 @@ async def proxy_differ_ws(
     # 4004 close frame ("Session not found"). Distinguishing them would
     # leak existence to unauthenticated callers.
     with make_session() as db:
-        user = get_user_from_token(token, db) if token else None
+        user = get_user_from_token(token, db, SCOPE_CLAUDE_SESSIONS)
     if not await require_session_access_websocket(websocket, user, session_id):
         return
 
@@ -1471,7 +1474,7 @@ async def stream_session_logs(
     # 4004 ``Session not found`` so we don't leak existence to callers
     # who hold a valid token but for the wrong session.
     with make_session() as db:
-        user = get_user_from_token(token, db)
+        user = get_user_from_token(token, db, SCOPE_CLAUDE_SESSIONS)
     if user is None:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return

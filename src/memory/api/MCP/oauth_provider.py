@@ -39,9 +39,9 @@ from memory.common.db.models.users import (
 from memory.api.auth import (
     is_expired,
     lookup_principal,
-    resolve_api_key_scopes,
     system_scopes,
 )
+from memory.common.access_control import resolve_api_key_scopes
 from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
 
 logger = logging.getLogger(__name__)

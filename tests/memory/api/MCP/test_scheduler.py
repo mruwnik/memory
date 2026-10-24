@@ -9,7 +9,7 @@ import pytest
 from memory.api.MCP.servers import scheduler
 from memory.common import settings as settings_mod
 from memory.common.db import connection as db_connection
-from memory.common.db.models import ScheduledTask
+from memory.common.db.models import APIKey, ScheduledTask
 from tests.conftest import mcp_auth_context
 
 
@@ -157,7 +157,7 @@ async def test_update_channel_change_revalidates_target(
 
 @pytest.mark.asyncio
 async def test_create_claude_session(db_session, regular_user, user_session):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
         result = await scheduler.upsert.fn(
             task_type="claude_session",
             message="Run the digest",
@@ -248,7 +248,7 @@ async def test_create_claude_session(db_session, regular_user, user_session):
 async def test_create_validation_errors(
     db_session, regular_user, user_session, kwargs, match
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
         with pytest.raises(ValueError, match=match):
             await scheduler.upsert.fn(**kwargs)
 
@@ -429,3 +429,90 @@ async def test_upsert_create_then_update_in_place(
     assert updated["id"] == fixed_id
     assert updated["topic"] == "renamed"
     assert updated["message"] == "x"
+
+
+SESSION_TASK = dict(
+    task_type="claude_session",
+    message="Run the digest",
+    cron_expression="0 9 * * *",
+    spawn_config={"environment_id": 1},
+)
+
+
+@pytest.mark.asyncio
+async def test_scheduling_a_session_needs_the_claude_sessions_scope(
+    db_session, regular_user, user_session
+):
+    with mcp_auth_context(user_session.id, scopes=["schedule:write", "read", "write"]):
+        with pytest.raises(ValueError, match="claude_sessions"):
+            await scheduler.upsert.fn(**SESSION_TASK)
+
+    assert db_session.query(ScheduledTask).count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via_key", [True, False])
+async def test_scheduled_session_records_the_key_it_will_act_through(
+    db_session, regular_user, user_session, via_key
+):
+    key = APIKey.create(user_id=regular_user.id, scopes=["schedule:write", "claude_sessions"])
+    db_session.add(key)
+    db_session.commit()
+    token = key.key if via_key else user_session.id
+
+    with mcp_auth_context(token, scopes=["schedule:write", "claude_sessions"]):
+        result = await scheduler.upsert.fn(**SESSION_TASK)
+
+    assert result["data"]["api_key_id"] == (key.id if via_key else None)
+
+
+@pytest.mark.asyncio
+async def test_one_time_keys_cannot_schedule_sessions(db_session, regular_user):
+    key = APIKey.create(user_id=regular_user.id, key_type="one_time", scopes=["claude_sessions"])
+    db_session.add(key)
+    db_session.commit()
+
+    with mcp_auth_context(key.key, scopes=["claude_sessions"]):
+        with pytest.raises(ValueError, match="one-time"):
+            await scheduler.upsert.fn(**SESSION_TASK)
+
+
+@pytest.mark.asyncio
+async def test_changing_a_session_schedule_restamps_its_key(
+    db_session, regular_user, user_session
+):
+    key = APIKey.create(user_id=regular_user.id, scopes=["claude_sessions"])
+    db_session.add(key)
+    db_session.commit()
+    with mcp_auth_context(key.key, scopes=["claude_sessions"]):
+        created = await scheduler.upsert.fn(**SESSION_TASK)
+
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        updated = await scheduler.upsert.fn(task_id=created["id"], message="New prompt")
+
+    assert updated["data"]["api_key_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_pausing_a_session_schedule_needs_no_claude_scope(
+    db_session, regular_user, user_session
+):
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        created = await scheduler.upsert.fn(**SESSION_TASK)
+
+    with mcp_auth_context(user_session.id, scopes=["schedule:write"]):
+        paused = await scheduler.upsert.fn(task_id=created["id"], enabled=False)
+
+    assert paused["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_changing_a_session_schedule_needs_the_scope(
+    db_session, regular_user, user_session
+):
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        created = await scheduler.upsert.fn(**SESSION_TASK)
+
+    with mcp_auth_context(user_session.id, scopes=["schedule:write"]):
+        with pytest.raises(ValueError, match="claude_sessions"):
+            await scheduler.upsert.fn(task_id=created["id"], message="New prompt")

@@ -3,9 +3,6 @@
 External MCP servers: the stored token, refreshed once on a 401 under the row
 lock, and a failure that ends the run. Provider keys: a key its provider
 refuses is marked invalid and its owner told.
-
-Kept apart from `external` and `provider_keys` because notifying needs the MCP
-meta subserver, which the agent subserver (importing those) is mounted alongside.
 """
 
 import asyncio
@@ -21,9 +18,9 @@ from mcp.types import Tool
 
 from memory.agents.external import apply_tools, mcp_session
 from memory.agents.provider_keys import keys_page
-from memory.api.MCP.servers.meta import notify_user_now
 from memory.common.db.connection import make_session
 from memory.common.db.models import ExternalMCPServer, LLMProviderKey, User
+from memory.common.notify import notify_user_now
 from memory.common.mcp_oauth import (
     MCPServerError,
     ReauthRequired,

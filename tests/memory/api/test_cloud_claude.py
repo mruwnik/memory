@@ -2,12 +2,16 @@
 
 import asyncio
 import pathlib
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from starlette.websockets import WebSocketDisconnect
+
+from memory.api.auth import get_current_user
 
 from memory.api.cloud_claude import (
     SpawnRequest,
@@ -22,8 +26,9 @@ from memory.api.cloud_claude import (
 )
 from memory.api.orchestrator_client import OrchestratorError
 from memory.common import settings
+from memory.common.db.connection import get_session
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
-from memory.common.db.models.users import HumanUser
+from memory.common.db.models.users import HumanUser, UserSession
 
 
 # Tests for session ID generation and parsing
@@ -958,3 +963,78 @@ def test_spawn_session_concurrent_limit_ignores_exited_sessions(tmp_path):
 
     assert info.session_id == "u7-s99-abc123"
     client.create_container.assert_awaited_once()
+
+
+# --- Every container route needs the claude_sessions scope -------------------
+
+OWNED = "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111"
+
+
+@pytest.fixture
+def unscoped_client(app_client, db_session, user):
+    """Authenticated as a real user holding everything except claude_sessions."""
+    test_client, app = app_client
+    user.scopes = ["read", "write", "agents", "check"]
+    db_session.commit()
+
+    def get_test_session():
+        yield db_session
+
+    saved = dict(app.dependency_overrides)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_session] = get_test_session
+    yield test_client
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(saved)
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "/claude/status"),
+        ("GET", "/claude/stats"),
+        ("GET", f"/claude/stats/history?session_id={OWNED}"),
+        ("GET", f"/claude/{OWNED}/stats"),
+        ("POST", "/claude/spawn"),
+        ("GET", "/claude/list"),
+        ("GET", f"/claude/{OWNED}"),
+        ("DELETE", f"/claude/{OWNED}"),
+        ("GET", f"/claude/{OWNED}/panes"),
+        ("GET", f"/claude/{OWNED}/attach"),
+        ("GET", f"/claude/{OWNED}/logs"),
+        ("GET", f"/claude/{OWNED}/differ/api/sessions"),
+        ("POST", "/claude/environments/create"),
+        ("GET", "/claude/environments/list"),
+        ("GET", "/claude/environments/1"),
+        ("DELETE", "/claude/environments/1"),
+        ("POST", "/claude/environments/1/reset"),
+        ("POST", "/claude/snapshots/upload"),
+        ("GET", "/claude/snapshots/list"),
+        ("GET", "/claude/snapshots/1"),
+        ("DELETE", "/claude/snapshots/1"),
+    ],
+)
+def test_container_routes_require_claude_sessions_scope(unscoped_client, method, path):
+    orchestrator = MagicMock(side_effect=AssertionError("orchestrator must not be reached"))
+    with patch("memory.api.cloud_claude.get_orchestrator_client", orchestrator):
+        response = unscoped_client.request(method, path, json={"environment_id": 1})
+
+    assert response.status_code == 403
+    orchestrator.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "path", [f"/claude/{OWNED}/logs/stream", f"/claude/{OWNED}/differ/mcp"]
+)
+def test_container_websockets_require_claude_sessions_scope(
+    app_client, db_session, user, path
+):
+    test_client, _ = app_client
+    user.scopes = ["read", "write"]
+    token = UserSession(user_id=user.id, expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    db_session.add(token)
+    db_session.commit()
+
+    with pytest.raises(WebSocketDisconnect):
+        with test_client.websocket_connect(f"{path}?token={token.id}") as ws:
+            ws.receive_text()

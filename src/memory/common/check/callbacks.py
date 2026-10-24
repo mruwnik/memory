@@ -2,55 +2,42 @@
 
 Delivery is fire-and-forget: a few quick retries, then we give up and rely on
 the caller polling ``GET /check/{id}`` (results live for CHECK_JOB_TTL_SEC).
-Callback URLs are SSRF-guarded — the server must not be coerced into POSTing to
-internal/metadata endpoints.
+Callbacks go through ``safe_http``, which checks every address at dial time, so
+the server can't be coerced into POSTing to internal or metadata endpoints.
 """
 
 import asyncio
-import ipaddress
 import logging
-import socket
+from dataclasses import replace
 from urllib.parse import urlparse
 
 import httpx
 
-from memory.common.check.schemas import CallbackPayload, JobRecord
 from memory.common import settings
+from memory.common.check.schemas import CallbackPayload, JobRecord
+from memory.common.safe_http import (
+    BlockedDestination,
+    NetworkPolicy,
+    PinnedBackend,
+    default_policy,
+    public_http_client,
+)
 
 logger = logging.getLogger(__name__)
 
 _BACKOFF_SECONDS = [0, 5, 30]  # attempt 1 immediate, then 5s, 30s
 
 
-async def _resolve(host: str) -> list[str]:
-    loop = asyncio.get_running_loop()
-    infos = await loop.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    return [str(info[4][0]) for info in infos]
-
-
-async def is_safe_callback_url(url: str) -> bool:
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
-    # NOTE (v2): we validate the resolved IP, but httpx re-resolves the hostname
-    # at connect time, so an active DNS-rebinding attacker can still bypass this.
-    # Full fix = pin the validated IP via a custom transport while preserving TLS
-    # SNI. Accepted for now: callbacks are check-scope-gated and private ranges
-    # are denied by default.
-    try:
-        addrs = await _resolve(parsed.hostname)
-    except (socket.gaierror, OSError):
-        return False
-    if not addrs:
-        return False
+def callback_policy() -> NetworkPolicy:
+    """Public addresses only, unless the dev flag also opens private ranges.
+    Loopback, link-local and metadata stay refused either way."""
     if settings.CHECK_ALLOW_PRIVATE_CALLBACKS:
-        return True  # dev escape hatch: permit private/loopback targets (scheme + resolvability still enforced)
-    for addr in addrs:
-        ip = ipaddress.ip_address(addr)
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False
-    return True
+        return default_policy()
+    return replace(default_policy(), public_only=True)
+
+
+def callback_backend() -> PinnedBackend:
+    return PinnedBackend(policy=callback_policy())
 
 
 def build_callback_payload(job: JobRecord) -> CallbackPayload:
@@ -72,21 +59,23 @@ async def deliver_callback(job: JobRecord) -> bool:
 
 async def _deliver_callback(job: JobRecord) -> bool:
     url = job["callback_url"]
-    if not url:
-        return False
-    if not await is_safe_callback_url(url):
-        logger.warning("check: refusing unsafe callback_url for %s", job.get("job_id"))
+    if urlparse(url).scheme not in ("http", "https"):
         return False
 
     payload = build_callback_payload(job)
     max_attempts = max(1, settings.CHECK_CALLBACK_MAX_ATTEMPTS)
-    async with httpx.AsyncClient(timeout=settings.CHECK_CALLBACK_TIMEOUT_SEC) as client:
+    async with public_http_client(
+        timeout=settings.CHECK_CALLBACK_TIMEOUT_SEC, backend=callback_backend()
+    ) as client:
         for attempt in range(max_attempts):
             backoff = _BACKOFF_SECONDS[min(attempt, len(_BACKOFF_SECONDS) - 1)]
             if backoff:
                 await asyncio.sleep(backoff)
             try:
                 resp = await client.post(url, json=payload.model_dump())
+            except BlockedDestination:
+                logger.warning("check: refusing unsafe callback_url for %s", job.get("job_id"))
+                return False
             except httpx.HTTPError as exc:
                 logger.info("check callback attempt %d failed: %s", attempt + 1, exc)
                 continue

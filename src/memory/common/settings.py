@@ -426,6 +426,12 @@ SCHEDULED_TASK_RETENTION_DAYS = int(os.getenv("SCHEDULED_TASK_RETENTION_DAYS", 9
 MAX_CONCURRENT_SESSIONS_PER_USER = int(
     os.getenv("MAX_CONCURRENT_SESSIONS_PER_USER", 4)
 )
+# How often the API settles scheduled Claude sessions against the orchestrator
+# and removes exited containers; 0 turns it off.
+CLAUDE_MAINTENANCE_INTERVAL_SEC = float(os.getenv("CLAUDE_MAINTENANCE_INTERVAL_SEC", 300))
+# A scheduled session still running after this long is recorded as failed
+# (its container is left alone).
+CLAUDE_SESSION_TIMEOUT_HOURS = float(os.getenv("CLAUDE_SESSION_TIMEOUT_HOURS", 24))
 
 # Maximum allowed body size for `/claude/transfer/push` (tar uploads to a
 # Claude container). The endpoint buffers the body in API memory before
@@ -466,8 +472,8 @@ CHECK_CALLBACK_TIMEOUT_SEC = int(os.getenv("CHECK_CALLBACK_TIMEOUT_SEC", "10"))
 CHECK_CALLBACK_MAX_ATTEMPTS = int(os.getenv("CHECK_CALLBACK_MAX_ATTEMPTS", "3"))
 CHECK_MAX_REQUEUE_ATTEMPTS = int(os.getenv("CHECK_MAX_REQUEUE_ATTEMPTS", "3"))
 CHECK_RATE_LIMIT_PER_MIN = int(os.getenv("CHECK_RATE_LIMIT_PER_MIN", "60"))
-# SSRF guard: callbacks to private/loopback/link-local addresses are blocked
-# unless explicitly allowed (e.g. for a localhost dev callback receiver).
+# Callbacks reach public addresses only; this also opens private/LAN ranges.
+# Loopback, link-local, metadata and the stack's own services stay blocked.
 CHECK_ALLOW_PRIVATE_CALLBACKS = boolean_env("CHECK_ALLOW_PRIVATE_CALLBACKS", False)
 CHECK_DEFAULT_WAIT_SEC = int(os.getenv("CHECK_DEFAULT_WAIT_SEC", "60"))
 CHECK_MAX_WAIT_SEC = int(os.getenv("CHECK_MAX_WAIT_SEC", "300"))

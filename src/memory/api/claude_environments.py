@@ -12,11 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import require_scope
 from memory.api.orchestrator_client import OrchestratorError, get_orchestrator_client
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
+from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def generate_volume_name(user_id: int, env_id: int, name: str) -> str:
 @router.post("/create")
 async def create_environment(
     request: CreateEnvironmentRequest,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> EnvironmentResponse:
     """Create a new persistent environment.
@@ -188,7 +189,7 @@ async def create_environment(
 
 @router.get("/list")
 def list_environments(
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> list[EnvironmentResponse]:
     """List all environments for the current user."""
@@ -204,7 +205,7 @@ def list_environments(
 @router.get("/{env_id}")
 def get_environment(
     env_id: int,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> EnvironmentResponse:
     """Get a specific environment by ID."""
@@ -224,7 +225,7 @@ def get_environment(
 @router.delete("/{env_id}")
 async def delete_environment(
     env_id: int,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """Delete an environment and its Docker volume."""
@@ -259,7 +260,7 @@ async def delete_environment(
 async def reset_environment(
     env_id: int,
     request: ResetEnvironmentRequest,
-    user: User = Depends(get_current_user),
+    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
     db: DBSession = Depends(get_session),
 ) -> EnvironmentResponse:
     """Reset an environment to its initial state.

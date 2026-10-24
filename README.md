@@ -276,6 +276,8 @@ Configuration lives in `.env` (or environment variables on the host). Key settin
 | `ENABLE_SEARCH_SCORING`           | `true`               | Recency / popularity / title-match score boosts                |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
 | `LATEST_RELEASE_URL`              | unset                | URL returning the latest release tag; enables `update_available` in `/health` |
+| `CLAUDE_MAINTENANCE_INTERVAL_SEC` | `300`                | How often the api settles scheduled Claude sessions and removes exited containers; `0` turns it off |
+| `CLAUDE_SESSION_TIMEOUT_HOURS`    | `24`                 | A scheduled Claude session still running after this is marked failed (container left running) |
 | `AGENT_MAX_RUN_COST_USD`          | `1.00`               | Hard ceiling on one agent run's cost on the server's provider keys; definitions and keys can only lower it |
 | `AGENT_MAX_DAILY_COST_USD`        | `10.00`              | Hard ceiling on each user's rolling-24h agent spend on the server's provider keys |
 | `AGENT_DEFAULT_USER_KEY_RUN_COST_USD` | `1.00`           | Per-run cap for runs on a user's own provider key when the agent sets no `max_cost_usd` |

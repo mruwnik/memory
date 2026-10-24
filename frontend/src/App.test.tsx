@@ -183,8 +183,17 @@ describe('App routing & auth', () => {
     expect(screen.getByText('CHECK')).toBeInTheDocument()
   })
 
-  it('lazily renders ClaudeSessions for an authenticated user', async () => {
+  it('does not render ClaudeSessions without the claude_sessions scope', () => {
     authState.isAuthenticated = true
+    authState.hasScope = vi.fn((s) => s !== 'claude_sessions')
+    setPath('/ui/claude')
+    render(<App />)
+    expect(screen.queryByText('CLAUDE')).not.toBeInTheDocument()
+  })
+
+  it('lazily renders ClaudeSessions for a user with the claude_sessions scope', async () => {
+    authState.isAuthenticated = true
+    authState.hasScope = vi.fn((s) => s === 'claude_sessions')
     setPath('/ui/claude')
     render(<App />)
     await waitFor(() => expect(screen.getByText('CLAUDE')).toBeInTheDocument())

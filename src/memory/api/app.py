@@ -6,6 +6,8 @@ import os
 import logging
 import mimetypes
 import pathlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -26,6 +28,7 @@ from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
+from memory.api.claude_maintenance import maintenance_running
 from memory.api.auth import (
     AuthenticationMiddleware,
     get_current_user,
@@ -84,6 +87,12 @@ limiter = Limiter(
 # Create the MCP http app to get its lifespan
 mcp_http_app = mcp.http_app(stateless_http=True)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async with mcp_http_app.lifespan(app), maintenance_running():
+        yield
+
 # OpenAPI tag descriptions for better documentation organization
 tags_metadata = [
     {"name": "auth", "description": "Authentication and authorization endpoints"},
@@ -137,7 +146,7 @@ Most endpoints require authentication via:
     """,
     version="1.0.0",
     openapi_tags=tags_metadata,
-    lifespan=mcp_http_app.lifespan,
+    lifespan=lifespan,
 )
 app.state.limiter = limiter
 

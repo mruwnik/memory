@@ -27,6 +27,9 @@ def app_client():
     # Disable auth middleware for tests
     original_disable_auth = settings.DISABLE_AUTH
     settings.DISABLE_AUTH = True
+    # No orchestrator in tests: keep the container maintenance loop off.
+    original_maintenance_interval = settings.CLAUDE_MAINTENANCE_INTERVAL_SEC
+    settings.CLAUDE_MAINTENANCE_INTERVAL_SEC = 0
 
     # Create a mock user that will be returned by the auth dependency
     mock_user = MagicMock()
@@ -48,6 +51,7 @@ def app_client():
     _test_client.__exit__(None, None, None)
     app.dependency_overrides.pop(get_current_user, None)
     settings.DISABLE_AUTH = original_disable_auth
+    settings.CLAUDE_MAINTENANCE_INTERVAL_SEC = original_maintenance_interval
 
 
 @pytest.fixture
@@ -126,7 +130,7 @@ def regular_client(app_client, db_session, user):
     mock_user = MagicMock(spec=HumanUser)
     mock_user.id = user.id
     mock_user.email = user.email
-    mock_user.scopes = ["read", "write"]  # Non-admin scopes
+    mock_user.scopes = ["read", "write", "claude_sessions"]  # Non-admin scopes
 
     def mock_get_current_user():
         return mock_user

@@ -17,7 +17,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
+from sqlalchemy import and_, or_
 
+from memory.agents.principal import PrincipalRevoked, standing_key
 from memory.common import discord as discord_utils
 from memory.common import settings
 from memory.common.celery_app import (
@@ -33,6 +35,7 @@ from memory.common.db.models import (
     EmailAccount,
     ScheduledTask,
     TaskExecution,
+    User,
     UserSession,
 )
 from memory.common.db.models.scheduled_tasks import (
@@ -48,6 +51,8 @@ from memory.common.email_sender import (
     send_email,
 )
 from memory.common.jobs import tracked_task
+from memory.common.notify import notify_user_now
+from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 from memory.common.slack import async_slack_call, slack_target_is_dm
 
 logger = logging.getLogger(__name__)
@@ -417,6 +422,34 @@ def spawn_claude_session(task: ScheduledTask, db) -> str:
     return session_id
 
 
+def check_session_principal(db, task: ScheduledTask) -> int | None:
+    """Re-check, at fire time, that whoever scheduled this session may still
+    spawn one; returns the API key id it acts through."""
+    user = db.get(User, task.user_id)
+    if user is None:
+        raise PrincipalRevoked(f"user {task.user_id} no longer exists")
+    key = standing_key(db, user, (task.data or {}).get("api_key_id"), SCOPE_CLAUDE_SESSIONS)
+    return key.id if key else None
+
+
+def revoke_session_schedule(db, task: ScheduledTask, error: PrincipalRevoked) -> None:
+    """Disable the schedule, so its owner is told once rather than every tick."""
+    task.enabled = False
+    db.commit()
+    user = db.get(User, task.user_id)
+    if user is None:
+        return
+    try:
+        notify_user_now(
+            db,
+            user,
+            subject=f"Scheduled Claude session paused: {task.topic or task.id}",
+            message=f"Scheduled task {task.id} was disabled: {error}",
+        )
+    except Exception:
+        logger.exception("could not notify user %s about scheduled task %s", user.id, task.id)
+
+
 @app.task(bind=True, name=EXECUTE_SCHEDULED_TASK)
 @tracked_task
 def execute_scheduled_task(self, execution_id: str):
@@ -480,9 +513,15 @@ def execute_scheduled_task(self, execution_id: str):
                     error_message = "Failed to send notification"
 
             elif task_type == TaskType.CLAUDE_SESSION:
+                try:
+                    api_key_id = check_session_principal(session, task)
+                except PrincipalRevoked as e:
+                    revoke_session_schedule(session, task, e)
+                    raise
                 session_id = spawn_claude_session(task, session)
-                final_status = ExecutionStatus.COMPLETED
-                execution_data = {"session_id": session_id}
+                # The API's container reconciler finishes it once the container exits.
+                final_status = ExecutionStatus.RUNNING
+                execution_data = {"session_id": session_id, "api_key_id": api_key_id}
 
             else:
                 raise ValueError(f"Unknown task_type: {task_type}")
@@ -497,11 +536,12 @@ def execute_scheduled_task(self, execution_id: str):
             execution.error_message = error_message
             if execution_data:
                 execution.data = execution_data
-            execution.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            if final_status != ExecutionStatus.RUNNING:
+                execution.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             session.commit()
 
         return {
-            "success": final_status == ExecutionStatus.COMPLETED,
+            "success": final_status != ExecutionStatus.FAILED,
             "execution_id": execution_id,
             "task_id": task_id,
             "task_type": task_type,
@@ -515,14 +555,24 @@ def run_scheduled_tasks():
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     with make_session() as session:
-        # 1. Recover stale executions (stuck in "running" for too long)
+        # 1. Recover stale executions (stuck in "running" for too long). A
+        # session whose container started is the API reconciler's to finish,
+        # but the reconciler may be off, so it gets the session timeout here.
         stale_cutoff = now - timedelta(hours=STALE_EXECUTION_TIMEOUT_HOURS)
+        session_cutoff = now - timedelta(hours=settings.CLAUDE_SESSION_TIMEOUT_HOURS)
+        no_session = or_(
+            TaskExecution.data.is_(None),
+            TaskExecution.data["session_id"].as_string().is_(None),
+        )
         stale_executions = (
             session.query(TaskExecution)
             .filter(
                 TaskExecution.status == ExecutionStatus.RUNNING,
-                TaskExecution.started_at < stale_cutoff,
                 TaskExecution.finished_at.is_(None),
+                or_(
+                    and_(no_session, TaskExecution.started_at < stale_cutoff),
+                    and_(~no_session, TaskExecution.started_at < session_cutoff),
+                ),
             )
             .with_for_update(skip_locked=True)
             .all()

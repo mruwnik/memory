@@ -6,9 +6,11 @@ from typing import Any
 
 from croniter import croniter
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 from sqlalchemy import nullslast
 from sqlalchemy.exc import IntegrityError
 
+from memory.api.auth import lookup_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -18,7 +20,12 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.db.models.secrets import find_secret
-from memory.common.scopes import SCOPE_SCHEDULE, SCOPE_SCHEDULE_WRITE
+from memory.common.scopes import (
+    SCOPE_CLAUDE_SESSIONS,
+    SCOPE_SCHEDULE,
+    SCOPE_SCHEDULE_WRITE,
+    has_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +141,20 @@ def validate_scheduled_secret_refs(
                 "/secrets); literal tokens are not accepted because they would "
                 "be persisted in plaintext in the schedule's data column."
             )
+
+
+def session_principal(session) -> int | None:
+    """The API key a scheduled Claude session will act through (None: the
+    caller's session). Each fire re-checks it still holds claude_sessions."""
+    token = get_access_token()
+    if token is None or not has_scope(list(token.scopes or []), SCOPE_CLAUDE_SESSIONS):
+        raise ValueError(f"scheduling Claude sessions needs the '{SCOPE_CLAUDE_SESSIONS}' scope")
+    key = lookup_api_key(token.token, session)
+    if key is not None and key.is_one_time:
+        raise ValueError(
+            "one-time API keys can't schedule Claude sessions; use a session or a regular API key"
+        )
+    return key.id if key else None
 
 
 def check_active_task_cap(session, user_id: int, exclude_id: str | None = None) -> None:
@@ -345,6 +366,8 @@ async def upsert(
                 notification_target=notification_target,
                 spawn_config=spawn_config,
             )
+            if task.task_type == TaskType.CLAUDE_SESSION:
+                task.data = {**(task.data or {}), "api_key_id": session_principal(session)}
             created_id = task.id
             try:
                 session.commit()
@@ -371,9 +394,9 @@ async def upsert(
         # the transition after the mutations below rather than per-field.
         was_active = task.enabled
 
-        # Anything but pausing would skip agent_schedule's re-check of the
-        # caller's scopes and tools.
-        agent_changes = (
+        # Anything but pausing changes what the schedule will run, so it needs
+        # the right to run it (agent_schedule re-checks agents' scopes and tools).
+        changes = (
             enabled,
             cron_expression,
             topic,
@@ -382,7 +405,7 @@ async def upsert(
             notification_target,
             spawn_config,
         ) != (False, None, None, None, None, None, None)
-        if task.task_type == TaskType.AGENT_RUN and agent_changes:
+        if task.task_type == TaskType.AGENT_RUN and changes:
             raise ValueError(
                 "agent schedules can only be paused here; change them with agent_schedule"
             )
@@ -418,6 +441,9 @@ async def upsert(
             task.notification_target = resolve_and_validate_target(
                 session, user_id, task.notification_channel, task.notification_target
             )
+
+        if task.task_type == TaskType.CLAUDE_SESSION and changes:
+            task.data = {**(task.data or {}), "api_key_id": session_principal(session)}
 
         if spawn_config is not None:
             if task.task_type != "claude_session":
