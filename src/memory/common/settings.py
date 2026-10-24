@@ -9,7 +9,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 
 from memory.common.crypto import derive_transfer_token_secret
-from memory.common.modules import module_config_errors, resolve_modules
+from memory.common.modules import CLAUDE_CONTAINERS, module_config_errors, resolve_modules
 
 load_dotenv()
 
@@ -640,6 +640,9 @@ else:
 TRANSFER_TOKEN_TTL_SECONDS = int(os.getenv("TRANSFER_TOKEN_TTL_SECONDS", 60))
 INGEST_TOKEN_TTL_SECONDS = int(os.getenv("INGEST_TOKEN_TTL_SECONDS", 300))
 
+# Unix socket of the Claude session orchestrator, which only the api talks to.
+ORCHESTRATOR_SOCKET = os.getenv("ORCHESTRATOR_SOCKET", "")
+
 # Base URL the API uses to proxy to the Claude session orchestrator. The host
 # part is consumed by ``httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)``
 # (the actual transport is the Unix socket; the URL hostname is just an
@@ -728,6 +731,10 @@ def require_settings(values: Any, role: str) -> None:
             f"Set them in .env, or for secrets as NAME_FILE pointing at a file.{why}",
             file=sys.stderr,
         )
+        raise SystemExit(1)
+    # Only the api reaches the orchestrator; workers spawn sessions through the api.
+    if role == "api" and CLAUDE_CONTAINERS in values.ENABLED_MODULES and not values.ORCHESTRATOR_SOCKET:
+        print("Refusing to start: the claude_containers module needs ORCHESTRATOR_SOCKET.", file=sys.stderr)
         raise SystemExit(1)
     # docker/workers/entry.sh and agents-worker listen on "memory" when QUEUE_PREFIX is unset.
     listens = values.QUEUE_PREFIX or "memory"

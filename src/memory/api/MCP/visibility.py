@@ -87,8 +87,8 @@ _listing_only: set[VisibilityCheckerFunc] = set()
 def tool_key(func: Callable) -> str:
     """The name ``func`` is exposed under once its subserver is mounted.
 
-    Each subserver lives in ``servers/<prefix>.py`` and is mounted under
-    ``<prefix>`` (see ``MCPServer``), so the module name is the prefix.
+    Each subserver lives in a module named ``<prefix>.py`` and is mounted
+    under ``<prefix>`` (see ``MCPServer``), so the module name is the prefix.
     Keying on the bare function name would let same-named tools in
     different subservers (``fetch``, ``upsert``, ...) share one checker.
     """

@@ -831,6 +831,35 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
+def test_due_sessions_are_skipped_without_claude_containers(
+    mock_send, db_session, sample_user, monkeypatch, caplog
+):
+    monkeypatch.setattr(scheduled_tasks.settings, "ENABLED_MODULES", frozenset())
+    due = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
+    task = ScheduledTask(
+        id=str(uuid.uuid4()),
+        user_id=sample_user.id,
+        task_type="claude_session",
+        next_scheduled_time=due,
+        message="Run the digest",
+        cron_expression="0 9 * * *",
+        data={"spawn_config": {"environment_id": 1}},
+        enabled=True,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    result = scheduled_tasks.run_scheduled_tasks()
+
+    db_session.refresh(task)
+    assert result["count"] == 0
+    assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == 0
+    assert task.next_scheduled_time > due
+    mock_send.assert_not_called()
+    assert "claude_containers" in caplog.text
+
+
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_clears_next_scheduled_time_for_one_time(
     mock_delay, db_session, sample_user
 ):

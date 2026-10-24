@@ -44,7 +44,6 @@ from memory.claude_containers.transfer_tokens import (
 )
 from memory.common.access_control import has_admin_scope
 from memory.claude_containers.orchestrator_client import (
-    ORCHESTRATOR_SOCKET,
     OrchestratorError,
     get_orchestrator_client,
 )
@@ -202,7 +201,7 @@ async def open_orchestrator_uds_request(
             Differs across endpoints (e.g. "Cannot reach differ
             server" for the differ proxy).
     """
-    transport = httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)
+    transport = httpx.AsyncHTTPTransport(uds=settings.ORCHESTRATOR_SOCKET)
     client = httpx.AsyncClient(transport=transport, timeout=timeout)
     try:
         upstream_resp = await client.send(
@@ -960,8 +959,8 @@ async def get_attach_commands(
 # the URL to a specific user/session/path/action — so even if the URL leaks
 # via logs, blast radius is one operation.
 #
-# Listing and URL minting are MCP-only (see `claude.session_list_dir` /
-# `session_pull_url` / `session_push_url`); the frontend defaults to MCP tool
+# Listing and URL minting are MCP-only (see `containers.list_dir` /
+# `pull_url` / `push_url`); the frontend defaults to MCP tool
 # calls and doesn't need duplicate REST endpoints for those.
 
 
@@ -1397,7 +1396,7 @@ async def proxy_differ_ws(
         orch_url += "?" + urlencode(qs_parts)
     try:
         async with websockets.unix_connect(
-            ORCHESTRATOR_SOCKET, orch_url
+            settings.ORCHESTRATOR_SOCKET, orch_url
         ) as upstream:
 
             async def client_to_upstream():

@@ -1,6 +1,7 @@
 """Optional features the operator switches on with ENABLE_MODULES / DISABLE_MODULES."""
 
 from memory.common.scopes import (
+    SCOPE_CLAUDE_SESSIONS,
     SCOPE_PROJECTS,
     SCOPE_PROJECTS_WRITE,
     SCOPE_TEAMS,
@@ -21,11 +22,13 @@ MODULES: dict[str, bool] = {
 }
 
 MODULE_MCP_SERVERS: dict[str, frozenset[str]] = {
+    CLAUDE_CONTAINERS: frozenset({"containers"}),
     TEAMS: frozenset({"teams"}),
     PROJECTS: frozenset({"projects"}),
 }
 
 MODULE_SCOPES: dict[str, frozenset[str]] = {
+    CLAUDE_CONTAINERS: frozenset({SCOPE_CLAUDE_SESSIONS}),
     TEAMS: frozenset({SCOPE_TEAMS, SCOPE_TEAMS_WRITE}),
     PROJECTS: frozenset({SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE}),
 }

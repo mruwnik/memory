@@ -58,10 +58,14 @@ def test_valid_module_config_has_no_errors():
     [
         (
             frozenset(),
-            {"teams", "projects"},
-            {"teams", "teams:write", "projects", "projects:write"},
+            {"teams", "projects", "containers"},
+            {"teams", "teams:write", "projects", "projects:write", "claude_sessions"},
         ),
-        (frozenset({"teams"}), {"projects"}, {"projects", "projects:write"}),
+        (
+            frozenset({"teams"}),
+            {"projects", "containers"},
+            {"projects", "projects:write", "claude_sessions"},
+        ),
         (ALL, set(), set()),
     ],
 )
@@ -70,14 +74,24 @@ def test_disabled_modules_drop_their_servers_and_scopes(enabled, servers, scopes
     assert scopes_hidden(enabled) == scopes
 
 
-def test_default_install_has_no_team_or_project_tools_or_scopes():
+def test_default_install_has_no_module_tools_scopes_routes_or_loops():
     code = (
         "import asyncio, json\n"
+        "from memory import claude_containers\n"
+        "def refuse():\n"
+        "    raise AssertionError('container maintenance started')\n"
+        "claude_containers.maintenance_running = refuse\n"
+        "from memory.api.app import app, lifespan\n"
         "from memory.api.MCP.base import mcp\n"
         "from memory.api.users import list_available_scopes\n"
+        "async def boot():\n"
+        "    async with lifespan(app):\n"
+        "        pass\n"
+        "asyncio.run(boot())\n"
         "print(json.dumps({\n"
         "    'tools': sorted(asyncio.run(mcp.get_tools())),\n"
         "    'scopes': [s.value for s in list_available_scopes(user=None)],\n"
+        "    'routes': [getattr(r, 'path', '') for r in app.routes],\n"
         "}))\n"
     )
     # Empty rather than unset, so load_dotenv can't fill them from a local .env.
@@ -92,7 +106,13 @@ def test_default_install_has_no_team_or_project_tools_or_scopes():
     )
     found = json.loads(out.stdout.strip().splitlines()[-1])
 
-    assert "core_search" in found["tools"]
-    assert not [t for t in found["tools"] if t.startswith(("teams_", "projects_"))]
+    assert {"core_search", "claude_session_search", "claude_session_fetch"} <= set(found["tools"])
+    assert not [
+        t for t in found["tools"] if t.startswith(("teams_", "projects_", "containers_"))
+    ]
     assert "notes" in found["scopes"]
-    assert not {"teams", "teams:write", "projects", "projects:write"} & set(found["scopes"])
+    assert not {
+        "teams", "teams:write", "projects", "projects:write", "claude_sessions"
+    } & set(found["scopes"])
+    assert "/auth/me" in found["routes"]
+    assert not [r for r in found["routes"] if r.startswith("/claude")]

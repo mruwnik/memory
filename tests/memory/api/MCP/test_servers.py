@@ -33,6 +33,7 @@ def test_all_servers_in_enum():
         "agent",
         "books",
         "claude",
+        "containers",
         "core",
         "deadlines",
         "discord",
@@ -76,8 +77,12 @@ def test_enum_values_are_strings():
         (frozenset({"slack"}), ALL_MODULES, ALL_MCP_SERVERS - {"slack"}),
         (frozenset({"slack", "forecast"}), ALL_MODULES, ALL_MCP_SERVERS - {"slack", "forecast"}),
         (frozenset({"core", "meta", "books"}), ALL_MODULES, ALL_MCP_SERVERS - {"core", "meta", "books"}),
-        (frozenset({"slack"}), frozenset(), ALL_MCP_SERVERS - {"slack", "teams", "projects"}),
-        (frozenset(), frozenset({"teams"}), ALL_MCP_SERVERS - {"projects"}),
+        (
+            frozenset({"slack"}),
+            frozenset(),
+            ALL_MCP_SERVERS - {"slack", "teams", "projects", "containers"},
+        ),
+        (frozenset(), frozenset({"teams"}), ALL_MCP_SERVERS - {"projects", "containers"}),
     ],
 )
 def test_unmounted_servers(monkeypatch, disabled, modules, expected_enabled):
@@ -117,7 +122,7 @@ def test_effective_disabled_servers_adds_modules_that_are_off(db_session, monkey
     db_session.add(InstanceSetting(key="disabled_mcp_servers", value=["slack"]))
     db_session.commit()
 
-    assert effective_disabled_servers() == frozenset({"slack", "teams", "projects"})
+    assert effective_disabled_servers() == frozenset({"slack", "teams", "projects", "containers"})
 
 
 def test_only_the_env_and_modules_unmount_servers():
@@ -131,7 +136,7 @@ def test_only_the_env_and_modules_unmount_servers():
     }
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env)
 
-    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"slack", "teams", "projects"}))
+    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"slack", "teams", "projects", "containers"}))
 
 
 def test_check_disabled_servers_keeps_one_server():

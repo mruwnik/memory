@@ -41,6 +41,4 @@ def test_only_the_composition_points_import_claude_containers():
         if not in_package(module_name(path)) and imports_package(path)
     }
 
-    # The claude MCP server's file-transfer tools still live in core until they
-    # move into the package as their own server.
-    assert importers == {"memory.api.app", "memory.api.MCP.servers.claude"}
+    assert importers == {"memory.api.app", "memory.api.MCP.servers"}

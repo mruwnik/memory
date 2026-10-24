@@ -466,6 +466,18 @@ async def test_scheduling_a_session_needs_the_claude_sessions_scope(
 
 
 @pytest.mark.asyncio
+async def test_sessions_cannot_be_scheduled_without_claude_containers(
+    db_session, regular_user, user_session, monkeypatch
+):
+    monkeypatch.setattr(settings_mod, "ENABLED_MODULES", frozenset())
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        with pytest.raises(ValueError, match="claude_containers"):
+            await scheduler.upsert.fn(**SESSION_TASK)
+
+    assert db_session.query(ScheduledTask).count() == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("via_key", [True, False])
 async def test_scheduled_session_records_the_key_it_will_act_through(
     db_session, regular_user, user_session, via_key

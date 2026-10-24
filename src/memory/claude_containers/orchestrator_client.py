@@ -17,11 +17,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-logger = logging.getLogger(__name__)
+from memory.common import settings
 
-ORCHESTRATOR_SOCKET = os.environ.get(
-    "ORCHESTRATOR_SOCKET", "/var/run/claude-sessions/orchestrator.sock"
-)
+logger = logging.getLogger(__name__)
 
 # Timeout for HTTP operations in seconds
 HTTP_TIMEOUT = 30
@@ -276,8 +274,8 @@ async def http_request(
 class OrchestratorClient:
     """Async HTTP client for the Claude Session Orchestrator."""
 
-    def __init__(self, socket_path: str = ORCHESTRATOR_SOCKET):
-        self.socket_path = socket_path
+    def __init__(self, socket_path: str | None = None):
+        self.socket_path = socket_path or settings.ORCHESTRATOR_SOCKET
 
     async def _request(
         self,

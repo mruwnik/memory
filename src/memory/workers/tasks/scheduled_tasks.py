@@ -52,6 +52,7 @@ from memory.common.email_sender import (
     send_email,
 )
 from memory.common.jobs import tracked_task
+from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.notify import notify_user_now
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 from memory.common.slack import async_slack_call, slack_target_is_dm
@@ -643,14 +644,9 @@ def run_scheduled_tasks():
 
         # 3. Create executions and dispatch
         execution_ids = []
+        containers_on = CLAUDE_CONTAINERS in settings.ENABLED_MODULES
         for task in due_tasks:
-            execution = TaskExecution(
-                task_id=task.id,
-                scheduled_time=task.next_scheduled_time,
-                status=ExecutionStatus.PENDING,
-            )
-            session.add(execution)
-
+            scheduled_time = task.next_scheduled_time
             if task.cron_expression:
                 task.next_scheduled_time = compute_next_cron(
                     task.cron_expression, task.user.timezone, now
@@ -658,6 +654,19 @@ def run_scheduled_tasks():
             else:
                 task.next_scheduled_time = None
 
+            if task.task_type == TaskType.CLAUDE_SESSION and not containers_on:
+                logger.warning(
+                    f"Skipping scheduled Claude session {task.id}: the {CLAUDE_CONTAINERS} "
+                    "module is off"
+                )
+                continue
+
+            execution = TaskExecution(
+                task_id=task.id,
+                scheduled_time=scheduled_time,
+                status=ExecutionStatus.PENDING,
+            )
+            session.add(execution)
             session.flush()
             execution_ids.append(execution.id)
 

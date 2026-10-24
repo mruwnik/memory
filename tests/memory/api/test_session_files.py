@@ -1,7 +1,7 @@
 """Tests for cloud-claude session file transfer endpoints.
 
 The OAuth-authenticated mint and list endpoints are exposed via MCP tools
-in `memory.api.MCP.servers.claude` — covered by tests there. What lives in
+in `memory.claude_containers.containers` — covered by tests there. What lives in
 `cloud_claude.py` is the streaming `/claude/transfer/{pull,push}` pair that
 curl talks to with a presigned token. That's what this file exercises.
 """

@@ -7,7 +7,7 @@ import logging
 import mimetypes
 import pathlib
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 
 from fastapi import Depends, FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,6 +24,7 @@ from memory.common.access_control import (
     user_can_access,
 )
 from memory.common.csp import sanitize_csp_source_list
+from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
@@ -93,7 +94,9 @@ mcp_http_app = mcp.http_app(stateless_http=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     announce_setup_token()
-    async with mcp_http_app.lifespan(app), claude_containers.maintenance_running():
+    containers_on = CLAUDE_CONTAINERS in settings.ENABLED_MODULES
+    maintenance = claude_containers.maintenance_running() if containers_on else nullcontext()
+    async with mcp_http_app.lifespan(app), maintenance:
         yield
 
 # OpenAPI tag descriptions for better documentation organization
@@ -500,8 +503,9 @@ app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(source_items_router)
 app.include_router(sessions_router)
-for claude_router in claude_containers.routers:
-    app.include_router(claude_router)
+if CLAUDE_CONTAINERS in settings.ENABLED_MODULES:
+    for claude_router in claude_containers.routers:
+        app.include_router(claude_router)
 app.include_router(secrets_router)
 app.include_router(instance_settings_router)
 app.include_router(users_router)

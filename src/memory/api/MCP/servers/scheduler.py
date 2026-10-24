@@ -20,6 +20,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.db.models.secrets import find_secret
+from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.scopes import (
     SCOPE_CLAUDE_SESSIONS,
     SCOPE_SCHEDULE,
@@ -209,6 +210,11 @@ def build_scheduled_task(
             "Creating a task requires task_type 'notification' or 'claude_session' "
             "(agent runs are scheduled with agent_schedule)"
         )
+    if task_type == TaskType.CLAUDE_SESSION and CLAUDE_CONTAINERS not in settings.ENABLED_MODULES:
+        raise ValueError(
+            "claude_session tasks need the claude_containers module "
+            "(ENABLE_MODULES=claude_containers)"
+        )
     if bool(cron_expression) == bool(scheduled_time):
         raise ValueError("Provide exactly one of cron_expression or scheduled_time")
 
@@ -316,8 +322,8 @@ async def upsert(
 
     Args:
         task_id: ID of the task to update. Omit (or pass a fresh id) to create.
-        task_type: "notification" or "claude_session" (create only; an existing
-            task's type is immutable).
+        task_type: "notification", or "claude_session" when the claude_containers
+            module is on (create only; an existing task's type is immutable).
         enabled: Whether the task is enabled (disabling clears its next run time).
         cron_expression: Cron schedule expression (5-field), in the user's
             timezone (see meta_get_user).
