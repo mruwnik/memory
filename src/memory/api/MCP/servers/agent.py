@@ -90,7 +90,7 @@ from memory.common.db.models.agents import TERMINAL_STATUSES, RunStatus
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
-from memory.common.scopes import SCOPE_AGENTS
+from memory.common.scopes import SCOPE_AGENTS, SCOPE_WRITE
 from memory.common.db.models.mcp import TRANSPORTS
 from memory.common.db.models.provider_keys import KEY_PROVIDERS, KeyStatus
 from memory.common.mcp_oauth import MCPServerError, describe, revoke
@@ -1146,7 +1146,7 @@ def promote_default(
 
 
 @agent_mcp.tool()
-@visible_when()
+@visible_when(require_scopes(SCOPE_WRITE))
 async def key_list() -> dict:
     """Your LLM provider API keys by provider (never the keys themselves, only their
     last 4 characters). They pay for your agent runs, LLM work on items you own, and
@@ -1155,7 +1155,7 @@ async def key_list() -> dict:
 
 
 @agent_mcp.tool()
-@visible_when()
+@visible_when(require_scopes(SCOPE_WRITE))
 async def key_upsert(
     provider: str | None = None,
     label: str | None = None,
@@ -1164,7 +1164,7 @@ async def key_upsert(
     max_cost_usd_per_day: str | None = None,
     key_ref: int | str | None = None,
 ) -> dict:
-    """Add or update one of your LLM provider API keys for agent runs.
+    """Add or update one of your LLM provider API keys.
 
     Creating needs provider (anthropic or openai), label and key. A key is stored
     only once its provider accepts it, and is never shown again. With key_ref (a key's id or
@@ -1225,7 +1225,7 @@ async def key_upsert(
 
 
 @agent_mcp.tool()
-@visible_when()
+@visible_when(require_scopes(SCOPE_WRITE))
 async def key_delete(key_ref: int | str) -> dict:
     """Delete one of your provider keys. Agents that pin it (`pinned_by`) fail
     until you pick another key for them. Deleting the default makes your most

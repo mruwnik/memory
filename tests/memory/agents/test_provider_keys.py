@@ -12,6 +12,7 @@ from memory.agents import provider_keys
 from memory.agents.provider_keys import KeyUnavailable, choose_key
 from memory.agents.spec import AgentSpec
 from memory.api.MCP.servers import agent
+from memory.api.MCP.visibility import get_call_checker, get_visibility_checker
 from memory.common.db.models import AgentDefinition, AgentRun, LLMProviderKey
 from tests.conftest import mcp_auth_context
 
@@ -390,12 +391,20 @@ async def test_names_are_unique_across_providers(
 
 
 @pytest.mark.asyncio
-async def test_key_tools_need_no_agents_scope(
-    db_session, regular_user, user_session, provider_api
-):
-    with mcp_auth_context(user_session.id, scopes=["teams"]):
-        created = await agent.key_upsert.fn(provider="anthropic", label="personal", key=SECRET)
-        await agent.key_upsert.fn(key_ref="personal", max_cost_usd_per_day="5")
-        deleted = await agent.key_delete.fn(key_ref="personal")
-
-    assert deleted["deleted"] == created["id"]
+@pytest.mark.parametrize("tool", ["agent_key_list", "agent_key_upsert", "agent_key_delete"])
+@pytest.mark.parametrize(
+    "scopes, allowed",
+    [
+        (["read"], False),
+        (["read", "agents"], False),
+        (["read", "write"], True),
+        (["*"], True),
+    ],
+)
+async def test_key_tools_need_write_scope(tool, scopes, allowed):
+    """Narrow API keys and one-time keys (which carry the user's stored scopes, not a
+    session's read/write) can't read, change or delete provider keys."""
+    user_info = {"authenticated": True, "scopes": scopes}
+    for checker in (get_visibility_checker(tool), get_call_checker(tool)):
+        assert checker is not None
+        assert await checker(user_info, None) is allowed
