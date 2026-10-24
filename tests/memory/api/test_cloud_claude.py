@@ -27,6 +27,7 @@ from memory.claude_containers.cloud_claude import (
 from memory.claude_containers.orchestrator_client import OrchestratorError
 from memory.common import settings
 from memory.common.db.connection import get_session
+from memory.common.db.models import ClaudeConfigSnapshot, ClaudeGitHubToken
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.users import HumanUser, UserSession
 
@@ -922,6 +923,49 @@ def test_spawn_session_concurrent_limit_counts_only_owner(tmp_path):
     client.create_container.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "use_saved_write_token, expected_write",
+    [(False, None), (True, "ghp_write_987654321098")],
+)
+def test_spawn_session_passes_saved_github_tokens_to_container(
+    db_session, user, tmp_path, use_saved_write_token, expected_write
+):
+    for kind, value in [("clone", "ghp_clone_123456789012"), ("write", "ghp_write_987654321098")]:
+        token = ClaudeGitHubToken(user_id=user.id, kind=kind)
+        token.token = value
+        db_session.add(token)
+    snapshot = ClaudeConfigSnapshot(
+        user_id=user.id, name="s", content_hash="h", filename="snap.tar.gz", size=1
+    )
+    db_session.add(snapshot)
+    db_session.commit()
+    (tmp_path / "snap.tar.gz").write_bytes(b"snapshot-payload")
+
+    client = MagicMock()
+    client.list_containers = AsyncMock(return_value=[])
+    client.create_initialized_volume = AsyncMock(return_value=None)
+    client.create_container = AsyncMock(
+        return_value=MagicMock(session_id="x", container_name="c", status="running", differ=None)
+    )
+    request = SpawnRequest(snapshot_id=snapshot.id, use_saved_write_token=use_saved_write_token)
+
+    with (
+        patch("memory.claude_containers.cloud_claude.get_orchestrator_client", return_value=client),
+        patch.object(settings, "SNAPSHOT_STORAGE_DIR", tmp_path),
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "HOST_STORAGE_DIR", pathlib.Path("/host")),
+    ):
+        asyncio.run(spawn_session(request, user, db_session))
+
+    env = client.create_container.await_args.kwargs["env"]
+    assert env["GITHUB_TOKEN"] == "ghp_clone_123456789012"
+    assert env.get("GITHUB_TOKEN_WRITE") == expected_write
+
+
+def test_spawn_request_does_not_use_saved_write_token_by_default():
+    assert SpawnRequest(snapshot_id=1).use_saved_write_token is False
+
+
 def test_spawn_session_concurrent_limit_ignores_exited_sessions(tmp_path):
     """Exited/dead containers the user owns are killed sessions, not live
     ones — they consume no host CPU/memory and must not count against the
@@ -1012,6 +1056,9 @@ def unscoped_client(app_client, db_session, user):
         ("GET", "/claude/snapshots/list"),
         ("GET", "/claude/snapshots/1"),
         ("DELETE", "/claude/snapshots/1"),
+        ("GET", "/claude/github-tokens"),
+        ("PUT", "/claude/github-tokens/clone"),
+        ("DELETE", "/claude/github-tokens/clone"),
     ],
 )
 def test_container_routes_require_claude_sessions_scope(unscoped_client, method, path):

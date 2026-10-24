@@ -4,6 +4,7 @@ import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, Attac
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
+import GithubTokens from './GithubTokens'
 import ClaudeFleetStats, { SessionStatsPanel, Usage, formatMb, sessionDisplay } from './ClaudeFleetStats'
 import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Hint, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 
@@ -14,14 +15,6 @@ const COMMON_TOOLS = [
 ]
 const ALLOWED_TOOLS_STORAGE_KEY = 'claude_session_allowed_tools'
 const CUSTOM_ENV_STORAGE_KEY = 'claude_session_custom_env'
-// SECURITY NOTE: GitHub tokens stored in localStorage are accessible to any JS on this origin.
-// This is acceptable for this single-user application where:
-// - The user explicitly enters their own tokens
-// - No third-party scripts are loaded
-// - Tokens can also reference server-side secrets by name instead of literal PATs
-// For multi-user or public deployments, use server-side session storage instead.
-const GITHUB_TOKEN_STORAGE_KEY = 'claude_session_github_token'
-const GITHUB_TOKEN_WRITE_STORAGE_KEY = 'claude_session_github_token_write'
 
 interface ScreenMessage {
   type: 'screen' | 'error' | 'status' | 'panes'
@@ -139,12 +132,6 @@ const ClaudeSessions = () => {
   })
   const [customEnvText, setCustomEnvText] = useState<string>(() => {
     return localStorage.getItem(CUSTOM_ENV_STORAGE_KEY) || ''
-  })
-  const [githubToken, setGithubToken] = useState<string>(() => {
-    return localStorage.getItem(GITHUB_TOKEN_STORAGE_KEY) || ''
-  })
-  const [githubTokenWrite, setGithubTokenWrite] = useState<string>(() => {
-    return localStorage.getItem(GITHUB_TOKEN_WRITE_STORAGE_KEY) || ''
   })
   const [initialPrompt, setInitialPrompt] = useState<string>('')
   const [runId, setRunId] = useState<string>('')
@@ -377,15 +364,6 @@ const ClaudeSessions = () => {
     localStorage.setItem(CUSTOM_ENV_STORAGE_KEY, customEnvText)
   }, [customEnvText])
 
-  // Persist github tokens to localStorage
-  useEffect(() => {
-    localStorage.setItem(GITHUB_TOKEN_STORAGE_KEY, githubToken)
-  }, [githubToken])
-
-  useEffect(() => {
-    localStorage.setItem(GITHUB_TOKEN_WRITE_STORAGE_KEY, githubTokenWrite)
-  }, [githubTokenWrite])
-
   // Parse KEY=VALUE text into Record<string, string>
   const parseEnvText = (text: string): Record<string, string> => {
     const env: Record<string, string> = {}
@@ -439,8 +417,6 @@ const ClaudeSessions = () => {
       snapshot_id: selectedConfig?.type === 'snapshot' ? selectedConfig.id : undefined,
       environment_id: selectedConfig?.type === 'environment' ? selectedConfig.id : undefined,
       repo_url: selectedRepoUrl || undefined,
-      github_token: githubToken || undefined,
-      github_token_write: githubTokenWrite || undefined,
       enable_playwright: enablePlaywright || undefined,
       allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
       custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
@@ -454,7 +430,7 @@ const ClaudeSessions = () => {
     setFormError(null)
     setSpawning(true)
     try {
-      const newSession = await spawnSession(buildSpawnConfig())
+      const newSession = await spawnSession({ ...buildSpawnConfig(), use_saved_write_token: true })
       await loadSessions()
       selectSession(newSession)
       setShowNewSession(false)
@@ -655,27 +631,7 @@ const ClaudeSessions = () => {
                     </Field>
                   )}
 
-                  {/* GitHub Token */}
-                  <Field label="GitHub token (optional)" hint="PAT for HTTPS clone, or a secret name. Cached in localStorage.">
-                    <Input
-                      type="password"
-                      value={githubToken}
-                      onChange={(e) => setGithubToken(e.target.value)}
-                      placeholder="ghp_... or secret name"
-                      className="font-mono"
-                    />
-                  </Field>
-
-                  {/* GitHub Token Write */}
-                  <Field label="GitHub write token (optional)" hint="Write token for differ (push, PR creation). Cached in localStorage.">
-                    <Input
-                      type="password"
-                      value={githubTokenWrite}
-                      onChange={(e) => setGithubTokenWrite(e.target.value)}
-                      placeholder="ghp_... or secret name"
-                      className="font-mono"
-                    />
-                  </Field>
+                  <GithubTokens />
 
                   {/* Playwright toggle */}
                   <Checkbox checked={enablePlaywright} onChange={(e) => setEnablePlaywright(e.target.checked)}

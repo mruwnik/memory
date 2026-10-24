@@ -27,6 +27,7 @@ const listUserRepos = vi.fn()
 const getFleetStats = vi.fn()
 const getStatsHistory = vi.fn()
 const listUsers = vi.fn()
+const listGithubTokens = vi.fn()
 const hasScope = vi.fn()
 
 vi.mock('@/hooks/useClaude', async (orig) => {
@@ -38,7 +39,7 @@ vi.mock('@/hooks/useClaude', async (orig) => {
     useClaude: () => ({
       listSessions, killSession, spawnSession, scheduleSession, getAttachInfo,
       getOrchestratorStatus, listSnapshots, listEnvironments, listUserRepos,
-      getFleetStats, getStatsHistory,
+      getFleetStats, getStatsHistory, listGithubTokens,
     }),
   }
 })
@@ -51,7 +52,7 @@ vi.mock('../../hooks/useClaude', async (orig) => {
     useClaude: () => ({
       listSessions, killSession, spawnSession, scheduleSession, getAttachInfo,
       getOrchestratorStatus, listSnapshots, listEnvironments, listUserRepos,
-      getFleetStats, getStatsHistory,
+      getFleetStats, getStatsHistory, listGithubTokens,
     }),
   }
 })
@@ -127,6 +128,7 @@ beforeEach(() => {
   listSnapshots.mockReset().mockResolvedValue([snapshot])
   listEnvironments.mockReset().mockResolvedValue([environment])
   listUserRepos.mockReset().mockResolvedValue([{ id: 1, owner: 'org', name: 'repo', repo_path: 'org/repo' }])
+  listGithubTokens.mockReset().mockResolvedValue([])
   getFleetStats.mockReset().mockResolvedValue({ ts: new Date().toISOString(), containers: [] })
   getStatsHistory.mockReset().mockResolvedValue({ points: [], count: 0, truncated: false })
   listUsers.mockReset().mockResolvedValue([])
@@ -205,7 +207,7 @@ describe('ClaudeSessions', () => {
     await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.click(screen.getByRole('button', { name: 'Start session' }))
     await waitFor(() => expect(spawnSession).toHaveBeenCalled())
-    expect(spawnSession.mock.calls[0][0]).toMatchObject({ environment_id: 3 })
+    expect(spawnSession.mock.calls[0][0]).toMatchObject({ environment_id: 3, use_saved_write_token: true })
   })
 
   it('submits the new-session form on Enter', async () => {

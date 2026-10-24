@@ -100,6 +100,7 @@ SPAWN_CONFIG_FIELDS = {
     "snapshot_id",
     "github_token",
     "github_token_write",
+    "use_saved_write_token",
 }
 
 

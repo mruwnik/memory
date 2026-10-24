@@ -144,14 +144,22 @@ export interface SpawnRequest {
   snapshot_id?: number // Static snapshot (mutually exclusive with environment_id)
   environment_id?: number // Persistent environment (mutually exclusive with snapshot_id)
   repo_url?: string
-  github_token?: string
-  github_token_write?: string
   enable_playwright?: boolean
+  use_saved_write_token?: boolean
   allowed_tools?: string[]
   custom_env?: Record<string, string>
   initial_prompt?: string
   run_id?: string // Custom run ID for branch naming (defaults to session_id)
   dev_channels_server?: string // Load Claude development channels from this server
+}
+
+export type GithubTokenKind = 'clone' | 'write'
+
+// The token itself is write-only: the server only ever returns its last 4 characters.
+export interface GithubToken {
+  kind: GithubTokenKind
+  token_hint: string
+  updated_at: string | null
 }
 
 export interface ScheduleResponse {
@@ -363,6 +371,26 @@ export const useClaude = () => {
     [apiCall]
   )
 
+  const listGithubTokens = useCallback(async (): Promise<GithubToken[]> => {
+    const response = await apiCall('/claude/github-tokens')
+    if (!response.ok) throw await apiError(response, 'Failed to load GitHub tokens')
+    return response.json()
+  }, [apiCall])
+
+  const saveGithubToken = useCallback(async (kind: GithubTokenKind, token: string): Promise<GithubToken> => {
+    const response = await apiCall(`/claude/github-tokens/${kind}`, {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    })
+    if (!response.ok) throw await apiError(response, 'Failed to save GitHub token')
+    return response.json()
+  }, [apiCall])
+
+  const deleteGithubToken = useCallback(async (kind: GithubTokenKind): Promise<void> => {
+    const response = await apiCall(`/claude/github-tokens/${kind}`, { method: 'DELETE' })
+    if (!response.ok) throw await apiError(response, 'Failed to remove GitHub token')
+  }, [apiCall])
+
   return {
     // Sessions
     listSessions,
@@ -387,5 +415,9 @@ export const useClaude = () => {
     resetEnvironment,
     // Repos
     listUserRepos,
+    // GitHub tokens
+    listGithubTokens,
+    saveGithubToken,
+    deleteGithubToken,
   }
 }

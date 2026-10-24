@@ -166,6 +166,7 @@ from memory.common.db.models.claude_config import (
     ClaudeConfigSnapshotPayload,
     ClaudeEnvironment,
     ClaudeEnvironmentPayload,
+    ClaudeGitHubToken,
 )
 from memory.common.db.models.watchlist import (
     WatchedMarket,
@@ -344,6 +345,7 @@ __all__ = [
     # Claude Environments
     "ClaudeEnvironment",
     "ClaudeEnvironmentPayload",
+    "ClaudeGitHubToken",
     # SSH key generation
     "generate_ssh_keypair",
     # Secrets

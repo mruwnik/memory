@@ -64,6 +64,14 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- The Claude "New session" form saves GitHub tokens on the server (encrypted,
+  per user, only the last 4 characters are ever shown) instead of in the
+  browser's localStorage, and clears the old localStorage copy on load. Users
+  re-enter their tokens once. Every session a user spawns gets their saved clone
+  token unless the spawn request names its own. The saved write token goes only to
+  sessions spawned from the form, or whose request or schedule sets
+  `use_saved_write_token`. Any API key with the `claude_sessions` scope can
+  therefore obtain the saved tokens by spawning a session and reading its env.
 - `tools/install.sh --non-interactive` installs from environment variables
   without prompting and creates the first user (see the README). Both modes now
   also generate `secrets/secrets_encryption_key.txt` when absent (compose mounts
@@ -360,6 +368,8 @@ section has nothing in it:
 - `20261031_transcript_push_only`: makes `transcript_accounts.api_key_encrypted`
   nullable and clears every stored `webhook_secret_encrypted`. Fast.
   Downgrading deletes push-only (`generic`) accounts.
+- `20261101_claude_github_tokens`: creates the empty `claude_github_tokens`
+  table. Fast.
 
 ### Post-deploy commands
 

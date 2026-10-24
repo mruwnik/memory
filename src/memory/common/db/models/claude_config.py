@@ -10,10 +10,12 @@ from typing import Annotated, TypedDict, TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Text,
     UniqueConstraint,
 )
@@ -21,6 +23,7 @@ from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
+from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.users import User
@@ -183,3 +186,48 @@ class ClaudeEnvironment(Base):
             created_at=self.created_at.isoformat() if self.created_at else None,
             session_count=self.session_count,
         )
+
+
+# Kind -> the container env var the token is injected as.
+GITHUB_TOKEN_ENV_VARS = {"clone": "GITHUB_TOKEN", "write": "GITHUB_TOKEN_WRITE"}
+
+
+class ClaudeGitHubToken(Base):
+    """A user's GitHub PAT, injected into every Claude session they spawn.
+
+    The token itself is write-only: nothing serializes it, only its last 4 characters.
+    """
+
+    __tablename__ = "claude_github_tokens"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    token_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    token_hint: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "kind", name="claude_github_tokens_user_kind"),
+        CheckConstraint("kind IN ('clone', 'write')", name="claude_github_tokens_kind"),
+    )
+
+    @property
+    def token(self) -> str:
+        return decrypt_value(self.token_encrypted)
+
+    @token.setter
+    def token(self, value: str) -> None:
+        self.token_encrypted = encrypt_value(value)
+        self.token_hint = value[-4:]
+
+    def serialize(self) -> dict[str, str | None]:
+        return {
+            "kind": self.kind,
+            "token_hint": self.token_hint,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

@@ -60,7 +60,7 @@ from memory.common import paths, settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
 from memory.claude_containers.claude_environments import mark_environment_used
-from memory.common.db.models.secrets import extract as extract_secret
+from memory.claude_containers.github_tokens import github_token_env
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ RESERVED_ENV_VARS = {
 #
 # The value flows to the spawned container as ``$GIT_REPO_URL`` and is
 # consumed by ``git clone`` running with the requester's own SSH key +
-# GitHub PATs (per-user, looked up via ``extract_secret(db, user.id, …)``
+# GitHub PATs (per-user, from ``github_token_env``
 # below). The known git-side footguns — leading ``-`` for flag-injection
 # CVEs, ``ext::sh -c …`` / ``transport-helper::`` remote helpers,
 # ``git://`` MITM, ``file://`` mounts — all execute strictly inside that
@@ -417,8 +417,10 @@ class SpawnRequest(BaseModel):
     snapshot_id: int | None = None  # Static snapshot to extract
     environment_id: int | None = None  # Persistent environment to use
     repo_url: str | None = None  # Git remote URL to set up in workspace
-    github_token: str | None = None  # GitHub PAT for HTTPS clone (not stored)
-    github_token_write: str | None = None  # Write token for differ (push, PR creation)
+    # Secret name or literal; overrides the user's saved GitHub token of that kind
+    github_token: str | None = None  # For HTTPS clone
+    github_token_write: str | None = None  # For differ (push, PR creation)
+    use_saved_write_token: bool = False  # Inject the user's saved write PAT
     enable_playwright: bool = False  # Enable Playwright MCP server in container
     allowed_tools: list[str] | None = (
         None  # Tools to pre-approve (no permission prompts)
@@ -753,10 +755,12 @@ async def spawn_session(
     # Inject secrets as env vars (previously handled by old orchestrator)
     if user.ssh_private_key:
         env["SSH_PRIVATE_KEY"] = user.ssh_private_key
-    if request.github_token:
-        env["GITHUB_TOKEN"] = extract_secret(db, user.id, request.github_token)
-    if request.github_token_write:
-        env["GITHUB_TOKEN_WRITE"] = extract_secret(db, user.id, request.github_token_write)
+    env |= github_token_env(
+        db,
+        user.id,
+        {"clone": request.github_token, "write": request.github_token_write},
+        request.use_saved_write_token,
+    )
     if request.repo_url:
         env["GIT_REPO_URL"] = request.repo_url
 
