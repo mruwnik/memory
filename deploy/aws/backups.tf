@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "backups" {
-  bucket_prefix = "memory-backups-"
+  bucket_prefix = "${var.name}-backups-"
 }
 
 resource "aws_s3_bucket_public_access_block" "backups" {
@@ -74,7 +74,7 @@ resource "aws_s3_bucket_policy" "backups" {
 # Operator command output. Kept apart from the backups, and on SSE-S3, so
 # reading it needs no access to the backup bucket or the KMS key.
 resource "aws_s3_bucket" "ops_output" {
-  bucket_prefix = "memory-ops-output-"
+  bucket_prefix = "${var.name}-ops-output-"
   force_destroy = true
 }
 

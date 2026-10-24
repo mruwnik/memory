@@ -20,6 +20,7 @@ prefix=$(get .ssm_prefix.value)
 bucket=$(get .backup_bucket.value)
 output_bucket=$(get .ops_output_bucket.value)
 kms=$(get .kms_key_arn.value)
+instance_role=$(get .instance_role_arn.value)
 other_instance="arn:$partition:ec2:$region:$account:instance/i-00000000000000000"
 run_shell="arn:$partition:ssm:$region::document/AWS-RunShellScript"
 param="arn:$partition:ssm:$region:$account:parameter$prefix/postgres_password"
@@ -56,7 +57,7 @@ while read -r name role; do
         fi
         expect deny "$role" ssm:UpdateDocument "$doc"
     done < <(get '.document_arns.value | to_entries[] | "\(.key) \(.value)"')
-    expect deny "$role" ssm:CreateDocument "arn:$partition:ssm:$region:$account:document/memory-new"
+    expect deny "$role" ssm:CreateDocument "arn:$partition:ssm:$region:$account:document/new-document"
     expect deny "$role" ssm:StartSession "$instance"
     expect deny "$role" kms:Decrypt "$kms"
     expect deny "$role" ssm:GetParameter "$param"
@@ -72,13 +73,12 @@ while read -r name role; do
     expect deny "$role" s3:ListBucket "arn:$partition:s3:::$bucket"
     expect allow "$role" s3:GetObject "arn:$partition:s3:::$output_bucket/ops/cmd/out"
     expect allow "$role" s3:ListBucket "arn:$partition:s3:::$output_bucket"
-    expect deny "$role" iam:PassRole "arn:$partition:iam::$account:role/memory-instance"
+    expect deny "$role" iam:PassRole "$instance_role"
     expect "$([[ $name == maintain ]] && echo allow || echo deny)" "$role" ec2:RebootInstances "$instance"
 done < <(get '.operator_role_arns.value | to_entries[] | "\(.key) \(.value)"')
 
 # Operators choose the output bucket, so the instance must refuse to write
 # command output into the backups.
-instance_role=$(get .instance_role_arn.value)
 expect deny "$instance_role" s3:PutObject "arn:$partition:s3:::$bucket/x/cmd/i-0/awsrunShellScript/s/stdout"
 expect allow "$instance_role" s3:PutObject "arn:$partition:s3:::$bucket/memory/databases/postgres.enc"
 expect allow "$instance_role" s3:PutObject "arn:$partition:s3:::$output_bucket/ops/cmd/i-0/awsrunShellScript/s/stdout"

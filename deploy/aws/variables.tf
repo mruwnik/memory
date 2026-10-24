@@ -1,3 +1,14 @@
+variable "name" {
+  description = "Prefix for every account-wide name (roles, documents, buckets, the KMS alias, the SSM path), so several deployments can share an account."
+  type        = string
+  default     = "memory"
+  # Bucket prefixes cap the length; SSM reserves aws/amazon/amzn and S3 xn--/sthree-.
+  validation {
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$", var.name)) && !can(regex("^(aws|amazon|amzn|xn--|sthree-)", var.name))
+    error_message = "name must be 1-20 lowercase letters, digits and dashes, start with a letter, and not start with aws, amazon, amzn, xn-- or sthree-."
+  }
+}
+
 variable "domain" {
   description = "Hostname the instance serves, e.g. memory.example.com. Point an A record at the public_ip output, or set route53_zone_id."
   type        = string

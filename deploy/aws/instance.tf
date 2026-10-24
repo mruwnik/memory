@@ -8,13 +8,13 @@ data "aws_ami" "ubuntu" {
 }
 
 resource "aws_kms_key" "this" {
-  description             = "memory: EBS volumes, backups and SSM secrets"
+  description             = "${var.name}: EBS volumes, backups and SSM secrets"
   enable_key_rotation     = true
   deletion_window_in_days = 30
 }
 
 resource "aws_kms_alias" "this" {
-  name          = "alias/memory"
+  name          = "alias/${var.name}"
   target_key_id = aws_kms_key.this.key_id
 }
 
@@ -25,7 +25,7 @@ resource "aws_ebs_volume" "data" {
   type              = "gp3"
   encrypted         = true
   kms_key_id        = aws_kms_key.this.arn
-  tags              = { Name = "memory-data" }
+  tags              = { Name = "${var.name}-data" }
 
   # Holds the live databases; see README "Destroying" to remove it on purpose.
   lifecycle {
@@ -73,7 +73,7 @@ resource "aws_instance" "this" {
     ignore_changes = [ami, user_data_base64]
   }
 
-  tags = { Name = "memory" }
+  tags = { Name = var.name }
 
   depends_on = [aws_ssm_parameter.config, aws_ssm_parameter.secret, aws_route_table_association.this]
 }
@@ -86,7 +86,7 @@ resource "aws_volume_attachment" "data" {
 }
 
 resource "aws_iam_role" "instance" {
-  name = "memory-instance"
+  name = "${var.name}-instance"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -165,6 +165,6 @@ resource "aws_iam_role_policy" "instance" {
 }
 
 resource "aws_iam_instance_profile" "instance" {
-  name = "memory-instance"
+  name = "${var.name}-instance"
   role = aws_iam_role.instance.name
 }

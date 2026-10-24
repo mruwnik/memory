@@ -5,7 +5,7 @@ data "aws_availability_zones" "available" {
 resource "aws_vpc" "this" {
   cidr_block           = "10.42.0.0/24"
   enable_dns_hostnames = true
-  tags                 = { Name = "memory" }
+  tags                 = { Name = var.name }
 }
 
 resource "aws_internet_gateway" "this" {
@@ -16,7 +16,7 @@ resource "aws_subnet" "this" {
   vpc_id            = aws_vpc.this.id
   cidr_block        = aws_vpc.this.cidr_block
   availability_zone = coalesce(var.availability_zone, data.aws_availability_zones.available.names[0])
-  tags              = { Name = "memory" }
+  tags              = { Name = var.name }
 
   # The data volume is tied to this AZ: a reordered AZ list must not move it.
   lifecycle {
@@ -38,7 +38,7 @@ resource "aws_route_table_association" "this" {
 }
 
 resource "aws_security_group" "this" {
-  name        = "memory"
+  name        = var.name
   description = "HTTP and HTTPS in; admin access is SSM only"
   vpc_id      = aws_vpc.this.id
 

@@ -30,7 +30,7 @@ locals {
 
   document_content = { for a, v in local.actions : a => yamlencode({
     schemaVersion = "2.2"
-    description   = "memory: ${a}"
+    description   = "${var.name}: ${a}"
     parameters    = v.parameters
     mainSteps = [{
       action = "aws:runShellScript"
@@ -66,7 +66,7 @@ locals {
 # old one, because SendCommand will run any version a document still has.
 resource "aws_ssm_document" "op" {
   for_each        = local.document_content
-  name            = "memory-${each.key}-${substr(sha256(each.value), 0, 8)}"
+  name            = "${var.name}-${each.key}-${substr(sha256(each.value), 0, 8)}"
   document_type   = "Command"
   document_format = "YAML"
   content         = each.value
@@ -82,7 +82,7 @@ resource "aws_ssm_document" "op" {
 
 resource "aws_iam_role" "operator" {
   for_each = local.enabled_roles
-  name     = "memory-${each.key}"
+  name     = "${var.name}-${each.key}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [merge(

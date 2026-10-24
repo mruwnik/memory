@@ -281,3 +281,60 @@ run "empty_principal_list_rejected" {
   }
   expect_failures = [var.operator_principal_arns]
 }
+
+# A second deployment in the same account must not collide with the first.
+run "every_name_carries_the_prefix" {
+  command = plan
+  variables {
+    name                = "alice"
+    operator_account_id = "222222222222"
+    operator_observe    = true
+    operator_maintain   = true
+    operator_recover    = true
+  }
+  assert {
+    condition = alltrue([for n in concat(
+      [
+        aws_iam_role.instance.name,
+        aws_iam_instance_profile.instance.name,
+        aws_security_group.this.name,
+        aws_kms_alias.this.name,
+        aws_s3_bucket.backups.bucket_prefix,
+        aws_s3_bucket.ops_output.bucket_prefix,
+        aws_vpc.this.tags.Name,
+        aws_subnet.this.tags.Name,
+        aws_instance.this.tags.Name,
+        aws_ebs_volume.data.tags.Name,
+        output.ssm_prefix,
+      ],
+      [for r in aws_iam_role.operator : r.name],
+      [for d in aws_ssm_document.op : d.name],
+      [for p in aws_ssm_parameter.config : p.name],
+      [for p in aws_ssm_parameter.secret : p.name],
+    ) : can(regex("^(alias/|/)?alice(-|/|$)", n))])
+    error_message = "every account-scoped name must start with the name variable"
+  }
+  assert {
+    condition = one([for s in jsondecode(aws_iam_role_policy.instance.policy).Statement : s.Resource if s.Sid == "ReadOwnParameters"]) == [
+      "arn:aws:ssm:eu-central-1:111111111111:parameter/alice",
+      "arn:aws:ssm:eu-central-1:111111111111:parameter/alice/*",
+    ]
+    error_message = "the instance may read only its own deployment's parameters"
+  }
+}
+
+run "default_names" {
+  command = plan
+  assert {
+    condition     = aws_iam_role.instance.name == "memory-instance" && aws_kms_alias.this.name == "alias/memory" && output.ssm_prefix == "/memory"
+    error_message = "the default name must keep the memory-* names"
+  }
+}
+
+run "name_rejects_reserved_and_malformed" {
+  command = plan
+  variables {
+    name = "aws-prod"
+  }
+  expect_failures = [var.name]
+}

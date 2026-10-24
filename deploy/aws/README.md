@@ -9,12 +9,41 @@ What it creates:
 - one customer-managed KMS key that encrypts both volumes, the backups and the secrets;
 - a private, versioned, SSE-KMS backup bucket;
 - a private ops-output bucket for operator command output, which expires it after 14 days;
-- SSM parameters under `/memory/`: generated secrets as SecureStrings, and the instance's config;
+- SSM parameters under `/<name>/`: generated secrets as SecureStrings, and the instance's config;
 - one SSM Command document per repair action, plus up to three operator roles.
 
 Admin access is SSM Session Manager, and only for your own IAM principals. There is no SSH.
 
-A dedicated AWS account for memory is cleanest. Nothing else then shares the KMS key's default policy, the Run Command history or CloudTrail with it. Resource names are fixed (`memory-instance`, `alias/memory`, the `/memory/` parameter prefix and so on), so there can be one stack per account and region.
+Every account-wide name starts with `name` (default `memory`): `memory-instance`, `alias/memory`, the `/memory/` parameter path, the buckets, documents and operator roles. Deployments with different names can share an account and region.
+
+One account per person is still the recommended setup. Whoever holds an AWS account can always read what is in it: the account's admins can use the KMS key, so they can decrypt the backups, snapshots and secrets. Two people sharing an account can each read the other's data. With an account each, the only person who can read your data is you.
+
+## Handing an account to its owner
+
+When an operator sets up an account for someone else, the owner has to end up as the only one holding it. Do this before any real data goes in: until the last step, the operator could read anything in the account.
+
+1. The operator creates the account in their AWS Organization.
+2. Before handing it over, the operator changes the account's root email to the owner's own address.
+3. The owner signs in as root with "Forgot password", sets a new password and turns on MFA for root.
+4. The owner adds a payment method. The operator's card is fine: paying the bill gives no access.
+5. The account leaves the organization (Organizations → Leave organization, from the owner's account). An organization's management account can otherwise get in at any time.
+6. The owner deletes the `OrganizationAccountAccessRole` role in IAM. It lets the management account in, and leaving the organization doesn't remove it. Check IAM for any other user or role they don't recognise.
+7. The owner runs `terraform apply` with their own credentials, setting `operator_account_id` to the operator's account and turning on the roles they want (see below). The owner keeps the Terraform state: it holds the generated secrets.
+
+## What your operator can and can't do
+
+The operator works from their own AWS account, through up to three roles you switch on:
+
+- **observe**: see whether the app is healthy, and read its recent error messages.
+- **maintain**: restart it, install a release, free disk space, reboot.
+- **recover**: roll back an update or restore the latest backup. Both can lose your most recent changes, so leave this off unless something is broken.
+
+The operator can't log in to the machine, read your notes, emails or files, read or decrypt the backups, see your passwords or keys, or change what these actions do. Only you can change them, by re-applying. Every action they run is recorded in your account's CloudTrail (in the AWS console under CloudTrail → Event history).
+
+Two limits:
+
+- Error messages can occasionally include fragments of text. Turn on observe only for an operator you'd trust with that.
+- Whoever signs releases (`release_signers`) can ship code that reads your data. Updates wait `update_delay_hours` before installing, which gives time to notice a bad one. If you trust no one with that, set `auto_update = false` and install releases yourself after review.
 
 ## Usage
 
@@ -43,6 +72,7 @@ The Terraform state holds every generated secret. Use a remote backend with encr
 | Name | Default | |
 |---|---|---|
 | `domain` | required | Hostname to serve |
+| `name` | `memory` | Prefix for every account-wide name. Up to 20 lowercase letters, digits and dashes |
 | `admin_email` | required | First user |
 | `voyage_api_key` | required | Embeddings key, stored as a SecureString |
 | `release_signers` | required | SSH public keys whose signed `v*` tags auto-install |
@@ -148,13 +178,13 @@ CloudTrail in your account records every invocation.
 The operator, from their own account:
 
 ```bash
-aws sts assume-role --role-arn arn:aws:iam::<owner>:role/memory-observe --role-session-name ops
+aws sts assume-role --role-arn arn:aws:iam::<owner>:role/<name>-observe --role-session-name ops
 # with the returned credentials; document names come from the documents output
 aws ssm send-command --region <region> --instance-ids <instance_id> \
-  --document-name memory-status-<hash> \
+  --document-name <name>-status-<hash> \
   --output-s3-bucket-name <ops_output_bucket> --output-s3-key-prefix ops
 #   -> prints the CommandId
-aws ssm send-command ... --document-name memory-update-to-<hash> --parameters tag=v1.4.0 ...
+aws ssm send-command ... --document-name <name>-update-to-<hash> --parameters tag=v1.4.0 ...
 aws s3 ls --recursive s3://<ops_output_bucket>/ops/<command id>/
 aws s3 cp s3://<ops_output_bucket>/ops/<command id>/<instance id>/awsrunShellScript/<step>/stdout -
 ```
