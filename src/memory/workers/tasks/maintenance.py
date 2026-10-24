@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
 
+from celery.backends.database.models import Task as CeleryTaskMeta
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import CursorResult, delete, func, inspect as sa_inspect, or_, update
 from sqlalchemy import select
@@ -35,6 +36,8 @@ from memory.common.celery_app import (
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_DONE_ONEOFF_TASKS,
     CLEANUP_OLD_TASK_EXECUTIONS,
+    CLEANUP_OLD_TASK_RESULTS,
+    CLEANUP_OLD_PENDING_JOBS,
     REINGEST_MISSING_CHUNKS,
     REINGEST_CHUNK,
     REINGEST_ITEM,
@@ -56,6 +59,8 @@ from memory.common.db.models import (
     AgentRunStep,
     Chunk,
     CodingProject,
+    JobStatus,
+    PendingJob,
     ScheduledTask,
     Session,
     SourceItem,
@@ -1170,6 +1175,62 @@ def cleanup_old_task_executions(retention_days: int | None = None) -> dict:
             deleted += result.rowcount
 
     logger.info(f"Deleted {deleted} task executions older than {retention_days} days")
+    return {"deleted": deleted, "retention_days": retention_days}
+
+
+# Small enough that each DELETE holds row locks briefly on tables with millions of rows.
+RETENTION_DELETE_BATCH_SIZE = 5000
+
+
+def delete_in_batches(model, id_column, *conditions) -> int:
+    """Delete rows matching conditions, one committed batch at a time."""
+    deleted = 0
+    with make_session() as session:
+        while True:
+            batch = select(id_column).where(*conditions).limit(RETENTION_DELETE_BATCH_SIZE)
+            result = cast(
+                CursorResult, session.execute(delete(model).where(id_column.in_(batch)))
+            )
+            session.commit()
+            if result.rowcount == 0:
+                return deleted
+            deleted += result.rowcount
+
+
+@app.task(name=CLEANUP_OLD_TASK_RESULTS)
+@tracked_task
+def cleanup_old_task_results(retention_days: int | None = None) -> dict:
+    """Delete Celery result rows (celery_taskmeta) older than retention_days."""
+    if retention_days is None:
+        retention_days = settings.TASK_RESULT_RETENTION_DAYS
+
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
+    deleted = delete_in_batches(CeleryTaskMeta, CeleryTaskMeta.id, CeleryTaskMeta.date_done < cutoff)
+
+    logger.info(f"Deleted {deleted} task results older than {retention_days} days")
+    return {"deleted": deleted, "retention_days": retention_days}
+
+
+@app.task(name=CLEANUP_OLD_PENDING_JOBS)
+@tracked_task
+def cleanup_old_pending_jobs(retention_days: int | None = None) -> dict:
+    """Delete complete/failed pending jobs older than retention_days.
+
+    Pending and processing jobs are never deleted: they may still be running or
+    awaiting a retry.
+    """
+    if retention_days is None:
+        retention_days = settings.PENDING_JOB_RETENTION_DAYS
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    deleted = delete_in_batches(
+        PendingJob,
+        PendingJob.id,
+        PendingJob.status.in_([JobStatus.COMPLETE.value, JobStatus.FAILED.value]),
+        PendingJob.created_at < cutoff,
+    )
+
+    logger.info(f"Deleted {deleted} finished jobs older than {retention_days} days")
     return {"deleted": deleted, "retention_days": retention_days}
 
 

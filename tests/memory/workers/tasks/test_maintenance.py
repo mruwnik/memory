@@ -5,8 +5,9 @@ from unittest.mock import patch, call
 from typing import cast
 
 import pytest
+from celery.backends.database.models import Task as CeleryTaskMeta
 from PIL import Image
-from sqlalchemy import update
+from sqlalchemy import insert, update
 
 from memory.common import qdrant as qd
 from memory.common import settings
@@ -38,7 +39,7 @@ from memory.workers.tasks.maintenance import (
 )
 import memory.workers.tasks.maintenance as maintenance_module
 
-from memory.common.db.models import ScheduledTask, TaskExecution
+from memory.common.db.models import JobStatus, PendingJob, ScheduledTask, TaskExecution
 
 
 @pytest.fixture
@@ -1886,3 +1887,88 @@ def test_cleanup_used_one_time_keys(db_session, admin_user, monkeypatch):
     remaining = {k.id for k in db_session.query(APIKey).all()}
     assert purged_ids & remaining == set()
     assert kept_ids <= remaining
+
+
+@pytest.fixture
+def taskmeta_table(db_session):
+    # Celery creates its result table lazily; alembic ignores it.
+    CeleryTaskMeta.__table__.create(db_session.connection(), checkfirst=True)
+
+
+def add_task_results(session, *rows: tuple[str, int]) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    session.execute(
+        insert(CeleryTaskMeta.__table__),
+        [
+            {"task_id": task_id, "status": "SUCCESS", "date_done": now - timedelta(days=age)}
+            for task_id, age in rows
+        ],
+    )
+    session.commit()
+
+
+def test_cleanup_old_task_results_deletes_only_expired(db_session, taskmeta_table):
+    add_task_results(db_session, ("old", 10), ("recent", 2))
+
+    result = maintenance_module.cleanup_old_task_results(retention_days=7)
+
+    db_session.expire_all()
+    assert result["deleted"] == 1
+    assert {r.task_id for r in db_session.query(CeleryTaskMeta)} == {"recent"}
+
+
+def test_cleanup_old_task_results_deletes_across_batches(
+    db_session, taskmeta_table, monkeypatch
+):
+    monkeypatch.setattr(maintenance_module, "RETENTION_DELETE_BATCH_SIZE", 2)
+    add_task_results(db_session, *[(f"old-{i}", 10) for i in range(5)])
+
+    result = maintenance_module.cleanup_old_task_results(retention_days=7)
+
+    assert result["deleted"] == 5
+    assert db_session.query(CeleryTaskMeta).count() == 0
+
+
+def make_job(status: str, age_days: int, **kwargs) -> PendingJob:
+    created = datetime.now(timezone.utc) - timedelta(days=age_days)
+    return PendingJob(
+        job_type="test",
+        status=status,
+        created_at=created,
+        updated_at=created,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "status, age_days, kept",
+    [
+        (JobStatus.COMPLETE.value, 60, False),
+        (JobStatus.FAILED.value, 60, False),
+        (JobStatus.COMPLETE.value, 5, True),
+        (JobStatus.FAILED.value, 5, True),
+        (JobStatus.PENDING.value, 60, True),
+        (JobStatus.PROCESSING.value, 60, True),
+    ],
+)
+def test_cleanup_old_pending_jobs(db_session, status, age_days, kept):
+    job = make_job(status, age_days)
+    db_session.add(job)
+    db_session.commit()
+    job_id = job.id
+
+    maintenance_module.cleanup_old_pending_jobs(retention_days=30)
+
+    db_session.expire_all()
+    assert (db_session.get(PendingJob, job_id) is not None) == kept
+
+
+def test_cleanup_old_pending_jobs_deletes_across_batches(db_session, monkeypatch):
+    monkeypatch.setattr(maintenance_module, "RETENTION_DELETE_BATCH_SIZE", 2)
+    db_session.add_all([make_job(JobStatus.COMPLETE.value, 60) for _ in range(5)])
+    db_session.commit()
+
+    result = maintenance_module.cleanup_old_pending_jobs(retention_days=30)
+
+    # The tracked_task wrapper adds its own running job, which is recent and kept.
+    assert result["deleted"] == 5

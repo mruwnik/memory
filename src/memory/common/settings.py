@@ -419,6 +419,12 @@ MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20)
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
 TASK_EXECUTION_RETENTION_DAYS = int(os.getenv("TASK_EXECUTION_RETENTION_DAYS", 30))
 SCHEDULED_TASK_RETENTION_DAYS = int(os.getenv("SCHEDULED_TASK_RETENTION_DAYS", 90))
+# Celery results are only read by tools/run_celery_task.py right after a run, so
+# a week is plenty for debugging a failed task.
+TASK_RESULT_RETENTION_DAYS = int(os.getenv("TASK_RESULT_RETENTION_DAYS", 7))
+# Finished jobs are what clients poll and what external_id idempotency checks
+# match; a month outlasts any realistic retry or status lookup.
+PENDING_JOB_RETENTION_DAYS = int(os.getenv("PENDING_JOB_RETENTION_DAYS", 30))
 
 # Maximum number of concurrently running Claude session containers a single
 # user may have. Bounds host CPU/memory usage. Enforced in the /claude/spawn

@@ -43,6 +43,17 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- Two new nightly maintenance tasks prune tables that previously grew without
+  bound: `celery_taskmeta` (Celery results older than
+  `TASK_RESULT_RETENTION_DAYS`, default 7) and `pending_jobs` (complete or
+  failed jobs older than `PENDING_JOB_RETENTION_DAYS`, default 30; pending and
+  processing jobs are never deleted). Celery's own `celery.backend_cleanup` was
+  scheduled onto a queue no worker consumes, so it never ran; it is now
+  disabled (`result_expires=None`). The first run on a large table deletes a
+  lot, in committed batches of 5000 rows. Afterwards, run
+  `VACUUM (ANALYZE) celery_taskmeta, pending_jobs;` once to make the space
+  reusable. It does not shrink the files; `VACUUM FULL` does, but takes an
+  exclusive lock on each table while it runs, so only use it in a quiet window.
 - Ingestion summaries now go through the Anthropic Message Batches API
   (`SUMMARIZER_USE_BATCH`, default `true`). Items are searchable at once, and
   their summary chunk arrives when the batch ends, usually within an hour.

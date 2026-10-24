@@ -91,6 +91,8 @@ MATCH_INGEST_TRIGGERS = f"{MAINTENANCE_ROOT}.match_ingest_triggers"
 SWEEP_TRIGGER_BUFFERS = f"{MAINTENANCE_ROOT}.sweep_trigger_buffers"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
+CLEANUP_OLD_TASK_RESULTS = f"{MAINTENANCE_ROOT}.cleanup_old_task_results"
+CLEANUP_OLD_PENDING_JOBS = f"{MAINTENANCE_ROOT}.cleanup_old_pending_jobs"
 CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
@@ -301,6 +303,10 @@ app.conf.update(
     # duplicate Claude containers or sending duplicate notifications.
     # Tasks that need retry should declare autoretry_for per-task for transient
     # errors only (e.g. requests.Timeout, ConnectionError).
+    # Celery's built-in celery.backend_cleanup is scheduled by beat whenever
+    # result_expires is set, but it is routed to the default "celery" queue that
+    # no worker consumes. None disables it; cleanup_old_task_results replaces it.
+    result_expires=None,
     task_time_limit=3600,  # 1 hour hard limit
     task_soft_time_limit=3000,  # 50 minute soft limit
     task_routes={
@@ -454,6 +460,14 @@ def build_beat_schedule() -> dict:
         "cleanup-old-task-executions": {
             "task": CLEANUP_OLD_TASK_EXECUTIONS,
             "schedule": crontab(hour="3", minute="45"),
+        },
+        "cleanup-old-task-results": {
+            "task": CLEANUP_OLD_TASK_RESULTS,
+            "schedule": crontab(hour="4", minute="50"),
+        },
+        "cleanup-old-pending-jobs": {
+            "task": CLEANUP_OLD_PENDING_JOBS,
+            "schedule": crontab(hour="4", minute="55"),
         },
         "cleanup-old-done-oneoff-tasks": {
             "task": CLEANUP_OLD_DONE_ONEOFF_TASKS,
