@@ -446,6 +446,7 @@ def test_uncached_input_is_what_is_left_after_cache_reads_and_writes(
         input_tokens_details={"cached_tokens": cached, "cache_write_tokens": written},
     )
 
+    assert r.usage is not None
     usage = OpenAIProvider.agent_usage(r.usage, [])
 
     assert (usage.input_tokens, usage.cache_read_tokens, usage.cache_write_tokens) == (

@@ -21,8 +21,7 @@ from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
 from memory.common import settings, summarizer
-from memory.common.db.models import SourceItem
-from memory.common.db.models import LLMProviderKey
+from memory.common.db.models import LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
 from tests.providers.email_provider import MockEmailProvider
