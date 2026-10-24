@@ -22,6 +22,9 @@ from testcontainers.community.qdrant import QdrantContainer
 
 from memory.common import settings
 from memory.common.db.models import SourceItem
+from memory.common.db.models import LLMProviderKey
+from memory.common.llms import registry
+from tests.memory.agents.fakes import FakeAnthropic, ScriptedProvider
 from tests.providers.email_provider import MockEmailProvider
 
 MOCK_SUMMARY_RESPONSE = json.dumps({"summary": "test summary", "tags": ["tag1", "tag2"]})
@@ -650,6 +653,27 @@ def regular_user(db_session):
     db_session.add(user)
     db_session.commit()
     return user
+
+
+@pytest.fixture
+def scripted_llm(monkeypatch):
+    """System agents' anthropic calls answer from ScriptedProvider.script."""
+    monkeypatch.setitem(registry.PROVIDERS, "anthropic", FakeAnthropic)
+    ScriptedProvider.script = []
+    ScriptedProvider.requests = []
+    yield ScriptedProvider
+
+
+@pytest.fixture
+def llm_key(db_session, regular_user):
+    """regular_user's default anthropic key."""
+    key = LLMProviderKey(
+        user_id=regular_user.id, provider="anthropic", label="default", is_default=True
+    )
+    key.key = "sk-test-default"
+    db_session.add(key)
+    db_session.commit()
+    return key
 
 
 @pytest.fixture

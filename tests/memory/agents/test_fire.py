@@ -133,9 +133,10 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
         triggers.sweep_trigger_buffers(client)
     fire_dispatched(no_celery_dispatch)
 
-    assert [r.input for r in db_session.query(AgentRun).order_by(AgentRun.created_at)] == [
+    # Every run in a test shares one transaction, so created_at can't order them.
+    assert sorted(r.input for r in db_session.query(AgentRun)) == sorted(
         i.format(id=item.id) for i in inputs
-    ]
+    )
 
 
 def test_disabled_triggers_and_unreadable_items_start_nothing(

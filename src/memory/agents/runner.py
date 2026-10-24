@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import func
 
+from memory.agents.call import SUBMIT_RESULT, submit_result_tool
 from memory.agents.provider_keys import (
     KeyUnavailable,
     key_for_run,
@@ -25,7 +26,6 @@ from memory.agents.provider_keys import (
     rejected_message,
 )
 from memory.agents.spec import (
-    SUBMIT_RESULT,
     AgentSpec,
     finish_tool_names,
     generation_params,
@@ -241,15 +241,6 @@ def finish(
         run.result = result
         run.finished_at = now()
         db.commit()
-
-
-def submit_result_tool(schema: dict[str, Any]) -> ToolDefinition:
-    return ToolDefinition(
-        name=SUBMIT_RESULT,
-        description="Submit the final result of the task. A valid submission ends the run.",
-        input_schema=schema,
-        strict=True,
-    )
 
 
 def truncate(text: str) -> str:

@@ -21,6 +21,7 @@ import anthropic
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from memory.agents.system import SUMMARISE, SUMMARY_SCHEMA
 from memory.common import embedding, extract, llms, qdrant, settings, summarizer
 from memory.common.content_processing import push_chunks_to_qdrant
 from memory.common.db.models import Chunk, SummaryRequest
@@ -43,8 +44,8 @@ def batch_request(provider: AnthropicProvider, request: SummaryRequest) -> dict[
     return provider.batch_request(
         str(request.id),
         [Message(role=MessageRole.USER, content=[TextContent(text=request.prompt)])],
-        llms.SUMMARY_SYSTEM_PROMPT,
-        llms.summary_settings(summarizer.SUMMARY_SCHEMA),
+        SUMMARISE.system_prompt,
+        llms.summary_settings(SUMMARY_SCHEMA),
     )
 
 

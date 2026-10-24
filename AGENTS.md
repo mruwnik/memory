@@ -45,6 +45,10 @@ Visibility flows User → Person → Team → Project → content (`common/acces
 - NULL `project_id` is superadmin-only.
 - Filters apply at Qdrant, BM25 and the final merge (defense in depth). The fail-closed gate is `require_access_filter` in `api/search/embeddings.py`; don't add a search path that bypasses it.
 
+## LLM calls
+
+Every LLM call goes through `memory.agents.call.run_agent(agent, prompt, *, user, key, record)` on a **system agent** from `memory.agents.system` (slug `system:*`, one model, a fixed system prompt, optional result schema), paid with a user's own provider key (a `Credential`). `record=COST` adds the spend to the key's hourly `llm_spend` bucket (search, ingest); `record=FULL` keeps the turn as a run. Calls stop when the key's daily pool (its cap, else `AGENT_DEFAULT_USER_KEY_DAILY_COST_USD`) is spent. Keys come from `memory.agents.provider_keys`: ingest → the source's explicit key, its "no LLM" choice, or the default key of whoever brought the item in (Slack/Discord: the app/bot registrant); search → the searcher's default key. No key → the LLM step is skipped. These modules are worker-safe: never import `spec`, `enqueue`, `runner` or `memory.api` from them. Voyage embeddings and rerank keep the server's key.
+
 ## Gotchas
 
 - Every request to a user-supplied URL goes through `common/safe_http.public_http_client`, which checks each address at dial time. Never use plain httpx/aiohttp for these.

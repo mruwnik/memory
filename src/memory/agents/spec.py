@@ -14,6 +14,7 @@ import referencing.jsonschema
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from memory.agents.builtins import search_backend
+from memory.agents.call import SUBMIT_RESULT
 from memory.agents.caps import per_run_cap
 from memory.common import settings
 from memory.common.llms.neutral import (
@@ -30,7 +31,6 @@ DEFAULT_AGENT_MODEL = "anthropic/claude-sonnet-5-5"
 DEFAULT_MAX_OUTPUT_TOKENS = 16_000
 MAX_TEXT_CHARS = 200_000
 MAX_NAME_CHARS = 100
-SUBMIT_RESULT = "submit_result"
 # agent_* and the scheduler writes: a run must not start or manage runs or
 # sessions, which would escape its caps (scheduled sessions can also receive the
 # owner's stored secrets). One-time keys would land a live credential in the

@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from decimal import Decimal
 
+from memory.common.llms.anthropic_provider import ANTHROPIC_MODELS
 from memory.common.llms.base import BaseLLMProvider
 from memory.common.llms.neutral import (
     AgentUsage,
@@ -154,6 +155,13 @@ class FakePoor(ScriptedProvider):
     MODELS = {"m": POOR}
 
 
+class FakeAnthropic(ScriptedProvider):
+    """Real anthropic model info, scripted answers: for code that calls system agents."""
+
+    provider = "anthropic"
+    MODELS = ANTHROPIC_MODELS
+
+
 FAKE_MODELS = ["anthropic/m", "openai/m"]
 DEFAULT_USAGE = AgentUsage(input_tokens=100, output_tokens=10)
 
@@ -175,6 +183,20 @@ def calls(
         message=NeutralMessage(
             role="assistant",
             content=[ToolCall(id=i, name=n, input=a) for i, n, a in tool_calls],
+        ),
+        replay={"blocks": []},
+        stop_reason="tool_calls",
+        usage=usage or DEFAULT_USAGE,
+        cost=PRICING.cost(usage or DEFAULT_USAGE),
+    )
+
+
+def submitted(data: dict, usage: AgentUsage | None = None) -> Completion:
+    """A turn that answers a result schema."""
+    return Completion(
+        message=NeutralMessage(
+            role="assistant",
+            content=[ToolCall(id="r1", name="submit_result", input=data)],
         ),
         replay={"blocks": []},
         stop_reason="tool_calls",

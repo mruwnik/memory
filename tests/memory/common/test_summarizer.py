@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from memory.agents.system import SUMMARISE, SUMMARY_SCHEMA
 from memory.common import llms, settings, summarizer
 
 
@@ -34,7 +35,7 @@ def test_summarize_requests_summary_schema():
     response = '{"summary": "short", "tags": ["t"]}'
     with patch.object(summarizer.llms, "summarize", return_value=response) as llm:
         assert summarizer.summarize(LONG_TEXT) == ("short", ["t"])
-    assert llm.call_args.kwargs["json_schema"] == summarizer.SUMMARY_SCHEMA
+    assert llm.call_args.kwargs["json_schema"] == SUMMARY_SCHEMA
 
 
 LONG_TEXT = "word " * 2000
@@ -109,4 +110,4 @@ def test_summarize_returns_generated_text(monkeypatch):
     monkeypatch.setattr("memory.common.llms.create_provider", lambda model: StubProvider())
 
     assert llms.summarize("text", model="anthropic/claude-haiku-5-5") == "a summary"
-    assert calls[0][1] == llms.SUMMARY_SYSTEM_PROMPT
+    assert calls[0][1] == SUMMARISE.system_prompt

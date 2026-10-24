@@ -43,11 +43,6 @@ __all__ = [
     "create_provider",
 ]
 
-SUMMARY_SYSTEM_PROMPT = (
-    "You are a helpful assistant that creates concise summaries and identifies key topics."
-)
-
-
 def summary_settings(json_schema: dict[str, Any] | None = None) -> LLMSettings:
     return LLMSettings(temperature=0.3, max_tokens=2048, json_schema=json_schema)
 
@@ -65,7 +60,8 @@ def summarize(
     content += [ImageContent(image=image) for image in images]
     return provider.generate(
         messages=[Message(role=MessageRole.USER, content=content)],
-        system_prompt=system_prompt or SUMMARY_SYSTEM_PROMPT,
+        system_prompt=system_prompt
+        or "You are a helpful assistant that creates concise summaries and identifies key topics.",
         settings=summary_settings(json_schema),
     )
 

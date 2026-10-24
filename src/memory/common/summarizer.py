@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+from memory.agents.system import SUMMARY_SCHEMA
 from memory.common import settings, tokens, llms
 
 logger = logging.getLogger(__name__)
@@ -31,17 +32,6 @@ Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learni
 Text to summarize:
 {content}
 """
-
-
-SUMMARY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string"},
-        "tags": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["summary", "tags"],
-    "additionalProperties": False,
-}
 
 
 @dataclass

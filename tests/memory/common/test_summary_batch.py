@@ -9,6 +9,7 @@ import httpx2
 import pytest
 
 from memory.common import embedding, extract, qdrant as qdrant_tools, settings
+from memory.agents.system import SUMMARISE, SUMMARY_SCHEMA
 from memory.common import summary_batch
 from memory.common.content_processing import push_chunks_to_qdrant
 from memory.common.db.connection import make_session
@@ -103,10 +104,10 @@ def test_submit_pending_creates_batch_and_persists_id(db_session, batches):
     assert [r["custom_id"] for r in requests] == [str(r.id) for r in pending]
     params = requests[0]["params"]
     assert params["model"] == "claude-haiku-4-5"
-    assert params["system"] == summary_batch.llms.SUMMARY_SYSTEM_PROMPT
+    assert params["system"] == SUMMARISE.system_prompt
     assert params["output_config"]["format"] == {
         "type": "json_schema",
-        "schema": summary_batch.summarizer.SUMMARY_SCHEMA,
+        "schema": SUMMARY_SCHEMA,
     }
     assert params["messages"][0]["role"] == "user"
     assert "extra_headers" not in params

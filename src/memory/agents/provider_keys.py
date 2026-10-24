@@ -5,6 +5,7 @@ Key values never reach a log line or an error message.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
@@ -30,6 +31,21 @@ CHECKS: dict[str, tuple[str, Callable[[str], dict[str, str]]]] = {
 }
 
 
+@dataclass(frozen=True)
+class Credential:
+    """A key read once inside a DB session, safe to carry across threads."""
+
+    id: int
+    user_id: int
+    provider: str
+    label: str
+    key: str = field(repr=False)
+
+
+def credential(key: LLMProviderKey) -> Credential:
+    return Credential(key.id, key.user_id, key.provider, key.label, key.key)
+
+
 class KeyUnavailable(ValueError):
     """No key can pay for the run; the message says what to fix."""
 
@@ -51,7 +67,7 @@ def resolve_key_ref(db: DBSession, user_id: int, ref: int | str) -> LLMProviderK
     return key
 
 
-def rejected_message(key: LLMProviderKey) -> str:
+def rejected_message(key: LLMProviderKey | Credential) -> str:
     return (
         f"your {key.provider} API key '{key.label}' was rejected by {key.provider}; "
         f"replace it at {keys_page()}"
@@ -105,7 +121,7 @@ def choose_key(
     return key
 
 
-def notify_key_rejected(key: LLMProviderKey) -> None:
+def notify_key_rejected(key: LLMProviderKey | Credential) -> None:
     """Tell the key's owner, once, that its provider refused it."""
     with make_session() as db:
         user = db.get(User, key.user_id)
@@ -175,6 +191,6 @@ def reject_key(key_id: int, used: str) -> bool:
         if key is None or key.status != KeyStatus.OK or key.key != used:
             return False
         key.status = KeyStatus.INVALID.value
-        key.status_detail = f"{key.provider} rejected it during an agent run"
+        key.status_detail = f"{key.provider} rejected it during an LLM call"
         db.commit()
         return True
