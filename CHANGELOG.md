@@ -72,6 +72,12 @@ section has nothing in it:
   sessions spawned from the form, or whose request or schedule sets
   `use_saved_write_token`. Any API key with the `claude_sessions` scope can
   therefore obtain the saved tokens by spawning a session and reading its env.
+- Users can reset a forgotten password by emailed link ("Forgot password?" on the
+  login page). It is off until you set `PASSWORD_RESET_FROM_EMAIL` to the address
+  of an existing send-enabled email account (Sources → Email) owned by an admin,
+  which sends the links. Whoever owns that account can read every reset link. It
+  also needs `SECRETS_ENCRYPTION_KEY` (or `TRANSFER_TOKEN_SECRET`). A reset ends
+  all the user's sessions; API keys are kept. Email sync never ingests reset mail.
 - `tools/install.sh --non-interactive` installs from environment variables
   without prompting and creates the first user (see the README). Both modes now
   also generate `secrets/secrets_encryption_key.txt` when absent (compose mounts

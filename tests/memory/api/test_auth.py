@@ -68,6 +68,9 @@ from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
         "/register",
         "/register/finish",
         "/revoke",
+        "/auth/password-reset",
+        "/auth/password-reset/request",
+        "/auth/password-reset/confirm",
     ],
 )
 def test_is_whitelisted_path_lets_real_routes_through(path):
@@ -97,6 +100,8 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/uiconfig",
         # Real-but-not-whitelisted endpoints
         "/users",
+        "/auth/me",
+        "/auth/password-resets",
         "/secrets",
         "/teams/1",
         "/calendar-accounts",

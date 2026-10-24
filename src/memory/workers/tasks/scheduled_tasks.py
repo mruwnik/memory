@@ -46,6 +46,7 @@ from memory.common.db.models.scheduled_tasks import (
 from memory.common.db.models.slack import SlackUserCredentials
 from memory.common.discord_data import discord_target_is_channel
 from memory.common.email_sender import (
+    PASSWORD_RESET_HEADER,
     get_account_by_address,
     prepare_send_config,
     send_email,
@@ -263,6 +264,7 @@ def send_via_email(params: NotificationParams) -> bool:
         to=[to_address],
         subject=subject,
         body=message,
+        headers={PASSWORD_RESET_HEADER: "1"} if params.data.get("password_reset") else None,
     )
 
     if result.success:

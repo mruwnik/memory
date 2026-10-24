@@ -102,6 +102,14 @@
             border-left: 4px solid #c33;
         }
 
+        .forgot-link {
+            display: block;
+            text-align: center;
+            margin-top: 1rem;
+            color: #4c51bf;
+            font-size: 0.9rem;
+        }
+
         .demo-credentials {
             background: #f8f9fa;
             padding: 1rem;
@@ -153,6 +161,9 @@
 
             <button type="submit" class="login-button">Sign In</button>
         </form>
+        {% if reset_available %}
+        <a class="forgot-link" href="/ui/forgot-password">Forgot password?</a>
+        {% endif %}
     </div>
 </body>
 

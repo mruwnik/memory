@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -56,6 +56,8 @@ const AuthWrapper = () => {
         // Allow public poll routes without auth
         const isPublicRoute =
           location.pathname === '/ui/login' ||
+          location.pathname === '/ui/forgot-password' ||
+          location.pathname === '/ui/reset-password' ||
           location.pathname.startsWith('/ui/polls/respond/') ||
           location.pathname.startsWith('/ui/polls/results/')
         if (!isPublicRoute) {
@@ -122,6 +124,8 @@ const AuthWrapper = () => {
   return (
     <Routes>
       <Route path="/ui/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
+      <Route path="/ui/forgot-password" element={<ForgotPassword />} />
+      <Route path="/ui/reset-password" element={<ResetPassword />} />
 
       <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
         {routes.map(({ path, element, scope }) => (

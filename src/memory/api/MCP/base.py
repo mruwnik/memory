@@ -18,6 +18,7 @@ from memory.api.MCP.servers import (
     is_server_enabled,
 )
 from memory.api.auth import authenticate_user
+from memory.api.password_reset import sender_account
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.api.MCP.access import fetch_user_by_token
@@ -112,6 +113,8 @@ async def oauth_protected_resource(request: Request):
 
 
 def login_form(request: Request, form_data: dict, error: str | None = None):
+    with make_session() as session:
+        reset_available = sender_account(session) is not None
     return templates.TemplateResponse(
         request,
         "login.html",
@@ -119,6 +122,7 @@ def login_form(request: Request, form_data: dict, error: str | None = None):
             "form_data": form_data,
             "error": error,
             "action": "/oauth/login",
+            "reset_available": reset_available,
         },
     )
 

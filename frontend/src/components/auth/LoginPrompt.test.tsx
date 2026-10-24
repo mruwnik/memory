@@ -5,10 +5,8 @@ import LoginPrompt from './LoginPrompt'
 describe('LoginPrompt', () => {
   it('renders the app title and prompt text', () => {
     renderWithUser(<LoginPrompt onLogin={() => {}} />)
-    expect(screen.getByText('Memory App')).toBeInTheDocument()
-    expect(
-      screen.getByText('Please log in to access your memory database'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Memory' })).toBeInTheDocument()
+    expect(screen.getByText('Log in to your knowledge base.')).toBeInTheDocument()
   })
 
   it('invokes onLogin when the Log In button is clicked', async () => {

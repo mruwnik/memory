@@ -17,6 +17,10 @@ from memory.common.db.models import EmailAccount, GoogleAccount
 
 logger = logging.getLogger(__name__)
 
+# Reset mail is marked so email sync can refuse to ingest the links it carries.
+PASSWORD_RESET_SUBJECT = "Reset your Memory password"
+PASSWORD_RESET_HEADER = "X-Memory-Password-Reset"
+
 
 # Common IMAP to SMTP server mappings
 SMTP_SERVER_MAP = {
@@ -172,6 +176,7 @@ def _build_mime_message(
     attachments: list[EmailAttachmentData] | None = None,
     reply_to: str | None = None,
     include_bcc_header: bool = False,
+    headers: dict[str, str] | None = None,
 ) -> MIMEMultipart:
     """Build a MIME message for sending.
 
@@ -190,6 +195,8 @@ def _build_mime_message(
         msg["Bcc"] = ", ".join(sanitize_header(addr) for addr in bcc)
     if reply_to:
         msg["Reply-To"] = sanitize_header(reply_to)
+    for name, value in (headers or {}).items():
+        msg[sanitize_header(name)] = sanitize_header(value)
 
     # Create body part
     if html_body:
@@ -223,6 +230,7 @@ def send_via_smtp(
     bcc: list[str] | None = None,
     attachments: list[EmailAttachmentData] | None = None,
     reply_to: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> EmailResult:
     """Send email via SMTP.
 
@@ -236,6 +244,7 @@ def send_via_smtp(
         bcc: Optional BCC recipients
         attachments: Optional attachments
         reply_to: Optional reply-to address
+        headers: Optional extra headers
 
     Returns:
         EmailResult with success status and message_id or error
@@ -253,6 +262,7 @@ def send_via_smtp(
             bcc=bcc,
             attachments=attachments,
             reply_to=reply_to,
+            headers=headers,
         )
 
         # All recipients for SMTP envelope
@@ -312,6 +322,7 @@ def send_via_gmail_api(
     bcc: list[str] | None = None,
     attachments: list[EmailAttachmentData] | None = None,
     reply_to: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> EmailResult:
     """Send email via Gmail API.
 
@@ -325,6 +336,7 @@ def send_via_gmail_api(
         bcc: Optional BCC recipients
         attachments: Optional attachments
         reply_to: Optional reply-to address
+        headers: Optional extra headers
 
     Returns:
         EmailResult with success status and message_id or error
@@ -344,6 +356,7 @@ def send_via_gmail_api(
             bcc=bcc,
             attachments=attachments,
             reply_to=reply_to,
+            headers=headers,
             include_bcc_header=True,
         )
 
@@ -378,6 +391,7 @@ def send_email(
     bcc: list[str] | None = None,
     attachments: list[EmailAttachmentData] | None = None,
     reply_to: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> EmailResult:
     """Send an email using the appropriate method based on config type.
 
@@ -391,6 +405,7 @@ def send_email(
         bcc: Optional BCC recipients
         attachments: Optional attachments
         reply_to: Optional reply-to address
+        headers: Optional extra headers
 
     Returns:
         EmailResult with success status and message_id or error
@@ -406,6 +421,7 @@ def send_email(
             bcc=bcc,
             attachments=attachments,
             reply_to=reply_to,
+            headers=headers,
         )
     return send_via_smtp(
         config=config,
@@ -417,6 +433,7 @@ def send_email(
         bcc=bcc,
         attachments=attachments,
         reply_to=reply_to,
+        headers=headers,
     )
 
 

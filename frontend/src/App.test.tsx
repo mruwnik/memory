@@ -44,6 +44,8 @@ vi.mock('@/components', () => ({
   ScheduledTasks: () => <div>SCHEDULED</div>,
   Check: () => <div>CHECK</div>,
   ReportsPage: () => <div>REPORTS</div>,
+  ForgotPassword: () => <div>FORGOT_PASSWORD</div>,
+  ResetPassword: () => <div>RESET_PASSWORD</div>,
 }))
 vi.mock('@/components/polls', () => ({
   PollList: () => <div>POLL_LIST</div>,
@@ -140,6 +142,15 @@ describe('App routing & auth', () => {
     setPath('/ui/polls/respond/my-slug')
     render(<App />)
     expect(screen.getByText('POLL_RESPOND')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['/ui/forgot-password', 'FORGOT_PASSWORD'],
+    ['/ui/reset-password', 'RESET_PASSWORD'],
+  ])('allows %s without auth', (path, marker) => {
+    setPath(path)
+    render(<App />)
+    expect(screen.getByText(marker)).toBeInTheDocument()
   })
 
   it('allows the public poll results route without auth', () => {

@@ -2,6 +2,8 @@ import contextlib
 import logging
 import pathlib
 from datetime import datetime
+from email.parser import HeaderParser
+from email.utils import parseaddr
 from typing import Generator, cast
 
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +14,7 @@ from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOU
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import EmailAccount, MailMessage
 from memory.common.db.models.source_item import clean_filename
+from memory.common.email_sender import PASSWORD_RESET_HEADER, PASSWORD_RESET_SUBJECT
 from memory.common.redis_lock import Lock, distributed_lock
 from memory.parsers.email import parse_email_message
 from memory.workers.email import (
@@ -214,6 +217,21 @@ def process_message(
     return result
 
 
+def is_password_reset_mail(raw_email: str) -> bool:
+    # A reset link in a synced mailbox would let anyone who can read that
+    # mailbox take over the recipient's account. Headers only: the body is
+    # base64/QP encoded, and spoofing these merely hides the spoofer's own mail.
+    headers = HeaderParser().parsestr(raw_email)
+    if headers.get(PASSWORD_RESET_HEADER):
+        return True
+    sender = parseaddr(str(headers.get("From", "")))[1]
+    return (
+        bool(settings.PASSWORD_RESET_FROM_EMAIL)
+        and sender.lower() == settings.PASSWORD_RESET_FROM_EMAIL.lower()
+        and str(headers.get("Subject", "")).strip() == PASSWORD_RESET_SUBJECT
+    )
+
+
 def queue_message(
     db: DBSession,
     account_id: int,
@@ -224,13 +242,15 @@ def queue_message(
     """Parse, dedup, spool, and queue a single message for async processing.
 
     Returns True if the message was newly queued, False if it already
-    exists (dedup hit). On any failure the shared session is rolled back
+    exists (dedup hit) or is password-reset mail. On any failure the shared session is rolled back
     before the exception propagates: a dropped connection (e.g. Postgres'
     idle-in-transaction timeout firing mid-sync) otherwise poisons the
     transaction and every subsequent statement cascades into
     PendingRollbackError. pool_pre_ping then hands out a live connection
     on the next statement.
     """
+    if is_password_reset_mail(raw_email):
+        return False
     spooled: str | None = None
     try:
         parsed_email = parse_email_message(raw_email, message_id)

@@ -95,6 +95,9 @@ WHITELIST = {
     # webhook secret (HMAC of the body or a bearer token), checked inside
     # transcript_ingest.ingest_transcript; they have no session.
     "/transcripts/ingest/",
+    # Forgotten-password request and confirm: the caller is by definition
+    # logged out; confirm is authorized by the signed reset token.
+    "/auth/password-reset",
 }
 
 

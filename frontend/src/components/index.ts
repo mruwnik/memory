@@ -9,6 +9,8 @@ export { Jobs } from './jobs'
 export { ConfigSources, Snapshots } from './snapshots'
 export { default as LoginPrompt } from './auth/LoginPrompt'
 export { default as AuthError } from './auth/AuthError'
+export { default as ForgotPassword } from './auth/ForgotPassword'
+export { default as ResetPassword } from './auth/ResetPassword'
 
 export { CeleryOverview } from './celery'
 export { ScheduledTasks } from './scheduled-tasks'

@@ -12,7 +12,12 @@ from memory.common.db.models import (
     SourceItem,
     EmailAttachment,
 )
-from memory.common import embedding
+from memory.common import embedding, settings
+from memory.common.email_sender import (
+    PASSWORD_RESET_HEADER,
+    PASSWORD_RESET_SUBJECT,
+    _build_mime_message,
+)
 from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
     process_email_batch,
@@ -337,6 +342,38 @@ def test_queue_message_spools_body_and_passes_only_filename(
     assert SIMPLE_EMAIL_RAW not in call.kwargs.values()
     # And the body was actually written there for the worker to read.
     assert spool_path(name).read_text(encoding="utf-8") == SIMPLE_EMAIL_RAW
+
+
+RESET_SENDER = "noreply@example.com"
+
+
+@pytest.mark.parametrize(
+    "from_addr, subject, headers, skipped",
+    [
+        (RESET_SENDER, PASSWORD_RESET_SUBJECT, None, True),
+        (f"Memory <{RESET_SENDER}>", PASSWORD_RESET_SUBJECT, None, True),
+        ("someone@example.com", "Anything", {PASSWORD_RESET_HEADER: "1"}, True),
+        (RESET_SENDER, "Weekly digest", None, False),
+        ("someone@example.com", PASSWORD_RESET_SUBJECT, None, False),
+    ],
+)
+def test_queue_message_never_ingests_password_reset_mail(
+    db_session, test_email_account, monkeypatch, from_addr, subject, headers, skipped
+):
+    monkeypatch.setattr(settings, "PASSWORD_RESET_FROM_EMAIL", RESET_SENDER)
+    raw = _build_mime_message(
+        from_addr=from_addr,
+        to=["victim@example.com"],
+        subject=subject,
+        body="https://memory.example.com/ui/reset-password#token=secret",
+        headers=headers,
+    ).as_string()
+
+    with patch("memory.workers.tasks.email.process_message") as mock_proc:
+        queued = queue_message(db_session, test_email_account.id, "888", "Sent", raw)
+
+    assert queued is not skipped
+    assert mock_proc.delay.called is not skipped
 
 
 def test_spool_file_kept_when_processing_raises(db_session, test_email_account):

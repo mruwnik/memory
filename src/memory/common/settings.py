@@ -364,6 +364,9 @@ OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = build_redirect_allowlist(
 
 # API settings
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
+# Address of a send-enabled email account that mails password-reset links.
+# Unset hides "Forgot password?".
+PASSWORD_RESET_FROM_EMAIL = os.getenv("PASSWORD_RESET_FROM_EMAIL", "")
 INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", SERVER_URL)
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
