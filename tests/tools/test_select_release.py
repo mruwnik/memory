@@ -49,7 +49,12 @@ def repo(tmp_path):
 
 @pytest.fixture
 def select(allowed, state_dir):
-    def go(repo, *extra, min_age=48, env=None):
+    def go(repo, *extra, min_age=48, env=None, installed_here=False):
+        if not installed_here:
+            # Tags are made on HEAD; selection must not treat that as installed.
+            tree = run(repo, "git", "rev-parse", "HEAD^{tree}").stdout.strip()
+            elsewhere = run(repo, "git", "commit-tree", tree, "-m", "elsewhere").stdout.strip()
+            run(repo, "git", "checkout", "-q", "--detach", elsewhere)
         return run(
             repo,
             "bash", "tools/select_release.sh",
@@ -309,3 +314,39 @@ def test_release_refuses_when_master_differs_from_the_remote(release_repo, relea
     assert result.returncode != 0
     assert "differs from" in result.stderr
     assert run(release_repo, "git", "tag").stdout == ""
+
+
+def test_skip_tags_are_not_auto_selected_but_can_be_requested(repo, select, signed_tag, state_dir):
+    signed_tag(repo, "v1.0.0", 100, "good")
+    signed_tag(repo, "v1.1.0", 100, "good")
+    (state_dir / "skip-tags").write_text("v1.1.0\n")
+
+    auto = select(repo)
+    explicit = select(repo, "v1.1.0")
+
+    assert auto.stdout.strip() == "v1.0.0"
+    assert explicit.stdout.strip() == "v1.1.0"
+
+
+def test_automatic_selection_reports_up_to_date_instead_of_downgrading(repo, select, signed_tag):
+    signed_tag(repo, "v1.0.0", 100, "good")
+    commit(repo, "installed later")
+    signed_tag(repo, "v1.1.0", 100, "good")
+    commit(repo, "after the newest release")
+
+    result = select(repo, installed_here=True)
+
+    assert result.returncode == 3
+    assert result.stdout == ""
+    assert "up to date" in result.stderr
+
+
+def test_explicit_older_tag_is_still_allowed(repo, select, signed_tag):
+    signed_tag(repo, "v1.0.0", 100, "good")
+    commit(repo, "installed later")
+    signed_tag(repo, "v1.1.0", 100, "good")
+
+    result = select(repo, "v1.0.0", installed_here=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "v1.0.0"

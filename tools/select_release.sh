@@ -12,11 +12,16 @@
 # timer and the update-to action. First sightings are recorded unless --no-record
 # (dry runs) or no check is requested; an unrecorded tag counts as first seen now.
 #
-# Env: STATE_DIR (default /var/lib/memory) holds seen-tags, "<tag sha> <epoch>" lines.
+# Exits 3 ("up to date" on stderr) when automatic selection finds the newest
+# qualifying tag is HEAD or an ancestor of it, so the timer never downgrades.
+#
+# Env: STATE_DIR (default /var/lib/memory) holds seen-tags, "<tag sha> <epoch>" lines,
+#      and skip-tags, tags that automatic selection passes over (see tools/ops/rollback.sh).
 set -Eeuo pipefail
 
 STATE_DIR=${STATE_DIR:-/var/lib/memory}
 SEEN=$STATE_DIR/seen-tags
+SKIP=$STATE_DIR/skip-tags
 
 ALLOWED=""
 MIN_AGE_HOURS=0
@@ -27,7 +32,7 @@ while (($#)); do
         --require-signed) ALLOWED=${2:?--require-signed needs a file}; shift 2 ;;
         --min-age-hours) MIN_AGE_HOURS=${2:?--min-age-hours needs a number}; shift 2 ;;
         --no-record) RECORD=0; shift ;;
-        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        -h|--help) sed -n "2,20p" "$0"; exit 0 ;;
         -*) echo "unknown option: $1" >&2; exit 2 ;;
         *) REF=$1; shift ;;
     esac
@@ -106,7 +111,14 @@ if [[ -n $REF ]]; then
 fi
 
 while read -r tag; do
+    # Rolled back from; update.sh forgets a tag once it is installed on request.
+    grep -qxF -- "$tag" "$SKIP" 2> /dev/null && continue
     if check_tag "$tag" 2> /dev/null; then
+        # Never downgrade: the newest qualifying tag is already installed.
+        if git merge-base --is-ancestor "refs/tags/$tag^{commit}" HEAD 2> /dev/null; then
+            echo "up to date: $tag is installed or older than the checkout" >&2
+            exit 3
+        fi
         echo "$tag"
         exit 0
     fi

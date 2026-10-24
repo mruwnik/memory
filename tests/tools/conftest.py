@@ -70,3 +70,18 @@ def signed_tag(keys, state_dir):
             f.write(f"{sha} {int(time.time()) - seen_hours * 3600}\n")
 
     return make
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "local_stack: needs the local compose stack up; needs --run-slow"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--run-slow"):
+        return
+    skip = pytest.mark.skip(reason="need --run-slow and a running local compose stack")
+    for item in items:
+        if "local_stack" in item.keywords:
+            item.add_marker(skip)

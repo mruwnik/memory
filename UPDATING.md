@@ -204,6 +204,27 @@ Qdrant even though their Postgres rows are gone. The periodic
 `clean-all-collections` maintenance task deletes those orphaned vectors. To
 run it now, queue it as in section 3 with `maintenance clean-all-collections`.
 
+### Repair scripts
+
+`tools/ops/` holds the repair actions, run as root on the box (or by an operator
+through fixed SSM documents). Output is numbers and states only.
+
+| Script | Does |
+|---|---|
+| `status.sh` | Health, containers, disk, memory, last update and backup results, pending reboot |
+| `restart.sh [service]` | Restart one service or all |
+| `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`); prints step and result lines only |
+| `rollback.sh --yes` | The commands above, from the update state or `last-good`; refuses unless the record is for the current checkout, and skips the tag it leaves |
+| `restore-latest-backup.sh --yes` | Restore the newest complete S3 set (Qdrant, then Postgres, then files); first keeps a fresh `pre-restore-*.dump` and a `pre-restore-qdrant-*.tar.gz` |
+| `disk-cleanup.sh` | Prune old images, build cache and dumps beyond `KEEP_BACKUPS` |
+| `reboot.sh --yes` | `shutdown -r +1` |
+
+All take `--dry-run`. On-box state is in `$STATE_DIR` (default
+`/var/lib/memory`): `update-failed` (written by `tools/update.sh`),
+`restore-failed` and `restore.log` (owner-only details of a failed restore or
+rollback), `skip-tags`, and `last-backup` (the nightly backup timer writes `ok`
+or `failed` as its first word). `status.sh` reports the markers.
+
 ## 5. When a migration fails
 
 `update.sh` stops right after the failed `migrate` run, and the app services

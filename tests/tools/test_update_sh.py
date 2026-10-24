@@ -27,6 +27,8 @@ def clone(tmp_path):
     git(clone, "remote", "set-url", "origin", str(tmp_path / "origin.git"))
     for script in ["update.sh", "select_release.sh"]:
         shutil.copy(REPO_ROOT / "tools" / script, clone / "tools" / script)
+    (clone / "tools" / "ops").mkdir(exist_ok=True)
+    shutil.copy(REPO_ROOT / "tools" / "ops" / "lib.sh", clone / "tools" / "ops" / "lib.sh")
     git(clone, "add", "tools")
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "update.sh under test")
     git(clone, "tag", "v0.0.9")
@@ -124,7 +126,9 @@ def test_update_state_for_current_checkout_is_resumed(clone):
 
 
 def test_signed_old_tag_is_planned_when_signatures_are_required(clone, allowed, signed_tag):
+    git(clone, "checkout", "--quiet", "--detach", "v0.0.10")
     signed_tag(clone, "v0.0.11", 100, "good")
+    git(clone, "checkout", "--quiet", "--detach", "v0.0.9")
 
     code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
 
@@ -171,3 +175,21 @@ def test_missing_allowed_signers_file_is_named_in_the_error(clone):
 
     assert code != 0
     assert "nope" in output
+
+
+def test_update_to_the_checked_out_commit_does_nothing(clone):
+    code, output = dry_run(clone, "v0.0.9")
+
+    assert code == 0, output
+    assert "Already at" in output
+    assert "migrate" not in output
+
+
+def test_up_to_date_with_an_unfinished_update_reports_failure(clone, allowed, signed_tag):
+    signed_tag(clone, "v0.0.11", 100, "good")  # tag at HEAD: installed
+    write_state(clone, git(clone, "rev-parse", "HEAD"))
+
+    code, output = dry_run(clone, "--require-signed", str(allowed), "--min-age-hours", "48")
+
+    assert code != 0
+    assert "did not finish" in output

@@ -52,6 +52,21 @@ section has nothing in it:
   `--min-age-hours N` to install only signed, sufficiently old release tags
   (age counts from when the host first saw the tag; state in `$STATE_DIR`).
   Without them it behaves as before. New `tools/release.sh` cuts signed tags.
+- New repair scripts in `tools/ops/` (status, restart, update-to, rollback,
+  restore-latest-backup, disk-cleanup, reboot); see UPDATING.md. `tools/update.sh`
+  now sources `tools/ops/lib.sh`, writes `$STATE_DIR/update-failed` when an update
+  fails (default `STATE_DIR=/var/lib/memory`), and `last-good` records the
+  previous version. `rollback.sh` adds the tag it leaves to `$STATE_DIR/skip-tags`,
+  which the automatic release selection passes over.
+  Automatic selection never returns a tag at or behind the checkout (exit 3,
+  "up to date"), and `update.sh` does nothing when the target is already checked out.
+- `tools/restore_databases.sh` is removed; use `tools/ops/restore-latest-backup.sh`
+  (set `BACKUP_SOURCE` to a local directory laid out like the bucket). Its Qdrant
+  restore never worked: Qdrant has no API to restore full snapshots. The new one
+  tars the Qdrant volume to `backups/pre-restore-qdrant-*.tar.gz`, then starts
+  Qdrant on the snapshot (`--storage-snapshot`), and puts the tarball back if that fails.
+- `tools/backup_databases.sh` now also uploads the file storage directory
+  (`FILE_STORAGE_DIR`, default `/app/memory_files`) as `files-<date>.tar.gz.enc`.
 - MCP tools gated on "has any items" (organizer task and calendar tools,
   deadlines, books, observations) are still hidden from tool listings while
   their table is empty, but calling one no longer fails with "Access denied";
