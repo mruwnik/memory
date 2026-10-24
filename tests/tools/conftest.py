@@ -55,7 +55,7 @@ def signed_tag(keys, state_dir):
     seen=None never records it, so it counts as first seen when selection runs."""
 
     def make(repo, name, age_hours, who=None, seen=-1):
-        key = {"good": keys[0], "stranger": keys[1]}.get(who)
+        key = {"good": keys[0], "stranger": keys[1]}.get(who or "")
         kind = ["-s"] if key else [] if who == "lightweight" else ["-a", "-m", name]
         if key:
             kind += ["-m", name]

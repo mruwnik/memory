@@ -400,7 +400,7 @@ def test_encrypt_snippet_produces_what_restore_decrypts(tmp_path):
     """Pins the contract with restore-latest-backup: Fernet archives under the
     worker's names, and plain directories listed for syncing."""
     body = (REPO_ROOT / "deploy" / "aws" / "host" / "nightly-backup.sh").read_text()
-    snippet = re.search(r"^ENCRYPT='(.*?)'$", body, re.S | re.M).group(1)
+    snippet = re.findall(r"^ENCRYPT='(.*?)'$", body, re.S | re.M)[0]
     files, out = tmp_path / "files", tmp_path / "out"
     (files / "notes").mkdir(parents=True)
     (files / "notes" / "a.md").write_text("note")
@@ -428,4 +428,6 @@ def test_encrypt_snippet_produces_what_restore_decrypts(tmp_path):
         env=env, capture_output=True, check=True, timeout=120,
     ).stdout  # fmt: skip
     with tarfile.open(fileobj=io.BytesIO(plain), mode="r:gz") as tar:
-        assert tar.extractfile("notes/a.md").read() == b"note"
+        member = tar.extractfile("notes/a.md")
+        assert member is not None
+        assert member.read() == b"note"
