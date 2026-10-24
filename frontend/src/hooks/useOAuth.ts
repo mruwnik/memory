@@ -42,6 +42,44 @@ const setCookie = (name: string, value: string, days = 30) => {
 const getClientId = () => localStorage.getItem('oauth_client_id')
 const setClientId = (clientId) => localStorage.setItem('oauth_client_id', clientId)
 
+// Exchange the authorization code for tokens; resolves to an error message, or null on success
+const exchangeCode = async (clientId: string, code: string, codeVerifier: string | null) => {
+  try {
+    const response = await fetch(`${SERVER_URL}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: codeVerifier || undefined
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      return `Token exchange failed: ${errorData.error || 'Unknown error'}`
+    }
+
+    const tokens = await response.json()
+    setCookie('access_token', tokens.access_token, 30)
+    setCookie(SESSION_COOKIE_NAME, tokens.access_token, 30)
+    if (tokens.refresh_token) {
+      setCookie('refresh_token', tokens.refresh_token, 30)
+    }
+    localStorage.removeItem('oauth_state')
+    localStorage.removeItem('code_verifier')
+    return null
+  } catch (err) {
+    return `Network error: ${err.message}`
+  }
+}
+
+// StrictMode runs the callback effect twice; exchanging the single-use code
+// again would fail and report an error over a login that succeeded.
+let pendingExchange: { code: string; result: Promise<boolean> } | null = null
+
 export const useOAuth = () => {
   const [error, setError] = useState<string | null>(null)
 
@@ -120,6 +158,10 @@ export const useOAuth = () => {
     }
 
     if (!code || !state) return false
+    if (pendingExchange?.code === code) return pendingExchange.result
+
+    // A spent code must not be replayed by reloading this URL
+    window.history.replaceState({}, document.title, window.location.pathname)
 
     // Verify state
     const storedState = localStorage.getItem('oauth_state')
@@ -136,45 +178,15 @@ export const useOAuth = () => {
       return false
     }
 
-    try {
-      // Exchange code for tokens
-      const response = await fetch(`${SERVER_URL}/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: clientId,
-          code,
-          redirect_uri: REDIRECT_URI,
-          code_verifier: storedCodeVerifier || undefined
-        })
-      })
-
-      if (response.ok) {
-        const tokens = await response.json()
-
-        // Store tokens
-        setCookie('access_token', tokens.access_token, 30)
-        setCookie(SESSION_COOKIE_NAME, tokens.access_token, 30)
-        if (tokens.refresh_token) {
-          setCookie('refresh_token', tokens.refresh_token, 30)
-        }
-
-        // Cleanup
-        localStorage.removeItem('oauth_state')
-        localStorage.removeItem('code_verifier')
-        window.history.replaceState({}, document.title, window.location.pathname)
-
-        return true
-      } else {
-        const errorData = await response.json()
-        setError(`Token exchange failed: ${errorData.error || 'Unknown error'}`)
-        return false
-      }
-    } catch (err) {
-      setError(`Network error: ${err.message}`)
-      return false
-    }
+    const result = exchangeCode(clientId, code, storedCodeVerifier).then((exchangeError) => {
+      if (exchangeError) setError(exchangeError)
+      return !exchangeError
+    })
+    pendingExchange = { code, result }
+    result.finally(() => {
+      pendingExchange = null
+    })
+    return result
   }, [])
 
   const clearError = useCallback(() => {

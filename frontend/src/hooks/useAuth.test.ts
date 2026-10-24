@@ -109,22 +109,16 @@ describe('checkAuth', () => {
     expect(result.current.user?.scopes).toEqual([])
   })
 
-  it('logs out when /auth/me returns non-ok and no refresh token is present', async () => {
+  it('drops the tokens when /auth/me is 401 and there is no refresh token', async () => {
     setCookie('access_token', 'tok')
-    // /auth/me 401 triggers refreshToken (no refresh cookie -> logout); the
-    // subsequent /auth/logout is also routed below.
-    const fetchMock = mockFetch(async (input) => {
-      const url = input.toString()
-      if (url.includes('/auth/logout')) return mockResponse({ json: {} })
-      return mockResponse({ status: 401 })
-    })
+    mockFetch(async () => mockResponse({ status: 401 }))
     const { result } = renderHook(() => useAuth())
-    await waitFor(() => expect(result.current.isAuthenticated).toBe(false))
-    expect(fetchMock).toHaveBeenCalled()
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.isAuthenticated).toBe(false)
+    expect(document.cookie).not.toContain('access_token=tok')
   })
 
   it('stays unauthenticated and stops loading when apiCall throws (session cookie but no access token)', async () => {
-    // session cookie present but no access_token -> apiCall throws -> catch -> logout.
     // The catch branch must clear isLoading so the app doesn't hang on a loading
     // spinner forever after an auth failure.
     setCookie('session_id', 'sess')
@@ -132,24 +126,23 @@ describe('checkAuth', () => {
     const { result } = renderHook(() => useAuth())
     await waitFor(() => expect(result.current.isAuthenticated).toBe(false))
     await waitFor(() => expect(result.current.isLoading).toBe(false))
-    // /auth/me was never reached (apiCall threw before fetch); only logout fires.
-    const meCalls = fetchMock.mock.calls.filter(([u]) =>
-      u.toString().includes('/auth/me'),
-    )
-    expect(meCalls).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('stops loading when /auth/me returns non-ok', async () => {
-    // The non-ok else branch must also clear isLoading (not just authentication).
+  it.each([
+    ['a network error', async () => {
+      throw new TypeError('Failed to fetch')
+    }],
+    ['a 500', async () => mockResponse({ status: 500 })],
+  ])('keeps the tokens when /auth/me fails with %s', async (_, impl) => {
+    // Every tab shares these tokens; only a 401 says the session is gone.
     setCookie('access_token', 'tok')
-    mockFetch(async (input) => {
-      const url = input.toString()
-      if (url.includes('/auth/logout')) return mockResponse({ json: {} })
-      return mockResponse({ status: 401 })
-    })
+    const fetchMock = mockFetch(impl)
     const { result } = renderHook(() => useAuth())
     await waitFor(() => expect(result.current.isLoading).toBe(false))
     expect(result.current.isAuthenticated).toBe(false)
+    expect(fetchMock.mock.calls.map(([u]) => u.toString())).toEqual(['/auth/me'])
+    expect(document.cookie).toContain('access_token=tok')
   })
 })
 
@@ -236,12 +229,7 @@ describe('apiCall', () => {
 
   it('returns the 401 response unchanged when refresh fails', async () => {
     setCookie('access_token', 'old')
-    // No refresh token / client id -> refreshToken returns false (and logs out).
-    const fetchMock = mockFetch(async (input) => {
-      const url = input.toString()
-      if (url.includes('/auth/logout')) return mockResponse({ json: {} })
-      return mockResponse({ status: 401 })
-    })
+    const fetchMock = mockFetch(async () => mockResponse({ status: 401 }))
     const { result } = renderHook(() => useAuth())
     let response!: Response
     await act(async () => {
@@ -265,59 +253,125 @@ describe('apiCall', () => {
   })
 })
 
-describe('refreshToken', () => {
-  it('logs out and returns false when refresh token or client id is missing', async () => {
-    setCookie('access_token', 'tok')
-    const fetchMock = mockFetch(async () => mockResponse({ json: {} }))
-    const { result } = renderHook(() => useAuth())
-    let outcome!: boolean
-    await act(async () => {
-      outcome = await result.current.refreshToken()
-    })
-    expect(outcome).toBe(false)
-  })
-
-  it('stores new tokens and returns true on success', async () => {
+describe('token refresh', () => {
+  const seedRefreshable = () => {
+    setCookie('access_token', 'old')
     setCookie('refresh_token', 'r1')
     localStorage.setItem('oauth_client_id', 'client-1')
-    mockFetch(async (input) => {
-      if (input.toString().includes('/token')) {
-        document.cookie = 'access_token=at;path=/'
-        return mockResponse({
-          json: { access_token: 'at', refresh_token: 'r2' },
-        })
+  }
+  const callsTo = (fetchMock: ReturnType<typeof mockFetch>, path: string) =>
+    fetchMock.mock.calls.filter(([u]) => u.toString().endsWith(path))
+  const bearer = (init?: RequestInit) =>
+    (init?.headers as Record<string, string> | undefined)?.Authorization
+  const me = { user_id: 1, name: 'A', email: 'a@x', user_type: 'human', scopes: [] }
+
+  it('posts a form-encoded refresh_token grant and stores the rotated pair', async () => {
+    seedRefreshable()
+    const fetchMock = mockFetch(async (input, init) => {
+      if (input.toString().endsWith('/token')) {
+        return mockResponse({ json: { access_token: 'new', refresh_token: 'r2' } })
       }
-      return mockResponse({ json: {} })
+      return mockResponse({ status: bearer(init) === 'Bearer new' ? 200 : 401, json: me })
     })
-    // refreshToken's POST to /token goes through apiCall which needs an
-    // access_token; seed one so apiCall does not throw.
-    document.cookie = 'access_token=seed;path=/'
     const { result } = renderHook(() => useAuth())
-    let outcome!: boolean
-    await act(async () => {
-      outcome = await result.current.refreshToken()
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true))
+
+    const [, init] = callsTo(fetchMock, '/token')[0]
+    expect((init!.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/x-www-form-urlencoded',
+    )
+    expect(Object.fromEntries(new URLSearchParams(init!.body as URLSearchParams))).toEqual({
+      grant_type: 'refresh_token',
+      refresh_token: 'r1',
+      client_id: 'client-1',
     })
-    expect(outcome).toBe(true)
-    expect(document.cookie).toContain('access_token=at')
+    expect(document.cookie).toContain('access_token=new')
+    expect(document.cookie).toContain('session_id=new')
     expect(document.cookie).toContain('refresh_token=r2')
   })
 
-  it('logs out and returns false when the token endpoint returns non-ok', async () => {
-    document.cookie = 'access_token=seed;path=/'
-    setCookie('refresh_token', 'r1')
-    localStorage.setItem('oauth_client_id', 'client-1')
-    mockFetch(async (input) => {
-      if (input.toString().includes('/token')) {
-        return mockResponse({ status: 400 })
+  it.each([400, 401])(
+    'gives up after one refresh attempt when /token answers %i',
+    async (status) => {
+      seedRefreshable()
+      const fetchMock = mockFetch(async (input) =>
+        mockResponse({ status: input.toString().endsWith('/token') ? status : 401 }),
+      )
+      const { result } = renderHook(() => useAuth())
+      await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+      expect(result.current.isAuthenticated).toBe(false)
+      expect(callsTo(fetchMock, '/token')).toHaveLength(1)
+      expect(document.cookie).not.toContain('refresh_token=r1')
+      await expect(result.current.apiCall('/foo')).rejects.toThrow('No access token available')
+      expect(callsTo(fetchMock, '/token')).toHaveLength(1)
+    },
+  )
+
+  it('shares one refresh between concurrent 401s', async () => {
+    seedRefreshable()
+    let releaseToken!: () => void
+    const tokenGate = new Promise<void>((resolve) => {
+      releaseToken = resolve
+    })
+    const fetchMock = mockFetch(async (input, init) => {
+      if (input.toString().endsWith('/token')) {
+        await tokenGate
+        return mockResponse({ json: { access_token: 'new', refresh_token: 'r2' } })
       }
-      return mockResponse({ json: {} })
+      return mockResponse({ status: bearer(init) === 'Bearer new' ? 200 : 401, json: me })
     })
     const { result } = renderHook(() => useAuth())
-    let outcome!: boolean
+
+    let statuses!: number[]
     await act(async () => {
-      outcome = await result.current.refreshToken()
+      const calls = Promise.all([result.current.apiCall('/a'), result.current.apiCall('/b')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      releaseToken()
+      statuses = (await calls).map((r) => r.status)
     })
-    expect(outcome).toBe(false)
+
+    expect(statuses).toEqual([200, 200])
+    expect(callsTo(fetchMock, '/token')).toHaveLength(1)
+  })
+
+  it('reuses tokens another tab rotated instead of replaying the stale refresh token', async () => {
+    seedRefreshable()
+    const fetchMock = mockFetch(async (_, init) => {
+      if (bearer(init) === 'Bearer old') {
+        // Another tab refreshed while this request was in flight.
+        setCookie('access_token', 'from-other-tab')
+        return mockResponse({ status: 401 })
+      }
+      return mockResponse({ json: me })
+    })
+    const { result } = renderHook(() => useAuth())
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true))
+
+    expect(callsTo(fetchMock, '/token')).toHaveLength(0)
+    expect(bearer(callsTo(fetchMock, '/auth/me').slice(-1)[0][1])).toBe('Bearer from-other-tab')
+  })
+
+  it('signs out every mounted useAuth when the refresh fails', async () => {
+    seedRefreshable()
+    let expired = false
+    mockFetch(async (input) => {
+      if (input.toString().endsWith('/token')) return mockResponse({ status: 400 })
+      return mockResponse({ status: expired ? 401 : 200, json: me })
+    })
+    const first = renderHook(() => useAuth())
+    const second = renderHook(() => useAuth())
+    await waitFor(() => expect(second.result.current.isAuthenticated).toBe(true))
+    await waitFor(() => expect(first.result.current.isAuthenticated).toBe(true))
+
+    expired = true
+    await act(async () => {
+      await first.result.current.apiCall('/foo')
+    })
+
+    expect(first.result.current.isAuthenticated).toBe(false)
+    expect(second.result.current.isAuthenticated).toBe(false)
+    expect(second.result.current.user).toBeNull()
   })
 })
 
@@ -348,6 +402,25 @@ describe('logout', () => {
     expect(result.current.user).toBeNull()
     expect(localStorage.getItem('oauth_client_id')).toBeNull()
     expect(document.cookie).not.toContain('access_token=tok')
+  })
+
+  it('does not refresh when the server rejects the logout', async () => {
+    setCookie('access_token', 'tok')
+    setCookie('refresh_token', 'r')
+    localStorage.setItem('oauth_client_id', 'client-1')
+    const fetchMock = mockFetch(async () => mockResponse({ status: 401 }))
+    const { result } = renderHook(() => useAuth())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    fetchMock.mockClear()
+    setCookie('access_token', 'tok')
+    setCookie('refresh_token', 'r')
+
+    await act(async () => {
+      await result.current.logout()
+    })
+
+    expect(fetchMock.mock.calls.map(([u]) => u.toString())).toEqual(['/auth/logout'])
+    expect(document.cookie).not.toContain('refresh_token=r')
   })
 
   it('still clears state when the logout request throws', async () => {

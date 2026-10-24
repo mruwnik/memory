@@ -179,6 +179,40 @@ describe('handleCallback', () => {
     replaceSpy.mockRestore()
   })
 
+  it('exchanges a code once when the callback runs twice (StrictMode)', async () => {
+    window.location.search = '?code=once&state=good'
+    localStorage.setItem('oauth_state', 'good')
+    localStorage.setItem('oauth_client_id', 'client-1')
+    let exchanges = 0
+    mockFetch(async () => {
+      exchanges += 1
+      return exchanges === 1
+        ? mockResponse({ json: { access_token: 'at', refresh_token: 'rt' } })
+        : mockResponse({ status: 400, json: { error: 'invalid_grant' } })
+    })
+    const { result } = renderHook(() => useOAuth())
+    let outcomes!: boolean[]
+    await act(async () => {
+      outcomes = await Promise.all([result.current.handleCallback(), result.current.handleCallback()])
+    })
+    expect(outcomes).toEqual([true, true])
+    expect(exchanges).toBe(1)
+    expect(result.current.error).toBeNull()
+  })
+
+  it('strips the spent code from the URL even when the exchange fails', async () => {
+    window.location.search = '?code=abc&state=good'
+    localStorage.setItem('oauth_state', 'good')
+    localStorage.setItem('oauth_client_id', 'client-1')
+    mockFetch(async () => mockResponse({ status: 400, json: { error: 'invalid_grant' } }))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const { result } = renderHook(() => useOAuth())
+    await act(async () => {
+      await result.current.handleCallback()
+    })
+    expect(replaceSpy).toHaveBeenCalledWith({}, document.title, '/ui')
+  })
+
   it('sets an error from the response body when token exchange fails', async () => {
     window.location.search = '?code=abc&state=good'
     localStorage.setItem('oauth_state', 'good')
