@@ -19,7 +19,7 @@ const run = (o: Partial<AgentRun>): AgentRun => ({
 })
 
 beforeEach(() => {
-  listRuns.mockReset().mockResolvedValue([run({ id: 'r1', definition_id: 3 }), run({ id: 'r2', status: 'budget_exceeded' })])
+  listRuns.mockReset().mockResolvedValue([run({ id: 'r1', definition_id: 3, trigger_kind: 'ingest' }), run({ id: 'r2', status: 'budget_exceeded' })])
   listDefinitions.mockReset().mockResolvedValue([{ id: 3, name: 'digest' }])
 })
 
@@ -29,13 +29,29 @@ describe('AgentRuns', () => {
     expect(await screen.findByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/runs/r1')
     expect(screen.getByRole('link', { name: 'Ad-hoc run' })).toBeInTheDocument()
     expect(screen.getAllByText('New report: - [report #5] summary')).toHaveLength(2)
+    expect(screen.getByText('New items')).toBeInTheDocument()
   })
 
   it('names statuses and costs in plain words', async () => {
     renderWithRouter(<AgentRuns />)
     await screen.findByRole('link', { name: 'Ad-hoc run' })
     expect(screen.getByRole('button', { name: 'Over budget' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument()
     expect(screen.getAllByText('Over budget')).toHaveLength(2)
     expect(screen.getAllByText('<$0.01')).toHaveLength(2)
+  })
+
+  it('retries a failed load', async () => {
+    listRuns.mockRejectedValueOnce(new Error('boom'))
+    const { user } = renderWithRouter(<AgentRuns />)
+    await user.click(await screen.findByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('link', { name: 'Ad-hoc run' })).toBeInTheDocument()
+  })
+
+  it('refreshes the list on demand', async () => {
+    const { user } = renderWithRouter(<AgentRuns />)
+    await screen.findByRole('link', { name: 'Ad-hoc run' })
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(listRuns).toHaveBeenCalledTimes(2)
   })
 })

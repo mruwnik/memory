@@ -5,7 +5,7 @@ import { EmailPanel, defaultSyncFolders } from './EmailPanel'
 import type { ImapFolder } from '@/hooks/useSources'
 
 const imapAccount = {
-  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true, can_choose_default: true },
   id: 1,
   name: 'Work IMAP',
   email_address: 'work@example.com',

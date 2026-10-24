@@ -15,7 +15,7 @@ const bot = {
 }
 
 const server = {
-  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true, can_choose_default: true },
   id: 'srv-1',
   name: 'My Server',
   description: null,

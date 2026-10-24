@@ -86,10 +86,10 @@ export const GoogleDrivePanel = () => {
     loadData()
   })
 
-  const handleFolderLLMKey = async (accountId: number, folderId: number, llm_key: LLMKeyChoice) => {
+  const handleFolderLLMKey = (accountId: number, folderId: number, llm_key: LLMKeyChoice) => run(async () => {
     await updateGoogleFolder(accountId, folderId, { llm_key })
     loadData()
-  }
+  })
 
   const handleSyncFolder = (accountId: number, folderId: number) => run(async () => {
     await syncGoogleFolder(accountId, folderId)

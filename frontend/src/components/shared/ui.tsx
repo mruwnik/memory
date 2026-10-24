@@ -757,6 +757,24 @@ export const Notice = ({ tone, onRetry, onDismiss, className, children, ...props
   </div>
 )
 
+/** Runs a form's submit or a button's action, tracking busy state (to disable it) and keeping its error message. */
+export const useSubmit = () => {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = useCallback(async (work: () => Promise<void>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await work()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+  return { busy, error, setError, submit }
+}
+
 /**
  * Runs actions on a loaded page (sync, toggle, delete) and keeps the outcome for a `Notice`,
  * so a failure is never silent. `run` resolves to whether the action succeeded.

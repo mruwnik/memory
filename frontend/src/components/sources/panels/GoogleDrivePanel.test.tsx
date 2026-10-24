@@ -31,7 +31,7 @@ vi.mock('../Sources', () => ({
 import { GoogleDrivePanel } from './GoogleDrivePanel'
 
 const folder = (over: Record<string, unknown> = {}) => ({
-  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true, can_choose_default: true },
   id: 100,
   folder_id: 'abc',
   folder_name: 'Docs',

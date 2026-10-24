@@ -168,6 +168,8 @@ export interface ServerTool {
   changed_at?: string | null
 }
 
+export interface KeyList { providers: Record<KeyProvider, ProviderKey[]> }
+
 export interface ExternalServer {
   id: number
   name: string
@@ -381,12 +383,12 @@ export const useAgents = () => {
     [call],
   )
   const upsertServer = useCallback(
-    (body: { name: string; url: string; transport: ServerTransport; auth: ServerAuth; serverId?: number }) =>
+    (body: { name: string; url: string; transport: ServerTransport; auth?: ServerAuth; serverId?: number }) =>
       call<ServerUpsertResult>('agent_server_upsert', {
         name: body.name,
         url: body.url,
         transport: body.transport,
-        auth: body.auth,
+        ...(body.auth ? { auth: body.auth } : {}),
         ...(body.serverId !== undefined ? { server_id: body.serverId } : {}),
       }),
     [call],
@@ -406,7 +408,7 @@ export const useAgents = () => {
   const deleteServer = useCallback((serverId: number) => call('agent_server_delete', { server_id: serverId }), [call])
 
   const listKeys = useCallback(
-    () => call<{ providers: Record<KeyProvider, ProviderKey[]> }>('agent_key_list'),
+    () => call<KeyList>('agent_key_list'),
     [call],
   )
   const upsertKey = useCallback(

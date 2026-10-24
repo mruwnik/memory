@@ -138,6 +138,7 @@ def test_an_explicit_key_is_kept_with_its_label(client, db_session, user, make):
         "provider": "anthropic",
         "paid_by_you": True,
         "runs": True,
+        "can_choose_default": True,
     }
 
 
@@ -229,6 +230,45 @@ def test_only_the_default_payer_or_an_admin_may_choose_default(
     db_session.refresh(row)
     key_ids = {"default": None, "theirs": theirs.id}
     assert (row.llm_disabled, row.llm_key_id) == (False, key_ids[stored])
+
+
+@pytest.mark.parametrize("make,client_fixture", CO_USERS)
+def test_whoever_chose_a_key_may_put_the_source_back_on_default(
+    request, db_session, user, admin_user, make, client_fixture
+):
+    caller = request.getfixturevalue(client_fixture)
+    mine = key(db_session, user.id, "mine")
+    row, url = make(db_session, user, admin_user)
+    row.llm_key_id = mine.id
+    db_session.commit()
+
+    response = caller.patch(url, json={"llm_key": "default"})
+
+    assert response.status_code == 200, response.text
+    db_session.refresh(row)
+    assert (row.llm_disabled, row.llm_key_id) == (False, None)
+
+
+@pytest.mark.parametrize(
+    "viewer,start,expected",
+    [
+        ("admin_user", "theirs", True),  # the payer
+        ("user", "theirs", False),
+        ("user", "mine", True),
+        ("user", "default", False),
+    ],
+)
+def test_the_view_says_who_may_choose_default(
+    request, db_session, user, admin_user, viewer, start, expected
+):
+    mine = key(db_session, user.id, "mine")
+    row, _, theirs = on_their_key(db_session, user, admin_user, slack_co_user)
+    row.llm_key_id = {"theirs": theirs.id, "mine": mine.id, "default": None}[start]
+    db_session.commit()
+
+    view = llm_key_view(db_session, request.getfixturevalue(viewer), row)
+
+    assert view.can_choose_default == expected
 
 
 @pytest.mark.parametrize("make,client_fixture", CO_USERS)

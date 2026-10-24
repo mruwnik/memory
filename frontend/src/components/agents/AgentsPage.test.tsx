@@ -17,10 +17,12 @@ beforeEach(() => {
 })
 
 describe('AgentsPage', () => {
-  it('shows the empty state', async () => {
+  it('shows the empty state with a way to create one', async () => {
     listDefinitions.mockResolvedValue([])
     renderWithRouter(<AgentsPage />)
     await waitFor(() => expect(screen.getByText('You have no agents yet')).toBeInTheDocument())
+    expect(screen.getAllByRole('link', { name: 'New agent' })).toHaveLength(2)
+    expect(screen.getByRole('link', { name: 'LLM keys' })).toHaveAttribute('href', '/ui/keys')
   })
 
   it('lists definitions with their last run status', async () => {
@@ -48,13 +50,20 @@ describe('AgentsPage', () => {
     ])
     renderWithRouter(<AgentsPage />)
     expect(await screen.findByText('Search: hypothetical passages')).toBeInTheDocument()
-    expect(screen.getByTitle(/add a default anthropic key/)).toHaveTextContent('!')
+    expect(screen.getByText(/add a default anthropic key/)).toBeInTheDocument()
+    expect(screen.getByText("Can't run")).toBeInTheDocument()
   })
 
-  it('flags definitions that cannot run', async () => {
-    listDefinitions.mockResolvedValue([{ id: 1, name: 'old', description: '', spec: { model: 'm' }, last_run: null, problems: ['pick one of your keys'] }])
+  it('says in words why a definition cannot run and which tools changed', async () => {
+    listDefinitions.mockResolvedValue([{
+      id: 1, name: 'old', description: '', spec: { model: 'm' }, last_run: null,
+      problems: ['pick one of your keys', 'key 4 was deleted'], changed_tools: ['a', 'b'],
+    }])
     renderWithRouter(<AgentsPage />)
-    expect(await screen.findByTitle('pick one of your keys')).toHaveTextContent('!')
+    expect(await screen.findByText('pick one of your keys')).toBeInTheDocument()
+    expect(screen.getByText('key 4 was deleted')).toBeInTheDocument()
+    expect(screen.getByText("Can't run")).toBeInTheDocument()
+    expect(screen.getByText('2 external tools changed: a, b')).toBeInTheDocument()
   })
 
   it('shows a system agents load error without hiding your agents', async () => {
@@ -65,9 +74,11 @@ describe('AgentsPage', () => {
     expect(screen.getByText('digest')).toBeInTheDocument()
   })
 
-  it('shows load errors', async () => {
-    listDefinitions.mockRejectedValue(new Error('MCP agent_list_all tool error: boom'))
-    renderWithRouter(<AgentsPage />)
-    await waitFor(() => expect(screen.getByText(/boom/)).toBeInTheDocument())
+  it('retries a failed load', async () => {
+    listDefinitions.mockRejectedValueOnce(new Error('MCP agent_list_all tool error: boom')).mockResolvedValue([])
+    const { user } = renderWithRouter(<AgentsPage />)
+    expect(await screen.findByText(/boom/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('You have no agents yet')).toBeInTheDocument()
   })
 })

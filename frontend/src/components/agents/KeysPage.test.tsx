@@ -66,4 +66,20 @@ describe('KeysPage', () => {
     expect(notice).toHaveTextContent('These agents used it and fail until you pick another key: digest.')
     expect(notice).toHaveTextContent("'work' is now your default Anthropic key.")
   })
+
+  it('focuses the edit field, and the button that opened it once done', async () => {
+    listKeys.mockResolvedValue(listed([providerKey()]))
+    const { user } = renderWithRouter(<KeysPage />)
+    await user.click(await screen.findByRole('button', { name: 'Rename' }))
+    expect(screen.getByLabelText('Label')).toHaveFocus()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('button', { name: 'Rename' })).toHaveFocus()
+  })
+
+  it('adds a key for an empty provider from its empty state', async () => {
+    listKeys.mockResolvedValue(listed([]))
+    const { user } = renderWithRouter(<KeysPage />)
+    await user.click(await screen.findByRole('button', { name: 'Add OpenAI key' }))
+    expect(within(screen.getByRole('dialog')).getByLabelText('Provider')).toHaveDisplayValue('OpenAI')
+  })
 })

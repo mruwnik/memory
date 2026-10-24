@@ -1,37 +1,19 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   DEFAULT_KEY_DAILY_CAP_USD, KEY_PROVIDERS, PROVIDER_NAMES, useAgents,
   type KeyDeleteResult, type KeyProvider, type KeyUpsert, type ProviderKey,
 } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { formatCost } from '@/utils/format'
-import { Badge, Button, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select } from '@/components/shared/ui'
+import { Badge, Button, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select, useSubmit } from '@/components/shared/ui'
 
 type Keys = Record<KeyProvider, ProviderKey[]>
 type Save = (body: KeyUpsert) => Promise<void>
 
 const CAP_HINT = `Optional. Without one, ${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day applies unless the agent sets a daily cap.`
 
-/** Runs `work`, tracking busy state and keeping its error message for the form. */
-function useSubmit() {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const submit = async (work: () => Promise<void>) => {
-    setBusy(true)
-    setError(null)
-    try {
-      await work()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-  return { busy, error, submit }
-}
-
-function AddKeyForm({ onSave }: { onSave: Save }) {
-  const [provider, setProvider] = useState<KeyProvider>('anthropic')
+function AddKeyForm({ initialProvider, onSave }: { initialProvider: KeyProvider; onSave: Save }) {
+  const [provider, setProvider] = useState<KeyProvider>(initialProvider)
   const [label, setLabel] = useState('')
   const [key, setKey] = useState('')
   const [cap, setCap] = useState('')
@@ -94,10 +76,10 @@ function EditKeyForm({ entry, edit, onSave, onDone }: { entry: ProviderKey; edit
       <Field className="flex-1 min-w-48" label={EDITS[edit].label} error={error}
         hint={edit === 'cap' ? `Leave empty for no cap of its own (${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day unless the agent sets one).` : undefined}>
         {edit === 'key'
-          ? <Input type="password" required autoComplete="off" value={value} onChange={e => setValue(e.target.value)} />
+          ? <Input autoFocus type="password" required autoComplete="off" value={value} onChange={e => setValue(e.target.value)} />
           : edit === 'label'
-            ? <Input required maxLength={100} value={value} onChange={e => setValue(e.target.value)} />
-            : <Input inputMode="decimal" placeholder={DEFAULT_KEY_DAILY_CAP_USD} value={value} onChange={e => setValue(e.target.value)} />}
+            ? <Input autoFocus required maxLength={100} value={value} onChange={e => setValue(e.target.value)} />
+            : <Input autoFocus inputMode="decimal" placeholder={DEFAULT_KEY_DAILY_CAP_USD} value={value} onChange={e => setValue(e.target.value)} />}
       </Field>
       <div className="flex gap-2 pt-6">
         <Button type="submit" size="sm" variant="primary" disabled={busy || (edit !== 'cap' && !value.trim())}>
@@ -109,13 +91,25 @@ function EditKeyForm({ entry, edit, onSave, onDone }: { entry: ProviderKey; edit
   )
 }
 
-function KeyRow({ entry, onSave, onMakeDefault, onDelete }: {
+function KeyRow({ entry, onSave, onDelete }: {
   entry: ProviderKey
   onSave: Save
-  onMakeDefault: () => void
   onDelete: () => void
 }) {
   const [edit, setEdit] = useState<Edit | null>(null)
+  const makeDefault = useSubmit()
+  // Opening an edit hides the row's buttons, so closing it puts focus back on the one that opened it.
+  const openers = useRef<Partial<Record<Edit, HTMLButtonElement | null>>>({})
+  const closed = useRef<Edit | null>(null)
+  useEffect(() => {
+    if (edit !== null || closed.current === null) return
+    openers.current[closed.current]?.focus()
+    closed.current = null
+  }, [edit])
+  const done = () => {
+    closed.current = edit
+    setEdit(null)
+  }
   const cap = entry.max_cost_usd_per_day ? `${formatCost(entry.max_cost_usd_per_day)}/day cap` : `${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day default cap`
 
   return (
@@ -128,19 +122,25 @@ function KeyRow({ entry, onSave, onMakeDefault, onDelete }: {
       </>}
       meta={[`#${entry.id}`, entry.last_used_at ? `Used ${formatRelativeTime(entry.last_used_at)}` : 'Never used', cap]}
       actions={edit === null && <>
-        <Button size="sm" onClick={() => setEdit('label')}>Rename</Button>
-        <Button size="sm" onClick={() => setEdit('key')}>Replace key</Button>
-        <Button size="sm" onClick={() => setEdit('cap')}>Daily cap</Button>
-        {!entry.is_default && <Button size="sm" onClick={onMakeDefault}>Make default</Button>}
+        <Button size="sm" ref={el => { openers.current.label = el }} onClick={() => setEdit('label')}>Rename</Button>
+        <Button size="sm" ref={el => { openers.current.key = el }} onClick={() => setEdit('key')}>Replace key</Button>
+        <Button size="sm" ref={el => { openers.current.cap = el }} onClick={() => setEdit('cap')}>Daily cap</Button>
+        {!entry.is_default && (
+          <Button size="sm" disabled={makeDefault.busy}
+            onClick={() => makeDefault.submit(() => onSave({ keyId: entry.id, isDefault: true }))}>
+            {makeDefault.busy ? 'Saving...' : 'Make default'}
+          </Button>
+        )}
         <Button size="sm" variant="danger" onClick={onDelete}>Delete</Button>
       </>}
     >
       {entry.status === 'invalid' && (
         <RowError>
-          {entry.status_detail ?? `${PROVIDER_NAMES[entry.provider]} rejected this key.`} Runs that use it fail until you replace it.
+          {entry.status_detail ?? `${PROVIDER_NAMES[entry.provider]} rejected this key.`} LLM work that uses it fails until you replace it.
         </RowError>
       )}
-      {edit && <EditKeyForm entry={entry} edit={edit} onSave={onSave} onDone={() => setEdit(null)} />}
+      {makeDefault.error && <RowError>{makeDefault.error}</RowError>}
+      {edit && <EditKeyForm entry={entry} edit={edit} onSave={onSave} onDone={done} />}
     </Row>
   )
 }
@@ -158,7 +158,7 @@ const deleteOutcome = (entry: ProviderKey, result: KeyDeleteResult, keys: Keys) 
 export default function KeysPage() {
   const { listKeys, upsertKey, deleteKey } = useAgents()
   const [keys, setKeys] = useState<Keys | null>(null)
-  const [adding, setAdding] = useState(false)
+  const [adding, setAdding] = useState<KeyProvider | null>(null)
   const [deleting, setDeleting] = useState<ProviderKey | null>(null)
   const [outcome, setOutcome] = useState<{ tone: 'success' | 'warning'; message: string } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -190,18 +190,18 @@ export default function KeysPage() {
 
   return (
     <Page
-      title="LLM API keys"
+      title="LLM keys"
       description="Anthropic keys pay for summaries and other LLM work on items you own, and for the LLM steps of your searches. Anthropic and OpenAI keys both pay for agents on their models. Nothing LLM-backed runs without one. Tools refer to keys by name or id."
-      actions={<Button variant="primary" onClick={() => setAdding(true)}>New key</Button>}
+      actions={<Button variant="primary" onClick={() => setAdding('anthropic')}>New key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}
       onRetry={load}
     >
       {adding && (
-        <Modal title="Add API key" onClose={() => setAdding(false)} size="xl">
-          <AddKeyForm onSave={async body => {
+        <Modal title="Add LLM key" onClose={() => setAdding(null)} size="xl">
+          <AddKeyForm initialProvider={adding} onSave={async body => {
             await save(body)
-            setAdding(false)
+            setAdding(null)
           }} />
         </Modal>
       )}
@@ -210,13 +210,12 @@ export default function KeysPage() {
       {keys && KEY_PROVIDERS.map(provider => (
         <Section key={provider} title={PROVIDER_NAMES[provider]}>
           {keys[provider].length === 0
-            ? <EmptyState message={`No ${PROVIDER_NAMES[provider]} keys`} />
+            ? <EmptyState message={`No ${PROVIDER_NAMES[provider]} keys`}
+                actionLabel={`Add ${PROVIDER_NAMES[provider]} key`} onAction={() => setAdding(provider)} />
             : (
               <List>
                 {keys[provider].map(entry => (
-                  <KeyRow key={entry.id} entry={entry} onSave={save}
-                    onMakeDefault={() => act(() => save({ keyId: entry.id, isDefault: true }))}
-                    onDelete={() => setDeleting(entry)} />
+                  <KeyRow key={entry.id} entry={entry} onSave={save} onDelete={() => setDeleting(entry)} />
                 ))}
               </List>
             )}
@@ -224,7 +223,7 @@ export default function KeysPage() {
       ))}
       {deleting && (
         <ConfirmDialog title="Delete key" confirmLabel="Delete"
-          message={`Delete the ${PROVIDER_NAMES[deleting.provider]} key '${deleting.label}'? Agents that pin it stop working until you pick another key.`}
+          message={`Delete the ${PROVIDER_NAMES[deleting.provider]} key '${deleting.label}'? Agents that pin it stop working until you pick another key, and sources that use it go back to their default key.`}
           onConfirm={() => confirmDelete(deleting)} onCancel={() => setDeleting(null)} />
       )}
     </Page>

@@ -20,7 +20,7 @@ export function payer({ model, provider_key: choice = null }: AgentSpec, catalog
   if (typeof choice === 'number' && !key) {
     return { key: null, problem: `That key was deleted or isn't a key for ${name}; runs fail until you pick another.` }
   }
-  if (!key) return { key: null, problem: `Add an API key for ${name} so this agent can run.` }
+  if (!key) return { key: null, problem: `Add an LLM key for ${name} so this agent can run.` }
   if (key.status === 'invalid') return { key, problem: `${name} rejected '${key.label}'; runs fail until you replace it.` }
   return { key, problem: null }
 }
@@ -42,7 +42,7 @@ export function KeyPicker({ value, catalog, onChange }: {
 
   return (
     <div className="space-y-2">
-      <Field label="API key" hint={!problem && note}>
+      <Field label="LLM key" hint={!problem && note}>
         <Select id="spec-key" value={choice === null ? DEFAULT : String(choice)} onChange={e => onChange(toChoice(e.target.value))}>
           <option value={DEFAULT}>Default key for {name}</option>
           {keys.map(k => <option key={k.id} value={String(k.id)}>{k.label} (••••{k.key_hint})</option>)}
@@ -51,7 +51,7 @@ export function KeyPicker({ value, catalog, onChange }: {
       </Field>
       {problem && (
         <Notice tone="warning">
-          {problem} <Link className="underline" to="/ui/keys">Manage API keys</Link>
+          {problem} <Link className="underline" to="/ui/keys">Manage LLM keys</Link>
         </Notice>
       )}
     </div>

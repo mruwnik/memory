@@ -12,7 +12,7 @@ const mcp = (payload: unknown) => ({
   json: { jsonrpc: '2.0', id: 1, result: { content: [{ text: JSON.stringify(payload) }] } },
 })
 
-const llm_key = { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true }
+const llm_key = { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true, can_choose_default: true }
 const common = { llm_key, tags: [], active: true, last_sync_at: null, sync_error: null, created_at: '', updated_at: '', project_id: null, sensitivity: 'basic' }
 
 const emailAccount = {

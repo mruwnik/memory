@@ -37,7 +37,7 @@ vi.mock('../Sources', () => ({
 import { TranscriptsPanel } from './TranscriptsPanel'
 
 const account = (over: Record<string, unknown> = {}) => ({
-  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true, can_choose_default: true },
   id: 1,
   name: 'My Fireflies',
   provider: 'fireflies',

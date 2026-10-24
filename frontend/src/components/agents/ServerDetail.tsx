@@ -27,6 +27,7 @@ export default function ServerDetail() {
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(() => {
+    setError(null)
     listServers()
       .then(all => setServer(all.find(s => s.id === serverId) ?? null))
       .catch(e => setError(e.message))
@@ -47,8 +48,14 @@ export default function ServerDetail() {
   }
 
   const back = { to: '/ui/agents/servers', label: 'MCP servers' }
-  if (!Number.isInteger(serverId) || server === null) return <Page back={back} title="Unknown MCP server" />
-  if (server === undefined) return <Page back={back} title="MCP server" loading="Loading server..." error={error} />
+  if (!Number.isInteger(serverId) || server === null) {
+    return (
+      <Page back={back} title="Unknown MCP server">
+        <EmptyState message="This MCP server doesn't exist or isn't yours." />
+      </Page>
+    )
+  }
+  if (server === undefined) return <Page back={back} title="MCP server" loading="Loading server..." error={error} onRetry={load} />
 
   const reauthorize = () => act(async () => {
     window.open(await authorizeServer(server.id), '_blank', 'noopener,noreferrer')
@@ -74,7 +81,12 @@ export default function ServerDetail() {
       actions={<>
         <Button disabled={busy} onClick={refresh}>Refresh tools</Button>
         {server.auth_type === 'oauth' && <Button disabled={busy} onClick={reauthorize}>Re-authorize</Button>}
-        {server.has_token && <Button disabled={busy} onClick={disconnect}>Disconnect</Button>}
+        {server.has_token && (
+          <ConfirmButton size="md" variant="secondary" disabled={busy} onConfirm={disconnect}
+            confirm={`Disconnect ${server.name}? Agents using it fail until you authorize it again.`}>
+            Disconnect
+          </ConfirmButton>
+        )}
         <Button disabled={busy} onClick={() => setEditing(true)}>Edit</Button>
         <ConfirmButton size="md" disabled={busy} confirm={`Delete MCP server "${server.name}"?`} onConfirm={remove} />
       </>}
@@ -101,6 +113,10 @@ export default function ServerDetail() {
         <ServerForm server={server} onSubmit={async values => {
           const result = await upsertServer({ ...values, serverId: server.id })
           setServer(result.server)
+          if (!result.authorize_url && !result.error) {
+            setEditing(false)
+            setMessage('Saved.')
+          }
           return result
         }} />
       </Modal>

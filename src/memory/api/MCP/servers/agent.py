@@ -917,7 +917,8 @@ async def server_upsert(
     "headers" | "none", "headers": {...}, "client_id", "client_secret", "scopes"};
     "auto" detects OAuth. Returns the server, `authorize_url` when you must authorize
     it in a browser, `secret_sent_to` (the host a client secret you entered goes to),
-    and `error` when it couldn't connect. Changing the URL drops its tokens.
+    and `error` when it couldn't connect. Changing the URL drops its tokens. Editing
+    with `auth` omitted and the same URL and transport keeps its saved credentials.
     """
     user_id = server_changes_allowed(caller()[0])
     name = name.strip()
@@ -930,6 +931,7 @@ async def server_upsert(
     except ValidationError as e:
         # Not str(e): pydantic echoes input values, and these hold secrets.
         raise ValueError(f"invalid auth: {describe(e)}") from e
+    keep_credentials = False
     with make_session() as db:
         if server_id is None:
             count = (
@@ -950,7 +952,9 @@ async def server_upsert(
             db.add(server)
         else:
             server = owned_server(db, server_id, user_id)
-            if (server.url, server.transport) != (url, transport):
+            same_server = (server.url, server.transport) == (url, transport)
+            keep_credentials = auth is None and same_server
+            if not same_server:
                 # Credentials were issued for the old server.
                 server.clear_tokens()
                 server.clear_client()
@@ -961,6 +965,13 @@ async def server_upsert(
         except IntegrityError as e:
             raise ValueError(f"you already have an MCP server named {name!r}") from e
         server_id = server.id
+    if keep_credentials:
+        return {
+            "server": serialized(server_id),
+            "authorize_url": None,
+            "secret_sent_to": None,
+            "error": None,
+        }
     try:
         result = await configure(user_id, server_id, parsed)
     except MCPServerError as e:

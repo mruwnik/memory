@@ -18,6 +18,8 @@ export interface LLMKeyView {
   provider: string
   paid_by_you: boolean
   runs: boolean
+  /** Default spends the payer's keys: only they, an admin, or whoever chose the current key may pick it. */
+  can_choose_default: boolean
 }
 
 // Types for Email Accounts

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderWithRouter, screen, waitFor } from '@/test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { StrictMode } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { RunView } from './index'
@@ -7,10 +7,11 @@ import { RunView } from './index'
 const waitRun = vi.fn()
 const cancelRun = vi.fn()
 const starRun = vi.fn()
+const getDefinition = vi.fn()
 
 vi.mock('@/hooks/useAgents', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useAgents')>()),
-  useAgents: () => ({ waitRun, cancelRun, starRun }),
+  useAgents: () => ({ waitRun, cancelRun, starRun, getDefinition }),
 }))
 
 const run = (o = {}) => ({
@@ -30,6 +31,7 @@ beforeEach(() => {
   waitRun.mockReset()
   cancelRun.mockReset()
   starRun.mockReset()
+  getDefinition.mockReset().mockResolvedValue({ id: 3, name: 'digest' })
 })
 
 afterEach(() => vi.useRealTimers())
@@ -105,5 +107,65 @@ describe('RunView', () => {
     view()
     await waitFor(() => expect(screen.getByText(/transcript deleted after 90 days/i)).toBeInTheDocument())
     expect(screen.getByText('kept')).toBeInTheDocument()
+  })
+
+  it('names the agent and shows what was asked, when and how', async () => {
+    waitRun.mockResolvedValueOnce({
+      run: run({
+        status: 'done', definition_id: 3, trigger_kind: 'cron', usage: { input_tokens: 12345, output_tokens: 1500 },
+        started_at: '2026-01-01T00:00:00Z', finished_at: '2026-01-01T00:02:05Z',
+      }),
+      steps: [],
+    })
+    view()
+    expect(await screen.findByRole('heading', { name: /digest/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/3')
+    expect(screen.getByText('do it')).toBeInTheDocument()
+    expect(screen.getByText('Schedule')).toBeInTheDocument()
+    expect(screen.getByText('2m 5s')).toBeInTheDocument()
+    expect(screen.getByText(/12,345 context/)).toBeInTheDocument()
+  })
+
+  it('titles a run without an agent as ad-hoc', async () => {
+    waitRun.mockResolvedValueOnce({ run: run({ status: 'done' }), steps: [] })
+    view()
+    expect(await screen.findByRole('heading', { name: /Ad-hoc run/ })).toBeInTheDocument()
+    expect(getDefinition).not.toHaveBeenCalled()
+  })
+
+  it('asks before cancelling a run', async () => {
+    waitRun.mockResolvedValue({ run: run(), steps: [] })
+    cancelRun.mockResolvedValue(run({ status: 'cancelled' }))
+    const { user } = view()
+    await user.click(await screen.findByRole('button', { name: 'Cancel run' }))
+    expect(cancelRun).not.toHaveBeenCalled()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel run' }))
+    expect(cancelRun).toHaveBeenCalledWith('r1')
+  })
+
+  it('keeps an action error while the run keeps polling', async () => {
+    waitRun.mockResolvedValue({ run: run(), steps: [] })
+    starRun.mockRejectedValue(new Error('star failed'))
+    const { user } = view()
+    await user.click(await screen.findByRole('button', { name: 'Star' }))
+    expect(await screen.findByText('star failed')).toBeInTheDocument()
+    vi.advanceTimersByTime(2100)
+    await waitFor(() => expect(waitRun).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('star failed')).toBeInTheDocument()
+  })
+
+  it('keeps one star label and reports the state with aria-pressed', async () => {
+    waitRun.mockResolvedValueOnce({ run: run({ status: 'done', starred: true }), steps: [] })
+    view()
+    expect(await screen.findByRole('button', { name: 'Star' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('stops polling a run that does not exist, and offers a retry', async () => {
+    waitRun.mockRejectedValue(new Error('Error calling tool agent_wait: unknown run r1'))
+    const { user } = view()
+    await user.click(await screen.findByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(waitRun).toHaveBeenCalledTimes(2))
+    vi.advanceTimersByTime(35_000)
+    expect(waitRun).toHaveBeenCalledTimes(2)
   })
 })

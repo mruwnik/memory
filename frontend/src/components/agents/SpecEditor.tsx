@@ -1,17 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { externalToolName, type AgentSpec, type Catalog, type ExternalServer, type ModelEntry, type Reasoning } from '@/hooks/useAgents'
 import { ServerStatusBadge } from './ServerStatusBadge'
 import { KeyPicker, payer, providerOf } from './KeyPicker'
 import { Link } from 'react-router-dom'
-import { Checkbox, Field, Fieldset, Input, Label, MultiSelect, Notice, Select, Textarea } from '@/components/shared/ui'
+import { Checkbox, Field, Fieldset, Input, MultiSelect, Notice, Select, Textarea } from '@/components/shared/ui'
 
 const REASONING_ORDER: Reasoning[] = ['off', 'low', 'medium', 'high']
+const REASONING_LABELS: Record<Reasoning, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' }
 
 interface Props {
   value: AgentSpec
   catalog: Catalog
   onChange: (spec: AgentSpec) => void
-  // Told whether every JSON field currently parses, so callers can block saving.
+  // Told whether every field currently holds a valid value, so callers can block saving.
   onValidityChange?: (valid: boolean) => void
 }
 
@@ -55,13 +56,14 @@ function ExternalServers({ servers, value, onChange }: {
               )}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-1 mt-1">
                 {server.tools.map(tool => (
-                  <Checkbox key={tool.name} className="flex-wrap min-w-0" title={tool.description}
+                  <Checkbox key={tool.name} className="flex-wrap min-w-0"
                     disabled={isDenied(tool.name)} checked={selected.includes(tool.name)}
                     onChange={() => onChange(toggleExternal(value, server.id, tool.name))}
                     label={<>
                       <span className="font-mono break-all">{tool.name}</span>
                       {isDenied(tool.name) && <span className="text-xs text-slate-500">agent_* tools are never allowed in runs</span>}
                       {!tool.read_only && <SideEffects />}
+                      {tool.description && <span className="basis-full text-xs text-slate-500 line-clamp-2">{tool.description}</span>}
                     </>} />
                 ))}
               </div>
@@ -73,6 +75,8 @@ function ExternalServers({ servers, value, onChange }: {
   )
 }
 
+const formatJson = (value: unknown) => (value === null ? '' : JSON.stringify(value, null, 2))
+
 function JsonField({ id, label, value, onChange, onError, className }: {
   id: string
   label: string
@@ -81,16 +85,26 @@ function JsonField({ id, label, value, onChange, onError, className }: {
   onError: (invalid: boolean) => void
   className: string
 }) {
+  const [text, setText] = useState(() => formatJson(value))
   const [error, setError] = useState<string | null>(null)
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const serialized = JSON.stringify(value)
+  // Shows the value as stored (e.g. normalised by the server on save), but never rewrites what the user is typing.
+  // Keyed on the serialized value because the object's identity changes on every parent render.
+  useEffect(() => {
+    if (document.activeElement === ref.current) return
+    setText(formatJson(value))
+    setError(null)
+    onError(false)
+  }, [serialized])
   return (
-    <div>
-      <Label className="mb-1" htmlFor={id}>{label}</Label>
-      <Textarea id={id} className={`${className} font-mono`} aria-invalid={error !== null}
-        defaultValue={value === null ? '' : JSON.stringify(value, null, 2)}
+    <Field label={label} error={error}>
+      <Textarea ref={ref} id={id} className={`${className} font-mono`} value={text}
         onChange={e => {
-          const text = e.target.value.trim()
+          setText(e.target.value)
+          const trimmed = e.target.value.trim()
           try {
-            const parsed = text ? JSON.parse(text) : null
+            const parsed = trimmed ? JSON.parse(trimmed) : null
             setError(null)
             onError(false)
             onChange(parsed)
@@ -99,10 +113,38 @@ function JsonField({ id, label, value, onChange, onError, className }: {
             onError(true)
           }
         }} />
-      {error && <div className="text-xs text-red-600 mt-1">{error}</div>}
-    </div>
+    </Field>
   )
 }
+
+/** A required whole-number setting: while the box is empty or not a number, the spec keeps its last valid value. */
+function IntField({ label, value, onChange, onError, ...props }: {
+  label: string
+  value: number
+  onChange: (n: number) => void
+  onError: (invalid: boolean) => void
+  min?: string
+  max?: number | string
+}) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => { setText(t => (Number(t) === value && t !== '' ? t : String(value))) }, [value])
+  const error = text.trim() === '' ? 'Required' : Number.isInteger(Number(text)) ? null : 'Enter a whole number'
+  return (
+    <Field label={label} error={error}>
+      <Input type="number" value={text} {...props}
+        onChange={e => {
+          const next = e.target.value
+          setText(next)
+          const valid = next.trim() !== '' && Number.isInteger(Number(next))
+          onError(!valid)
+          if (valid) onChange(Number(next))
+        }} />
+    </Field>
+  )
+}
+
+const isAmount = (text: string | null) => !text || /^\d+(\.\d+)?$/.test(text.trim())
+const AMOUNT_ERROR = 'Enter an amount in dollars, like 2.50'
 
 /** The spec adjusted to what `model` accepts, so a model switch never leaves an invalid setting. */
 const fitToModel = (spec: AgentSpec, model: ModelEntry | undefined): AgentSpec => {
@@ -124,11 +166,12 @@ const fitToModel = (spec: AgentSpec, model: ModelEntry | undefined): AgentSpec =
 }
 
 export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props) {
-  const [invalidJson, setInvalidJson] = useState<Record<string, boolean>>({})
+  const [invalidFields, setInvalidFields] = useState<Record<string, boolean>>({})
+  const costsValid = isAmount(value.max_cost_usd) && isAmount(value.max_cost_usd_per_day)
   useEffect(() => {
-    onValidityChange?.(!Object.values(invalidJson).some(Boolean))
-  }, [invalidJson, onValidityChange])
-  const jsonError = (id: string) => (invalid: boolean) => setInvalidJson(prev => ({ ...prev, [id]: invalid }))
+    onValidityChange?.(costsValid && !Object.values(invalidFields).some(Boolean))
+  }, [invalidFields, costsValid, onValidityChange])
+  const fieldError = (id: string) => (invalid: boolean) => setInvalidFields(prev => ({ ...prev, [id]: invalid }))
   const model = catalog.models.find(m => m.model === value.model)
   const levels = REASONING_ORDER.filter(l => model?.capabilities.reasoning_levels.includes(l))
   const toolNames = [...catalog.builtins, ...catalog.tools.map(t => t.name)]
@@ -158,40 +201,35 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
 
   return (
     <div className="space-y-4">
-      <div>
-        <Label className="mb-1" htmlFor="spec-prompt">System prompt</Label>
-        <Textarea id="spec-prompt" className="h-40 font-mono" value={value.system_prompt}
+      <Field label="System prompt">
+        <Textarea className="h-40 font-mono" value={value.system_prompt}
           onChange={e => set({ system_prompt: e.target.value })} />
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div>
-          <Label className="mb-1" htmlFor="spec-model">Model</Label>
-          <Select id="spec-model" value={value.model}
+      </Field>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+        <Field label="Model">
+          <Select value={value.model}
             onChange={e => onChange(fitToModel(value, catalog.models.find(m => m.model === e.target.value)))}>
             {catalog.models.map(m => <option key={m.model} value={m.model}>{m.model}</option>)}
           </Select>
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-reasoning">Reasoning</Label>
-          <Select id="spec-reasoning" value={value.reasoning}
+        </Field>
+        <Field label="Reasoning">
+          <Select value={value.reasoning}
             onChange={e => set({ reasoning: e.target.value as Reasoning })}>
-            {levels.map(l => <option key={l} value={l}>{l}</option>)}
+            {levels.map(l => <option key={l} value={l}>{REASONING_LABELS[l]}</option>)}
           </Select>
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-temperature">Temperature</Label>
-          <Input id="spec-temperature" type="number" step="0.1" min="0" max="2"
+        </Field>
+        <Field label="Temperature" hint={!model?.capabilities.sampling_params && "This model doesn't take temperature"}>
+          <Input type="number" step="0.1" min="0" max="2"
             disabled={!model?.capabilities.sampling_params}
             value={value.temperature ?? ''}
             onChange={e => set({ temperature: e.target.value === '' ? null : Number(e.target.value) })} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-max-output">Max output tokens</Label>
-          <Input id="spec-max-output" type="number" min="1" max={model?.capabilities.max_output_tokens}
+        </Field>
+        <Field label="Max output tokens">
+          <Input type="number" min="1" max={model?.capabilities.max_output_tokens}
             placeholder="auto"
             value={value.max_output_tokens ?? ''}
             onChange={e => set({ max_output_tokens: e.target.value === '' ? null : Number(e.target.value) })} />
-        </div>
+        </Field>
       </div>
 
       <div className="md:w-1/2">
@@ -216,17 +254,16 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
         </Notice>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div>
-          <Label className="mb-1" htmlFor="spec-finish">Finish</Label>
-          <Select id="spec-finish" value={value.finish.mode}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+        <Field label="Finish">
+          <Select value={value.finish.mode}
             onChange={e => set({ finish: { mode: e.target.value as 'answer' | 'tool', tools: [] } })}>
-            <option value="answer">final answer</option>
-            <option value="tool">a finish tool succeeds</option>
+            <option value="answer">Final answer</option>
+            <option value="tool">A finish tool succeeds</option>
           </Select>
-        </div>
+        </Field>
         {value.finish.mode === 'tool' && (
-          <Field className="col-span-2 md:col-span-3" label="Finish tools"
+          <Field className="sm:col-span-2 md:col-span-3" label="Finish tools"
             hint={finishCandidates.length
               ? 'The run ends when one of these succeeds. Only tools allowed above are offered.'
               : 'Allow some tools above first; only allowed tools can finish a run.'}>
@@ -236,42 +273,33 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
         )}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div>
-          <Label className="mb-1" htmlFor="spec-turns">Max turns</Label>
-          <Input id="spec-turns" type="number" min="1" max="200" value={value.max_turns}
-            onChange={e => set({ max_turns: Number(e.target.value) })} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-cost">Max $ per run</Label>
-          <Input id="spec-cost" value={value.max_cost_usd ?? ''}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+        <IntField label="Max turns" min="1" max="200" value={value.max_turns}
+          onError={fieldError('spec-turns')} onChange={max_turns => set({ max_turns })} />
+        <Field label="Max $ per run" error={isAmount(value.max_cost_usd) ? null : AMOUNT_ERROR}>
+          <Input inputMode="decimal" value={value.max_cost_usd ?? ''}
             placeholder={catalog.ceilings.default_user_key_run_cost_usd}
             onChange={e => set({ max_cost_usd: e.target.value || null })} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-daily">Max $ per day</Label>
-          <Input id="spec-daily" value={value.max_cost_usd_per_day ?? ''}
+        </Field>
+        <Field label="Max $ per day" error={isAmount(value.max_cost_usd_per_day) ? null : AMOUNT_ERROR}>
+          <Input inputMode="decimal" value={value.max_cost_usd_per_day ?? ''}
             placeholder="optional"
             onChange={e => set({ max_cost_usd_per_day: e.target.value || null })} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-rate">Max runs per hour (≤ {catalog.ceilings.max_runs_per_hour})</Label>
-          <Input id="spec-rate" type="number" min="1" max={catalog.ceilings.max_runs_per_hour}
+        </Field>
+        <Field label={`Max runs per hour (≤ ${catalog.ceilings.max_runs_per_hour})`}>
+          <Input type="number" min="1" max={catalog.ceilings.max_runs_per_hour}
             placeholder={String(catalog.ceilings.max_runs_per_hour)} value={value.max_runs_per_hour ?? ''}
             onChange={e => set({ max_runs_per_hour: e.target.value ? Number(e.target.value) : null })} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="spec-timeout">Timeout (s, ≤ {catalog.ceilings.max_timeout_sec})</Label>
-          <Input id="spec-timeout" type="number" min="1" value={value.timeout_sec}
-            onChange={e => set({ timeout_sec: Number(e.target.value) })} />
-        </div>
+        </Field>
+        <IntField label={`Timeout (s, ≤ ${catalog.ceilings.max_timeout_sec})`} min="1" max={catalog.ceilings.max_timeout_sec}
+          value={value.timeout_sec} onError={fieldError('spec-timeout')} onChange={timeout_sec => set({ timeout_sec })} />
       </div>
 
       <JsonField id="spec-schema" label="Result schema (JSON, optional)" className="h-24"
-        value={value.result_schema} onError={jsonError('spec-schema')}
+        value={value.result_schema} onError={fieldError('spec-schema')}
         onChange={parsed => set({ result_schema: parsed as AgentSpec['result_schema'] })} />
       <JsonField id="spec-extras" label="Provider extras (JSON)" className="h-16"
-        value={value.provider_extras} onError={jsonError('spec-extras')}
+        value={value.provider_extras} onError={fieldError('spec-extras')}
         onChange={parsed => set({ provider_extras: (parsed ?? {}) as AgentSpec['provider_extras'] })} />
     </div>
   )

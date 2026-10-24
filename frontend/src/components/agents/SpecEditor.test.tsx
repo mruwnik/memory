@@ -54,7 +54,7 @@ const catalog: Catalog = {
 const withServer = (s: ExternalServer): Catalog => ({ ...catalog, mcp_servers: [s] })
 
 const sonnet = defaultSpec('anthropic/claude-sonnet-5-5')
-const keyOptions = () => Array.from(screen.getByLabelText('API key').querySelectorAll('option')).map(o => o.textContent)
+const keyOptions = () => Array.from(screen.getByLabelText('LLM key').querySelectorAll('option')).map(o => o.textContent)
 
 describe('SpecEditor', () => {
   it("offers the provider's keys", () => {
@@ -73,8 +73,8 @@ describe('SpecEditor', () => {
 
   it('links to the keys page when no key can pay', () => {
     renderWithRouter(<SpecEditor value={sonnet} catalog={{ ...catalog, provider_keys: [] }} onChange={vi.fn()} />)
-    expect(screen.getByRole('alert')).toHaveTextContent('Add an API key for Anthropic so this agent can run.')
-    expect(screen.getByRole('link', { name: 'Manage API keys' })).toHaveAttribute('href', '/ui/keys')
+    expect(screen.getByRole('alert')).toHaveTextContent('Add an LLM key for Anthropic so this agent can run.')
+    expect(screen.getByRole('link', { name: 'Manage LLM keys' })).toHaveAttribute('href', '/ui/keys')
   })
 
   it.each([
@@ -90,19 +90,20 @@ describe('SpecEditor', () => {
   it('pins the picked key', async () => {
     const onChange = vi.fn()
     const { user } = renderWithRouter(<SpecEditor value={sonnet} catalog={catalog} onChange={onChange} />)
-    await user.selectOptions(screen.getByLabelText('API key'), 'work (••••cd34)')
+    await user.selectOptions(screen.getByLabelText('LLM key'), 'work (••••cd34)')
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ provider_key: 4 }))
   })
 
   it('only offers the reasoning levels the model supports', () => {
     renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-opus-5-5')} catalog={catalog} onChange={vi.fn()} />)
     const options = Array.from(screen.getByLabelText('Reasoning').querySelectorAll('option')).map(o => o.textContent)
-    expect(options).toEqual(['low', 'medium', 'high'])
+    expect(options).toEqual(['Low', 'Medium', 'High'])
   })
 
   it('disables temperature when the model forbids sampling', () => {
     renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.getByLabelText('Temperature')).toBeDisabled()
+    expect(screen.getByLabelText('Temperature')).toHaveAccessibleDescription("This model doesn't take temperature")
   })
 
   it('leaves max output tokens to the run by default', () => {
@@ -138,7 +139,43 @@ describe('SpecEditor', () => {
     )
     await user.type(screen.getByLabelText('Result schema (JSON, optional)'), '{{{{')
     expect(onValidityChange).toHaveBeenLastCalledWith(false)
-    expect(screen.getByText('Not valid JSON')).toBeInTheDocument()
+    expect(screen.getByLabelText('Result schema (JSON, optional)')).toHaveAccessibleDescription('Not valid JSON')
+  })
+
+  it('shows a JSON value the server normalised', () => {
+    const spec = defaultSpec('anthropic/claude-sonnet-5-5')
+    const { rerender } = renderWithRouter(<SpecEditor value={spec} catalog={catalog} onChange={vi.fn()} />)
+    rerender(<SpecEditor value={{ ...spec, provider_extras: { effort: 'max' } }} catalog={catalog} onChange={vi.fn()} />)
+    expect(screen.getByLabelText('Provider extras (JSON)')).toHaveValue(JSON.stringify({ effort: 'max' }, null, 2))
+  })
+
+  it.each(['Max turns', 'Timeout (s, ≤ 1800)'])('never stores an emptied %s as 0', async label => {
+    const onChange = vi.fn()
+    const onValidityChange = vi.fn()
+    const { user } = renderWithRouter(
+      <SpecEditor value={defaultSpec('anthropic/claude-sonnet-5-5')} catalog={catalog} onChange={onChange} onValidityChange={onValidityChange} />,
+    )
+    await user.clear(screen.getByLabelText(label))
+    expect(onChange).not.toHaveBeenCalled()
+    expect(onValidityChange).toHaveBeenLastCalledWith(false)
+    expect(screen.getByLabelText(label)).toHaveAccessibleDescription('Required')
+  })
+
+  it.each([
+    ['2.50', true],
+    ['abc', false],
+  ])('checks a cost cap is an amount (%s)', (max_cost_usd, valid) => {
+    const onValidityChange = vi.fn()
+    renderWithRouter(
+      <SpecEditor value={{ ...sonnet, max_cost_usd }} catalog={catalog} onChange={vi.fn()} onValidityChange={onValidityChange} />,
+    )
+    expect(onValidityChange).toHaveBeenLastCalledWith(valid)
+  })
+
+  it("shows an external tool's description", () => {
+    renderWithRouter(<SpecEditor value={sonnet} catalog={catalog} onChange={vi.fn()} />)
+    expect(screen.getByLabelText(/list_issues/)).toHaveAccessibleName(/List/)
+    expect(screen.getByText('Create')).toBeVisible()
   })
 
   it('adds an external tool under its server', async () => {

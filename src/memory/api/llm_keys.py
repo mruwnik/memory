@@ -22,6 +22,7 @@ class LLMKeyView(BaseModel):
     paid_by_you: bool
     # False when no usable key would pay, so no LLM work runs on new items.
     runs: bool
+    can_choose_default: bool
 
 
 def current_choice(holder: LLMKeyChoice) -> LLMKeyInput:
@@ -30,18 +31,27 @@ def current_choice(holder: LLMKeyChoice) -> LLMKeyInput:
     return holder.llm_key_id if holder.llm_key_id is not None else "default"
 
 
+def may_choose_default(db: DBSession, user: User, holder: LLMKeyChoice) -> bool:
+    """Default spends the payer's keys, so only they or an admin may pick it, or whoever
+    chose the current key taking their own key off again."""
+    if user.id == payer_id(holder) or has_admin_scope(user):
+        return True
+    key = chosen_key(db, holder)
+    return key is not None and key.user_id == user.id
+
+
 def apply_llm_key(
     db: DBSession, user: User, holder: LLMKeyChoice, value: LLMKeyInput | None
 ) -> None:
     """Set `holder`'s choice. The caller already passed the holder's visibility check.
-    "default" spends the default payer's keys, so only they or an admin may pick it; an
-    explicit key must be the caller's own and for SOURCE_PROVIDER, and the caller pays."""
+    "default" is limited by may_choose_default; an explicit key must be the caller's own
+    and for SOURCE_PROVIDER, and the caller pays."""
     if value is None:
         return
     if value in ("default", "none"):
         if value == current_choice(holder):
             return
-        if value == "default" and user.id != payer_id(holder) and not has_admin_scope(user):
+        if value == "default" and not may_choose_default(db, user, holder):
             raise HTTPException(
                 status_code=403,
                 detail="only the source's owner or an admin can put it back on the "
@@ -76,6 +86,7 @@ def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyVie
             provider=SOURCE_PROVIDER,
             paid_by_you=False,
             runs=False,
+            can_choose_default=may_choose_default(db, viewer, holder),
         )
     key = chosen_key(db, holder)
     if key is not None:
@@ -91,4 +102,5 @@ def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyVie
         provider=SOURCE_PROVIDER,
         paid_by_you=mine,
         runs=pays is not None,
+        can_choose_default=may_choose_default(db, viewer, holder),
     )

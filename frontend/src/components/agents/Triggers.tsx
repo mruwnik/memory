@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { emptyTriggerConfig, useAgents, type AgentTrigger, type TriggerConfig } from '@/hooks/useAgents'
-import { Badge, Button, Checkbox, ConfirmButton, Field, FieldRow, FormActions, Input, List, Modal, MultiSelect, Notice, Row, Section, Textarea } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, MultiSelect, Notice, Row, Section, Textarea, useActionNotice, useSubmit } from '@/components/shared/ui'
 
 const splitList = (text: string) => text.split(',').map(s => s.trim()).filter(Boolean)
 
@@ -37,9 +37,9 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
   const [maxItems, setMaxItems] = useState(initial.delivery.mode === 'batch' ? initial.delivery.max_items : 50)
   const [template, setTemplate] = useState(initial.template)
   const [onEdit, setOnEdit] = useState(initial.on_edit ?? false)
+  const { busy, error, submit } = useSubmit()
 
-
-  const save = () => onSave({
+  const save = () => submit(() => onSave({
     filter: {
       source_types: types,
       tags_any: splitList(tags),
@@ -51,10 +51,11 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
     delivery: batched ? { mode: 'batch', window_sec: windowSec, max_items: maxItems } : { mode: 'per_item' },
     template,
     on_edit: onEdit,
-  })
+  }))
 
   return (
     <div className="space-y-4">
+      {error && <Notice tone="error">{error}</Notice>}
       <Field label="Source types" hint="None means any type. At least one filter, here or below, is required.">
         <MultiSelect options={sourceTypes} value={types} onChange={setTypes} placeholder="Any type" />
       </Field>
@@ -84,7 +85,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
       <Checkbox label="Also fire when a matching item is edited" checked={onEdit} onChange={e => setOnEdit(e.target.checked)} />
       <FormActions>
         <Button onClick={onCancel}>Cancel</Button>
-        <Button variant="primary" onClick={save}>Save trigger</Button>
+        <Button variant="primary" disabled={busy} onClick={save}>{busy ? 'Saving...' : 'Save trigger'}</Button>
       </FormActions>
     </div>
   )
@@ -94,24 +95,28 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
   const { listTriggers, saveTrigger, deleteTrigger } = useAgents()
   const [triggers, setTriggers] = useState<AgentTrigger[] | null>(null)
   const [editing, setEditing] = useState<AgentTrigger | 'new' | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const { run, notice } = useActionNotice()
 
-  const reload = useCallback(
-    () => listTriggers(definitionId).then(setTriggers).catch(e => setError(e.message)),
-    [listTriggers, definitionId],
-  )
+  const reload = useCallback(() => {
+    setLoadError(null)
+    return listTriggers(definitionId).then(setTriggers).catch(e => setLoadError(e.message))
+  }, [listTriggers, definitionId])
   useEffect(() => { reload() }, [reload])
 
-  const act = async (action: () => Promise<unknown>) => {
-    setError(null)
-    try {
-      await action()
-      setEditing(null)
-      await reload()
-    } catch (e) {
-      setError((e as Error).message)
-    }
+  const act = async (id: number, action: () => Promise<unknown>) => {
+    setBusyId(id)
+    await run(async () => { await action(); await reload() })
+    setBusyId(null)
+  }
+
+  const save = async (config: TriggerConfig) => {
+    const saved = await saveTrigger({ definitionId, config, ...(editing && editing !== 'new' && { triggerId: editing.id }) })
+    setWarnings(saved.warnings ?? [])
+    setEditing(null)
+    await reload()
   }
 
   return (
@@ -124,28 +129,21 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
         bot-token Slack) is only stopped by the caps. A trigger that hits a cap pauses itself and notifies you.
       </>}
     >
-      {error && <Notice tone="error">{error}</Notice>}
+      {loadError && <Notice tone="error" onRetry={reload}>{loadError}</Notice>}
+      {notice}
       {warnings.map(w => <Notice key={w} tone="warning">{w}</Notice>)}
       {editing !== null && (
         <Modal title={editing === 'new' ? 'New trigger' : 'Edit trigger'} onClose={() => setEditing(null)} size="xl">
-        {error && <Notice tone="error" className="mb-4">{error}</Notice>}
-        <TriggerForm
-          initial={editing === 'new' ? emptyTriggerConfig() : editing.config}
-          sourceTypes={sourceTypes}
-          onCancel={() => setEditing(null)}
-          onSave={config => act(async () => {
-            const saved = await saveTrigger({
-              definitionId,
-              config,
-              ...(editing === 'new' ? {} : { triggerId: editing.id }),
-            })
-            setWarnings(saved.warnings ?? [])
-          })}
-        />
+          <TriggerForm
+            initial={editing === 'new' ? emptyTriggerConfig() : editing.config}
+            sourceTypes={sourceTypes}
+            onCancel={() => setEditing(null)}
+            onSave={save}
+          />
         </Modal>
       )}
-      {triggers === null && !error && <p className="text-sm text-slate-600">Loading triggers...</p>}
-      {triggers?.length === 0 && <p className="text-sm text-slate-600">No triggers.</p>}
+      {triggers === null && !loadError && <LoadingState message="Loading triggers..." />}
+      {triggers?.length === 0 && <EmptyState message="No triggers yet." />}
       {!!triggers?.length && (
         <List>
           {triggers.map(t => (
@@ -155,14 +153,15 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
               muted={!t.enabled}
               badges={<>
                 {t.state.tripped && <Badge tone="warning" className="whitespace-normal">Tripped: {t.state.tripped.reason}</Badge>}
-                {!t.enabled && !t.state.tripped && <Badge>paused</Badge>}
+                {!t.enabled && !t.state.tripped && <Badge>Paused</Badge>}
               </>}
               actions={<>
-                <Button size="sm" onClick={() => act(() => saveTrigger({ definitionId, enabled: !t.enabled, triggerId: t.id }))}>
-                  {t.enabled ? 'Pause' : 'Enable'}
+                <Button size="sm" disabled={busyId !== null}
+                  onClick={() => act(t.id, () => saveTrigger({ definitionId, enabled: !t.enabled, triggerId: t.id }))}>
+                  {busyId === t.id ? 'Saving...' : t.enabled ? 'Pause' : 'Resume'}
                 </Button>
                 <Button size="sm" onClick={() => { setWarnings([]); setEditing(t) }}>Edit</Button>
-                <ConfirmButton confirm="Delete this trigger?" onConfirm={() => act(() => deleteTrigger(t.id))} />
+                <ConfirmButton confirm="Delete this trigger?" onConfirm={() => act(t.id, () => deleteTrigger(t.id))} />
               </>}
             />
           ))}

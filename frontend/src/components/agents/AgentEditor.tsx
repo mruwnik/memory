@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { defaultSpec, useAgents, type AgentRun, type AgentSpec, type Catalog } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
@@ -6,8 +6,18 @@ import { SpecEditor } from './SpecEditor'
 import { StatusBadge } from './StatusBadge'
 import { Schedules } from './Schedules'
 import { Triggers } from './Triggers'
-import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea } from '@/components/shared/ui'
+import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
+
+const snapshot = (name: string, description: string, spec: AgentSpec | null) => JSON.stringify({ name, description, spec })
+
+// The app uses BrowserRouter, not a data router, so useBlocker isn't available: only reloads and closing the tab are guarded.
+const useWarnOnUnload = (active: boolean) => useEffect(() => {
+  if (!active) return
+  const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+  window.addEventListener('beforeunload', warn)
+  return () => window.removeEventListener('beforeunload', warn)
+}, [active])
 
 export default function AgentEditor() {
   const { id } = useParams()
@@ -22,81 +32,80 @@ export default function AgentEditor() {
   const [spec, setSpec] = useState<AgentSpec | null>(null)
   const [runs, setRuns] = useState<AgentRun[]>([])
   const [input, setInput] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [jsonValid, setJsonValid] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [runsError, setRunsError] = useState<string | null>(null)
+  const [valid, setValid] = useState(true)
   const [saved, setSaved] = useState<string | null>(null)
   const [changedTools, setChangedTools] = useState<string[]>([])
-  const current = useMemo(() => JSON.stringify({ name, description, spec }), [name, description, spec])
-  const dirty = current !== saved
+  const saving = useSubmit()
+  const running = useSubmit()
+  const { run: act, notice } = useActionNotice()
+  const current = useMemo(() => snapshot(name, description, spec), [name, description, spec])
+  const dirty = saved !== null && current !== saved
+  useWarnOnUnload(dirty)
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    if (!validId) return
+    setLoadError(null)
     loadCatalog()
       .then(c => {
         setCatalog(c)
-        if (isNew) setSpec(defaultSpec(c.default_model))
+        if (!isNew) return
+        setSpec(defaultSpec(c.default_model))
+        setSaved(snapshot('', '', defaultSpec(c.default_model)))
       })
-      .catch(e => setError(e.message))
-  }, [loadCatalog, isNew])
-
-  useEffect(() => {
-    if (definitionId === undefined || !validId) return
+      .catch(e => setLoadError(e.message))
+    if (definitionId === undefined) return
     getDefinition(definitionId)
       .then(d => {
         setName(d.name)
         setDescription(d.description)
         setSpec(d.spec)
         setChangedTools(d.changed_tools ?? [])
-        setSaved(JSON.stringify({ name: d.name, description: d.description, spec: d.spec }))
+        setSaved(snapshot(d.name, d.description, d.spec))
       })
-      .catch(e => setError(e.message))
-    listRuns({ definitionId, limit: 20 }).then(setRuns).catch(e => setError(e.message))
-  }, [definitionId, validId, getDefinition, listRuns])
+      .catch(e => setLoadError(e.message))
+  }, [loadCatalog, getDefinition, isNew, definitionId, validId])
+  useEffect(load, [load])
 
-  const save = async () => {
+  const loadRuns = useCallback(() => {
+    if (definitionId === undefined || !validId) return
+    setRunsError(null)
+    listRuns({ definitionId, limit: 20 }).then(setRuns).catch(e => setRunsError(e.message))
+  }, [listRuns, definitionId, validId])
+  useEffect(loadRuns, [loadRuns])
+
+  const save = () => saving.submit(async () => {
     if (!spec) return
-    setError(null)
-    try {
-      const stored = await saveDefinition({ name, description, spec, id: definitionId })
-      setName(stored.name)
-      setSpec(stored.spec)
-      setChangedTools([])
-      setSaved(JSON.stringify({ name: stored.name, description: stored.description, spec: stored.spec }))
-      if (isNew) navigate(`/ui/agents/${stored.id}`)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
+    const stored = await saveDefinition({ name: name.trim(), description, spec, id: definitionId })
+    setName(stored.name)
+    setSpec(stored.spec)
+    setChangedTools([])
+    setSaved(snapshot(stored.name, stored.description, stored.spec))
+    if (isNew) navigate(`/ui/agents/${stored.id}`)
+  })
 
-  const run = async () => {
-    setError(null)
-    try {
-      const { run_id } = await startRun({ input, definitionId })
-      navigate(`/ui/agents/runs/${run_id}`)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
+  const run = () => running.submit(async () => {
+    const { run_id } = await startRun({ input, definitionId })
+    navigate(`/ui/agents/runs/${run_id}`)
+  })
 
-  const remove = async () => {
+  const remove = () => act(async () => {
     if (definitionId === undefined) return
-    try {
-      await deleteDefinition(definitionId)
-      navigate('/ui/agents')
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
+    await deleteDefinition(definitionId)
+    navigate('/ui/agents')
+  })
 
   const back = { to: '/ui/agents', label: 'Agents' }
-  if (!validId) return <Page back={back} title="Unknown agent" />
-  if (!catalog || !spec) return <Page back={back} title={isNew ? 'New agent' : 'Agent'} loading="Loading agent..." error={error} />
+  if (!validId) return <Page back={back} title="Agent" error="This agent doesn't exist or isn't yours" />
+  if (!catalog || !spec) return <Page back={back} title={isNew ? 'New agent' : 'Agent'} loading="Loading agent..." error={loadError} onRetry={load} />
 
   return (
     <Page back={back} title={name || (isNew ? 'New agent' : 'Untitled agent')}
       actions={!isNew && <ConfirmButton size="md" confirm={`Delete agent "${name}"? Its runs are kept.`} onConfirm={remove}>Delete agent</ConfirmButton>}>
-      {error && <Notice tone="error">{error}</Notice>}
+      {notice}
       <FieldRow>
-        <Field label="Name"><Input maxLength={100} value={name} onChange={e => setName(e.target.value)} /></Field>
+        <Field label="Name"><Input required maxLength={100} value={name} onChange={e => setName(e.target.value)} /></Field>
         <Field label="Description"><Input value={description} onChange={e => setDescription(e.target.value)} /></Field>
       </FieldRow>
       {changedTools.length > 0 && (
@@ -105,21 +114,27 @@ export default function AgentEditor() {
           server's page, then save the agent again to accept the change.
         </Notice>
       )}
-      <SpecEditor value={spec} catalog={catalog} onChange={setSpec} onValidityChange={setJsonValid} />
+      <SpecEditor value={spec} catalog={catalog} onChange={setSpec} onValidityChange={setValid} />
       <FormActions className="items-center pb-6 border-b border-slate-200">
+        {saving.error && <Notice tone="error" className="basis-full">{saving.error}</Notice>}
         {!isNew && dirty && <span className="text-xs text-slate-600">Unsaved changes</span>}
-        <Button variant="primary" disabled={!jsonValid || (!dirty && changedTools.length === 0)} onClick={save}>
-          {isNew ? 'Create agent' : 'Save'}
+        <Button variant="primary" disabled={saving.busy || !valid || !name.trim() || (!dirty && changedTools.length === 0)} onClick={save}>
+          {saving.busy ? 'Saving...' : isNew ? 'Create agent' : 'Save'}
         </Button>
       </FormActions>
       {!isNew && (
         <Section title="Run">
-          <Textarea aria-label="Run input" className="h-24" placeholder="What should the agent do?"
-            value={input} onChange={e => setInput(e.target.value)} />
+          <Field label="Run input">
+            <Textarea className="h-24" placeholder="What should the agent do?" value={input} onChange={e => setInput(e.target.value)} />
+          </Field>
+          {running.error && <Notice tone="error">{running.error}</Notice>}
           <div className="flex items-center gap-2">
-            <Button variant="primary" disabled={!input.trim() || dirty} onClick={run}>Run saved version</Button>
+            <Button variant="primary" disabled={running.busy || !input.trim() || dirty} onClick={run}>
+              {running.busy ? 'Starting...' : 'Run saved version'}
+            </Button>
             {dirty && <span className="text-xs text-slate-600">Save your changes to run them.</span>}
           </div>
+          {runsError && <Notice tone="error" onRetry={loadRuns}>{runsError}</Notice>}
           {!!runs.length && (
             <List>
               {runs.map(r => (

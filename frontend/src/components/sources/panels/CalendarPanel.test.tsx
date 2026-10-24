@@ -6,7 +6,7 @@ import { CalendarPanel } from './CalendarPanel'
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
 const caldavAccount = {
-  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true, can_choose_default: true },
   id: 2,
   name: 'My CalDAV',
   calendar_type: 'caldav',

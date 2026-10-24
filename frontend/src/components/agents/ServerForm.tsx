@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import type { ExternalServer, ServerAuth, ServerTransport, ServerUpsertResult } from '@/hooks/useAgents'
-import { Button, Input, Label, Notice, Select, Textarea } from '@/components/shared/ui'
+import { Button, Field, FormActions, Hint, Input, Notice, Select, Textarea, useSubmit } from '@/components/shared/ui'
 
+type AuthChoice = 'keep' | 'auto' | 'bearer' | 'headers' | 'none'
 
-type AuthChoice = 'auto' | 'bearer' | 'headers' | 'none'
+export const AUTH_LABELS: Record<ExternalServer['auth_type'], string> = { oauth: 'OAuth', headers: 'Headers', none: 'No auth' }
 
 export interface ServerFormValues {
   name: string
   url: string
   transport: ServerTransport
-  auth: ServerAuth
+  /** Omitted to keep the saved credentials. */
+  auth?: ServerAuth
 }
 
 /** "Name: value" lines to a header map; blank lines are skipped. */
@@ -33,7 +35,7 @@ const hostOf = (url: string) => {
   }
 }
 
-export function toAuth(choice: AuthChoice, fields: { token: string; headers: string; clientId: string; clientSecret: string; scopes: string }): ServerAuth {
+export function toAuth(choice: Exclude<AuthChoice, 'keep'>, fields: { token: string; headers: string; clientId: string; clientSecret: string; scopes: string }): ServerAuth {
   if (choice === 'bearer') return { type: 'headers', headers: { Authorization: `Bearer ${fields.token}` } }
   if (choice === 'headers') return { type: 'headers', headers: parseHeaders(fields.headers) }
   if (choice === 'none') return { type: 'none' }
@@ -52,105 +54,92 @@ export function ServerForm({ server, onSubmit }: {
   const [url, setUrl] = useState(server?.url ?? '')
   const [name, setName] = useState(server?.name ?? '')
   const [transport, setTransport] = useState<ServerTransport>(server?.transport ?? 'http')
-  const [choice, setChoice] = useState<AuthChoice>('auto')
+  const [picked, setPicked] = useState<AuthChoice>(server ? 'keep' : 'auto')
   const [token, setToken] = useState('')
   const [headers, setHeaders] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [scopes, setScopes] = useState('')
-  const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<ServerUpsertResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { busy, error, submit } = useSubmit()
 
-  const submit = async (e: React.FormEvent) => {
+  // Credentials were issued for one URL and transport; changing either needs new ones.
+  const canKeep = !!server && url.trim() === server.url && transport === server.transport
+  const choice = picked === 'keep' && !canKeep ? 'auto' : picked
+
+  const save = (e: React.FormEvent) => {
     e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
+    submit(async () => {
       const done = await onSubmit({
         name: name.trim() || hostOf(url),
         url: url.trim(),
         transport,
-        auth: toAuth(choice, { token, headers, clientId, clientSecret, scopes }),
+        ...(choice === 'keep' ? {} : { auth: toAuth(choice, { token, headers, clientId, clientSecret, scopes }) }),
       })
       setResult(done)
       if (done.authorize_url) window.open(done.authorize_url, '_blank', 'noopener,noreferrer')
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   return (
-    <form className="space-y-3" onSubmit={submit}>
+    <form className="space-y-3" onSubmit={save}>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <Label className="mb-1" htmlFor="server-url">URL</Label>
-          <Input id="server-url" required placeholder="https://mcp.example.com/mcp"
-            value={url} onChange={e => setUrl(e.target.value)} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="server-name">Name</Label>
-          <Input id="server-name" maxLength={100} placeholder={hostOf(url) || 'defaults to the host'}
-            value={name} onChange={e => setName(e.target.value)} />
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="server-transport">Transport</Label>
-          <Select id="server-transport" value={transport}
-            onChange={e => setTransport(e.target.value as ServerTransport)}>
+        <Field label="URL">
+          <Input required placeholder="https://mcp.example.com/mcp" value={url} onChange={e => setUrl(e.target.value)} />
+        </Field>
+        <Field label="Name">
+          <Input maxLength={100} placeholder={hostOf(url) || 'defaults to the host'} value={name} onChange={e => setName(e.target.value)} />
+        </Field>
+        <Field label="Transport">
+          <Select value={transport} onChange={e => setTransport(e.target.value as ServerTransport)}>
             <option value="http">Streamable HTTP</option>
             <option value="sse">SSE (legacy)</option>
           </Select>
-        </div>
-        <div>
-          <Label className="mb-1" htmlFor="server-auth">Authentication</Label>
-          <Select id="server-auth" value={choice} onChange={e => setChoice(e.target.value as AuthChoice)}>
+        </Field>
+        <Field label="Authentication"
+          hint={server && !canKeep ? 'A new URL or transport needs new credentials.' : undefined}>
+          <Select value={choice} onChange={e => setPicked(e.target.value as AuthChoice)}>
+            {server && canKeep && <option value="keep">Keep current credentials ({AUTH_LABELS[server.auth_type]})</option>}
             <option value="auto">Auto-detect (OAuth if the server asks)</option>
             <option value="bearer">Bearer token</option>
             <option value="headers">Custom headers</option>
             <option value="none">None</option>
           </Select>
-        </div>
+        </Field>
       </div>
       {choice === 'bearer' && (
-        <div>
-          <Label className="mb-1" htmlFor="server-token">Bearer token</Label>
-          <Input id="server-token" type="password" required value={token} onChange={e => setToken(e.target.value)} />
-        </div>
+        <Field label="Bearer token">
+          <Input type="password" required value={token} onChange={e => setToken(e.target.value)} />
+        </Field>
       )}
       {choice === 'headers' && (
-        <div>
-          <Label className="mb-1" htmlFor="server-headers">Headers, one "Name: value" per line</Label>
-          <Textarea id="server-headers" className="h-20 font-mono" value={headers} onChange={e => setHeaders(e.target.value)} />
-        </div>
+        <Field label='Headers, one "Name: value" per line'>
+          <Textarea className="h-20 font-mono" value={headers} onChange={e => setHeaders(e.target.value)} />
+        </Field>
       )}
       {choice === 'auto' && (
         <details className="text-sm">
           <summary className="cursor-pointer text-slate-500">Advanced: your own OAuth client</summary>
-          <p className="text-xs text-slate-500 mt-2">
+          <Hint className="mt-2">
             Only for servers without dynamic client registration. Register an OAuth app with redirect URI{' '}
             <code>{`${window.location.origin}/auth/mcp/callback`}</code>.
-          </p>
+          </Hint>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
-            <div>
-              <Label className="mb-1" htmlFor="server-client-id">Client ID</Label>
-              <Input id="server-client-id" value={clientId} onChange={e => setClientId(e.target.value)} />
-            </div>
-            <div>
-              <Label className="mb-1" htmlFor="server-client-secret">Client secret</Label>
-              <Input id="server-client-secret" type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} />
-            </div>
-            <div>
-              <Label className="mb-1" htmlFor="server-scopes">Scopes</Label>
-              <Input id="server-scopes" placeholder="as the server suggests" value={scopes} onChange={e => setScopes(e.target.value)} />
-            </div>
+            <Field label="Client ID">
+              <Input value={clientId} onChange={e => setClientId(e.target.value)} />
+            </Field>
+            <Field label="Client secret">
+              <Input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} />
+            </Field>
+            <Field label="Scopes">
+              <Input placeholder="as the server suggests" value={scopes} onChange={e => setScopes(e.target.value)} />
+            </Field>
           </div>
         </details>
       )}
-      <Button variant="primary" type="submit" disabled={busy || !url.trim()}>
-        {busy ? 'Connecting...' : server ? 'Save and reconnect' : 'Add server'}
-      </Button>
+      {server && choice !== 'keep' && (
+        <Notice tone="warning">Saving replaces this server's saved credentials.</Notice>
+      )}
       {error && <Notice tone="error">{error}</Notice>}
       {result?.error && <Notice tone="error">{result.error}</Notice>}
       {result?.authorize_url && (
@@ -163,6 +152,11 @@ export function ServerForm({ server, onSubmit }: {
           Your client secret will be sent to <strong>{result.secret_sent_to}</strong>, the server's token endpoint.
         </Notice>
       )}
+      <FormActions>
+        <Button variant="primary" type="submit" disabled={busy || !url.trim()}>
+          {busy ? 'Connecting...' : !server ? 'Add server' : choice === 'keep' ? 'Save' : 'Save and reconnect'}
+        </Button>
+      </FormActions>
     </form>
   )
 }

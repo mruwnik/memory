@@ -30,7 +30,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions' },
       { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations' },
-      { to: '/ui/keys', title: 'LLM API keys', description: 'Anthropic keys pay for summaries and search; Anthropic and OpenAI keys pay for agents' },
+      { to: '/ui/keys', title: 'LLM keys', description: 'Anthropic keys pay for summaries and search; Anthropic and OpenAI keys pay for agents' },
     ],
   },
   {
@@ -41,7 +41,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and Claude sessions' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
-      { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted API keys and tokens' },
+      { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],
   },

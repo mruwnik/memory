@@ -29,7 +29,7 @@ describe('Triggers', () => {
       .toBe('tags: ai · batched (20 items or 600s)')
   })
 
-  it('shows why a tripped trigger was paused, and re-enables it', async () => {
+  it('shows why a tripped trigger was paused, and resumes it', async () => {
     listTriggers.mockResolvedValue([
       { id: 3, definition_id: 1, kind: 'ingest', config, enabled: false, state: { tripped: { reason: 'definition rate: 5 runs', at: 'x' } } },
     ])
@@ -37,7 +37,7 @@ describe('Triggers', () => {
     renderWithRouter(<Triggers definitionId={1} sourceTypes={['blog_post']} />)
 
     await waitFor(() => expect(screen.getByText(/Tripped: definition rate/)).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
 
     await waitFor(() => expect(saveTrigger).toHaveBeenCalledWith({ definitionId: 1, enabled: true, triggerId: 3 }))
   })
@@ -55,7 +55,7 @@ describe('Triggers', () => {
     saveTrigger.mockResolvedValue({})
     renderWithRouter(<Triggers definitionId={1} sourceTypes={['blog_post']} />)
 
-    await waitFor(() => expect(screen.getByText('No triggers.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('No triggers yet.')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'New trigger' }))
     fireEvent.change(screen.getByLabelText(/Any of these tags/), { target: { value: 'ai, ml' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save trigger' }))
@@ -64,5 +64,19 @@ describe('Triggers', () => {
       definitionId: 1,
       config: { ...emptyTriggerConfig(), filter: { ...emptyTriggerConfig().filter, tags_any: ['ai', 'ml'] } },
     }))
+  })
+
+  it('shows a save failure once, in the form, and stops showing saving', async () => {
+    listTriggers.mockResolvedValue([])
+    saveTrigger.mockRejectedValue(new Error('needs a filter'))
+    renderWithRouter(<Triggers definitionId={1} sourceTypes={[]} />)
+
+    await waitFor(() => expect(screen.getByText('No triggers yet.')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'New trigger' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save trigger' }))
+    expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled()
+
+    await waitFor(() => expect(screen.getAllByText('needs a filter')).toHaveLength(1))
+    expect(screen.getByRole('button', { name: 'Save trigger' })).toBeEnabled()
   })
 })

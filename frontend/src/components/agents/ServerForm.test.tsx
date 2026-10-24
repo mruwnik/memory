@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderWithUser, screen, waitFor } from '@/test/utils'
+import type { ExternalServer } from '@/hooks/useAgents'
 import { ServerForm, parseHeaders, toAuth } from './ServerForm'
+
+const saved = { id: 3, name: 'linear', url: 'https://mcp.linear.app/mcp', transport: 'http', auth_type: 'oauth' } as ExternalServer
+const clean = { server: saved, authorize_url: null, secret_sent_to: null, error: null }
 
 const fields = { token: 'tok', headers: 'X-Api-Key: k1\n\nX-Team: a:b', clientId: '', clientSecret: '', scopes: '' }
 
@@ -39,5 +43,25 @@ describe('ServerForm', () => {
     await user.type(screen.getByLabelText('URL'), 'http://10.0.0.5/mcp')
     await user.click(screen.getByRole('button', { name: 'Add server' }))
     await waitFor(() => expect(screen.getByText(/couldn't reach an MCP server/)).toBeInTheDocument())
+  })
+
+  it('keeps the saved credentials when an edit leaves auth alone', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(clean)
+    const { user } = renderWithUser(<ServerForm server={saved} onSubmit={onSubmit} />)
+    await user.clear(screen.getByLabelText('Name'))
+    await user.type(screen.getByLabelText('Name'), 'renamed')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ name: 'renamed', url: saved.url, transport: 'http' }))
+  })
+
+  it('needs new credentials once the URL changes', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(clean)
+    const { user } = renderWithUser(<ServerForm server={saved} onSubmit={onSubmit} />)
+    await user.type(screen.getByLabelText('URL'), '/v2')
+    await user.click(screen.getByRole('button', { name: 'Save and reconnect' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ auth: { type: 'auto' } })))
+    expect(screen.queryByRole('option', { name: /Keep current credentials/ })).not.toBeInTheDocument()
   })
 })

@@ -19,6 +19,14 @@ export const STATUS_LABELS: Record<RunStatus, string> = {
   cancelled: 'Cancelled',
 }
 
+export const TRIGGER_LABELS: Record<string, string> = {
+  manual: 'Manual',
+  mcp: 'MCP client',
+  cron: 'Schedule',
+  ingest: 'New items',
+  system: 'System',
+}
+
 export function StatusBadge({ status }: { status: RunStatus }) {
   return <Badge tone={TONES[status]}>{STATUS_LABELS[status]}</Badge>
 }

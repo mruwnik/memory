@@ -102,6 +102,22 @@ async def test_disconnect_revokes_and_clears_the_tokens(
 
 
 @pytest.mark.asyncio
+async def test_editing_without_auth_keeps_the_credentials(
+    db_session, regular_user, user_session, fake_mcp
+):
+    server = await connect_oauth(db_session, regular_user, fake_mcp)
+
+    with mcp_auth_context(user_session.id):
+        result = await agent.server_upsert.fn(
+            name="renamed", url=server.url, transport=server.transport, server_id=server.id
+        )
+
+    kept = reload(db_session, server.id)
+    assert (result["server"]["name"], result["server"]["status"]) == ("renamed", "connected")
+    assert (kept.access_token, kept.refresh_token) == (server.access_token, server.refresh_token)
+
+
+@pytest.mark.asyncio
 async def test_refresh_tools_reports_the_diff(
     db_session, regular_user, user_session, fake_mcp
 ):
