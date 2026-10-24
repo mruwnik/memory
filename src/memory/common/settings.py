@@ -9,6 +9,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 
 from memory.common.crypto import derive_transfer_token_secret
+from memory.common.modules import module_config_errors, resolve_modules
 
 load_dotenv()
 
@@ -664,6 +665,11 @@ DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")
 # POST /settings/restart makes it exit. A host-run api has nothing to restart it.
 API_SELF_RESTART = boolean_env("API_SELF_RESTART", False)
 
+# Optional features (memory.common.modules), applied on top of each module's default.
+ENABLE_MODULES: frozenset[str] = parse_csv_set("ENABLE_MODULES")
+DISABLE_MODULES: frozenset[str] = parse_csv_set("DISABLE_MODULES")
+ENABLED_MODULES: frozenset[str] = resolve_modules(ENABLE_MODULES, DISABLE_MODULES)
+
 # Custom tasks directory for deployment-specific periodic tasks
 CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None
 
@@ -706,6 +712,9 @@ def require_settings(values: Any, role: str) -> None:
             "S3_BACKUP_BUCKET to keep backups off.",
             file=sys.stderr,
         )
+        raise SystemExit(1)
+    if errors := module_config_errors(values.ENABLE_MODULES, values.DISABLE_MODULES):
+        print(f"Refusing to start: {'; '.join(errors)}.", file=sys.stderr)
         raise SystemExit(1)
     if missing := missing_required_settings(values):
         why = (

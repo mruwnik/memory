@@ -4,7 +4,8 @@ import logging
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from memory.common import instance_settings
+from memory.common import instance_settings, settings
+from memory.common.modules import servers_disabled
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -58,9 +59,17 @@ DISABLED_MCP_SERVERS = instance_settings.register(
 )
 
 
+def unmounted_servers() -> frozenset[str]:
+    """The env's DISABLED_MCP_SERVERS plus the servers of every module that is off."""
+    return settings.DISABLED_MCP_SERVERS | servers_disabled(settings.ENABLED_MODULES)
+
+
 def effective_disabled_servers() -> frozenset[str]:
-    """The servers whose tools are off now: the env's (never mounted), else the admin's live value."""
-    return instance_settings.value(DISABLED_MCP_SERVERS)
+    """The servers whose tools are off now: the env's (never mounted), else the admin's live
+    value, plus the servers of every module that is off."""
+    return instance_settings.value(DISABLED_MCP_SERVERS) | servers_disabled(
+        settings.ENABLED_MODULES
+    )
 
 
 def tool_server(tool: str) -> str | None:

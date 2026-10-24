@@ -35,6 +35,8 @@ x-common-env: &env
   DB_PORT: 5432
   FILE_STORAGE_DIR: /app/memory_files
   TZ: "Etc/UTC"
+  ENABLE_MODULES: ${ENABLE_MODULES:-}
+  DISABLE_MODULES: ${DISABLE_MODULES:-}
 
 x-worker-base: &worker-base
   build:

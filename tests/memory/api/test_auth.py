@@ -931,3 +931,10 @@ def test_websocket_token_rejects_expired_session(db_session):
     db_session.commit()
 
     assert auth.get_user_from_token(token, db_session, SCOPE_CLAUDE_SESSIONS) is None
+
+
+def test_me_lists_the_enabled_modules(client):
+    response = client.get("/auth/me")
+
+    assert response.status_code == 200
+    assert response.json()["modules"] == ["claude_containers", "multi_user", "projects", "teams"]

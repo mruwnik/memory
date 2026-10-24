@@ -771,8 +771,11 @@ def setup_warnings(user: User) -> list[str]:
 
 @router.get("/me")
 def get_me(user: User = Depends(get_current_user)):
-    """Get current user info"""
-    return user.serialize() | {"setup_warnings": setup_warnings(user)}
+    """Get current user info, with the modules this instance runs."""
+    return user.serialize() | {
+        "modules": sorted(settings.ENABLED_MODULES),
+        "setup_warnings": setup_warnings(user),
+    }
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):

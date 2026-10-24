@@ -16,6 +16,7 @@ from memory.api.MCP.servers import (
     MCPServer,
     get_enabled_servers,
     get_server_instance,
+    unmounted_servers,
 )
 from memory.api.auth import authenticate_user
 from memory.api.password_reset import sender_account
@@ -57,9 +58,10 @@ mcp = FastMCP(
 )
 
 
-# Only the env unmounts a server. The UI value hides tools live (VisibilityMiddleware), so
-# turning a server off reaches the agents worker too, without restarting anything.
-SUBSERVER_PREFIXES = list(get_enabled_servers(settings.DISABLED_MCP_SERVERS))
+# Only the env and module flags unmount a server. The UI value hides tools live
+# (VisibilityMiddleware), so turning a server off reaches the agents worker too, without
+# restarting anything.
+SUBSERVER_PREFIXES = list(get_enabled_servers(unmounted_servers()))
 
 if not SUBSERVER_PREFIXES:
     raise ValueError(
@@ -287,5 +289,5 @@ for server in MCPServer:
         mcp.mount(get_server_instance(server), prefix=server.value)
         logger.info(f"Mounted MCP server: {server.value}")
 
-if settings.DISABLED_MCP_SERVERS:
-    logger.info(f"Disabled MCP servers: {settings.DISABLED_MCP_SERVERS}")
+if disabled := unmounted_servers():
+    logger.info(f"Unmounted MCP servers: {sorted(disabled)}")

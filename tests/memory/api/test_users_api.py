@@ -322,6 +322,7 @@ def test_list_available_scopes(client: TestClient, admin_user):
     assert "read" in scope_values
     assert "*" in scope_values
     assert "discord" in scope_values
+    assert {"teams", "teams:write", "projects", "projects:write"} <= set(scope_values)
 
 
 def test_create_user_with_invalid_scope(client: TestClient, admin_user, db_session):

@@ -26,6 +26,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.users import check_timezone, hash_password, verify_password
 from memory.common.rate_limit import check_rate_limit_spec
+from memory.common.modules import scopes_hidden
 from memory.common.scopes import (
     SCOPE_ADMIN,
     VALID_SCOPES,
@@ -278,7 +279,8 @@ def list_available_scopes(
     user: User = require_scope(SCOPE_ADMIN),
 ) -> list[ScopeResponse]:
     """List all available scopes. Requires admin:users scope."""
-    return [ScopeResponse(**scope) for scope in VALID_SCOPES]
+    hidden = scopes_hidden(settings.ENABLED_MODULES)
+    return [ScopeResponse(**scope) for scope in VALID_SCOPES if scope["value"] not in hidden]
 
 
 @router.get("/{user_id}")

@@ -93,6 +93,8 @@ COMPLETE_SETTINGS = dict(
     QUEUE_PREFIX="",
     S3_BACKUP_BUCKET="",
     BACKUP_ENCRYPTION_KEY="",
+    ENABLE_MODULES=frozenset(),
+    DISABLE_MODULES=frozenset(),
 )
 
 
@@ -189,3 +191,24 @@ def test_a_worker_listening_on_other_queues_refuses_to_start(
     err = capsys.readouterr().err
     assert f"listens on {listens}" in err
     assert f"CELERY_QUEUE_PREFIX '{task_prefix}'" in err
+
+
+@pytest.mark.parametrize(
+    "enable, disable, named",
+    [({"tems"}, set(), "tems"), ({"teams"}, {"teams"}, "teams")],
+)
+def test_bad_module_config_refuses_to_start(capsys, enable, disable, named):
+    values = SimpleNamespace(
+        **{
+            **COMPLETE_SETTINGS,
+            "ANTHROPIC_API_KEY": "sk",
+            "ENABLE_MODULES": frozenset(enable),
+            "DISABLE_MODULES": frozenset(disable),
+        }
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "api")
+
+    assert exc.value.code == 1
+    assert named in capsys.readouterr().err
