@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from memory.agents.caps import SERVER, USER, CapExceeded, check_run_rate, resolve_run_cap
+from memory.agents.caps import CapExceeded, check_run_rate, resolve_run_cap
 from memory.agents.provider_keys import choose_key
 from memory.agents.spec import (
     MAX_TEXT_CHARS,
@@ -76,9 +76,9 @@ def enqueue_run(
         raise ValueError(f"unknown user {user_id}")
     # The scopes this principal has over HTTP, so a run can do what its owner could.
     scopes = system_scopes(TokenLookup(user=user, api_key_record=api_key))
-    provider_key = choose_key(db, user_id, spec, scopes)
+    provider_key = choose_key(db, user_id, spec.model, spec.provider_key)
     # Checked here too so cron doesn't start runs that would fail at hub open.
-    errors = spec_errors(spec, on_server_key=provider_key is None)
+    errors = spec_errors(spec)
     if errors := errors + server_errors(db, user_id, spec):
         raise SpecInvalid(errors)
     if definition is not None:
@@ -102,7 +102,6 @@ def enqueue_run(
         check_run_rate(db, definition, spec.max_runs_per_hour)
     max_cost = resolve_run_cap(
         db,
-        user_id=user_id,
         run_cap=spec.max_cost_usd,
         spec_daily_cap=spec.max_cost_usd_per_day if definition is not None else None,
         definition=definition,
@@ -125,8 +124,7 @@ def enqueue_run(
         trigger_ref=trigger.ref,
         dedupe_key=trigger.dedupe_key,
         api_key_id=api_key.id if api_key else None,
-        key_source=SERVER if provider_key is None else USER,
-        provider_key_id=provider_key.id if provider_key else None,
+        provider_key_id=provider_key.id,
         scopes=scopes,
     )
     db.add(run)

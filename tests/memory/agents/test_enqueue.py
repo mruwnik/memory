@@ -11,14 +11,12 @@ from memory.common.celery_app import RUN_AGENT
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey
 from tests.memory.agents.test_provider_keys import MODEL, add_key
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 MANUAL = TriggerInfo(kind="manual")
 
 
 @pytest.fixture(autouse=True)
 def ceilings(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
-    monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
     monkeypatch.setattr(settings, "AGENT_DEFAULT_USER_KEY_RUN_COST_USD", Decimal("2.00"))
     monkeypatch.setattr(settings, "AGENT_DEFAULT_USER_KEY_DAILY_COST_USD", Decimal("6.00"))
 
@@ -69,14 +67,15 @@ def test_enqueue_inserts_pending_and_dispatches(
 
     assert run.status == "pending"
     assert run.spec == spec(max_output_tokens=16_000).model_dump(mode="json")
-    assert run.max_cost_usd == Decimal("1.00")
+    assert run.max_cost_usd == Decimal("2.00")
+    assert run.provider_key_id == fake_providers.keys["anthropic"].id
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
 
 
 def test_invalid_spec_is_refused_before_insert(
     db_session, regular_user, fake_providers
 ):
-    bad = spec(model="fake-poor/m", reasoning="medium", max_output_tokens=10)
+    bad = spec(model="openai/m", reasoning="medium", max_output_tokens=10)
 
     with pytest.raises(SpecInvalid, match="reasoning 'medium' is not supported"):
         enqueue_run(
@@ -104,7 +103,7 @@ def test_overlong_input_is_refused_before_insert(
 @pytest.mark.parametrize(
     "spec_cap,key_cap,expected",
     [
-        (None, None, Decimal("1.00")),
+        (None, None, Decimal("2.00")),
         (Decimal("0.40"), None, Decimal("0.40")),
         (None, Decimal("0.30"), Decimal("0.30")),
         (Decimal("0.40"), Decimal("0.30"), Decimal("0.30")),
@@ -131,7 +130,7 @@ def test_run_cap_is_the_strictest_set_value(
 def test_run_cap_shrinks_to_what_is_left_in_the_day(
     db_session, regular_user, fake_providers
 ):
-    spent(db_session, regular_user, "9.75")
+    spent(db_session, regular_user, "5.75", provider_key_id=fake_providers.keys["anthropic"].id)
 
     run = enqueue_run(
         db_session, user_id=regular_user.id, spec=spec(), input="hi", trigger=MANUAL
@@ -144,14 +143,19 @@ def test_run_cap_shrinks_to_what_is_left_in_the_day(
     "spent_today,explicit,expected",
     [
         ("0", None, 16_000),  # the default, under the 64000 model limit
-        ("9.99", None, 5_000),  # $0.01 left buys 5000 tokens at $2/MTok
-        ("9.99", 1_000, 1_000),  # an explicit value is kept
+        ("5.99", None, 5_000),  # $0.01 left buys 5000 tokens at $2/MTok
+        ("5.99", 1_000, 1_000),  # an explicit value is kept
     ],
 )
 def test_unset_max_output_tokens_resolves_into_the_snapshot(
     db_session, regular_user, fake_providers, spent_today, explicit, expected
 ):
-    spent(db_session, regular_user, spent_today)
+    spent(
+        db_session,
+        regular_user,
+        spent_today,
+        provider_key_id=fake_providers.keys["anthropic"].id,
+    )
 
     run = enqueue_run(
         db_session,
@@ -167,8 +171,8 @@ def test_unset_max_output_tokens_resolves_into_the_snapshot(
 @pytest.mark.parametrize(
     "setup,expected",
     [
-        ("user_pool", "user pool: spent $10.00 of $10.00 in the last 24h"),
-        ("key_pool", "API key pool: spent $2.00 of $2.00 in the last 24h"),
+        ("key_pool", "provider key pool: spent $6.00 of $6.00 in the last 24h"),
+        ("api_key_pool", "API key pool: spent $2.00 of $2.00 in the last 24h"),
         ("definition_pool", "definition pool: spent $3.00 of $3.00 in the last 24h"),
     ],
 )
@@ -178,14 +182,14 @@ def test_spent_pools_refuse_with_the_pool_named(
     d = definition(db_session, regular_user, max_cost_usd_per_day="3")
     k = key(db_session, regular_user, daily_cap=Decimal("2"))
     spend = {
-        "user_pool": ({}, "10"),
-        "key_pool": ({"api_key_id": k.id}, "2"),
+        "key_pool": ({"provider_key_id": fake_providers.keys["anthropic"].id}, "6"),
+        "api_key_pool": ({"api_key_id": k.id}, "2"),
         "definition_pool": ({"definition_id": d.id}, "3"),
     }[setup]
     spent(db_session, regular_user, spend[1], **spend[0])
     target = {
-        "user_pool": {},
-        "key_pool": {"api_key": k},
+        "key_pool": {},
+        "api_key_pool": {"api_key": k},
         "definition_pool": {"definition": d},
     }[setup]
 
@@ -200,15 +204,16 @@ def test_spent_pools_refuse_with_the_pool_named(
         )
 
 
-def test_extra_api_keys_do_not_multiply_the_users_daily_ceiling(
+def test_extra_api_keys_do_not_multiply_the_provider_keys_daily_cap(
     db_session, regular_user, fake_providers
 ):
     first = key(db_session, regular_user)
     second = key(db_session, regular_user)
-    spent(db_session, regular_user, "6", api_key_id=first.id)
-    spent(db_session, regular_user, "4", api_key_id=second.id)
+    pays = fake_providers.keys["anthropic"].id
+    spent(db_session, regular_user, "4", api_key_id=first.id, provider_key_id=pays)
+    spent(db_session, regular_user, "2", api_key_id=second.id, provider_key_id=pays)
 
-    with pytest.raises(CapExceeded, match=r"user pool: spent \$10.00 of \$10.00"):
+    with pytest.raises(CapExceeded, match=r"provider key pool: spent \$6.00 of \$6.00"):
         enqueue_run(
             db_session,
             user_id=regular_user.id,
@@ -226,14 +231,14 @@ def test_session_runs_snapshot_the_scopes_sessions_get_over_http(
         db_session, user_id=regular_user.id, spec=spec(), input="hi", trigger=MANUAL
     )
 
-    assert run.scopes == ["llm_server_key", "read", "teams", "write"]
+    assert run.scopes == ["read", "teams", "write"]
 
 
 @pytest.mark.parametrize(
     "key_scopes,expected",
     [
-        (None, ["teams", "llm_server_key"]),  # a key without its own scopes inherits the user's
-        (["read", "llm_server_key"], ["read", "llm_server_key"]),
+        (None, ["teams"]),  # a key without its own scopes inherits the user's
+        (["read"], ["read"]),
     ],
 )
 def test_key_runs_snapshot_the_keys_scopes(
@@ -260,6 +265,7 @@ def test_spend_older_than_24h_does_not_count(db_session, regular_user, fake_prov
         db_session,
         regular_user,
         "10",
+        provider_key_id=fake_providers.keys["anthropic"].id,
         created_at=datetime.now(timezone.utc) - timedelta(hours=25),
     )
 
@@ -267,25 +273,7 @@ def test_spend_older_than_24h_does_not_count(db_session, regular_user, fake_prov
         db_session, user_id=regular_user.id, spec=spec(), input="hi", trigger=MANUAL
     )
 
-    assert run.max_cost_usd == Decimal("1.00")
-
-
-def test_stored_cap_above_a_lowered_ceiling_is_inert(
-    db_session, regular_user, fake_providers, monkeypatch
-):
-    k = key(db_session, regular_user, run_cap=Decimal("0.80"))
-    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("0.50"))
-
-    run = enqueue_run(
-        db_session,
-        user_id=regular_user.id,
-        spec=spec(max_output_tokens=1000),
-        input="hi",
-        trigger=MANUAL,
-        api_key=k,
-    )
-
-    assert run.max_cost_usd == Decimal("0.50")
+    assert run.max_cost_usd == Decimal("2.00")
 
 
 def test_dedupe_key_returns_the_existing_run(
@@ -380,13 +368,12 @@ def own_key_spec(**overrides):
     "run_cap,expected",
     [
         (None, Decimal("2.00")),  # AGENT_DEFAULT_USER_KEY_RUN_COST_USD
-        (Decimal("5"), Decimal("5")),  # above the server's AGENT_MAX_RUN_COST_USD
+        (Decimal("5"), Decimal("5")),  # an agent's own cap is not held to a ceiling
     ],
 )
-def test_own_key_runs_ignore_the_server_ceilings(
+def test_runs_are_capped_by_the_agent_or_the_user_key_default(
     db_session, regular_user, run_cap, expected
 ):
-    spent(db_session, regular_user, "10")  # the server pool is exhausted
     k = add_key(db_session, regular_user, is_default=True)
 
     run = enqueue_run(
@@ -397,35 +384,19 @@ def test_own_key_runs_ignore_the_server_ceilings(
         trigger=MANUAL,
     )
 
-    assert (run.key_source, run.provider_key_id) == ("user", k.id)
+    assert run.provider_key_id == k.id
     assert run.max_cost_usd == expected
-
-
-def test_own_key_spend_does_not_count_against_the_server_pool(
-    db_session, regular_user, fake_providers
-):
-    spent(db_session, regular_user, "10", key_source="user")
-
-    run = enqueue_run(
-        db_session, user_id=regular_user.id, spec=spec(), input="hi", trigger=MANUAL
-    )
-
-    assert (run.key_source, run.provider_key_id, run.max_cost_usd) == (
-        "server",
-        None,
-        Decimal("1.00"),
-    )
 
 
 def test_a_keys_daily_cap_limits_its_runs(db_session, regular_user):
     k = add_key(db_session, regular_user, "capped", max_cost_usd_per_day=Decimal("3"))
-    spent(db_session, regular_user, "2.5", key_source="user", provider_key_id=k.id)
+    spent(db_session, regular_user, "2.5", provider_key_id=k.id)
     pinned = own_key_spec(provider_key=k.id)
 
     run = enqueue_run(
         db_session, user_id=regular_user.id, spec=pinned, input="hi", trigger=MANUAL
     )
-    spent(db_session, regular_user, "0.5", key_source="user", provider_key_id=k.id)
+    spent(db_session, regular_user, "0.5", provider_key_id=k.id)
 
     assert run.max_cost_usd == Decimal("0.5")
     with pytest.raises(CapExceeded, match=r"provider key pool: spent \$3.00 of \$3.00"):
@@ -453,7 +424,7 @@ def test_own_keys_get_a_default_daily_cap_the_key_or_agent_can_raise(
         reasoning="medium",
         max_cost_usd_per_day=agent_cap,
     )
-    spent(db_session, regular_user, "5", key_source="user", provider_key_id=k.id)
+    spent(db_session, regular_user, "5", provider_key_id=k.id)
 
     run = enqueue_run(
         db_session,
@@ -467,20 +438,18 @@ def test_own_keys_get_a_default_daily_cap_the_key_or_agent_can_raise(
     assert run.max_cost_usd == expected
 
 
-@pytest.mark.parametrize("choice", ["server", None])
-def test_the_agents_own_daily_cap_counts_spend_on_either_key(
-    db_session, regular_user, choice
+def test_the_agents_own_daily_cap_counts_all_spend_through_the_definition(
+    db_session, regular_user
 ):
-    add_key(db_session, regular_user, is_default=True)
+    k = add_key(db_session, regular_user, is_default=True)
     d = definition(
         db_session,
         regular_user,
         model=MODEL,
         reasoning="medium",
         max_cost_usd_per_day="3",
-        provider_key=choice,
     )
-    spent(db_session, regular_user, "1.5", definition_id=d.id, key_source="user")
+    spent(db_session, regular_user, "1.5", definition_id=d.id, provider_key_id=k.id)
     spent(db_session, regular_user, "1.5", definition_id=d.id)
 
     with pytest.raises(CapExceeded, match="definition pool"):
@@ -510,11 +479,7 @@ def test_own_key_runs_keep_the_api_keys_run_cap(db_session, regular_user):
     assert run.max_cost_usd == Decimal("0.30")
 
 
-def test_the_server_key_follows_the_snapshotted_scopes(db_session, regular_user):
-    narrow = APIKey.create(user_id=regular_user.id, name="narrow", scopes=["agents"])
-    db_session.add(narrow)
-    db_session.commit()
-
+def test_without_a_key_for_the_models_provider_no_run_starts(db_session, regular_user):
     with pytest.raises(ValueError, match="add an API key for anthropic"):
         enqueue_run(
             db_session,
@@ -522,6 +487,5 @@ def test_the_server_key_follows_the_snapshotted_scopes(db_session, regular_user)
             spec=own_key_spec(),
             input="hi",
             trigger=MANUAL,
-            api_key=narrow,
         )
     assert db_session.query(AgentRun).count() == 0

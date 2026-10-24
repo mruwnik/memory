@@ -38,7 +38,7 @@ from memory.common.db.models import (
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials
 from tests.conftest import unique_sha256
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
 
 @pytest.fixture

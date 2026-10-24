@@ -10,7 +10,7 @@ from memory.common import settings
 
 BASE = {
     "system_prompt": "You are helpful.",
-    "model": "fake-rich/m",
+    "model": "anthropic/m",
     "reasoning": "high",
 }
 TREE = {
@@ -29,8 +29,6 @@ TREE = {
 
 @pytest.fixture(autouse=True)
 def ceilings(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
-    monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
     monkeypatch.setattr(settings, "AGENT_MAX_TIMEOUT_SEC", 1800)
     monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 60)
 
@@ -172,14 +170,6 @@ def test_defaults_are_valid_on_the_default_model():
             "result_schema is larger than 64 KB",
         ),
         (
-            {"max_cost_usd": "5"},
-            "max_cost_usd 5 exceeds the AGENT_MAX_RUN_COST_USD ceiling of 1.00",
-        ),
-        (
-            {"max_cost_usd_per_day": "50"},
-            "max_cost_usd_per_day 50 exceeds the AGENT_MAX_DAILY_COST_USD ceiling of 10.00",
-        ),
-        (
             {"timeout_sec": 99999},
             "timeout_sec 99999 exceeds AGENT_MAX_TIMEOUT_SEC (1800)",
         ),
@@ -189,17 +179,17 @@ def test_defaults_are_valid_on_the_default_model():
         ),
         (
             {"max_output_tokens": 64_000, "max_cost_usd": "0.10"},
-            "max_output_tokens 64000 can cost $0.128 in one turn on fake-rich/m, "
+            "max_output_tokens 64000 can cost $0.128 in one turn on anthropic/m, "
             "above the per-run cap of $0.10; lower max_output_tokens",
         ),
         ({"model": "nope/x"}, "unknown provider in model 'nope/x'"),
         (
-            {"model": "fake-poor/m", "reasoning": "medium"},
-            "reasoning 'medium' is not supported by fake-poor/m",
+            {"model": "openai/m", "reasoning": "medium"},
+            "reasoning 'medium' is not supported by openai/m",
         ),
         (
-            {"model": "fake-poor/m", "tools": ["web_search"]},
-            "web_search: fake-poor/m has no native web search",
+            {"model": "openai/m", "tools": ["web_search"]},
+            "web_search: openai/m has no native web search",
         ),
     ],
 )
@@ -227,11 +217,11 @@ def test_deeply_nested_result_schema_is_an_error_not_a_crash(fake_providers):
 
 def test_switching_provider_with_extras_is_rejected(fake_providers):
     s = spec(
-        model="fake-poor/m", max_output_tokens=4000, provider_extras={"effort": "max"}
+        model="openai/m", max_output_tokens=4000, provider_extras={"effort": "max"}
     )
 
     assert spec_errors(s) == [
-        "provider_extras key 'effort' is not supported by fake-poor; remove it"
+        "provider_extras key 'effort' is not supported by openai; remove it"
     ]
 
 
@@ -294,8 +284,8 @@ def test_cost_values_parse_as_decimals():
 
 
 def test_unset_max_output_tokens_fits_any_model(fake_providers):
-    # fake-poor/m allows 8000 output tokens; an explicit 16000 would be rejected.
-    assert spec_errors(spec(model="fake-poor/m")) == []
-    assert spec_errors(spec(model="fake-poor/m", max_output_tokens=16_000)) == [
+    # openai/m allows 8000 output tokens; an explicit 16000 would be rejected.
+    assert spec_errors(spec(model="openai/m")) == []
+    assert spec_errors(spec(model="openai/m", max_output_tokens=16_000)) == [
         "max_output_tokens 16000 > model limit 8000"
     ]

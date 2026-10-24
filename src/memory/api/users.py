@@ -12,7 +12,6 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
-from memory.agents.caps import ceiling_error
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import (
@@ -595,27 +594,6 @@ def create_user_api_key(
                     status_code=403,
                     detail=f"Cannot grant scopes you do not possess: {', '.join(sorted(disallowed))}",
                 )
-
-    cap_errors = [
-        e
-        for e in (
-            ceiling_error(
-                "agent_max_run_cost_usd",
-                data.agent_max_run_cost_usd,
-                settings.AGENT_MAX_RUN_COST_USD,
-                "AGENT_MAX_RUN_COST_USD",
-            ),
-            ceiling_error(
-                "agent_max_daily_cost_usd",
-                data.agent_max_daily_cost_usd,
-                settings.AGENT_MAX_DAILY_COST_USD,
-                "AGENT_MAX_DAILY_COST_USD",
-            ),
-        )
-        if e
-    ]
-    if cap_errors:
-        raise HTTPException(status_code=400, detail="; ".join(cap_errors))
 
     expires_at = None
     if data.expires_in_days:

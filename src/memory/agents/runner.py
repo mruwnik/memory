@@ -17,14 +17,13 @@ from typing import Any
 
 from sqlalchemy import func
 
-from memory.agents.caps import SERVER
 from memory.agents.provider_keys import (
     KeyUnavailable,
     key_for_run,
+    notify_key_rejected,
     reject_key,
     rejected_message,
 )
-from memory.agents.run_auth import notify_key_rejected
 from memory.agents.spec import (
     SUBMIT_RESULT,
     AgentSpec,
@@ -87,7 +86,6 @@ class Claim:
     max_cost: Decimal
     # When the run's definition was last saved; None for ad-hoc runs.
     saved_at: datetime | None = None
-    key_source: str = SERVER
     provider_key_id: int | None = None
 
 
@@ -117,7 +115,6 @@ def claim(run_id: str) -> Claim | None:
             run.input,
             run.max_cost_usd,
             definition.updated_at if definition else None,
-            run.key_source,
             run.provider_key_id,
         )
         db.commit()
@@ -219,10 +216,7 @@ def output_allowance(
     return min(max_output, affordable)
 
 
-def run_key(claimed: Claim) -> LLMProviderKey | None:
-    """The user's key a run pays with, or None for the server's."""
-    if claimed.key_source == SERVER:
-        return None
+def run_key(claimed: Claim) -> LLMProviderKey:
     try:
         return key_for_run(claimed.provider_key_id)
     except KeyUnavailable as e:
@@ -331,7 +325,7 @@ async def run_loop(
     run_id: str, spec: AgentSpec, claimed: Claim, token: str, hub_factory: HubFactory
 ) -> dict[str, Any]:
     key = run_key(claimed)
-    provider = get_provider(spec.model, api_key=key.key if key else None)
+    provider = get_provider(spec.model, api_key=key.key)
     info = provider.model_info(provider.model)
     params = generation_params(spec)
     finish_tools = finish_tool_names(spec)
@@ -392,8 +386,6 @@ async def run_loop(
                     params=replace(params, max_output_tokens=allowance),
                 )
             except provider.KEY_REJECTED as e:
-                if key is None:
-                    raise
                 raise key_refused(key) from e
             except provider.KEY_FORBIDDEN as e:
                 logger.warning("agent run %s: %s refused the request: %s", run_id, spec.model, e)

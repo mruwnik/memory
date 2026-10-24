@@ -1,9 +1,8 @@
 """Cost caps.
 
-Runs on the server's provider keys are held to hard global ceilings that
-definitions and API keys may only lower. Runs on a user's own provider key
-skip those ceilings: only the caps the user set (the agent's, the API key's,
-the provider key's) and default per-run and daily caps apply.
+Runs pay with their owner's provider key, so only the caps the user set (the
+agent's, the API key's, the provider key's) and the default per-run and daily
+caps apply.
 
 Concurrent runs that start against the same remaining amount can overshoot a
 daily pool by at most (concurrency - 1) x the per-run cap; that's accepted
@@ -20,23 +19,8 @@ from memory.common import settings
 from memory.common.db.connection import DBSession
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey, LLMProviderKey
 
-SERVER = "server"
-USER = "user"
-
-
 class CapExceeded(ValueError):
     pass
-
-
-def ceiling_error(
-    field: str, value: Decimal | None, ceiling: Decimal, setting: str
-) -> str | None:
-    if value is None or value <= ceiling:
-        return None
-    return (
-        f"{field} {value} exceeds the {setting} ceiling of {ceiling}; "
-        "lower it or raise the ceiling in settings"
-    )
 
 
 def effective_cap(ceiling: Decimal, *values: Decimal | None) -> Decimal:
@@ -44,14 +28,9 @@ def effective_cap(ceiling: Decimal, *values: Decimal | None) -> Decimal:
     return min([ceiling, *(v for v in values if v is not None)])
 
 
-def per_run_cap(on_server_key: bool, *values: Decimal | None) -> Decimal:
-    """The strictest of `values` (the agent's cap first), within the pool's per-run limit.
-
-    On the server's key that limit is AGENT_MAX_RUN_COST_USD; on a user's key it is
-    the agent's own cap, or AGENT_DEFAULT_USER_KEY_RUN_COST_USD when it sets none.
-    """
-    if on_server_key:
-        return effective_cap(settings.AGENT_MAX_RUN_COST_USD, *values)
+def per_run_cap(*values: Decimal | None) -> Decimal:
+    """The strictest of `values` (the agent's cap first); an agent without one is held
+    to AGENT_DEFAULT_USER_KEY_RUN_COST_USD."""
     spec_cap, *others = values
     return effective_cap(spec_cap or settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD, *others)
 
@@ -80,31 +59,15 @@ def spent_last_24h(db: DBSession, *conditions) -> Decimal:
 def daily_pools(
     db: DBSession,
     *,
-    user_id: int,
     spec_daily_cap: Decimal | None,
     definition: AgentDefinition | None,
     api_key: APIKey | None,
-    provider_key: LLMProviderKey | None,
+    provider_key: LLMProviderKey,
 ) -> list[Pool]:
-    """The pools a run charges.
-
-    On the server's key: the user pool, AGENT_MAX_DAILY_COST_USD over everything the
-    user spent on the server's keys, so minting API keys or definitions can't multiply
-    it. Either way: each daily cap the user set (definition, API key, provider key),
-    counting all spend through it. A provider key with no daily cap, on an agent with
-    none, gets AGENT_DEFAULT_USER_KEY_DAILY_COST_USD.
-    """
+    """The pools a run charges: each daily cap the user set (definition, API key, provider
+    key), counting all spend through it. A provider key with no daily cap, on an agent with
+    none, gets AGENT_DEFAULT_USER_KEY_DAILY_COST_USD."""
     pools = []
-    if provider_key is None:
-        pools.append(
-            Pool(
-                "user pool",
-                settings.AGENT_MAX_DAILY_COST_USD,
-                spent_last_24h(
-                    db, AgentRun.user_id == user_id, AgentRun.key_source == SERVER
-                ),
-            )
-        )
     if api_key is not None and api_key.agent_max_daily_cost_usd is not None:
         pools.append(
             Pool(
@@ -121,8 +84,6 @@ def daily_pools(
                 spent_last_24h(db, AgentRun.definition_id == definition.id),
             )
         )
-    if provider_key is None:
-        return pools
     key_cap = provider_key.max_cost_usd_per_day
     if key_cap is None and (definition is None or spec_daily_cap is None):
         key_cap = settings.AGENT_DEFAULT_USER_KEY_DAILY_COST_USD
@@ -140,20 +101,15 @@ def daily_pools(
 def resolve_run_cap(
     db: DBSession,
     *,
-    user_id: int,
     run_cap: Decimal | None,
     spec_daily_cap: Decimal | None,
     definition: AgentDefinition | None,
     api_key: APIKey | None,
-    provider_key: LLMProviderKey | None,
+    provider_key: LLMProviderKey,
 ) -> Decimal:
-    """The effective per-run cap, or CapExceeded naming the first exhausted pool.
-
-    `provider_key` None means the run is on the server's key.
-    """
+    """The effective per-run cap, or CapExceeded naming the first exhausted pool."""
     pools = daily_pools(
         db,
-        user_id=user_id,
         spec_daily_cap=spec_daily_cap,
         definition=definition,
         api_key=api_key,
@@ -165,11 +121,7 @@ def resolve_run_cap(
                 f"{pool.label}: spent ${pool.spent:.2f} of ${pool.cap:.2f} in the last 24h; "
                 "try again later or raise the cap"
             )
-    per_run = per_run_cap(
-        provider_key is None,
-        run_cap,
-        api_key.agent_max_run_cost_usd if api_key else None,
-    )
+    per_run = per_run_cap(run_cap, api_key.agent_max_run_cost_usd if api_key else None)
     return min([per_run, *(p.remaining for p in pools)])
 
 

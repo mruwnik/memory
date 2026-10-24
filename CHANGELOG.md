@@ -243,8 +243,7 @@ section has nothing in it:
   `anthropic/claude-haiku-5-5`. Values set explicitly in `.env` are kept.
 - `DISCORD_PROCESS_MESSAGES`, `DISCORD_MODEL` and `DISCORD_MAX_TOOL_CALLS` are
   removed; nothing read them. Delete them from `.env` if set.
-- New optional agent-run settings: `AGENT_MAX_RUN_COST_USD` (1.00) and
-  `AGENT_MAX_DAILY_COST_USD` (10.00) are hard cost ceilings; `AGENT_MAX_TIMEOUT_SEC`
+- New optional agent-run settings: `AGENT_MAX_TIMEOUT_SEC`
   (1800), `AGENT_MAX_WAIT_SEC` (300), `AGENT_LLM_TIMEOUT_SEC` (600, per model
   request), `AGENT_TOOL_RESULT_MAX_CHARS` (50000), `AGENT_CONTEXT_TRIM_AT_TOKENS`
   (100000), `AGENT_CONTEXT_TRIM_TO_TOKENS` (60000) and `AGENT_STEP_RETENTION_DAYS`
@@ -258,14 +257,16 @@ section has nothing in it:
 - New `agents` user scope gates the `agent_*` MCP tools and the Agents dashboard.
   Only `*` admins have it by default; grant it to anyone else who should use agents.
 - Users can add their own Anthropic/OpenAI API keys for agent runs (Agents → API
-  keys). Runs fall back to the server's `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` only
-  with the new `llm_server_key` scope (`*` admins have it); the migration grants it
-  to users and API keys that already hold `agents`. Server-key runs keep the
-  `AGENT_MAX_*` ceilings; runs on a user's key skip them and are capped per run by
-  the agent's `max_cost_usd` or the new `AGENT_DEFAULT_USER_KEY_RUN_COST_USD` (1.00),
-  and per key per day by the key's or the agent's daily cap, or else the new
-  `AGENT_DEFAULT_USER_KEY_DAILY_COST_USD` (20.00).
+  keys). Runs are capped per run by the agent's `max_cost_usd` or the new
+  `AGENT_DEFAULT_USER_KEY_RUN_COST_USD` (1.00), and per key per day by the key's
+  or the agent's daily cap, or else the new `AGENT_DEFAULT_USER_KEY_DAILY_COST_USD`
+  (20.00).
   Keys are encrypted with `SECRETS_ENCRYPTION_KEY`.
+- Agent runs no longer fall back to the server's `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`:
+  each run pays with its owner's key. The `llm_server_key` scope and the
+  `AGENT_MAX_RUN_COST_USD` / `AGENT_MAX_DAILY_COST_USD` settings are removed (they only
+  bounded server-key spend). Let the `agents` queue drain before upgrading: runs
+  queued on the server key fail after the migration.
 - Workers now refuse to start when the prefix they listen on (`QUEUE_PREFIX`,
   default `memory`) differs from `CELERY_QUEUE_PREFIX` (default `APP_NAME`,
   itself default `memory`), which tasks are routed with: such a worker would
@@ -437,6 +438,9 @@ section has nothing in it:
   from `teams` (`discord_role_id`, `discord_guild_id`, `auto_sync_discord`,
   `github_team_id`, `github_team_slug`, `github_org`, `auto_sync_github`). Fast.
   The links are lost; downgrading restores the columns empty.
+- `20261029_user_keys_only`: pins agents set to the server's key to their owner's default
+  key where one exists (the others lose the pin and are refused until their owner adds a
+  key), removes the `llm_server_key` scope, drops `agent_runs.key_source`. Fast.
 
 ### Post-deploy commands
 

@@ -15,13 +15,11 @@ from memory.common.db.models import (
 )
 from tests.conftest import mcp_auth_context
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
 
 @pytest.fixture(autouse=True)
 def ceilings(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
-    monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
     monkeypatch.setattr(settings, "AGENT_MAX_TIMEOUT_SEC", 1800)
 
 
@@ -49,7 +47,6 @@ async def test_upsert_creates_then_updates(
             "tool 'meta_get_user' is not visible to you",
         ),
         (SPEC | {"bogus": 1}, "invalid spec"),
-        (SPEC | {"max_cost_usd": "9"}, "AGENT_MAX_RUN_COST_USD ceiling"),
     ],
 )
 async def test_upsert_rejects_with_reasons(
@@ -159,7 +156,7 @@ async def test_runs_via_an_api_key_are_attributed_to_it(
     db_session.add(key)
     db_session.commit()
 
-    with mcp_auth_context(key.key, scopes=["agents", "llm_server_key"]):
+    with mcp_auth_context(key.key, scopes=["agents"]):
         result = await agent.run.fn(input="hi", spec=SPEC)
 
     run = db_session.get(AgentRun, result["run_id"])
@@ -193,14 +190,15 @@ async def test_cap_refusals_surface_as_errors(
             input="x",
             max_cost_usd=Decimal("1"),
             trigger_kind="manual",
-            cost_usd=Decimal("10"),
+            cost_usd=settings.AGENT_DEFAULT_USER_KEY_DAILY_COST_USD,
             status="done",
+            provider_key_id=fake_providers.keys["anthropic"].id,
         )
     )
     db_session.commit()
 
     with mcp_auth_context(user_session.id):
-        with pytest.raises(ValueError, match="user pool"):
+        with pytest.raises(ValueError, match="provider key pool"):
             await agent.run.fn(input="hi", spec=SPEC)
 
 
@@ -343,8 +341,6 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
         "off",
     ]
     assert catalog["ceilings"] == {
-        "max_run_cost_usd": "1.00",
-        "max_daily_cost_usd": "10.00",
         "max_timeout_sec": 1800,
         "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
         "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),

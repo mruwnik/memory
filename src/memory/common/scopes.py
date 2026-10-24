@@ -103,7 +103,6 @@ SCOPE_PROJECTS_WRITE = "projects:write"
 # AI
 SCOPE_CLAUDE_AI = "claudeai"
 SCOPE_AGENTS = "agents"  # define and run your own agents
-SCOPE_LLM_SERVER_KEY = "llm_server_key"  # agent runs may fall back to the server's provider keys
 SCOPE_CLAUDE_SESSIONS = "claude_sessions"  # spawn and manage Claude Code containers
 
 # Check (async verify/research/link/deep-dive/investigation-team job queue)
@@ -322,12 +321,6 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_AGENTS,
         "label": "Agents",
         "description": "Define and run agents with your own permissions",
-        "category": "ai",
-    },
-    {
-        "value": SCOPE_LLM_SERVER_KEY,
-        "label": "Server LLM keys",
-        "description": "Agent runs without your own provider API key use the server's, and its cost ceilings",
         "category": "ai",
     },
     {

@@ -1,8 +1,7 @@
 """Credentials that fail inside a run, and notifying their owner once.
 
 External MCP servers: the stored token, refreshed once on a 401 under the row
-lock, and a failure that ends the run. Provider keys: a key its provider
-refuses is marked invalid and its owner told.
+lock, and a failure that ends the run.
 """
 
 import asyncio
@@ -17,9 +16,8 @@ from fastmcp import Client
 from mcp.types import Tool
 
 from memory.agents.external import apply_tools, mcp_session
-from memory.agents.provider_keys import keys_page
 from memory.common.db.connection import make_session
-from memory.common.db.models import ExternalMCPServer, LLMProviderKey, User
+from memory.common.db.models import ExternalMCPServer, User
 from memory.common.notify import notify_user_now
 from memory.common.mcp_oauth import (
     MCPServerError,
@@ -46,21 +44,6 @@ def notify_reauth(error: ReauthRequired) -> None:
             "Its authorization expired or was revoked. Agent runs that use it fail "
             "until you re-authorize it.",
             server_page(error.server_id),
-        )
-
-
-def notify_key_rejected(key: LLMProviderKey) -> None:
-    with make_session() as db:
-        user = db.get(User, key.user_id)
-        if user is None:
-            return
-        notify_user_now(
-            db,
-            user,
-            f"Your {key.provider} API key '{key.label}' was rejected",
-            f"{key.provider} refused it during an agent run. Runs that use it fail "
-            "until you replace it.",
-            keys_page(),
         )
 
 

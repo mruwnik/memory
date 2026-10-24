@@ -14,7 +14,7 @@ import referencing.jsonschema
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from memory.agents.builtins import search_backend
-from memory.agents.caps import ceiling_error, per_run_cap
+from memory.agents.caps import per_run_cap
 from memory.common import settings
 from memory.common.llms.neutral import (
     BUILTIN_TOOLS,
@@ -92,9 +92,8 @@ class AgentSpec(BaseModel):
     # Runs this definition may start per rolling hour, whatever starts them.
     max_runs_per_hour: int | None = Field(default=None, ge=1)
     timeout_sec: int = Field(default=600, ge=1)
-    # Which provider key pays: a key id of yours, "server", or None for your
-    # default key for the model's provider, then the server's if you may use it.
-    provider_key: Annotated[int, Field(ge=1)] | Literal["server"] | None = None
+    # A key id of yours, or None for your default key for the model's provider.
+    provider_key: Annotated[int, Field(ge=1)] | None = None
 
 
 def is_denied(tool: str) -> bool:
@@ -257,25 +256,8 @@ def schema_errors(schema: dict[str, Any] | None) -> list[str]:
         return ["result_schema is nested too deeply"]
 
 
-def budget_errors(spec: AgentSpec, on_server_key: bool) -> list[str]:
-    """The server's cost ceilings bind only runs on its keys."""
+def budget_errors(spec: AgentSpec) -> list[str]:
     errors = []
-    if on_server_key:
-        ceilings = (
-            ceiling_error(
-                "max_cost_usd",
-                spec.max_cost_usd,
-                settings.AGENT_MAX_RUN_COST_USD,
-                "AGENT_MAX_RUN_COST_USD",
-            ),
-            ceiling_error(
-                "max_cost_usd_per_day",
-                spec.max_cost_usd_per_day,
-                settings.AGENT_MAX_DAILY_COST_USD,
-                "AGENT_MAX_DAILY_COST_USD",
-            ),
-        )
-        errors += [e for e in ceilings if e]
     if (spec.max_runs_per_hour or 0) > settings.AGENT_MAX_RUNS_PER_HOUR:
         errors.append(
             f"max_runs_per_hour {spec.max_runs_per_hour} exceeds AGENT_MAX_RUNS_PER_HOUR "
@@ -289,12 +271,12 @@ def budget_errors(spec: AgentSpec, on_server_key: bool) -> list[str]:
     return errors
 
 
-def turn_cost_errors(spec: AgentSpec, info: ModelInfo, on_server_key: bool) -> list[str]:
+def turn_cost_errors(spec: AgentSpec, info: ModelInfo) -> list[str]:
     """One turn's output alone must fit the run's cap, or the cap can't hold."""
     if spec.max_output_tokens is None:
         return []
     worst = Decimal(spec.max_output_tokens) * output_rate(info) / MTOK
-    cap = per_run_cap(on_server_key, spec.max_cost_usd)
+    cap = per_run_cap(spec.max_cost_usd)
     if worst <= cap:
         return []
     return [
@@ -303,14 +285,14 @@ def turn_cost_errors(spec: AgentSpec, info: ModelInfo, on_server_key: bool) -> l
     ]
 
 
-def model_errors(spec: AgentSpec, on_server_key: bool) -> list[str]:
+def model_errors(spec: AgentSpec) -> list[str]:
     try:
         provider, model = split_model(spec.model)
         cls = provider_class(spec.model)
         info = cls.model_info(model)
     except ValueError as e:
         return [str(e)]
-    return turn_cost_errors(spec, info, on_server_key) + validate_generation(
+    return turn_cost_errors(spec, info) + validate_generation(
         provider=provider,
         model=model,
         info=info,
@@ -330,15 +312,15 @@ def model_errors(spec: AgentSpec, on_server_key: bool) -> list[str]:
     )
 
 
-def spec_errors(spec: AgentSpec, on_server_key: bool = True) -> list[str]:
+def spec_errors(spec: AgentSpec) -> list[str]:
     """Everything wrong with `spec` that can be known without the DB or MCP.
 
     Tool visibility to the owner and its provider key are checked separately
-    (they need the owner); `on_server_key` says which cost ceilings apply.
+    (they need the owner).
     """
     return (
         tool_errors(spec)
         + schema_errors(spec.result_schema)
-        + budget_errors(spec, on_server_key)
-        + model_errors(spec, on_server_key)
+        + budget_errors(spec)
+        + model_errors(spec)
     )

@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from sse_starlette.sse import AppStatus
 
-from memory.common.db.models import HumanUser
+from memory.common.db.models import HumanUser, LLMProviderKey
 from memory.common.llms import registry
 from memory.common import safe_http
 from memory.common.safe_http import NetworkPolicy
@@ -12,27 +12,45 @@ from tests.memory.agents.fakes import FakePoor, FakeRich, ScriptedProvider
 
 @pytest.fixture
 def regular_user(db_session):
-    """Agent runs need a provider key; these tests run on the server's unless they add one."""
     user = HumanUser(
         name="Regular User",
         email="regular@example.com",
         password_hash="bcrypt_hash_placeholder",
-        scopes=["teams", "llm_server_key"],
+        scopes=["teams"],
     )
     db_session.add(user)
     db_session.commit()
     return user
 
 
+def default_keys(db, user) -> dict[str, LLMProviderKey]:
+    keys = {}
+    for provider in ("anthropic", "openai"):
+        key = LLMProviderKey(
+            user_id=user.id, provider=provider, label=f"fake-{provider}", is_default=True
+        )
+        key.key = "fake-key"
+        db.add(key)
+        keys[provider] = key
+    db.commit()
+    return keys
+
+
 @pytest.fixture
-def fake_providers(monkeypatch):
-    monkeypatch.setitem(registry.PROVIDERS, "fake-rich", FakeRich)
-    monkeypatch.setitem(registry.PROVIDERS, "fake-poor", FakePoor)
-    monkeypatch.setitem(registry.API_KEYS, "fake-rich", lambda: "fake-key")
-    monkeypatch.setitem(registry.API_KEYS, "fake-poor", lambda: "fake-key")
+def fake_providers(monkeypatch, db_session, regular_user):
+    """Fakes in the anthropic and openai slots, and a default key for each so runs can pay."""
+    monkeypatch.setitem(registry.PROVIDERS, "anthropic", FakeRich)
+    monkeypatch.setitem(registry.PROVIDERS, "openai", FakePoor)
     ScriptedProvider.script = []
     ScriptedProvider.requests = []
+    ScriptedProvider.keys = default_keys(db_session, regular_user)
     yield ScriptedProvider
+
+
+@pytest.fixture
+def admin_keys(db_session, admin_user, fake_providers):
+    """Default keys for the admin, for tests whose runs belong to them."""
+    return default_keys(db_session, admin_user)
 
 
 @pytest.fixture

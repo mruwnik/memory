@@ -9,12 +9,11 @@ from datetime import datetime, timezone
 
 import httpx
 
-from memory.agents.spec import AgentSpec
 from memory.common import settings
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import KeyStatus, LLMProviderKey
+from memory.common.db.models import KeyStatus, LLMProviderKey, User
 from memory.common.llms.registry import split_model
-from memory.common.scopes import SCOPE_LLM_SERVER_KEY, has_scope
+from memory.common.notify import notify_user_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +36,6 @@ class KeyUnavailable(ValueError):
 
 def keys_page() -> str:
     return f"{settings.SERVER_URL.rstrip('/')}/ui/agents/keys"
-
-
-def server_key_allowed(scopes: list[str]) -> bool:
-    return has_scope(scopes, SCOPE_LLM_SERVER_KEY)
 
 
 def rejected_message(key: LLMProviderKey) -> str:
@@ -80,35 +75,37 @@ def default_key(db: DBSession, user_id: int, provider: str) -> LLMProviderKey | 
 def choose_key(
     db: DBSession,
     user_id: int,
-    spec: AgentSpec,
-    scopes: list[str],
+    model: str,
+    provider_key: int | None,
     require_ok: bool = True,
-) -> LLMProviderKey | None:
-    """The user's key that pays for a run of `spec`, or None for the server's.
-
-    In order: the key the spec pins, the user's default for the model's provider,
-    then the server's key if `scopes` allow it. With `require_ok`, a key its
-    provider rejected is refused rather than used.
-    """
-    provider = split_model(spec.model)[0]
-    if spec.provider_key == "server":
-        if not server_key_allowed(scopes):
-            raise KeyUnavailable(
-                f"using the server's {provider} key needs the {SCOPE_LLM_SERVER_KEY} scope; "
-                f"add your own key at {keys_page()}"
-            )
-        return None
-    if spec.provider_key is not None:
-        key = pinned_key(db, user_id, spec.provider_key, spec.model)
+) -> LLMProviderKey:
+    """The user's key that pays for a run on `model`: the pinned one, else their default
+    for the model's provider. With `require_ok`, a key its provider rejected is refused."""
+    if provider_key is not None:
+        key = pinned_key(db, user_id, provider_key, model)
     else:
-        key = default_key(db, user_id, provider)
+        key = default_key(db, user_id, split_model(model)[0])
     if key is None:
-        if server_key_allowed(scopes):
-            return None
-        raise KeyUnavailable(f"add an API key for {provider} at {keys_page()}")
+        raise KeyUnavailable(f"add an API key for {split_model(model)[0]} at {keys_page()}")
     if require_ok and key.status != KeyStatus.OK:
         raise KeyUnavailable(rejected_message(key))
     return key
+
+
+def notify_key_rejected(key: LLMProviderKey) -> None:
+    """Tell the key's owner, once, that its provider refused it."""
+    with make_session() as db:
+        user = db.get(User, key.user_id)
+        if user is None:
+            return
+        notify_user_now(
+            db,
+            user,
+            f"Your {key.provider} API key '{key.label}' was rejected",
+            f"{key.provider} refused it. Agent runs and other LLM work that use it "
+            "stop until you replace it.",
+            keys_page(),
+        )
 
 
 def http_client() -> httpx.AsyncClient:

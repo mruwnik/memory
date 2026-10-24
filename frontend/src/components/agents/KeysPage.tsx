@@ -152,14 +152,12 @@ const deleteOutcome = (entry: ProviderKey, result: KeyDeleteResult, keys: Keys) 
     `Deleted '${entry.label}'.`,
     result.pinned_by.length > 0 && `These agents used it and fail until you pick another key: ${result.pinned_by.join(', ')}.`,
     successor && `'${successor.label}' is now your default ${PROVIDER_NAMES[entry.provider]} key.`,
-    result.note && `${result.note[0].toUpperCase()}${result.note.slice(1)}.`,
   ].filter(Boolean).join('\n')
 }
 
 export default function KeysPage() {
   const { listKeys, upsertKey, deleteKey } = useAgents()
   const [keys, setKeys] = useState<Keys | null>(null)
-  const [serverAllowed, setServerAllowed] = useState(false)
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<ProviderKey | null>(null)
   const [outcome, setOutcome] = useState<{ tone: 'success' | 'warning'; message: string } | null>(null)
@@ -169,10 +167,7 @@ export default function KeysPage() {
   const load = useCallback(() => {
     setLoadError(null)
     listKeys()
-      .then(result => {
-        setKeys(result.providers)
-        setServerAllowed(result.server_key_allowed)
-      })
+      .then(result => setKeys(result.providers))
       .catch(e => setLoadError(e.message))
   }, [listKeys])
   useEffect(load, [load])
@@ -197,12 +192,7 @@ export default function KeysPage() {
     <Page
       back={{ to: '/ui/agents', label: 'Agents' }}
       title="API keys"
-      description={<>
-        Your own provider keys for agent runs. Runs on your keys skip the server's cost ceilings; the agent's caps and the
-        key's daily cap still apply. {serverAllowed
-          ? "Agents with no key of yours for their model's provider use the server's key."
-          : "Agents need a key of yours for their model's provider to run."}
-      </>}
+      description="Your own provider keys for agent runs. The agent's caps and the key's daily cap apply. Agents need a key of yours for their model's provider to run."
       actions={<Button variant="primary" onClick={() => setAdding(true)}>New key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}

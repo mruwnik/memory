@@ -13,7 +13,7 @@ from memory.common.mcp_oauth import MCPServerError, refresh_locked
 from tests.conftest import mcp_auth_context
 from tests.memory.agents.fake_mcp import add_server, connect_oauth, reload
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
 
 def callback_request(query: str, session_token: str | None) -> Request:

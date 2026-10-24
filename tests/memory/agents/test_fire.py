@@ -25,7 +25,7 @@ from memory.common.db.models.sources import (
 )
 from tests.conftest import unique_sha256
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 CONFIG = {
     "filter": {"tags_any": ["ai"]},
     "delivery": {"mode": "per_item"},
@@ -35,8 +35,6 @@ CONFIG = {
 
 @pytest.fixture(autouse=True)
 def ceilings(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
-    monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
     monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 60)
 
 
@@ -78,7 +76,7 @@ def claimed(*items):
 
 
 def test_a_fire_starts_one_run_with_the_rendered_input(
-    db_session, admin_user, fake_providers, no_celery_dispatch
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
 ):
     trigger = setup(db_session, admin_user)
     a, b = post(db_session, "A"), post(db_session, "B")
@@ -118,7 +116,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     ],
 )
 def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
-    db_session, admin_user, fake_providers, no_celery_dispatch, monkeypatch, delivery, inputs
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, monkeypatch, delivery, inputs
 ):
     client = fakeredis.FakeRedis()
     setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
@@ -159,7 +157,7 @@ def test_disabled_triggers_and_unreadable_items_start_nothing(
     [(["agents"], True, "no longer valid"), (["read"], False, "'agents' scope")],
 )
 def test_lost_credentials_trip_the_breaker(
-    db_session, admin_user, fake_providers, key_scopes, revoked, reason
+    db_session, admin_user, fake_providers, admin_keys, key_scopes, revoked, reason
 ):
     key = APIKey.create(user_id=admin_user.id, name="k", scopes=key_scopes)
     key.revoked = revoked
@@ -176,8 +174,8 @@ def test_lost_credentials_trip_the_breaker(
     assert reason in trigger.state["tripped"]["reason"]
 
 
-def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_providers):
-    scopes = ["agents", "llm_server_key", "read"]
+def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_providers, admin_keys):
+    scopes = ["agents", "read"]
     key = APIKey.create(user_id=admin_user.id, name="k", scopes=scopes)
     db_session.add(key)
     db_session.commit()
@@ -192,7 +190,7 @@ def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_provi
 
 
 def test_a_deleted_pinned_provider_key_trips_the_breaker(
-    db_session, admin_user, fake_providers
+    db_session, admin_user, fake_providers, admin_keys
 ):
     trigger = setup(db_session, admin_user, spec=SPEC | {"provider_key": 99999})
 
@@ -208,11 +206,11 @@ def test_a_deleted_pinned_provider_key_trips_the_breaker(
     [
         (SPEC | {"max_runs_per_hour": 1}, "0", "max_runs_per_hour"),
         (SPEC | {"max_cost_usd_per_day": "0.50"}, "0.50", "definition pool"),
-        (SPEC | {"model": "fake-poor/m", "reasoning": "medium"}, "0", "reasoning"),
+        (SPEC | {"model": "openai/m", "reasoning": "medium"}, "0", "reasoning"),
     ],
 )
 def test_hitting_a_cap_trips_the_breaker_and_tells_the_owner(
-    db_session, admin_user, fake_providers, no_celery_dispatch, spec, earlier_cost, reason
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, spec, earlier_cost, reason
 ):
     trigger = setup(db_session, admin_user, spec)
     db_session.add(
@@ -240,7 +238,7 @@ def test_hitting_a_cap_trips_the_breaker_and_tells_the_owner(
     assert "Agent trigger paused: watcher" in notification.kwargs["args"][2]
 
 
-def test_a_deleted_key_trips_rather_than_widening(db_session, admin_user, fake_providers):
+def test_a_deleted_key_trips_rather_than_widening(db_session, admin_user, fake_providers, admin_keys):
     trigger = setup(db_session, admin_user)
     trigger.via_api_key = True
     db_session.commit()
@@ -265,7 +263,7 @@ def test_only_the_first_trip_disables_and_notifies(
 def test_a_batch_runs_over_only_the_items_still_readable_when_it_fires(
     db_session, regular_user, fake_providers
 ):
-    regular_user.scopes = ["agents", "llm_server_key"]
+    regular_user.scopes = ["agents"]
     project = Project(title="P", state="open")
     team = Team(name="T", slug="t-fire")
     person = Person(identifier="p-fire", display_name="P", user_id=regular_user.id)

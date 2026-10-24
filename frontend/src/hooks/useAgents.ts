@@ -22,8 +22,8 @@ export interface AgentSpec {
   max_cost_usd_per_day: string | null
   max_runs_per_hour: number | null
   timeout_sec: number
-  // A key id of yours, 'server', or null: your default key for the model's provider, then the server's if allowed.
-  provider_key?: number | 'server' | null
+  // A key id of yours, or null for your default key for the model's provider.
+  provider_key?: number | null
 }
 
 export interface AgentRun {
@@ -94,8 +94,6 @@ export interface Catalog {
   tools: { name: string; description: string; read_only: boolean }[]
   models: ModelEntry[]
   ceilings: {
-    max_run_cost_usd: string
-    max_daily_cost_usd: string
     max_timeout_sec: number
     max_runs_per_hour: number
     default_user_key_run_cost_usd: string
@@ -104,7 +102,6 @@ export interface Catalog {
   trigger_source_types: string[]
   mcp_servers: ExternalServer[]
   provider_keys: ProviderKey[]
-  server_key_allowed: boolean
 }
 
 export type KeyProvider = 'anthropic' | 'openai'
@@ -143,7 +140,6 @@ export interface KeyDeleteResult {
   deleted: number
   pinned_by: string[]
   new_default: number | null
-  note: string | null
 }
 
 export type ServerStatus = 'pending_auth' | 'connected' | 'needs_reauth' | 'error'
@@ -393,7 +389,7 @@ export const useAgents = () => {
   const deleteServer = useCallback((serverId: number) => call('agent_server_delete', { server_id: serverId }), [call])
 
   const listKeys = useCallback(
-    () => call<{ providers: Record<KeyProvider, ProviderKey[]>; server_key_allowed: boolean }>('agent_key_list'),
+    () => call<{ providers: Record<KeyProvider, ProviderKey[]> }>('agent_key_list'),
     [call],
   )
   const upsertKey = useCallback(

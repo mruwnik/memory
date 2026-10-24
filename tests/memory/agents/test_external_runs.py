@@ -103,8 +103,8 @@ async def test_runs_fail_naming_the_server_and_notify_once(
         revoke_everything(fake_mcp)
         return calls(("c1", f"mcp_{server.id}_lookup", {"query": "kiwi"}))
 
-    first = make_run(db_session, regular_user, "fake-rich/m", **external_spec(server.id))
-    second = make_run(db_session, regular_user, "fake-rich/m", **external_spec(server.id))
+    first = make_run(db_session, regular_user, "anthropic/m", **external_spec(server.id))
+    second = make_run(db_session, regular_user, "anthropic/m", **external_spec(server.id))
     fake_providers.script = [revoke_then_call, reply("never reached")]
 
     await execute_run(first)
@@ -134,7 +134,7 @@ def test_enqueue_refuses_servers_a_run_cannot_use(
     server.status = status
     db_session.commit()
     spec = AgentSpec.model_validate(
-        {"system_prompt": "x", "model": "fake-rich/m"} | external_spec(server.id)
+        {"system_prompt": "x", "model": "anthropic/m"} | external_spec(server.id)
     )
 
     with pytest.raises(SpecInvalid, match=expected):
@@ -221,7 +221,7 @@ async def test_a_run_records_changed_tools_as_a_notice(
     )
     db_session.add(definition)
     db_session.commit()
-    run_id = make_run(db_session, regular_user, "fake-rich/m", **external_spec(server.id))
+    run_id = make_run(db_session, regular_user, "anthropic/m", **external_spec(server.id))
     run = db_session.get(AgentRun, run_id)
     assert run is not None
     run.definition_id = definition.id

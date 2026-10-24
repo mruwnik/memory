@@ -9,7 +9,7 @@ from memory.common import settings
 from memory.common.db.models import AgentDefinition, AgentTrigger, APIKey
 from tests.conftest import mcp_auth_context
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 CONFIG = {"filter": {"tags_any": ["ai"]}}
 
 
@@ -113,11 +113,11 @@ async def test_a_trigger_remembers_the_key_that_made_it(
     db_session, regular_user, fake_providers
 ):
     d = definition(db_session, regular_user)
-    key = APIKey.create(user_id=regular_user.id, name="k", scopes=["agents", "llm_server_key"])
+    key = APIKey.create(user_id=regular_user.id, name="k", scopes=["agents"])
     db_session.add(key)
     db_session.commit()
 
-    with mcp_auth_context(key.key, scopes=["agents", "llm_server_key"]):
+    with mcp_auth_context(key.key, scopes=["agents"]):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
 
     assert (created["api_key_id"], created["via_api_key"]) == (key.id, True)
@@ -199,7 +199,7 @@ async def test_enabled_triggers_are_capped_per_user(
     [([], []), (["web_fetch"], ["web_fetch"]), (["meta_notify_user"], ["meta_notify_user"])],
 )
 async def test_write_and_egress_tools_are_flagged(
-    db_session, admin_user, admin_session, fake_providers, tools, warned
+    db_session, admin_user, admin_session, fake_providers, admin_keys, tools, warned
 ):
     d = definition(db_session, admin_user, SPEC | {"tools": tools})
 

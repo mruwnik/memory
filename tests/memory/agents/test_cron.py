@@ -5,7 +5,6 @@ import pytest
 
 from memory.agents import cron
 from memory.agents.cron import start_cron_run
-from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
 from memory.common.db.models import (
     AgentDefinition,
@@ -15,18 +14,12 @@ from memory.common.db.models import (
     TaskExecution,
 )
 
-SPEC = {"system_prompt": "x", "model": "fake-rich/m", "reasoning": "high"}
-
-
-@pytest.fixture(autouse=True)
-def ceilings(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_RUN_COST_USD", Decimal("1.00"))
-    monkeypatch.setattr(settings, "AGENT_MAX_DAILY_COST_USD", Decimal("10.00"))
+SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
 
 @pytest.fixture
 def owner(db_session, regular_user):
-    regular_user.scopes = ["agents", "llm_server_key"]
+    regular_user.scopes = ["agents"]
     db_session.commit()
     return regular_user
 
@@ -156,13 +149,13 @@ def test_a_long_overdue_execution_is_skipped(db_session, owner, fake_providers):
 
 def test_the_creating_api_key_bounds_the_run(db_session, owner, fake_providers):
     d = definition(db_session, owner)
-    key = api_key(db_session, owner, ["agents", "llm_server_key", "read"])
+    key = api_key(db_session, owner, ["agents", "read"])
     e = execution(db_session, owner, d.id, api_key_id=key.id)
 
     start_cron_run(e.id)
 
     run = db_session.query(AgentRun).one()
-    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "llm_server_key", "read"])
+    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
 
 
 @pytest.mark.parametrize(
@@ -212,7 +205,7 @@ def test_a_schedule_that_can_never_run_is_failed_and_disabled(
 @pytest.mark.parametrize(
     "spec,expected",
     [
-        (SPEC | {"reasoning": "medium", "model": "fake-poor/m"}, "reasoning"),
+        (SPEC | {"reasoning": "medium", "model": "openai/m"}, "reasoning"),
         (SPEC | {"max_cost_usd_per_day": "0.000001"}, "definition pool"),
     ],
 )

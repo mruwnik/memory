@@ -54,51 +54,30 @@ def provider_api(monkeypatch):
     return api
 
 
-@pytest.fixture
-def keyless_user(db_session, regular_user):
-    regular_user.scopes = ["teams"]
-    db_session.commit()
-    return regular_user
-
-
 # --- resolution -------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "pinned,scopes,expected",
-    [
-        ("other", [], "other"),
-        (None, [], "main"),
-        (None, ["llm_server_key"], "main"),
-        ("server", ["llm_server_key"], None),
-        ("server", ["*"], None),
-    ],
-)
-def test_keys_resolve_pinned_then_default_then_server(
-    db_session, regular_user, pinned, scopes, expected
-):
+@pytest.mark.parametrize("pinned,expected", [("other", "other"), (None, "main")])
+def test_keys_resolve_pinned_then_default(db_session, regular_user, pinned, expected):
     keys = {
         "main": add_key(db_session, regular_user, "main", is_default=True),
         "other": add_key(db_session, regular_user, "other"),
     }
-    choice = {"main": keys["main"].id, "other": keys["other"].id}.get(pinned, pinned)
-    expected_id = {"main": keys["main"].id, "other": keys["other"].id}.get(expected)
+    choice = {"main": keys["main"].id, "other": keys["other"].id}.get(pinned)
 
-    chosen = choose_key(db_session, regular_user.id, spec(provider_key=choice), scopes)
+    chosen = choose_key(db_session, regular_user.id, MODEL, choice)
 
-    assert getattr(chosen, "id", None) == expected_id
-
-
-@pytest.mark.parametrize("scopes", [["llm_server_key"], ["*"]])
-def test_without_keys_the_server_key_needs_the_scope(db_session, regular_user, scopes):
-    assert choose_key(db_session, regular_user.id, spec(), scopes) is None
+    assert chosen.id == keys[expected].id
 
 
-def test_a_default_for_another_provider_does_not_count(db_session, regular_user):
-    add_key(db_session, regular_user, provider="openai", is_default=True)
+@pytest.mark.parametrize("provider,is_default", [("anthropic", False), ("openai", True)])
+def test_without_a_default_for_the_models_provider_runs_are_refused(
+    db_session, regular_user, provider, is_default
+):
+    add_key(db_session, regular_user, provider=provider, is_default=is_default)
 
     with pytest.raises(KeyUnavailable, match="add an API key for anthropic"):
-        choose_key(db_session, regular_user.id, spec(), ["agents"])
+        choose_key(db_session, regular_user.id, MODEL, None)
 
 
 @pytest.mark.parametrize(
@@ -108,7 +87,6 @@ def test_a_default_for_another_provider_does_not_count(db_session, regular_user)
         ("missing", "is not yours or was deleted"),
         ("wrong_provider", "is an openai key, but anthropic/claude-sonnet-5-5 needs an anthropic key"),
         ("invalid_default", "was rejected by anthropic; replace it"),
-        ("server_unallowed", "needs the llm_server_key scope"),
     ],
 )
 def test_unusable_choices_are_refused_with_the_reason(
@@ -122,11 +100,10 @@ def test_unusable_choices_are_refused_with_the_reason(
         "missing": 99999,
         "wrong_provider": wrong.id,
         "invalid_default": None,
-        "server_unallowed": "server",
     }[setup]
 
     with pytest.raises(KeyUnavailable, match=expected):
-        choose_key(db_session, regular_user.id, spec(provider_key=choice), [])
+        choose_key(db_session, regular_user.id, MODEL, choice)
 
 
 # --- saving -------------------------------------------------------------------
@@ -287,12 +264,12 @@ async def test_other_users_keys_are_unknown(
 
 @pytest.mark.asyncio
 async def test_deleting_a_pinned_key_names_the_agents_that_pinned_it(
-    db_session, keyless_user, user_session
+    db_session, regular_user, user_session
 ):
-    key = add_key(db_session, keyless_user)
+    key = add_key(db_session, regular_user)
     db_session.add(
         AgentDefinition(
-            user_id=keyless_user.id,
+            user_id=regular_user.id,
             name="digest",
             spec=spec(provider_key=key.id).model_dump(mode="json"),
         )
@@ -302,7 +279,7 @@ async def test_deleting_a_pinned_key_names_the_agents_that_pinned_it(
     with mcp_auth_context(user_session.id):
         result = await agent.key_delete.fn(key_id=key.id)
 
-    assert result == {"deleted": key.id, "pinned_by": ["digest"], "new_default": None, "note": None}
+    assert result == {"deleted": key.id, "pinned_by": ["digest"], "new_default": None}
     assert db_session.query(LLMProviderKey).count() == 0
 
 
@@ -310,17 +287,10 @@ async def test_deleting_a_pinned_key_names_the_agents_that_pinned_it(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scopes,allowed", [(["teams"], False), (["teams", "llm_server_key"], True)])
-async def test_catalog_says_whether_the_server_key_is_allowed(
-    db_session, regular_user, user_session, scopes, allowed
-):
-    regular_user.scopes = scopes
-    db_session.commit()
-
+async def test_catalog_lists_your_keys(db_session, regular_user, user_session):
     with mcp_auth_context(user_session.id):
         catalog = await agent.catalog.fn()
 
-    assert catalog["server_key_allowed"] is allowed
     assert catalog["provider_keys"] == []
 
 
@@ -333,7 +303,7 @@ async def test_catalog_says_whether_the_server_key_is_allowed(
     ],
 )
 async def test_agents_without_a_usable_key_are_refused_at_save(
-    db_session, keyless_user, user_session, fields, expected
+    db_session, regular_user, user_session, fields, expected
 ):
     with mcp_auth_context(user_session.id):
         with pytest.raises(ValueError, match=expected):
@@ -342,16 +312,16 @@ async def test_agents_without_a_usable_key_are_refused_at_save(
 
 @pytest.mark.asyncio
 async def test_an_agent_on_your_own_key_records_it_on_the_run(
-    db_session, keyless_user, user_session
+    db_session, regular_user, user_session
 ):
-    key = add_key(db_session, keyless_user, is_default=True)
+    key = add_key(db_session, regular_user, is_default=True)
 
     with mcp_auth_context(user_session.id):
         started = await agent.run.fn(input="hi", spec={"system_prompt": "x", "model": MODEL})
         listed = await agent.key_list.fn()
 
     stored = db_session.get(AgentRun, started["run_id"])
-    assert (stored.key_source, stored.provider_key_id) == ("user", key.id)
+    assert stored.provider_key_id == key.id
     assert listed["providers"]["anthropic"][0]["id"] == key.id
 
 
@@ -390,28 +360,3 @@ async def test_losing_the_default_promotes_the_most_recently_used_key(
 
     assert {k["label"]: k["is_default"] for k in listed["providers"]["anthropic"]} == expected
     assert listed["providers"]["openai"][0]["is_default"] is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "scopes,note",
-    [
-        (["agents"], None),
-        (
-            ["agents", "llm_server_key"],
-            "you have no anthropic keys left, so agents that don't pin a key now run on "
-            "the server's anthropic key, under its cost ceilings",
-        ),
-    ],
-)
-async def test_deleting_the_last_key_says_when_agents_fall_back_to_the_server_key(
-    db_session, regular_user, user_session, scopes, note
-):
-    regular_user.scopes = scopes
-    db_session.commit()
-    key = add_key(db_session, regular_user, is_default=True)
-
-    with mcp_auth_context(user_session.id):
-        result = await agent.key_delete.fn(key_id=key.id)
-
-    assert result == {"deleted": key.id, "pinned_by": [], "new_default": None, "note": note}

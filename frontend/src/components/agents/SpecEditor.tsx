@@ -155,8 +155,6 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
   const exfiltrationRisk = externalNames.length > 0
     && value.tools.some(t => !catalog.builtins.includes(t))
     && (value.tools.includes('web_fetch') || value.tools.some(t => sideEffects.has(t)) || externalWrites)
-  // The server's cost ceilings bind only runs on its key.
-  const onUserKey = payer(value, catalog).key !== null
 
   return (
     <div className="space-y-4">
@@ -245,15 +243,15 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
             onChange={e => set({ max_turns: Number(e.target.value) })} />
         </div>
         <div>
-          <Label className="mb-1" htmlFor="spec-cost">Max $ per run{!onUserKey && ` (≤ ${catalog.ceilings.max_run_cost_usd})`}</Label>
+          <Label className="mb-1" htmlFor="spec-cost">Max $ per run</Label>
           <Input id="spec-cost" value={value.max_cost_usd ?? ''}
-            placeholder={onUserKey ? catalog.ceilings.default_user_key_run_cost_usd : catalog.ceilings.max_run_cost_usd}
+            placeholder={catalog.ceilings.default_user_key_run_cost_usd}
             onChange={e => set({ max_cost_usd: e.target.value || null })} />
         </div>
         <div>
-          <Label className="mb-1" htmlFor="spec-daily">Max $ per day{!onUserKey && ` (≤ ${catalog.ceilings.max_daily_cost_usd})`}</Label>
+          <Label className="mb-1" htmlFor="spec-daily">Max $ per day</Label>
           <Input id="spec-daily" value={value.max_cost_usd_per_day ?? ''}
-            placeholder={onUserKey ? 'optional' : catalog.ceilings.max_daily_cost_usd}
+            placeholder="optional"
             onChange={e => set({ max_cost_usd_per_day: e.target.value || null })} />
         </div>
         <div>

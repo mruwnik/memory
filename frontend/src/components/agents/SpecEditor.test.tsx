@@ -44,12 +44,11 @@ const catalog: Catalog = {
       extras_schema: {},
     },
   ],
-  ceilings: { max_run_cost_usd: '1.00', max_daily_cost_usd: '10.00', max_timeout_sec: 1800, max_runs_per_hour: 60, default_user_key_run_cost_usd: '2.00' },
+  ceilings: { max_timeout_sec: 1800, max_runs_per_hour: 60, default_user_key_run_cost_usd: '2.00' },
   default_model: 'anthropic/claude-sonnet-5-5',
   trigger_source_types: ['blog_post', 'discord_message'],
   mcp_servers: [server()],
   provider_keys: [providerKey(), providerKey({ id: 4, label: 'work', key_hint: 'cd34', is_default: false }), providerKey({ id: 5, provider: 'openai', label: 'gpt' })],
-  server_key_allowed: false,
 }
 
 const withServer = (s: ExternalServer): Catalog => ({ ...catalog, mcp_servers: [s] })
@@ -58,22 +57,18 @@ const sonnet = defaultSpec('anthropic/claude-sonnet-5-5')
 const keyOptions = () => Array.from(screen.getByLabelText('API key').querySelectorAll('option')).map(o => o.textContent)
 
 describe('SpecEditor', () => {
-  it.each([
-    [false, ['Default key for Anthropic', 'personal (••••ab12)', 'work (••••cd34)']],
-    [true, ['Default key for Anthropic', 'personal (••••ab12)', 'work (••••cd34)', 'Server key']],
-  ])('offers the provider\'s keys, and the server key only when allowed (%s)', (allowed, expected) => {
-    renderWithRouter(<SpecEditor value={sonnet} catalog={{ ...catalog, server_key_allowed: allowed }} onChange={vi.fn()} />)
-    expect(keyOptions()).toEqual(expected)
+  it("offers the provider's keys", () => {
+    renderWithRouter(<SpecEditor value={sonnet} catalog={catalog} onChange={vi.fn()} />)
+    expect(keyOptions()).toEqual(['Default key for Anthropic', 'personal (••••ab12)', 'work (••••cd34)'])
   })
 
   it.each([
-    [null, "your key 'personal'", 'Max $ per run', '2.00'],
-    [4, "your key 'work'", 'Max $ per run', '2.00'],
-    ['server' as const, "the server's Anthropic key", 'Max $ per run (≤ 1.00)', '1.00'],
-  ])('says which key pays for %s and which ceilings apply', (provider_key, payer, costLabel, placeholder) => {
-    renderWithRouter(<SpecEditor value={{ ...sonnet, provider_key }} catalog={{ ...catalog, server_key_allowed: true }} onChange={vi.fn()} />)
+    [null, "your key 'personal'"],
+    [4, "your key 'work'"],
+  ])('says which key pays for %s and the default per-run cap', (provider_key, payer) => {
+    renderWithRouter(<SpecEditor value={{ ...sonnet, provider_key }} catalog={catalog} onChange={vi.fn()} />)
     expect(screen.getByText(new RegExp(`Runs pay with ${payer}`))).toBeInTheDocument()
-    expect(screen.getByLabelText(costLabel)).toHaveAttribute('placeholder', placeholder)
+    expect(screen.getByLabelText('Max $ per run')).toHaveAttribute('placeholder', '2.00')
   })
 
   it('links to the keys page when no key can pay', () => {

@@ -37,7 +37,6 @@ from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
     choose_key,
-    server_key_allowed,
 )
 from memory.agents.triggers import (
     INGEST,
@@ -210,26 +209,25 @@ def foreign_servers(spec: AgentSpec) -> list[str]:
         ]
 
 
-def provider_key_errors(spec: AgentSpec) -> tuple[bool, list[str]]:
-    """Whether runs of `spec` by the caller would use the server's key, and why none can pay.
+def provider_key_errors(spec: AgentSpec) -> list[str]:
+    """Why no key of the caller's can pay for runs of `spec`.
 
     A key its provider rejected still counts here: it can be replaced without
     editing the agent, and the run says so if it isn't.
     """
     user_id, _ = caller()
-    _, scopes = caller_token()
     with make_session() as db:
         try:
-            return choose_key(db, user_id, spec, scopes, require_ok=False) is None, []
+            choose_key(db, user_id, spec.model, spec.provider_key, require_ok=False)
         except KeyUnavailable as e:
-            return True, [str(e)]
+            return [str(e)]
+        return []
 
 
 async def check_spec(spec: AgentSpec) -> None:
-    on_server_key, key_problems = provider_key_errors(spec)
     errors = (
-        spec_errors(spec, on_server_key)
-        + key_problems
+        spec_errors(spec)
+        + provider_key_errors(spec)
         + [
             f"tool '{n}' is not visible to you (missing scope?)"
             for n in await invisible_tools(spec)
@@ -252,9 +250,8 @@ async def upsert(
     temperature, provider_extras, tools (memory tool names and builtins web_search/web_fetch),
     mcp_servers ([{server_id, tools}]), finish ({"mode": "answer"} or
     {"mode": "tool", "tools": [...]}), result_schema, max_turns, max_cost_usd,
-    max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list ids, or
-    "server"; omit for your default key for the model's provider, then the server's if
-    you may use it). Errors name every problem at once.
+    max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list ids; omit
+    for your default key for the model's provider). Errors name every problem at once.
     """
     user_id, _ = caller()
     name = name.strip()
@@ -483,9 +480,8 @@ def capabilities_json(caps: Capabilities) -> dict:
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def catalog() -> dict:
-    """What a definition can use: your visible tools, builtins, models, cost
-    ceilings, your external MCP servers with their cached tools, your provider
-    keys, and whether runs may fall back to the server's keys."""
+    """What a definition can use: your visible tools, builtins, models, limits,
+    your external MCP servers with their cached tools, and your provider keys."""
     token, scopes = caller_token()
     async with memory_tools(token, scopes) as tools:
         listed = await tools.list()
@@ -507,8 +503,6 @@ async def catalog() -> dict:
             for model, info in sorted(all_models().items())
         ],
         "ceilings": {
-            "max_run_cost_usd": str(settings.AGENT_MAX_RUN_COST_USD),
-            "max_daily_cost_usd": str(settings.AGENT_MAX_DAILY_COST_USD),
             "max_timeout_sec": settings.AGENT_MAX_TIMEOUT_SEC,
             "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
             "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),
@@ -517,7 +511,6 @@ async def catalog() -> dict:
         "trigger_source_types": source_types(),
         "mcp_servers": user_servers(),
         "provider_keys": [k for keys in user_keys().values() for k in keys],
-        "server_key_allowed": server_key_allowed(scopes),
     }
 
 
@@ -1113,9 +1106,8 @@ def promote_default(
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def key_list() -> dict:
     """Your LLM provider API keys by provider (never the keys themselves, only their
-    last 4 characters), and whether runs may fall back to the server's keys."""
-    _, scopes = caller_token()
-    return {"providers": user_keys(), "server_key_allowed": server_key_allowed(scopes)}
+    last 4 characters)."""
+    return {"providers": user_keys()}
 
 
 @agent_mcp.tool()
@@ -1136,7 +1128,7 @@ async def key_upsert(
     provider becomes its default; un-defaulting it makes your most recently used
     other key the default. max_cost_usd_per_day caps daily spend on this key (""
     removes the cap; with no cap here or on the agent, AGENT_DEFAULT_USER_KEY_DAILY_COST_USD
-    applies); runs on your own keys skip the server's cost ceilings.
+    applies).
 
     Prefer entering keys in the web UI: a key passed in a tool call stays in the AI
     client's transcript.
@@ -1192,10 +1184,8 @@ async def key_upsert(
 async def key_delete(key_id: int) -> dict:
     """Delete one of your provider keys. Agents that pin it (`pinned_by`) fail
     until you pick another key for them. Deleting the default makes your most
-    recently used other key for the provider the default (`new_default`); `note`
-    says when agents fall back to the server's key instead."""
+    recently used other key for the provider the default (`new_default`)."""
     user_id, _ = caller()
-    _, scopes = caller_token()
     with make_session() as db:
         found = owned_key(db, key_id, user_id)
         provider = found.provider
@@ -1204,15 +1194,4 @@ async def key_delete(key_id: int) -> dict:
         db.delete(found)
         successor = promote_default(db, user_id, provider, key_id)
         new_default = successor.id if successor else None
-        keys_left = (
-            db.query(LLMProviderKey)
-            .filter(LLMProviderKey.user_id == user_id, LLMProviderKey.provider == provider)
-            .count()
-        )
-    note = None
-    if keys_left == 0 and server_key_allowed(scopes):
-        note = (
-            f"you have no {provider} keys left, so agents that don't pin a key now run "
-            f"on the server's {provider} key, under its cost ceilings"
-        )
-    return {"deleted": key_id, "pinned_by": pinned_by, "new_default": new_default, "note": note}
+    return {"deleted": key_id, "pinned_by": pinned_by, "new_default": new_default}

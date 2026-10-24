@@ -4,8 +4,9 @@ from decimal import Decimal
 
 import pytest
 
-from memory.agents import run_auth
+from memory.agents import provider_keys
 from memory.agents.enqueue import TriggerInfo, enqueue_run
+from memory.agents.provider_keys import choose_key
 from memory.agents.runner import execute_run
 from memory.agents.spec import AgentSpec
 from memory.agents.toolhub import ToolHubError
@@ -53,6 +54,7 @@ def make_run(db, user, model, max_cost="1", **spec):
         input="do it",
         max_cost_usd=Decimal(max_cost),
         trigger_kind="manual",
+        provider_key_id=choose_key(db, user.id, model, None).id,
     )
     db.add(run)
     db.commit()
@@ -182,8 +184,8 @@ async def test_failed_finish_tool_goes_back_to_the_model(
 @pytest.mark.parametrize(
     "model,expected_choices",
     [
-        ("fake-rich/m", ["auto", "required", "required"]),
-        ("fake-poor/m", ["auto", "auto", "auto"]),
+        ("anthropic/m", ["auto", "required", "required"]),
+        ("openai/m", ["auto", "auto", "auto"]),
     ],
 )
 async def test_reminders_then_failure_and_tool_choice_by_capability(
@@ -214,7 +216,7 @@ async def test_tool_choice_is_forced_only_on_the_turn_after_a_reminder(
     run_id = make_run(
         db_session,
         regular_user,
-        "fake-rich/m",
+        "anthropic/m",
         tools=["send", "echo"],
         finish={"mode": "tool", "tools": ["send"]},
     )
@@ -242,7 +244,7 @@ async def test_provider_executed_results_are_truncated_like_any_other(
     db_session, regular_user, fake_providers, monkeypatch
 ):
     monkeypatch.setattr(settings, "AGENT_TOOL_RESULT_MAX_CHARS", 10)
-    run_id = make_run(db_session, regular_user, "fake-rich/m", tools=["web_search"])
+    run_id = make_run(db_session, regular_user, "anthropic/m", tools=["web_search"])
     message = NeutralMessage(
         role="assistant",
         content=[
@@ -305,7 +307,7 @@ async def test_budgets_stop_the_run(
     db_session, regular_user, fake_providers, spec, max_cost, expected
 ):
     run_id = make_run(
-        db_session, regular_user, "fake-rich/m", max_cost=max_cost, **spec
+        db_session, regular_user, "anthropic/m", max_cost=max_cost, **spec
     )
     fake_providers.script = [
         calls(("t1", "echo", {})),
@@ -327,7 +329,7 @@ async def test_each_turn_may_only_spend_what_is_left(
     # The first turn's input is estimated from the system prompt ("be useful"),
     # the input ("do it") and the tool list ("[]"): 16 chars, 4 tokens, $0.000004.
     # The $0.000996 left of a $0.001 cap buys 498 output tokens at $2/MTok.
-    run_id = make_run(db_session, regular_user, "fake-rich/m", max_cost="0.001")
+    run_id = make_run(db_session, regular_user, "anthropic/m", max_cost="0.001")
     fake_providers.script = [stopped("max_output_tokens")]
 
     await execute_run(run_id, FakeHub({}).factory())
@@ -340,7 +342,7 @@ async def test_each_turn_may_only_spend_what_is_left(
 
 @pytest.mark.asyncio
 async def test_timeout_is_a_budget(db_session, regular_user, fake_providers):
-    run_id = make_run(db_session, regular_user, "fake-rich/m", timeout_sec=1)
+    run_id = make_run(db_session, regular_user, "anthropic/m", timeout_sec=1)
 
     async def slow():
         await asyncio.sleep(5)
@@ -365,7 +367,7 @@ def request_cancel(run_id):
 
 @pytest.mark.asyncio
 async def test_cancel_before_the_first_turn(db_session, regular_user, fake_providers):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
     request_cancel(run_id)
 
     await execute_run(run_id, hub().factory())
@@ -377,7 +379,7 @@ async def test_cancel_before_the_first_turn(db_session, regular_user, fake_provi
 
 @pytest.mark.asyncio
 async def test_cancel_between_tool_calls(db_session, regular_user, fake_providers):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
     h = hub(cancel_me=lambda i: (request_cancel(run_id), ("ok", False))[1])
     fake_providers.script = [calls(("t1", "cancel_me", {}), ("t2", "echo", {}))]
 
@@ -400,7 +402,7 @@ async def test_cancel_between_tool_calls(db_session, regular_user, fake_provider
 async def test_unusable_stop_reasons_fail_with_the_fix(
     db_session, regular_user, fake_providers, stop_reason, expected
 ):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
     fake_providers.script = [stopped(stop_reason)]
 
     await execute_run(run_id, hub().factory())
@@ -428,7 +430,7 @@ def paused() -> Completion:
 async def test_a_paused_turn_is_resumed_with_its_partial_content(
     db_session, regular_user, fake_providers
 ):
-    run_id = make_run(db_session, regular_user, "fake-rich/m", tools=["web_search"])
+    run_id = make_run(db_session, regular_user, "anthropic/m", tools=["web_search"])
     fake_providers.script = [paused(), reply("found it")]
 
     await execute_run(run_id, hub().factory())
@@ -446,7 +448,7 @@ async def test_each_resumed_request_goes_through_the_cost_cap(
 ):
     # The paused request costs $0.00012; resending its ~110 tokens would pass $0.0002.
     run_id = make_run(
-        db_session, regular_user, "fake-rich/m", max_cost="0.0002", tools=["web_search"]
+        db_session, regular_user, "anthropic/m", max_cost="0.0002", tools=["web_search"]
     )
     fake_providers.script = [paused(), paused(), reply("found it")]
 
@@ -461,7 +463,7 @@ async def test_each_resumed_request_goes_through_the_cost_cap(
 async def test_provider_executed_calls_are_not_run_by_the_runner(
     db_session, regular_user, fake_providers
 ):
-    run_id = make_run(db_session, regular_user, "fake-rich/m", tools=["web_search"])
+    run_id = make_run(db_session, regular_user, "anthropic/m", tools=["web_search"])
     message = NeutralMessage(
         role="assistant",
         content=[
@@ -487,7 +489,7 @@ async def test_provider_executed_calls_are_not_run_by_the_runner(
 
 @pytest.mark.asyncio
 async def test_only_pending_runs_execute(db_session, regular_user, fake_providers):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
     db_session.get(AgentRun, run_id).status = "running"
     db_session.commit()
 
@@ -502,14 +504,14 @@ async def test_only_pending_runs_execute(db_session, regular_user, fake_provider
 async def test_run_session_is_minted_for_the_owner_and_removed(
     db_session, regular_user, fake_providers
 ):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
     fake_providers.script = [reply("ok")]
     h = hub()
 
     await execute_run(run_id, h.factory())
 
     assert h.opened_with["user_id"] == regular_user.id
-    assert h.opened_with["scopes"] == ["teams", "llm_server_key"]
+    assert h.opened_with["scopes"] == ["teams"]
     token = h.opened_with["session_token"]
     assert db_session.query(UserSession).filter(UserSession.id == token).count() == 0
 
@@ -517,7 +519,7 @@ async def test_run_session_is_minted_for_the_owner_and_removed(
 def enqueued(db, user, api_key=None, **spec) -> str:
     full = {
         "system_prompt": "be useful",
-        "model": "fake-rich/m",
+        "model": "anthropic/m",
         "reasoning": "high",
     } | spec
     run = enqueue_run(
@@ -551,7 +553,7 @@ async def test_a_run_can_use_the_tools_its_owner_can_use_over_http(
 async def test_deleting_the_api_key_after_enqueue_does_not_widen_scopes(
     db_session, regular_user, fake_providers
 ):
-    key = APIKey.create(user_id=regular_user.id, name="narrow", scopes=["read", "llm_server_key"])
+    key = APIKey.create(user_id=regular_user.id, name="narrow", scopes=["read"])
     db_session.add(key)
     db_session.commit()
     run_id = enqueued(db_session, regular_user, api_key=key)
@@ -562,14 +564,14 @@ async def test_deleting_the_api_key_after_enqueue_does_not_widen_scopes(
 
     await execute_run(run_id, h.factory())
 
-    assert h.opened_with["scopes"] == ["read", "llm_server_key"]
+    assert h.opened_with["scopes"] == ["read"]
 
 
 @pytest.mark.asyncio
 async def test_unavailable_tools_fail_the_run_with_the_hubs_message(
     db_session, regular_user, fake_providers
 ):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
 
     def broken(**kwargs):
         raise ToolHubError(
@@ -589,7 +591,7 @@ async def test_trimming_stubs_old_results_and_records_a_notice(
 ):
     monkeypatch.setattr(settings, "AGENT_CONTEXT_TRIM_AT_TOKENS", 0)
     monkeypatch.setattr(settings, "AGENT_CONTEXT_TRIM_TO_TOKENS", 0)
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
+    run_id = make_run(db_session, regular_user, "anthropic/m")
     fake_providers.script = [
         calls((f"t{i}", "echo", {"text": "x" * 400})) for i in range(4)
     ] + [reply("done")]
@@ -609,9 +611,9 @@ async def test_trimming_stubs_old_results_and_records_a_notice(
 
 
 def on_key(db, user, key_id):
-    run_id = make_run(db, user, "fake-rich/m")
+    run_id = make_run(db, user, "anthropic/m")
     run = db.get(AgentRun, run_id)
-    run.key_source, run.provider_key_id = "user", key_id
+    run.provider_key_id = key_id
     db.commit()
     return run_id
 
@@ -620,7 +622,7 @@ def on_key(db, user, key_id):
 def notifications(monkeypatch):
     sent = []
     monkeypatch.setattr(
-        run_auth, "notify_user_now", lambda db, user, *args, **kw: sent.append((user.id, args))
+        provider_keys, "notify_user_now", lambda db, user, *args, **kw: sent.append((user.id, args))
     )
     return sent
 
@@ -640,16 +642,6 @@ async def test_runs_on_a_users_key_call_the_provider_with_it(
     assert run.status == "done", run.error
     assert fake_providers.requests[0]["api_key"] == "sk-users-own"
     assert key.last_used_at is not None
-
-
-@pytest.mark.asyncio
-async def test_server_key_runs_use_the_server_key(db_session, regular_user, fake_providers):
-    run_id = make_run(db_session, regular_user, "fake-rich/m")
-    fake_providers.script = [reply("ok")]
-
-    await execute_run(run_id, hub().factory())
-
-    assert fake_providers.requests[0]["api_key"] == "fake-key"
 
 
 @pytest.mark.asyncio
@@ -697,7 +689,7 @@ async def test_a_rejection_does_not_invalidate_a_key_replaced_mid_run(
 
 
 @pytest.mark.asyncio
-async def test_a_deleted_key_fails_its_runs_instead_of_using_the_server_key(
+async def test_a_deleted_key_fails_its_runs(
     db_session, regular_user, fake_providers
 ):
     key = add_key(db_session, regular_user)
@@ -729,14 +721,14 @@ async def test_a_forbidden_request_fails_only_that_run(
     db_session.refresh(key)
     assert (run.status, key.status, notifications) == ("failed", "ok", [])
     assert run.error == (
-        "the provider refused this request to fake-rich/m; the API key may not have "
+        "the provider refused this request to anthropic/m; the API key may not have "
         "access to this model or feature"
     )
     assert "model not allowed for this key" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_an_empty_users_key_never_falls_back_to_the_server_key(
+async def test_an_empty_key_fails_the_run(
     db_session, regular_user, fake_providers
 ):
     key = add_key(db_session, regular_user, value="")

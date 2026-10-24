@@ -17,7 +17,7 @@ const providerKey = (overrides: Partial<ProviderKey> = {}): ProviderKey => ({
   last_used_at: null, max_cost_usd_per_day: null, created_at: null, updated_at: null, ...overrides,
 })
 
-const listed = (anthropic: ProviderKey[]) => ({ providers: { anthropic, openai: [] }, server_key_allowed: false })
+const listed = (anthropic: ProviderKey[]) => ({ providers: { anthropic, openai: [] } })
 
 beforeEach(() => {
   listKeys.mockReset()
@@ -55,7 +55,7 @@ describe('KeysPage', () => {
 
   it('reports what deleting a key changed', async () => {
     listKeys.mockResolvedValue(listed([providerKey(), providerKey({ id: 2, label: 'work', is_default: false })]))
-    deleteKey.mockResolvedValue({ deleted: 1, pinned_by: ['digest'], new_default: 2, note: null })
+    deleteKey.mockResolvedValue({ deleted: 1, pinned_by: ['digest'], new_default: 2 })
     const { user } = renderWithRouter(<KeysPage />)
     const row = (await screen.findByText('personal')).closest('li')!
     await user.click(within(row).getByRole('button', { name: 'Delete' }))

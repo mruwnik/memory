@@ -80,6 +80,7 @@ class ScriptedProvider(BaseLLMProvider):
     KEY_FORBIDDEN = (FakeKeyForbidden,)
     script: list[ScriptItem] = []
     requests: list[dict] = []
+    keys: dict = {}
 
     def __init__(self, api_key: str, model: str):
         super().__init__(api_key, model, usage_tracker=InMemoryUsageTracker(configs={}))
@@ -144,16 +145,16 @@ class ScriptedProvider(BaseLLMProvider):
 
 
 class FakeRich(ScriptedProvider):
-    provider = "fake-rich"
+    provider = "anthropic"
     MODELS = {"m": RICH}
 
 
 class FakePoor(ScriptedProvider):
-    provider = "fake-poor"
+    provider = "openai"
     MODELS = {"m": POOR}
 
 
-FAKE_MODELS = ["fake-rich/m", "fake-poor/m"]
+FAKE_MODELS = ["anthropic/m", "openai/m"]
 DEFAULT_USAGE = AgentUsage(input_tokens=100, output_tokens=10)
 
 
