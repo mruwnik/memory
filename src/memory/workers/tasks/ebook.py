@@ -137,8 +137,8 @@ def validate_and_parse_book(file_path: str) -> Ebook:
 
     try:
         return parse_ebook(path)
-    except Exception as e:
-        logger.error(f"Failed to parse ebook {path}: {e}")
+    except Exception:
+        logger.exception("Failed to parse ebook")
         raise
 
 

@@ -166,7 +166,7 @@ def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type
                 )
             except Exception as e:
                 logger.error(
-                    f"Error extracting attachment content for {filename}: {str(e)}"
+                    f"Error extracting attachment content: {str(e)}"
                 )
 
     return attachments

@@ -689,13 +689,13 @@ class SimpleOAuthProvider(OAuthProvider):
                 session.query(OAuthState).filter(OAuthState.state == state).first()
             )
             if not oauth_state:
-                logger.error(f"State {state} not found in database")
+                logger.error(f"State {token_id(state)} not found in database")
                 raise ValueError("Invalid state parameter")
 
             # Check if state has expired (compare naive UTC datetimes)
             now = now_naive_utc()
             if oauth_state.expires_at < now:
-                logger.error(f"State {state} has expired")
+                logger.error(f"State {token_id(state)} has expired")
                 oauth_state.stale = True  # type: ignore
                 session.commit()
                 raise ValueError("State has expired")

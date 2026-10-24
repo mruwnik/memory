@@ -64,6 +64,8 @@ from memory.api.MCP.base import mcp
 from memory.api.safety import validate_disable_auth_safety
 
 logger = logging.getLogger(__name__)
+# Celery's record format, so tools/ops/logs.sh finds the api's errors the same way.
+logging.basicConfig(format="[%(asctime)s: %(levelname)s/%(name)s] %(message)s")
 
 
 # Refuse to boot when DISABLE_AUTH is set in a production-shaped

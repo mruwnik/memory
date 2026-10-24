@@ -30,6 +30,7 @@ case "$*" in
         printf 'item_text=%s\\n' "$(grep -h '^JWT_SECRET=' .env | cut -d= -f2)"
         ;;
     *pg_dump*) echo DUMPDATA ;;
+    "logs "*) cat "$FAKE_LOGS/${@: -1}" 2>/dev/null ;;
     "ps -a -q") echo container1 ;;
     "config --services") printf 'api\\nworker\\npostgres\\n' ;;
     *pg_restore*) cat >/dev/null; echo "row: secret-row" >&2; fails pg_restore && exit 1 ;;
@@ -262,6 +263,120 @@ def test_status_reports_a_degraded_api_instead_of_unreachable(box):
 
     assert code == 0, output
     assert "status=unreachable" in output
+
+
+TS = "2026-10-24T10:00:00.000000000Z"
+ERROR = "[2026-10-24 10:00:02,000: ERROR/memory.api.search]"
+ITEM_TEXT = "Dear Alice the merger is off"
+QUERY = "what is my salary"
+API_KEY = "sk-ant-api03-a1b2c3d4e5f6g7h8i9j0"
+API_LOG = [
+    f'INFO:     172.18.0.1:5000 - "GET /search?q={QUERY} HTTP/1.1" 200 OK',
+    f"[2026-10-24 10:00:01,000: WARNING/memory.api.search] slow search: {QUERY}",
+    f"{ERROR} Embedding failed: Client error '401' for url 'https://api.example.com/v1/embed?key={API_KEY}'",
+    "Traceback (most recent call last):",
+    '  File "/app/src/memory/common/embedding.py", line 140, in embed',
+    f'    vectors = client.embed("{QUERY}")',
+    "              ^^^^^^^^^^^^^^^^^^^^^^^^^",
+    f"sqlalchemy.exc.IntegrityError: (psycopg.errors.UniqueViolation) Key (body)=({ITEM_TEXT}) exists",
+    f"DETAIL:  Key (body)=({ITEM_TEXT}) already exists.",
+    f"[parameters: {{'body': '{ITEM_TEXT}'}}]",
+    "",
+    "The above exception was the direct cause of the following exception:",
+    "",
+    "Traceback (most recent call last):",
+    '  File "/app/src/memory/api/search/search.py", line 12, in <module>',
+    f"    raise RuntimeError({QUERY!r})",
+    f"RuntimeError: {QUERY}",
+    "ERROR:    Exception in ASGI application",
+    f"ERROR: Key (body)=({ITEM_TEXT}) already exists",
+    f"[draft: ERROR: {ITEM_TEXT}]",
+    f"[2026-10-24 10:00:04,000: INFO/memory.api] [2026-10-24 10:00:04,000: ERROR/x] {ITEM_TEXT}",
+    "CRITICAL: Application startup failed",
+]
+WORKER_LOG = [
+    "[2026-10-24 10:00:05,000: ERROR/ForkPoolWorker-1] Task memory.workers.tasks.email.sync_account"
+    f"[0b1c2d3e-4f5a-6b7c-8d9e-0f1a2b3c4d5e] raised unexpected: ValueError('{ITEM_TEXT}')",
+    f"[2026-10-24 10:00:06,000: INFO/ForkPoolWorker-1] Processed {ITEM_TEXT}",
+]
+
+
+def write_logs(box, **services):
+    logs = box.parent / "logs"
+    logs.mkdir(exist_ok=True)
+    for service, lines in services.items():
+        (logs / service).write_text("".join(f"{TS} {line}\n" for line in lines))
+    return str(logs)
+
+
+def test_logs_keeps_only_error_records_and_the_shape_of_tracebacks(box):
+    code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, api=API_LOG, worker=WORKER_LOG))
+
+    assert code == 0, output
+    assert output.splitlines() == [
+        "[api]",
+        f"{TS} {ERROR} Embedding failed: Client error '***' for url '***'",
+        f"{TS} Traceback (most recent call last):",
+        f'{TS}   File "/app/src/memory/common/embedding.py", line 140, in embed',
+        f"{TS} sqlalchemy.exc.IntegrityError",
+        f"{TS} The above exception was the direct cause of the following exception:",
+        f"{TS} Traceback (most recent call last):",
+        f'{TS}   File "/app/src/memory/api/search/search.py", line 12, in <module>',
+        f"{TS} RuntimeError",
+        f"{TS} ERROR:    Exception in ASGI application",
+        f"{TS} CRITICAL: Application startup failed",
+        "[worker]",
+        f"{TS} [2026-10-24 10:00:05,000: ERROR/ForkPoolWorker-1] Task memory.workers.tasks.email.sync_account"
+        "[***] raised unexpected: ValueError('***')",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("login failed password=hunter2 for x", "login failed password=*** for x"),
+        ("refresh failed, token: abc123", "refresh failed, token: ***"),
+        ("rejected Bearer abcdef", "rejected Bearer ***"),
+        ("mail to alice@example.com bounced", "mail to <email> bounced"),
+        ("GET https://u:pw@host.example:8443/s3cr3t/x?token=t failed", "GET https://host.example:8443 failed"),
+        (f"key {API_KEY} rejected", "key *** rejected"),
+        (f"note \"{ITEM_TEXT}\" and 'it''s' failed", "note '***' and '***''***' failed"),
+        ("raised ValueError('it\\'s a \"private\" note about Bob\\'s divorce')", "raised ValueError('***')"),
+        (f"note '{ITEM_TEXT}", "note '***'"),
+        ("Couldn't fetch 'Bob divorce notes' from drive", "Couldn't fetch '***' from drive"),
+        ("no 'Bob's divorce' here", "no '***' here"),
+        ("'utf-8' codec can't decode", "'***' codec can't decode"),
+        ("Couldn't parse it", "Couldn't parse it"),
+        ("x" * 400, ("x" * 400)[: 300 - len(ERROR) - 1]),
+    ],
+    ids=["password", "token", "bearer", "email", "url", "api-key", "quoted", "escaped-quotes", "unterminated",
+         "in-word-apostrophe", "apostrophe-inside-quote", "apostrophe-after-quote", "apostrophe-only", "long"],
+)
+def test_logs_scrubs_error_messages(box, message, expected):
+    code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, api=[f"{ERROR} {message}"]))
+
+    assert code == 0, output
+    assert output.splitlines() == ["[api]", f"{TS} {ERROR} {expected}", "[worker]"]
+
+
+def test_logs_prints_the_last_lines_per_service(box):
+    errors = [f"{ERROR} failure {i}" for i in range(5)]
+
+    code, output = ops(box, "logs", "2", FAKE_LOGS=write_logs(box, api=errors, worker=errors))
+
+    assert code == 0, output
+    assert output.splitlines() == [
+        "[api]", f"{TS} {ERROR} failure 3", f"{TS} {ERROR} failure 4",
+        "[worker]", f"{TS} {ERROR} failure 3", f"{TS} {ERROR} failure 4",
+    ]  # fmt: skip
+
+
+@pytest.mark.parametrize("lines", ["0", "1001", "abc", "5; rm -rf /"])
+def test_logs_rejects_a_bad_line_count(box, lines):
+    code, _ = ops(box, "logs", lines)
+
+    assert code != 0
+    assert "logs" not in calls(box)
 
 
 @pytest.mark.parametrize(

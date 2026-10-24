@@ -141,7 +141,7 @@ run "all_roles" {
   assert {
     condition = alltrue([
       for r, docs in {
-        observe  = ["status"]
+        observe  = ["status", "logs"]
         maintain = ["restart", "update-to", "disk-cleanup", "reboot"]
         recover  = ["rollback", "restore-latest-backup"]
       } :
@@ -189,7 +189,7 @@ run "all_roles" {
     condition = {
       for a, d in aws_ssm_document.op : a => endswith(trimspace(yamldecode(d.content).mainSteps[0].inputs.runCommand[0]), "--yes")
       } == {
-      status = false, restart = false, update-to = false, disk-cleanup = false
+      status = false, logs = false, restart = false, update-to = false, disk-cleanup = false
       reboot = true, rollback = true, restore-latest-backup = true
     }
     error_message = "exactly the destructive documents pass --yes"

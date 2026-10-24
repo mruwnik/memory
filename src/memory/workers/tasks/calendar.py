@@ -515,7 +515,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                     task = sync_calendar_event.delay(account.id, serialized)  # type: ignore[attr-defined]
                     task_ids.append(task.id)
                 except Exception as e:
-                    logger.error(f"Error queuing event {event_data.get('title')}: {e}")
+                    logger.error(f"Error queuing event {event_data.get('external_id')}: {e}")
 
             account.last_sync_at = now
             account.sync_error = None

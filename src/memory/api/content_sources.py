@@ -183,7 +183,7 @@ def delete_photo(
                 file_path.unlink()
                 logger.info(f"Deleted file: {file_path}")
             except OSError as e:
-                logger.error(f"Error deleting file {file_path}: {e}")
+                logger.error(f"Error deleting the file of photo {photo_id}: {e}")
 
     # Delete the photo record
     db.delete(photo)

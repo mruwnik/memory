@@ -207,11 +207,13 @@ run it now, queue it as in section 3 with `maintenance clean-all-collections`.
 ### Repair scripts
 
 `tools/ops/` holds the repair actions, run as root on the box (or by an operator
-through fixed SSM documents). Output is numbers and states only.
+through fixed SSM documents). Output is numbers and states only, except for
+`logs.sh` (see *Trust limits* in [deploy/aws/README.md](deploy/aws/README.md)).
 
 | Script | Does |
 |---|---|
 | `status.sh` | Health, containers, disk, memory, last update and backup results, pending reboot |
+| `logs.sh [LINES]` | The last ERROR records and traceback shapes of api and worker, scrubbed of quoted values, URLs, emails and credentials |
 | `restart.sh [service]` | Restart one service or all |
 | `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`); prints step and result lines only |
 | `rollback.sh --yes` | The commands above, from the update state or `last-good`; refuses unless the record is for the current checkout, and skips the tag it leaves |

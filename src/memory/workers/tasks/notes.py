@@ -64,10 +64,12 @@ def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
         capture_output=True,  # Capture both stdout and stderr
     )
     if res.returncode != 0:
-        logger.error(f"Git command failed: {res.returncode}")
-        logger.error(f"stderr: {res.stderr}")
+        logger.error(f"git {args[0] if args else ''} failed with exit {res.returncode}")
+        # Git's output names notes and quotes commit messages, which carry
+        # subjects; error records are shown to the appliance operator.
+        logger.warning(f"git stderr: {res.stderr}")
         if res.stdout:
-            logger.error(f"stdout: {res.stdout}")
+            logger.warning(f"git stdout: {res.stdout}")
     return res
 
 
@@ -124,10 +126,7 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note"):
                 if result and result.returncode != 0:
                     # Stash pop failed (likely merge conflict) - log prominently
                     # Changes remain in stash list for manual recovery
-                    logger.error(
-                        f"Failed to restore stashed changes (exit {result.returncode}): "
-                        f"{result.stderr or result.stdout}"
-                    )
+                    logger.error(f"Failed to restore stashed changes (exit {result.returncode})")
                     logger.error(
                         "WARNING: Stashed changes remain in stash list. "
                         "Run 'git stash list' and 'git stash pop' manually to recover."
@@ -173,11 +172,11 @@ def sync_note(
                 raise ValueError(
                     f"Note filename must be inside notes/: {filename!r}"
                 )
-        except ValueError as exc:
+        except ValueError:
             logger.error(
-                "Refusing to sync note with unsafe filename %r: %s",
-                filename,
-                exc,
+                "Refusing to sync note %s of creator %s: unsafe filename",
+                sha256.hex()[:8],
+                creator_id,
             )
             raise
 
@@ -233,7 +232,7 @@ def sync_note(
                 else:
                     logger.error(f"Note {note_id} not found after commit - skipping file save")
     elif save_to_file:
-        logger.error(f"No note_id in result, cannot save to file: {result}")
+        logger.error(f"No note_id in result, cannot save to file: status={result.get('status')}")
 
     return result
 

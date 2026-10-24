@@ -6,6 +6,11 @@ locals {
   # line, so they admit no metacharacters and no leading dash.
   actions = {
     status = { role = "observe", args = "", parameters = {} }
+    logs = {
+      role       = "observe"
+      args       = "{{ lines }}"
+      parameters = { lines = { type = "String", default = "100", allowedPattern = "^[1-9][0-9]{0,3}$", description = "Error lines per service, at most 1000" } }
+    }
     restart = {
       role       = "maintain"
       args       = "{{ service }}"

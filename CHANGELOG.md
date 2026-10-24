@@ -73,7 +73,7 @@ section has nothing in it:
   `--min-age-hours N` to install only signed, sufficiently old release tags
   (age counts from when the host first saw the tag; state in `$STATE_DIR`).
   Without them it behaves as before. New `tools/release.sh` cuts signed tags.
-- New repair scripts in `tools/ops/` (status, restart, update-to, rollback,
+- New repair scripts in `tools/ops/` (status, logs, restart, update-to, rollback,
   restore-latest-backup, disk-cleanup, reboot); see UPDATING.md. `tools/update.sh`
   now sources `tools/ops/lib.sh`, writes `$STATE_DIR/update-failed` when an update
   fails (default `STATE_DIR=/var/lib/memory`), and `last-good` records the
@@ -81,6 +81,9 @@ section has nothing in it:
   which the automatic release selection passes over.
   Automatic selection never returns a tag at or behind the checkout (exit 3,
   "up to date"), and `update.sh` does nothing when the target is already checked out.
+- API log records now carry a level (`[time: LEVEL/logger] message`, as in the
+  workers), and app warnings and errors in the API go through it instead of
+  printing bare.
 - `tools/restore_databases.sh` is removed; use `tools/ops/restore-latest-backup.sh`
   (set `BACKUP_SOURCE` to a local directory laid out like the bucket). Its Qdrant
   restore never worked: Qdrant has no API to restore full snapshots. The new one

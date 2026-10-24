@@ -112,7 +112,7 @@ variable "operator_account_id" {
 }
 
 variable "operator_observe" {
-  description = "Let the operator run status."
+  description = "Let the operator run status and logs."
   type        = bool
   default     = false
 }

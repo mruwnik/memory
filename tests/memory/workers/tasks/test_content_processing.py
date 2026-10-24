@@ -802,7 +802,7 @@ def test_safe_task_execution_with_kwargs():
 
 
 def test_safe_task_execution_exception_logging(caplog):
-    """Test that exceptions are logged before being re-raised."""
+    """Exceptions are logged, with their text in the traceback rather than the message."""
 
     @safe_task_execution
     def failing_task():
@@ -811,8 +811,9 @@ def test_safe_task_execution_exception_logging(caplog):
     with pytest.raises(RuntimeError, match="Test runtime error"):
         failing_task()
 
-    assert "Task failing_task failed:" in caplog.text
-    assert "Test runtime error" in caplog.text
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert errors == ["Task failing_task failed"]
+    assert "RuntimeError: Test runtime error" in caplog.text
 
 
 def _retry_exc():

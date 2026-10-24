@@ -102,6 +102,7 @@ Their output is in the journal, for example `journalctl -u memory-update`. `stat
 | Action | Role | Does |
 |---|---|---|
 | `status` | observe | Version, health, migrations, containers, disk, memory, last update and backup, pending reboot |
+| `logs [lines]` | observe | The last error records of the api and worker containers (default 100 lines each), through a redaction filter |
 | `restart [service]` | maintain | Restarts one compose service, or all of them |
 | `update-to <tag>` | maintain | Runs the same signature and age checks as the nightly update, then updates |
 | `disk-cleanup` | maintain | Prunes old images, build cache and old dumps |
@@ -169,8 +170,8 @@ The `valid-before` option in allowed_signers is checked against the date the sig
 ## Trust limits
 
 1. **Whoever controls signed release tags can read the data.** A malicious release can exfiltrate anything. Signatures and `update_delay_hours` make that visible rather than impossible. If you want to trust no one, set `auto_update = false` and review each release before running `update-to` or `tools/update.sh`.
-2. **Output can leak content.** An action's output is only as safe as what its script prints. The ops scripts print numbers, states and fixed strings. A `logs` action stays off the operator's list until the app's error logs have been audited for item text, queries and keys.
-3. **The operator can harm availability, not confidentiality.** The operator sees only the output of its own documents. `restore-latest-backup` and `rollback` can destroy recent writes, and `reboot` and `restart` cause downtime. Keep `operator_recover` off unless you need it.
+2. **Output can leak content.** An action's output is only as safe as what its script prints. The ops scripts print numbers, states and fixed strings, except `logs`. The app's error logs have been audited not to carry item text, search queries or keys, and `logs` filters them again: it keeps only ERROR and CRITICAL lines and the frame locations and exception types of tracebacks, and strips quoted values, URL paths and queries, emails and credential-shaped strings from what it keeps. Unquoted text in an error message gets through. A future log statement that interpolates item text would leak it, so turn `operator_observe` on only for an operator you'd trust with occasional fragments of error text, or read `tools/ops/logs.sh` before you do.
+3. **The operator can harm availability, not confidentiality,** beyond what `logs` lets through (item 2). The operator sees only the output of its own documents. `restore-latest-backup` and `rollback` can destroy recent writes, and `reboot` and `restart` cause downtime. Keep `operator_recover` off unless you need it.
 4. **Your own admins can read everything.** The KMS key uses the default key policy, so any principal in your account whose IAM policy allows the key can decrypt the volumes' snapshots, the backups and the secrets. Anyone who can read the Terraform state can read the secrets too.
 
 ## Destroying

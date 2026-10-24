@@ -45,8 +45,8 @@ def process_attachment(
         file_path = message.safe_filename(attachment["filename"])
         try:
             file_path.write_bytes(real_content)
-        except Exception as e:
-            logger.error(f"Failed to save attachment {file_path} to disk: {str(e)}")
+        except Exception:
+            logger.exception("Failed to save an attachment to disk")
             return None
 
     # Auto-add source and sender tags for filtering
