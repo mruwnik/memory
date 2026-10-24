@@ -23,6 +23,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/polls', title: 'Polls', description: 'Schedule meetings with availability polls' },
       { to: '/ui/check', title: 'Check Questions', description: 'Submit questions to verify, research, or link, and see answers', scope: 'check' },
       { to: '/ui/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
+      { to: '/ui/agents/keys', title: 'Agent API keys', description: 'Your Anthropic and OpenAI keys for agent runs', scope: 'agents' },
     ],
   },
   {

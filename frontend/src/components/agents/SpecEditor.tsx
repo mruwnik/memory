@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { externalToolName, type AgentSpec, type Catalog, type ExternalServer, type ModelEntry, type Reasoning } from '@/hooks/useAgents'
 import { ServerStatusBadge } from './ServerStatusBadge'
+import { KeyPicker, payer, providerOf } from './KeyPicker'
 import { Link } from 'react-router-dom'
 import { Checkbox, Field, Input, Label, MultiSelect, Notice, Select, Textarea } from '@/components/shared/ui'
 
@@ -117,6 +118,9 @@ const fitToModel = (spec: AgentSpec, model: ModelEntry | undefined): AgentSpec =
       spec.max_output_tokens !== null && spec.max_output_tokens > model.capabilities.max_output_tokens
         ? null
         : spec.max_output_tokens,
+    // A pinned key belongs to one provider.
+    provider_key:
+      typeof spec.provider_key === 'number' && providerOf(spec.model) !== providerOf(model.model) ? null : spec.provider_key,
   }
 }
 
@@ -152,6 +156,8 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
   const exfiltrationRisk = externalNames.length > 0
     && value.tools.some(t => !catalog.builtins.includes(t))
     && (value.tools.includes('web_fetch') || value.tools.some(t => sideEffects.has(t)) || externalWrites)
+  // The server's cost ceilings bind only runs on its key.
+  const onUserKey = payer(value, catalog).key !== null
 
   return (
     <div className="space-y-4">
@@ -189,6 +195,10 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
             value={value.max_output_tokens ?? ''}
             onChange={e => set({ max_output_tokens: e.target.value === '' ? null : Number(e.target.value) })} />
         </div>
+      </div>
+
+      <div className="md:w-1/2">
+        <KeyPicker value={value} catalog={catalog} onChange={provider_key => set({ provider_key })} />
       </div>
 
       <fieldset>
@@ -237,13 +247,15 @@ export function SpecEditor({ value, catalog, onChange, onValidityChange }: Props
             onChange={e => set({ max_turns: Number(e.target.value) })} />
         </div>
         <div>
-          <Label className="mb-1" htmlFor="spec-cost">Max $ per run (≤ {catalog.ceilings.max_run_cost_usd})</Label>
-          <Input id="spec-cost" placeholder={catalog.ceilings.max_run_cost_usd} value={value.max_cost_usd ?? ''}
+          <Label className="mb-1" htmlFor="spec-cost">Max $ per run{!onUserKey && ` (≤ ${catalog.ceilings.max_run_cost_usd})`}</Label>
+          <Input id="spec-cost" value={value.max_cost_usd ?? ''}
+            placeholder={onUserKey ? catalog.ceilings.default_user_key_run_cost_usd : catalog.ceilings.max_run_cost_usd}
             onChange={e => set({ max_cost_usd: e.target.value || null })} />
         </div>
         <div>
-          <Label className="mb-1" htmlFor="spec-daily">Max $ per day (≤ {catalog.ceilings.max_daily_cost_usd})</Label>
-          <Input id="spec-daily" placeholder={catalog.ceilings.max_daily_cost_usd} value={value.max_cost_usd_per_day ?? ''}
+          <Label className="mb-1" htmlFor="spec-daily">Max $ per day{!onUserKey && ` (≤ ${catalog.ceilings.max_daily_cost_usd})`}</Label>
+          <Input id="spec-daily" value={value.max_cost_usd_per_day ?? ''}
+            placeholder={onUserKey ? 'optional' : catalog.ceilings.max_daily_cost_usd}
             onChange={e => set({ max_cost_usd_per_day: e.target.value || null })} />
         </div>
         <div>

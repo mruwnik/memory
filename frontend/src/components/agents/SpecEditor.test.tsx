@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderWithRouter, screen, within } from '@/test/utils'
 import { SpecEditor } from './SpecEditor'
-import { defaultSpec, type Catalog, type ExternalServer } from '@/hooks/useAgents'
+import { defaultSpec, type Catalog, type ExternalServer, type ProviderKey } from '@/hooks/useAgents'
 
 const server = (overrides: Partial<ExternalServer> = {}): ExternalServer => ({
   id: 3, name: 'linear', url: 'https://mcp.linear.app/mcp', transport: 'http', auth_type: 'oauth',
@@ -14,6 +14,11 @@ const server = (overrides: Partial<ExternalServer> = {}): ExternalServer => ({
     { name: 'agent_spawn', description: 'Nope', input_schema: {}, read_only: false, hash: 'c' },
   ],
   ...overrides,
+})
+
+const providerKey = (overrides: Partial<ProviderKey> = {}): ProviderKey => ({
+  id: 3, provider: 'anthropic', label: 'personal', key_hint: 'ab12', is_default: true, status: 'ok', status_detail: null,
+  last_used_at: null, max_cost_usd_per_day: null, created_at: null, updated_at: null, ...overrides,
 })
 
 const catalog: Catalog = {
@@ -33,16 +38,67 @@ const catalog: Catalog = {
       capabilities: { tool_choice_required: false, strict_tools: true, reasoning_levels: ['high', 'low', 'medium', 'off'], sampling_params: false, native_web_search: true, native_web_fetch: true, max_output_tokens: 128000 },
       extras_schema: {},
     },
+    {
+      model: 'openai/gpt-5',
+      capabilities: { tool_choice_required: true, strict_tools: true, reasoning_levels: ['low', 'medium', 'high'], sampling_params: false, native_web_search: false, native_web_fetch: false, max_output_tokens: 128000 },
+      extras_schema: {},
+    },
   ],
-  ceilings: { max_run_cost_usd: '1.00', max_daily_cost_usd: '10.00', max_timeout_sec: 1800, max_runs_per_hour: 60 },
+  ceilings: { max_run_cost_usd: '1.00', max_daily_cost_usd: '10.00', max_timeout_sec: 1800, max_runs_per_hour: 60, default_user_key_run_cost_usd: '2.00' },
   default_model: 'anthropic/claude-sonnet-5-5',
   trigger_source_types: ['blog_post', 'discord_message'],
   mcp_servers: [server()],
+  provider_keys: [providerKey(), providerKey({ id: 4, label: 'work', key_hint: 'cd34', is_default: false }), providerKey({ id: 5, provider: 'openai', label: 'gpt' })],
+  server_key_allowed: false,
 }
 
 const withServer = (s: ExternalServer): Catalog => ({ ...catalog, mcp_servers: [s] })
 
+const sonnet = defaultSpec('anthropic/claude-sonnet-5-5')
+const keyOptions = () => Array.from(screen.getByLabelText('API key').querySelectorAll('option')).map(o => o.textContent)
+
 describe('SpecEditor', () => {
+  it.each([
+    [false, ['Default key for Anthropic', 'personal (••••ab12)', 'work (••••cd34)']],
+    [true, ['Default key for Anthropic', 'personal (••••ab12)', 'work (••••cd34)', 'Server key']],
+  ])('offers the provider\'s keys, and the server key only when allowed (%s)', (allowed, expected) => {
+    renderWithRouter(<SpecEditor value={sonnet} catalog={{ ...catalog, server_key_allowed: allowed }} onChange={vi.fn()} />)
+    expect(keyOptions()).toEqual(expected)
+  })
+
+  it.each([
+    [null, "your key 'personal'", 'Max $ per run', '2.00'],
+    [4, "your key 'work'", 'Max $ per run', '2.00'],
+    ['server' as const, "the server's Anthropic key", 'Max $ per run (≤ 1.00)', '1.00'],
+  ])('says which key pays for %s and which ceilings apply', (provider_key, payer, costLabel, placeholder) => {
+    renderWithRouter(<SpecEditor value={{ ...sonnet, provider_key }} catalog={{ ...catalog, server_key_allowed: true }} onChange={vi.fn()} />)
+    expect(screen.getByText(new RegExp(`Runs pay with ${payer}`))).toBeInTheDocument()
+    expect(screen.getByLabelText(costLabel)).toHaveAttribute('placeholder', placeholder)
+  })
+
+  it('links to the keys page when no key can pay', () => {
+    renderWithRouter(<SpecEditor value={sonnet} catalog={{ ...catalog, provider_keys: [] }} onChange={vi.fn()} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('Add an API key for Anthropic so this agent can run.')
+    expect(screen.getByRole('link', { name: 'Manage API keys' })).toHaveAttribute('href', '/ui/agents/keys')
+  })
+
+  it.each([
+    ['anthropic/claude-opus-5-5', 4],
+    ['openai/gpt-5', null],
+  ])('keeps a pinned key only while the model stays with its provider (%s)', async (model, provider_key) => {
+    const onChange = vi.fn()
+    const { user } = renderWithRouter(<SpecEditor value={{ ...sonnet, provider_key: 4 }} catalog={catalog} onChange={onChange} />)
+    await user.selectOptions(screen.getByLabelText('Model'), model)
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ model, provider_key }))
+  })
+
+  it('pins the picked key', async () => {
+    const onChange = vi.fn()
+    const { user } = renderWithRouter(<SpecEditor value={sonnet} catalog={catalog} onChange={onChange} />)
+    await user.selectOptions(screen.getByLabelText('API key'), 'work (••••cd34)')
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ provider_key: 4 }))
+  })
+
   it('only offers the reasoning levels the model supports', () => {
     renderWithRouter(<SpecEditor value={defaultSpec('anthropic/claude-opus-5-5')} catalog={catalog} onChange={vi.fn()} />)
     const options = Array.from(screen.getByLabelText('Reasoning').querySelectorAll('option')).map(o => o.textContent)

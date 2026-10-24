@@ -22,6 +22,8 @@ export interface AgentSpec {
   max_cost_usd_per_day: string | null
   max_runs_per_hour: number | null
   timeout_sec: number
+  // A key id of yours, 'server', or null: your default key for the model's provider, then the server's if allowed.
+  provider_key?: number | 'server' | null
 }
 
 export interface AgentRun {
@@ -91,10 +93,57 @@ export interface Catalog {
   builtins: string[]
   tools: { name: string; description: string; read_only: boolean }[]
   models: ModelEntry[]
-  ceilings: { max_run_cost_usd: string; max_daily_cost_usd: string; max_timeout_sec: number; max_runs_per_hour: number }
+  ceilings: {
+    max_run_cost_usd: string
+    max_daily_cost_usd: string
+    max_timeout_sec: number
+    max_runs_per_hour: number
+    default_user_key_run_cost_usd: string
+  }
   default_model: string
   trigger_source_types: string[]
   mcp_servers: ExternalServer[]
+  provider_keys: ProviderKey[]
+  server_key_allowed: boolean
+}
+
+export type KeyProvider = 'anthropic' | 'openai'
+export const PROVIDER_NAMES: Record<KeyProvider, string> = { anthropic: 'Anthropic', openai: 'OpenAI' }
+export const KEY_PROVIDERS = Object.keys(PROVIDER_NAMES) as KeyProvider[]
+export const providerName = (provider: string) => PROVIDER_NAMES[provider as KeyProvider] ?? provider
+// settings.AGENT_DEFAULT_USER_KEY_DAILY_COST_USD, which the API doesn't expose.
+export const DEFAULT_KEY_DAILY_CAP_USD = '20.00'
+
+/** A stored provider API key; the key itself is never returned, only its last 4 characters. */
+export interface ProviderKey {
+  id: number
+  provider: KeyProvider
+  label: string
+  key_hint: string
+  is_default: boolean
+  status: 'ok' | 'invalid'
+  status_detail: string | null
+  last_used_at: string | null
+  max_cost_usd_per_day: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface KeyUpsert {
+  keyId?: number
+  provider?: KeyProvider
+  label?: string
+  key?: string
+  isDefault?: boolean
+  // '' removes the cap
+  maxCostUsdPerDay?: string
+}
+
+export interface KeyDeleteResult {
+  deleted: number
+  pinned_by: string[]
+  new_default: number | null
+  note: string | null
 }
 
 export type ServerStatus = 'pending_auth' | 'connected' | 'needs_reauth' | 'error'
@@ -221,6 +270,7 @@ export const defaultSpec = (model: string): AgentSpec => ({
   max_cost_usd_per_day: null,
   max_runs_per_hour: null,
   timeout_sec: 600,
+  provider_key: null,
 })
 
 export const useAgents = () => {
@@ -342,9 +392,28 @@ export const useAgents = () => {
   )
   const deleteServer = useCallback((serverId: number) => call('agent_server_delete', { server_id: serverId }), [call])
 
+  const listKeys = useCallback(
+    () => call<{ providers: Record<KeyProvider, ProviderKey[]>; server_key_allowed: boolean }>('agent_key_list'),
+    [call],
+  )
+  const upsertKey = useCallback(
+    (body: KeyUpsert) =>
+      call<ProviderKey>('agent_key_upsert', {
+        ...(body.keyId !== undefined ? { key_id: body.keyId } : {}),
+        ...(body.provider !== undefined ? { provider: body.provider } : {}),
+        ...(body.label !== undefined ? { label: body.label } : {}),
+        ...(body.key ? { key: body.key } : {}),
+        ...(body.isDefault !== undefined ? { is_default: body.isDefault } : {}),
+        ...(body.maxCostUsdPerDay !== undefined ? { max_cost_usd_per_day: body.maxCostUsdPerDay } : {}),
+      }),
+    [call],
+  )
+  const deleteKey = useCallback((keyId: number) => call<KeyDeleteResult>('agent_key_delete', { key_id: keyId }), [call])
+
   return {
     listDefinitions, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
     listSchedules, saveSchedule, deleteSchedule, listTriggers, saveTrigger, deleteTrigger,
     listServers, upsertServer, authorizeServer, refreshServerTools, disconnectServer, deleteServer,
+    listKeys, upsertKey, deleteKey,
   }
 }

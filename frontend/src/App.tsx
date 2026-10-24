@@ -4,7 +4,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { Loading, LoginPrompt, AuthError, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, DockerLogs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
-import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail } from '@/components/agents'
+import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { PeopleManagement } from '@/components/people'
@@ -102,6 +102,7 @@ const AuthWrapper = () => {
     { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
     { path: '/ui/check', element: <Check />, scope: 'check' },
     { path: '/ui/agents', element: <AgentsPage />, scope: 'agents' },
+    { path: '/ui/agents/keys', element: <KeysPage />, scope: 'agents' },
     { path: '/ui/agents/servers', element: <ServersPage />, scope: 'agents' },
     { path: '/ui/agents/servers/:id', element: <ServerDetail />, scope: 'agents' },
     { path: '/ui/agents/runs', element: <AgentRuns />, scope: 'agents' },
