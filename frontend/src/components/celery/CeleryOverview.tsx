@@ -5,7 +5,7 @@ import {
   TaskActivity,
   TaskActivityEntry,
 } from '@/hooks/useCelery'
-import { Badge, Page, Row, Section, Stat, StatGrid, SubList, Table, type Tone } from '@/components/shared/ui'
+import { Badge, EmptyState, Notice, Page, RefreshButton, Row, Section, Stat, StatGrid, SubList, Table, Toolbar, type Tone } from '@/components/shared/ui'
 
 const STATUS_TONES: Record<string, Tone> = {
   success: 'success',
@@ -35,20 +35,11 @@ function shortTaskName(fullName: string): string {
   return parts[parts.length - 1].replace(/_/g, ' ')
 }
 
-function successRate(success: number, total: number): string {
-  if (total === 0) return '-'
-  return `${Math.round((success / total) * 100)}%`
-}
+type ActivityRow = TaskActivityEntry & { rate: number | null }
+
+const formatRate = (rate: number | null) => rate === null ? '-' : `${Math.round(rate * 100)}%`
 
 type SortDir = 'asc' | 'desc'
-
-function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
-  return (
-    <span className={`ml-1 inline-block ${active ? 'text-slate-800' : 'text-slate-300'}`}>
-      {active ? (dir === 'asc' ? '\u25B2' : '\u25BC') : '\u25B4'}
-    </span>
-  )
-}
 
 function useSortable<T>(items: T[], defaultKey: keyof T & string, defaultDir: SortDir = 'asc') {
   const [sortKey, setSortKey] = useState<keyof T & string>(defaultKey)
@@ -96,13 +87,16 @@ function SortHeader<T>({
   toggle: (key: keyof T & string) => void
   className?: string
 }) {
+  const active = sortKey === column
   return (
-    <th
-      className={`px-4 py-3 text-sm font-medium text-slate-600 cursor-pointer select-none hover:text-slate-800 ${className || ''}`}
-      onClick={() => toggle(column)}
-    >
-      {label}
-      <SortIcon active={sortKey === column} dir={sortDir} />
+    <th className={className} aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}>
+      <button type="button" onClick={() => toggle(column)}
+        className="inline-flex items-center gap-1 hover:text-slate-800 focus-visible:outline-2 focus-visible:outline-primary rounded">
+        {label}
+        <span aria-hidden="true" className={active ? 'text-slate-800' : 'text-slate-500'}>
+          {active ? (sortDir === 'asc' ? '\u25B2' : '\u25BC') : '\u2195'}
+        </span>
+      </button>
     </th>
   )
 }
@@ -116,11 +110,11 @@ const CeleryOverview = () => {
   const [expandedFailure, setExpandedFailure] = useState<number | null>(null)
 
   const beatSort = useSortable<BeatScheduleEntry>(schedule, 'name')
-  const activitySort = useSortable<TaskActivityEntry>(
-    activity?.by_task || [],
-    'failure',
-    'desc',
+  const activityRows = useMemo<ActivityRow[]>(
+    () => (activity?.by_task ?? []).map(row => ({ ...row, rate: row.total ? row.success / row.total : null })),
+    [activity],
   )
+  const activitySort = useSortable<ActivityRow>(activityRows, 'failure', 'desc')
 
   const load = useCallback(() => {
     setLoading(true)
@@ -139,7 +133,10 @@ const CeleryOverview = () => {
   const totals = activity?.totals
 
   return (
-    <Page title="Celery tasks" width="wide" loading={loading && 'Loading Celery overview...'} error={error} onRetry={load}>
+    <Page title="Celery tasks" width="wide" loading={!activity && loading && 'Loading Celery overview...'} error={activity ? null : error} onRetry={load}>
+        <Toolbar actions={<RefreshButton onClick={load} loading={loading} />} />
+        {activity && error && <Notice tone="error" onRetry={load}>{error}</Notice>}
+
         {/* Task Metrics Summary Cards */}
         {totals && (
           <StatGrid>
@@ -152,8 +149,9 @@ const CeleryOverview = () => {
 
         {/* Beat Schedule */}
         <Section title={`Beat schedule (${schedule.length} tasks)`}>
+          {schedule.length === 0 ? <EmptyState message="No periodic tasks are scheduled" /> : (
           <Table>
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-slate-50">
                 <tr>
                   <SortHeader<BeatScheduleEntry> label="Name" column="name" {...beatSort} />
                   <SortHeader<BeatScheduleEntry> label="Schedule" column="schedule_display" {...beatSort} />
@@ -162,72 +160,77 @@ const CeleryOverview = () => {
                   <SortHeader<BeatScheduleEntry> label="Duration" column="last_duration_ms" {...beatSort} />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody>
                 {beatSort.sorted.map((entry) => (
                   <tr key={entry.key} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 text-sm">
+                    <td>
                       <div className="font-medium text-slate-800">{entry.name}</div>
-                      <div className="text-xs text-slate-500 font-mono">{entry.task}</div>
+                      {/* The dotted path crowds the other columns off a phone screen */}
+                      <div className="hidden sm:block text-xs text-slate-500 font-mono">{entry.task}</div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-600">
+                    <td className="text-slate-600">
                       {entry.schedule_display}
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-600">
+                    <td className="text-slate-600">
                       {formatRelativeTime(entry.last_run)}
                     </td>
-                    <td className="px-4 py-3 text-sm">
+                    <td>
                       {entry.last_status ? (
                         <Badge tone={STATUS_TONES[entry.last_status] ?? 'neutral'}>{entry.last_status}</Badge>
                       ) : (
                         <span className="text-slate-500">-</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-600">
+                    <td className="text-slate-600">
                       {formatDuration(entry.last_duration_ms)}
                     </td>
                   </tr>
                 ))}
               </tbody>
           </Table>
+          )}
         </Section>
 
         {/* Task Activity */}
         {activity && (
           <Section title={`Task activity (last ${activity.hours}h)`}>
+            {activity.by_task.length === 0 && activity.recent_failures.length === 0 && (
+              <EmptyState message={`No tasks ran in the last ${activity.hours}h`} />
+            )}
             {activity.by_task.length > 0 && (
               <Table>
-                  <thead className="bg-slate-50 border-b border-slate-200">
+                  <thead className="bg-slate-50">
                     <tr>
-                      <SortHeader<TaskActivityEntry> label="Task" column="task" {...activitySort} />
-                      <SortHeader<TaskActivityEntry> label="Total" column="total" className="text-right" {...activitySort} />
-                      <SortHeader<TaskActivityEntry> label="Success" column="success" className="text-right" {...activitySort} />
-                      <SortHeader<TaskActivityEntry> label="Failed" column="failure" className="text-right" {...activitySort} />
-                      <SortHeader<TaskActivityEntry> label="Rate" column="success" className="text-right" {...activitySort} />
-                      <SortHeader<TaskActivityEntry> label="Avg duration" column="avg_duration_ms" className="text-right" {...activitySort} />
+                      <SortHeader<ActivityRow> label="Task" column="task" {...activitySort} />
+                      <SortHeader<ActivityRow> label="Total" column="total" className="text-right" {...activitySort} />
+                      <SortHeader<ActivityRow> label="Success" column="success" className="text-right" {...activitySort} />
+                      <SortHeader<ActivityRow> label="Failed" column="failure" className="text-right" {...activitySort} />
+                      <SortHeader<ActivityRow> label="Rate" column="rate" className="text-right" {...activitySort} />
+                      <SortHeader<ActivityRow> label="Avg duration" column="avg_duration_ms" className="text-right" {...activitySort} />
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody>
                     {activitySort.sorted.map((row) => (
                       <tr key={row.task} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 text-sm">
+                        <td>
                           <div className="font-medium text-slate-800 capitalize">
                             {shortTaskName(row.task)}
                           </div>
-                          <div className="text-xs text-slate-500 font-mono">{row.task}</div>
+                          <div className="hidden sm:block text-xs text-slate-500 font-mono">{row.task}</div>
                         </td>
-                        <td className="px-4 py-3 text-sm text-right font-medium text-slate-800">
+                        <td className="text-right font-medium text-slate-800">
                           {row.total}
                         </td>
-                        <td className="px-4 py-3 text-sm text-right text-green-600">
+                        <td className="text-right text-green-700">
                           {row.success}
                         </td>
-                        <td className="px-4 py-3 text-sm text-right text-red-600">
+                        <td className="text-right text-red-600">
                           {row.failure || '-'}
                         </td>
-                        <td className="px-4 py-3 text-sm text-right text-slate-600">
-                          {successRate(row.success, row.total)}
+                        <td className="text-right text-slate-600">
+                          {formatRate(row.rate)}
                         </td>
-                        <td className="px-4 py-3 text-sm text-right text-slate-600">
+                        <td className="text-right text-slate-600">
                           {formatDuration(row.avg_duration_ms)}
                         </td>
                       </tr>

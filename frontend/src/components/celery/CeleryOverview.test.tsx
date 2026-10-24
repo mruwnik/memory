@@ -21,7 +21,7 @@ const activity: TaskActivity = {
   totals: { total: 10, success: 8, failure: 2, avg_duration_ms: 250 },
   by_task: [
     { task: 'memory.workers.tasks.alpha', total: 6, success: 5, failure: 1, avg_duration_ms: 120 },
-    { task: 'memory.workers.tasks.beta', total: 4, success: 3, failure: 1, avg_duration_ms: 500 },
+    { task: 'memory.workers.tasks.beta', total: 4, success: 4, failure: 0, avg_duration_ms: 500 },
   ],
   recent_failures: [
     { task: 'memory.workers.tasks.alpha', timestamp: new Date().toISOString(), duration_ms: 90, labels: { worker: 'w1' }, error: 'boom traceback' },
@@ -60,14 +60,45 @@ describe('CeleryOverview', () => {
     expect(screen.getByText('success')).toBeInTheDocument()
   })
 
-  it('sorts the beat schedule by name ascending by default and toggles on header click', async () => {
+  it('sorts the beat schedule by name ascending by default and toggles from the keyboard', async () => {
     const user = userEvent.setup()
     renderWithRouter(<CeleryOverview />)
     await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument())
     const rows = () => screen.getAllByRole('row').filter(r => r.querySelector('td'))
+    const header = screen.getByRole('columnheader', { name: 'Name' })
     expect(rows()[0]).toHaveTextContent('Alpha Task')
-    await user.click(screen.getByText('Name'))
-    await waitFor(() => expect(rows()[0]).toHaveTextContent('Beta Task'))
+    expect(header).toHaveAttribute('aria-sort', 'ascending')
+    screen.getByRole('button', { name: 'Name' }).focus()
+    await user.keyboard('{Enter}')
+    expect(rows()[0]).toHaveTextContent('Beta Task')
+    expect(header).toHaveAttribute('aria-sort', 'descending')
+  })
+
+  it.each([
+    ['Rate', 'alpha'],
+    ['Success', 'beta'],
+  ])('sorts task activity ascending by %s with %s first', async (column, first) => {
+    const user = userEvent.setup()
+    renderWithRouter(<CeleryOverview />)
+    await waitFor(() => expect(screen.getByText('Task activity (last 24h)')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: column }))
+    const activityRows = screen.getAllByRole('table')[1].querySelectorAll('tbody tr')
+    expect(activityRows[0]).toHaveTextContent(`memory.workers.tasks.${first}`)
+  })
+
+  it('shows an empty state when no tasks ran', async () => {
+    getTaskActivity.mockResolvedValue({ ...activity, by_task: [], recent_failures: [] })
+    renderWithRouter(<CeleryOverview />)
+    await waitFor(() => expect(screen.getByText('No tasks ran in the last 24h')).toBeInTheDocument())
+  })
+
+  it('refreshes without dropping the loaded content', async () => {
+    const user = userEvent.setup()
+    renderWithRouter(<CeleryOverview />)
+    await waitFor(() => expect(screen.getByText('Alpha Task')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(screen.getByText('Alpha Task')).toBeInTheDocument()
+    await waitFor(() => expect(getBeatSchedule).toHaveBeenCalledTimes(2))
   })
 
   it('renders the task activity table', async () => {

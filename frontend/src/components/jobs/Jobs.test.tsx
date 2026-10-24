@@ -57,10 +57,14 @@ describe('Jobs page', () => {
     await waitFor(() => expect(screen.getByText('No jobs found')).toBeInTheDocument())
   })
 
-  it('shows the load error with a retry button', async () => {
+  it('replaces the page with the initial load error and retries it', async () => {
     listJobs.mockRejectedValueOnce(new Error('jobs down'))
+    const user = userEvent.setup()
     renderWithRouter(<Jobs />)
     await waitFor(() => expect(screen.getByText('jobs down')).toBeInTheDocument())
+    expect(screen.queryByText('No jobs found')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.getByText('No jobs found')).toBeInTheDocument())
   })
 
   it('renders job rows with formatted type, status, and stats', async () => {
@@ -72,6 +76,7 @@ describe('Jobs page', () => {
     await waitFor(() => expect(screen.getByText('Blog sync')).toBeInTheDocument())
     expect(screen.getByText('1 failed')).toBeInTheDocument()
     expect(screen.getByText('1 complete')).toBeInTheDocument()
+    expect(screen.queryByText('on this page')).not.toBeInTheDocument()
     expect(screen.getByText('bad')).toBeInTheDocument()
   })
 
@@ -115,6 +120,8 @@ describe('Jobs page', () => {
     const user = userEvent.setup()
     renderWithRouter(<Jobs />)
     await waitFor(() => expect(screen.getByText('Page 1')).toBeInTheDocument())
+    expect(screen.getByText('100 complete')).toBeInTheDocument()
+    expect(screen.getByText('on this page')).toBeInTheDocument()
     const next = screen.getByRole('button', { name: 'Next' })
     expect(next).toBeEnabled()
     await user.click(next)

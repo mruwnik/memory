@@ -487,7 +487,6 @@ class OrchestratorStatus(BaseModel):
     """Status of the orchestrator service."""
 
     available: bool
-    socket_path: str | None = None
     containers: dict | None = None
     memory: dict | None = None
     cpus: dict | None = None
@@ -503,7 +502,6 @@ async def orchestrator_status(
         health = await client.health()
         return OrchestratorStatus(
             available=True,
-            socket_path=client.socket_path,
             containers=health.containers,
             memory=health.memory,
             cpus=health.cpus,

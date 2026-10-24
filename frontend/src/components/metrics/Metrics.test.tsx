@@ -138,7 +138,7 @@ describe('Metrics container', () => {
 
     await waitFor(() => expect(screen.getByText('System health')).toBeInTheDocument())
     expect(screen.getByText('Task performance')).toBeInTheDocument()
-    expect(screen.getByText('MCP Tool Usage')).toBeInTheDocument()
+    expect(screen.getByText('MCP tool usage')).toBeInTheDocument()
     expect(screen.getByText('Recent task executions')).toBeInTheDocument()
     expect(screen.getByText('Recent MCP calls')).toBeInTheDocument()
   })
@@ -152,8 +152,8 @@ describe('Metrics container', () => {
     await waitFor(() => expect(screen.getByText('30')).toBeInTheDocument())
     // success rate = (9 + 20) / 30 = 96.67 -> rounded 97%
     expect(screen.getByText('97%')).toBeInTheDocument()
-    // avg duration = round((1200 + 50) / 2) = 625ms
-    expect(screen.getByText('625ms')).toBeInTheDocument()
+    // avg duration weighted by count = round((1200 * 10 + 50 * 20) / 30) = 433ms
+    expect(screen.getByText('433ms')).toBeInTheDocument()
   })
 
   it('renders task and mcp tables with their event rows and statuses', async () => {
@@ -221,7 +221,7 @@ describe('Metrics container', () => {
     // default 24h
     expect(summaryUrls().some((u) => u.includes('hours=24'))).toBe(true)
 
-    await user.click(screen.getByRole('button', { name: '7 Days' }))
+    await user.click(screen.getByRole('button', { name: '7 days' }))
     // 7d -> 168 hours
     await waitFor(() => expect(summaryUrls().some((u) => u.includes('hours=168')).valueOf()).toBe(true))
   })

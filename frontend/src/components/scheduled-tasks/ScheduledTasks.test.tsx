@@ -63,10 +63,26 @@ describe('ScheduledTasks', () => {
     await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
   })
 
-  it('renders an error state with retry', async () => {
+  it('replaces the page with the initial load error and retries it', async () => {
     listTasks.mockRejectedValueOnce(new Error('boom'))
+    const user = userEvent.setup()
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('boom')).toBeInTheDocument())
+    expect(screen.queryByText('No scheduled tasks')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
+  })
+
+  it('counts active, paused and done tasks separately', async () => {
+    listTasks.mockResolvedValue([
+      makeTask({ id: 'a', enabled: true }),
+      makeTask({ id: 'p', enabled: false }),
+      makeTask({ id: 'd', enabled: false, cron_expression: null }),
+    ])
+    renderWithRouter(<ScheduledTasks />)
+    await waitFor(() => expect(screen.getByText('1 active')).toBeInTheDocument())
+    expect(screen.getByText('1 paused')).toBeInTheDocument()
+    expect(screen.getByText('1 done')).toBeInTheDocument()
   })
 
   it('renders a notification task card with cron description and counts', async () => {
@@ -83,8 +99,8 @@ describe('ScheduledTasks', () => {
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
     expect(screen.getByText('Claude session')).toBeInTheDocument()
-    expect(screen.getByText('org/repo')).toBeInTheDocument()
-    expect(screen.getByText('nightly')).toBeInTheDocument()
+    expect(screen.getByText(/repo: org\/repo/)).toBeInTheDocument()
+    expect(screen.getByText(/run: nightly/)).toBeInTheDocument()
   })
 
   it('filters by task type, passing the filter to listTasks', async () => {
@@ -173,6 +189,18 @@ describe('ScheduledTasks', () => {
     await waitFor(() => expect(screen.getByText('empty hist')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'History' }))
     await waitFor(() => expect(screen.getByText('No execution history')).toBeInTheDocument())
+  })
+
+  it('says why the execution history failed to load', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 'h', topic: 'broken hist' })])
+    getExecutions.mockRejectedValue(new Error('history down'))
+    const user = userEvent.setup()
+    renderWithRouter(<ScheduledTasks />)
+    await waitFor(() => expect(screen.getByText('broken hist')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    await waitFor(() => expect(screen.getByText('history down')).toBeInTheDocument())
+    expect(screen.queryByText('No execution history')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'History' })).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('says why a delete failed and keeps the row', async () => {
@@ -267,9 +295,9 @@ describe('ScheduledTasks', () => {
     ])
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('with data')).toBeInTheDocument())
-    expect(screen.getByText('Hi')).toBeInTheDocument()
-    expect(screen.getByText('x@y.z')).toBeInTheDocument()
-    expect(screen.getByText('bot9')).toBeInTheDocument()
+    expect(screen.getByText(/subject: Hi/)).toBeInTheDocument()
+    expect(screen.getByText(/from: x@y\.z/)).toBeInTheDocument()
+    expect(screen.getByText(/bot: bot9/)).toBeInTheDocument()
   })
 
   it('renders a long claude prompt and a tools-overflow field', async () => {
@@ -291,9 +319,9 @@ describe('ScheduledTasks', () => {
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('long prompt')).toBeInTheDocument())
     expect(screen.getByText(longPrompt)).toBeInTheDocument()
-    expect(screen.getByText('Bash, Read, Write...')).toBeInTheDocument()
-    expect(screen.getByText('enabled')).toBeInTheDocument()
-    expect(screen.getByText('snap-1')).toBeInTheDocument()
+    expect(screen.getByText(/tools: Bash, Read, Write\.\.\./)).toBeInTheDocument()
+    expect(screen.getByText(/Playwright/)).toBeInTheDocument()
+    expect(screen.getByText(/snapshot: snap-1/)).toBeInTheDocument()
   })
 
   it('edits claude_session spawn config and sends spawn_config updates', async () => {

@@ -45,7 +45,11 @@ const UserMenu = ({ user, onLogout, hasScope }: UserMenuProps) => {
 
     if (e.key === 'Escape') {
       e.preventDefault()
+      e.stopPropagation()
       close()
+    } else if (e.key === 'Tab') {
+      // Tabbing out of the page gives onBlur a null relatedTarget, which it can't tell from a Safari click.
+      setIsOpen(false)
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
       items[(idx + 1) % items.length]?.focus()
@@ -70,13 +74,14 @@ const UserMenu = ({ user, onLogout, hasScope }: UserMenuProps) => {
     .slice(0, 2)
 
   return (
-    <div className="relative" ref={menuRef} onKeyDown={handleMenuKeyDown}>
+    <div className="relative" ref={menuRef} onKeyDown={handleMenuKeyDown}
+      onBlur={e => e.relatedTarget && !menuRef.current?.contains(e.relatedTarget) && setIsOpen(false)}>
       {/* User avatar button */}
       <button
         ref={triggerRef}
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 rounded-full p-1 pr-3 transition-colors"
-        aria-label="User menu"
+        aria-label={`${user.name}, account menu`}
         aria-haspopup="menu"
         aria-expanded={isOpen}
       >
@@ -127,7 +132,7 @@ const UserMenu = ({ user, onLogout, hasScope }: UserMenuProps) => {
           {/* Divider */}
           <div className="border-t border-slate-100 my-1" role="separator" />
 
-          {/* Logout */}
+          {/* Log out */}
           <div className="py-1">
             <button
               role="menuitem"
@@ -140,7 +145,7 @@ const UserMenu = ({ user, onLogout, hasScope }: UserMenuProps) => {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
               </svg>
-              Logout
+              Log out
             </button>
           </div>
         </div>

@@ -3,8 +3,8 @@ import { Stat, StatGrid } from '@/components/shared/ui'
 
 interface SummaryCardsProps {
   totalEvents: number
-  successRate: number
-  avgDuration: number
+  successRate: number | null
+  avgDuration: number | null
   systemMetrics: Record<string, number>
 }
 
@@ -29,7 +29,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
   return (
     <StatGrid>
       <Stat label="Total events" value={formatNumber(totalEvents)} />
-      <Stat label="Success rate" value={`${successRate}%`} tone={successRateTone(successRate)} />
+      <Stat label="Success rate" value={successRate === null ? '-' : `${successRate}%`} tone={successRate === null ? 'neutral' : successRateTone(successRate)} />
       <Stat label="Avg duration" value={formatDuration(avgDuration)} />
       {cpuPercent !== undefined && (
         <Stat label={hasSystemCpu ? 'System CPU' : 'Process CPU'} value={`${cpuPercent.toFixed(1)}%`} tone={usageTone(cpuPercent)} />
@@ -51,8 +51,8 @@ const formatNumber = (num: number): string => {
   return num.toString()
 }
 
-const formatDuration = (ms: number): string => {
-  if (ms === 0) return '-'
+const formatDuration = (ms: number | null): string => {
+  if (ms === null) return '-'
   if (ms < 1000) return `${ms}ms`
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
   return `${(ms / 60000).toFixed(1)}m`

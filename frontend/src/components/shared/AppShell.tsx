@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import UserMenu from '@/components/common/UserMenu'
 import type { AuthUser } from '@/hooks/useAuth'
-import { cx } from '@/components/shared/ui'
+import { cx, useDialogFocus, useEscape } from '@/components/shared/ui'
 import { activeItem, visibleSections } from '@/components/shared/nav'
 
 interface AppShellProps {
@@ -45,13 +45,17 @@ export const AppShell = ({ user, onLogout, hasScope }: AppShellProps) => {
 
   useEffect(() => setNavOpen(false), [pathname, search])
 
+  // The drawer is only a dialog below lg; leaving it open on resize would keep dialog semantics on the visible sidebar.
   useEffect(() => {
-    if (!navOpen) return
-    navRef.current?.querySelector<HTMLElement>('a')?.focus()
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setNavOpen(false)
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [navOpen])
+    const wide = window.matchMedia?.('(min-width: 1024px)')
+    if (!wide) return
+    const close = (e: MediaQueryListEvent) => e.matches && setNavOpen(false)
+    wide.addEventListener('change', close)
+    return () => wide.removeEventListener('change', close)
+  }, [])
+
+  useDialogFocus(navRef, () => navRef.current?.querySelector<HTMLElement>('a'), navOpen)
+  useEscape(navRef, () => setNavOpen(false), navOpen)
 
   return (
     <>
@@ -73,13 +77,13 @@ export const AppShell = ({ user, onLogout, hasScope }: AppShellProps) => {
       <div className="flex flex-1">
         {/* Narrow screens: a drawer over the page, toggled from the top bar. Wide screens: a fixed column. */}
         {navOpen && <div className="lg:hidden fixed inset-0 top-14 z-30 bg-black/30" onClick={() => setNavOpen(false)} />}
-        <nav id="section-nav" ref={navRef} aria-label="Sections"
+        <nav id="section-nav" ref={navRef} aria-label="Sections" role={navOpen ? 'dialog' : undefined} aria-modal={navOpen || undefined}
           className={cx('w-60 shrink-0 bg-white border-r border-slate-200 overflow-y-auto',
             'fixed top-14 bottom-0 left-0 z-40 lg:sticky lg:z-auto lg:h-[calc(100dvh-3.5rem)] lg:block',
             navOpen ? 'block shadow-xl' : 'hidden')}>
           <SectionNav hasScope={hasScope} />
         </nav>
-        <main id="main" className="flex-1 min-w-0">
+        <main id="main" tabIndex={-1} className="flex-1 min-w-0 focus:outline-none">
           <Outlet />
         </main>
       </div>

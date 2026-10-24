@@ -80,8 +80,9 @@ const Sources = () => {
         actions={isAdmin && <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />}
         width="wide"
       >
-        <Tabs label="Source types" options={[...TABS]} value={activeTab} onChange={setActiveTab} />
-        <ActivePanel />
+        <Tabs label="Source types" options={[...TABS]} value={activeTab} onChange={setActiveTab}>
+          <ActivePanel />
+        </Tabs>
       </Page>
     </SourcesContext.Provider>
   )

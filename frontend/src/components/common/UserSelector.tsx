@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useId, useMemo } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, User } from '../../hooks/useUsers'
 import { Select } from '@/components/shared/ui'
@@ -44,6 +44,7 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const id = useId()
 
   const isAdmin = hasScope('admin') || hasScope('*')
 
@@ -95,18 +96,18 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
   if (error) {
     return (
       <div className={`flex items-center gap-2 ${className}`}>
-        <span className="text-sm text-red-500">{error}</span>
+        <span className="text-sm text-red-700">{error}</span>
       </div>
     )
   }
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <label htmlFor="user-selector" className="text-sm text-slate-600 font-medium whitespace-nowrap">
-        View as:
+      <label htmlFor={id} className="text-sm text-slate-600 font-medium whitespace-nowrap">
+        User
       </label>
       <Select
-        id="user-selector"
+        id={id}
         value={value.id}
         onChange={(e) => {
           const userId = parseInt(e.target.value, 10)

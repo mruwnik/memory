@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import {
   ResponsiveContainer,
   LineChart,
@@ -16,20 +17,24 @@ import {
   type Environment,
 } from '../../hooks/useClaude'
 import { useUsers, type User } from '../../hooks/useUsers'
-import { Badge, Card, EmptyState, LoadingState, Notice, Section, Table } from '@/components/shared/ui'
+import { Badge, Card, EmptyState, LoadingState, Notice, Section, Table, cx } from '@/components/shared/ui'
 
 const REFRESH_MS = 10_000
 const HISTORY_MAX = 240 // ~2h at 30s cadence
 
-const formatMb = (mb: number): string => {
+export const formatMb = (mb: number): string => {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
   return `${Math.round(mb)} MB`
 }
 
-const usagePctColor = (pct: number): string => {
-  if (pct >= 90) return 'text-red-600'
-  if (pct >= 75) return 'text-yellow-600'
-  return 'text-slate-700'
+// The level is spelled out as well as coloured, so it doesn't rely on colour vision.
+export const Usage = ({ pct, children }: { pct: number; children: ReactNode }) => {
+  const level = pct >= 90 ? 'critical' : pct >= 75 ? 'high' : null
+  return (
+    <span className={cx('font-mono', level === 'critical' ? 'text-red-700 font-semibold' : level === 'high' ? 'text-amber-800 font-semibold' : 'text-slate-700')}>
+      {children}{level && <span className="font-sans"> ({level})</span>}
+    </span>
+  )
 }
 
 const barWidth = (value: number, max: number): string => {
@@ -112,7 +117,7 @@ const Bar: React.FC<{
     <div>
       <div className="flex items-baseline justify-between text-xs mb-1">
         <span className="font-medium text-slate-600">
-          used <span className={`font-mono ${usagePctColor((used / Math.max(max, 1)) * 100)}`}>{fmt(used)}</span>
+          used <Usage pct={(used / Math.max(max, 1)) * 100}>{fmt(used)}</Usage>
         </span>
         <span className="font-mono text-slate-500">
           allocated {fmt(allocated)} / {fmt(max)} {unit}
@@ -164,41 +169,16 @@ const StatusPill: React.FC<{ status: string }> = ({ status }) => (
 const ContainerRow: React.FC<{
   c: ContainerStatsEntry
   display: SessionDisplay
-  selected: boolean
-  clickable: boolean
-  onSelect: () => void
-}> = ({ c, display, selected, clickable, onSelect }) => {
+  owned: boolean
+}> = ({ c, display, owned }) => {
   const used = c.used
-  // Non-clickable rows are visible (so admins can see what's running) but
-  // muted, since /claude/list only returns sessions the caller owns —
-  // navigating to one would land on an empty details panel.
-  const baseCls = 'transition-colors'
-  const stateCls = !clickable
-    ? 'opacity-60 cursor-not-allowed'
-    : selected
-      ? 'bg-blue-50 cursor-pointer'
-      : 'hover:bg-slate-50 cursor-pointer'
   return (
-    <tr
-      className={`${baseCls} ${stateCls}`}
-      onClick={clickable ? onSelect : undefined}
-      tabIndex={clickable ? 0 : -1}
-      aria-selected={clickable ? selected : undefined}
-      aria-disabled={!clickable || undefined}
-      title={clickable ? undefined : "Belongs to another user — details aren't accessible from here"}
-      onKeyDown={
-        clickable
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                onSelect()
-              }
-            }
-          : undefined
-      }
-    >
+    <tr>
       <td className="px-3 py-2">
-        <div className="text-sm text-slate-800">{display.title}</div>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-800">
+          {owned ? <Link to={`/ui/claude/${c.id}`} className="text-primary hover:underline">{display.title}</Link> : display.title}
+          {!owned && <Badge>Not yours</Badge>}
+        </div>
         {display.subtitle && (
           <div className="text-xs text-slate-500">{display.subtitle}</div>
         )}
@@ -207,16 +187,14 @@ const ContainerRow: React.FC<{
       <td className="px-3 py-2"><StatusPill status={c.status} /></td>
       <td className="px-3 py-2 text-xs font-mono text-right">
         {used && used.cpu_pct !== null
-          ? <span className={usagePctColor((used.cpu_pct / Math.max(c.allocated.cpus * 100, 1)) * 100)}>
-              {used.cpu_pct.toFixed(1)}%
-            </span>
+          ? <Usage pct={(used.cpu_pct / Math.max(c.allocated.cpus * 100, 1)) * 100}>{used.cpu_pct.toFixed(1)}%</Usage>
           : <span className="text-slate-500">—</span>}
         <span className="text-slate-500"> / {(c.allocated.cpus * 100).toFixed(0)}%</span>
       </td>
       <td className="px-3 py-2 text-xs font-mono text-right">
         {used
           ? <>
-              <span className={usagePctColor(used.memory_pct)}>{formatMb(used.memory_mb)}</span>
+              <Usage pct={used.memory_pct}>{formatMb(used.memory_mb)}</Usage>
               <span className="text-slate-500"> / {formatMb(c.allocated.memory_mb)} ({used.memory_pct.toFixed(0)}%)</span>
             </>
           : <span className="text-slate-500">—</span>}
@@ -365,14 +343,12 @@ export const SessionStatsPanel: React.FC<{ sessionId: string }> = ({ sessionId }
 }
 
 interface ClaudeFleetStatsProps {
-  selectedSessionId: string | null
-  onSelectContainer: (sessionId: string) => void
   // Lookup tables: parent loads these once; we render with what's available.
   // Empty arrays are fine — display falls back to ids.
   environments: Environment[]
   hasAdminScope: boolean
   // The viewer's user_id. Rows whose session_id parses to a different user
-  // render as non-clickable, since /claude/list only returns the caller's
+  // aren't linked, since /claude/list only returns the caller's
   // own sessions — clicking would land on an empty details panel. Null
   // means we don't know yet (auth still loading); be permissive in that
   // case so we don't accidentally lock everything out.
@@ -380,8 +356,6 @@ interface ClaudeFleetStatsProps {
 }
 
 const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
-  selectedSessionId,
-  onSelectContainer,
   environments,
   hasAdminScope,
   currentUserId,
@@ -437,7 +411,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
         {containers.length === 0 ? (
           <EmptyState message="No containers running." />
         ) : (
-          <Table role="grid" aria-label="Running containers">
+          <Table aria-label="Running containers">
             <thead>
               <tr>
                 <th>Session</th>
@@ -458,9 +432,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
                     key={c.id}
                     c={c}
                     display={sessionDisplay(c.id, environments, users)}
-                    selected={selectedSessionId === c.id}
-                    clickable={owned}
-                    onSelect={() => onSelectContainer(c.id)}
+                    owned={owned}
                   />
                 )
               })}

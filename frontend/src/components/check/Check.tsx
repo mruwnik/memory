@@ -19,13 +19,15 @@ const STATUS_LABELS: Record<CheckStatus, string> = {
   expired: 'Expired',
 }
 
-const MODES: CheckMode[] = ['research', 'verify', 'link', 'deep-dive', 'investigation-team']
+const MODE_LABELS: Record<CheckMode, string> = {
+  research: 'Research',
+  verify: 'Verify',
+  link: 'Link',
+  'deep-dive': 'Deep dive',
+  'investigation-team': 'Investigation team',
+}
 
-// `listJobs` fetches a single PAGE_LIMIT-sized page (see useCheck); the UI has no
-// pagination. With CHECK retention at 14 days, that cap is assumed to comfortably
-// cover a user's live questions, so paging is a deliberate v2 follow-up. When we
-// do hit the cap the header counts and filter tabs only reflect the most-recent
-// page, so we flag them as approximate instead of silently undercounting.
+// `listJobs` fetches one PAGE_LIMIT-sized page (see useCheck); paging is a deliberate v2 follow-up.
 
 
 // --- Answer rendering ---
@@ -181,7 +183,7 @@ const AskForm = ({ onAsk, onCancel, saving, error }: AskFormProps) => {
         </Field>
         <Field label="Mode">
           <Select value={mode} onChange={e => setMode(e.target.value as CheckMode)}>
-            {MODES.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+            {Object.entries(MODE_LABELS).map(([m, label]) => <option key={m} value={m}>{label}</option>)}
           </Select>
         </Field>
         {error && <Notice tone="error">{error}</Notice>}
@@ -211,7 +213,7 @@ const JobRow = ({ job, onDelete }: JobRowProps) => {
     <Row
       title={<span className="whitespace-pre-wrap">{job.text}</span>}
       badges={<>
-        <Badge>{job.mode}</Badge>
+        <Badge>{MODE_LABELS[job.mode] ?? job.mode}</Badge>
         <Badge tone={STATUS_TONES[job.status] ?? 'neutral'}>{STATUS_LABELS[job.status] || job.status}</Badge>
       </>}
       meta={[
@@ -239,9 +241,18 @@ const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'expired', label: 'Expired' },
 ]
 
+const EMPTY_MESSAGES: Record<StatusFilter, string> = {
+  all: 'No questions yet',
+  queued: 'No queued questions',
+  in_flight: 'No questions in progress',
+  ok: 'No answered questions',
+  error: 'No failed questions',
+  expired: 'No expired questions',
+}
+
 const Check = () => {
   const { listJobs, ask, deleteJob } = useCheck()
-  const [jobs, setJobs] = useState<CheckJob[]>([])
+  const [jobs, setJobs] = useState<CheckJob[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -256,11 +267,13 @@ const Check = () => {
   // A background load (the 5s poll) skips the loading spinner and swallows
   // transient errors so the list updates in place without flashing or banners.
   const loadJobs = useCallback(async (background = false) => {
-    if (!background) setLoading(true)
+    if (!background) {
+      setLoading(true)
+      setError(null)
+    }
     try {
       const data = await listJobs()
       setJobs(data)
-      setError(null)
     } catch (e) {
       if (!background) setError(e instanceof Error ? e.message : 'Failed to load questions')
     } finally {
@@ -292,18 +305,19 @@ const Check = () => {
 
   const handleDelete = (jobId: string) => run(async () => {
     await deleteJob(jobId)
-    setJobs(prev => prev.filter(j => j.job_id !== jobId))
+    setJobs(prev => prev && prev.filter(j => j.job_id !== jobId))
   })
 
   // Counts come from the full set; the displayed list is filtered in-memory.
-  const answeredCount = jobs.filter(j => j.status === 'ok').length
-  const pendingCount = jobs.filter(j => j.status === 'queued' || j.status === 'in_flight').length
-  const visibleJobs = statusFilter === 'all' ? jobs : jobs.filter(j => j.status === statusFilter)
+  const all = jobs ?? []
+  const answeredCount = all.filter(j => j.status === 'ok').length
+  const pendingCount = all.filter(j => j.status === 'queued' || j.status === 'in_flight').length
+  const visibleJobs = statusFilter === 'all' ? all : all.filter(j => j.status === statusFilter)
 
   // We only fetched the most-recent page; at the cap, counts are lower bounds
   // and older jobs aren't shown. Surface a "+" suffix and a notice so the
   // numbers don't read as exact totals.
-  const atCap = jobs.length >= PAGE_LIMIT
+  const atCap = all.length >= PAGE_LIMIT
   const countSuffix = atCap ? '+' : ''
 
   return (
@@ -315,6 +329,9 @@ const Check = () => {
       </span>}
       actions={<Button variant="primary" onClick={() => setShowAsk(true)}>New question</Button>}
       width="wide"
+      loading={jobs === null && 'Loading questions...'}
+      error={jobs === null ? error : null}
+      onRetry={() => loadJobs()}
     >
       {showAsk && <AskForm onAsk={handleAsk} onCancel={() => setShowAsk(false)} saving={asking} error={askError} />}
 
@@ -322,13 +339,13 @@ const Check = () => {
         <ToggleGroup label="Status" options={FILTERS} value={statusFilter} onChange={setStatusFilter} />
       </Toolbar>
 
-      {error && <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>}
+      {jobs && error && <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>}
       {notice}
 
       {!loading && atCap && <Hint>Showing the {PAGE_LIMIT} most recent questions.</Hint>}
 
       {loading ? <LoadingState message="Loading questions..." />
-        : visibleJobs.length === 0 ? <EmptyState message={statusFilter === 'all' ? 'No questions yet' : `No ${statusFilter} questions`} />
+        : visibleJobs.length === 0 ? <EmptyState message={EMPTY_MESSAGES[statusFilter]} />
         : <List>{visibleJobs.map(job => <JobRow key={job.job_id} job={job} onDelete={handleDelete} />)}</List>}
     </Page>
   )

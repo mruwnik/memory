@@ -15,10 +15,10 @@ import { TelemetrySummaryCards } from './TelemetrySummaryCards'
 import { RecentEventsTable } from './RecentEventsTable'
 import { ToolBreakdownChart } from './ToolBreakdownChart'
 import { SessionBreakdownChart } from './SessionBreakdownChart'
+import { TimeRange } from '@/hooks/useMetrics'
+import { TimeRangeSelector } from '@/components/metrics/TimeRangeSelector'
 import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
-import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, Select, ToggleGroup, Toolbar } from '@/components/shared/ui'
-
-type TimeRange = '1h' | '6h' | '24h' | '7d'
+import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
 
 const timeRangeToParams = (range: TimeRange): { from: Date; granularity: number } => {
   const now = new Date()
@@ -219,22 +219,6 @@ const Telemetry: React.FC = () => {
       )}
     </Page>
   )
-}
-
-interface TimeRangeSelectorProps {
-  value: TimeRange
-  onChange: (range: TimeRange) => void
-}
-
-const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({ value, onChange }) => {
-  const ranges: { value: TimeRange; label: string }[] = [
-    { value: '1h', label: '1 Hour' },
-    { value: '6h', label: '6 Hours' },
-    { value: '24h', label: '24 Hours' },
-    { value: '7d', label: '7 Days' },
-  ]
-
-  return <ToggleGroup label="Time range" options={ranges} value={value} onChange={onChange} />
 }
 
 const apiKeyName = (key: TelemetryApiKey): string =>

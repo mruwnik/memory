@@ -5,9 +5,8 @@ import { useClaude, Environment } from '@/hooks/useClaude'
 import { useDiscord } from '@/hooks/useDiscord'
 import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
-import Combobox, { ComboOption } from '@/components/shared/Combobox'
 import { PauseButton, StatusBadge, formatRelativeTime } from '@/components/sources/shared'
-import { Badge, Button, ButtonLink, Checkbox, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
+import { Badge, Button, ButtonLink, Checkbox, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
 
@@ -95,70 +94,42 @@ function formatDuration(start: string | null, end: string | null): string {
 
 // --- Data Display ---
 
-const DataField = ({ label, value }: { label: string; value: string }) => (
-  <span className="inline-flex items-center gap-1 text-xs bg-slate-50 border border-slate-200 rounded px-2 py-0.5">
-    <span className="text-slate-500">{label}</span>
-    <span className="text-slate-700 font-mono">{value}</span>
-  </span>
-)
+/** Short facts from a task's data, for the row's meta line. */
+function dataFacts(task: ScheduledTask): string[] {
+  const data = task.data ?? {}
+  if (task.task_type === 'agent_run') return []
+  if (task.task_type === 'claude_session') {
+    const config = (data.spawn_config ?? {}) as Record<string, unknown>
+    const tools = config.allowed_tools as string[] | undefined
+    return [
+      config.environment_id && `env: ${config.environment_id}`,
+      config.snapshot_id && `snapshot: ${config.snapshot_id}`,
+      config.repo_url && `repo: ${String(config.repo_url).replace(/^https?:\/\/github\.com\//, '')}`,
+      config.run_id && `run: ${config.run_id}`,
+      config.enable_playwright && 'Playwright',
+      tools && `tools: ${tools.length > 3 ? `${tools.slice(0, 3).join(', ')}...` : tools.join(', ')}`,
+    ].filter((f): f is string => !!f)
+  }
+  return [
+    data.subject && `subject: ${data.subject}`,
+    data.from_address && `from: ${data.from_address}`,
+    data.discord_bot_id && `bot: ${data.discord_bot_id}`,
+  ].filter((f): f is string => !!f)
+}
 
-const TaskDataFields = ({ task }: { task: ScheduledTask }) => {
+const TaskDataBody = ({ task }: { task: ScheduledTask }) => {
   const data = task.data
-  if (!data || Object.keys(data).length === 0) return null
-
-  if (task.task_type === 'agent_run') {
+  if (task.task_type === 'agent_run' && data) {
     return (
-      <div className="mt-1 text-sm text-slate-600">
+      <div className="text-sm text-slate-600">
         <p className="line-clamp-3">{String(data.input ?? '')}</p>
         <Link to={`/ui/agents/${data.definition_id}`} className="text-primary text-xs">Edit on the agent's page</Link>
       </div>
     )
   }
-
-  if (task.task_type === 'claude_session') {
-    const config = data.spawn_config as Record<string, unknown> | undefined
-    if (!config) return null
-
-    const fields: { label: string; value: string }[] = []
-    if (config.environment_id) fields.push({ label: 'env', value: String(config.environment_id) })
-    if (config.snapshot_id) fields.push({ label: 'snapshot', value: String(config.snapshot_id) })
-    if (config.repo_url) fields.push({ label: 'repo', value: String(config.repo_url).replace(/^https?:\/\/github\.com\//, '') })
-    if (config.run_id) fields.push({ label: 'run', value: String(config.run_id) })
-    if (config.enable_playwright) fields.push({ label: 'playwright', value: 'enabled' })
-    if (config.allowed_tools) {
-      const tools = config.allowed_tools as string[]
-      fields.push({ label: 'tools', value: tools.length > 3 ? `${tools.slice(0, 3).join(', ')}...` : tools.join(', ') })
-    }
-
-    const prompt = config.initial_prompt as string | undefined
-    const showPrompt = prompt && prompt.length > 100
-
-    return (
-      <>
-        {showPrompt && (
-          <p className="text-sm text-slate-600 mt-1 line-clamp-3" title={prompt}>{prompt}</p>
-        )}
-        {fields.length > 0 && (
-          <div className="flex gap-2 mt-2 flex-wrap">
-            {fields.map(f => <DataField key={f.label} label={f.label} value={f.value} />)}
-          </div>
-        )}
-      </>
-    )
-  }
-
-  // Notification tasks: show extra data fields
-  const fields: { label: string; value: string }[] = []
-  if (data.subject) fields.push({ label: 'subject', value: String(data.subject) })
-  if (data.from_address) fields.push({ label: 'from', value: String(data.from_address) })
-  if (data.discord_bot_id) fields.push({ label: 'bot', value: String(data.discord_bot_id) })
-
-  if (fields.length === 0) return null
-  return (
-    <div className="flex gap-2 mt-2 flex-wrap">
-      {fields.map(f => <DataField key={f.label} label={f.label} value={f.value} />)}
-    </div>
-  )
+  const prompt = (data?.spawn_config as Record<string, unknown> | undefined)?.initial_prompt as string | undefined
+  if (task.task_type !== 'claude_session' || !prompt || prompt.length <= 100) return null
+  return <p className="text-sm text-slate-600 line-clamp-3" title={prompt}>{prompt}</p>
 }
 
 // --- Edit Form ---
@@ -570,30 +541,32 @@ interface ExecutionHistoryProps {
 }
 
 const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
+  const [expanded, setExpanded] = useState(false)
   const [executions, setExecutions] = useState<TaskExecution[] | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!expanded) return
     let cancelled = false
+    setError(null)
     getExecutions(taskId)
       .then(data => { if (!cancelled) setExecutions(data) })
-      .catch(() => { if (!cancelled) setExecutions([]) })
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load history') })
     return () => { cancelled = true }
-  }, [taskId, getExecutions])
-
-  if (loading) return <Hint>Loading history...</Hint>
-  if (!executions || executions.length === 0) return <Hint>No execution history</Hint>
+  }, [expanded, taskId, getExecutions])
 
   return (
-    <List flush className="border-t border-slate-100">
-      {executions.map(ex => {
+    <SubList
+      title={<ExpandToggle expanded={expanded} onClick={() => setExpanded(e => !e)}>History</ExpandToggle>}
+      empty={expanded && !error && (executions ? 'No execution history' : 'Loading history...')}
+      footer={expanded && error && <RowError>{error}</RowError>}
+    >
+      {expanded && !error && executions?.map(ex => {
         const sessionId = (ex.data as Record<string, unknown> | null)?.session_id as string | undefined
         const runId = (ex.data as Record<string, unknown> | null)?.run_id as string | undefined
         return (
           <Row
             key={ex.id}
-            className="px-0"
             title={formatRelativeTime(ex.scheduled_time)}
             badges={<Badge tone={EXECUTION_STATUS_TONES[ex.status] ?? 'neutral'}>{ex.status}</Badge>}
             meta={[
@@ -607,7 +580,7 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
           </Row>
         )
       })}
-    </List>
+    </SubList>
   )
 }
 
@@ -623,7 +596,6 @@ interface TaskRowProps {
 
 const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
   const [editing, setEditing] = useState(false)
-  const [showHistory, setShowHistory] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
@@ -658,6 +630,7 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
         `Next: ${formatFutureTime(task.next_scheduled_time)}`,
         `Created: ${formatRelativeTime(task.created_at)}`,
         task.notification_channel && `${task.notification_channel}${task.notification_target ? `: ${task.notification_target}` : ''}`,
+        ...dataFacts(task),
       ]}
       actions={<>
         {getTaskStatus(task) !== 'done' && (
@@ -667,15 +640,12 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
             : <PauseButton active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
         )}
         {task.task_type !== 'agent_run' && <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>}
-        <Button size="sm" variant={showHistory ? 'primary' : 'secondary'} aria-pressed={showHistory} onClick={() => setShowHistory(h => !h)}>
-          History
-        </Button>
         <ConfirmButton confirm={`Delete "${task.topic || 'Untitled'}"?`} onConfirm={() => onDelete(task.id)} />
       </>}
     >
       {task.message && <p className="text-slate-600 line-clamp-2">{task.message}</p>}
-      <TaskDataFields task={task} />
-      {showHistory && <ExecutionHistory taskId={task.id} getExecutions={getExecutions} />}
+      <TaskDataBody task={task} />
+      <ExecutionHistory taskId={task.id} getExecutions={getExecutions} />
       {editing && (
         <Modal title={`Edit ${typeLabel.toLowerCase()}`} onClose={() => { setEditing(false); setEditError(null) }} size="xl">
           <EditForm
@@ -702,7 +672,7 @@ const EMPTY_MESSAGES: Record<TypeFilter, string> = {
 
 const ScheduledTasks = () => {
   const { listTasks, toggleTask, deleteTask, updateTask, getExecutions, createTask } = useScheduledTasks()
-  const [tasks, setTasks] = useState<ScheduledTask[]>([])
+  const [tasks, setTasks] = useState<ScheduledTask[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
@@ -710,11 +680,10 @@ const ScheduledTasks = () => {
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       const filters = typeFilter !== 'all' ? { task_type: typeFilter } : {}
-      const data = await listTasks(filters)
-      setTasks(data)
-      setError(null)
+      setTasks(await listTasks(filters))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load tasks')
     } finally {
@@ -726,22 +695,22 @@ const ScheduledTasks = () => {
 
   const handleToggle = async (taskId: string, enabled: boolean) => {
     // Optimistic update
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, enabled } : t))
+    setTasks(prev => prev && prev.map(t => t.id === taskId ? { ...t, enabled } : t))
     const ok = await run(async () => {
       const updated = await toggleTask(taskId, enabled)
-      setTasks(prev => prev.map(t => t.id === taskId ? updated : t))
+      setTasks(prev => prev && prev.map(t => t.id === taskId ? updated : t))
     })
-    if (!ok) setTasks(prev => prev.map(t => t.id === taskId ? { ...t, enabled: !enabled } : t))
+    if (!ok) setTasks(prev => prev && prev.map(t => t.id === taskId ? { ...t, enabled: !enabled } : t))
   }
 
   const handleDelete = (taskId: string) => run(async () => {
     await deleteTask(taskId)
-    setTasks(prev => prev.filter(t => t.id !== taskId))
+    setTasks(prev => prev && prev.filter(t => t.id !== taskId))
   })
 
   const handleUpdate = async (taskId: string, updates: UpdateTaskBody) => {
     const updated = await updateTask(taskId, updates)
-    setTasks(prev => prev.map(t => t.id === taskId ? updated : t))
+    setTasks(prev => prev && prev.map(t => t.id === taskId ? updated : t))
     return updated
   }
 
@@ -763,8 +732,9 @@ const ScheduledTasks = () => {
     }
   }
 
-  const enabledCount = tasks.filter(t => t.enabled).length
-  const disabledCount = tasks.length - enabledCount
+  const shown = tasks ?? []
+  const countOf = (status: TaskStatus) => shown.filter(t => getTaskStatus(t) === status).length
+  const counts = [`${countOf('active')} active`, countOf('inactive') > 0 && `${countOf('inactive')} paused`, countOf('done') > 0 && `${countOf('done')} done`]
 
   const FILTERS: { value: TypeFilter; label: string }[] = [
     { value: 'all', label: 'All' },
@@ -776,12 +746,12 @@ const ScheduledTasks = () => {
   return (
     <Page
       title="Scheduled tasks"
-      description={<span className="flex flex-wrap gap-x-3">
-        <span>{enabledCount} active</span>
-        {disabledCount > 0 && <span>{disabledCount} disabled</span>}
-      </span>}
+      description={<span className="flex flex-wrap gap-x-3">{counts.filter(Boolean).map(c => <span key={c as string}>{c}</span>)}</span>}
       actions={<Button variant="primary" onClick={() => setShowCreate(true)}>New task</Button>}
       width="wide"
+      loading={tasks === null && 'Loading scheduled tasks...'}
+      error={tasks === null ? error : null}
+      onRetry={loadTasks}
     >
       {showCreate && <CreateForm onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />}
 
@@ -789,14 +759,14 @@ const ScheduledTasks = () => {
         <ToggleGroup label="Type" options={FILTERS} value={typeFilter} onChange={setTypeFilter} />
       </Toolbar>
 
-      {error && <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>}
+      {tasks && error && <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>}
       {notice}
 
       {loading ? <LoadingState message="Loading scheduled tasks..." />
-        : tasks.length === 0 ? <EmptyState message={EMPTY_MESSAGES[typeFilter]} />
+        : shown.length === 0 ? <EmptyState message={EMPTY_MESSAGES[typeFilter]} />
         : (
           <List>
-            {tasks.map(task => (
+            {shown.map(task => (
               <TaskRow key={task.id} task={task} onToggle={handleToggle} onDelete={handleDelete} onUpdate={handleUpdate} getExecutions={getExecutions} />
             ))}
           </List>

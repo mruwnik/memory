@@ -557,6 +557,126 @@ export const MultiSelect = ({ options, value, onChange, id, placeholder, creatab
   )
 }
 
+export interface ComboOption { value: string; label: string; group?: string }
+
+interface ComboboxProps {
+  value: string
+  /** option is undefined when the value is free-typed (custom) rather than picked. */
+  onChange: (value: string, option?: ComboOption) => void
+  options: ComboOption[]
+  placeholder?: string
+  /** Keep a free-typed value that matches no option. */
+  allowCustom?: boolean
+  loading?: boolean
+  /** For async search: options are then shown unfiltered (the parent filters). */
+  onQueryChange?: (query: string) => void
+  disabled?: boolean
+  className?: string
+  id?: string
+  'aria-label'?: string
+  'aria-describedby'?: string
+  'aria-invalid'?: boolean
+}
+
+/** Single-value searchable picker, optionally grouped and accepting free-typed values. */
+export const Combobox = ({ value, onChange, options, placeholder, allowCustom, loading, onQueryChange, disabled, className, ...inputProps }: ComboboxProps) => {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [highlight, setHighlight] = useState(0)
+  const listId = useId()
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // While closed the field shows the committed value's label.
+  useEffect(() => {
+    if (!open) setQuery(value ? options.find(o => o.value === value)?.label ?? value : '')
+  }, [value, options, open])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => !rootRef.current?.contains(e.target as Node) && setOpen(false)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+
+  const q = query.trim().toLowerCase()
+  const filtered = onQueryChange || !q ? options : options.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+  const current = open && !loading ? filtered[highlight] : undefined
+
+  const commitTyped = () => {
+    const match = options.find(o => o.label === query || o.value === query.trim())
+    if (match) onChange(match.value, match)
+    else if (allowCustom && query.trim()) onChange(query.trim(), undefined)
+    // Closing re-syncs the field text to the committed value.
+    setOpen(false)
+  }
+  const select = (opt: ComboOption) => {
+    onChange(opt.value, opt)
+    setQuery(opt.label)
+    setOpen(false)
+  }
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlight(open ? Math.min(highlight + 1, filtered.length - 1) : 0)
+      setOpen(true)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlight(Math.max(highlight - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (current) select(current)
+      else commitTyped()
+    } else if (e.key === 'Escape' && open) {
+      // Close the list without also closing a surrounding Modal.
+      e.stopPropagation()
+      setOpen(false)
+    }
+  }
+
+  const groups = filtered.reduce<{ group?: string; items: [ComboOption, number][] }[]>((acc, o, i) => {
+    const last = acc[acc.length - 1]
+    if (last && last.group === o.group) last.items.push([o, i])
+    else acc.push({ group: o.group, items: [[o, i]] })
+    return acc
+  }, [])
+  const optionId = (i: number) => `${listId}-${i}`
+
+  return (
+    <div ref={rootRef} className={cx('relative', className)}>
+      <input {...inputProps} type="text" role="combobox" aria-expanded={open} aria-controls={open ? listId : undefined} aria-autocomplete="list"
+        aria-activedescendant={current ? optionId(highlight) : undefined}
+        className={controlClass()} value={query} disabled={disabled} placeholder={placeholder}
+        onChange={e => { setQuery(e.target.value); setOpen(true); setHighlight(0); onQueryChange?.(e.target.value) }}
+        onFocus={() => setOpen(true)} onBlur={commitTyped} onKeyDown={onKeyDown} />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto bg-white border border-slate-200 rounded-lg shadow-lg py-1">
+          {loading && <p className="px-3 py-2 text-sm text-slate-500">Loading...</p>}
+          {!loading && !filtered.length && (
+            <p className="px-3 py-2 text-sm text-slate-500">{allowCustom ? 'No matches. Press Enter to use as typed' : 'No matches'}</p>
+          )}
+          <ul id={listId} role="listbox" aria-label={inputProps['aria-label']}>
+            {!loading && groups.map(({ group, items }, g) => (
+              <li key={`${group}-${g}`} role={group ? 'group' : 'presentation'} aria-label={group}>
+                {group && <div aria-hidden="true" className="px-3 pt-2 pb-1 text-xs font-semibold text-slate-600">{group}</div>}
+                <ul role="presentation">
+                  {items.map(([o, i]) => (
+                    <li key={`${o.value}-${i}`} id={optionId(i)} role="option" aria-selected={i === highlight}
+                      onMouseDown={e => { e.preventDefault(); select(o) }} onMouseEnter={() => setHighlight(i)}
+                      className={cx('px-3 py-1.5 text-sm text-slate-800 cursor-pointer break-all', i === highlight && 'bg-slate-100')}>
+                      {o.label}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ---- Status and feedback ----
 
 const TONES = {
@@ -650,23 +770,48 @@ export const ErrorState = ({ message, onRetry }: { message: string; onRetry?: ()
 
 interface Option<T extends string> { value: T; label: ReactNode }
 
-/** Underlined tabs that switch the view below them. */
-export function Tabs<T extends string>({ options, value, onChange, label }: { options: Option<T>[]; value: T; onChange: (v: T) => void; label: string }) {
+const TAB_KEYS: Record<string, (i: number, n: number) => number> = {
+  ArrowRight: (i, n) => (i + 1) % n,
+  ArrowLeft: (i, n) => (i - 1 + n) % n,
+  Home: () => 0,
+  End: (_, n) => n - 1,
+}
+
+/** Underlined tabs that switch the view below them; `children` is the selected view, wired up as its tabpanel. */
+export function Tabs<T extends string>({ options, value, onChange, label, children }: { options: Option<T>[]; value: T; onChange: (v: T) => void; label: string; children?: ReactNode }) {
+  const id = useId()
+  const tabId = (v: T) => `${id}-tab-${v}`
+  const panelId = children === undefined ? undefined : `${id}-panel`
   const selectedRef = useRef<HTMLButtonElement>(null)
   // On phones the strip scrolls, so a tab opened by URL (Secrets from the nav) can start off-screen.
   useEffect(() => { selectedRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }, [value])
+
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    const move = TAB_KEYS[e.key]
+    if (!move) return
+    e.preventDefault()
+    const next = options[move(options.findIndex(o => o.value === value), options.length)]
+    onChange(next.value)
+    document.getElementById(tabId(next.value))?.focus()
+  }
+
   return (
-    // Phones scroll one row of tabs sideways rather than wrapping a long set into a block of rows.
-    <div role="tablist" aria-label={label}
-      className="flex sm:flex-wrap gap-1 border-b border-slate-200 max-sm:overflow-x-auto max-sm:overflow-y-hidden max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden">
-      {options.map(o => (
-        <button key={o.value} ref={o.value === value ? selectedRef : undefined} type="button" role="tab" aria-selected={o.value === value} onClick={() => onChange(o.value)}
-          className={cx('shrink-0 whitespace-nowrap py-2 px-4 sm:-mb-px text-sm font-medium border-b-2 transition-colors',
-            o.value === value ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-800 hover:border-slate-300')}>
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <>
+      {/* Phones scroll one row of tabs sideways rather than wrapping a long set into a block of rows. */}
+      <div role="tablist" aria-label={label} onKeyDown={onKeyDown}
+        className="flex sm:flex-wrap gap-1 border-b border-slate-200 max-sm:overflow-x-auto max-sm:overflow-y-hidden max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden">
+        {options.map(o => (
+          <button key={o.value} id={tabId(o.value)} ref={o.value === value ? selectedRef : undefined} type="button" role="tab"
+            aria-selected={o.value === value} aria-controls={o.value === value ? panelId : undefined} tabIndex={o.value === value ? 0 : -1}
+            onClick={() => onChange(o.value)}
+            className={cx('shrink-0 whitespace-nowrap py-2 px-4 sm:-mb-px text-sm font-medium border-b-2 transition-colors',
+              o.value === value ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-800 hover:border-slate-300')}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {panelId && <div role="tabpanel" id={panelId} aria-labelledby={tabId(value)} className="space-y-6">{children}</div>}
+    </>
   )
 }
 
@@ -687,15 +832,29 @@ export function ToggleGroup<T extends string>({ options, value, onChange, label 
 
 // ---- Dialogs ----
 
-function useEscape(onEscape?: () => void) {
+interface EscapeLayer { element: RefObject<HTMLElement | null>; onEscape: RefObject<(() => void) | undefined> }
+
+// Open dialogs, topmost last: Escape closes only the topmost one. A dialog sits below any dialog
+// nested inside it, even when both mount together (child effects run first).
+const escapeLayers: EscapeLayer[] = []
+
+export function useEscape(element: RefObject<HTMLElement | null>, onEscape?: () => void, active = true) {
+  const handler = useRef(onEscape)
+  useEffect(() => { handler.current = onEscape })
   useEffect(() => {
-    if (!onEscape) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onEscape()
+    if (!active) return
+    const layer = { element, onEscape: handler }
+    const nested = escapeLayers.findIndex(l => l.element.current && element.current?.contains(l.element.current))
+    escapeLayers.splice(nested < 0 ? escapeLayers.length : nested, 0, layer)
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && escapeLayers[escapeLayers.length - 1] === layer) handler.current?.()
     }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onEscape])
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      escapeLayers.splice(escapeLayers.indexOf(layer), 1)
+    }
+  }, [active])
 }
 
 const MODAL_SIZES = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-2xl' }
@@ -712,8 +871,9 @@ interface ModalProps {
 const FOCUSABLE = 'a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 // Focus `initial` (else the dialog's first control) on open, keep Tab inside the dialog, and restore focus on close.
-function useDialogFocus(dialogRef: RefObject<HTMLElement | null>, initial: () => HTMLElement | null | undefined) {
+export function useDialogFocus(dialogRef: RefObject<HTMLElement | null>, initial: () => HTMLElement | null | undefined, active = true) {
   useEffect(() => {
+    if (!active) return
     const previouslyFocused = document.activeElement as HTMLElement | null
     const dialog = dialogRef.current
     const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
@@ -735,7 +895,7 @@ function useDialogFocus(dialogRef: RefObject<HTMLElement | null>, initial: () =>
       dialog?.removeEventListener('keydown', trapTab)
       previouslyFocused?.focus()
     }
-  }, [])
+  }, [active])
 }
 
 /** Closes only via × or Escape: a stray backdrop click must not discard a half-filled form. */
@@ -743,7 +903,7 @@ export const Modal = ({ title, onClose, children, size = 'lg', className }: Moda
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
-  useEscape(onClose)
+  useEscape(dialogRef, onClose)
   useDialogFocus(dialogRef, () => bodyRef.current?.querySelector<HTMLElement>(FOCUSABLE))
 
   return (
@@ -752,7 +912,7 @@ export const Modal = ({ title, onClose, children, size = 'lg', className }: Moda
         className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto', MODAL_SIZES[size], className)}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h2>
-          {onClose && <button aria-label="Close" className="text-slate-500 hover:text-slate-700 text-2xl leading-none" onClick={onClose}>&times;</button>}
+          {onClose && <button type="button" aria-label="Close" className="-mr-2 w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 text-2xl leading-none" onClick={onClose}>&times;</button>}
         </div>
         <div ref={bodyRef} className="p-4">{children}</div>
       </div>
@@ -794,7 +954,7 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabe
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
-  useEscape(onCancel)
+  useEscape(dialogRef, onCancel)
   // Cancel is the safer default focus for destructive confirmations
   useDialogFocus(dialogRef, () => cancelRef.current)
 

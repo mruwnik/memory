@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mockFetch, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import ConfigSources from './ConfigSources'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
@@ -78,18 +78,14 @@ describe('ConfigSources load + tabs', () => {
     expect(screen.getByText('1 skill')).toBeInTheDocument()
   })
 
-  it('shows the load error when a fetch fails', async () => {
-    mockFetchRoutes({ ...routes([], []), '/claude/environments/list': { status: 500, json: { detail: 'boom' } } })
-    renderWithRouter(<ConfigSources />)
-    await waitFor(() => expect(screen.getByText('boom')).toBeInTheDocument())
-  })
-
-  it('dismisses the error banner when Dismiss is clicked', async () => {
+  it('replaces the page with the load error and retries it', async () => {
     mockFetchRoutes({ ...routes([], []), '/claude/environments/list': { status: 500, json: { detail: 'boom' } } })
     const { user } = renderWithRouter(<ConfigSources />)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument()
+    expect(await screen.findByText('boom')).toBeInTheDocument()
+    expect(screen.queryByText('No environments yet')).not.toBeInTheDocument()
+    mockFetchRoutes(routes([environment], []))
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Dev Env')).toBeInTheDocument()
   })
 })
 
@@ -124,6 +120,21 @@ describe('ConfigSources create environment', () => {
     await user.type(within(modal).getByPlaceholderText('My Development Environment'), 'Dup')
     await user.click(within(modal).getByRole('button', { name: 'Create' }))
     expect(await within(modal).findByText('Name already in use')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['Snapshot', 'Choose a snapshot to initialize from'],
+    ['Environment', 'Choose an environment to clone'],
+  ])('requires a source %s before creating', async (source, message) => {
+    const mock = mockFetchRoutes(routes([environment], [snapshot]))
+    const { user } = renderWithRouter(<ConfigSources />)
+    await user.click(await screen.findByRole('button', { name: 'New environment' }))
+    const modal = screen.getByRole('dialog')
+    await user.type(within(modal).getByPlaceholderText('My Development Environment'), 'New Env')
+    await user.click(within(modal).getByRole('button', { name: source }))
+    await user.click(within(modal).getByRole('button', { name: 'Create' }))
+    expect(within(modal).getByRole('combobox', { name: source })).toHaveAccessibleDescription(message)
+    expect(mock.mock.calls.some(([url]) => String(url).includes('/claude/environments/create'))).toBe(false)
   })
 
   it('offers New environment only on the Environments tab', async () => {
@@ -193,5 +204,14 @@ describe('ConfigSources reset environment', () => {
       )
       expect(post).toBeTruthy()
     })
+  })
+
+  it('disables the reset button while the reset runs', async () => {
+    const routed = mockFetchRoutes(routes([environment], [snapshot]))
+    mockFetch((url, init) => String(url).includes('/reset') ? new Promise(() => {}) : routed(url, init))
+    const { user } = renderWithRouter(<ConfigSources />)
+    await user.click(await screen.findByRole('button', { name: 'Reset' }))
+    await user.click(screen.getByRole('button', { name: 'Reset environment' }))
+    expect(screen.getByRole('button', { name: 'Resetting...' })).toBeDisabled()
   })
 })

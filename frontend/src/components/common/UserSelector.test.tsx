@@ -62,7 +62,7 @@ describe('UserSelector rendering', () => {
   it('renders the loaded users with a (you) marker for the current user', async () => {
     render(<UserSelector value={selected} onChange={() => {}} />)
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
     const options = screen.getAllByRole('option') as HTMLOptionElement[]
     expect(options.some(o => o.textContent?.includes('Admin (you)'))).toBe(true)
@@ -80,7 +80,7 @@ describe('UserSelector rendering', () => {
       <UserSelector value={selected} onChange={() => {}} onlyHumanUsers />,
     )
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
     expect(screen.queryByText(/Bot/)).not.toBeInTheDocument()
   })
@@ -94,7 +94,7 @@ describe('UserSelector rendering', () => {
       />,
     )
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
     const options = screen.getAllByRole('option') as HTMLOptionElement[]
     expect(options).toHaveLength(1)
@@ -111,7 +111,7 @@ describe('UserSelector rendering', () => {
       />,
     )
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
     expect(screen.getByText('All users')).toBeInTheDocument()
     expect(screen.getByText('System (no user)')).toBeInTheDocument()
@@ -124,9 +124,9 @@ describe('UserSelector onChange', () => {
     const user = userEvent.setup()
     render(<UserSelector value={selected} onChange={onChange} />)
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
-    await user.selectOptions(screen.getByLabelText('View as:'), '2')
+    await user.selectOptions(screen.getByLabelText('User'), '2')
     expect(onChange).toHaveBeenCalledWith({ type: 'user', id: 2, name: 'Bob' })
   })
 
@@ -135,9 +135,9 @@ describe('UserSelector onChange', () => {
     const user = userEvent.setup()
     render(<UserSelector value={selected} onChange={onChange} showAllOption />)
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
-    await user.selectOptions(screen.getByLabelText('View as:'), String(ALL_USERS_ID))
+    await user.selectOptions(screen.getByLabelText('User'), String(ALL_USERS_ID))
     expect(onChange).toHaveBeenCalledWith({
       type: 'user',
       id: ALL_USERS_ID,
@@ -150,9 +150,9 @@ describe('UserSelector onChange', () => {
     const user = userEvent.setup()
     render(<UserSelector value={selected} onChange={onChange} showNoneOption />)
     await waitFor(() =>
-      expect(screen.getByLabelText('View as:')).toBeInTheDocument(),
+      expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
-    await user.selectOptions(screen.getByLabelText('View as:'), String(NO_USER_ID))
+    await user.selectOptions(screen.getByLabelText('User'), String(NO_USER_ID))
     expect(onChange).toHaveBeenCalledWith({
       type: 'user',
       id: NO_USER_ID,

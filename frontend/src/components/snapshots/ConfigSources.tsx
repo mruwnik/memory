@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useClaude, Snapshot, Environment, CreateEnvironmentRequest } from '../../hooks/useClaude'
 import { apiError } from '../../hooks/apiError'
-import { Badge, Button, ConfirmButton, EmptyState, Field, Input, Label, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, Select, Tabs, Textarea, ToggleGroup, type Tone, Toolbar } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, Field, Input, Label, List, Modal, Notice, Page, RefreshButton, Row, Select, Tabs, Textarea, ToggleGroup, type Tone, Toolbar, useActionNotice } from '@/components/shared/ui'
 
 interface SnapshotSummary {
   skills: string[]
@@ -13,6 +13,13 @@ interface SnapshotSummary {
 }
 
 type Tab = 'environments' | 'snapshots'
+type SourceType = 'empty' | 'snapshot' | 'environment'
+
+const SOURCE_HINTS: Record<SourceType, string> = {
+  empty: 'Create a blank environment',
+  snapshot: 'Initialize with config from a snapshot',
+  environment: 'Clone all data from an existing environment',
+}
 
 const ConfigSources = () => {
   const {
@@ -26,41 +33,45 @@ const ConfigSources = () => {
   const [activeTab, setActiveTab] = useState<Tab>('environments')
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
   const [environments, setEnvironments] = useState<Environment[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const { run, notice } = useActionNotice()
   const [deletingId, setDeletingId] = useState<string | null>(null) // "snap-{id}" or "env-{id}"
 
   // Create environment modal state
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newEnvName, setNewEnvName] = useState('')
   const [newEnvDescription, setNewEnvDescription] = useState('')
-  const [newEnvSourceType, setNewEnvSourceType] = useState<'empty' | 'snapshot' | 'environment'>('empty')
+  const [newEnvSourceType, setNewEnvSourceType] = useState<SourceType>('empty')
   const [newEnvSnapshotId, setNewEnvSnapshotId] = useState<number | null>(null)
   const [newEnvSourceEnvId, setNewEnvSourceEnvId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<{ field?: boolean; message: string } | null>(null)
+  const [createError, setCreateError] = useState<{ field?: 'name' | 'source'; message: string } | null>(null)
 
   // Reset environment modal state
   const [resettingEnvId, setResettingEnvId] = useState<number | null>(null)
   const [resetSnapshotId, setResetSnapshotId] = useState<number | null>(null)
   const [resetError, setResetError] = useState<string | null>(null)
+  const [resetting, setResetting] = useState(false)
+
+  const fetchData = useCallback(async () => {
+    const [snapshotsData, environmentsData] = await Promise.all([
+      listSnapshots(),
+      listEnvironments(),
+    ])
+    setSnapshots(snapshotsData)
+    setEnvironments(environmentsData)
+  }, [listSnapshots, listEnvironments])
 
   const loadData = useCallback(async () => {
-    setLoading(true)
+    setLoadError(null)
     try {
-      const [snapshotsData, environmentsData] = await Promise.all([
-        listSnapshots(),
-        listEnvironments(),
-      ])
-      setSnapshots(snapshotsData)
-      setEnvironments(environmentsData)
-      setError(null)
+      await fetchData()
+      setLoaded(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load data')
-    } finally {
-      setLoading(false)
+      setLoadError(e instanceof Error ? e.message : 'Failed to load data')
     }
-  }, [listSnapshots, listEnvironments])
+  }, [fetchData])
 
   useEffect(() => {
     loadData()
@@ -68,30 +79,24 @@ const ConfigSources = () => {
 
   const handleDeleteSnapshot = async (id: number) => {
     setDeletingId(`snap-${id}`)
-    try {
+    await run(async () => {
       const response = await fetch(`/claude/snapshots/${id}`, {
         method: 'DELETE',
         credentials: 'include',
       })
       if (!response.ok) throw await apiError(response, 'Failed to delete snapshot')
-      loadData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete snapshot')
-    } finally {
-      setDeletingId(null)
-    }
+      await fetchData()
+    })
+    setDeletingId(null)
   }
 
   const handleDeleteEnvironment = async (id: number) => {
     setDeletingId(`env-${id}`)
-    try {
+    await run(async () => {
       await deleteEnvironment(id)
-      loadData()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete environment')
-    } finally {
-      setDeletingId(null)
-    }
+      await fetchData()
+    })
+    setDeletingId(null)
   }
 
   const closeCreateModal = () => {
@@ -106,7 +111,15 @@ const ConfigSources = () => {
 
   const handleCreateEnvironment = async () => {
     if (!newEnvName.trim()) {
-      setCreateError({ field: true, message: 'Environment name is required' })
+      setCreateError({ field: 'name', message: 'Environment name is required' })
+      return
+    }
+    if (newEnvSourceType === 'snapshot' && newEnvSnapshotId === null) {
+      setCreateError({ field: 'source', message: 'Choose a snapshot to initialize from' })
+      return
+    }
+    if (newEnvSourceType === 'environment' && newEnvSourceEnvId === null) {
+      setCreateError({ field: 'source', message: 'Choose an environment to clone' })
       return
     }
 
@@ -116,12 +129,12 @@ const ConfigSources = () => {
       const request: CreateEnvironmentRequest = {
         name: newEnvName.trim(),
         description: newEnvDescription.trim() || undefined,
-        snapshot_id: newEnvSourceType === 'snapshot' ? (newEnvSnapshotId || undefined) : undefined,
-        source_environment_id: newEnvSourceType === 'environment' ? (newEnvSourceEnvId || undefined) : undefined,
+        snapshot_id: newEnvSourceType === 'snapshot' ? newEnvSnapshotId ?? undefined : undefined,
+        source_environment_id: newEnvSourceType === 'environment' ? newEnvSourceEnvId ?? undefined : undefined,
       }
       await createEnvironment(request)
       closeCreateModal()
-      loadData()
+      run(fetchData)
     } catch (e) {
       setCreateError({ message: e instanceof Error ? e.message : 'Failed to create environment' })
     } finally {
@@ -132,12 +145,15 @@ const ConfigSources = () => {
   const handleResetEnvironment = async () => {
     if (!resettingEnvId) return
     setResetError(null)
+    setResetting(true)
     try {
-      await resetEnvironment(resettingEnvId, { snapshot_id: resetSnapshotId || undefined })
+      await resetEnvironment(resettingEnvId, { snapshot_id: resetSnapshotId ?? undefined })
       closeResetModal()
-      loadData()
+      run(fetchData)
     } catch (e) {
       setResetError(e instanceof Error ? e.message : 'Failed to reset environment')
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -182,22 +198,18 @@ const ConfigSources = () => {
       title="Claude configurations"
       actions={activeTab === 'environments' && <Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>}
       width="wide"
+      loading={!loaded}
+      error={loadError}
+      onRetry={loadData}
     >
-      <Tabs label="Sections" value={activeTab} onChange={setActiveTab} options={[{ value: 'environments', label: <>Environments ({environments.length})</> }, { value: 'snapshots', label: <>Snapshots ({snapshots.length})</> }]} />
+      <Tabs label="Sections" value={activeTab} onChange={setActiveTab} options={[{ value: 'environments', label: <>Environments ({environments.length})</> }, { value: 'snapshots', label: <>Snapshots ({snapshots.length})</> }]}>
 
-      <Toolbar actions={<RefreshButton onClick={() => loadData()} label="Refresh list" />} />
+      <Toolbar actions={<RefreshButton onClick={() => run(fetchData)} label="Refresh list" />} />
 
       <div className="space-y-4">
-        {/* Error */}
-        {error && (
-          <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>
-        )}
+        {notice}
 
-        {/* Loading */}
-        {loading && <LoadingState />}
-
-        {/* Environments Tab */}
-        {!loading && activeTab === 'environments' && (
+        {activeTab === 'environments' && (
           <>
             {/* Empty State */}
             {environments.length === 0 && (
@@ -206,7 +218,6 @@ const ConfigSources = () => {
                 <p className="text-sm">
                   Environments are persistent Docker volumes that retain state across sessions.
                   <br />
-                  Create one to get started!
                 </p>
               </>} />
             )}
@@ -218,7 +229,6 @@ const ConfigSources = () => {
                   <Row
                     key={env.id}
                     title={env.name}
-                    badges={<Badge tone="success">Persistent</Badge>}
                     meta={[
                       `Created: ${formatDate(env.created_at)}`,
                       `Last used: ${formatDate(env.last_used_at)}`,
@@ -246,7 +256,7 @@ const ConfigSources = () => {
         )}
 
         {/* Snapshots Tab */}
-        {!loading && activeTab === 'snapshots' && (
+        {activeTab === 'snapshots' && (
           <>
             {/* Empty State */}
             {snapshots.length === 0 && (
@@ -273,12 +283,9 @@ const ConfigSources = () => {
                     <Row
                       key={snapshot.id}
                       title={snapshot.name}
-                      badges={<>
-                        {snapshot.subscription_type && (
-                          <Badge tone={SUBSCRIPTION_TONES[snapshot.subscription_type.toLowerCase()] ?? 'neutral'}>{snapshot.subscription_type}</Badge>
-                        )}
-                        <Badge tone="info">Static</Badge>
-                      </>}
+                      badges={snapshot.subscription_type && (
+                        <Badge tone={SUBSCRIPTION_TONES[snapshot.subscription_type.toLowerCase()] ?? 'neutral'}>{snapshot.subscription_type}</Badge>
+                      )}
                       meta={[
                         snapshot.claude_account_email,
                         formatDate(snapshot.created_at),
@@ -300,13 +307,14 @@ const ConfigSources = () => {
           </>
         )}
       </div>
+      </Tabs>
 
       {/* Create Environment Modal */}
       {showCreateModal && (
         <Modal title="New environment" onClose={closeCreateModal} size="md">
           <div className="space-y-4">
               {createError && !createError.field && <Notice tone="error">{createError.message}</Notice>}
-              <Field label="Name *" error={createError?.field ? createError.message : null}>
+              <Field label="Name" error={createError?.field === 'name' ? createError.message : null}>
                 <Input
                   type="text"
                   value={newEnvName}
@@ -329,6 +337,7 @@ const ConfigSources = () => {
                 <ToggleGroup label="Initialize from" value={newEnvSourceType} onChange={setNewEnvSourceType} options={[{ value: 'empty', label: 'Empty' }, { value: 'snapshot', label: 'Snapshot' }, { value: 'environment', label: 'Environment' }]} />
 
                 {newEnvSourceType === 'snapshot' && (
+                  <Field label="Snapshot" className="mt-3" error={createError?.field === 'source' ? createError.message : null}>
                   <Select
                     value={newEnvSnapshotId ?? ''}
                     onChange={(e) => setNewEnvSnapshotId(e.target.value ? Number(e.target.value) : null)}
@@ -340,9 +349,11 @@ const ConfigSources = () => {
                       </option>
                     ))}
                   </Select>
+                  </Field>
                 )}
 
                 {newEnvSourceType === 'environment' && (
+                  <Field label="Environment" className="mt-3" error={createError?.field === 'source' ? createError.message : null}>
                   <Select
                     value={newEnvSourceEnvId ?? ''}
                     onChange={(e) => setNewEnvSourceEnvId(e.target.value ? Number(e.target.value) : null)}
@@ -354,13 +365,10 @@ const ConfigSources = () => {
                       </option>
                     ))}
                   </Select>
+                  </Field>
                 )}
 
-                <p className="text-xs text-slate-500 mt-1">
-                  {newEnvSourceType === 'empty' && 'Create a blank environment'}
-                  {newEnvSourceType === 'snapshot' && 'Initialize with config from a snapshot'}
-                  {newEnvSourceType === 'environment' && 'Clone all data from an existing environment'}
-                </p>
+                <p className="text-xs text-slate-500 mt-1">{SOURCE_HINTS[newEnvSourceType]}</p>
               </div>
             </div>
 
@@ -385,7 +393,7 @@ const ConfigSources = () => {
             </p>
             {resetError && <Notice tone="error" className="mb-4">{resetError}</Notice>}
 
-            <Field label="Reinitialize from Snapshot">
+            <Field label="Reinitialize from snapshot">
               <Select
                 value={resetSnapshotId ?? ''}
                 onChange={(e) => setResetSnapshotId(e.target.value ? Number(e.target.value) : null)}
@@ -401,10 +409,8 @@ const ConfigSources = () => {
 
             <div className="flex justify-end gap-3 mt-6">
               <Button onClick={closeResetModal}>Cancel</Button>
-              <Button variant="dangerSolid"
-                onClick={handleResetEnvironment}
-              >
-                Reset environment
+              <Button variant="dangerSolid" onClick={handleResetEnvironment} disabled={resetting}>
+                {resetting ? 'Resetting...' : 'Reset environment'}
               </Button>
             </div>
         </Modal>

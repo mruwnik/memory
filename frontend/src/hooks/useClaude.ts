@@ -96,7 +96,6 @@ export interface AttachInfo {
 
 export interface OrchestratorStatus {
   available: boolean
-  socket_path: string | null
   containers?: { running: number; max: number } | null
   // Sampler-backed fields (added in orchestrator commit 4c45a70). `used*` is
   // the live total across running containers; `allocated*` is the static sum

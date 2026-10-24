@@ -38,10 +38,32 @@ describe('Check', () => {
     await waitFor(() => expect(screen.getByText('No questions yet')).toBeInTheDocument())
   })
 
-  it('renders an error state with retry', async () => {
+  it('replaces the page with the initial load error and retries it', async () => {
     listJobs.mockRejectedValueOnce(new Error('boom'))
     renderWithRouter(<Check />)
     await waitFor(() => expect(screen.getByText('boom')).toBeInTheDocument())
+    expect(screen.queryByText('No questions yet')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.getByText('No questions yet')).toBeInTheDocument())
+  })
+
+  it.each([
+    ['In progress', 'No questions in progress'],
+    ['Answered', 'No answered questions'],
+    ['Error', 'No failed questions'],
+  ])('names the %s filter in its empty state', async (filter, message) => {
+    renderWithRouter(<Check />)
+    await waitFor(() => expect(screen.getByText('No questions yet')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: filter }))
+    expect(screen.getByText(message)).toBeInTheDocument()
+  })
+
+  it('offers every mode with a readable label', async () => {
+    renderWithRouter(<Check />)
+    await waitFor(() => expect(screen.getByText('No questions yet')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: 'New question' }))
+    const options = within(screen.getByLabelText('Mode')).getAllByRole('option').map(o => o.textContent)
+    expect(options).toEqual(['Research', 'Verify', 'Link', 'Deep dive', 'Investigation team'])
   })
 
   it('renders a job card with question, answer, mode and status', async () => {
@@ -49,7 +71,7 @@ describe('Check', () => {
     renderWithRouter(<Check />)
     await waitFor(() => expect(screen.getByText('is the sky blue?')).toBeInTheDocument())
     expect(screen.getByText('yes, it is')).toBeInTheDocument()
-    expect(screen.getByText('research')).toBeInTheDocument()
+    expect(screen.getByText('Research')).toBeInTheDocument()
     expect(screen.getByText('Answered', { selector: 'span' })).toBeInTheDocument()
     expect(screen.getByText('1 answered')).toBeInTheDocument()
   })

@@ -31,7 +31,7 @@ const STATUS_TONES: Record<string, Tone> = {
 
 const Jobs = () => {
   const { listJobs, retryJob, reingestJob, getUsersWithJobs, getJobTypes } = useJobs()
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [jobs, setJobs] = useState<Job[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -81,6 +81,7 @@ const Jobs = () => {
 
   const loadJobs = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
+    setError(null)
     setActionError(null)
     try {
       const filters: Record<string, string | number | undefined> = {}
@@ -102,7 +103,6 @@ const Jobs = () => {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       })
       setJobs(sorted)
-      setError(null)
     } catch (e) {
       if (signal?.aborted) return
       setError(e instanceof Error ? e.message : 'Failed to load jobs')
@@ -172,22 +172,27 @@ const Jobs = () => {
     return type.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())
   }
 
-  // Stats are only meaningful when showing all jobs
-  const showStats = statusFilter === 'all'
-  const pendingCount = jobs.filter(j => j.status === 'pending').length
-  const processingCount = jobs.filter(j => j.status === 'processing').length
-  const failedCount = jobs.filter(j => j.status === 'failed').length
-  const completeCount = jobs.filter(j => j.status === 'complete').length
+  const shown = jobs ?? []
+  const countOf = (status: JobStatus) => shown.filter(j => j.status === status).length
+  const failedCount = countOf('failed')
+  const processingCount = countOf('processing')
 
-  const counts = showStats
-    ? [failedCount > 0 && `${failedCount} failed`, processingCount > 0 && `${processingCount} processing`, `${pendingCount} pending`, `${completeCount} complete`]
-    : [`Showing ${jobs.length} ${statusFilter}`]
+  // The API returns one page without totals, so once there is more than one page the counts only cover this one
+  const counts = [
+    ...(statusFilter === 'all'
+      ? [failedCount > 0 && `${failedCount} failed`, processingCount > 0 && `${processingCount} processing`, `${countOf('pending')} pending`, `${countOf('complete')} complete`]
+      : [`Showing ${shown.length} ${statusFilter}`]),
+    (page > 0 || hasMore) && 'on this page',
+  ]
 
   return (
     <Page
       title="Jobs"
       description={<span className="flex flex-wrap gap-x-3">{counts.filter(Boolean).map(c => <span key={c as string}>{c}</span>)}</span>}
       width="wide"
+      loading={jobs === null && 'Loading jobs...'}
+      error={jobs === null ? error : null}
+      onRetry={() => loadJobs()}
     >
       <Toolbar actions={<RefreshButton onClick={() => loadJobs()} loading={loading} label="Refresh jobs list" />}>
         <ToggleGroup label="Status" options={FILTERS} value={statusFilter} onChange={setStatusFilter} />
@@ -214,13 +219,13 @@ const Jobs = () => {
       </Toolbar>
 
       {actionError && <Notice tone="error" onDismiss={() => setActionError(null)}>{actionError}</Notice>}
-      {error && <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>}
+      {jobs && error && <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>}
 
       {loading ? <LoadingState message="Loading jobs..." />
-        : jobs.length === 0 ? <EmptyState message={statusFilter === 'all' ? 'No jobs found' : `No ${statusFilter} jobs`} />
+        : shown.length === 0 ? <EmptyState message={statusFilter === 'all' ? 'No jobs found' : `No ${statusFilter} jobs`} />
         : (
           <List>
-            {jobs.map(job => {
+            {shown.map(job => {
               const busy = retryingId === job.id || reingestingId === job.id
               return (
                 <Row
@@ -236,7 +241,7 @@ const Jobs = () => {
                   ]}
                   actions={<>
                     {job.status === 'failed' && (
-                      <Button variant="primary" size="sm" onClick={() => handleRetry(job.id)} disabled={busy} title="Retry failed job">
+                      <Button size="sm" onClick={() => handleRetry(job.id)} disabled={busy} title="Retry failed job">
                         {retryingId === job.id ? 'Retrying...' : 'Retry'}
                       </Button>
                     )}

@@ -214,7 +214,7 @@ describe('Telemetry container', () => {
     // 24h is the default -> granularity 60 in the request
     expect(metricsUrl().some((u) => u.includes('granularity=60'))).toBe(true)
 
-    await user.click(screen.getByRole('button', { name: '1 Hour' }))
+    await user.click(screen.getByRole('button', { name: '1 hour' }))
     // 1h range -> granularity 5
     await waitFor(() => expect(metricsUrl().some((u) => u.includes('granularity=5'))).toBe(true))
   })
@@ -223,7 +223,7 @@ describe('Telemetry container', () => {
     setAuthCookies()
     mockFetchRoutes(baseRoutes(adminUser))
     const { unmount } = renderWithRouter(<Telemetry />)
-    expect(await screen.findByLabelText('View as:')).toBeInTheDocument()
+    expect(await screen.findByLabelText('User')).toBeInTheDocument()
     unmount()
 
     clearCookies()
@@ -232,7 +232,7 @@ describe('Telemetry container', () => {
     mockFetchRoutes(baseRoutes(regularUser))
     renderWithRouter(<Telemetry />)
     await waitFor(() => expect(screen.getByText('Token usage')).toBeInTheDocument())
-    expect(screen.queryByLabelText('View as:')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('User')).not.toBeInTheDocument()
   })
 
   it('renders a recent-events row from the raw events response', async () => {

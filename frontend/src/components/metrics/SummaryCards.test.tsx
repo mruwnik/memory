@@ -4,8 +4,8 @@ import { SummaryCards } from './SummaryCards'
 
 const baseProps = {
   totalEvents: 0,
-  successRate: 0,
-  avgDuration: 0,
+  successRate: null,
+  avgDuration: null,
   systemMetrics: {} as Record<string, number>,
 }
 
@@ -28,18 +28,21 @@ describe('SummaryCards', () => {
   })
 
   it.each([
-    [0, '-'],
+    [null, '-'],
     [500, '500ms'],
     [1500, '1.5s'],
     [90000, '1.5m'],
-  ])('formats avg duration %i as %s', (ms, expected) => {
-    render(<SummaryCards {...baseProps} avgDuration={ms} />)
+  ])('formats avg duration %s as %s', (ms, expected) => {
+    render(<SummaryCards {...baseProps} successRate={50} avgDuration={ms} />)
     expect(screen.getByText(expected)).toBeInTheDocument()
   })
 
-  it('renders the success rate as a percentage', () => {
-    render(<SummaryCards {...baseProps} successRate={87} />)
-    expect(screen.getByText('87%')).toBeInTheDocument()
+  it.each([
+    [87, '87%', 'text-amber-700'],
+    [null, '-', 'text-slate-800'],
+  ])('renders success rate %s as %s with a matching tone', (rate, expected, tone) => {
+    render(<SummaryCards {...baseProps} successRate={rate} avgDuration={500} />)
+    expect(screen.getByText(expected)).toHaveClass(tone)
   })
 
   it('omits the CPU, memory and disk cards when no system metrics present', () => {

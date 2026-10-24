@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@/test/utils'
-import userEvent from '@testing-library/user-event'
+import { render, renderWithRouter, screen, waitFor } from '@/test/utils'
 import type { FleetStats, Environment } from '@/hooks/useClaude'
 import ClaudeFleetStats, {
   parseSessionId,
   sessionDisplay,
   HistoryChart,
+  Usage,
 } from './ClaudeFleetStats'
 
 const getFleetStats = vi.fn()
@@ -70,6 +70,17 @@ describe('sessionDisplay', () => {
   })
 })
 
+describe('Usage', () => {
+  it.each([
+    [50, '50%'],
+    [80, '80% (high)'],
+    [95, '95% (critical)'],
+  ])('labels %i%% usage as %s, not only by colour', (pct, text) => {
+    const { container } = render(<Usage pct={pct}>{pct}%</Usage>)
+    expect(container).toHaveTextContent(text)
+  })
+})
+
 describe('HistoryChart', () => {
   it('shows an empty message with no points', () => {
     render(<HistoryChart points={[]} />)
@@ -84,8 +95,6 @@ describe('HistoryChart', () => {
 
 describe('ClaudeFleetStats', () => {
   const baseProps = {
-    selectedSessionId: null,
-    onSelectContainer: vi.fn(),
     environments: [env(3, 'prod-env')],
     hasAdminScope: false,
     currentUserId: 1,
@@ -93,18 +102,18 @@ describe('ClaudeFleetStats', () => {
 
   it('shows a loading message before the first snapshot arrives', () => {
     getFleetStats.mockReturnValue(new Promise(() => {}))
-    render(<ClaudeFleetStats {...baseProps} />)
+    renderWithRouter(<ClaudeFleetStats {...baseProps} />)
     expect(screen.getByText(/Loading fleet stats/)).toBeInTheDocument()
   })
 
   it('renders an error when stats fail', async () => {
     getFleetStats.mockRejectedValue(new Error('stats down'))
-    render(<ClaudeFleetStats {...baseProps} />)
+    renderWithRouter(<ClaudeFleetStats {...baseProps} />)
     await waitFor(() => expect(screen.getByText('stats down')).toBeInTheDocument())
   })
 
   it('renders the global cluster summary and container rows', async () => {
-    render(<ClaudeFleetStats {...baseProps} />)
+    renderWithRouter(<ClaudeFleetStats {...baseProps} />)
     await waitFor(() => expect(screen.getByText('Cluster')).toBeInTheDocument())
     expect(screen.getByText('2 / 5 containers')).toBeInTheDocument()
     expect(screen.getByText('Containers')).toBeInTheDocument()
@@ -113,26 +122,20 @@ describe('ClaudeFleetStats', () => {
 
   it('shows an empty message when no containers are running', async () => {
     getFleetStats.mockResolvedValue(snap({ containers: [] }))
-    render(<ClaudeFleetStats {...baseProps} />)
+    renderWithRouter(<ClaudeFleetStats {...baseProps} />)
     await waitFor(() => expect(screen.getByText('No containers running.')).toBeInTheDocument())
   })
 
-  it('selects an owned container row on click', async () => {
-    const onSelectContainer = vi.fn()
-    const user = userEvent.setup()
-    render(<ClaudeFleetStats {...baseProps} onSelectContainer={onSelectContainer} currentUserId={1} />)
-    await waitFor(() => expect(screen.getByText('prod-env')).toBeInTheDocument())
-    await user.click(screen.getByText('prod-env').closest('tr')!)
-    expect(onSelectContainer).toHaveBeenCalledWith('u1-e3-abc')
+  it('links owned containers to their session', async () => {
+    renderWithRouter(<ClaudeFleetStats {...baseProps} currentUserId={1} />)
+    expect(await screen.findByRole('link', { name: 'prod-env' })).toHaveAttribute('href', '/ui/claude/u1-e3-abc')
+    expect(screen.getByRole('table', { name: 'Running containers' })).toBeInTheDocument()
   })
 
-  it('marks rows owned by other users as non-clickable', async () => {
-    const onSelectContainer = vi.fn()
-    const user = userEvent.setup()
-    render(<ClaudeFleetStats {...baseProps} onSelectContainer={onSelectContainer} currentUserId={1} />)
-    // u2-s7-def belongs to user 2 — its row should not respond to clicks.
-    await waitFor(() => expect(screen.getByText('snapshot #7')).toBeInTheDocument())
-    await user.click(screen.getByText('snapshot #7').closest('tr')!)
-    expect(onSelectContainer).not.toHaveBeenCalledWith('u2-s7-def')
+  it("says which rows belong to other users and doesn't link them", async () => {
+    renderWithRouter(<ClaudeFleetStats {...baseProps} currentUserId={1} />)
+    expect(await screen.findByText('snapshot #7')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'snapshot #7' })).not.toBeInTheDocument()
+    expect(screen.getByText('Not yours')).toBeInTheDocument()
   })
 })

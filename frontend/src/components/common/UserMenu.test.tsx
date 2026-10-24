@@ -40,7 +40,7 @@ describe('UserMenu', () => {
 
   it('opens the menu on trigger click and sets aria-expanded', async () => {
     const { user } = renderMenu()
-    const trigger = screen.getByRole('button', { name: 'User menu' })
+    const trigger = screen.getByRole('button', { name: 'Ada Lovelace, account menu' })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     await user.click(trigger)
     expect(screen.getByRole('menu')).toBeInTheDocument()
@@ -49,23 +49,23 @@ describe('UserMenu', () => {
 
   it('renders a Settings link pointing at the settings route', async () => {
     const { user } = renderMenu()
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     const link = screen.getByRole('menuitem', { name: /Settings/ })
     expect(link).toHaveAttribute('href', '/ui/settings')
   })
 
-  it('calls onLogout and closes when Logout is clicked', async () => {
+  it('calls onLogout and closes when Log out is clicked', async () => {
     const onLogout = vi.fn()
     const { user } = renderMenu({ onLogout })
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
-    await user.click(screen.getByRole('menuitem', { name: /Logout/ }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
+    await user.click(screen.getByRole('menuitem', { name: /Log out/ }))
     expect(onLogout).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
   it('closes the menu when clicking outside', async () => {
     const { user } = renderMenu()
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     expect(screen.getByRole('menu')).toBeInTheDocument()
     await user.click(document.body)
     await waitFor(() =>
@@ -75,16 +75,24 @@ describe('UserMenu', () => {
 
   it('closes the menu on Escape', async () => {
     const { user } = renderMenu()
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     await user.keyboard('{Escape}')
     await waitFor(() =>
       expect(screen.queryByRole('menu')).not.toBeInTheDocument(),
     )
   })
 
+  it('closes the menu when Tab moves focus out of it', async () => {
+    const { user } = renderMenu()
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
+    await user.tab()
+    await user.tab()
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+
   it('cycles focus with ArrowDown across menu items', async () => {
     const { user } = renderMenu()
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     const items = screen.getAllByRole('menuitem')
     // First item gets focus on open.
     await waitFor(() => expect(items[0]).toHaveFocus())
@@ -97,7 +105,7 @@ describe('UserMenu', () => {
 
   it('wraps focus to the last item with ArrowUp from the first', async () => {
     const { user } = renderMenu()
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     const items = screen.getAllByRole('menuitem')
     await waitFor(() => expect(items[0]).toHaveFocus())
     await user.keyboard('{ArrowUp}')
@@ -106,7 +114,7 @@ describe('UserMenu', () => {
 
   it('moves focus to first/last with Home/End', async () => {
     const { user } = renderMenu()
-    await user.click(screen.getByRole('button', { name: 'User menu' }))
+    await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     const items = screen.getAllByRole('menuitem')
     await user.keyboard('{End}')
     expect(items[items.length - 1]).toHaveFocus()

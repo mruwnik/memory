@@ -193,10 +193,7 @@ async def http_request(
     Returns (status_code, parsed_json_body).
     """
     if not os.path.exists(socket_path):
-        raise OrchestratorError(
-            f"Orchestrator socket not found: {socket_path}. "
-            "Is the orchestrator running?"
-        )
+        raise OrchestratorError("The session orchestrator isn't running")
 
     try:
         reader, writer = await asyncio.wait_for(

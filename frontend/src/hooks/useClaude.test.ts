@@ -208,7 +208,7 @@ describe('useClaude sessions', () => {
   })
 
   it('getOrchestratorStatus returns the status payload', async () => {
-    const fetchMock = mockJson({ available: true, socket_path: '/sock' })
+    const fetchMock = mockJson({ available: true })
     const r = await setup().getOrchestratorStatus()
     expect(r.available).toBe(true)
     expect(callTo(fetchMock, '/claude/status').url).toContain('/claude/status')

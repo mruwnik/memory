@@ -23,7 +23,7 @@ export const TelemetrySummaryCards: React.FC<TelemetrySummaryCardsProps> = ({
 
   return (
     <StatGrid>
-      <Stat label="Total tokens" value={formatTokens(totalTokens)} hint="Input + Output" />
+      <Stat label="Total tokens" value={formatTokens(totalTokens)} hint="Input + output" />
       <Stat label="Total cost" value={formatCost(totalCost)} />
       <Stat label="Sessions" value={totalSessions.toString()} />
       <Stat label="Events" value={eventCount.toString()} />

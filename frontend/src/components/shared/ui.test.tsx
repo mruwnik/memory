@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ConfirmButton, Field, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
+import { useState } from 'react'
+import { Combobox, ConfirmButton, Field, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -45,6 +46,41 @@ describe('Modal', () => {
   })
 })
 
+describe('Escape', () => {
+  const Nested = ({ onOuterClose }: { onOuterClose: () => void }) => {
+    const [inner, setInner] = useState(true)
+    return (
+      <Modal title="Outer" onClose={onOuterClose}>
+        <ConfirmButton confirm="Delete it?" onConfirm={vi.fn()} />
+        <Combobox aria-label="Channel" value="" onChange={vi.fn()} options={[{ value: 'c1', label: '#general' }]} />
+        {inner && <Modal title="Inner" onClose={() => setInner(false)}><button>Ok</button></Modal>}
+      </Modal>
+    )
+  }
+
+  it('closes only the topmost layer', async () => {
+    const user = userEvent.setup()
+    const onOuterClose = vi.fn()
+    render(<Nested onOuterClose={onOuterClose} />)
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Inner' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Delete it?' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('combobox', { name: 'Channel' }))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+
+    expect(onOuterClose).not.toHaveBeenCalled()
+    await user.keyboard('{Escape}')
+    expect(onOuterClose).toHaveBeenCalledOnce()
+  })
+})
+
 describe('SplitView', () => {
   it('shows the placeholder on narrow screens when nothing is selected', () => {
     render(<SplitView list={<p>list</p>} detail={null} placeholder={<p>fleet</p>} onBack={vi.fn()} />)
@@ -84,6 +120,30 @@ describe('useActionNotice', () => {
 })
 
 describe('Tabs', () => {
+  const Harness = () => {
+    const [value, setValue] = useState('a')
+    const options = [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }]
+    return <Tabs label="T" options={options} value={value} onChange={setValue}>panel {value}</Tabs>
+  }
+
+  it.each([
+    ['{ArrowRight}', 'B'],
+    ['{ArrowLeft}', 'C'],
+    ['{ArrowRight}{ArrowRight}{ArrowRight}', 'A'],
+    ['{End}', 'C'],
+    ['{End}{Home}', 'A'],
+  ])('moves selection and focus with %s and labels the panel by the selected tab', async (keys, name) => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.tab()
+    await user.keyboard(keys)
+    const tab = screen.getByRole('tab', { name })
+    expect(tab).toHaveFocus()
+    expect(tab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('tab').filter(t => t.tabIndex === 0)).toEqual([tab])
+    expect(screen.getByRole('tabpanel', { name })).toHaveTextContent(`panel ${name.toLowerCase()}`)
+  })
+
   it('scrolls the selected tab into view on mount and on change', () => {
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView')
     const options = [{ value: 'a', label: 'A' }, { value: 'z', label: 'Z' }]

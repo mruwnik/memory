@@ -4,8 +4,8 @@ import { useClaude, ClaudeSession, Snapshot, Environment, GithubRepoBasic, Attac
 import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
-import ClaudeFleetStats, { SessionStatsPanel, sessionDisplay } from './ClaudeFleetStats'
-import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Input, Label, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
+import ClaudeFleetStats, { SessionStatsPanel, Usage, formatMb, sessionDisplay } from './ClaudeFleetStats'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Hint, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -46,16 +46,11 @@ const STATUS_TONES: Record<string, Tone> = {
   paused: 'warning',
 }
 
-const formatMb = (mb: number): string => {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
-  return `${Math.round(mb)} MB`
-}
-
-const usagePctColor = (pct: number): string => {
-  if (pct >= 90) return 'text-red-600'
-  if (pct >= 75) return 'text-yellow-600'
-  return 'text-slate-600'
-}
+const CRON_PRESETS = [
+  { label: 'Daily 09:00 UTC', value: '0 9 * * *' },
+  { label: 'Weekdays 09:00 UTC', value: '0 9 * * 1-5' },
+  { label: 'Mondays 09:00 UTC', value: '0 9 * * 1' },
+]
 
 const ContainerStatsBadge: React.FC<{ stats: ContainerStats }> = ({ stats }) => {
   const { memory, cpu } = stats
@@ -67,15 +62,11 @@ const ContainerStatsBadge: React.FC<{ stats: ContainerStats }> = ({ stats }) => 
     <div className="flex items-center gap-3 text-xs text-slate-500">
       <span className="flex items-center gap-1" title={`CPU: ${cpu.pct.toFixed(1)}% of ${cpu.limit_pct}% limit`}>
         <span className="font-medium text-slate-600">CPU</span>
-        <span className={`font-mono ${usagePctColor(cpuPctOfLimit)}`}>
-          {cpuPct}% / {cpu.limit_pct}%
-        </span>
+        <Usage pct={cpuPctOfLimit}>{cpuPct}% / {cpu.limit_pct}%</Usage>
       </span>
       <span className="flex items-center gap-1" title={`Memory: ${memory.used_mb} MB of ${memory.limit_mb} MB`}>
         <span className="font-medium text-slate-600">Mem</span>
-        <span className={`font-mono ${usagePctColor(memory.pct)}`}>
-          {formatMb(memory.used_mb)} / {formatMb(memory.limit_mb)} ({Math.round(memory.pct)}%)
-        </span>
+        <Usage pct={memory.pct}>{formatMb(memory.used_mb)} / {formatMb(memory.limit_mb)} ({Math.round(memory.pct)}%)</Usage>
       </span>
     </div>
   )
@@ -103,6 +94,7 @@ const ClaudeSessions = () => {
   const [selectedSession, setSelectedSession] = useState<ClaudeSession | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [attachInfo, setAttachInfo] = useState<AttachInfo | null>(null)
+  const [attachError, setAttachError] = useState<string | null>(null)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
   const [environments, setEnvironments] = useState<Environment[]>([])
   const [repos, setRepos] = useState<GithubRepoBasic[]>([])
@@ -125,6 +117,7 @@ const ClaudeSessions = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [showNewSession, setShowNewSession] = useState(false)
   const [killingId, setKillingId] = useState<string | null>(null)
@@ -169,33 +162,40 @@ const ClaudeSessions = () => {
     [navigate]
   )
 
+  // Read through a ref so a selection change doesn't recreate loadSessions and refetch the list.
+  const selectedSessionRef = useRef(selectedSession)
+  selectedSessionRef.current = selectedSession
+
   // Load data
   const loadSessions = useCallback(async () => {
     try {
       const data = await listSessions()
       setSessions(data)
+      setSessionsError(null)
+      setOrchestratorAvailable(true)
       // If selected session no longer exists, clear it (and the URL).
-      if (selectedSession && !data.find((s) => s.session_id === selectedSession.session_id)) {
+      const selected = selectedSessionRef.current
+      if (selected && !data.find((s) => s.session_id === selected.session_id)) {
         setSelectedSession(null)
         setAttachInfo(null)
         navigate('/ui/claude')
       }
     } catch (e) {
-      console.error('Failed to load sessions:', e)
+      setSessionsError(e instanceof Error ? e.message : 'Failed to list sessions')
+      // A failing list usually means the orchestrator went away; the status call says so without internals.
+      getOrchestratorStatus().then(status => setOrchestratorAvailable(status.available)).catch(() => {})
     }
-  }, [listSessions, selectedSession, navigate])
+  }, [listSessions, getOrchestratorStatus, navigate])
 
   const loadInitialData = useCallback(async () => {
     setLoading(true)
     try {
-      const [sessionsData, snapshotsData, environmentsData, reposData, status] = await Promise.all([
-        listSessions(),
+      const [snapshotsData, environmentsData, reposData, status] = await Promise.all([
         listSnapshots(),
         listEnvironments(),
         listUserRepos(),
         getOrchestratorStatus(),
       ])
-      setSessions(sessionsData)
       setSnapshots(snapshotsData)
       setEnvironments(environmentsData)
       setRepos(reposData)
@@ -212,14 +212,15 @@ const ClaudeSessions = () => {
     } finally {
       setLoading(false)
     }
-  }, [listSessions, listSnapshots, listEnvironments, listUserRepos, getOrchestratorStatus])
+  }, [listSnapshots, listEnvironments, listUserRepos, getOrchestratorStatus])
 
   useEffect(() => {
     loadInitialData()
   }, [loadInitialData])
 
-  // Poll for session updates
+  // Sessions load apart from the static data, so an offline orchestrator leaves the rest of the page usable.
   useEffect(() => {
+    loadSessions()
     const interval = setInterval(loadSessions, 5000)
     return () => clearInterval(interval)
   }, [loadSessions])
@@ -263,9 +264,13 @@ const ClaudeSessions = () => {
       setAttachInfo(null)
       return
     }
+    setAttachError(null)
     getAttachInfo(selectedSession.session_id)
       .then(setAttachInfo)
-      .catch(() => setAttachInfo(null))
+      .catch(e => {
+        setAttachInfo(null)
+        setAttachError(e instanceof Error ? e.message : 'Failed to get attach info')
+      })
   }, [selectedSession, getAttachInfo])
 
   // WebSocket connection for real-time screen streaming
@@ -447,10 +452,6 @@ const ClaudeSessions = () => {
 
   const handleSpawnSession = async () => {
     setFormError(null)
-    if (!selectedConfig) {
-      setFormError('Please select a snapshot or environment')
-      return
-    }
     setSpawning(true)
     try {
       const newSession = await spawnSession(buildSpawnConfig())
@@ -470,14 +471,6 @@ const ClaudeSessions = () => {
 
   const handleScheduleSession = async () => {
     setFormError(null)
-    if (!selectedConfig) {
-      setFormError('Please select a snapshot or environment')
-      return
-    }
-    if (!initialPrompt) {
-      setFormError('Scheduled sessions require an initial prompt')
-      return
-    }
     setScheduling(true)
     setScheduleSuccess(null)
     try {
@@ -510,12 +503,10 @@ const ClaudeSessions = () => {
               <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
                 <h2 className="text-lg font-semibold text-slate-800">Fleet overview</h2>
                 <p className="text-sm text-slate-600">
-                  Select a session for details, or click a row below to see its history.
+                  Select a session for details, or open one from the table below.
                 </p>
               </div>
               <ClaudeFleetStats
-                selectedSessionId={null}
-                onSelectContainer={(id) => navigate(`/ui/claude/${id}`)}
                 environments={environments}
                 hasAdminScope={hasScope('*')}
                 currentUserId={authUser?.id ?? null}
@@ -538,6 +529,9 @@ const ClaudeSessions = () => {
         aria-describedby={orchestratorAvailable === false ? offlineId : undefined}>New session</Button>}
     >
       <div className="h-full flex flex-col gap-4">
+      {orchestratorAvailable === false
+        ? <Notice tone="error">Claude sessions are unavailable: the session orchestrator isn't running.</Notice>
+        : sessionsError && <Notice tone="error" onRetry={loadSessions}>Couldn't refresh sessions: {sessionsError}</Notice>}
       {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
       <div className="flex-1 min-h-0">
       <SplitView
@@ -546,10 +540,13 @@ const ClaudeSessions = () => {
           <p className="p-4 text-sm text-slate-600 text-center">No active sessions</p>
         ) : (
           <List flush>
-            {sessions.map((session) => (
+            {sessions.map((session) => {
+              const display = sessionDisplay(session.session_id, environments, users)
+              return (
               <Row
                 key={session.session_id}
-                title={<span className="font-mono">{session.session_id}</span>}
+                title={<>{display.title}{' '}<span className="sr-only">{session.session_id}</span></>}
+                meta={[display.subtitle, <span className="font-mono">{session.session_id}</span>]}
                 onSelect={() => handleSelectSession(session)}
                 selected={selectedSession?.session_id === session.session_id}
                 badges={<Badge tone={STATUS_TONES[session.status?.toLowerCase() ?? ''] ?? 'neutral'}>{session.status || 'unknown'}</Badge>}
@@ -561,10 +558,11 @@ const ClaudeSessions = () => {
                   </ConfirmButton>
                 }
               />
-            ))}
+              )
+            })}
           </List>
         )}
-        placeholder={fleet}
+        placeholder={orchestratorAvailable === false ? 'Fleet stats show once the orchestrator is running.' : fleet}
         onBack={() => { setShowNewSession(false); selectSession(null) }}
         backLabel="Sessions"
         detail={
@@ -585,9 +583,14 @@ const ClaudeSessions = () => {
                   </p>
                 </Notice>
               ) : (
-                <div className="space-y-6">
+                <form className="space-y-6" onSubmit={(e) => {
+                  e.preventDefault()
+                  if (!selectedConfig || (cronExpression && !initialPrompt)) return
+                  if (cronExpression) handleScheduleSession()
+                  else handleSpawnSession()
+                }}>
                   {/* Config source selection (grouped: environments + snapshots) */}
-                  <Field label="Configuration *" hint={<>{selectedConfig?.type === 'environment' ? 'Environment: State persists across sessions' : 'Snapshot: Fresh extraction each time'}</>}>
+                  <Field label="Configuration" hint={<>{selectedConfig?.type === 'environment' ? 'Environment: State persists across sessions' : 'Snapshot: Fresh extraction each time'}</>}>
                     <Select
                       value={selectedConfig ? `${selectedConfig.type}:${selectedConfig.id}` : ''}
                       onChange={(e) => {
@@ -653,7 +656,7 @@ const ClaudeSessions = () => {
                   )}
 
                   {/* GitHub Token */}
-                  <Field label="GitHub Token (optional)" hint="PAT for HTTPS clone, or a secret name. Cached in localStorage.">
+                  <Field label="GitHub token (optional)" hint="PAT for HTTPS clone, or a secret name. Cached in localStorage.">
                     <Input
                       type="password"
                       value={githubToken}
@@ -664,7 +667,7 @@ const ClaudeSessions = () => {
                   </Field>
 
                   {/* GitHub Token Write */}
-                  <Field label="GitHub Write Token (optional)" hint="Write token for differ (push, PR creation). Cached in localStorage.">
+                  <Field label="GitHub write token (optional)" hint="Write token for differ (push, PR creation). Cached in localStorage.">
                     <Input
                       type="password"
                       value={githubTokenWrite}
@@ -689,29 +692,17 @@ const ClaudeSessions = () => {
                     />
                   </Field>
 
-                  {/* Pre-approved Tools */}
-                  <div>
-                    <Label className="mb-2">
-                      Pre-approved Tools
-                    </Label>
-                    <p className="text-xs text-slate-500 mb-3">
-                      These tools won't require permission prompts. MCP tools always require permission.
-                    </p>
-                    <div className="grid grid-cols-3 gap-2 mb-3">
+                  <fieldset className="space-y-2">
+                    <legend className="text-sm font-medium text-slate-700">Pre-approved tools</legend>
+                    <Hint>These tools won't require permission prompts. MCP tools always require permission.</Hint>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {COMMON_TOOLS.map(tool => (
                         <Checkbox key={tool} checked={allowedTools.includes(tool)} onChange={() => toggleTool(tool)} label={tool} />
                       ))}
                     </div>
-                  </div>
+                  </fieldset>
 
-                  {/* Custom Environment Variables */}
-                  <div>
-                    <Label className="mb-2">
-                      Custom environment variables
-                    </Label>
-                    <p className="text-xs text-slate-500 mb-2">
-                      One per line: KEY=value. Lines starting with # are ignored.
-                    </p>
+                  <Field label="Custom environment variables" hint="One per line: KEY=value. Lines starting with # are ignored.">
                     <Textarea
                       value={customEnvText}
                       onChange={(e) => setCustomEnvText(e.target.value)}
@@ -719,10 +710,10 @@ const ClaudeSessions = () => {
                       rows={3}
                       className="font-mono"
                     />
-                  </div>
+                  </Field>
 
-                  {/* Initial Prompt */}
-                  <Field label="Initial prompt (optional)" hint="If provided, Claude will start processing this prompt immediately.">
+                  <Field label="Initial prompt" hint="Claude starts working on it straight away. Optional, except for a schedule."
+                    error={cronExpression && !initialPrompt ? 'Required for a scheduled session.' : null}>
                     <Textarea
                       value={initialPrompt}
                       onChange={(e) => setInitialPrompt(e.target.value)}
@@ -731,61 +722,20 @@ const ClaudeSessions = () => {
                     />
                   </Field>
 
-                  {/* Cron Schedule */}
-                  <div>
-                    <Label className="mb-2">
-                      Schedule (optional)
-                    </Label>
-                    <div className="flex gap-2 mb-2">
+                  <div className="space-y-2">
+                    <Field label="Schedule (optional)" hint={<>Standard 5-field cron, in UTC: minute hour day-of-month month day-of-week.{cronExpression && ' This creates a recurring schedule instead of starting a session now.'}</>}>
                       <Input
                         type="text"
                         value={cronExpression}
                         onChange={(e) => setCronExpression(e.target.value)}
                         placeholder="0 9 * * *"
-                        className="flex-1 font-mono"
+                        className="font-mono"
                       />
+                    </Field>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ToggleGroup label="Schedule presets" value={cronExpression} onChange={setCronExpression} options={CRON_PRESETS} />
+                      {cronExpression && <Button size="sm" type="button" onClick={() => setCronExpression('')}>Clear</Button>}
                     </div>
-                    <p className="text-xs text-slate-500 mb-2">
-                      Standard 5-field cron: minute hour day-of-month month day-of-week
-                    </p>
-                    <div className="flex gap-2 mb-2">
-                      {[
-                        { label: 'Daily 9am', value: '0 9 * * *' },
-                        { label: 'Weekdays 9am', value: '0 9 * * 1-5' },
-                        { label: 'Weekly Mon', value: '0 9 * * 1' },
-                      ].map((preset) => (
-                        <button
-                          key={preset.label}
-                          type="button"
-                          onClick={() => setCronExpression(preset.value)}
-                          className={`text-xs px-2 py-1 rounded border ${
-                            cronExpression === preset.value
-                              ? 'bg-primary/10 border-primary text-primary'
-                              : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                      {cronExpression && (
-                        <Button size="sm"
-                          type="button"
-                          onClick={() => setCronExpression('')}
-                        >
-                          Clear
-                        </Button>
-                      )}
-                    </div>
-                    {cronExpression && !initialPrompt && (
-                      <p className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded mb-1">
-                        An initial prompt is required for scheduled sessions.
-                      </p>
-                    )}
-                    {cronExpression && (
-                      <p className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
-                        This will create a recurring schedule, not start a session now.
-                      </p>
-                    )}
                   </div>
 
                   {/* Schedule success message */}
@@ -805,9 +755,8 @@ const ClaudeSessions = () => {
 
                   {/* Actions */}
                   <div className="flex gap-3">
-                    <Button variant="primary"
-                      onClick={cronExpression ? handleScheduleSession : handleSpawnSession}
-                      disabled={spawning || scheduling || !selectedConfig}
+                    <Button variant="primary" type="submit"
+                      disabled={spawning || scheduling || !selectedConfig || (!!cronExpression && !initialPrompt)}
                     >
                       {spawning
                         ? 'Starting...'
@@ -817,13 +766,11 @@ const ClaudeSessions = () => {
                             ? 'Schedule recurring session'
                             : 'Start session'}
                     </Button>
-                    <Button
-                      onClick={() => setShowNewSession(false)}
-                    >
+                    <Button type="button" onClick={() => setShowNewSession(false)}>
                       Cancel
                     </Button>
                   </div>
-                </div>
+                </form>
               )}
             </div>
             </div>
@@ -857,7 +804,7 @@ const ClaudeSessions = () => {
                 <SessionStatsPanel sessionId={selectedSession.session_id} />
               </Disclosure>
 
-              {/* Attach commands (collapsible) */}
+              {attachError && <Notice tone="error">Couldn't load connect commands: {attachError}</Notice>}
               {attachInfo && (
                 <Disclosure summary="Connect commands">
                   <div className="space-y-3">
@@ -889,13 +836,14 @@ const ClaudeSessions = () => {
                     {wsConnected ? (
                       <Badge tone="success">Connected</Badge>
                     ) : wsError ? (
-                      <Badge tone="danger">{wsError}</Badge>
+                      <Badge tone="danger">Disconnected</Badge>
                     ) : (
                       <Badge tone="warning">Connecting...</Badge>
                     )}
                   </div>
                   {containerStats && <ContainerStatsBadge stats={containerStats} />}
                 </div>
+                {wsError && !wsConnected && <Notice tone="error" className="mb-2">{wsError}</Notice>}
                 <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden min-h-[400px]">
                   <XtermTerminal
                     wsRef={wsRef}

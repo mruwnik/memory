@@ -12,6 +12,7 @@ import { SummaryCards } from './SummaryCards'
 import { SystemHealthChart } from './SystemHealthChart'
 import { TaskDurationChart } from './TaskDurationChart'
 import { McpUsageChart } from './McpUsageChart'
+import { TimeRangeSelector } from './TimeRangeSelector'
 import { Badge, Card, CardGrid, LoadingState, Notice, Page, RefreshButton, Table, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
 
 // System metrics are sampled minutely - 7 days max keeps memory reasonable
@@ -91,13 +92,14 @@ const Metrics: React.FC = () => {
   const totalEvents = summary?.metrics.reduce((sum, m) => sum + m.count, 0) ?? 0
   const successCount = summary?.metrics.reduce((sum, m) => sum + m.success_count, 0) ?? 0
   const failureCount = summary?.metrics.reduce((sum, m) => sum + m.failure_count, 0) ?? 0
-  const successRate = totalEvents > 0 ? Math.round((successCount / totalEvents) * 100) : 0
+  const successRate = totalEvents > 0 ? Math.round((successCount / totalEvents) * 100) : null
 
-  // Calculate average duration across all timed metrics
+  // Weighted by count so a rare slow task doesn't outweigh thousands of fast calls
   const timedMetrics = summary?.metrics.filter(m => m.avg_duration_ms !== null) ?? []
-  const avgDuration = timedMetrics.length > 0
-    ? Math.round(timedMetrics.reduce((sum, m) => sum + (m.avg_duration_ms ?? 0), 0) / timedMetrics.length)
-    : 0
+  const timedCount = timedMetrics.reduce((sum, m) => sum + m.count, 0)
+  const avgDuration = timedCount > 0
+    ? Math.round(timedMetrics.reduce((sum, m) => sum + (m.avg_duration_ms ?? 0) * m.count, 0) / timedCount)
+    : null
 
   return (
     <Page
@@ -131,7 +133,7 @@ const Metrics: React.FC = () => {
             <Card title="Task performance">
               <TaskDurationChart data={summary.metrics.filter(m => m.metric_type === 'task')} />
             </Card>
-            <Card title="MCP Tool Usage">
+            <Card title="MCP tool usage">
               <McpUsageChart data={summary.metrics.filter(m => m.metric_type === 'mcp_call')} />
             </Card>
             <Card title="Recent task executions">
@@ -145,23 +147,6 @@ const Metrics: React.FC = () => {
       )}
     </Page>
   )
-}
-
-// Time range selector component
-interface TimeRangeSelectorProps {
-  value: TimeRange
-  onChange: (range: TimeRange) => void
-}
-
-const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({ value, onChange }) => {
-  const ranges: { value: TimeRange; label: string }[] = [
-    { value: '1h', label: '1 Hour' },
-    { value: '6h', label: '6 Hours' },
-    { value: '24h', label: '24 Hours' },
-    { value: '7d', label: '7 Days' },
-  ]
-
-  return <ToggleGroup label="Time range" options={ranges} value={value} onChange={onChange} />
 }
 
 // Refresh interval selector component
@@ -181,7 +166,7 @@ const RefreshIntervalSelector: React.FC<RefreshIntervalSelectorProps> = ({ value
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-sm text-slate-600">Auto:</span>
+      <span aria-hidden="true" className="text-sm text-slate-600">Auto refresh</span>
       <ToggleGroup label="Auto refresh" options={intervals} value={value} onChange={onChange} />
     </div>
   )

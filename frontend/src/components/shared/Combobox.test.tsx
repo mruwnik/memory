@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@/test/utils'
-import Combobox, { ComboOption } from './Combobox'
+import { Combobox, type ComboOption } from './ui'
 
 const OPTIONS: ComboOption[] = [
   { value: 'C1', label: 'Acme / #general', group: 'Acme' },

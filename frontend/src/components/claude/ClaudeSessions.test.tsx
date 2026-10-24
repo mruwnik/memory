@@ -123,7 +123,7 @@ beforeEach(() => {
   spawnSession.mockReset().mockResolvedValue(session({ session_id: 'u1-e3-new' }))
   scheduleSession.mockReset().mockResolvedValue({ task_id: 'task-1', cron_expression: '0 9 * * *', next_scheduled_time: new Date().toISOString(), topic: 't' })
   getAttachInfo.mockReset().mockResolvedValue(attach)
-  getOrchestratorStatus.mockReset().mockResolvedValue({ available: true, socket_path: null })
+  getOrchestratorStatus.mockReset().mockResolvedValue({ available: true })
   listSnapshots.mockReset().mockResolvedValue([snapshot])
   listEnvironments.mockReset().mockResolvedValue([environment])
   listUserRepos.mockReset().mockResolvedValue([{ id: 1, owner: 'org', name: 'repo', repo_path: 'org/repo' }])
@@ -151,16 +151,29 @@ describe('ClaudeSessions', () => {
     await waitFor(() => expect(screen.getByText('orch down')).toBeInTheDocument())
   })
 
-  it('shows the orchestrator-offline badge', async () => {
-    getOrchestratorStatus.mockResolvedValue({ available: false, socket_path: null })
+  it('keeps the page usable and explains in plain words when the orchestrator is down', async () => {
+    getOrchestratorStatus.mockResolvedValue({ available: false })
+    listSessions.mockRejectedValue(new Error('Orchestrator error: Orchestrator socket not found: /var/run/orch.sock'))
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Orchestrator offline')).toBeInTheDocument())
+    expect(screen.getByRole('alert')).toHaveTextContent("Claude sessions are unavailable: the session orchestrator isn't running.")
+    expect(screen.getByText('Fleet stats show once the orchestrator is running.')).toBeInTheDocument()
+    expect(screen.queryByText(/orch\.sock/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New session' })).toBeDisabled()
   })
 
-  it('lists active sessions in the sidebar', async () => {
+  it('says when the session list fails to refresh', async () => {
+    listSessions.mockRejectedValue(new Error('Bad gateway'))
+    renderClaude('/ui/claude')
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent("Couldn't refresh sessions: Bad gateway"))
+    expect(screen.getByText('Fleet overview')).toBeInTheDocument()
+  })
+
+  it('lists active sessions in the sidebar by environment, with the id as meta', async () => {
     listSessions.mockResolvedValue([session({ session_id: 'u1-e3-abc', status: 'running' })])
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('u1-e3-abc')).toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: 'prod-env u1-e3-abc' })).toBeInTheDocument()
+    expect(screen.getByText('u1-e3-abc', { selector: '.font-mono' })).toBeInTheDocument()
     expect(screen.getByText('running')).toBeInTheDocument()
   })
 
@@ -170,7 +183,9 @@ describe('ClaudeSessions', () => {
     await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     expect(screen.getByText('Start new session')).toBeInTheDocument()
-    expect(screen.getByText('Configuration *')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Configuration' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Custom environment variables' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Schedule (optional)' })).toHaveAccessibleDescription(/UTC/)
   })
 
   it('warns when there are no snapshots or environments', async () => {
@@ -193,16 +208,24 @@ describe('ClaudeSessions', () => {
     expect(spawnSession.mock.calls[0][0]).toMatchObject({ environment_id: 3 })
   })
 
+  it('submits the new-session form on Enter', async () => {
+    const user = userEvent.setup()
+    renderClaude('/ui/claude')
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'New session' }))
+    await user.type(screen.getByRole('textbox', { name: 'Dev channels server (optional)' }), 'http://ch{Enter}')
+    await waitFor(() => expect(spawnSession).toHaveBeenCalled())
+    expect(spawnSession.mock.calls[0][0]).toMatchObject({ dev_channels_server: 'http://ch' })
+  })
+
   it('requires an initial prompt to schedule a recurring session', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
-    await user.type(screen.getByPlaceholderText('0 9 * * *'), '0 9 * * *')
-    expect(screen.getByText('An initial prompt is required for scheduled sessions.')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
-    expect(screen.getByText('Scheduled sessions require an initial prompt')).toBeInTheDocument()
-    expect(scheduleSession).not.toHaveBeenCalled()
+    await user.type(screen.getByRole('textbox', { name: 'Schedule (optional)' }), '0 9 * * *')
+    expect(screen.getByRole('textbox', { name: 'Initial prompt' })).toHaveAccessibleDescription(/Required for a scheduled session/)
+    expect(screen.getByRole('button', { name: 'Schedule recurring session' })).toBeDisabled()
   })
 
   it('schedules a recurring session when a prompt and cron are set', async () => {
@@ -211,7 +234,8 @@ describe('ClaudeSessions', () => {
     await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.type(screen.getByPlaceholderText('Start Claude with this prompt...'), 'do work')
-    await user.click(screen.getByRole('button', { name: 'Daily 9am' }))
+    await user.click(screen.getByRole('button', { name: 'Daily 09:00 UTC' }))
+    expect(screen.getByRole('button', { name: 'Daily 09:00 UTC' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
     await waitFor(() => expect(scheduleSession).toHaveBeenCalled())
     expect(screen.getByText('Schedule created')).toBeInTheDocument()
@@ -222,7 +246,7 @@ describe('ClaudeSessions', () => {
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
-    const bashToggle = screen.getByRole('checkbox', { name: 'Bash' })
+    const bashToggle = within(screen.getByRole('group', { name: 'Pre-approved tools' })).getByRole('checkbox', { name: 'Bash' })
     expect(bashToggle).toBeChecked()
     await user.click(bashToggle)
     await waitFor(() => {
@@ -237,6 +261,13 @@ describe('ClaudeSessions', () => {
     await waitFor(() => expect(getAttachInfo).toHaveBeenCalledWith('u1-e3-abc'))
     await waitFor(() => expect(screen.getByText('Session ID')).toBeInTheDocument())
     expect(screen.getByText('claude-abc')).toBeInTheDocument()
+  })
+
+  it('says why the connect commands are missing', async () => {
+    listSessions.mockResolvedValue([session({ session_id: 'u1-e3-abc' })])
+    getAttachInfo.mockRejectedValue(new Error('Container not found'))
+    renderClaude('/ui/claude/u1-e3-abc')
+    expect(await screen.findByText("Couldn't load connect commands: Container not found")).toBeInTheDocument()
   })
 
   it.each([
