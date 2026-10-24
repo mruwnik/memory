@@ -49,6 +49,8 @@ The installer will:
 
 Re-run it any time — it skips anything already configured.
 
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `JWT_SECRET`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, starts the api, and creates the admin user if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+
 ### 2. Start the stack
 
 ```bash

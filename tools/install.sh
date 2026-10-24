@@ -6,6 +6,37 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SECRETS_DIR="$PROJECT_DIR/secrets"
 ENV_FILE="$PROJECT_DIR/.env"
 
+# --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD,
+# VOYAGE_API_KEY. Optional, used instead of generating: POSTGRES_PASSWORD,
+# JWT_SECRET, REDIS_PASSWORD, OPENAI_API_KEY,
+# ANTHROPIC_API_KEY, APP_NAME. Anything already installed is kept.
+NON_INTERACTIVE=false
+for arg in "$@"; do
+    case "$arg" in
+        --non-interactive) NON_INTERACTIVE=true ;;
+        *) echo "Unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
+
+if [ "$NON_INTERACTIVE" = true ]; then
+    for var in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD VOYAGE_API_KEY; do
+        if [ -z "${!var:-}" ]; then
+            echo "✗ $var is required with --non-interactive" >&2
+            exit 1
+        fi
+    done
+
+    # Values land unquoted in .env and in sed expressions; ADMIN_PASSWORD only
+    # travels through the environment, so it is unrestricted.
+    for var in DOMAIN ADMIN_EMAIL VOYAGE_API_KEY POSTGRES_PASSWORD JWT_SECRET \
+        REDIS_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY APP_NAME; do
+        if [[ ! "${!var:-}" =~ ^[A-Za-z0-9._@:/+-]*$ ]]; then
+            echo "✗ $var contains characters outside A-Za-z0-9._@:/+-" >&2
+            exit 1
+        fi
+    done
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,7 +68,7 @@ set_env_value() {
     local value="$2"
 
     if [ ! -f "$ENV_FILE" ]; then
-        touch "$ENV_FILE"
+        (umask 077 && touch "$ENV_FILE")
     fi
 
     if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
@@ -66,6 +97,11 @@ prompt_if_missing() {
         return 0
     fi
 
+    if [ "$NON_INTERACTIVE" = true ]; then
+        [ -n "${!key:-}" ] && set_env_value "$key" "${!key}"
+        return 0
+    fi
+
     echo ""
     if [ "$required" = "true" ]; then
         echo -e "${YELLOW}[Required]${NC} $prompt"
@@ -85,6 +121,16 @@ prompt_if_missing() {
     fi
 }
 
+# Like read, but answers empty when non-interactive
+ask() {
+    local var="$1" prompt="$2"
+    if [ "$NON_INTERACTIVE" = true ]; then
+        printf -v "$var" ''
+        return 0
+    fi
+    read -r -p "$prompt" "$var"
+}
+
 # Check if a secret file exists and has content
 secret_exists() {
     local file="$SECRETS_DIR/$1"
@@ -95,7 +141,7 @@ secret_exists() {
 write_secret() {
     local file="$SECRETS_DIR/$1"
     local value="$2"
-    echo -n "$value" > "$file"
+    (umask 077 && echo -n "$value" > "$file")
     chmod 600 "$file"
 }
 
@@ -114,7 +160,11 @@ if [ -n "$(get_env_value 'APP_NAME')" ]; then
 else
     echo ""
     info "The app name is used for MCP server name, Celery queues, Discord channels, etc."
-    read -r -p "Application name [memory]: " app_name
+    if [ "$NON_INTERACTIVE" = true ]; then
+        app_name="${APP_NAME:-}"
+    else
+        read -r -p "Application name [memory]: " app_name
+    fi
     if [ -n "$app_name" ]; then
         set_env_value "APP_NAME" "$app_name"
         success "APP_NAME set to $app_name"
@@ -126,7 +176,8 @@ fi
 
 # Create directories
 info "Creating directories..."
-mkdir -p "$SECRETS_DIR"
+(umask 077 && mkdir -p "$SECRETS_DIR")
+chmod 700 "$SECRETS_DIR"
 mkdir -p "$PROJECT_DIR/memory_files"
 
 # ─────────────────────────────────────────────────────────────────────
@@ -140,7 +191,7 @@ info "Checking auto-generated secrets..."
 if secret_exists "postgres_password.txt"; then
     success "PostgreSQL password already exists"
 else
-    write_secret "postgres_password.txt" "$(generate_secret)"
+    write_secret "postgres_password.txt" "${POSTGRES_PASSWORD:-$(generate_secret)}"
     success "Generated PostgreSQL password"
 fi
 
@@ -148,7 +199,7 @@ fi
 if secret_exists "jwt_secret.txt"; then
     success "JWT secret already exists"
 else
-    write_secret "jwt_secret.txt" "$(generate_secret)"
+    write_secret "jwt_secret.txt" "${JWT_SECRET:-$(generate_secret)}"
     success "Generated JWT secret"
 fi
 
@@ -156,8 +207,16 @@ fi
 if [ -n "$(get_env_value 'REDIS_PASSWORD')" ]; then
     success "Redis password already configured"
 else
-    set_env_value "REDIS_PASSWORD" "$(generate_secret)"
+    set_env_value "REDIS_PASSWORD" "${REDIS_PASSWORD:-$(generate_secret)}"
     success "Generated Redis password"
+fi
+
+# Compose mounts this file as a secret, so the stack won't start without it
+if secret_exists "secrets_encryption_key.txt"; then
+    success "Secrets encryption key already exists"
+else
+    write_secret "secrets_encryption_key.txt" "$(generate_secret)"
+    success "Generated secrets encryption key"
 fi
 
 # ─────────────────────────────────────────────────────────────────────
@@ -183,6 +242,8 @@ prompt_if_missing "OPENAI_API_KEY" \
 openai_key=$(get_env_value "OPENAI_API_KEY")
 if [ -n "$openai_key" ]; then
     write_secret "openai_key.txt" "$openai_key"
+elif [ "$NON_INTERACTIVE" = true ] && ! secret_exists "openai_key.txt"; then
+    write_secret "openai_key.txt" ""
 fi
 
 # Anthropic - for query analysis, reranking, summarization
@@ -195,6 +256,8 @@ prompt_if_missing "ANTHROPIC_API_KEY" \
 anthropic_key=$(get_env_value "ANTHROPIC_API_KEY")
 if [ -n "$anthropic_key" ]; then
     write_secret "anthropic_key.txt" "$anthropic_key"
+elif [ "$NON_INTERACTIVE" = true ] && ! secret_exists "anthropic_key.txt"; then
+    write_secret "anthropic_key.txt" ""
 fi
 
 # Voyage AI - embeddings + reranking
@@ -241,13 +304,22 @@ if [ -n "$(get_env_value 'API_PORT')" ]; then
     success "API_PORT already configured: $(get_env_value 'API_PORT')"
 else
     echo ""
-    read -r -p "API port [8000]: " api_port
+    ask api_port "API port [8000]: "
     if [ -n "$api_port" ] && [ "$api_port" != "8000" ]; then
         set_env_value "API_PORT" "$api_port"
         success "API_PORT set to $api_port"
     else
         info "API_PORT using default (8000)"
     fi
+fi
+
+if [ "$NON_INTERACTIVE" = true ]; then
+    # Loopback only: Caddy on this host is the sole public entry point and the
+    # only thing allowed to set X-Forwarded-*
+    set_env_value "API_PORT" "127.0.0.1:8000"
+    set_env_value "SERVER_URL" "https://$DOMAIN"
+    set_env_value "FORWARDED_ALLOW_IPS" "127.0.0.1,::1"
+    set_env_value "RATE_LIMIT_TRUSTED_PROXIES" "127.0.0.1,::1"
 fi
 
 success "Service defaults configured"
@@ -268,7 +340,7 @@ echo ""
 if [ -n "$(get_env_value 'DEPLOY_HOST')" ]; then
     success "DEPLOY_HOST already configured: $(get_env_value 'DEPLOY_HOST')"
 else
-    read -r -p "SSH host for deployment (e.g., 'myserver' or 'user@host') [skip]: " deploy_host
+    ask deploy_host "SSH host for deployment (e.g., 'myserver' or 'user@host') [skip]: "
     if [ -n "$deploy_host" ]; then
         set_env_value "DEPLOY_HOST" "$deploy_host"
         success "DEPLOY_HOST set to $deploy_host"
@@ -280,7 +352,7 @@ fi
 if [ -n "$(get_env_value 'DEPLOY_DIR')" ]; then
     success "DEPLOY_DIR already configured: $(get_env_value 'DEPLOY_DIR')"
 else
-    read -r -p "Remote directory path [skip]: " deploy_dir
+    ask deploy_dir "Remote directory path [skip]: "
     if [ -n "$deploy_dir" ]; then
         set_env_value "DEPLOY_DIR" "$deploy_dir"
         success "DEPLOY_DIR set to $deploy_dir"
@@ -303,7 +375,7 @@ if [ -f "$SECRETS_DIR/ssh_private_key" ] && [ -f "$SECRETS_DIR/ssh_public_key" ]
     success "SSH keys already exist"
 else
     info "SSH keys are needed for git push operations (e.g., notes sync)."
-    read -r -p "Generate SSH key pair? [y/N]: " generate_ssh
+    ask generate_ssh "Generate SSH key pair? [y/N]: "
 
     if [[ "$generate_ssh" =~ ^[Yy]$ ]]; then
         ssh-keygen -t ed25519 -C "memory-kb" -f "$SECRETS_DIR/ssh_private_key" -N ""
@@ -328,6 +400,9 @@ else
     fi
 fi
 
+# Files written by earlier versions of this script may be looser
+chmod 600 "$ENV_FILE" "$SECRETS_DIR"/* 2>/dev/null || true
+
 # ─────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────
@@ -340,8 +415,10 @@ echo ""
 
 # Check what's configured
 missing=()
-[ -z "$(get_env_value 'OPENAI_API_KEY')" ] && missing+=("OPENAI_API_KEY")
-[ -z "$(get_env_value 'ANTHROPIC_API_KEY')" ] && missing+=("ANTHROPIC_API_KEY")
+if [ "$NON_INTERACTIVE" != true ]; then
+    [ -z "$(get_env_value 'OPENAI_API_KEY')" ] && missing+=("OPENAI_API_KEY")
+    [ -z "$(get_env_value 'ANTHROPIC_API_KEY')" ] && missing+=("ANTHROPIC_API_KEY")
+fi
 [ -z "$(get_env_value 'VOYAGE_API_KEY')" ] && missing+=("VOYAGE_API_KEY")
 
 if [ ${#missing[@]} -gt 0 ]; then
@@ -352,11 +429,29 @@ else
     success "All required keys configured!"
 fi
 
-echo ""
-info "Next steps:"
-echo "  1. Review configuration: $ENV_FILE"
-echo "  2. Start services: docker compose up -d"
-echo "  3. Create a user: docker compose exec api python tools/add_user.py \\"
-echo "       --email you@example.com --password yourpass --name 'Your Name'"
-echo "  4. Access the app: http://localhost:8000"
-echo ""
+if [ "$NON_INTERACTIVE" != true ]; then
+    echo ""
+    info "Next steps:"
+    echo "  1. Review configuration: $ENV_FILE"
+    echo "  2. Start services: docker compose up -d"
+    echo "  3. Create a user: docker compose exec api python tools/add_user.py \\"
+    echo "       --email you@example.com --password yourpass --name 'Your Name'"
+    echo "  4. Access the app: http://localhost:8000"
+    echo ""
+fi
+
+if [ "$NON_INTERACTIVE" = true ]; then
+    # Supplied values already live in .env and secrets/; compose interpolates the
+    # shell environment ahead of .env, so a stale one would override what is stored.
+    unset POSTGRES_PASSWORD JWT_SECRET REDIS_PASSWORD SERVER_URL API_PORT \
+        FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES
+    cd "$PROJECT_DIR"
+    # --wait blocks on the api healthcheck, which needs migrations to have run
+    docker compose up -d --wait api
+    # The password travels through the environment, and add_user.py prints an
+    # API key, so neither ends up in argv, logs or output.
+    ADD_USER_PASSWORD="$ADMIN_PASSWORD" docker compose exec -T -e ADD_USER_PASSWORD api \
+        python tools/add_user.py --email "$ADMIN_EMAIL" --name "$ADMIN_EMAIL" \
+        --no-api-key --if-missing > /dev/null
+    success "First user ready: $ADMIN_EMAIL"
+fi

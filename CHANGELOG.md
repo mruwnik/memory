@@ -43,6 +43,12 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- `tools/install.sh --non-interactive` installs from environment variables
+  without prompting and creates the first user (see the README). Both modes now
+  also generate `secrets/secrets_encryption_key.txt` when absent (compose mounts
+  it), and tighten `.env` and `secrets/` to owner-only permissions. `tools/add_user.py`
+  reads the password from `ADD_USER_PASSWORD` and accepts `--if-missing`.
+
 - MCP tools gated on "has any items" (organizer task and calendar tools,
   deadlines, books, observations) are still hidden from tool listings while
   their table is empty, but calling one no longer fails with "Access denied";
