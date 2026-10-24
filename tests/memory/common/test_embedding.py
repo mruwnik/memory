@@ -2,11 +2,13 @@
 import sys
 import threading
 from unittest.mock import Mock
+import anthropic
+import httpx2
 import pytest
 from typing import cast
 from PIL import Image
 
-from memory.common import collections, embedding, settings
+from memory.common import collections, embedding, extract, settings
 from memory.common.embedding import (
     as_string,
     embed_chunks,
@@ -16,7 +18,9 @@ from memory.common.embedding import (
     embed_by_model,
 )
 from memory.common.extract import DataChunk, MulitmodalChunk
-from memory.common.db.models import Chunk
+from memory.common.db.models import Chunk, Note
+from tests.conftest import unique_sha256
+from tests.memory.agents.fakes import key_rejected, submitted
 
 
 @pytest.fixture
@@ -324,3 +328,78 @@ def test_query_embedding_cache_survives_concurrent_threads(monkeypatch):
         sys.setswitchinterval(previous)
 
     assert errors == []
+
+
+LONG = "word " * 5000
+
+
+def note_by(db, user_id):
+    note = Note(modality="note", sha256=unique_sha256("note"), content=LONG, creator_id=user_id)
+    db.add(note)
+    db.flush()
+    return note
+
+
+def test_items_with_a_key_get_a_summary_chunk_paid_with_it(db_session, regular_user, llm_key, scripted_llm):
+    scripted_llm.script = [submitted({"summary": "short", "tags": ["t"]})]
+    note = note_by(db_session, regular_user.id)
+
+    chunks = embedding.embed_source_item(note)
+
+    assert "short" in [c.content for c in chunks]
+    assert scripted_llm.requests[0]["api_key"] == "sk-test-default"
+
+
+def test_items_without_a_key_are_embedded_without_a_summary(db_session, regular_user, scripted_llm):
+    note = note_by(db_session, regular_user.id)
+
+    chunks = embedding.embed_source_item(note)
+
+    assert chunks
+    assert scripted_llm.requests == []
+
+
+async def connection_dropped():
+    raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com"))
+
+
+async def stream_dropped():
+    raise httpx2.ReadError("connection reset mid-stream")
+
+
+@pytest.mark.parametrize("failure", [key_rejected, connection_dropped, stream_dropped])
+def test_a_failed_summary_still_embeds_the_item(db_session, regular_user, llm_key, scripted_llm, failure):
+    scripted_llm.script = [failure]
+    note = note_by(db_session, regular_user.id)
+
+    chunks = embedding.embed_source_item(note)
+
+    assert len(scripted_llm.requests) == 1
+    assert len(chunks) == len(extract.extract_text(LONG, skip_summary=True))
+
+
+def test_batching_defers_keyed_summaries_without_calling_the_llm(
+    db_session, regular_user, llm_key, scripted_llm, monkeypatch
+):
+    monkeypatch.setattr(settings, "SUMMARIZER_USE_BATCH", True)
+    note = note_by(db_session, regular_user.id)
+
+    embedding.embed_source_item(note)
+
+    assert scripted_llm.requests == []
+    assert len(note.summary_requests) == 1
+
+
+def test_reembedding_an_item_that_lost_its_key_drops_its_pending_requests(
+    db_session, regular_user, llm_key, scripted_llm, monkeypatch
+):
+    monkeypatch.setattr(settings, "SUMMARIZER_USE_BATCH", True)
+    note = note_by(db_session, regular_user.id)
+    embedding.embed_source_item(note)
+    db_session.delete(llm_key)
+    db_session.flush()
+
+    embedding.embed_source_item(note)
+
+    assert note.summary_requests == []
+    assert scripted_llm.requests == []

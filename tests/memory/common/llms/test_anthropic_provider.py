@@ -6,8 +6,7 @@ from unittest.mock import Mock
 from anthropic import transform_schema
 from PIL import Image
 
-from memory.agents.system import QUERY_ANALYSIS_SCHEMA, SCORE_SCHEMA
-from memory.common.summarizer import SUMMARY_SCHEMA
+from memory.agents.system import QUERY_ANALYSIS_SCHEMA, SCORE_SCHEMA, SUMMARY_SCHEMA
 from memory.common.llms.anthropic_provider import AnthropicProvider
 from memory.common.llms.base import (
     Message,

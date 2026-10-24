@@ -2,6 +2,10 @@
 
 from typing import Any
 
+import anthropic
+import httpx
+import httpx2
+import openai
 from PIL import Image
 
 
@@ -41,7 +45,19 @@ __all__ = [
     "StreamEvent",
     "LLMSettings",
     "create_provider",
+    "PROVIDER_ERRORS",
 ]
+
+# What a provider call can raise besides our own errors. The SDKs wrap transport
+# failures only while sending; once a response streams, raw transport errors
+# escape (anthropic is built on httpx2, openai on httpx).
+PROVIDER_ERRORS: tuple[type[Exception], ...] = (
+    anthropic.APIError,
+    openai.APIError,
+    httpx2.RequestError,
+    httpx.RequestError,
+)
+
 
 def summary_settings(json_schema: dict[str, Any] | None = None) -> LLMSettings:
     return LLMSettings(temperature=0.3, max_tokens=2048, json_schema=json_schema)

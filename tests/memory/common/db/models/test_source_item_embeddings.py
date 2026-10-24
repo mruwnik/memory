@@ -489,11 +489,10 @@ def test_book_section_embeddings_multiple_pages(mock_voyage_client):
         ),
     )
     metadata = cast(dict[str, Any], item.as_payload())
-    metadata["tags"] = {"bla", "tag1", "tag2"}
+    metadata["tags"] = {"bla"}
     content = item.content or ""
     expected = [
         (content.strip(), cast(list[str], []), metadata | {"type": "section"}),
-        ("test summary", [], metadata | {"type": "summary"}),
     ]
 
     mock_voyage_client.embed = Mock(return_value=Mock(embeddings=[[0.1] * 1024] * 3))
@@ -507,7 +506,7 @@ def test_book_section_embeddings_multiple_pages(mock_voyage_client):
     assert not mock_voyage_client.multimodal_embed.call_count
 
     assert mock_voyage_client.embed.call_args == call(
-        [content.strip(), "test summary"],
+        [content.strip()],
         model=settings.TEXT_EMBEDDING_MODEL,
         input_type="document",
     )
@@ -532,7 +531,7 @@ def test_post_embeddings_single_page(mock_voyage_client, class_, modality):
         images=[LANG_TIMELINE.filename, CODE_COMPLEXITY.filename],  # type: ignore
     )
     metadata = cast(dict[str, Any], item.as_payload())
-    metadata["tags"] = {"bla", "tag1", "tag2"}
+    metadata["tags"] = {"bla"}
     expected = [
         (item.content.strip(), [LANG_TIMELINE_HASH, CODE_COMPLEXITY_HASH], metadata),
     ]

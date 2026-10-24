@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
-from memory.common import settings
+from memory.common import settings, summarizer
 from memory.common.db.models import SourceItem
 from memory.common.db.models import LLMProviderKey
 from memory.common.llms import registry
@@ -969,6 +969,13 @@ def mock_api_keys():
 def sync_summarizer():
     """Summarize inline, as most tests assert on the summary chunk directly."""
     with patch.object(settings, "SUMMARIZER_USE_BATCH", False):
+        yield
+
+
+@pytest.fixture
+def stub_summaries():
+    """Summaries answer MOCK_SUMMARY_RESPONSE without a key, for tests of where they land."""
+    with summarizer.summarising(lambda prompt: json.loads(MOCK_SUMMARY_RESPONSE)):
         yield
 
 

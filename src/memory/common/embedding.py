@@ -2,12 +2,17 @@ import hashlib
 import logging
 import threading
 import time
-from typing import Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 import voyageai
 from PIL import Image
+from sqlalchemy.orm import object_session
 
+from memory.agents.call import LLMError, Record, run_agent_sync
+from memory.agents.provider_keys import Credential, credential, ingest_key
+from memory.agents.system import SUMMARISE
 from memory.common import extract, settings, summarizer
+from memory.common.llms import PROVIDER_ERRORS
 from memory.common.chunker import (
     DEFAULT_CHUNK_TOKENS,
     OVERLAP_TOKENS,
@@ -235,13 +240,31 @@ def embed_by_model(chunks: list[Chunk], model: str) -> list[Chunk]:
     return model_chunks
 
 
+def summariser(key: Credential) -> summarizer.Summarise:
+    def summarise(prompt: str) -> dict[str, Any] | None:
+        try:
+            return run_agent_sync(
+                SUMMARISE.slug, prompt, user=key.user_id, key=key, record=Record.COST
+            ).data
+        # A summary is optional: a provider outage shouldn't fail the item's ingest.
+        except (LLMError, *PROVIDER_ERRORS) as e:
+            logger.warning("summary skipped: %s", e)
+            return None
+
+    return summarise
+
+
 def embed_source_item(
     item: SourceItem, before_embed: Callable[[], None] = lambda: None
 ) -> list[Chunk]:
     """Chunk and embed item. before_embed runs once the chunks are built, before
     any embedding API call, e.g. to end a DB transaction the calls would outlast."""
-    batching = summarizer.batch_enabled()
-    with summarizer.deferring(batching) as deferred:
+    db = object_session(item)
+    found = ingest_key(db, item, SUMMARISE) if db is not None else None
+    key = credential(found) if found is not None else None
+    batching = key is not None and summarizer.batch_enabled()
+    inline = summariser(key) if key is not None and not batching else None
+    with summarizer.summarising(inline), summarizer.deferring(batching) as deferred:
         chunks = list(item.data_chunks())
     if chunks:
         # make_chunk's backref put the chunks in item.chunks but not in the session,
@@ -255,13 +278,13 @@ def embed_source_item(
 
     # Only after a successful embed, so a failed item doesn't later gain a lone
     # summary chunk (which would also hide it from the empty-item reingest).
-    # Assigning replaces, and so deletes, requests left over from an earlier embed.
-    if batching:
-        requests = [
-            SummaryRequest(
-                prompt=d.prompt, chunk_metadata=d.chunk_metadata, modality=d.modality
-            )
-            for d in deferred
-        ]
-        item.summary_requests = requests if chunks else []
+    # Assigning replaces, and so deletes, requests left over from an earlier embed,
+    # including one from before the item lost its key.
+    requests = [
+        SummaryRequest(
+            prompt=d.prompt, chunk_metadata=d.chunk_metadata, modality=d.modality
+        )
+        for d in deferred
+    ]
+    item.summary_requests = requests if chunks else []
     return chunks

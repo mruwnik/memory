@@ -11,6 +11,7 @@ tags into the item's existing chunk payloads, and deletes the request. Failed
 results go back to pending until they run out of attempts.
 """
 
+import json
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -120,7 +121,7 @@ def add_tags(chunk_refs: list[tuple[str, str]], tags: list[str]) -> None:
 
 def apply_summary(session: Session, request: SummaryRequest, response: str) -> None:
     item = request.source
-    summary, tags = summarizer.parse_summary(response)
+    summary, tags = summarizer.parse_summary(json.loads(response))
     existing = [(str(c.collection_name), str(c.id)) for c in item.chunks]
 
     new_chunks: list[Chunk] = []

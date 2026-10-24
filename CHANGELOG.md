@@ -233,6 +233,10 @@ section has nothing in it:
   release, or re-embeds of items older than 48 hours, are not retried
   automatically; re-embed those with the `reingest_all_empty_source_items`
   maintenance task.
+- Ingest summaries and tags run only on a provider key: a source's explicit key
+  (Sources → each source → LLM key), else the default key of whoever brought the
+  item in. Items without one are embedded without a summary. Spend counts
+  against the key's daily cap.
 - Ingestion summaries now go through the Anthropic Message Batches API
   (`SUMMARIZER_USE_BATCH`, default `true`). Items are searchable at once, and
   their summary chunk arrives when the batch ends, usually within an hour.

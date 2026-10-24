@@ -14,22 +14,32 @@ from memory.common import summary_batch
 from memory.common.content_processing import push_chunks_to_qdrant
 from memory.common.db.connection import make_session
 from memory.common.db.models import SourceItem, SummaryRequest
+from tests.memory.agents import fakes
 
 LONG_TEXT = "Some interesting sentence about things. " * 200
 RESPONSE = json.dumps({"summary": "the summary", "tags": ["t1", "t2"]})
 
 
-def make_item(db_session, content: str = LONG_TEXT) -> SourceItem:
+def make_item(
+    db_session, content: str = LONG_TEXT, creator_id: int | None = None
+) -> SourceItem:
     item = SourceItem(
         content=content,
         modality="text",
         sha256=hashlib.sha256(content.encode()).digest(),
         tags=["bla"],
         mime_type="text/plain",
+        creator_id=creator_id,
     )
     db_session.add(item)
     db_session.flush()
     return item
+
+
+@pytest.fixture
+def keyed_item(db_session, regular_user, llm_key):
+    """An item whose creator has a key to pay for its summary."""
+    return make_item(db_session, creator_id=regular_user.id)
 
 
 def add_request(db_session, item, **kwargs) -> SummaryRequest:
@@ -65,24 +75,29 @@ def batches(mock_anthropic_client):
         yield batches
 
 
-@pytest.mark.parametrize("use_batch", [True, False])
-def test_embed_source_item_defers_summary_when_batching(db_session, use_batch):
-    item = make_item(db_session)
+@pytest.mark.parametrize(
+    "use_batch, has_summary_chunk, expected_requests",
+    [(True, False, [("pending", {})]), (False, True, [])],
+)
+def test_embed_source_item_defers_summary_when_batching(
+    db_session, keyed_item, scripted_llm, use_batch, has_summary_chunk, expected_requests
+):
+    scripted_llm.script = [fakes.submitted({"summary": "test summary", "tags": ["t"]})]
+    item = keyed_item
     with patch.object(settings, "SUMMARIZER_USE_BATCH", use_batch):
         chunks = embedding.embed_source_item(item)
     db_session.commit()
 
-    has_summary_chunk = any(c.content == "test summary" for c in chunks)
     requests = db_session.query(SummaryRequest).all()
-    assert has_summary_chunk is not use_batch
-    assert [(r.source_id, r.status, r.chunk_metadata) for r in requests] == (
-        [(item.id, "pending", {})] if use_batch else []
-    )
+    assert any(c.content == "test summary" for c in chunks) is has_summary_chunk
+    assert [(r.source_id, r.status, r.chunk_metadata) for r in requests] == [
+        (item.id, status, metadata) for status, metadata in expected_requests
+    ]
     assert all(LONG_TEXT.strip()[:100] in r.prompt for r in requests)
 
 
-def test_reembedding_replaces_pending_requests(db_session):
-    item = make_item(db_session)
+def test_reembedding_replaces_pending_requests(db_session, keyed_item):
+    item = keyed_item
     with patch.object(settings, "SUMMARIZER_USE_BATCH", True):
         embedding.embed_source_item(item)
         db_session.commit()
@@ -270,8 +285,8 @@ def test_collect_leaves_unfinished_batches(db_session, batches):
     assert (request.status, request.batch_id) == ("submitted", "batch_1")
 
 
-def test_failed_embedding_records_no_summary_request(db_session):
-    item = make_item(db_session)
+def test_failed_embedding_records_no_summary_request(db_session, keyed_item):
+    item = keyed_item
     with (
         patch.object(settings, "SUMMARIZER_USE_BATCH", True),
         patch.object(embedding, "embed_chunks", side_effect=RuntimeError("voyage down")),
@@ -283,8 +298,8 @@ def test_failed_embedding_records_no_summary_request(db_session):
     assert db_session.query(SummaryRequest).count() == 0
 
 
-def test_reembedding_without_summary_drops_stale_requests(db_session):
-    item = make_item(db_session)
+def test_reembedding_without_summary_drops_stale_requests(db_session, keyed_item):
+    item = keyed_item
     with patch.object(settings, "SUMMARIZER_USE_BATCH", True):
         embedding.embed_source_item(item)
         db_session.commit()

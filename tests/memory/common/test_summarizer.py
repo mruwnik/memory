@@ -1,113 +1,57 @@
-from unittest.mock import patch
-
 import pytest
 
-from memory.agents.system import SUMMARISE, SUMMARY_SCHEMA
-from memory.common import llms, settings, summarizer
+from memory.common import settings, summarizer, tokens
+
+LONG = "word " * 5000
 
 
-def test_parse_summary():
-    assert summarizer.parse_summary('{"summary": "s", "tags": ["a"]}') == ("s", ["a"])
+def test_parse_summary_returns_summary_and_tags():
+    assert summarizer.parse_summary({"summary": "s", "tags": ["a"]}) == ("s", ["a"])
 
 
-@pytest.mark.parametrize(
-    "response",
-    [
-        "",
-        # A refusal, or a result requested before the switch to JSON output
-        "<summary>s</summary>",
-        # Output that hit max_tokens
-        '{"summary": "s", "tags": ["a',
-    ],
-)
-def test_parse_summary_rejects_unparseable_response(response):
-    with pytest.raises(ValueError):
-        summarizer.parse_summary(response)
+def test_parse_summary_caps_overlong_summaries():
+    summary, _ = summarizer.parse_summary({"summary": "x " * 20000, "tags": []})
+    assert len(summary) <= settings.DEFAULT_CHUNK_TOKENS * tokens.CHARS_PER_TOKEN + 3
 
 
-@pytest.mark.parametrize("response", ["", '{"summary": "s", "tags": ["a'])
-def test_summarize_falls_back_to_content_on_unparseable_response(response):
-    with patch.object(summarizer.llms, "summarize", return_value=response):
-        assert summarizer.summarize("short text") == ("short text", [])
+def test_without_an_llm_there_is_no_summary():
+    assert summarizer.summarize(LONG) is None
 
 
-def test_summarize_requests_summary_schema():
-    response = '{"summary": "short", "tags": ["t"]}'
-    with patch.object(summarizer.llms, "summarize", return_value=response) as llm:
-        assert summarizer.summarize(LONG_TEXT) == ("short", ["t"])
-    assert llm.call_args.kwargs["json_schema"] == SUMMARY_SCHEMA
+def test_summaries_come_from_the_summariser_in_scope():
+    prompts = []
+
+    def fn(prompt):
+        prompts.append(prompt)
+        return {"summary": "s", "tags": ["t"]}
+
+    with summarizer.summarising(fn):
+        assert summarizer.summarize(LONG) == ("s", ["t"])
+    assert summarizer.summarize(LONG) is None
+    assert "Text to summarize" in prompts[0]
 
 
-LONG_TEXT = "word " * 2000
+def test_a_failed_summariser_leaves_no_summary():
+    with summarizer.summarising(lambda prompt: None):
+        assert summarizer.summarize(LONG) is None
 
 
-def test_summarize_or_defer_outside_deferral_summarizes_inline():
-    with patch.object(summarizer, "summarize", return_value=("s", ["t"])) as summarize:
-        assert summarizer.summarize_or_defer(LONG_TEXT, {"type": "x"}) == ("s", ["t"])
-    summarize.assert_called_once_with(LONG_TEXT)
-
-
-@pytest.mark.parametrize("chunk_metadata", [{"type": "summary"}, None])
-@pytest.mark.parametrize("modality", ["book", None])
+@pytest.mark.parametrize("chunk_metadata,modality", [({"type": "summary"}, "book"), (None, None)])
 def test_summarize_or_defer_records_request_without_calling_llm(chunk_metadata, modality):
-    with (
-        patch.object(summarizer.llms, "summarize") as llm,
-        summarizer.deferring(True) as deferred,
-    ):
-        assert summarizer.summarize_or_defer(LONG_TEXT, chunk_metadata, modality) is None
-
-    llm.assert_not_called()
-    assert deferred == [
-        summarizer.DeferredSummary(
-            prompt=summarizer.build_prompt(LONG_TEXT, settings.DEFAULT_CHUNK_TOKENS),
-            chunk_metadata=chunk_metadata,
-            modality=modality,
-        )
-    ]
-    assert "Text to summarize" in deferred[0].prompt
-
-
-def test_deferring_disabled_summarizes_inline():
-    with (
-        patch.object(summarizer, "summarize", return_value=("s", [])),
-        summarizer.deferring(False) as deferred,
-    ):
-        assert summarizer.summarize_or_defer(LONG_TEXT, {}) == ("s", [])
-    assert deferred == []
+    with summarizer.summarising(lambda p: pytest.fail("called")), summarizer.deferring(True) as deferred:
+        assert summarizer.summarize_or_defer(LONG, chunk_metadata, modality) is None
+    assert [(d.chunk_metadata, d.modality) for d in deferred] == [(chunk_metadata, modality)]
 
 
 def test_deferring_resets_after_block():
     with summarizer.deferring(True):
         pass
-    with patch.object(summarizer, "summarize", return_value=("s", [])):
-        assert summarizer.summarize_or_defer(LONG_TEXT, {}) == ("s", [])
+    with summarizer.summarising(lambda prompt: {"summary": "s", "tags": []}):
+        assert summarizer.summarize_or_defer(LONG, {}) == ("s", [])
 
 
-@pytest.mark.parametrize(
-    "use_batch, model, expected",
-    [
-        (True, "anthropic/claude-haiku-4-5", True),
-        (False, "anthropic/claude-haiku-4-5", False),
-        (True, "openai/gpt-4o-mini", False),
-    ],
-)
-def test_batch_enabled(use_batch, model, expected):
-    with (
-        patch.object(settings, "SUMMARIZER_USE_BATCH", use_batch),
-        patch.object(settings, "SUMMARIZER_MODEL", model),
-    ):
-        assert summarizer.batch_enabled() is expected
+@pytest.mark.parametrize("use_batch,expected", [(True, True), (False, False)])
+def test_batch_enabled_follows_the_setting(monkeypatch, use_batch, expected):
+    monkeypatch.setattr(settings, "SUMMARIZER_USE_BATCH", use_batch)
+    assert summarizer.batch_enabled() is expected
 
-
-def test_summarize_returns_generated_text(monkeypatch):
-    calls = []
-
-    class StubProvider:
-        def generate(self, messages, system_prompt=None, tools=None, mcp_servers=None, settings=None):
-            calls.append((messages, system_prompt, settings))
-            return "a summary"
-
-    monkeypatch.setattr("memory.common.llms.create_provider", lambda model: StubProvider())
-
-    assert llms.summarize("text", model="anthropic/claude-haiku-5-5") == "a summary"
-    assert calls[0][1] == SUMMARISE.system_prompt

@@ -425,7 +425,7 @@ def test_email_attachment_cascade_delete(db_session: Session):
         (["", "  ", "   "], []),
     ],
 )
-def test_book_section_data_chunks(pages, expected_chunks):
+def test_book_section_data_chunks(pages, expected_chunks, stub_summaries):
     """Test BookSection.data_chunks with various page combinations"""
     content = "\n\n".join(pages).strip()
     book_section = BookSection(
@@ -490,7 +490,7 @@ def test_book_section_data_chunks(pages, expected_chunks):
         ),
     ],
 )
-def test_blog_post_chunk_contents(content, expected, default_chunk_size):
+def test_blog_post_chunk_contents(content, expected, default_chunk_size, stub_summaries):
     default_chunk_size(10)
     blog_post = BlogPost(
         sha256=b"test_blog",
@@ -531,7 +531,9 @@ def test_blog_post_chunk_contents_with_images(tmp_path):
     ]
 
 
-def test_blog_post_chunk_contents_with_image_long_content(tmp_path, default_chunk_size):
+def test_blog_post_chunk_contents_with_image_long_content(
+    tmp_path, default_chunk_size, stub_summaries
+):
     default_chunk_size(10)
     img1_path = tmp_path / "img1.jpg"
     img2_path = tmp_path / "img2.jpg"
@@ -856,7 +858,7 @@ def test_note_data_chunks(subject, content, expected):
         }
 
 
-def test_note_data_chunks_long_content():
+def test_note_data_chunks_long_content(stub_summaries):
     """Test Note.data_chunks() with long content that gets split into multiple chunks."""
     note = Note(
         sha256=b"test_obs_long",

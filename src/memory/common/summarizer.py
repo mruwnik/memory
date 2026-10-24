@@ -1,12 +1,12 @@
-import json
 import logging
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from memory.agents.system import SUMMARY_SCHEMA
-from memory.common import settings, tokens, llms
+from memory.agents.system import SUMMARISE
+from memory.common import settings, tokens
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +47,33 @@ class DeferredSummary:
     modality: str | None = None
 
 
+Summarise = Callable[[str], dict[str, Any] | None]
+
 _deferred: ContextVar[list[DeferredSummary] | None] = ContextVar(
     "deferred_summaries", default=None
 )
+_summarise: ContextVar[Summarise | None] = ContextVar("summarise", default=None)
+
+
+def truncate(content: str, target_tokens: int) -> str:
+    target_chars = target_tokens * tokens.CHARS_PER_TOKEN
+    if len(content) > target_chars:
+        return content[:target_chars].rsplit(" ", 1)[0] + "..."
+    return content
+
+
+@contextmanager
+def summarising(fn: Summarise | None) -> Iterator[None]:
+    """Summaries inside the block run through `fn`; outside one, none run."""
+    token = _summarise.set(fn)
+    try:
+        yield
+    finally:
+        _summarise.reset(token)
 
 
 def batch_enabled() -> bool:
-    return settings.SUMMARIZER_USE_BATCH and settings.SUMMARIZER_MODEL.startswith(
-        "anthropic/"
-    )
+    return settings.SUMMARIZER_USE_BATCH and SUMMARISE.provider == "anthropic"
 
 
 @contextmanager
@@ -88,7 +106,7 @@ def build_prompt(content: str, target_tokens: int) -> str:
         logger.warning(
             f"Prompt too long ({tokens.approx_token_count(prompt)} tokens), truncating"
         )
-        prompt = llms.truncate(prompt, MAX_TOKENS - 20)
+        prompt = truncate(prompt, MAX_TOKENS - 20)
     return prompt
 
 
@@ -106,48 +124,21 @@ def summarize_or_defer(
     return None
 
 
-def parse_summary(response: str) -> tuple[str, list[str]]:
-    """(summary, tags) from a `SUMMARY_SCHEMA` response, capping overlong summaries; ValueError if unparseable."""
-    result = json.loads(response)
-    summary = result["summary"]
+def parse_summary(data: dict[str, Any]) -> tuple[str, list[str]]:
+    """(summary, tags) from a SUMMARY_SCHEMA result, capping overlong summaries."""
+    summary = data["summary"]
     target_tokens = settings.DEFAULT_CHUNK_TOKENS
     if tokens.approx_token_count(summary) > target_tokens * 1.5:
-        summary = llms.truncate(summary, target_tokens)
-    return summary, result["tags"]
+        summary = truncate(summary, target_tokens)
+    return summary, data["tags"]
 
 
-def summarize(content: str, target_tokens: int | None = None) -> tuple[str, list[str]]:
-    """
-    Summarize content to approximately target_tokens length and generate tags.
-
-    Args:
-        content: Text to summarize
-        target_tokens: Target length in tokens (defaults to DEFAULT_CHUNK_TOKENS)
-
-    Returns:
-        Tuple of (summary, tags)
-    """
-    if not content or not content.strip():
-        return "", []
-
-    if target_tokens is None:
-        target_tokens = settings.DEFAULT_CHUNK_TOKENS
-
-    summary, tags = content, []
-    prompt = build_prompt(content, target_tokens)
-
-    try:
-        response = llms.summarize(
-            prompt, settings.SUMMARIZER_MODEL, json_schema=SUMMARY_SCHEMA
-        )
-        result = json.loads(response)
-        summary, tags = result["summary"], result["tags"]
-    except Exception:
-        logger.exception("Summarization failed")
-
-    summary_tokens = tokens.approx_token_count(summary)
-    if summary_tokens > target_tokens * 1.5:
-        logger.warning(f"Summary too long ({summary_tokens} tokens), truncating")
-        summary = llms.truncate(content, target_tokens)
-
-    return summary, tags
+def summarize(
+    content: str, target_tokens: int | None = None
+) -> tuple[str, list[str]] | None:
+    """(summary, tags) for `content`, or None when no summariser is in scope or it failed."""
+    fn = _summarise.get()
+    if fn is None or not content.strip():
+        return None
+    data = fn(build_prompt(content, target_tokens or settings.DEFAULT_CHUNK_TOKENS))
+    return parse_summary(data) if data is not None else None
