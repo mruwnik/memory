@@ -962,6 +962,7 @@ async def test_search_writes_a_hyde_passage_only_for_a_keyed_searcher(
     db_session, regular_user, scripted_llm, monkeypatch, request, searcher_fixture, hyde_requests
 ):
     request.getfixturevalue(searcher_fixture)
+    monkeypatch.setattr(settings, "ENABLE_HYDE_EXPANSION", True)
     monkeypatch.setattr(hyde, "_hyde_cache", {})
     monkeypatch.setattr(search_module, "search_chunks_embeddings", AsyncMock(return_value={}))
     scripted_llm.script = [reply("a passage")]

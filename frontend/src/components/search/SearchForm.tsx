@@ -64,6 +64,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
     const [limit, setLimit] = useState<number | ''>(DEFAULT_LIMIT)
     const [enhancements, setEnhancements] = useState<Record<string, boolean>>({})
     const [availableEnhancements, setAvailableEnhancements] = useState<Record<string, boolean>>({})
+    const [scoresAvailable, setScoresAvailable] = useState(false)
     const [filtersReady, setFiltersReady] = useState(false)
     const [filtersError, setFiltersError] = useState<string | null>(null)
     const submittedQuery = useRef<string | null>(null)
@@ -79,8 +80,10 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
            setSchemas(schemas)
            setModalities(createFlags(Object.keys(schemas), true))
            setTags(createFlags(tags))
-           setEnhancements(defaults)
-           setAvailableEnhancements(defaults)
+           const { use_scores = false, ...enhancementDefaults } = defaults
+           setEnhancements(enhancementDefaults)
+           setAvailableEnhancements(enhancementDefaults)
+           setScoresAvailable(use_scores)
         }
         setupFilters()
             .catch(e => setFiltersError(e instanceof Error ? e.message : String(e)))
@@ -147,7 +150,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
             <div className="space-y-4">
                 <div className="flex flex-col gap-2">
                     <Checkbox checked={previews} onChange={(e) => setPreviews(e.target.checked)} label="Include content previews" />
-                    <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with an LLM before returning" />
+                    <Checkbox checked={useScores} disabled={!scoresAvailable} onChange={(e) => setUseScores(e.target.checked)} label="Score results with an LLM before returning" />
                 </div>
 
                 <Disclosure summary="Search enhancements">
@@ -155,7 +158,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
                         {ENHANCEMENTS.map(([key, label]) => (
                             <Checkbox key={key} label={label}
                                 checked={enhancements[key] ?? false}
-                                // The server can only be asked to skip an enhancement, never to add one it has off.
+                                // The server can only be asked to skip an enhancement, never to add one it has off or no key pays for.
                                 disabled={!availableEnhancements[key]}
                                 onChange={(e) => setEnhancements(prev => ({ ...prev, [key]: e.target.checked }))} />
                         ))}

@@ -145,12 +145,40 @@ def test_source_item_collections_are_real_collections(klass):
         ("ENABLE_HYDE_EXPANSION", "use_hyde"),
         ("ENABLE_RERANKING", "use_reranking"),
         ("ENABLE_QUERY_ANALYSIS", "use_query_analysis"),
+        ("ENABLE_SEARCH_SCORING", "use_scores"),
     ],
 )
-async def test_get_search_defaults_reports_server_settings(monkeypatch, setting, key, value):
+async def test_get_search_defaults_reports_server_settings(
+    db_session, user_session, llm_key, monkeypatch, setting, key, value
+):
     monkeypatch.setattr(f"memory.common.settings.{setting}", value)
 
-    assert (await get_search_defaults.fn())[key] is value
+    with mcp_auth_context(user_session.id):
+        assert (await get_search_defaults.fn())[key] is value
+
+
+@pytest.fixture
+def llm_search_steps_on(monkeypatch):
+    for setting in ("ENABLE_HYDE_EXPANSION", "ENABLE_QUERY_ANALYSIS", "ENABLE_SEARCH_SCORING"):
+        monkeypatch.setattr(f"memory.common.settings.{setting}", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["use_hyde", "use_query_analysis", "use_scores"])
+async def test_llm_search_steps_need_a_key_of_yours(
+    db_session, user_session, llm_search_steps_on, key
+):
+    with mcp_auth_context(user_session.id):
+        assert (await get_search_defaults.fn())[key] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["use_hyde", "use_query_analysis", "use_scores"])
+async def test_llm_search_steps_run_on_your_default_key(
+    db_session, user_session, llm_key, llm_search_steps_on, key
+):
+    with mcp_auth_context(user_session.id):
+        assert (await get_search_defaults.fn())[key] is True
 
 
 @pytest.mark.asyncio

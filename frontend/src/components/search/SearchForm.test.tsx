@@ -11,10 +11,11 @@ const schemas = {
     size: 1,
   },
 }
-const searchDefaults = { use_bm25: true, use_hyde: false, use_reranking: true, use_query_analysis: false }
+const enhancementDefaults = { use_bm25: true, use_hyde: false, use_reranking: true, use_query_analysis: false }
+const searchDefaults = { ...enhancementDefaults, use_scores: true }
 
 // Route fetch: /auth/me for useAuth, MCP calls by tool name in the JSON-RPC body.
-const installFetch = (searchResults: unknown[] = []) =>
+const installFetch = (searchResults: unknown[] = [], defaults: Record<string, boolean> = searchDefaults) =>
   mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
     const tool = mcpToolFromRequest(input, init)
@@ -28,7 +29,7 @@ const installFetch = (searchResults: unknown[] = []) =>
       return mockResponse({ json: mcpEnvelopeJson(['work', 'home']) })
     }
     if (tool === 'meta_get_search_defaults') {
-      return mockResponse({ json: mcpEnvelopeJson(searchDefaults) })
+      return mockResponse({ json: mcpEnvelopeJson(defaults) })
     }
     if (tool === 'core_search') {
       return mockResponse({ json: mcpEnvelopeJson(...searchResults) })
@@ -78,7 +79,7 @@ describe('SearchForm', () => {
       previews: false,
       useScores: false,
       limit: 10,
-      enhancements: searchDefaults,
+      enhancements: enhancementDefaults,
     })
     expect(params.filters.tags).toEqual([])
   })
@@ -117,10 +118,19 @@ describe('SearchForm', () => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    await user.click(screen.getByLabelText('Score results with an LLM before returning'))
+    const scores = screen.getByLabelText('Score results with an LLM before returning')
+    await waitFor(() => expect(scores).toBeEnabled())
+    await user.click(scores)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     expect(onSearch.mock.calls[0][0].config.useScores).toBe(true)
+  })
+
+  it('offers LLM scoring only when there is a key to pay for it', async () => {
+    installFetch([], { ...searchDefaults, use_scores: false })
+    renderWithUser(<SearchForm isLoading={false} onSearch={() => {}} />)
+    await waitFor(() => expect(screen.getByLabelText('BM25 keyword search')).toBeEnabled())
+    expect(screen.getByLabelText('Score results with an LLM before returning')).toBeDisabled()
   })
 
   it.each([
@@ -135,7 +145,7 @@ describe('SearchForm', () => {
     for (let i = 0; i < clicks; i++) await user.click(bm25)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
-    expect(onSearch.mock.calls[0][0].config.enhancements).toEqual({ ...searchDefaults, use_bm25: expected })
+    expect(onSearch.mock.calls[0][0].config.enhancements).toEqual({ ...enhancementDefaults, use_bm25: expected })
   })
 
   it.each([

@@ -1,5 +1,6 @@
 """MCP subserver for metadata and utility tools."""
 
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -13,7 +14,10 @@ from memory.api.MCP.servers.core import (
     SEARCHABLE_COLLECTIONS,
     get_current_user_access_filter,
 )
+from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.search.search import searcher_keys
 from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
 from memory.api.search.types import MCPSearchFilters
 from memory.common.access_control import apply_access_filter_to_query
@@ -245,16 +249,22 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
 @meta_mcp.tool()
 @visible_when(require_scopes(SCOPE_READ))
 async def get_search_defaults() -> dict[str, bool]:
-    """The search enhancements this server allows.
+    """The search enhancements available to you.
 
-    An allowed (true) enhancement runs unless `search`'s matching `use_*` flag
-    is false. A false one is off on this server and no flag can turn it on.
+    An available (true) enhancement runs unless `search`'s matching `use_*` flag
+    is false; `use_scores` is opt-in. A false one is off on this server, or is an
+    LLM step and you have no default Anthropic or OpenAI key to pay for it, and no
+    flag can turn it on.
     """
+    user = get_mcp_current_user()
+    keys = await asyncio.to_thread(searcher_keys, user.id if user else None)
     return {
         "use_bm25": settings.ENABLE_BM25_SEARCH,
-        "use_hyde": settings.ENABLE_HYDE_EXPANSION,
+        "use_hyde": settings.ENABLE_HYDE_EXPANSION and keys[HYDE.slug] is not None,
         "use_reranking": settings.ENABLE_RERANKING,
-        "use_query_analysis": settings.ENABLE_QUERY_ANALYSIS,
+        "use_query_analysis": settings.ENABLE_QUERY_ANALYSIS
+        and keys[QUERY_ANALYSIS.slug] is not None,
+        "use_scores": settings.ENABLE_SEARCH_SCORING and keys[CHUNK_SCORE.slug] is not None,
     }
 
 
