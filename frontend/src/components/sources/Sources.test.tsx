@@ -100,4 +100,11 @@ describe('Sources container', () => {
     await user.click(screen.getByRole('button', { name: 'back' }))
     expect(screen.getByTestId('panel-secrets')).toBeInTheDocument()
   })
+
+  it('puts each tab\'s failing-sync count in its accessible name', async () => {
+    mockFetchRoutes({ '/auth/me': meWith(['teams']), '/sync-failures': { json: { drive: 2, email: 0 } }, __default: { json: {} } })
+    renderWithRouter(<Sources />)
+    expect(await screen.findByRole('tab', { name: 'Drive (2 failing)' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Email' })).toBeInTheDocument()
+  })
 })

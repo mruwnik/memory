@@ -1,7 +1,8 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import UserSelector, { SelectedUser, useUserSelection } from '../common/UserSelector'
 import { useAuth } from '../../hooks/useAuth'
+import { SyncFailureCounts, useSources } from '../../hooks/useSources'
 
 // Context to provide selected user to all panels
 interface SourcesContextType {
@@ -58,6 +59,14 @@ const Sources = () => {
   const [selectedUser, setSelectedUser] = useUserSelection('sourcesSelectedUser')
   const { hasScope } = useAuth()
 
+  const { getSyncFailureCounts } = useSources()
+  const [failing, setFailing] = useState<SyncFailureCounts>({})
+
+  // Refetched on tab change so a count drops once the failing source is fixed on its tab.
+  useEffect(() => {
+    getSyncFailureCounts(selectedUser.id || undefined).then(setFailing).catch(() => setFailing({}))
+  }, [getSyncFailureCounts, selectedUser.id, activeTab])
+
   // Check if user is admin
   const isAdmin = hasScope('admin') || hasScope('*')
 
@@ -71,7 +80,7 @@ const Sources = () => {
         actions={isAdmin && <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />}
         width="wide"
       >
-        <Tabs label="Source types" options={[...TABS]} value={activeTab} onChange={setActiveTab}>
+        <Tabs label="Source types" options={TABS.map(t => ({ ...t, label: failing[t.value] ? `${t.label} (${failing[t.value]} failing)` : t.label }))} value={activeTab} onChange={setActiveTab}>
           <ActivePanel />
         </Tabs>
       </Page>

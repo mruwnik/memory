@@ -55,6 +55,7 @@ from memory.api.users import router as users_router
 from memory.api.password_reset import router as password_reset_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
+from memory.api.sync_status import router as sync_status_router
 from memory.api.celery_overview import router as celery_overview_router
 from memory.api.ingest import router as ingest_router
 from memory.api.check.router import router as check_router
@@ -503,6 +504,7 @@ app.include_router(users_router)
 app.include_router(password_reset_router)
 app.include_router(discord_router)
 app.include_router(slack_router)
+app.include_router(sync_status_router)
 app.include_router(celery_overview_router)
 app.include_router(ingest_router)
 app.include_router(check_router)

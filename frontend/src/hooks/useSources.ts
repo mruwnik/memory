@@ -479,8 +479,18 @@ export interface CeleryTaskResponse {
   status: string
 }
 
+/** Failing sources per Sources tab, keyed by the tab's value. */
+export type SyncFailureCounts = Partial<Record<string, number>>
+
 export const useSources = () => {
   const { apiCall } = useAuth()
+
+  const getSyncFailureCounts = useCallback(async (userId?: number): Promise<SyncFailureCounts> => {
+    const params = userId !== undefined ? `?user_id=${userId}` : ''
+    const response = await apiCall(`/sync-failures${params}`)
+    if (!response.ok) throw await apiError(response, 'Failed to fetch sync failures')
+    return response.json()
+  }, [apiCall])
 
   // === Email Accounts ===
 
@@ -940,6 +950,7 @@ export const useSources = () => {
   }, [apiCall])
 
   return {
+    getSyncFailureCounts,
     // Email
     listEmailAccounts,
     createEmailAccount,

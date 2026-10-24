@@ -1373,3 +1373,12 @@ def test_authorized_user_endpoints_reject_non_owner(
         f"/slack/apps/{app.id}/authorized-users/{user.id}"
     )
     assert rm_resp.status_code == 403
+
+
+def test_sync_failures_counts_connected_failing_workspaces(
+    client, db_session, slack_credentials, slack_workspace
+):
+    slack_workspace.record_sync("boom")
+    db_session.commit()
+
+    assert client.get("/sync-failures").json()["slack"] == 1
