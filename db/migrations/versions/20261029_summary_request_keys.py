@@ -20,6 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # A request inserted between the delete and the NOT NULL column would fail the migration.
+    op.execute("LOCK TABLE summary_request IN ACCESS EXCLUSIVE MODE")
     op.execute("DELETE FROM summary_request")
     op.add_column(
         "summary_request",

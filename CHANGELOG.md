@@ -52,12 +52,18 @@ section has nothing in it:
   summarised. System agents run on Claude Haiku with an Anthropic key, else on
   `gpt-6-luna` with an OpenAI key; summary batching (`SUMMARIZER_USE_BATCH`) only
   applies to Anthropic keys, so OpenAI-paid summaries run inline at full price.
-- **Before updating**, let in-flight summary batches finish
-  (`collect_summary_batches` runs every `SUMMARIZER_BATCH_POLL_INTERVAL`): the
-  migration drops every queued summary request, since they were queued on the
-  server's key. The queue is drained once
-  `SELECT count(*) FROM summary_request WHERE status != 'failed'` is 0; items
-  whose requests are dropped get their summary when next reingested.
+- **Before updating**, drain the summary queue: the migration drops every
+  queued summary request, since they were queued on the server's key. Set
+  `SUMMARIZER_USE_BATCH=false` on the running version and restart its workers,
+  so ingest stops queueing new requests, then let in-flight batches finish
+  (`collect_summary_batches` runs every `SUMMARIZER_BATCH_POLL_INTERVAL`). The
+  queue is drained once
+  `SELECT count(*) FROM summary_request WHERE status != 'failed'` is 0. Restore
+  `SUMMARIZER_USE_BATCH` when updating. If you can't wait, list the items that
+  will lose their summary with
+  `SELECT DISTINCT s.id, s.type FROM summary_request r JOIN source_item s ON s.id = r.source_id WHERE r.status != 'failed'`
+  and, once updated, reingest each with
+  `python tools/run_celery_task.py maintenance reingest-item --item-id <id> --item-type <type>`.
 - **Before updating**, check each transcript account's project and
   sensitivity (Sources → Transcripts). Once updated, newly synced meetings and,
   from the next daily sweep, existing ones take them on: every contributor on that
