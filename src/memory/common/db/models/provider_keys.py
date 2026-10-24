@@ -4,6 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -106,3 +107,26 @@ class LLMProviderKey(Base):
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
         }
+
+
+class LLMSpend(Base):
+    """What a provider key spent on calls kept without a run row, per agent and hour.
+
+    Hourly buckets keep the search and ingest hot paths to one upsert per call
+    while the daily caps can still sum a rolling 24 hours.
+    """
+
+    __tablename__ = "llm_spend"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    provider_key_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("llm_provider_keys.id", ondelete="CASCADE"), nullable=False
+    )
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, default=0)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("provider_key_id", "agent", "hour", name="llm_spend_bucket"),
+    )

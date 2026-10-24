@@ -445,6 +445,7 @@ section has nothing in it:
   key), removes the `llm_server_key` scope, drops `agent_runs.key_source`. Fast.
 - `20261029_key_names_per_user`: renames same-named keys of one user (`name (provider)`)
   and makes names unique per user. Fast.
+- `20261029_llm_spend`: new table for per-key LLM spend outside agent runs. Fast.
 
 ### Post-deploy commands
 
