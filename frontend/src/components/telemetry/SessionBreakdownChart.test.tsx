@@ -112,8 +112,7 @@ describe('SessionBreakdownChart', () => {
     ])
     const { user } = renderWithUser(<SessionBreakdownChart data={data} />)
     expect(readData()[0].fullSessionId).toBe('lowCostHighToken')
-    const selects = screen.getAllByRole('combobox')
-    await user.selectOptions(selects[1], 'cost')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Sort sessions by' }), 'cost')
     expect(readData()[0].fullSessionId).toBe('highCostLowToken')
   })
 
@@ -124,8 +123,7 @@ describe('SessionBreakdownChart', () => {
       makeSession({ session_id: 'mid', total_tokens: 500, event_count: 50 }),
     ])
     const { user } = renderWithUser(<SessionBreakdownChart data={data} />)
-    const selects = screen.getAllByRole('combobox')
-    await user.selectOptions(selects[1], 'events')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Sort sessions by' }), 'events')
     expect(readData()[0].fullSessionId).toBe('manyEvents')
   })
 
@@ -136,8 +134,7 @@ describe('SessionBreakdownChart', () => {
     const { user } = renderWithUser(<SessionBreakdownChart data={makeResponse(twenty)} />)
     // default is Top 15
     expect(readData()).toHaveLength(15)
-    const selects = screen.getAllByRole('combobox')
-    await user.selectOptions(selects[0], '10')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Sessions shown' }), '10')
     expect(readData()).toHaveLength(10)
   })
 
@@ -162,6 +159,18 @@ describe('SessionBreakdownChart', () => {
       'Added API key grouping. Then tests.',
       'ec2a0d98-dbca-4399-92fc-516ad323da36',
     ])
+  })
+
+  it('lists each charted session with its details outside the hover tooltip', () => {
+    const data = makeResponse([
+      makeSession({ session_id: 'a', label: 'Fix login', summary: 'Fixed the auth loop', project: '/code/memory', total_tokens: 1500, event_count: 7 }),
+    ])
+    render(<SessionBreakdownChart data={data} />)
+    const row = screen.getByRole('row', { name: /Fix login/ })
+    expect(row).toHaveTextContent('Fixed the auth loop')
+    expect(row).toHaveTextContent('/code/memory')
+    expect(row).toHaveTextContent('Medium Usage')
+    expect(row).toHaveTextContent('1.5K')
   })
 
   it('renders category count legend badges', () => {

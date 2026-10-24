@@ -4,7 +4,7 @@ import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
-import { Button, EmptyState, Input, Label, List, Modal, MultiSelect, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
+import { Button, Checkbox, EmptyState, Input, Label, List, Modal, MultiSelect, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
 
 const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople } = usePeople()
@@ -229,7 +229,7 @@ const PeopleManagement = () => {
       <Page
         title="People"
         description={people.length > 0 && `Showing ${people.length} ${people.length === 1 ? 'person' : 'people'}`}
-        actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>Add Person</Button>}
+        actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New person</Button>}
         width="default"
         loading={loading && people.length === 0}
       >
@@ -275,8 +275,8 @@ const PeopleManagement = () => {
                 key={person.identifier}
                 person={person}
                 select={
-                  <input type="checkbox" checked={selectedForMerge.has(person.identifier)}
-                    onChange={() => toggleMergeSelection(person.identifier)} aria-label={`Select ${person.display_name} for merge`} />
+                  <Checkbox checked={selectedForMerge.has(person.identifier)} onChange={() => toggleMergeSelection(person.identifier)}
+                    label={<span className="sr-only">Select {person.display_name} for merge</span>} className="p-2 -m-2" />
                 }
                 expanded={expandedIdentifier === person.identifier}
                 onToggleExpand={() => toggleExpanded(person.identifier)}

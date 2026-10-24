@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import type { SlackAppSetupState } from './useSlackWizard'
+import { apiError } from './apiError'
 
 // Types for Slack Workspaces
 export interface SlackWorkspaceApp {
@@ -83,13 +84,13 @@ export const useSlack = () => {
   const listWorkspaces = useCallback(async (userId?: number): Promise<SlackWorkspace[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/slack/workspaces${params}`)
-    if (!response.ok) throw new Error('Failed to fetch Slack workspaces')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch Slack workspaces')
     return response.json()
   }, [apiCall])
 
   const getWorkspace = useCallback(async (workspaceId: string): Promise<SlackWorkspace> => {
     const response = await apiCall(`/slack/workspaces/${workspaceId}`)
-    if (!response.ok) throw new Error('Failed to fetch workspace')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch workspace')
     return response.json()
   }, [apiCall])
 
@@ -98,10 +99,7 @@ export const useSlack = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update workspace')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update workspace')
     return response.json()
   }, [apiCall])
 
@@ -109,20 +107,14 @@ export const useSlack = () => {
     const response = await apiCall(`/slack/workspaces/${workspaceId}`, {
       method: 'DELETE',
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to disconnect workspace')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to disconnect workspace')
   }, [apiCall])
 
   const triggerSync = useCallback(async (workspaceId: string): Promise<{ status: string }> => {
     const response = await apiCall(`/slack/workspaces/${workspaceId}/sync`, {
       method: 'POST',
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to trigger sync')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to trigger sync')
     return response.json()
   }, [apiCall])
 
@@ -133,7 +125,7 @@ export const useSlack = () => {
       ? `/slack/workspaces/${workspaceId}/channels?channel_type=${channelType}`
       : `/slack/workspaces/${workspaceId}/channels`
     const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch channels')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch channels')
     return response.json()
   }, [apiCall])
 
@@ -142,10 +134,7 @@ export const useSlack = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update channel')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update channel')
     return response.json()
   }, [apiCall])
 
@@ -156,7 +145,7 @@ export const useSlack = () => {
     if (search) params.set('search', search)
     const url = `/slack/workspaces/${workspaceId}/users?${params.toString()}`
     const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch users')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch users')
     return response.json()
   }, [apiCall])
 

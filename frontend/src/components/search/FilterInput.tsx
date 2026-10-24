@@ -1,3 +1,5 @@
+import { Input } from '@/components/shared/ui'
+
 const isDateField = (field: string): boolean =>
     field.includes('sent_at') || field.includes('published') || field.includes('created_at')
 
@@ -12,41 +14,28 @@ interface FilterInputProps {
     fieldConfig: any
     value: any
     onChange: (field: string, value: any) => void
+    /** Set by a surrounding `Field`. */
+    id?: string
+    'aria-describedby'?: string
 }
 
-export const FilterInput = ({ field, fieldConfig, value, onChange }: FilterInputProps) => {
-    const baseClassName = "w-full py-1 px-2 border border-slate-200 rounded text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
-
+export const FilterInput = ({ field, fieldConfig, value, onChange, ...wiring }: FilterInputProps) => {
     if (isNumberField(field, fieldConfig)) {
         return (
-            <input
-                value={value || ''}
-                className={baseClassName}
-                type="number"
-                onChange={(e) => onChange(field, parseNumberValue(e.target.value))}
-                placeholder={fieldConfig.description}
-            />
+            <Input {...wiring} value={value || ''} type="number" placeholder={fieldConfig.description}
+                onChange={(e) => onChange(field, parseNumberValue(e.target.value))} />
         )
     }
 
     if (isDateField(field)) {
         return (
-            <input
-                value={value || ''}
-                className={baseClassName}
-                type="date"
-                onChange={(e) => onChange(field, e.target.value || null)}
-            />
+            <Input {...wiring} value={value || ''} type="date"
+                onChange={(e) => onChange(field, e.target.value || null)} />
         )
     }
 
     return (
-        <input
-            value={value || ''}
-            className={baseClassName}
-            type="text"
-            onChange={(e) => onChange(field, e.target.value || null)}
-            placeholder={fieldConfig.description}
-        />
+        <Input {...wiring} value={value || ''} type="text" placeholder={fieldConfig.description}
+            onChange={(e) => onChange(field, e.target.value || null)} />
     )
 }

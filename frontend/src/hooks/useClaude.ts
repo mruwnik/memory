@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth, SERVER_URL, SESSION_COOKIE_NAME } from './useAuth'
 import { useMCP } from './useMCP'
+import { apiError } from './apiError'
 
 // Get auth token from cookies for WebSocket authentication
 const getAuthToken = (): string | null => {
@@ -201,13 +202,13 @@ export const useClaude = () => {
   // Session management
   const listSessions = useCallback(async (): Promise<ClaudeSession[]> => {
     const response = await apiCall('/claude/list')
-    if (!response.ok) throw new Error('Failed to list sessions')
+    if (!response.ok) throw await apiError(response, 'Failed to list sessions')
     return response.json()
   }, [apiCall])
 
   const getSession = useCallback(async (sessionId: string): Promise<ClaudeSession> => {
     const response = await apiCall(`/claude/${sessionId}`)
-    if (!response.ok) throw new Error('Failed to get session')
+    if (!response.ok) throw await apiError(response, 'Failed to get session')
     return response.json()
   }, [apiCall])
 
@@ -216,10 +217,7 @@ export const useClaude = () => {
       method: 'POST',
       body: JSON.stringify(request),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to spawn session')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to spawn session')
     return response.json()
   }, [apiCall])
 
@@ -255,24 +253,24 @@ export const useClaude = () => {
 
   const killSession = useCallback(async (sessionId: string): Promise<void> => {
     const response = await apiCall(`/claude/${sessionId}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to kill session')
+    if (!response.ok) throw await apiError(response, 'Failed to kill session')
   }, [apiCall])
 
   const getAttachInfo = useCallback(async (sessionId: string): Promise<AttachInfo> => {
     const response = await apiCall(`/claude/${sessionId}/attach`)
-    if (!response.ok) throw new Error('Failed to get attach info')
+    if (!response.ok) throw await apiError(response, 'Failed to get attach info')
     return response.json()
   }, [apiCall])
 
   const getOrchestratorStatus = useCallback(async (): Promise<OrchestratorStatus> => {
     const response = await apiCall('/claude/status')
-    if (!response.ok) throw new Error('Failed to get orchestrator status')
+    if (!response.ok) throw await apiError(response, 'Failed to get orchestrator status')
     return response.json()
   }, [apiCall])
 
   const getFleetStats = useCallback(async (): Promise<FleetStats> => {
     const response = await apiCall('/claude/stats')
-    if (!response.ok) throw new Error('Failed to get fleet stats')
+    if (!response.ok) throw await apiError(response, 'Failed to get fleet stats')
     return response.json()
   }, [apiCall])
 
@@ -286,7 +284,7 @@ export const useClaude = () => {
       if (opts.max !== undefined) params.set('max', String(opts.max))
       const qs = params.toString()
       const response = await apiCall(`/claude/stats/history${qs ? `?${qs}` : ''}`)
-      if (!response.ok) throw new Error('Failed to get stats history')
+      if (!response.ok) throw await apiError(response, 'Failed to get stats history')
       return response.json()
     },
     [apiCall]
@@ -295,7 +293,7 @@ export const useClaude = () => {
   // Snapshots (for selecting config when spawning)
   const listSnapshots = useCallback(async (): Promise<Snapshot[]> => {
     const response = await apiCall('/claude/snapshots/list')
-    if (!response.ok) throw new Error('Failed to list snapshots')
+    if (!response.ok) throw await apiError(response, 'Failed to list snapshots')
     return response.json()
   }, [apiCall])
 
@@ -303,7 +301,7 @@ export const useClaude = () => {
   // Admins see all repos, others see only their own
   const listUserRepos = useCallback(async (): Promise<GithubRepoBasic[]> => {
     const response = await apiCall('/github/repos')
-    if (!response.ok) throw new Error('Failed to list GitHub repos')
+    if (!response.ok) throw await apiError(response, 'Failed to list GitHub repos')
     return response.json()
   }, [apiCall])
 
@@ -318,7 +316,7 @@ export const useClaude = () => {
   const getSessionLogs = useCallback(
     async (sessionId: string, tail: number = 200): Promise<SessionLogs> => {
       const response = await apiCall(`/claude/${sessionId}/logs?tail=${tail}`)
-      if (!response.ok) throw new Error('Failed to get session logs')
+      if (!response.ok) throw await apiError(response, 'Failed to get session logs')
       return response.json()
     },
     [apiCall]
@@ -327,13 +325,13 @@ export const useClaude = () => {
   // Environments (persistent Docker volumes)
   const listEnvironments = useCallback(async (): Promise<Environment[]> => {
     const response = await apiCall('/claude/environments/list')
-    if (!response.ok) throw new Error('Failed to list environments')
+    if (!response.ok) throw await apiError(response, 'Failed to list environments')
     return response.json()
   }, [apiCall])
 
   const getEnvironment = useCallback(async (envId: number): Promise<Environment> => {
     const response = await apiCall(`/claude/environments/${envId}`)
-    if (!response.ok) throw new Error('Failed to get environment')
+    if (!response.ok) throw await apiError(response, 'Failed to get environment')
     return response.json()
   }, [apiCall])
 
@@ -343,10 +341,7 @@ export const useClaude = () => {
         method: 'POST',
         body: JSON.stringify(request),
       })
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Failed to create environment')
-      }
+      if (!response.ok) throw await apiError(response, 'Failed to create environment')
       return response.json()
     },
     [apiCall]
@@ -354,10 +349,7 @@ export const useClaude = () => {
 
   const deleteEnvironment = useCallback(async (envId: number): Promise<void> => {
     const response = await apiCall(`/claude/environments/${envId}`, { method: 'DELETE' })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to delete environment')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to delete environment')
   }, [apiCall])
 
   const resetEnvironment = useCallback(
@@ -366,10 +358,7 @@ export const useClaude = () => {
         method: 'POST',
         body: JSON.stringify(request),
       })
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Failed to reset environment')
-      }
+      if (!response.ok) throw await apiError(response, 'Failed to reset environment')
       return response.json()
     },
     [apiCall]

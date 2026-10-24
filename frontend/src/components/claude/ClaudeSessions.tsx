@@ -5,7 +5,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import ClaudeFleetStats, { SessionStatsPanel, sessionDisplay } from './ClaudeFleetStats'
-import { Badge, Button, DetailList, Disclosure, Field, Input, Label, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, DetailList, Disclosure, Field, Input, Label, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -122,6 +122,8 @@ const ClaudeSessions = () => {
   // UI State
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [showNewSession, setShowNewSession] = useState(false)
   const [killingId, setKillingId] = useState<string | null>(null)
   const [spawning, setSpawning] = useState(false)
@@ -202,9 +204,9 @@ const ClaudeSessions = () => {
       } else if (snapshotsData.length > 0) {
         setSelectedConfig({ type: 'snapshot', id: snapshotsData[0].id })
       }
-      setError(null)
+      setLoadError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load data')
+      setLoadError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
     }
@@ -409,7 +411,6 @@ const ClaudeSessions = () => {
   }
 
   const handleKillSession = async (sessionId: string) => {
-    if (!confirm('Kill this session? The container will be stopped and removed.')) return
     setKillingId(sessionId)
     try {
       await killSession(sessionId)
@@ -443,8 +444,9 @@ const ClaudeSessions = () => {
   }
 
   const handleSpawnSession = async () => {
+    setFormError(null)
     if (!selectedConfig) {
-      setError('Please select a snapshot or environment')
+      setFormError('Please select a snapshot or environment')
       return
     }
     setSpawning(true)
@@ -458,19 +460,20 @@ const ClaudeSessions = () => {
       setInitialPrompt('')
       setRunId('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to spawn session')
+      setFormError(e instanceof Error ? e.message : 'Failed to spawn session')
     } finally {
       setSpawning(false)
     }
   }
 
   const handleScheduleSession = async () => {
+    setFormError(null)
     if (!selectedConfig) {
-      setError('Please select a snapshot or environment')
+      setFormError('Please select a snapshot or environment')
       return
     }
     if (!initialPrompt) {
-      setError('Scheduled sessions require an initial prompt')
+      setFormError('Scheduled sessions require an initial prompt')
       return
     }
     setScheduling(true)
@@ -486,7 +489,7 @@ const ClaudeSessions = () => {
       setRunId('')
       setCronExpression('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to schedule session')
+      setFormError(e instanceof Error ? e.message : 'Failed to schedule session')
     } finally {
       setScheduling(false)
     }
@@ -524,7 +527,9 @@ const ClaudeSessions = () => {
       width="full"
       fill
       loading={loading}
-      actions={<Button variant="primary" onClick={handleNewSession}>+ New Session</Button>}
+      error={loadError}
+      onRetry={loadInitialData}
+      actions={<Button variant="primary" onClick={handleNewSession}>New session</Button>}
     >
       <div className="h-full flex flex-col gap-4">
       {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
@@ -543,10 +548,11 @@ const ClaudeSessions = () => {
                 selected={selectedSession?.session_id === session.session_id}
                 badges={<Badge tone={STATUS_TONES[session.status?.toLowerCase() ?? ''] ?? 'neutral'}>{session.status || 'unknown'}</Badge>}
                 actions={
-                  <Button variant="ghost" size="sm" onClick={() => handleKillSession(session.session_id)}
+                  <ConfirmButton variant="ghost" confirm="Kill this session? The container will be stopped and removed."
+                    confirmLabel="Kill session" onConfirm={() => handleKillSession(session.session_id)}
                     disabled={killingId === session.session_id} title="Kill session" aria-label={`Kill session ${session.session_id}`}>
                     {killingId === session.session_id ? '...' : <span aria-hidden="true">&times;</span>}
-                  </Button>
+                  </ConfirmButton>
                 }
               />
             ))}
@@ -811,6 +817,8 @@ const ClaudeSessions = () => {
                       </button>
                     </Notice>
                   )}
+
+                  {formError && <Notice tone="error" onDismiss={() => setFormError(null)}>{formError}</Notice>}
 
                   {/* Actions */}
                   <div className="flex gap-3">

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import { apiError } from './apiError'
 
 export interface TelemetryEvent {
   id: number
@@ -144,9 +145,7 @@ export const useTelemetry = () => {
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/raw?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch telemetry events: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry events')
     return parseJsonResponse<TelemetryRawResponse>(response)
   }, [apiCall])
 
@@ -175,9 +174,7 @@ export const useTelemetry = () => {
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/metrics?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch telemetry metrics: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry metrics')
     return parseJsonResponse<TelemetryMetricsResponse>(response)
   }, [apiCall])
 
@@ -194,9 +191,7 @@ export const useTelemetry = () => {
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/sessions/stats/tool-usage?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch tool usage: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch tool usage')
     return parseJsonResponse<ToolUsageResponse>(response)
   }, [apiCall])
 
@@ -215,9 +210,7 @@ export const useTelemetry = () => {
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/sessions?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch session stats: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch session stats')
     return parseJsonResponse<SessionStatsResponse>(response)
   }, [apiCall])
 
@@ -225,17 +218,13 @@ export const useTelemetry = () => {
     const params = new URLSearchParams()
     if (userId !== undefined) params.set('user_id', userId.toString())
     const response = await apiCall(`/telemetry/api-keys?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch telemetry API keys: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry API keys')
     return parseJsonResponse<TelemetryApiKey[]>(response)
   }, [apiCall])
 
   const getUsersWithTelemetry = useCallback(async (): Promise<TelemetryUser[]> => {
     const response = await apiCall('/telemetry/users')
-    if (!response.ok) {
-      throw new Error(`Failed to fetch telemetry users: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry users')
     return parseJsonResponse<TelemetryUser[]>(response)
   }, [apiCall])
 

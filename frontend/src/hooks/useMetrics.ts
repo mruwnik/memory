@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import { apiError } from './apiError'
 
 // API response types
 export interface MetricSummaryItem {
@@ -91,9 +92,7 @@ export const useMetrics = () => {
     if (name) params.set('name', name)
 
     const response = await apiCall(`/api/metrics/summary?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch metrics summary: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch metrics summary')
     return parseJsonResponse<MetricsSummaryResponse>(response)
   }, [apiCall])
 
@@ -108,9 +107,7 @@ export const useMetrics = () => {
     if (name) params.set('name', name)
 
     const response = await apiCall(`/api/metrics/tasks?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch task metrics: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch task metrics')
     return parseJsonResponse<TaskMetricsResponse>(response)
   }, [apiCall])
 
@@ -125,9 +122,7 @@ export const useMetrics = () => {
     if (name) params.set('name', name)
 
     const response = await apiCall(`/api/metrics/mcp?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch MCP metrics: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch MCP metrics')
     return parseJsonResponse<McpMetricsResponse>(response)
   }, [apiCall])
 
@@ -140,9 +135,7 @@ export const useMetrics = () => {
     if (name) params.set('name', name)
 
     const response = await apiCall(`/api/metrics/system?${params}`)
-    if (!response.ok) {
-      throw new Error(`Failed to fetch system metrics: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch system metrics')
     return parseJsonResponse<SystemMetricsResponse>(response)
   }, [apiCall])
 

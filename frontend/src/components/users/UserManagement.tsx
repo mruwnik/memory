@@ -7,7 +7,8 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Badge, Button, EmptyState, Field, Input, Label, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
+import { Badge, Button, EmptyState, Field, FormActions, Input, Label, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
+import { NewApiKey } from './NewApiKey'
 
 interface UserFormData {
   name: string
@@ -164,12 +165,9 @@ const UserManagement = () => {
     }
   }
 
-  const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch (e) {
-      console.error('Failed to copy:', e)
-    }
+  const closeApiKeyModal = () => {
+    setApiKeyUser(null)
+    setNewApiKey(null)
   }
 
   const toggleScope = (scopes: string[], scope: string): string[] => {
@@ -208,7 +206,7 @@ const UserManagement = () => {
                 title={<>{user.name}{user.id === currentUser?.id && <span className="ml-2 text-xs font-normal text-slate-500">(you)</span>}</>}
                 badges={<>
                   <Badge tone={user.user_type === 'human' ? 'info' : 'primary'}>{user.user_type === 'human' ? 'Human' : 'Bot'}</Badge>
-                  {user.scopes.map(scope => <Badge key={scope}>{scope}</Badge>)}
+                  {user.scopes.map(scope => <Badge key={scope}>{scope === '*' ? 'All permissions' : scope}</Badge>)}
                 </>}
                 meta={[user.email, user.api_key_count > 0 && 'Has API key configured']}
                 actions={<>
@@ -429,65 +427,25 @@ const UserManagement = () => {
 
       {/* API Key Modal */}
       {apiKeyUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md m-4">
-            {!newApiKey ? (
-              <>
-                <h3 className="text-lg font-semibold text-slate-800 mb-4">
-                  {apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'} API Key
-                </h3>
-
-                <p className="text-sm text-slate-600 mb-4">
-                  {apiKeyUser.api_key_count > 0
-                    ? `Are you sure you want to regenerate the API key for ${apiKeyUser.name}? The current key will be invalidated.`
-                    : `Generate an API key for ${apiKeyUser.name}.`}
-                </p>
-
-                <div className="flex justify-end gap-3">
-                  <Button
-                    onClick={() => setApiKeyUser(null)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button variant="primary"
-                    onClick={handleRegenerateApiKey}
-                    disabled={apiKeyLoading}
-                  >
-                    {apiKeyLoading ? 'Generating...' : apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'}
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h3 className="text-lg font-semibold text-slate-800 mb-4">New API Key Generated</h3>
-
-                <p className="text-sm text-slate-600 mb-4">
-                  Copy the API key now. It won't be shown again.
-                </p>
-
-                <div className="bg-slate-100 p-3 rounded-lg mb-4">
-                  <code className="text-sm text-slate-800 break-all">{newApiKey}</code>
-                </div>
-
-                <div className="flex justify-end gap-3">
-                  <Button
-                    onClick={() => copyToClipboard(newApiKey)}
-                  >
-                    Copy
-                  </Button>
-                  <Button variant="primary"
-                    onClick={() => {
-                      setApiKeyUser(null)
-                      setNewApiKey(null)
-                    }}
-                  >
-                    Done
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <Modal size="md" onClose={newApiKey ? undefined : closeApiKeyModal}
+          title={newApiKey ? 'New API Key Generated' : `${apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'} API Key`}>
+          {newApiKey ? <NewApiKey apiKey={newApiKey} onDone={closeApiKeyModal} /> : (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">
+                {apiKeyUser.api_key_count > 0
+                  ? `Are you sure you want to regenerate the API key for ${apiKeyUser.name}? The current key will be invalidated.`
+                  : `Generate an API key for ${apiKeyUser.name}.`}
+              </p>
+              <FormActions>
+                <Button onClick={closeApiKeyModal}>Cancel</Button>
+                <Button variant={apiKeyUser.api_key_count > 0 ? 'dangerSolid' : 'primary'}
+                  onClick={handleRegenerateApiKey} disabled={apiKeyLoading}>
+                  {apiKeyLoading ? 'Generating...' : apiKeyUser.api_key_count > 0 ? 'Regenerate' : 'Generate'}
+                </Button>
+              </FormActions>
+            </div>
+          )}
+        </Modal>
       )}
     </>
   )

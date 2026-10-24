@@ -43,7 +43,7 @@ Usage:
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, runtime_checkable
 
 from memory.common.db.connection import DBSession, make_session
@@ -77,8 +77,11 @@ class VisibilityChecker(Protocol):
 # Type alias for checker functions
 VisibilityCheckerFunc = Callable[[dict, DBSession | None], Awaitable[bool]]
 
-# Registry: mounted tool name (e.g. "people_fetch") -> checker
-_visibility_checkers: dict[str, VisibilityCheckerFunc] = {}
+# Registry: mounted tool name (e.g. "people_fetch") -> (listing checker, call checker)
+_visibility_checkers: dict[str, tuple[VisibilityCheckerFunc, VisibilityCheckerFunc]] = {}
+
+# Checkers that only decide whether a tool is worth listing, never who may call it.
+_listing_only: set[VisibilityCheckerFunc] = set()
 
 
 def tool_key(func: Callable) -> str:
@@ -92,8 +95,12 @@ def tool_key(func: Callable) -> str:
     return f"{func.__module__.rsplit('.', 1)[-1]}_{func.__name__}"
 
 
-def register_visibility(tool_name: str, checker: VisibilityCheckerFunc) -> None:
-    """Register a visibility checker under a mounted tool name.
+def register_visibility(
+    tool_name: str,
+    checker: VisibilityCheckerFunc,
+    call_checker: VisibilityCheckerFunc | None = None,
+) -> None:
+    """Register a tool's listing checker, and its call checker if that differs.
 
     Raises ValueError on a second registration for the same name, so a
     collision fails at import instead of silently replacing a checker.
@@ -101,12 +108,19 @@ def register_visibility(tool_name: str, checker: VisibilityCheckerFunc) -> None:
     if tool_name in _visibility_checkers:
         raise ValueError(f"Visibility checker already registered for {tool_name}")
     logger.debug(f"Registering visibility checker for tool: {tool_name}")
-    _visibility_checkers[tool_name] = checker
+    _visibility_checkers[tool_name] = (checker, call_checker or checker)
 
 
 def get_visibility_checker(tool_name: str) -> VisibilityCheckerFunc | None:
-    """Get the checker for a mounted tool name, or None if none is registered."""
-    return _visibility_checkers.get(tool_name)
+    """The checker deciding whether a tool is listed, or None if none is registered."""
+    entry = _visibility_checkers.get(tool_name)
+    return entry and entry[0]
+
+
+def get_call_checker(tool_name: str) -> VisibilityCheckerFunc | None:
+    """The checker deciding whether a tool may be called, or None if none is registered."""
+    entry = _visibility_checkers.get(tool_name)
+    return entry and entry[1]
 
 
 # --- Common checker factories ---
@@ -147,7 +161,9 @@ def require_scopes(*scopes: str) -> VisibilityCheckerFunc:
 def has_items(model_class: type) -> VisibilityCheckerFunc:
     """Create a checker that returns True only if items of this model exist.
 
-    Use this to hide tools when there's no data to operate on.
+    Use this to hide tools when there's no data to operate on. It only
+    affects listing: the table is global, not per-user, so an empty one
+    says nothing about access, and a call still returns empty results.
 
     Args:
         model_class: SQLAlchemy model class to check for existence
@@ -171,10 +187,23 @@ def has_items(model_class: type) -> VisibilityCheckerFunc:
         return await asyncio.to_thread(_sync_check)
 
     checker.__name__ = f"has_items({model_class.__name__})"
+    _listing_only.add(checker)
     return checker
 
 
 # --- Decorator ---
+
+
+def combine(checkers: Sequence[VisibilityCheckerFunc]) -> VisibilityCheckerFunc:
+    """A checker that passes when every one of ``checkers`` does, stopping at the first failure."""
+
+    async def combined(user_info: dict, session: DBSession | None) -> bool:
+        for checker in checkers:
+            if not await checker(user_info, session):
+                return False
+        return True
+
+    return combined
 
 
 def visible_when(*checkers: VisibilityCheckerFunc):
@@ -221,13 +250,15 @@ def visible_when(*checkers: VisibilityCheckerFunc):
             register_visibility(tool_key(func), always_public)
             return func
 
-        async def combined(user_info: dict, session: DBSession | None) -> bool:
-            for checker in checkers:
-                if not await checker(user_info, session):
-                    return False
-            return True
-
-        register_visibility(tool_key(func), combined)
+        call_checkers = [c for c in checkers if c not in _listing_only]
+        if not call_checkers:
+            # Otherwise the call checker would pass everyone.
+            raise ValueError(
+                f"{tool_key(func)}: has_items only hides a tool; add a checker that authorizes calls"
+            )
+        register_visibility(
+            tool_key(func), combine(checkers), combine(call_checkers)
+        )
         return func
 
     return decorator

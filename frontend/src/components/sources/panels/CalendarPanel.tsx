@@ -3,7 +3,7 @@ import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { SourceRow, TagsInput, IntervalInput } from '../shared'
-import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select } from '@/components/shared/ui'
+import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 interface GroupedEvents {
@@ -26,6 +26,7 @@ export const CalendarPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<CalendarAccount | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -75,20 +76,20 @@ export const CalendarPanel = () => {
     }
   }
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = (id: number) => run(async () => {
     await deleteCalendarAccount(id)
     loadData()
-  }
+  })
 
-  const handleToggleActive = async (account: CalendarAccount) => {
+  const handleToggleActive = (account: CalendarAccount) => run(async () => {
     await updateCalendarAccount(account.id, { active: !account.active })
     loadData()
-  }
+  })
 
-  const handleSync = async (id: number) => {
+  const handleSync = (id: number) => run(async () => {
     await syncCalendarAccount(id)
     loadData()
-  }
+  }, 'Sync queued')
 
   const getEventsForAccount = (accountId: number): GroupedEvents => {
     return events
@@ -116,6 +117,7 @@ export const CalendarPanel = () => {
 
   return (
     <Section title="Calendar Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Calendar</Button>}>
+      {notice}
       {accounts.length === 0 ? (
         <EmptyState
           message="No calendar accounts configured"
@@ -298,7 +300,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
             </Field>
 
             <Field label={<>
-                Password {account && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+                Password {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
               <Input
                 type="password"
                 value={formData.caldav_password}

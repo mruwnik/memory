@@ -3,6 +3,7 @@ import { useAgents, type AgentDefinition } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { StatusBadge } from './StatusBadge'
 import { Badge, ButtonLink, EmptyState, List, Page, Row } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`
 
@@ -46,7 +47,7 @@ export default function AgentsPage() {
               meta={[
                 <span className="font-mono">{d.spec.model}</span>,
                 d.last_run && `Last run ${formatRelativeTime(d.last_run.created_at)}`,
-                d.last_run && `$${d.last_run.cost_usd}`,
+                d.last_run && formatCost(d.last_run.cost_usd),
               ]}
             >
               {d.description && <p className="text-slate-600">{d.description}</p>}

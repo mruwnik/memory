@@ -107,6 +107,56 @@ def test_has_items_checker_name():
     assert checker.__name__ == "has_items(FakeModel)"
 
 
+@pytest.fixture
+def empty_tool(mock_session):
+    """A scoped tool gated on has_items over an empty table."""
+    mock_session.query.return_value.limit.return_value.count.return_value = 0
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+
+    @visible_when(require_scopes("read"), has_items(FakeModel))
+    def list_things():
+        pass
+
+    tool = MagicMock(spec=Tool)
+    tool.name = tool.key = tool_key(list_things)
+    with (
+        patch("memory.api.MCP.visibility.make_session", return_value=mock_session),
+        patch("memory.api.MCP.visibility_middleware.make_session"),
+    ):
+        yield tool
+
+
+def test_has_items_alone_is_rejected():
+    with pytest.raises(ValueError, match="authorizes calls"):
+
+        @visible_when(has_items(FakeModel))
+        def unguarded():
+            pass
+
+
+@pytest.mark.asyncio
+async def test_empty_has_items_hides_tool_from_listing(empty_tool):
+    middleware = VisibilityMiddleware(get_user_info=lambda: {"scopes": ["*"]})
+    call_next = AsyncMock(return_value=[empty_tool])
+
+    assert await middleware.on_list_tools(MagicMock(), call_next) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scopes", [["*"], ["read"]])
+async def test_empty_has_items_still_allows_scoped_calls(empty_tool, scopes):
+    """An empty table means "nothing to list yet", not "access denied"."""
+    middleware = VisibilityMiddleware(get_user_info=lambda: {"scopes": scopes})
+    context = MagicMock()
+    context.message.name = empty_tool.key
+    call_next = AsyncMock()
+
+    await middleware.on_call_tool(context, call_next)
+
+    call_next.assert_awaited_once()
+
+
 # --- visible_when decorator tests ---
 
 

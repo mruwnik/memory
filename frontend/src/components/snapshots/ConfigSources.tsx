@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useClaude, Snapshot, Environment, CreateEnvironmentRequest } from '../../hooks/useClaude'
+import { apiError } from '../../hooks/apiError'
 import { Badge, Button, ConfirmButton, EmptyState, Field, Input, Label, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, Select, Tabs, Textarea, ToggleGroup, type Tone, Toolbar } from '@/components/shared/ui'
 
 interface SnapshotSummary {
@@ -37,10 +38,12 @@ const ConfigSources = () => {
   const [newEnvSnapshotId, setNewEnvSnapshotId] = useState<number | null>(null)
   const [newEnvSourceEnvId, setNewEnvSourceEnvId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<{ field?: boolean; message: string } | null>(null)
 
   // Reset environment modal state
   const [resettingEnvId, setResettingEnvId] = useState<number | null>(null)
   const [resetSnapshotId, setResetSnapshotId] = useState<number | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -70,7 +73,7 @@ const ConfigSources = () => {
         method: 'DELETE',
         credentials: 'include',
       })
-      if (!response.ok) throw new Error('Failed to delete snapshot')
+      if (!response.ok) throw await apiError(response, 'Failed to delete snapshot')
       loadData()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete snapshot')
@@ -91,13 +94,24 @@ const ConfigSources = () => {
     }
   }
 
+  const closeCreateModal = () => {
+    setShowCreateModal(false)
+    setNewEnvName('')
+    setNewEnvDescription('')
+    setNewEnvSourceType('empty')
+    setNewEnvSnapshotId(null)
+    setNewEnvSourceEnvId(null)
+    setCreateError(null)
+  }
+
   const handleCreateEnvironment = async () => {
     if (!newEnvName.trim()) {
-      setError('Environment name is required')
+      setCreateError({ field: true, message: 'Environment name is required' })
       return
     }
 
     setCreating(true)
+    setCreateError(null)
     try {
       const request: CreateEnvironmentRequest = {
         name: newEnvName.trim(),
@@ -106,15 +120,10 @@ const ConfigSources = () => {
         source_environment_id: newEnvSourceType === 'environment' ? (newEnvSourceEnvId || undefined) : undefined,
       }
       await createEnvironment(request)
-      setShowCreateModal(false)
-      setNewEnvName('')
-      setNewEnvDescription('')
-      setNewEnvSourceType('empty')
-      setNewEnvSnapshotId(null)
-      setNewEnvSourceEnvId(null)
+      closeCreateModal()
       loadData()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create environment')
+      setCreateError({ message: e instanceof Error ? e.message : 'Failed to create environment' })
     } finally {
       setCreating(false)
     }
@@ -122,16 +131,20 @@ const ConfigSources = () => {
 
   const handleResetEnvironment = async () => {
     if (!resettingEnvId) return
-    if (!confirm('Are you sure you want to reset this environment? All current data will be lost.')) return
-
+    setResetError(null)
     try {
       await resetEnvironment(resettingEnvId, { snapshot_id: resetSnapshotId || undefined })
-      setResettingEnvId(null)
-      setResetSnapshotId(null)
+      closeResetModal()
       loadData()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to reset environment')
+      setResetError(e instanceof Error ? e.message : 'Failed to reset environment')
     }
+  }
+
+  const closeResetModal = () => {
+    setResettingEnvId(null)
+    setResetSnapshotId(null)
+    setResetError(null)
   }
 
   const formatSize = (bytes: number | null) => {
@@ -167,7 +180,7 @@ const ConfigSources = () => {
   return (
     <Page
       title="Claude Configurations"
-      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>}
+      actions={activeTab === 'environments' && <Button variant="primary" onClick={() => setShowCreateModal(true)}>New environment</Button>}
       width="wide"
     >
       <Tabs label="Sections" value={activeTab} onChange={setActiveTab} options={[{ value: 'environments', label: <>Environments ({environments.length})</> }, { value: 'snapshots', label: <>Snapshots ({snapshots.length})</> }]} />
@@ -290,16 +303,10 @@ const ConfigSources = () => {
 
       {/* Create Environment Modal */}
       {showCreateModal && (
-        <Modal title="Create Environment" onClose={() => {
-                  setShowCreateModal(false)
-                  setNewEnvName('')
-                  setNewEnvDescription('')
-                  setNewEnvSourceType('empty')
-                  setNewEnvSnapshotId(null)
-                  setNewEnvSourceEnvId(null)
-                }} size="md">
+        <Modal title="Create Environment" onClose={closeCreateModal} size="md">
           <div className="space-y-4">
-              <Field label="Name *">
+              {createError && !createError.field && <Notice tone="error">{createError.message}</Notice>}
+              <Field label="Name *" error={createError?.field ? createError.message : null}>
                 <Input
                   type="text"
                   value={newEnvName}
@@ -358,18 +365,7 @@ const ConfigSources = () => {
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
-              <Button
-                onClick={() => {
-                  setShowCreateModal(false)
-                  setNewEnvName('')
-                  setNewEnvDescription('')
-                  setNewEnvSourceType('empty')
-                  setNewEnvSnapshotId(null)
-                  setNewEnvSourceEnvId(null)
-                }}
-              >
-                Cancel
-              </Button>
+              <Button onClick={closeCreateModal}>Cancel</Button>
               <Button variant="primary"
                 onClick={handleCreateEnvironment}
                 disabled={creating || !newEnvName.trim()}
@@ -382,13 +378,12 @@ const ConfigSources = () => {
 
       {/* Reset Environment Modal */}
       {resettingEnvId !== null && (
-        <Modal title="Reset Environment" onClose={() => {
-                  setResettingEnvId(null)
-                  setResetSnapshotId(null)
-                }} size="md">
+        <Modal title="Reset Environment" onClose={closeResetModal} size="md">
           <p className="text-sm text-slate-600 mb-4">
               This will delete all current data in the environment and optionally reinitialize from a snapshot.
+              It can't be undone.
             </p>
+            {resetError && <Notice tone="error" className="mb-4">{resetError}</Notice>}
 
             <Field label="Reinitialize from Snapshot">
               <Select
@@ -405,14 +400,7 @@ const ConfigSources = () => {
             </Field>
 
             <div className="flex justify-end gap-3 mt-6">
-              <Button
-                onClick={() => {
-                  setResettingEnvId(null)
-                  setResetSnapshotId(null)
-                }}
-              >
-                Cancel
-              </Button>
+              <Button onClick={closeResetModal}>Cancel</Button>
               <Button variant="dangerSolid"
                 onClick={handleResetEnvironment}
               >

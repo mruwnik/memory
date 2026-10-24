@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import { apiError } from './apiError'
 
 // Types for Secrets
 export interface Secret {
@@ -30,10 +31,7 @@ export const useSecrets = () => {
 
   const listSecrets = useCallback(async (): Promise<Secret[]> => {
     const response = await apiCall('/secrets')
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to list secrets')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to list secrets')
     return response.json()
   }, [apiCall])
 
@@ -42,10 +40,7 @@ export const useSecrets = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create secret')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create secret')
     return response.json()
   }, [apiCall])
 
@@ -54,27 +49,18 @@ export const useSecrets = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update secret')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update secret')
     return response.json()
   }, [apiCall])
 
   const deleteSecret = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/secrets/${id}`, { method: 'DELETE' })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to delete secret')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to delete secret')
   }, [apiCall])
 
   const getSecretValue = useCallback(async (id: number): Promise<SecretWithValue> => {
     const response = await apiCall(`/secrets/${id}/value`)
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to get secret value')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to get secret value')
     return response.json()
   }, [apiCall])
 

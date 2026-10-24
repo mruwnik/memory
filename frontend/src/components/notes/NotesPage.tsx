@@ -64,7 +64,7 @@ const FolderNode = ({
           className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-sm"
           style={{ paddingLeft: `${paddingLeft + 12}px` }}
         >
-          <span className="text-slate-400 w-4">
+          <span className="text-slate-500 w-4">
             {isExpanded ? '▼' : '▶'}
           </span>
           <span className="text-amber-600">📁</span>
@@ -102,7 +102,7 @@ const FolderNode = ({
                 }`}
                 style={{ paddingLeft: `${(name ? depth + 1 : depth) * 16 + 12 + 16}px` }}
               >
-                <span className="text-slate-400">📄</span>
+                <span className="text-slate-500">📄</span>
                 <span>{fileName}</span>
               </button>
             )

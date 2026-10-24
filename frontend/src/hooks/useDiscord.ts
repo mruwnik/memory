@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import { useMCP } from './useMCP'
+import { apiError } from './apiError'
 
 // Types for Discord Bots
 // Note: IDs are strings to avoid JavaScript precision loss on large Discord snowflake IDs
@@ -89,7 +90,7 @@ export const useDiscord = () => {
   const listBots = useCallback(async (userId?: number): Promise<DiscordBot[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/discord/bots${params}`)
-    if (!response.ok) throw new Error('Failed to fetch Discord bots')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch Discord bots')
     return response.json()
   }, [apiCall])
 
@@ -98,10 +99,7 @@ export const useDiscord = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create Discord bot')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create Discord bot')
     return response.json()
   }, [apiCall])
 
@@ -110,10 +108,7 @@ export const useDiscord = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update Discord bot')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update Discord bot')
     return response.json()
   }, [apiCall])
 
@@ -121,15 +116,12 @@ export const useDiscord = () => {
     const response = await apiCall(`/discord/bots/${botId}`, {
       method: 'DELETE',
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to delete Discord bot')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to delete Discord bot')
   }, [apiCall])
 
   const getBotHealth = useCallback(async (botId: string): Promise<{ bot_id: string; connected: boolean }> => {
     const response = await apiCall(`/discord/bots/${botId}/health`)
-    if (!response.ok) throw new Error('Failed to get bot health')
+    if (!response.ok) throw await apiError(response, 'Failed to get bot health')
     return response.json()
   }, [apiCall])
 
@@ -137,16 +129,13 @@ export const useDiscord = () => {
     const response = await apiCall(`/discord/bots/${botId}/refresh`, {
       method: 'POST',
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to refresh metadata')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to refresh metadata')
     return response.json()
   }, [apiCall])
 
   const getBotInviteUrl = useCallback(async (botId: string): Promise<{ invite_url: string }> => {
     const response = await apiCall(`/discord/bots/${botId}/invite`)
-    if (!response.ok) throw new Error('Failed to get bot invite URL')
+    if (!response.ok) throw await apiError(response, 'Failed to get bot invite URL')
     return response.json()
   }, [apiCall])
 
@@ -154,7 +143,7 @@ export const useDiscord = () => {
 
   const listBotUsers = useCallback(async (botId: string): Promise<BotUser[]> => {
     const response = await apiCall(`/discord/bots/${botId}/users`)
-    if (!response.ok) throw new Error('Failed to fetch bot users')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch bot users')
     return response.json()
   }, [apiCall])
 
@@ -163,10 +152,7 @@ export const useDiscord = () => {
       method: 'POST',
       body: JSON.stringify({ user_id: userId }),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to add user to bot')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to add user to bot')
     return response.json()
   }, [apiCall])
 
@@ -174,10 +160,7 @@ export const useDiscord = () => {
     const response = await apiCall(`/discord/bots/${botId}/users/${userId}`, {
       method: 'DELETE',
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to remove user from bot')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to remove user from bot')
     return response.json()
   }, [apiCall])
 
@@ -186,7 +169,7 @@ export const useDiscord = () => {
   const listServers = useCallback(async (botId?: string): Promise<DiscordServer[]> => {
     const url = botId ? `/discord/servers?bot_id=${botId}` : '/discord/servers'
     const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch Discord servers')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch Discord servers')
     return response.json()
   }, [apiCall])
 
@@ -195,10 +178,7 @@ export const useDiscord = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update Discord server')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update Discord server')
     return response.json()
   }, [apiCall])
 
@@ -237,10 +217,7 @@ export const useDiscord = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update Discord channel')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update Discord channel')
     return response.json()
   }, [apiCall])
 

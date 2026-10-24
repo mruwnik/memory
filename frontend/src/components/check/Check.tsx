@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useCheck, PAGE_LIMIT, CheckJob, CheckMode, CheckStatus, AskBody } from '@/hooks/useCheck'
 import { formatRelativeTime } from '@/components/sources/shared'
-import { Badge, Button, ConfirmButton, EmptyState, Field, FormActions, Hint, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, Field, FormActions, Hint, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
 
 const STATUS_TONES: Record<CheckStatus, Tone> = {
   queued: 'warning',
@@ -198,7 +198,7 @@ const AskForm = ({ onAsk, onCancel, saving, error }: AskFormProps) => {
 
 interface JobRowProps {
   job: CheckJob
-  onDelete: (jobId: string) => Promise<void>
+  onDelete: (jobId: string) => Promise<unknown>
 }
 
 const JobRow = ({ job, onDelete }: JobRowProps) => {
@@ -218,7 +218,7 @@ const JobRow = ({ job, onDelete }: JobRowProps) => {
         `Asked ${formatRelativeTime(job.submitted_at)}`,
         job.completed_at && `Answered ${formatRelativeTime(job.completed_at)}`,
       ]}
-      actions={<ConfirmButton confirm="Delete this question?" onConfirm={() => onDelete(job.job_id).catch(() => {})} />}
+      actions={<ConfirmButton confirm="Delete this question?" onConfirm={() => onDelete(job.job_id)} />}
     >
       {result && <AnswerView result={result} />}
       {job.status === 'error' && job.error && <RowError>{job.error}</RowError>}
@@ -249,6 +249,7 @@ const Check = () => {
   const [showAsk, setShowAsk] = useState(false)
   const [asking, setAsking] = useState(false)
   const [askError, setAskError] = useState<string | null>(null)
+  const { run, notice } = useActionNotice()
 
   // Always fetch the full list; filtering happens client-side for display so
   // the header counts stay accurate and switching tabs doesn't refetch/flash.
@@ -289,10 +290,10 @@ const Check = () => {
     }
   }
 
-  const handleDelete = async (jobId: string) => {
+  const handleDelete = (jobId: string) => run(async () => {
     await deleteJob(jobId)
     setJobs(prev => prev.filter(j => j.job_id !== jobId))
-  }
+  })
 
   // Counts come from the full set; the displayed list is filtered in-memory.
   const answeredCount = jobs.filter(j => j.status === 'ok').length
@@ -312,7 +313,7 @@ const Check = () => {
         {pendingCount > 0 && <span>{pendingCount}{countSuffix} pending</span>}
         <span>{answeredCount}{countSuffix} answered</span>
       </span>}
-      actions={<Button variant="primary" onClick={() => setShowAsk(true)}>+ New question</Button>}
+      actions={<Button variant="primary" onClick={() => setShowAsk(true)}>New question</Button>}
       width="wide"
     >
       {showAsk && <AskForm onAsk={handleAsk} onCancel={() => setShowAsk(false)} saving={asking} error={askError} />}
@@ -322,6 +323,7 @@ const Check = () => {
       </Toolbar>
 
       {error && <Notice tone="error" onRetry={() => loadJobs()}>{error}</Notice>}
+      {notice}
 
       {!loading && atCap && <Hint>Showing the {PAGE_LIMIT} most recent questions.</Hint>}
 

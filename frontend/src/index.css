@@ -13,7 +13,11 @@
   body {
     @apply font-sans leading-relaxed text-slate-800 bg-slate-50;
   }
+  /* The browser default is 13px, too small to tap. */
   input[type="checkbox"], input[type="radio"] {
     accent-color: var(--color-primary);
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import { useMCP } from './useMCP'
+import { apiError } from './apiError'
 
 export interface Report {
   id: number
@@ -78,10 +79,7 @@ export const useReports = () => {
       method: 'POST',
       body: formData,
     })
-    if (!response.ok) {
-      const data = await response.json()
-      throw new Error(data.detail || 'Upload failed')
-    }
+    if (!response.ok) throw await apiError(response, 'Upload failed')
     return response.json()
   }, [apiCall])
 

@@ -43,15 +43,6 @@ describe('useDockerLogs.listContainers', () => {
   })
 
   it('falls back to status message when error body is not JSON', async () => {
-    route(() =>
-      mockResponse({
-        status: 502,
-        ok: false,
-        text: 'gateway',
-        // no json -> json() throws -> .catch fallback {detail:'Unknown error'}
-      }),
-    )
-    // Make json() reject to exercise the .catch branch.
     const fetchMock = mockFetch(async (input) => {
       if (String(input).endsWith('/auth/me')) return mockResponse({ json: {} })
       const bad = mockResponse({ status: 502 })
@@ -61,7 +52,7 @@ describe('useDockerLogs.listContainers', () => {
       return bad
     })
     const { result } = renderHook(() => useDockerLogs())
-    await expect(result.current.listContainers()).rejects.toThrow('Unknown error')
+    await expect(result.current.listContainers()).rejects.toThrow('Failed to fetch containers (502)')
     expect(fetchMock).toHaveBeenCalled()
   })
 

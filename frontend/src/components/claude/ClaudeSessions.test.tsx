@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@/test/utils'
+import { render, screen, waitFor, within } from '@/test/utils'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import type { ClaudeSession, Snapshot, Environment, AttachInfo } from '@/hooks/useClaude'
@@ -118,7 +118,6 @@ const attach: AttachInfo = {
 beforeEach(() => {
   localStorage.clear()
   vi.stubGlobal('WebSocket', FakeWS as unknown as typeof WebSocket)
-  vi.stubGlobal('confirm', vi.fn(() => true))
   listSessions.mockReset().mockResolvedValue([])
   killSession.mockReset().mockResolvedValue(undefined)
   spawnSession.mockReset().mockResolvedValue(session({ session_id: 'u1-e3-new' }))
@@ -169,7 +168,7 @@ describe('ClaudeSessions', () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Session' }))
+    await user.click(screen.getByRole('button', { name: 'New session' }))
     expect(screen.getByText('Start New Session')).toBeInTheDocument()
     expect(screen.getByText('Configuration *')).toBeInTheDocument()
   })
@@ -180,7 +179,7 @@ describe('ClaudeSessions', () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Session' }))
+    await user.click(screen.getByRole('button', { name: 'New session' }))
     expect(screen.getByText('No snapshots or environments available')).toBeInTheDocument()
   })
 
@@ -188,7 +187,7 @@ describe('ClaudeSessions', () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Session' }))
+    await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.click(screen.getByRole('button', { name: 'Start Session' }))
     await waitFor(() => expect(spawnSession).toHaveBeenCalled())
     expect(spawnSession.mock.calls[0][0]).toMatchObject({ environment_id: 3 })
@@ -198,7 +197,7 @@ describe('ClaudeSessions', () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Session' }))
+    await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.type(screen.getByPlaceholderText('0 9 * * *'), '0 9 * * *')
     expect(screen.getByText('An initial prompt is required for scheduled sessions.')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Schedule Recurring Session' }))
@@ -210,7 +209,7 @@ describe('ClaudeSessions', () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Session' }))
+    await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.type(screen.getByPlaceholderText('Start Claude with this prompt...'), 'do work')
     await user.click(screen.getByRole('button', { name: 'Daily 9am' }))
     await user.click(screen.getByRole('button', { name: 'Schedule Recurring Session' }))
@@ -222,7 +221,7 @@ describe('ClaudeSessions', () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet Overview')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '+ New Session' }))
+    await user.click(screen.getByRole('button', { name: 'New session' }))
     const bashToggle = screen.getByRole('checkbox', { name: 'Bash' })
     expect(bashToggle).toBeChecked()
     await user.click(bashToggle)
@@ -246,16 +245,18 @@ describe('ClaudeSessions', () => {
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('u1-e3-abc')).toBeInTheDocument())
     await user.click(screen.getByTitle('Kill session'))
-    expect(confirm).toHaveBeenCalled()
+    expect(killSession).not.toHaveBeenCalled()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Kill session' }))
     await waitFor(() => expect(killSession).toHaveBeenCalledWith('u1-e3-abc'))
   })
 
-  it('dismisses the error banner', async () => {
-    listEnvironments.mockRejectedValue(new Error('boom err'))
+  it('replaces the page with the load error and retries it', async () => {
+    listEnvironments.mockRejectedValueOnce(new Error('Orchestrator not configured'))
     const user = userEvent.setup()
     renderClaude('/ui/claude')
-    await waitFor(() => expect(screen.getByText('boom err')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(screen.queryByText('boom err')).not.toBeInTheDocument()
+    expect(await screen.findByText('Orchestrator not configured')).toBeInTheDocument()
+    expect(screen.queryByText('No active sessions')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Fleet Overview')).toBeInTheDocument()
   })
 })

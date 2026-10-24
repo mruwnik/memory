@@ -72,7 +72,7 @@ describe('useJournal.addJournalEntry', () => {
       })
     })
     const { result } = renderHook(() => useJournal())
-    await expect(result.current.addJournalEntry(1, 'x')).rejects.toThrow('tool error')
+    await expect(result.current.addJournalEntry(1, 'x')).rejects.toThrow('nope')
     expect(fetchMock).toHaveBeenCalled()
   })
 })

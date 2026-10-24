@@ -199,7 +199,7 @@ const ReportsPage = () => {
       title="Reports"
       width="full"
       fill
-      actions={<Button variant="primary" onClick={() => { resetForm(); setShowForm(true) }}>New Report</Button>}
+      actions={<Button variant="primary" onClick={() => { resetForm(); setShowForm(true) }}>New report</Button>}
     >
       <SplitView
         listTitle={<>

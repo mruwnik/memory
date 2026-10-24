@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody, CreateTaskBody } from '@/hooks/useScheduledTasks'
 import { useClaude, Environment } from '@/hooks/useClaude'
 import { useDiscord } from '@/hooks/useDiscord'
 import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
 import Combobox, { ComboOption } from '@/components/shared/Combobox'
-import { StatusBadge, formatRelativeTime } from '@/components/sources/shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
+import { PauseButton, StatusBadge, formatRelativeTime } from '@/components/sources/shared'
+import { Badge, Button, ButtonLink, Checkbox, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
 
 type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
 
@@ -298,24 +298,26 @@ const NotificationFields = ({ channel, target, onChannel, onTarget }: Notificati
           ))}
         </Select>
       </Field>
-      <Field label="Target" hint={channel === 'email' && "Email address (or a person's name to look up)."}>
+      <div className="space-y-2">
+        <Field label="Target" hint={channel === 'email' && "Email address (or a person's name to look up)."}>
+          {!channel && <Input type="text" value="" disabled placeholder="Select a channel first" />}
+          {channel === 'email' && (
+            <Input type="email" value={target} onChange={e => onTarget(e.target.value)} placeholder="you@example.com" />
+          )}
+          {isChat && mode === 'channel' && (
+            <Combobox value={target} onChange={v => onTarget(v)} options={channelOptions} loading={loadingChannels}
+              allowCustom placeholder={`Search ${channel} channels…`} />
+          )}
+          {isChat && mode === 'dm' && (
+            <Combobox value={target} onChange={v => onTarget(v)} options={peopleOptions} loading={loadingPeople}
+              onQueryChange={searchPeople} allowCustom placeholder="Search people by name…" />
+          )}
+        </Field>
         {isChat && (
           <ToggleGroup label="Target type" value={mode} onChange={handleMode}
             options={[{ value: 'channel', label: 'Channel' }, { value: 'dm', label: 'Direct message' }]} />
         )}
-        {!channel && <Input type="text" value="" disabled placeholder="Select a channel first" />}
-        {channel === 'email' && (
-          <Input type="email" value={target} onChange={e => onTarget(e.target.value)} placeholder="you@example.com" />
-        )}
-        {isChat && mode === 'channel' && (
-          <Combobox value={target} onChange={v => onTarget(v)} options={channelOptions} loading={loadingChannels}
-            allowCustom placeholder={`Search ${channel} channels…`} />
-        )}
-        {isChat && mode === 'dm' && (
-          <Combobox value={target} onChange={v => onTarget(v)} options={peopleOptions} loading={loadingPeople}
-            onQueryChange={searchPeople} allowCustom placeholder="Search people by name…" />
-        )}
-      </Field>
+      </div>
     </FieldRow>
   )
 }
@@ -614,7 +616,7 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
 interface TaskRowProps {
   task: ScheduledTask
   onToggle: (taskId: string, enabled: boolean) => void
-  onDelete: (taskId: string) => Promise<void>
+  onDelete: (taskId: string) => Promise<unknown>
   onUpdate: (taskId: string, updates: UpdateTaskBody) => Promise<ScheduledTask>
   getExecutions: (taskId: string) => Promise<TaskExecution[]>
 }
@@ -622,7 +624,6 @@ interface TaskRowProps {
 const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
   const [editing, setEditing] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
-  const navigate = useNavigate()
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
@@ -649,19 +650,7 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
         {getTaskStatus(task) === 'done' ? (
           <Badge tone="info">Done</Badge>
         ) : (
-          <StatusBadge
-            active={task.enabled}
-            onClick={() => {
-              // Agent schedules resume on the agent's page, which re-checks their tools and scopes.
-              if (task.task_type === 'agent_run' && !task.enabled) {
-                if (window.confirm("Agent schedules are resumed on the agent's page. Open it?")) {
-                  navigate(`/ui/agents/${task.data?.definition_id}`)
-                }
-                return
-              }
-              onToggle(task.id, !task.enabled)
-            }}
-          />
+          <StatusBadge active={task.enabled} />
         )}
       </>}
       meta={[
@@ -671,11 +660,17 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
         task.notification_channel && `${task.notification_channel}${task.notification_target ? `: ${task.notification_target}` : ''}`,
       ]}
       actions={<>
+        {getTaskStatus(task) !== 'done' && (
+          // Agent schedules resume on the agent's page, which re-checks their tools and scopes.
+          task.task_type === 'agent_run' && !task.enabled
+            ? <ButtonLink size="sm" to={`/ui/agents/${task.data?.definition_id}`}>Resume on agent page</ButtonLink>
+            : <PauseButton active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
+        )}
         {task.task_type !== 'agent_run' && <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>}
         <Button size="sm" variant={showHistory ? 'primary' : 'secondary'} aria-pressed={showHistory} onClick={() => setShowHistory(h => !h)}>
           History
         </Button>
-        <ConfirmButton confirm={`Delete "${task.topic || 'Untitled'}"?`} onConfirm={() => onDelete(task.id).catch(() => {})} />
+        <ConfirmButton confirm={`Delete "${task.topic || 'Untitled'}"?`} onConfirm={() => onDelete(task.id)} />
       </>}
     >
       {task.message && <p className="text-slate-600 line-clamp-2">{task.message}</p>}
@@ -698,12 +693,20 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
 
 // --- Main Page ---
 
+const EMPTY_MESSAGES: Record<TypeFilter, string> = {
+  all: 'No scheduled tasks',
+  notification: 'No notification tasks',
+  claude_session: 'No Claude session tasks',
+  agent_run: 'No agent run tasks',
+}
+
 const ScheduledTasks = () => {
   const { listTasks, toggleTask, deleteTask, updateTask, getExecutions, createTask } = useScheduledTasks()
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
+  const { run, notice } = useActionNotice()
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -724,19 +727,17 @@ const ScheduledTasks = () => {
   const handleToggle = async (taskId: string, enabled: boolean) => {
     // Optimistic update
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, enabled } : t))
-    try {
+    const ok = await run(async () => {
       const updated = await toggleTask(taskId, enabled)
       setTasks(prev => prev.map(t => t.id === taskId ? updated : t))
-    } catch {
-      // Revert
-      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, enabled: !enabled } : t))
-    }
+    })
+    if (!ok) setTasks(prev => prev.map(t => t.id === taskId ? { ...t, enabled: !enabled } : t))
   }
 
-  const handleDelete = async (taskId: string) => {
+  const handleDelete = (taskId: string) => run(async () => {
     await deleteTask(taskId)
     setTasks(prev => prev.filter(t => t.id !== taskId))
-  }
+  })
 
   const handleUpdate = async (taskId: string, updates: UpdateTaskBody) => {
     const updated = await updateTask(taskId, updates)
@@ -779,7 +780,7 @@ const ScheduledTasks = () => {
         <span>{enabledCount} active</span>
         {disabledCount > 0 && <span>{disabledCount} disabled</span>}
       </span>}
-      actions={<Button variant="primary" onClick={() => setShowCreate(true)}>+ New task</Button>}
+      actions={<Button variant="primary" onClick={() => setShowCreate(true)}>New task</Button>}
       width="wide"
     >
       {showCreate && <CreateForm onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />}
@@ -789,11 +790,10 @@ const ScheduledTasks = () => {
       </Toolbar>
 
       {error && <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>}
+      {notice}
 
       {loading ? <LoadingState message="Loading scheduled tasks..." />
-        : tasks.length === 0 ? <EmptyState message={typeFilter === 'all'
-            ? 'No scheduled tasks'
-            : `No ${typeFilter === 'notification' ? 'notification' : 'Claude session'} tasks`} />
+        : tasks.length === 0 ? <EmptyState message={EMPTY_MESSAGES[typeFilter]} />
         : (
           <List>
             {tasks.map(task => (

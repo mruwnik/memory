@@ -43,6 +43,11 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- MCP tools gated on "has any items" (organizer task and calendar tools,
+  deadlines, books, observations) are still hidden from tool listings while
+  their table is empty, but calling one no longer fails with "Access denied";
+  it returns empty results. The Calendar and Tasks pages work again on an
+  instance with no events or tasks yet.
 - Slack polling no longer waits for a Slack app's push-event setup. Any
   workspace with collection on and an unexpired OAuth token on an active app is
   polled, so workspaces whose app setup was never finished (stuck in `draft` or

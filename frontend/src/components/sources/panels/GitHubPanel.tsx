@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
 import { TagsInput, IntervalInput, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, Label, List, LoadingState, Modal, Notice, Row, Section, SubList, cx } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, Label, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GitHubPanel = () => {
@@ -17,6 +17,7 @@ export const GitHubPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [addingRepoTo, setAddingRepoTo] = useState<number | null>(null)
   const [addingProjectTo, setAddingProjectTo] = useState<number | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -65,15 +66,15 @@ export const GitHubPanel = () => {
     setAddingRepoTo(null)
   }
 
-  const handleToggleRepoActive = async (accountId: number, repoId: number, active: boolean) => {
+  const handleToggleRepoActive = (accountId: number, repoId: number, active: boolean) => run(async () => {
     await updateGithubRepo(accountId, repoId, { active: !active })
     loadData()
-  }
+  })
 
-  const handleSyncRepo = async (accountId: number, repoId: number) => {
+  const handleSyncRepo = (accountId: number, repoId: number) => run(async () => {
     await syncGithubRepo(accountId, repoId)
     loadData()
-  }
+  }, 'Sync queued')
 
   const handleAddProject = async (accountId: number, data: { owner: string; project_number: number; is_org: boolean }) => {
     await addGithubProject(accountId, data)
@@ -81,16 +82,17 @@ export const GitHubPanel = () => {
     loadData()
   }
 
-  const handleDeleteProject = async (projectId: number) => {
+  const handleDeleteProject = (projectId: number) => run(async () => {
     await deleteGithubProject(projectId)
     loadData()
-  }
+  })
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
     <Section title="GitHub">
+      {notice}
       {accounts.length === 0 ? (
         <EmptyState message="No GitHub accounts configured. Add a GitHub account in the Accounts tab first." />
       ) : (
@@ -130,7 +132,7 @@ export const GitHubPanel = () => {
                         <Button size="sm" onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)}>
                           {repo.active ? 'Disable' : 'Enable'}
                         </Button>
-                        <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => handleDeleteRepo(account.id, repo.id)}>Remove</ConfirmButton>
+                        <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => run(async () => { await handleDeleteRepo(account.id, repo.id); loadData() })}>Remove</ConfirmButton>
                       </>}
                     />
                   ))}
@@ -490,7 +492,7 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
       <div className="min-h-60 flex flex-col items-center justify-center text-sm text-slate-500">
         <div className="w-6 h-6 border-2 border-slate-200 border-t-primary rounded-full animate-spin mb-2"></div>
         <p>Loading repositories...</p>
-        <p className="text-xs text-slate-400 mt-1">This may take a moment for large accounts</p>
+        <p className="text-xs text-slate-500 mt-1">This may take a moment for large accounts</p>
       </div>
     )
   }

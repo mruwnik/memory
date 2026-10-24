@@ -19,6 +19,10 @@ interface ComboboxProps {
   onQueryChange?: (query: string) => void
   disabled?: boolean
   className?: string
+  /** Placed on the input, so a surrounding `Field` can label and describe it. */
+  id?: string
+  'aria-describedby'?: string
+  'aria-invalid'?: boolean
 }
 
 const inputClass =
@@ -38,6 +42,7 @@ const Combobox = ({
   onQueryChange,
   disabled = false,
   className,
+  ...inputProps
 }: ComboboxProps) => {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -124,7 +129,7 @@ const Combobox = ({
       rows.push(
         <li
           key={`group-${opt.group}`}
-          className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+          className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
         >
           {opt.group}
         </li>
@@ -150,6 +155,7 @@ const Combobox = ({
   return (
     <div ref={containerRef} className={`relative ${className ?? ''}`}>
       <input
+        {...inputProps}
         type="text"
         value={query}
         disabled={disabled}
@@ -170,9 +176,9 @@ const Combobox = ({
       />
       {open && (
         <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded border border-slate-200 bg-white shadow-lg">
-          {loading && <li className="px-3 py-2 text-sm text-slate-400">Loading…</li>}
+          {loading && <li className="px-3 py-2 text-sm text-slate-500">Loading…</li>}
           {!loading && filtered.length === 0 && (
-            <li className="px-3 py-2 text-sm text-slate-400">
+            <li className="px-3 py-2 text-sm text-slate-500">
               {allowCustom ? 'No matches — press Enter to use as-is' : 'No matches'}
             </li>
           )}

@@ -322,6 +322,15 @@ describe('Calendar admin user filter', () => {
     expect(screen.getByRole('button', { name: /Users/ })).toHaveTextContent('(2/3)')
   })
 
+  it('shifts a menu that would open past the left edge of a phone screen back into view', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: -169, right: 119 } as DOMRect)
+    renderWithRouter(<Calendar />)
+    await waitFor(() => expect(getEventsForMonths).toHaveBeenCalled())
+    await userEvent.setup().click(screen.getByRole('button', { name: /Users/ }))
+    expect(screen.getByRole('group', { name: 'Users' })).toHaveStyle({ transform: 'translateX(177px)' })
+    vi.restoreAllMocks()
+  })
+
   it('selects none then all users via the dropdown controls', async () => {
     renderWithRouter(<Calendar />)
     await waitFor(() => expect(getEventsForMonths).toHaveBeenCalled())

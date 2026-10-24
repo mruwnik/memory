@@ -1,78 +1,61 @@
 import React from 'react'
 import { TelemetryEvent } from '@/hooks/useTelemetry'
+import { Badge, EmptyState, Table, type Tone } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 interface RecentEventsTableProps {
   events: TelemetryEvent[]
 }
 
 export const RecentEventsTable: React.FC<RecentEventsTableProps> = ({ events }) => {
-  if (events.length === 0) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No recent events
-      </div>
-    )
-  }
+  if (events.length === 0) return <EmptyState message="No recent events" />
 
   return (
-    <div className="overflow-auto max-h-64">
-      <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-slate-50">
-          <tr className="text-left text-slate-600">
-            <th className="py-2 px-2 font-medium">Time</th>
-            <th className="py-2 px-2 font-medium">Event</th>
-            <th className="py-2 px-2 font-medium">Source</th>
-            <th className="py-2 px-2 font-medium text-right">Value</th>
+    <div className="max-h-64 overflow-auto">
+      <Table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Source</th>
+            <th className="text-right">Value</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-100">
+        <tbody>
           {events.slice(0, 20).map(event => (
-            <tr key={event.id} className="hover:bg-slate-50">
-              <td className="py-2 px-2 text-slate-500 whitespace-nowrap">
-                {formatTime(event.timestamp)}
-              </td>
-              <td className="py-2 px-2">
-                <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                  getEventBadgeColor(event.name)
-                }`}>
-                  {event.name}
-                </span>
-              </td>
-              <td className="py-2 px-2 text-slate-600 truncate max-w-32">
-                {event.source || event.tool_name || '-'}
-              </td>
-              <td className="py-2 px-2 text-right font-mono text-slate-700">
-                {formatValue(event.name, event.value)}
-              </td>
+            <tr key={event.id}>
+              <td className="text-slate-600 whitespace-nowrap">{formatTime(event.timestamp)}</td>
+              <td><Badge tone={eventTone(event.name)}>{event.name}</Badge></td>
+              <td className="text-slate-600 truncate max-w-32">{event.source || event.tool_name || '-'}</td>
+              <td className="text-right font-mono text-slate-700">{formatValue(event.name, event.value)}</td>
             </tr>
           ))}
         </tbody>
-      </table>
+      </Table>
     </div>
   )
 }
 
+// A time alone is ambiguous once the range spans days, so anything before today carries its date.
 function formatTime(isoString: string): string {
   const date = new Date(isoString)
-  return date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  })
+  const time = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false } as const
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString(undefined, time)
+    : date.toLocaleString(undefined, { month: 'short', day: 'numeric', ...time })
 }
 
-function getEventBadgeColor(name: string): string {
-  if (name.includes('token')) return 'bg-blue-100 text-blue-700'
-  if (name.includes('cost')) return 'bg-green-100 text-green-700'
-  if (name.includes('session')) return 'bg-purple-100 text-purple-700'
-  if (name.includes('error')) return 'bg-red-100 text-red-700'
-  return 'bg-slate-100 text-slate-700'
+function eventTone(name: string): Tone {
+  if (name.includes('error')) return 'danger'
+  if (name.includes('token')) return 'info'
+  if (name.includes('cost')) return 'success'
+  if (name.includes('session')) return 'primary'
+  return 'neutral'
 }
 
 function formatValue(name: string, value: number | null): string {
   if (value === null) return '-'
-  if (name.includes('cost')) return `$${value.toFixed(4)}`
+  if (name.includes('cost')) return formatCost(value)
   if (name.includes('token')) return value.toLocaleString()
   return value.toString()
 }

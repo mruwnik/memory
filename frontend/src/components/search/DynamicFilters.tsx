@@ -1,6 +1,6 @@
 import { FilterInput } from './FilterInput'
 import { CollectionMetadata, SchemaArg } from '@/types/mcp'
-import { Label } from '@/components/shared/ui'
+import { Disclosure, Field, Label } from '@/components/shared/ui'
 
 const formatFieldLabel = (field: string): string =>
     field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
@@ -102,49 +102,37 @@ export const DynamicFilters = ({
             <Label>Filters</Label>
             <div className="space-y-3">
                 {commonFields.length > 0 && (
-                    <details className="border border-slate-200 rounded-lg p-4" open>
-                        <summary className="cursor-pointer font-medium text-slate-700">
-                            Document Properties
-                        </summary>
-                        <div className="mt-4 grid grid-cols-2 gap-4">
+                    <Disclosure summary="Document Properties" open>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {commonFields.map(([field, fieldConfig]: [string, SchemaArg]) => (
-                                <div key={field} className="flex flex-col gap-1">
-                                    <label className="text-xs text-slate-600">
-                                        {formatFieldLabel(field)}:
-                                    </label>
+                                <Field key={field} label={formatFieldLabel(field)}>
                                     <FilterInput
                                         field={field}
                                         fieldConfig={fieldConfig}
                                         value={filters[field]}
                                         onChange={onFilterChange}
                                     />
-                                </div>
+                                </Field>
                             ))}
                         </div>
-                    </details>
+                    </Disclosure>
                 )}
 
                 {Object.entries(modalityFields).map(([modality, fields]) => (
-                    <details key={modality} className="border border-slate-200 rounded-lg p-4">
-                        <summary className="cursor-pointer font-medium text-slate-700">
-                            {formatFieldLabel(modality)} Specific
-                        </summary>
-                        <div className="mt-4 grid grid-cols-2 gap-4">
+                    <Disclosure key={modality} summary={`${formatFieldLabel(modality)} Specific`}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {fields.map(([field, fieldConfig]: [string, SchemaArg]) => (
-                                <div key={field} className="flex flex-col gap-1">
-                                    <label className="text-xs text-slate-600">
-                                        {formatFieldLabel(field)}:
-                                    </label>
+                                <Field key={field} label={formatFieldLabel(field)}>
                                     <FilterInput
                                         field={field}
                                         fieldConfig={fieldConfig}
                                         value={filters[field]}
                                         onChange={onFilterChange}
                                     />
-                                </div>
+                                </Field>
                             ))}
                         </div>
-                    </details>
+                    </Disclosure>
                 ))}
             </div>
         </div>

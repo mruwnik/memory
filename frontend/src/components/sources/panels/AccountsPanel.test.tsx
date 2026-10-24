@@ -88,7 +88,7 @@ describe('AccountsPanel load states', () => {
   it('shows an error state when github list fails', async () => {
     mockFetchRoutes({ ...routes({}), '/github/accounts': { status: 500, json: {} } })
     renderWithUser(<AccountsPanel />)
-    await waitFor(() => expect(screen.getByText('Failed to fetch GitHub accounts')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Failed to fetch GitHub accounts/)).toBeInTheDocument())
   })
 })
 
@@ -142,7 +142,7 @@ describe('AccountsPanel github actions', () => {
     const mock = mockFetchRoutes(routes({ github: [githubAccount], config: oauthConfig }))
     const { user } = renderWithUser(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
-    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/github/accounts/4') && (init as RequestInit)?.method === 'PATCH',
@@ -152,17 +152,19 @@ describe('AccountsPanel github actions', () => {
     })
   })
 
-  it('alerts with the validation message on Validate', async () => {
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+  it.each([
+    [{ status: 'success', message: 'Authenticated as octo' }, 'status'],
+    [{ status: 'error', message: 'Bad credentials' }, 'alert'],
+  ])('shows the Validate result %j on the account row', async (result, role) => {
     // validate route must precede the broader /github/accounts list route
     mockFetchRoutes({
-      '/github/accounts/4/validate': { json: { status: 'ok', message: 'credentials valid' } },
+      '/github/accounts/4/validate': { json: result },
       ...routes({ github: [githubAccount], config: oauthConfig }),
     })
     const { user } = renderWithUser(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Validate' }))
-    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('credentials valid'))
+    expect(await screen.findByRole(role)).toHaveTextContent(result.message)
   })
 
   it('deletes after confirming the dialog', async () => {

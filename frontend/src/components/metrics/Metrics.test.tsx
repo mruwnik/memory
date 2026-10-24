@@ -201,7 +201,7 @@ describe('Metrics container', () => {
     renderWithRouter(<Metrics />)
 
     await waitFor(() =>
-      expect(screen.getByText(/Failed to fetch metrics summary/)).toBeInTheDocument(),
+      expect(screen.getByText('boom')).toBeInTheDocument(),
     )
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })

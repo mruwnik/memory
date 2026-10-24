@@ -136,7 +136,7 @@ const PersonFormModal = ({
             <Label htmlFor="person-identifier" className="mb-1">
               Identifier <span className="text-red-500" aria-hidden="true">*</span>
               <span className="sr-only">(required)</span>
-              {!isEdit && <span className="font-normal text-slate-400 ml-1">(auto-generated)</span>}
+              {!isEdit && <span className="font-normal text-slate-500 ml-1">(auto-generated)</span>}
             </Label>
             <Input
               id="person-identifier"
@@ -151,7 +151,7 @@ const PersonFormModal = ({
               className="disabled:bg-slate-50"
             />
             {!isEdit && (
-              <p className="text-xs text-slate-400 mt-1">
+              <p className="text-xs text-slate-500 mt-1">
                 Unique identifier (lowercase, no spaces). Cannot be changed later.
               </p>
             )}

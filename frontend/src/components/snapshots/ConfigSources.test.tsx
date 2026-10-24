@@ -81,7 +81,7 @@ describe('ConfigSources load + tabs', () => {
   it('shows the load error when a fetch fails', async () => {
     mockFetchRoutes({ ...routes([], []), '/claude/environments/list': { status: 500, json: { detail: 'boom' } } })
     renderWithRouter(<ConfigSources />)
-    await waitFor(() => expect(screen.getByText(/Failed to/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('boom')).toBeInTheDocument())
   })
 
   it('dismisses the error banner when Dismiss is clicked', async () => {
@@ -113,6 +113,25 @@ describe('ConfigSources create environment', () => {
       expect(post).toBeTruthy()
       expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({ name: 'New Env' })
     })
+  })
+
+  it('shows a create failure inside the open modal', async () => {
+    mockFetchRoutes({ ...routes([], []), '/claude/environments/create': { status: 409, json: { detail: 'Name already in use' } } })
+    const { user } = renderWithRouter(<ConfigSources />)
+    await waitFor(() => expect(screen.getByText('No environments yet')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'New environment' }))
+    const modal = screen.getByRole('dialog')
+    await user.type(within(modal).getByPlaceholderText('My Development Environment'), 'Dup')
+    await user.click(within(modal).getByRole('button', { name: 'Create' }))
+    expect(await within(modal).findByText('Name already in use')).toBeInTheDocument()
+  })
+
+  it('offers New environment only on the Environments tab', async () => {
+    mockFetchRoutes(routes([], []))
+    const { user } = renderWithRouter(<ConfigSources />)
+    await waitFor(() => expect(screen.getByText('No environments yet')).toBeInTheDocument())
+    await user.click(screen.getByRole('tab', { name: /Snapshots/ }))
+    expect(screen.queryByRole('button', { name: 'New environment' })).not.toBeInTheDocument()
   })
 })
 
@@ -161,8 +180,7 @@ describe('ConfigSources delete flows', () => {
 })
 
 describe('ConfigSources reset environment', () => {
-  it('opens the reset modal and posts a reset after confirm', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('opens the reset modal and posts a reset from its own button', async () => {
     const mock = mockFetchRoutes({ ...routes([environment], [snapshot]), '/claude/environments/100/reset': { json: environment } })
     const { user } = renderWithRouter(<ConfigSources />)
     await waitFor(() => expect(screen.getByText('Dev Env')).toBeInTheDocument())

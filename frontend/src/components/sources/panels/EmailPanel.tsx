@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { SourceRow, TagsInput, TestConnectionButton } from '../shared'
-import { Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select } from '@/components/shared/ui'
+import { Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
@@ -16,6 +16,7 @@ export const EmailPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
     setLoading(true)
@@ -53,26 +54,27 @@ export const EmailPanel = () => {
     }
   }
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = (id: number) => run(async () => {
     await deleteEmailAccount(id)
     loadAccounts()
-  }
+  })
 
-  const handleToggleActive = async (account: EmailAccount) => {
+  const handleToggleActive = (account: EmailAccount) => run(async () => {
     await updateEmailAccount(account.id, { active: !account.active })
     loadAccounts()
-  }
+  })
 
-  const handleSync = async (id: number) => {
+  const handleSync = (id: number) => run(async () => {
     await syncEmailAccount(id)
     loadAccounts()
-  }
+  }, 'Sync queued')
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
     <Section title="Email Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button>}>
+      {notice}
       {accounts.length === 0 ? (
         <EmptyState
           message="No email accounts configured"
@@ -166,7 +168,7 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
         {folders.map(folder => (
           <label
             key={folder.name}
-            className={`flex items-center gap-2 text-sm ${folder.selectable ? 'text-slate-700' : 'text-slate-400'}`}
+            className={`flex items-center gap-2 text-sm ${folder.selectable ? 'text-slate-700' : 'text-slate-500'}`}
           >
             <input
               type="checkbox"
@@ -334,7 +336,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             </Field>
 
             <Field label={<>
-                Password {account && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+                Password {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
               <Input
                 type="password"
                 value={formData.password}
@@ -375,7 +377,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
 
             <FieldRow>
               <Field label={<>
-                  SMTP Server <span className="text-slate-400">(optional)</span></>}>
+                  SMTP Server <span className="text-slate-500">(optional)</span></>}>
                 <Input
                   type="text"
                   value={formData.smtp_server}

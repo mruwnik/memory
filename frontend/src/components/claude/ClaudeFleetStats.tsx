@@ -202,7 +202,7 @@ const ContainerRow: React.FC<{
         {display.subtitle && (
           <div className="text-xs text-slate-500">{display.subtitle}</div>
         )}
-        <div className="font-mono text-[10px] text-slate-400">{c.id}</div>
+        <div className="font-mono text-[10px] text-slate-500">{c.id}</div>
       </td>
       <td className="px-3 py-2"><StatusPill status={c.status} /></td>
       <td className="px-3 py-2 text-xs font-mono text-right">
@@ -210,16 +210,16 @@ const ContainerRow: React.FC<{
           ? <span className={usagePctColor((used.cpu_pct / Math.max(c.allocated.cpus * 100, 1)) * 100)}>
               {used.cpu_pct.toFixed(1)}%
             </span>
-          : <span className="text-slate-400">—</span>}
-        <span className="text-slate-400"> / {(c.allocated.cpus * 100).toFixed(0)}%</span>
+          : <span className="text-slate-500">—</span>}
+        <span className="text-slate-500"> / {(c.allocated.cpus * 100).toFixed(0)}%</span>
       </td>
       <td className="px-3 py-2 text-xs font-mono text-right">
         {used
           ? <>
               <span className={usagePctColor(used.memory_pct)}>{formatMb(used.memory_mb)}</span>
-              <span className="text-slate-400"> / {formatMb(c.allocated.memory_mb)} ({used.memory_pct.toFixed(0)}%)</span>
+              <span className="text-slate-500"> / {formatMb(c.allocated.memory_mb)} ({used.memory_pct.toFixed(0)}%)</span>
             </>
-          : <span className="text-slate-400">—</span>}
+          : <span className="text-slate-500">—</span>}
       </td>
     </tr>
   )
@@ -360,9 +360,7 @@ export const SessionStatsPanel: React.FC<{ sessionId: string }> = ({ sessionId }
   if (loading && points.length === 0) {
     return <div className="text-sm text-slate-500 py-4">Loading history…</div>
   }
-  if (error) {
-    return <div className="text-sm text-red-600 py-2">{error}</div>
-  }
+  if (error) return <Notice tone="error" onRetry={load}>{error}</Notice>
   return <HistoryChart points={points} />
 }
 
@@ -422,13 +420,7 @@ const ClaudeFleetStats: React.FC<ClaudeFleetStatsProps> = ({
       })
   }, [hasAdminScope, listUsers])
 
-  if (error) {
-    return (
-      <Notice tone="error">
-        {error}
-      </Notice>
-    )
-  }
+  if (error) return <Notice tone="error" onRetry={loadSnap}>{error}</Notice>
   if (!snap) {
     return (
       <LoadingState message="Loading fleet stats…" />

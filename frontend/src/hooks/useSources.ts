@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth, SERVER_URL } from './useAuth'
+import { apiError } from './apiError'
 
 // Types for Email Accounts
 export interface EmailAccount {
@@ -477,7 +478,7 @@ export const useSources = () => {
   const listEmailAccounts = useCallback(async (userId?: number): Promise<EmailAccount[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/email-accounts${params}`)
-    if (!response.ok) throw new Error('Failed to fetch email accounts')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch email accounts')
     return response.json()
   }, [apiCall])
 
@@ -486,10 +487,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create email account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create email account')
     return response.json()
   }, [apiCall])
 
@@ -498,21 +496,18 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update email account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update email account')
     return response.json()
   }, [apiCall])
 
   const deleteEmailAccount = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/email-accounts/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete email account')
+    if (!response.ok) throw await apiError(response, 'Failed to delete email account')
   }, [apiCall])
 
   const syncEmailAccount = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/email-accounts/${id}/sync`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to sync email account')
+    if (!response.ok) throw await apiError(response, 'Failed to sync email account')
     return response.json()
   }, [apiCall])
 
@@ -521,10 +516,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(body),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to test email account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to test email account')
     return response.json()
   }, [apiCall])
 
@@ -533,7 +525,7 @@ export const useSources = () => {
   const listArticleFeeds = useCallback(async (userId?: number): Promise<ArticleFeed[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/article-feeds${params}`)
-    if (!response.ok) throw new Error('Failed to fetch article feeds')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch article feeds')
     return response.json()
   }, [apiCall])
 
@@ -542,10 +534,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create article feed')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create article feed')
     return response.json()
   }, [apiCall])
 
@@ -554,21 +543,18 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update article feed')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update article feed')
     return response.json()
   }, [apiCall])
 
   const deleteArticleFeed = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/article-feeds/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete article feed')
+    if (!response.ok) throw await apiError(response, 'Failed to delete article feed')
   }, [apiCall])
 
   const syncArticleFeed = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/article-feeds/${id}/sync`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to sync article feed')
+    if (!response.ok) throw await apiError(response, 'Failed to sync article feed')
     return response.json()
   }, [apiCall])
 
@@ -576,7 +562,7 @@ export const useSources = () => {
     const response = await apiCall(`/article-feeds/discover?url=${encodeURIComponent(url)}`, {
       method: 'POST',
     })
-    if (!response.ok) throw new Error('Failed to discover feed')
+    if (!response.ok) throw await apiError(response, 'Failed to discover feed')
     return response.json()
   }, [apiCall])
 
@@ -585,7 +571,7 @@ export const useSources = () => {
   const listGithubAccounts = useCallback(async (userId?: number): Promise<GithubAccount[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/github/accounts${params}`)
-    if (!response.ok) throw new Error('Failed to fetch GitHub accounts')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch GitHub accounts')
     return response.json()
   }, [apiCall])
 
@@ -594,10 +580,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create GitHub account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create GitHub account')
     return response.json()
   }, [apiCall])
 
@@ -606,27 +589,24 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update GitHub account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update GitHub account')
     return response.json()
   }, [apiCall])
 
   const deleteGithubAccount = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/github/accounts/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete GitHub account')
+    if (!response.ok) throw await apiError(response, 'Failed to delete GitHub account')
   }, [apiCall])
 
   const validateGithubAccount = useCallback(async (id: number): Promise<{ status: string; message: string }> => {
     const response = await apiCall(`/github/accounts/${id}/validate`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to validate GitHub account')
+    if (!response.ok) throw await apiError(response, 'Failed to validate GitHub account')
     return response.json()
   }, [apiCall])
 
   const listAvailableRepos = useCallback(async (accountId: number): Promise<AvailableRepo[]> => {
     const response = await apiCall(`/github/accounts/${accountId}/available-repos`)
-    if (!response.ok) throw new Error('Failed to fetch available repos')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch available repos')
     return response.json()
   }, [apiCall])
 
@@ -637,10 +617,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to add GitHub repo')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to add GitHub repo')
     return response.json()
   }, [apiCall])
 
@@ -649,21 +626,18 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update GitHub repo')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update GitHub repo')
     return response.json()
   }, [apiCall])
 
   const deleteGithubRepo = useCallback(async (accountId: number, repoId: number): Promise<void> => {
     const response = await apiCall(`/github/accounts/${accountId}/repos/${repoId}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete GitHub repo')
+    if (!response.ok) throw await apiError(response, 'Failed to delete GitHub repo')
   }, [apiCall])
 
   const syncGithubRepo = useCallback(async (accountId: number, repoId: number, forceFull = false): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/github/accounts/${accountId}/repos/${repoId}/sync?force_full=${forceFull}`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to sync GitHub repo')
+    if (!response.ok) throw await apiError(response, 'Failed to sync GitHub repo')
     return response.json()
   }, [apiCall])
 
@@ -675,7 +649,7 @@ export const useSources = () => {
     if (includeClosed) params.append('include_closed', 'true')
     const url = params.toString() ? `/github/projects?${params}` : '/github/projects'
     const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch GitHub projects')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch GitHub projects')
     return response.json()
   }, [apiCall])
 
@@ -686,7 +660,7 @@ export const useSources = () => {
       ? `/github/accounts/${accountId}/projects?${params}`
       : `/github/accounts/${accountId}/projects`
     const response = await apiCall(url)
-    if (!response.ok) throw new Error('Failed to fetch account projects')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch account projects')
     return response.json()
   }, [apiCall])
 
@@ -702,10 +676,7 @@ export const useSources = () => {
       include_closed: includeClosed.toString(),
     })
     const response = await apiCall(`/github/accounts/${accountId}/available-projects?${params}`)
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to fetch available projects')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch available projects')
     return response.json()
   }, [apiCall])
 
@@ -714,10 +685,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to add GitHub project')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to add GitHub project')
     return response.json()
   }, [apiCall])
 
@@ -728,16 +696,13 @@ export const useSources = () => {
       include_closed: includeClosed.toString(),
     })
     const response = await apiCall(`/github/projects/sync?${params}`, { method: 'POST' })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to sync GitHub projects')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to sync GitHub projects')
     return response.json()
   }, [apiCall])
 
   const deleteGithubProject = useCallback(async (projectId: number): Promise<void> => {
     const response = await apiCall(`/github/projects/${projectId}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete GitHub project')
+    if (!response.ok) throw await apiError(response, 'Failed to delete GitHub project')
   }, [apiCall])
 
   // === Google Drive ===
@@ -745,13 +710,13 @@ export const useSources = () => {
   const listGoogleAccounts = useCallback(async (userId?: number): Promise<GoogleAccount[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/google-drive/accounts${params}`)
-    if (!response.ok) throw new Error('Failed to fetch Google accounts')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch Google accounts')
     return response.json()
   }, [apiCall])
 
   const getGoogleAvailableScopes = useCallback(async (): Promise<GoogleAvailableScopes> => {
     const response = await apiCall('/google-drive/available-scopes')
-    if (!response.ok) throw new Error('Failed to fetch available scopes')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch available scopes')
     const data = await response.json()
     return data.scopes
   }, [apiCall])
@@ -761,13 +726,13 @@ export const useSources = () => {
       ? '?' + scopes.map(s => `scopes=${encodeURIComponent(s)}`).join('&')
       : ''
     const response = await apiCall(`/google-drive/authorize${params}`)
-    if (!response.ok) throw new Error('Failed to get Google auth URL')
+    if (!response.ok) throw await apiError(response, 'Failed to get Google auth URL')
     return response.json()
   }, [apiCall])
 
   const deleteGoogleAccount = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/google-drive/accounts/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete Google account')
+    if (!response.ok) throw await apiError(response, 'Failed to delete Google account')
   }, [apiCall])
 
   const reauthorizeGoogleAccount = useCallback(async (id: number, scopes?: string[]): Promise<{ authorization_url: string }> => {
@@ -776,7 +741,7 @@ export const useSources = () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scopes }),
     })
-    if (!response.ok) throw new Error('Failed to get reauthorization URL')
+    if (!response.ok) throw await apiError(response, 'Failed to get reauthorization URL')
     return response.json()
   }, [apiCall])
 
@@ -788,10 +753,7 @@ export const useSources = () => {
     const params = new URLSearchParams({ folder_id: folderId })
     if (pageToken) params.append('page_token', pageToken)
     const response = await apiCall(`/google-drive/accounts/${accountId}/browse?${params}`)
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to browse Google Drive')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to browse Google Drive')
     return response.json()
   }, [apiCall])
 
@@ -800,10 +762,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to add Google folder')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to add Google folder')
     return response.json()
   }, [apiCall])
 
@@ -812,21 +771,18 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update Google folder')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update Google folder')
     return response.json()
   }, [apiCall])
 
   const deleteGoogleFolder = useCallback(async (accountId: number, folderId: number): Promise<void> => {
     const response = await apiCall(`/google-drive/accounts/${accountId}/folders/${folderId}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete Google folder')
+    if (!response.ok) throw await apiError(response, 'Failed to delete Google folder')
   }, [apiCall])
 
   const syncGoogleFolder = useCallback(async (accountId: number, folderId: number, forceFull = false): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/google-drive/accounts/${accountId}/folders/${folderId}/sync?force_full=${forceFull}`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to sync Google folder')
+    if (!response.ok) throw await apiError(response, 'Failed to sync Google folder')
     return response.json()
   }, [apiCall])
 
@@ -836,7 +792,7 @@ export const useSources = () => {
     const response = await apiCall('/google-drive/config')
     if (!response.ok) {
       if (response.status === 404) return null
-      throw new Error('Failed to fetch Google OAuth config')
+      throw await apiError(response, 'Failed to fetch Google OAuth config')
     }
     return response.json()
   }, [apiCall])
@@ -858,16 +814,13 @@ export const useSources = () => {
       body: formData,
     })
 
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to upload OAuth config')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to upload OAuth config')
     return response.json()
   }, [])
 
   const deleteGoogleOAuthConfig = useCallback(async (): Promise<void> => {
     const response = await apiCall('/google-drive/config', { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete Google OAuth config')
+    if (!response.ok) throw await apiError(response, 'Failed to delete Google OAuth config')
   }, [apiCall])
 
   // === Calendar Accounts ===
@@ -875,7 +828,7 @@ export const useSources = () => {
   const listCalendarAccounts = useCallback(async (userId?: number): Promise<CalendarAccount[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/calendar-accounts${params}`)
-    if (!response.ok) throw new Error('Failed to fetch calendar accounts')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch calendar accounts')
     return response.json()
   }, [apiCall])
 
@@ -884,10 +837,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create calendar account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create calendar account')
     return response.json()
   }, [apiCall])
 
@@ -896,21 +846,18 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update calendar account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update calendar account')
     return response.json()
   }, [apiCall])
 
   const deleteCalendarAccount = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/calendar-accounts/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete calendar account')
+    if (!response.ok) throw await apiError(response, 'Failed to delete calendar account')
   }, [apiCall])
 
   const syncCalendarAccount = useCallback(async (id: number, forceFull = false): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/calendar-accounts/${id}/sync?force_full=${forceFull}`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to sync calendar account')
+    if (!response.ok) throw await apiError(response, 'Failed to sync calendar account')
     return response.json()
   }, [apiCall])
 
@@ -918,14 +865,14 @@ export const useSources = () => {
 
   const listTranscriptProviders = useCallback(async (): Promise<string[]> => {
     const response = await apiCall('/transcript-accounts/providers')
-    if (!response.ok) throw new Error('Failed to fetch transcript providers')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch transcript providers')
     return response.json()
   }, [apiCall])
 
   const listTranscriptAccounts = useCallback(async (userId?: number): Promise<TranscriptAccount[]> => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/transcript-accounts${params}`)
-    if (!response.ok) throw new Error('Failed to fetch transcript accounts')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch transcript accounts')
     return response.json()
   }, [apiCall])
 
@@ -934,10 +881,7 @@ export const useSources = () => {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to create transcript account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to create transcript account')
     return response.json()
   }, [apiCall])
 
@@ -946,27 +890,24 @@ export const useSources = () => {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Failed to update transcript account')
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to update transcript account')
     return response.json()
   }, [apiCall])
 
   const deleteTranscriptAccount = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/transcript-accounts/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete transcript account')
+    if (!response.ok) throw await apiError(response, 'Failed to delete transcript account')
   }, [apiCall])
 
   const syncTranscriptAccount = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/transcript-accounts/${id}/sync`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to sync transcript account')
+    if (!response.ok) throw await apiError(response, 'Failed to sync transcript account')
     return response.json()
   }, [apiCall])
 
   const rescanTranscriptAccount = useCallback(async (id: number): Promise<CeleryTaskResponse> => {
     const response = await apiCall(`/transcript-accounts/${id}/rescan`, { method: 'POST' })
-    if (!response.ok) throw new Error('Failed to rescan transcript account')
+    if (!response.ok) throw await apiError(response, 'Failed to rescan transcript account')
     return response.json()
   }, [apiCall])
 
@@ -974,7 +915,7 @@ export const useSources = () => {
 
   const deletePhoto = useCallback(async (id: number): Promise<void> => {
     const response = await apiCall(`/photos/${id}`, { method: 'DELETE' })
-    if (!response.ok) throw new Error('Failed to delete photo')
+    if (!response.ok) throw await apiError(response, 'Failed to delete photo')
   }, [apiCall])
 
   return {

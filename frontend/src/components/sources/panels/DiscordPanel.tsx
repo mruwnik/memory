@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
-import { AccessSelects, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx } from '@/components/shared/ui'
+import { AccessSelects, PauseButton, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
+import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const DiscordPanel = () => {
@@ -38,6 +38,7 @@ export const DiscordPanel = () => {
   const [usersByBot, setUsersByBot] = useState<Record<string, BotUser[]>>({})
   const [allUsers, setAllUsers] = useState<User[]>([])
   const [managingUsersBot, setManagingUsersBot] = useState<DiscordBot | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -83,29 +84,29 @@ export const DiscordPanel = () => {
     loadData()
   }
 
-  const handleDeleteBot = async (bot: DiscordBot) => {
+  const handleDeleteBot = (bot: DiscordBot) => run(async () => {
     await deleteBot(bot.id)
     loadData()
-  }
+  })
 
-  const handleToggleBotActive = async (bot: DiscordBot) => {
+  const handleToggleBotActive = (bot: DiscordBot) => run(async () => {
     await updateBot(bot.id, { is_active: !bot.is_active })
     loadData()
-  }
+  })
 
-  const handleRefreshMetadata = async (botId: string) => {
+  const handleRefreshMetadata = (botId: string) => run(async () => {
     await refreshBotMetadata(botId)
     // Reload servers after metadata refresh
     const serversData = await listServers()
     setServers(serversData)
     // Clear cached channels to force reload
     setChannelsByServer({})
-  }
+  })
 
-  const handleGetInviteUrl = async (botId: string) => {
+  const handleGetInviteUrl = (botId: string) => run(async () => {
     const result = await getBotInviteUrl(botId)
     window.open(result.invite_url, '_blank')
-  }
+  })
 
   const loadBotUsers = async (botId: string) => {
     if (usersByBot[botId]) return usersByBot[botId]
@@ -143,7 +144,7 @@ export const DiscordPanel = () => {
     setUsersByBot(prev => ({ ...prev, [botId]: users }))
   }
 
-  const handleToggleServerCollect = async (server: DiscordServer) => {
+  const handleToggleServerCollect = (server: DiscordServer) => run(async () => {
     await updateServer(server.id, { collect_messages: !server.collect_messages })
     // Refresh servers
     const serversData = await listServers()
@@ -153,16 +154,16 @@ export const DiscordPanel = () => {
       const channels = await listChannels(server.id)
       setChannelsByServer(prev => ({ ...prev, [server.id]: channels }))
     }
-  }
+  })
 
-  const handleUpdateServer = async (server: DiscordServer, updates: DiscordServerUpdate) => {
+  const handleUpdateServer = (server: DiscordServer, updates: DiscordServerUpdate) => run(async () => {
     await updateServer(server.id, updates)
     // Refresh servers
     const serversData = await listServers()
     setServers(serversData)
-  }
+  })
 
-  const handleUpdateChannel = async (channel: DiscordChannel, updates: DiscordChannelUpdate) => {
+  const handleUpdateChannel = (channel: DiscordChannel, updates: DiscordChannelUpdate) => run(async () => {
     const updatedChannel = await updateChannel(channel.id, updates)
 
     // Refresh channels for this server, or update single channel for DMs
@@ -181,7 +182,7 @@ export const DiscordPanel = () => {
         return updated
       })
     }
-  }
+  })
 
   const handleToggleChannelCollect = async (channel: DiscordChannel) => {
     // Cycle through: inherit (null) -> on (true) -> off (false) -> inherit (null)
@@ -202,6 +203,7 @@ export const DiscordPanel = () => {
 
   return (
     <Section title="Discord" actions={<Button variant="primary" onClick={() => setAddingBot(true)}>Add Bot</Button>}>
+      {notice}
       {bots.length === 0 ? (
         <EmptyState
           message="No Discord bots configured. Add a bot to start collecting messages."
@@ -271,13 +273,13 @@ interface BotCardProps {
   onToggleExpand: () => void
   onExpandServer: (serverId: string) => void
   onToggleActive: () => void
-  onRefresh: () => Promise<void>
+  onRefresh: () => Promise<unknown>
   onDelete: () => void
-  onToggleServerCollect: (server: DiscordServer) => Promise<void>
-  onUpdateServer: (server: DiscordServer, updates: DiscordServerUpdate) => Promise<void>
-  onToggleChannelCollect: (channel: DiscordChannel) => Promise<void>
-  onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<void>
-  onGetInviteUrl: () => Promise<void>
+  onToggleServerCollect: (server: DiscordServer) => Promise<unknown>
+  onUpdateServer: (server: DiscordServer, updates: DiscordServerUpdate) => Promise<unknown>
+  onToggleChannelCollect: (channel: DiscordChannel) => Promise<unknown>
+  onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<unknown>
+  onGetInviteUrl: () => Promise<unknown>
   onManageUsers: () => Promise<void>
 }
 
@@ -305,12 +307,13 @@ const BotRow = ({
       title={bot.name}
       muted={!bot.is_active}
       badges={<>
-        <StatusBadge active={bot.is_active} onClick={onToggleActive} />
+        <StatusBadge active={bot.is_active} />
         <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>
       </>}
       meta={[bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`]}
       actions={<>
         <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh Metadata" />
+        <PauseButton active={bot.is_active} onClick={onToggleActive} />
         <Button size="sm" onClick={onGetInviteUrl}>Add to Server</Button>
         <Button size="sm" onClick={onManageUsers}>Manage Users</Button>
         <ConfirmButton confirm={`Remove "${bot.name}"? This will revoke your access to this bot.`} onConfirm={onDelete}>Remove</ConfirmButton>
@@ -345,10 +348,10 @@ interface ServerCardProps {
   projects: Project[]
   expanded: boolean
   onToggleExpand: () => void
-  onToggleCollect: () => Promise<void>
-  onUpdate: (updates: DiscordServerUpdate) => Promise<void>
-  onToggleChannelCollect: (channel: DiscordChannel) => Promise<void>
-  onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<void>
+  onToggleCollect: () => Promise<unknown>
+  onUpdate: (updates: DiscordServerUpdate) => Promise<unknown>
+  onToggleChannelCollect: (channel: DiscordChannel) => Promise<unknown>
+  onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<unknown>
 }
 
 const ServerRow = ({
@@ -428,8 +431,8 @@ interface ChannelRowProps {
   channel: DiscordChannel
   projects: Project[]
   serverCollecting: boolean
-  onToggle: () => Promise<void>
-  onUpdate: (updates: DiscordChannelUpdate) => Promise<void>
+  onToggle: () => Promise<unknown>
+  onUpdate: (updates: DiscordChannelUpdate) => Promise<unknown>
 }
 
 const ChannelRow = ({ channel, projects, serverCollecting, onToggle, onUpdate }: ChannelRowProps) => {

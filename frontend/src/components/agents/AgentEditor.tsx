@@ -7,6 +7,7 @@ import { StatusBadge } from './StatusBadge'
 import { Schedules } from './Schedules'
 import { Triggers } from './Triggers'
 import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 export default function AgentEditor() {
   const { id } = useParams()
@@ -123,7 +124,7 @@ export default function AgentEditor() {
             <List>
               {runs.map(r => (
                 <Row key={r.id} to={`/ui/agents/runs/${r.id}`} title={r.input} badges={<StatusBadge status={r.status} />}
-                  meta={[formatRelativeTime(r.created_at), `$${r.cost_usd}`]} />
+                  meta={[formatRelativeTime(r.created_at), formatCost(r.cost_usd)]} />
               ))}
             </List>
           )}

@@ -10,7 +10,7 @@ import {
   Cell,
 } from 'recharts'
 import { ToolUsageResponse, ToolCallStats } from '@/hooks/useTelemetry'
-import { Select } from '@/components/shared/ui'
+import { EmptyState, Select } from '@/components/shared/ui'
 
 type MetricType = 'total' | 'median' | 'p75' | 'p90' | 'p99' | 'min' | 'max'
 
@@ -32,11 +32,7 @@ export const ToolBreakdownChart: React.FC<ToolBreakdownChartProps> = ({ data }) 
   const [metric, setMetric] = useState<MetricType>('total')
 
   if (!data || data.tools.length === 0) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No tool usage data available
-      </div>
-    )
+    return <EmptyState message="No tool usage data available" />
   }
 
   const getMetricValue = (tool: typeof data.tools[0]): number => {

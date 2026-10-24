@@ -3,7 +3,7 @@ import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannel
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, SyncButton, formatRelativeTime } from '../shared'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Notice, Row, RowError, Section, SubList, Tone, cx } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
 
@@ -18,34 +18,39 @@ export const SlackPanel = () => {
     updateChannel,
   } = useSlack()
   const { listProjects } = useProjects()
-  const { getApp } = useSlackWizard()
+  const { getApp, listApps, deleteApp } = useSlackWizard()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
+  const [apps, setApps] = useState<SlackAppResponse[]>([])
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[]>>({})
   const [projects, setProjects] = useState<Project[]>([])
   const [expandedWorkspace, setExpandedWorkspace] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [resumeApp, setResumeApp] = useState<SlackAppResponse | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [resume, setResume] = useState<{ app: SlackAppResponse; connected: boolean } | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [workspacesData, projectsData] = await Promise.all([
+      const [workspacesData, projectsData, appsData] = await Promise.all([
         listWorkspaces(userId),
-        listProjects()
+        listProjects(),
+        listApps(),
       ])
       setWorkspaces(workspacesData)
       setProjects(projectsData)
+      setApps(appsData)
+      setLoaded(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load workspaces')
     } finally {
       setLoading(false)
     }
-  }, [listWorkspaces, listProjects, userId])
+  }, [listWorkspaces, listProjects, listApps, userId])
 
   useEffect(() => {
     loadData()
@@ -79,36 +84,33 @@ export const SlackPanel = () => {
   const handleConnect = () => {
     // Per-app wizard flow: register a SlackApp first, then OAuth into it.
     // No env-var single-app `/slack/authorize` endpoint anymore.
-    setResumeApp(null)
+    setResume(null)
     setWizardOpen(true)
   }
 
-  const handleResumeSetup = async (app: SlackWorkspaceApp) => {
-    setActionError(null)
-    try {
-      setResumeApp(await getApp(app.id))
-      setWizardOpen(true)
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Failed to load the Slack app')
-    }
-  }
+  const handleResumeSetup = (app: SlackWorkspaceApp) => run(async () => {
+    setResume({ app: await getApp(app.id), connected: true })
+    setWizardOpen(true)
+  })
 
+  // Reload even on cancel: the wizard may already have created an app, which must show as unfinished.
   const closeWizard = () => {
     setWizardOpen(false)
-    setResumeApp(null)
-  }
-
-  const handleWizardComplete = () => {
-    closeWizard()
+    setResume(null)
     loadData()
   }
 
-  const handleDisconnect = async (workspace: SlackWorkspace) => {
+  const handleDeleteApp = (app: SlackAppResponse) => run(async () => {
+    await deleteApp(app.id)
+    loadData()
+  })
+
+  const handleDisconnect = (workspace: SlackWorkspace) => run(async () => {
     await deleteWorkspace(workspace.id)
     loadData()
-  }
+  })
 
-  const handleToggleCollect = async (workspace: SlackWorkspace) => {
+  const handleToggleCollect = (workspace: SlackWorkspace) => run(async () => {
     await updateWorkspace(workspace.id, { collect_messages: !workspace.collect_messages })
     loadData()
     // Refresh channels if loaded (inheritance may have changed)
@@ -116,32 +118,26 @@ export const SlackPanel = () => {
       const channels = await listChannels(workspace.id)
       setChannelsByWorkspace(prev => ({ ...prev, [workspace.id]: channels }))
     }
-  }
+  })
 
-  const handleUpdateWorkspace = async (workspace: SlackWorkspace, updates: SlackWorkspaceUpdate) => {
+  const handleUpdateWorkspace = (workspace: SlackWorkspace, updates: SlackWorkspaceUpdate) => run(async () => {
     await updateWorkspace(workspace.id, updates)
     loadData()
-  }
+  })
 
-  const handleSync = async (workspace: SlackWorkspace) => {
-    setActionError(null)
-    try {
-      await triggerSync(workspace.id)
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Failed to trigger sync')
-      return
-    }
+  const handleSync = (workspace: SlackWorkspace) => run(async () => {
+    await triggerSync(workspace.id)
     // Reload to show updated sync status
     loadData()
-  }
+  }, 'Sync queued')
 
-  const handleUpdateChannel = async (channel: SlackChannel, updates: SlackChannelUpdate) => {
+  const handleUpdateChannel = (channel: SlackChannel, updates: SlackChannelUpdate) => run(async () => {
     await updateChannel(channel.id, updates)
 
     // Refresh channels
     const channels = await listChannels(channel.workspace_id)
     setChannelsByWorkspace(prev => ({ ...prev, [channel.workspace_id]: channels }))
-  }
+  })
 
   const handleToggleChannelCollect = async (channel: SlackChannel) => {
     // Cycle through: inherit (null) -> on (true) -> off (false) -> inherit (null)
@@ -157,28 +153,28 @@ export const SlackPanel = () => {
     await handleUpdateChannel(channel, { collect_messages: newValue })
   }
 
-  if (loading) return <LoadingState />
-  if (error) return <ErrorState message={error} onRetry={loadData} />
+  // Apps the user started but never authorized: resuming one avoids creating a duplicate in Slack.
+  const connectedAppIds = new Set(workspaces.flatMap(w => w.apps.map(a => a.id)))
+  const unfinishedApps = apps.filter(app => app.is_owner && !EVENTS_LIVE.includes(app.setup_state) && !connectedAppIds.has(app.id))
 
-  return (
+  const body = loading && !loaded ? <LoadingState /> : error ? <ErrorState message={error} onRetry={loadData} /> : (
     <Section title="Slack" actions={<Button variant="primary" onClick={handleConnect}>Connect Workspace</Button>}>
-      {wizardOpen && (
-        <SlackAppWizard
-          key={resumeApp?.id ?? 'new'}
-          initialApp={resumeApp}
-          onComplete={handleWizardComplete}
-          onCancel={closeWizard}
-        />
-      )}
-      {actionError && <Notice tone="error" onDismiss={() => setActionError(null)}>{actionError}</Notice>}
+      {notice}
 
-      {workspaces.length === 0 ? (
-        <EmptyState
-          message="No Slack workspaces connected. Connect a workspace to start collecting messages."
-          actionLabel="Connect Workspace"
-          onAction={handleConnect}
-        />
-      ) : (
+      {unfinishedApps.length > 0 && (
+        <List>
+          {unfinishedApps.map(app => (
+            <Row key={app.id} title={app.name} badges={<Badge tone="warning">Setup incomplete</Badge>}
+              meta={['No workspace connected yet']}
+              actions={<>
+                <Button size="sm" onClick={() => { setResume({ app, connected: false }); setWizardOpen(true) }}>Resume setup</Button>
+                <ConfirmButton confirm={`Delete the unfinished Slack app "${app.name}"?`} onConfirm={() => handleDeleteApp(app)} />
+              </>} />
+          ))}
+        </List>
+      )}
+
+      {workspaces.length > 0 ? (
         <List>
           {workspaces.map(workspace => (
             <WorkspaceRow
@@ -203,9 +199,29 @@ export const SlackPanel = () => {
             />
           ))}
         </List>
+      ) : unfinishedApps.length === 0 && (
+        <EmptyState
+          message="No Slack workspaces connected. Connect a workspace to start collecting messages."
+          actionLabel="Connect Workspace"
+          onAction={handleConnect}
+        />
       )}
     </Section>
   )
+
+  // The wizard sits outside the load states so a reload (e.g. on OAuth completion) doesn't remount it mid-setup.
+  return <>
+    {wizardOpen && (
+      <SlackAppWizard
+        key={resume?.app.id ?? 'new'}
+        initialApp={resume?.app}
+        initialAppConnected={resume?.connected}
+        onComplete={closeWizard}
+        onCancel={closeWizard}
+      />
+    )}
+    {body}
+  </>
 }
 
 // Apps whose push events are verified; the others are reached only by polling.
@@ -236,13 +252,13 @@ interface WorkspaceCardProps {
   projects: Project[]
   expanded: boolean
   onToggleExpand: () => void
-  onToggleCollect: () => Promise<void>
-  onUpdateWorkspace: (updates: SlackWorkspaceUpdate) => Promise<void>
-  onSync: () => Promise<void>
+  onToggleCollect: () => Promise<unknown>
+  onUpdateWorkspace: (updates: SlackWorkspaceUpdate) => Promise<unknown>
+  onSync: () => Promise<unknown>
   onResumeSetup: (app: SlackWorkspaceApp) => void
   onDisconnect: () => void
-  onToggleChannelCollect: (channel: SlackChannel) => Promise<void>
-  onUpdateChannel: (channel: SlackChannel, updates: SlackChannelUpdate) => Promise<void>
+  onToggleChannelCollect: (channel: SlackChannel) => Promise<unknown>
+  onUpdateChannel: (channel: SlackChannel, updates: SlackChannelUpdate) => Promise<unknown>
 }
 
 const WorkspaceRow = ({
@@ -350,8 +366,8 @@ interface ChannelRowProps {
   channel: SlackChannel
   projects: Project[]
   workspaceCollecting: boolean
-  onToggle: () => Promise<void>
-  onUpdate: (updates: SlackChannelUpdate) => Promise<void>
+  onToggle: () => Promise<unknown>
+  onUpdate: (updates: SlackChannelUpdate) => Promise<unknown>
 }
 
 const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate }: ChannelRowProps) => {

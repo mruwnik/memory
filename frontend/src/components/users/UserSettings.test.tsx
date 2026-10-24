@@ -87,7 +87,7 @@ describe('UserSettings load states', () => {
       return mockResponse({ status: 500, json: {} })
     })
     renderWithRouter(<UserSettings />)
-    expect(await screen.findByText('Failed to fetch current user')).toBeInTheDocument()
+    expect(await screen.findByText(/Failed to fetch current user/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })
@@ -229,5 +229,11 @@ describe('UserSettings API key', () => {
     await waitFor(async () =>
       expect(await navigator.clipboard.readText()).toBe('mcp_newkey'),
     )
+
+    // The key is never shown again, so only Done may close the dialog.
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByText('mcp_newkey')).not.toBeInTheDocument()
   })
 })

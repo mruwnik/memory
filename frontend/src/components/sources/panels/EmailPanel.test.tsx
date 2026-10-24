@@ -64,7 +64,7 @@ describe('EmailPanel load states', () => {
   it('renders an error state with retry when the list fetch fails', async () => {
     const fetchMock = mockFetchRoutes({ ...baseRoutes([]), '/email-accounts': { status: 500, json: {} } })
     const { user } = renderWithUser(<EmailPanel />)
-    await waitFor(() => expect(screen.getByText('Failed to fetch email accounts')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Failed to fetch email accounts/)).toBeInTheDocument())
     const callsBefore = fetchMock.mock.calls.length
     await user.click(screen.getByText('Retry'))
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore))
@@ -169,11 +169,11 @@ describe('EmailPanel create flow', () => {
 })
 
 describe('EmailPanel mutate flows', () => {
-  it('toggles active via the status switch with a PATCH', async () => {
+  it('pauses an account with a PATCH', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([imapAccount]))
     const { user } = renderWithUser(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
-    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
       const patch = fetchMock.mock.calls.find(
         ([url, init]) => String(url).includes('/email-accounts/1') && (init as RequestInit)?.method === 'PATCH',
@@ -181,6 +181,17 @@ describe('EmailPanel mutate flows', () => {
       expect(patch).toBeTruthy()
       expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ active: false })
     })
+  })
+
+  it.each([
+    [{ status: 409, json: { detail: 'A sync is already running' } }, 'alert', 'A sync is already running'],
+    [{ json: { task_id: 't1' } }, 'status', 'Sync queued'],
+  ])('reports the outcome of Sync', async (syncResponse, role, text) => {
+    mockFetchRoutes({ '/email-accounts/1/sync': syncResponse, ...baseRoutes([imapAccount]) })
+    const { user } = renderWithUser(<EmailPanel />)
+    await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Sync' }))
+    expect((await screen.findByText(text)).closest('[role]')).toHaveAttribute('role', role)
   })
 
   it('deletes after confirming the dialog', async () => {

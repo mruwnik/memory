@@ -1,5 +1,6 @@
 import React from 'react'
 import { Stat, StatGrid } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 interface TelemetrySummaryCardsProps {
   totalTokens: number
@@ -20,16 +21,12 @@ export const TelemetrySummaryCards: React.FC<TelemetrySummaryCardsProps> = ({
     return tokens.toString()
   }
 
-  const formatCost = (cost: number): string => {
-    return `$${cost.toFixed(4)}`
-  }
-
   return (
     <StatGrid>
       <Stat label="Total Tokens" value={formatTokens(totalTokens)} hint="Input + Output" />
-      <Stat label="Total Cost" value={formatCost(totalCost)} hint="API usage" />
-      <Stat label="Sessions" value={totalSessions.toString()} hint="Active sessions" />
-      <Stat label="Events" value={eventCount.toString()} hint="Total events" />
+      <Stat label="Total Cost" value={formatCost(totalCost)} />
+      <Stat label="Sessions" value={totalSessions.toString()} />
+      <Stat label="Events" value={eventCount.toString()} />
     </StatGrid>
   )
 }

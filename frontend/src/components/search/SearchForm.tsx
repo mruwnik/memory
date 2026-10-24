@@ -1,9 +1,8 @@
 import { useMCP } from '@/hooks/useMCP'
 import { useEffect, useState } from 'react'
 import { DynamicFilters } from './DynamicFilters'
-import { SelectableTags } from './SelectableTags'
 import { CollectionMetadata } from '@/types/mcp'
-import { Button, Checkbox, Field, Input, MultiSelect } from '@/components/shared/ui'
+import { Button, Card, Checkbox, Disclosure, Field, Input, MultiSelect } from '@/components/shared/ui'
 
 type Filter = {
     tags?: string[]
@@ -33,8 +32,8 @@ interface SearchFormProps {
     onSearch: (params: SearchParams) => void
 }
 
-const createFlags = (items: string[], defaultValue = false): Record<string, boolean> =>
-    items.reduce((acc, item) => ({ ...acc, [item]: defaultValue }), {})
+const createFlags = (items: string[], defaultValue = false, selected: string[] = []): Record<string, boolean> =>
+    Object.fromEntries(items.map(item => [item, defaultValue || selected.includes(item)]))
 
 const getSelectedItems = (items: Record<string, boolean>): string[] =>
     Object.entries(items).filter(([_, selected]) => selected).map(([key]) => key)
@@ -100,13 +99,15 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
     }
 
     return (
-        <form onSubmit={handleSubmit} className="bg-white p-8 rounded-xl shadow-md mb-8">
+        <Card>
+        <form onSubmit={handleSubmit}>
             <div className="flex gap-4 items-center mb-6">
                 <Input
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search your knowledge base..."
+                    aria-label="Search query"
                     className="flex-1 text-base"
                     required
                 />
@@ -122,28 +123,37 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                 <Checkbox checked={previews} onChange={(e) => setPreviews(e.target.checked)} label="Include content previews" />
                 <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with a LLM before returning" />
 
-                <details className="border border-slate-200 rounded-lg p-4">
-                    <summary className="cursor-pointer font-medium text-slate-700">Search Enhancements</summary>
-                    <div className="mt-4 space-y-3 pl-4">
+                <Disclosure summary="Search Enhancements">
+                    <div className="space-y-3">
                         <Checkbox checked={useBm25} onChange={(e) => setUseBm25(e.target.checked)} label="BM25 keyword search" />
                         <Checkbox checked={useHyde} onChange={(e) => setUseHyde(e.target.checked)} label="HyDE (hypothetical document expansion)" />
                         <Checkbox checked={useReranking} onChange={(e) => setUseReranking(e.target.checked)} label="Reranking (cross-encoder)" />
                         <Checkbox checked={useQueryAnalysis} onChange={(e) => setUseQueryAnalysis(e.target.checked)} label="Query analysis (LLM-based)" />
                     </div>
-                </details>
+                </Disclosure>
 
-                <SelectableTags
-                    title="Modalities"
-                    tags={modalities}
-                    onSelect={(tag, selected) => setModalities({ ...modalities, [tag]: selected })}
-                    onBatchUpdate={(updates) => setModalities(updates)}
-                />
+                <Field label="Modalities">
+                    <MultiSelect
+                        options={Object.keys(modalities)}
+                        value={getSelectedItems(modalities)}
+                        onChange={selected => setModalities(createFlags(Object.keys(modalities), false, selected))}
+                        placeholder="All modalities"
+                    />
+                </Field>
+                <div className="flex gap-3 -mt-2">
+                    <Button variant="link" size="sm" type="button" onClick={() => setModalities(createFlags(Object.keys(modalities), true))}>
+                        Select all
+                    </Button>
+                    <Button variant="link" size="sm" type="button" onClick={() => setModalities(createFlags(Object.keys(modalities)))}>
+                        Clear
+                    </Button>
+                </div>
 
                 <Field label="Tags">
                     <MultiSelect
                         options={Object.keys(tags)}
-                        value={Object.keys(tags).filter(t => tags[t])}
-                        onChange={selected => setTags(Object.fromEntries(Object.keys(tags).map(t => [t, selected.includes(t)])))}
+                        value={getSelectedItems(tags)}
+                        onChange={selected => setTags(createFlags(Object.keys(tags), false, selected))}
                         placeholder="Any tag"
                     />
                 </Field>
@@ -174,6 +184,7 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                 </Field>
             </div>
         </form>
+        </Card>
     )
 }
 

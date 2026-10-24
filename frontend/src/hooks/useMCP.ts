@@ -144,8 +144,11 @@ export const useMCP = () => {
     }
 
     if (resp.result.isError) {
-      const text = content[0]?.text ?? 'unknown error'
-      throw new Error(`MCP ${method} tool error: ${text}`)
+      const text: string = content[0]?.text ?? `${method} failed`
+      // The visibility middleware denies with "Access denied: <tool name>", which means nothing to a user.
+      throw new Error(/^Access denied: [a-z_]+$/.test(text)
+        ? "You don't have permission for this. Ask an admin to grant you access."
+        : text)
     }
 
     return content.map((item: any) => {

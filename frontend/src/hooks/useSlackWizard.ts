@@ -18,6 +18,7 @@
 // (4, 6, 7) have completed.
 import { useCallback, useMemo } from 'react'
 import { useAuth } from './useAuth'
+import { apiError } from './apiError'
 
 export type SlackAppSetupState =
   | 'draft'
@@ -71,14 +72,7 @@ export interface SlackTestMessageStatus {
 
 const apiOk = async (response: Response, fallback: string) => {
   if (response.ok) return response.json()
-  let detail = fallback
-  try {
-    const body = await response.json()
-    if (body?.detail) detail = body.detail
-  } catch {
-    /* ignore — non-JSON body */
-  }
-  throw new Error(detail)
+  throw await apiError(response, fallback)
 }
 
 export const useSlackWizard = () => {

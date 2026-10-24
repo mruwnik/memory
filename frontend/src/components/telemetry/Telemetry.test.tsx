@@ -194,7 +194,7 @@ describe('Telemetry container', () => {
     renderWithRouter(<Telemetry />)
 
     await waitFor(() =>
-      expect(screen.getByText(/Failed to fetch telemetry metrics/)).toBeInTheDocument(),
+      expect(screen.getByText('boom')).toBeInTheDocument(),
     )
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })

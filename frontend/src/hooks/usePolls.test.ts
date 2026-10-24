@@ -160,7 +160,7 @@ describe('public poll endpoints', () => {
         throw new Error('not json')
       },
     } as unknown as Response))
-    await expect(getPollBySlug('x')).rejects.toThrow('Unknown error')
+    await expect(getPollBySlug('x')).rejects.toThrow('Request failed (500)')
   })
 
   it('submitPollResponse POSTs the body', async () => {

@@ -134,9 +134,23 @@ describe('mcpCall', () => {
       jsonRpcResult([{ text: 'tool exploded' }], true),
     )
     const { result } = renderHook(() => useMCP())
-    await expect(result.current.mcpCall('t')).rejects.toThrow(
-      'MCP t tool error: tool exploded',
+    await expect(result.current.mcpCall('t')).rejects.toThrow(/^tool exploded$/)
+  })
+
+  it('turns an access denial into a plain permission message', async () => {
+    mockFetch(async () =>
+      jsonRpcResult([{ text: 'Access denied: organizer_list_tasks' }], true),
     )
+    const { result } = renderHook(() => useMCP())
+    await expect(result.current.mcpCall('organizer_list_tasks')).rejects.toThrow(
+      "You don't have permission for this. Ask an admin to grant you access.",
+    )
+  })
+
+  it('keeps the specifics of other access errors', async () => {
+    mockFetch(async () => jsonRpcResult([{ text: 'Access denied to project 5' }], true))
+    const { result } = renderHook(() => useMCP())
+    await expect(result.current.mcpCall('projects_fetch')).rejects.toThrow('Access denied to project 5')
   })
 
   it('throws on an empty (non-SSE) body', async () => {

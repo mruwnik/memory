@@ -19,26 +19,18 @@ export const formatRelativeTime = (dateString: string | null): string => {
   return date.toLocaleDateString()
 }
 
-// Active/inactive state; with onClick it is a switch that toggles the source.
-interface StatusBadgeProps {
-  active: boolean
-  onClick?: () => void
-}
+export const StatusBadge = ({ active }: { active: boolean }) => (
+  <Badge tone={active ? 'success' : 'neutral'}>{active ? 'Active' : 'Inactive'}</Badge>
+)
 
-export const StatusBadge = ({ active, onClick }: StatusBadgeProps) => {
-  const badge = <Badge tone={active ? 'success' : 'neutral'}>{active ? 'Active' : 'Inactive'}</Badge>
-  if (!onClick) return badge
-  return (
-    <button type="button" role="switch" aria-checked={active} onClick={onClick}
-      className="rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-primary">
-      {badge}
-    </button>
-  )
-}
+/** The row action that stops or restarts collection for a source shown with a StatusBadge. */
+export const PauseButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => (
+  <Button size="sm" onClick={onClick}>{active ? 'Pause' : 'Resume'}</Button>
+)
 
 // Sync Button
 interface SyncButtonProps {
-  onSync: () => Promise<void>
+  onSync: () => Promise<unknown>
   disabled?: boolean
   label?: string
 }
@@ -142,7 +134,7 @@ export const TagsInput = ({ tags, onChange, placeholder = 'Add tag...' }: TagsIn
             <button
               type="button"
               onClick={() => removeTag(tag)}
-              className="text-slate-400 hover:text-slate-600"
+              className="text-slate-500 hover:text-slate-600"
             >
               &times;
             </button>
@@ -213,7 +205,7 @@ interface SourceRowProps {
   onToggleActive?: () => void
   onEdit?: () => void
   onDelete?: () => void
-  onSync?: () => Promise<void>
+  onSync?: () => Promise<unknown>
   additionalActions?: React.ReactNode
   children?: React.ReactNode
 }
@@ -235,10 +227,11 @@ export const SourceRow = ({
   <Row
     title={title}
     muted={!active}
-    badges={<StatusBadge active={active} onClick={onToggleActive} />}
+    badges={<StatusBadge active={active} />}
     meta={[subtitle, `Last sync: ${formatRelativeTime(lastSyncAt)}`, ...meta]}
     actions={<>
       {onSync && <SyncButton onSync={onSync} disabled={!active} />}
+      {onToggleActive && <PauseButton active={active} onClick={onToggleActive} />}
       {additionalActions}
       {onEdit && <Button size="sm" onClick={onEdit}>Edit</Button>}
       {onDelete && <ConfirmButton confirm={`Are you sure you want to delete "${title}"?`} onConfirm={onDelete} />}

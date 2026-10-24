@@ -45,7 +45,7 @@ export const PollList: React.FC = () => {
   return (
     <Page
       title="Availability Polls"
-      actions={<ButtonLink variant="primary" to="/ui/polls/new">Create New Poll</ButtonLink>}
+      actions={<ButtonLink variant="primary" to="/ui/polls/new">New poll</ButtonLink>}
       width="default"
     >
       <Toolbar>

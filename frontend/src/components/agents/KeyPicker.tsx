@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { DEFAULT_KEY_DAILY_CAP_USD, providerName, type AgentSpec, type Catalog, type ProviderKey } from '@/hooks/useAgents'
 import { Field, Notice, Select } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 const DEFAULT = 'default'
 const SERVER = 'server'
@@ -9,7 +10,6 @@ const toChoice = (value: string): AgentSpec['provider_key'] =>
   value === DEFAULT ? null : value === SERVER ? SERVER : Number(value)
 
 export const providerOf = (model: string) => model.split('/')[0]
-export const usd = (amount: string) => `$${Number(amount).toFixed(2)}`
 
 /**
  * The user key that pays for runs of `spec` (null: the server's), and why runs would fail if they can't start.
@@ -40,11 +40,11 @@ export function KeyPicker({ value, catalog, onChange }: {
   const { key, problem } = payer(value, catalog)
   const { ceilings } = catalog
   const keyCap = key?.max_cost_usd_per_day
-    ? `${usd(key.max_cost_usd_per_day)}/day`
-    : `${usd(DEFAULT_KEY_DAILY_CAP_USD)}/day unless this agent sets one`
+    ? `${formatCost(key.max_cost_usd_per_day)}/day`
+    : `${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day unless this agent sets one`
   const note = key
-    ? `Runs pay with your key '${key.label}'. The server's cost ceilings don't apply; this agent's caps and the key's daily cap (${keyCap}) do. Without a max $ per run, a run stops at ${usd(ceilings.default_user_key_run_cost_usd)}.`
-    : `Runs pay with the server's ${name} key, within its ceilings of ${usd(ceilings.max_run_cost_usd)} per run and ${usd(ceilings.max_daily_cost_usd)} per day.`
+    ? `Runs pay with your key '${key.label}'. The server's cost ceilings don't apply; this agent's caps and the key's daily cap (${keyCap}) do. Without a max $ per run, a run stops at ${formatCost(ceilings.default_user_key_run_cost_usd)}.`
+    : `Runs pay with the server's ${name} key, within its ceilings of ${formatCost(ceilings.max_run_cost_usd)} per run and ${formatCost(ceilings.max_daily_cost_usd)} per day.`
 
   return (
     <div className="space-y-2">

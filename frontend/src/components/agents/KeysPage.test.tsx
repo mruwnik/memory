@@ -44,7 +44,7 @@ describe('KeysPage', () => {
     listKeys.mockResolvedValue(listed([]))
     upsertKey.mockRejectedValue(new Error('anthropic rejected this key'))
     const { user } = renderWithRouter(<KeysPage />)
-    await user.click(await screen.findByRole('button', { name: 'Add key' }))
+    await user.click(await screen.findByRole('button', { name: 'New key' }))
     await user.type(screen.getByLabelText('Label'), 'personal')
     await user.type(screen.getByLabelText('API key'), 'sk-ant-secret')
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add key' }))

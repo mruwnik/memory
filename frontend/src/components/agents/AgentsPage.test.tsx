@@ -26,7 +26,7 @@ describe('AgentsPage', () => {
     ])
     renderWithRouter(<AgentsPage />)
     await waitFor(() => expect(screen.getByText('digest')).toBeInTheDocument())
-    expect(screen.getByText('failed')).toBeInTheDocument()
+    expect(screen.getByText('Failed')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/1')
   })
 

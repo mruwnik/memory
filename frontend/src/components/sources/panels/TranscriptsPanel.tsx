@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { SourceRow, TagsInput } from '../shared'
-import { RowError, Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select } from '@/components/shared/ui'
+import { RowError, Button, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const TranscriptsPanel = () => {
@@ -24,6 +24,7 @@ export const TranscriptsPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<TranscriptAccount | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
     setLoading(true)
@@ -60,31 +61,32 @@ export const TranscriptsPanel = () => {
     }
   }
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = (id: number) => run(async () => {
     await deleteTranscriptAccount(id)
     loadAccounts()
-  }
+  })
 
-  const handleToggleActive = async (account: TranscriptAccount) => {
+  const handleToggleActive = (account: TranscriptAccount) => run(async () => {
     await updateTranscriptAccount(account.id, { active: !account.active })
     loadAccounts()
-  }
+  })
 
-  const handleSync = async (id: number) => {
+  const handleSync = (id: number) => run(async () => {
     await syncTranscriptAccount(id)
     loadAccounts()
-  }
+  }, 'Sync queued')
 
-  const handleRescan = async (id: number) => {
+  const handleRescan = (id: number) => run(async () => {
     await rescanTranscriptAccount(id)
     loadAccounts()
-  }
+  }, 'Rescan queued')
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadAccounts} />
 
   return (
     <Section title="Transcript Accounts" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add Account</Button>}>
+      {notice}
       {accounts.length === 0 ? (
         <EmptyState
           message="No transcript accounts configured. Connect Fireflies (or another supported provider) to ingest meeting transcripts."
@@ -266,7 +268,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
         </Field>
 
         <Field label={<>
-            API Key {account && <span className="text-slate-400">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
+            API Key {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
           <Input
             type="password"
             value={formData.api_key}
@@ -278,7 +280,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
 
         <Field>
           <Label>
-            Webhook Secret {account && <span className="text-slate-400">(optional; leave blank to keep current)</span>}
+            Webhook Secret {account && <span className="text-slate-500">(optional; leave blank to keep current)</span>}
           </Label>
           <Input
             type="password"

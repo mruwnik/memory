@@ -10,6 +10,15 @@ const TONES: Record<RunStatus, Tone> = {
   cancelled: 'neutral',
 }
 
+export const STATUS_LABELS: Record<RunStatus, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  done: 'Done',
+  failed: 'Failed',
+  budget_exceeded: 'Over budget',
+  cancelled: 'Cancelled',
+}
+
 export function StatusBadge({ status }: { status: RunStatus }) {
-  return <Badge tone={TONES[status]}>{status}</Badge>
+  return <Badge tone={TONES[status]}>{STATUS_LABELS[status]}</Badge>
 }

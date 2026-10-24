@@ -78,7 +78,7 @@ describe('useTelemetry getRawEvents', () => {
 
   it('throws a status-bearing error on non-ok', async () => {
     mockJson({}, 503)
-    await expect(setup().getRawEvents()).rejects.toThrow('Failed to fetch telemetry events: 503')
+    await expect(setup().getRawEvents()).rejects.toThrow('Failed to fetch telemetry events (503)')
   })
 
   it('throws when the content-type is not JSON', async () => {
@@ -120,7 +120,7 @@ describe('useTelemetry getMetrics', () => {
 
   it('throws a status-bearing error on non-ok', async () => {
     mockJson({}, 500)
-    await expect(setup().getMetrics('x')).rejects.toThrow('Failed to fetch telemetry metrics: 500')
+    await expect(setup().getMetrics('x')).rejects.toThrow('Failed to fetch telemetry metrics (500)')
   })
 })
 
@@ -136,7 +136,7 @@ describe('useTelemetry getToolUsage', () => {
 
   it('throws a status-bearing error on non-ok', async () => {
     mockJson({}, 502)
-    await expect(setup().getToolUsage()).rejects.toThrow('Failed to fetch tool usage: 502')
+    await expect(setup().getToolUsage()).rejects.toThrow('Failed to fetch tool usage (502)')
   })
 })
 
@@ -152,7 +152,7 @@ describe('useTelemetry getUsersWithTelemetry', () => {
   it('throws a status-bearing error on non-ok', async () => {
     mockJson({}, 403)
     await expect(setup().getUsersWithTelemetry()).rejects.toThrow(
-      'Failed to fetch telemetry users: 403',
+      'Failed to fetch telemetry users (403)',
     )
   })
 })
@@ -170,7 +170,7 @@ describe('useTelemetry getSessionStats', () => {
 
   it('throws a status-bearing error on non-ok', async () => {
     mockJson({}, 500)
-    await expect(setup().getSessionStats()).rejects.toThrow('Failed to fetch session stats: 500')
+    await expect(setup().getSessionStats()).rejects.toThrow('Failed to fetch session stats (500)')
   })
 })
 

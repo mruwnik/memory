@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { TERMINAL_STATUSES, useAgents, type AgentRun, type Block, type RunStep } from '@/hooks/useAgents'
 import { StatusBadge } from './StatusBadge'
 import { Badge, Button, DetailList, List, Notice, Page, Row, Section, type Tone } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 const POLL_MS = 2000
 const PAGE_SIZE = 100
@@ -126,7 +127,7 @@ function RunView({ runId }: { runId: string }) {
     >
     <DetailList items={[
       ['Model', <span className="font-mono">{run.model}</span>],
-      ['Cost', `$${run.cost_usd} of $${run.max_cost_usd}`],
+      ['Cost', `${formatCost(run.cost_usd)} of ${formatCost(run.max_cost_usd)}`],
       ['Turns', run.num_turns],
       ['Tokens', `${contextTokens(run.usage)} context (${run.usage.cache_read_tokens ?? 0} cached) / ${run.usage.output_tokens ?? 0} out`],
       ['Trigger', run.trigger_kind],

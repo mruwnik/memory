@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
-import { Button, Card, LoadingState, Modal, Notice, Page, buttonClass } from '@/components/shared/ui'
+import { Button, Card, Checkbox, LoadingState, Modal, Page, buttonClass } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -17,6 +17,76 @@ interface DayCell {
   isCurrentMonth: boolean
   isToday: boolean
   events: CalendarEvent[]
+}
+
+const VIEWPORT_GUTTER = 8
+
+interface FilterMenuProps<T> {
+  label: string
+  options: { value: T; label: ReactNode }[]
+  selected: Set<T>
+  onToggle: (value: T) => void
+  onAll: () => void
+  onNone: () => void
+}
+
+/** A button that opens a checklist of filter values. Escape, an outside click or tabbing away closes it. */
+function FilterMenu<T extends string | number>({ label, options, selected, onToggle, onAll, onNone }: FilterMenuProps<T>) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // The menu hangs off the button's right edge, which on a phone can push it past the left of the screen.
+  useLayoutEffect(() => {
+    const menu = menuRef.current
+    if (!menu) return
+    const { left, right } = menu.getBoundingClientRect()
+    const shift = Math.max(VIEWPORT_GUTTER - left, Math.min(0, window.innerWidth - VIEWPORT_GUTTER - right))
+    menu.style.transform = shift ? `translateX(${shift}px)` : ''
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    menuRef.current?.querySelector<HTMLElement>('button, input')?.focus()
+    const closeOutside = (e: Event) => !rootRef.current?.contains(e.target as Node) && setOpen(false)
+    document.addEventListener('mousedown', closeOutside)
+    document.addEventListener('focusin', closeOutside)
+    return () => {
+      document.removeEventListener('mousedown', closeOutside)
+      document.removeEventListener('focusin', closeOutside)
+    }
+  }, [open])
+
+  return (
+    <div ref={rootRef} className="relative" onKeyDown={e => {
+      if (e.key !== 'Escape' || !open) return
+      setOpen(false)
+      buttonRef.current?.focus()
+    }}>
+      <button ref={buttonRef} type="button" className={buttonClass('secondary')} aria-expanded={open}
+        disabled={!options.length} onClick={() => setOpen(o => !o)}>
+        <span>{label}</span>
+        <span className="text-xs text-slate-500">({selected.size}/{options.length})</span>
+      </button>
+      {open && (
+        <div ref={menuRef} role="group" aria-label={label}
+          className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-72 max-w-[calc(100vw-1rem)] max-h-80 overflow-auto">
+          <div className="p-2 border-b border-slate-100 flex gap-4">
+            <Button variant="link" onClick={onAll}>Select all</Button>
+            <Button variant="link" onClick={onNone}>Select none</Button>
+          </div>
+          <div className="p-2 space-y-1">
+            {options.map(o => (
+              <Checkbox key={o.value} checked={selected.has(o.value)} onChange={() => onToggle(o.value)}
+                label={<span className="truncate">{o.label}</span>}
+                className="flex w-full px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer" />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 const Calendar = () => {
@@ -46,7 +116,6 @@ const Calendar = () => {
     }
     return new Set()
   })
-  const [showCalendarFilter, setShowCalendarFilter] = useState(false)
   const [hasLoadedInitialCalendars, setHasLoadedInitialCalendars] = useState(false)
 
   // Attendee popup state
@@ -56,7 +125,6 @@ const Calendar = () => {
   const isAdmin = hasScope('admin') || hasScope('*')
   const [users, setUsers] = useState<User[]>([])
   const [enabledUsers, setEnabledUsers] = useState<Set<number>>(new Set())
-  const [showUserFilter, setShowUserFilter] = useState(false)
   const [usersLoaded, setUsersLoaded] = useState(false)
 
   // Load users for admin
@@ -281,128 +349,25 @@ const Calendar = () => {
       title={<>{MONTH_NAMES[currentDate.getMonth()]} {currentDate.getFullYear()}</>}
       actions={<>
         <div className="flex flex-wrap gap-2">
-          {/* User Filter Dropdown (Admin only) */}
           {isAdmin && users.length > 0 && (
-            <div className="relative">
-              <button
-                onClick={() => setShowUserFilter(!showUserFilter)}
-                className={buttonClass('secondary')} aria-haspopup="true"
-              >
-                <span>Users</span>
-                <span className="text-xs text-slate-500">
-                  ({enabledUsers.size}/{users.length})
-                </span>
-              </button>
-              {showUserFilter && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowUserFilter(false)}
-                  />
-                  <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64 max-h-80 overflow-auto">
-                    <div className="p-2 border-b border-slate-100 flex gap-2">
-                      <Button variant="link"
-                        onClick={selectAllUsers}
-
-                      >
-                        Select all
-                      </Button>
-                      <Button variant="link"
-                        onClick={selectNoUsers}
-
-                      >
-                        Select none
-                      </Button>
-                    </div>
-                    <div className="p-2 space-y-1">
-                      {users.map(user => (
-                        <label
-                          key={user.id}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={enabledUsers.has(user.id)}
-                            onChange={() => toggleUser(user.id)}
-
-                          />
-                          <span className="text-sm text-slate-700 truncate">
-                            {user.name}
-                            {user.id === currentUser?.id && (
-                              <span className="text-slate-500 ml-1">(you)</span>
-                            )}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+            <FilterMenu label="Users" selected={enabledUsers} onToggle={toggleUser} onAll={selectAllUsers} onNone={selectNoUsers}
+              options={users.map(user => ({
+                value: user.id,
+                label: <>{user.name}{user.id === currentUser?.id && <span className="text-slate-500 ml-1">(you)</span>}</>,
+              }))} />
           )}
-          {/* Calendar Filter Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowCalendarFilter(!showCalendarFilter)}
-              className={buttonClass('secondary')} aria-haspopup="true"
-            >
-              <span>Calendars</span>
-              <span className="text-xs text-slate-500">
-                ({enabledCalendars.size}/{calendarNames.length})
-              </span>
-            </button>
-            {showCalendarFilter && (
-              <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setShowCalendarFilter(false)}
-                />
-                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-72 max-h-80 overflow-auto">
-                  <div className="p-2 border-b border-slate-100 flex gap-2">
-                    <Button variant="link"
-                      onClick={selectAllCalendars}
-
-                    >
-                      Select all
-                    </Button>
-                    <Button variant="link"
-                      onClick={selectNoCalendars}
-
-                    >
-                      Select none
-                    </Button>
-                  </div>
-                  <div className="p-2 space-y-1">
-                    {calendarNames.map(name => (
-                      <label
-                        key={name}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={enabledCalendars.has(name)}
-                          onChange={() => toggleCalendar(name)}
-
-                        />
-                        <span className="text-sm text-slate-700 truncate">{name}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+          <FilterMenu label="Calendars" selected={enabledCalendars} onToggle={toggleCalendar}
+            onAll={selectAllCalendars} onNone={selectNoCalendars}
+            options={calendarNames.map(name => ({ value: name, label: name }))} />
           <Button size="icon" onClick={goToPreviousMonth} aria-label="Previous month">&lt;</Button>
           <Button onClick={goToToday}>Today</Button>
           <Button size="icon" onClick={goToNextMonth} aria-label="Next month">&gt;</Button>
         </div>
       </>}
       width="wide"
+      error={error}
+      onRetry={() => loadEvents(currentDate, selectedUserIds)}
     >
-      {error && (
-        <Notice tone="error" onRetry={() => loadEvents(currentDate, selectedUserIds)}>{error}</Notice>
-      )}
-
       <Card flush className="relative grid grid-cols-7 overflow-hidden">
         {/* Day headers */}
         {DAYS_OF_WEEK.map(day => (
@@ -424,7 +389,7 @@ const Calendar = () => {
                 day.isToday
                   ? 'bg-primary text-white'
                   : !day.isCurrentMonth
-                    ? 'text-slate-400'
+                    ? 'text-slate-500'
                     : 'text-slate-700'
               }`}>
                 {day.date.getDate()}
@@ -503,7 +468,7 @@ const Calendar = () => {
                         <div className="text-xs text-slate-500 truncate">{event.location}</div>
                       )}
                       {event.calendar_name && (
-                        <div className="text-xs text-slate-400 mt-1">{event.calendar_name}</div>
+                        <div className="text-xs text-slate-500 mt-1">{event.calendar_name}</div>
                       )}
                     </div>
                   </div>
@@ -614,7 +579,7 @@ const Calendar = () => {
                   <div>
                     <div className="text-lg font-medium text-slate-800">{selectedAttendee.person.display_name}</div>
                     {selectedAttendee.person.identifier && (
-                      <div className="text-xs text-slate-400">@{selectedAttendee.person.identifier}</div>
+                      <div className="text-xs text-slate-500">@{selectedAttendee.person.identifier}</div>
                     )}
                   </div>
 
@@ -666,7 +631,7 @@ const Calendar = () => {
               ) : (
                 <div className="text-center py-4">
                   <div className="text-slate-500 mb-2">No profile found for this person</div>
-                  <div className="text-xs text-slate-400">You can add them to your contacts via the People section</div>
+                  <div className="text-xs text-slate-500">You can add them to your contacts via the People section</div>
                 </div>
               )}
             </div>

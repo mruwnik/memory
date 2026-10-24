@@ -21,9 +21,11 @@ vi.mock('@/hooks/useSlack', () => ({
 }))
 
 const getApp = vi.fn()
+const listApps = vi.fn()
+const deleteApp = vi.fn()
 
 vi.mock('@/hooks/useSlackWizard', () => ({
-  useSlackWizard: () => ({ getApp }),
+  useSlackWizard: () => ({ getApp, listApps, deleteApp }),
 }))
 
 vi.mock('@/hooks/useProjects', () => ({
@@ -36,8 +38,8 @@ vi.mock('../Sources', () => ({
 
 // The panel renders SlackAppWizard, which depends on these hooks; stub them.
 vi.mock('./SlackAppWizard', () => ({
-  SlackAppWizard: ({ initialApp, onCancel, onComplete }: { initialApp?: { id: number } | null; onCancel?: () => void; onComplete?: () => void }) => (
-    <div data-testid="slack-wizard" data-app-id={initialApp?.id ?? ''}>
+  SlackAppWizard: ({ initialApp, initialAppConnected, onCancel, onComplete }: { initialApp?: { id: number } | null; initialAppConnected?: boolean; onCancel?: () => void; onComplete?: () => void }) => (
+    <div data-testid="slack-wizard" data-app-id={initialApp?.id ?? ''} data-connected={String(initialAppConnected)}>
       <button onClick={onCancel}>wizard-cancel</button>
       <button onClick={() => onComplete?.()}>wizard-complete</button>
     </div>
@@ -80,6 +82,8 @@ const channel = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+const draftApp = { id: 4, name: 'Acme app', setup_state: 'draft', is_owner: true }
+
 beforeEach(() => {
   vi.clearAllMocks()
   listWorkspaces.mockResolvedValue([])
@@ -90,6 +94,8 @@ beforeEach(() => {
   triggerSync.mockResolvedValue({ status: 'queued' })
   updateChannel.mockResolvedValue(channel())
   getApp.mockResolvedValue({ id: 4, name: 'Acme app', setup_state: 'draft' })
+  listApps.mockResolvedValue([])
+  deleteApp.mockResolvedValue(undefined)
 })
 
 describe('SlackPanel - load states', () => {
@@ -164,13 +170,31 @@ describe('SlackPanel - connect wizard', () => {
     expect(screen.getByTestId('slack-wizard')).toBeInTheDocument()
   })
 
-  it('closes the wizard on cancel', async () => {
+  it('closes the wizard on cancel and lists the app it may have created as unfinished', async () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText(/No Slack workspaces connected/)
 
+    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done' }])
     await user.click(screen.getAllByRole('button', { name: 'Connect Workspace' })[0])
     await user.click(screen.getByRole('button', { name: 'wizard-cancel' }))
     expect(screen.queryByTestId('slack-wizard')).not.toBeInTheDocument()
+    expect(await screen.findByText('Half done')).toBeInTheDocument()
+  })
+
+  it('keeps the same wizard mounted while OAuth completion reloads the panel', async () => {
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText(/No Slack workspaces connected/)
+    await user.click(screen.getAllByRole('button', { name: 'Connect Workspace' })[0])
+    const wizard = screen.getByTestId('slack-wizard')
+
+    listWorkspaces.mockReturnValue(new Promise(() => {}))
+    const channel = new BroadcastChannel('slack-oauth-8')
+    channel.postMessage({ type: 'oauth-complete' })
+    channel.close()
+    await waitFor(() => expect(listWorkspaces).toHaveBeenCalledTimes(2))
+
+    expect(screen.getByTestId('slack-wizard')).toBe(wizard)
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
   })
 
   it('reloads workspaces when the wizard completes', async () => {
@@ -250,8 +274,6 @@ describe('SlackPanel - workspace actions', () => {
   })
 })
 
-const draftApp = { id: 4, name: 'Acme app', setup_state: 'draft', is_owner: true }
-
 describe('SlackPanel - event setup', () => {
   it('marks a workspace whose app has no push events as polling only', async () => {
     listWorkspaces.mockResolvedValue([workspace({ apps: [draftApp] })])
@@ -275,7 +297,40 @@ describe('SlackPanel - event setup', () => {
 
     await user.click(screen.getByRole('button', { name: 'Finish event setup' }))
     expect(getApp).toHaveBeenCalledWith(4)
-    expect(await screen.findByTestId('slack-wizard')).toHaveAttribute('data-app-id', '4')
+    const wizard = await screen.findByTestId('slack-wizard')
+    expect(wizard).toHaveAttribute('data-app-id', '4')
+    expect(wizard).toHaveAttribute('data-connected', 'true')
+  })
+
+  it('lists an app that never reached OAuth so its setup can be resumed instead of duplicated', async () => {
+    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done' }, draftApp])
+    listWorkspaces.mockResolvedValue([workspace({ apps: [draftApp] })])
+    const { user } = renderWithUser(<SlackPanel />)
+
+    expect(await screen.findByText('Half done')).toBeInTheDocument()
+    expect(screen.getAllByText('Setup incomplete')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'Resume setup' }))
+    const wizard = screen.getByTestId('slack-wizard')
+    expect(wizard).toHaveAttribute('data-app-id', '6')
+    expect(wizard).toHaveAttribute('data-connected', 'false')
+  })
+
+  it('offers only Resume setup, not a second Connect, when an unfinished app stands in for the empty state', async () => {
+    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done' }])
+    renderWithUser(<SlackPanel />)
+
+    expect(await screen.findByText('Half done')).toBeInTheDocument()
+    expect(screen.queryByText(/No Slack workspaces connected/)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Connect Workspace' })).toHaveLength(1)
+  })
+
+  it('deletes an unfinished app after confirmation', async () => {
+    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done' }])
+    const { user } = renderWithUser(<SlackPanel />)
+
+    await user.click(await screen.findByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(deleteApp).toHaveBeenCalledWith(6))
   })
 
   it('offers no setup action to someone who does not own the app', async () => {

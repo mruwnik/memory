@@ -81,7 +81,7 @@ describe('PeopleManagement create flow', () => {
     const { user } = renderWithRouter(<PeopleManagement />)
     await screen.findByText(/No people tracked yet/)
 
-    await user.click(screen.getByRole('button', { name: /Add Person/ }))
+    await user.click(screen.getByRole('button', { name: 'New person' }))
     const dialog = screen.getByRole('dialog')
     await user.type(within(dialog).getByLabelText(/Display Name/), 'Carol')
     await user.click(within(dialog).getByRole('button', { name: 'Add Person' }))
@@ -101,7 +101,7 @@ describe('PeopleManagement create flow', () => {
     const { user } = renderWithRouter(<PeopleManagement />)
     await screen.findByText(/No people tracked yet/)
 
-    await user.click(screen.getByRole('button', { name: /Add Person/ }))
+    await user.click(screen.getByRole('button', { name: 'New person' }))
     const dialog = screen.getByRole('dialog')
     await user.type(within(dialog).getByLabelText(/Display Name/), 'Carol')
     await user.click(within(dialog).getByRole('button', { name: 'Add Person' }))

@@ -173,7 +173,7 @@ export const TeamsPanel = () => {
   return (
     <Page
       title="Teams"
-      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New Team</Button>}
+      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New team</Button>}
       width="wide"
       loading={loading}
       error={error}
@@ -838,7 +838,7 @@ const MembersModal = ({
                 <div className="space-y-4">
                   <div>
                     <div className="text-lg font-medium text-slate-800">{selectedMember.person.display_name}</div>
-                    <div className="text-xs text-slate-400">@{selectedMember.person.identifier}</div>
+                    <div className="text-xs text-slate-500">@{selectedMember.person.identifier}</div>
                   </div>
 
                   {selectedMember.person.aliases && selectedMember.person.aliases.length > 0 && (
@@ -892,7 +892,7 @@ const MembersModal = ({
                         {selectedMember.person.tidbits.map((tidbit: Tidbit) => (
                           <div key={tidbit.id} className="bg-slate-50 rounded-lg p-3 text-sm">
                             <div className="text-slate-700 whitespace-pre-wrap">{tidbit.content}</div>
-                            <div className="flex items-center gap-2 mt-2 text-xs text-slate-400">
+                            <div className="flex items-center gap-2 mt-2 text-xs text-slate-500">
                               {tidbit.tidbit_type && (
                                 <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">
                                   {tidbit.tidbit_type}

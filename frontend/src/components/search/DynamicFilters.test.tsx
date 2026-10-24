@@ -24,8 +24,8 @@ describe('DynamicFilters', () => {
       <DynamicFilters schemas={{}} selectedModalities={[]} filters={{}} onFilterChange={() => {}} />,
     )
     expect(screen.getByText('Document Properties')).toBeInTheDocument()
-    expect(screen.getByText('Min Created At:')).toBeInTheDocument()
-    expect(screen.getByText('Max Created At:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Min Created At')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max Created At')).toBeInTheDocument()
   })
 
   it('renders modality-specific section for non-common fields', () => {
@@ -41,7 +41,7 @@ describe('DynamicFilters', () => {
       />,
     )
     expect(screen.getByText('Blog Specific')).toBeInTheDocument()
-    expect(screen.getByText('Author:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Author')).toBeInTheDocument()
   })
 
   it('does not create a modality section when all fields are common', () => {
@@ -58,7 +58,7 @@ describe('DynamicFilters', () => {
     )
     // filename is a common field => it goes to Document Properties, no "Email Specific"
     expect(screen.queryByText('Email Specific')).not.toBeInTheDocument()
-    expect(screen.getByText('Filename:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Filename')).toBeInTheDocument()
   })
 
   it('expands size into min/max size common fields', () => {
@@ -73,8 +73,8 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByText('Min Size:')).toBeInTheDocument()
-    expect(screen.getByText('Max Size:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Min Size')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max Size')).toBeInTheDocument()
   })
 
   it('expands sent_at into min/max common fields', () => {
@@ -89,8 +89,8 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByText('Min Sent At:')).toBeInTheDocument()
-    expect(screen.getByText('Max Sent At:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Min Sent At')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max Sent At')).toBeInTheDocument()
   })
 
   it('skips the tags field entirely', () => {
@@ -109,7 +109,7 @@ describe('DynamicFilters', () => {
       />,
     )
     expect(screen.queryByText('Tags:')).not.toBeInTheDocument()
-    expect(screen.getByText('Author:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Author')).toBeInTheDocument()
   })
 
   it('formats underscored field names into title case labels', () => {
@@ -124,7 +124,7 @@ describe('DynamicFilters', () => {
         onFilterChange={() => {}}
       />,
     )
-    expect(screen.getByText('Word Count:')).toBeInTheDocument()
+    expect(screen.getByLabelText('Word Count')).toBeInTheDocument()
   })
 
   it('passes current filter values into inputs', () => {

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import { apiError } from './apiError'
 
 export interface BeatScheduleEntry {
   key: string
@@ -46,13 +47,13 @@ export const useCelery = () => {
 
   const getBeatSchedule = useCallback(async (): Promise<BeatScheduleEntry[]> => {
     const response = await apiCall('/api/celery/beat-schedule')
-    if (!response.ok) throw new Error('Failed to fetch beat schedule')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch beat schedule')
     return response.json()
   }, [apiCall])
 
   const getTaskActivity = useCallback(async (hours: number = 24): Promise<TaskActivity> => {
     const response = await apiCall(`/api/celery/task-activity?hours=${hours}`)
-    if (!response.ok) throw new Error('Failed to fetch task activity')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch task activity')
     return response.json()
   }, [apiCall])
 

@@ -144,7 +144,7 @@ describe('Check', () => {
     listJobs.mockResolvedValue([])
     renderWithRouter(<Check />)
     await waitFor(() => expect(screen.getByText('No questions yet')).toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: '+ New question' }))
+    await userEvent.click(screen.getByRole('button', { name: 'New question' }))
     await userEvent.type(screen.getByPlaceholderText(/What would you like to verify/), 'why is the sky blue?')
     await userEvent.click(screen.getByRole('button', { name: 'Ask' }))
     await waitFor(() => expect(ask).toHaveBeenCalledWith({ text: 'why is the sky blue?', mode: 'research' }))

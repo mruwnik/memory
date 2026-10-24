@@ -439,7 +439,7 @@ export const ProjectsPanel = () => {
   return (
     <Page
       title="Projects"
-      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New Project</Button>}
+      actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New project</Button>}
       width="wide"
       loading={loading}
       error={error}
@@ -850,18 +850,17 @@ const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, o
         {isOpen && dueWarning === 'caution' && (
           <Badge tone="warning" title={project.due_on ? `Due: ${formatDueDate(project.due_on)}` : undefined}>Due in 2-3 weeks</Badge>
         )}
-        {isOpen && dueWarning === 'no-date' && <Badge title="No due date set">No due date</Badge>}
       </>}
       meta={[
         <span className="relative">
-          Owner:{' '}
+          {effectiveOwner && 'Owner: '}
           <button type="button" onClick={handleOwnerClick}
-            className={cx('rounded px-1 hover:bg-slate-100',
+            className={cx('rounded px-1 hover:bg-slate-100 max-sm:py-2',
               effectiveOwner ? (isInheritedOwner ? 'italic text-slate-600' : 'text-slate-700') : 'bg-amber-50 text-amber-800')}
-            title={isInheritedOwner ? 'Inherited from parent' : effectiveOwner ? 'Click to change' : 'No owner - click to assign'}>
+            title={isInheritedOwner ? 'Inherited from parent' : effectiveOwner ? 'Change owner' : undefined}>
             {effectiveOwner
               ? `${effectiveOwner.display_name || effectiveOwner.identifier}${isInheritedOwner ? ' (inherited)' : ''}`
-              : 'None'}
+              : 'Set owner'}
           </button>
           {showOwnerSelector && onChangeOwner && availablePeople && (
             <OwnerSelectorPopover currentOwnerId={project.owner_id} availablePeople={availablePeople}
@@ -869,9 +868,10 @@ const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, onChangeOwner, o
           )}
         </span>,
         <span className="relative">
-          Due:{' '}
-          <button type="button" onClick={handleDueDateClick} className="rounded px-1 text-slate-700 hover:bg-slate-100" title="Click to set due date">
-            {project.due_on ? formatDueDate(project.due_on) : 'None'}
+          {project.due_on && 'Due: '}
+          <button type="button" onClick={handleDueDateClick} className="rounded px-1 text-slate-700 hover:bg-slate-100 max-sm:py-2"
+            title={project.due_on ? 'Change due date' : undefined}>
+            {project.due_on ? formatDueDate(project.due_on) : 'Set due date'}
           </button>
           {showDueDateSelector && onChangeDueDate && (
             <DueDateSelectorPopover currentDueOn={project.due_on} onSelect={handleDueDateSelect}
@@ -1345,7 +1345,7 @@ const ProjectTeamsModal = ({
                         <span className="font-medium">{team.name}</span>
                         <span className="text-slate-500 text-sm ml-2">@{team.slug}</span>
                         {team.member_count !== undefined && (
-                          <span className="text-slate-400 text-xs ml-2">
+                          <span className="text-slate-500 text-xs ml-2">
                             ({team.member_count} member{team.member_count !== 1 ? 's' : ''})
                           </span>
                         )}

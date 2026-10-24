@@ -61,7 +61,7 @@ describe('FeedsPanel load states', () => {
   it('shows an error state with retry on list failure', async () => {
     mockFetchRoutes({ '/article-feeds': { status: 500, json: {} }, '/auth/me': authMe, __default: { json: {} } })
     renderWithUser(<FeedsPanel />)
-    await waitFor(() => expect(screen.getByText('Failed to fetch article feeds')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Failed to fetch article feeds/)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })
@@ -110,7 +110,7 @@ describe('FeedsPanel mutate flows', () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
     const { user } = renderWithUser(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
-    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(postBody(mock, '/article-feeds/7', 'PATCH')).toEqual({ active: false }))
   })
 

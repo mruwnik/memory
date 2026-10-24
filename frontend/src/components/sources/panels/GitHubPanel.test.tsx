@@ -453,6 +453,6 @@ describe('GitHubPanel repo form selection helpers', () => {
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add Repo' }))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText('Failed to fetch available repos')).toBeInTheDocument()
+    expect(await within(dialog).findByText(/Failed to fetch available repos/)).toBeInTheDocument()
   })
 })

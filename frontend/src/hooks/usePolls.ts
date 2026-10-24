@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth, SERVER_URL } from './useAuth'
 import { useMCP } from './useMCP'
+import { apiError } from './apiError'
 
 export type PollStatus = 'open' | 'closed' | 'finalized' | 'cancelled'
 export type AvailabilityLevel = 1 | 2 // 1 = available, 2 = if needed
@@ -111,10 +112,7 @@ async function publicFetch<T>(endpoint: string, options: RequestInit = {}): Prom
     },
   })
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail || `Request failed: ${response.status}`)
-  }
+  if (!response.ok) throw await apiError(response, 'Request failed')
 
   return parseJsonResponse<T>(response)
 }

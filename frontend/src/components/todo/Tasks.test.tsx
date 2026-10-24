@@ -49,6 +49,8 @@ describe('Tasks page', () => {
     listTasks.mockRejectedValueOnce(new Error('load failed'))
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(screen.getByText('load failed')).toBeInTheDocument())
+    expect(screen.queryByRole('textbox', { name: 'New task' })).not.toBeInTheDocument()
+    expect(screen.queryByText('0 active')).not.toBeInTheDocument()
     listTasks.mockResolvedValue([makeTask({ task_title: 'recovered' })])
     await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.getByText('recovered')).toBeInTheDocument())
@@ -99,6 +101,17 @@ describe('Tasks page', () => {
       priority: 'high',
       due_date: undefined,
     })
+  })
+
+  it('says why adding a task failed and keeps the typed title', async () => {
+    createTask.mockRejectedValueOnce(new Error("You don't have permission for this. Ask an admin to grant you access."))
+    const user = userEvent.setup()
+    renderWithRouter(<Tasks />)
+    await waitFor(() => expect(screen.getByText('No active tasks. Add one above!')).toBeInTheDocument())
+    await user.type(screen.getByRole('textbox', { name: 'New task' }), 'Ship it')
+    await user.click(screen.getByRole('button', { name: 'Add Task' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("You don't have permission")
+    expect(screen.getByRole('textbox', { name: 'New task' })).toHaveValue('Ship it')
   })
 
   it('disables Add Task when the title is blank', async () => {

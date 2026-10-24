@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import { apiError } from './apiError'
 
 export interface ContainerInfo {
   name: string
@@ -37,10 +38,7 @@ export const useDockerLogs = () => {
 
   const listContainers = useCallback(async (): Promise<ContainerInfo[]> => {
     const response = await apiCall('/api/docker/containers')
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-      throw new Error(error.detail || `Failed to fetch containers: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch containers')
     return parseJsonResponse<ContainerInfo[]>(response)
   }, [apiCall])
 
@@ -59,10 +57,7 @@ export const useDockerLogs = () => {
     const query = searchParams.toString()
     const response = await apiCall(`/api/docker/logs/${encodeURIComponent(container)}${query ? `?${query}` : ''}`)
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-      throw new Error(error.detail || `Failed to fetch logs: ${response.status}`)
-    }
+    if (!response.ok) throw await apiError(response, 'Failed to fetch logs')
     return parseJsonResponse<LogsResponse>(response)
   }, [apiCall])
 

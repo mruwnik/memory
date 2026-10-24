@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useUsers, type User } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
 import { Badge, Button, Card, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
+import { NewApiKey } from './NewApiKey'
 
 const UserSettings = () => {
   const { getCurrentUser, updateUser, changePassword, regenerateApiKey } = useUsers()
@@ -123,14 +124,6 @@ const UserSettings = () => {
     }
   }
 
-  const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch (e) {
-      console.error('Failed to copy:', e)
-    }
-  }
-
   if (loading) {
     return <Page title="User Settings" width="narrow" loading />
   }
@@ -180,7 +173,7 @@ const UserSettings = () => {
 
         <Card title="Permissions" description="Your current scopes:">
           <div className="flex flex-wrap gap-2">
-            {user?.scopes.map((scope) => <Badge key={scope}>{scope}</Badge>)}
+            {user?.scopes.map((scope) => <Badge key={scope}>{scope === '*' ? 'All permissions' : scope}</Badge>)}
           </div>
         </Card>
       </Page>
@@ -250,7 +243,7 @@ const UserSettings = () => {
       {showApiKeyModal && (
         <Modal size="md"
           title={newApiKey ? 'New API Key Generated' : `${(user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'} API Key`}
-          onClose={() => { setShowApiKeyModal(false); setNewApiKey(null) }}>
+          onClose={newApiKey ? undefined : () => setShowApiKeyModal(false)}>
           {!newApiKey ? (
             <div className="space-y-4">
               <p className="text-sm text-slate-600">
@@ -260,22 +253,13 @@ const UserSettings = () => {
               </p>
               <FormActions>
                 <Button onClick={() => setShowApiKeyModal(false)}>Cancel</Button>
-                <Button variant="primary" onClick={handleRegenerateApiKey} disabled={apiKeyLoading}>
+                <Button variant={(user?.api_key_count ?? 0) > 0 ? 'dangerSolid' : 'primary'} onClick={handleRegenerateApiKey} disabled={apiKeyLoading}>
                   {apiKeyLoading ? 'Generating...' : (user?.api_key_count ?? 0) > 0 ? 'Regenerate' : 'Generate'}
                 </Button>
               </FormActions>
             </div>
           ) : (
-            <div className="space-y-4">
-              <p className="text-sm text-slate-600">Copy your new API key now. It won't be shown again.</p>
-              <div className="bg-slate-100 p-3 rounded-lg">
-                <code className="text-sm text-slate-800 break-all">{newApiKey}</code>
-              </div>
-              <FormActions>
-                <Button onClick={() => copyToClipboard(newApiKey)}>Copy</Button>
-                <Button variant="primary" onClick={() => { setShowApiKeyModal(false); setNewApiKey(null) }}>Done</Button>
-              </FormActions>
-            </div>
+            <NewApiKey apiKey={newApiKey} onDone={() => { setShowApiKeyModal(false); setNewApiKey(null) }} />
           )}
         </Modal>
       )}

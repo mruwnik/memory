@@ -60,7 +60,7 @@ describe('useMetrics.getSummary', () => {
   it('throws with the status code on a non-OK response', async () => {
     mockFetch(async () => mockResponse({ status: 503, json: {}, headers: JSON_HEADERS }))
     const { getSummary } = setup()
-    await expect(getSummary()).rejects.toThrow('Failed to fetch metrics summary: 503')
+    await expect(getSummary()).rejects.toThrow('Failed to fetch metrics summary (503)')
   })
 
   it('throws when the content-type is not JSON', async () => {
@@ -100,7 +100,7 @@ describe('useMetrics.getTaskMetrics', () => {
   it('throws with status on failure', async () => {
     mockFetch(async () => mockResponse({ status: 500, json: {}, headers: JSON_HEADERS }))
     const { getTaskMetrics } = setup()
-    await expect(getTaskMetrics()).rejects.toThrow('Failed to fetch task metrics: 500')
+    await expect(getTaskMetrics()).rejects.toThrow('Failed to fetch task metrics (500)')
   })
 })
 
@@ -130,7 +130,7 @@ describe('useMetrics.getMcpMetrics', () => {
   it('throws with status on failure', async () => {
     mockFetch(async () => mockResponse({ status: 404, json: {}, headers: JSON_HEADERS }))
     const { getMcpMetrics } = setup()
-    await expect(getMcpMetrics()).rejects.toThrow('Failed to fetch MCP metrics: 404')
+    await expect(getMcpMetrics()).rejects.toThrow('Failed to fetch MCP metrics (404)')
   })
 })
 
@@ -161,6 +161,6 @@ describe('useMetrics.getSystemMetrics', () => {
   it('throws with status on failure', async () => {
     mockFetch(async () => mockResponse({ status: 500, json: {}, headers: JSON_HEADERS }))
     const { getSystemMetrics } = setup()
-    await expect(getSystemMetrics()).rejects.toThrow('Failed to fetch system metrics: 500')
+    await expect(getSystemMetrics()).rejects.toThrow('Failed to fetch system metrics (500)')
   })
 })

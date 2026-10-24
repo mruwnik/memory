@@ -114,7 +114,7 @@ describe('DiscordPanel bot actions', () => {
     const mock = mockFetchRoutes(routes({ bots: [bot] }))
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/discord/bots/bot-1') && (init as RequestInit)?.method === 'PATCH',

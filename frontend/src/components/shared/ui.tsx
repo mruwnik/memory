@@ -1,5 +1,5 @@
 // The app's page template and UI primitives. See frontend/STYLE.md for when to use which.
-import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
+import { Children, Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { Link, type LinkProps } from 'react-router-dom'
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ')
@@ -358,7 +358,8 @@ const BUTTON_VARIANTS = {
   ghost: 'text-slate-600 hover:bg-slate-100',
   link: 'text-primary hover:underline p-0!',
 }
-const BUTTON_SIZES = { md: 'py-2 px-4 text-sm', sm: 'py-1 px-2.5 text-xs', icon: 'w-9 h-9 text-lg' }
+// Small buttons are in-row actions; on phones they grow to a tappable height.
+const BUTTON_SIZES = { md: 'py-2 px-4 text-sm', sm: 'py-1 px-2.5 text-xs max-sm:min-h-10 max-sm:px-3', icon: 'w-9 h-9 text-lg' }
 export type ButtonVariant = keyof typeof BUTTON_VARIANTS
 
 export const buttonClass = (variant: ButtonVariant = 'secondary', size: keyof typeof BUTTON_SIZES = 'md', className?: string) => cx(
@@ -382,7 +383,7 @@ export const ButtonLink = ({ variant, size, className, ...props }: LinkProps & P
 
 // ---- Forms ----
 
-const CONTROL = 'block py-2 px-3 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-500'
+const CONTROL = 'block py-2 px-3 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-500'
 // Controls are full width unless the caller sizes them.
 const controlClass = (className?: string) => cx(CONTROL, !/(^|\s)(w|flex)-/.test(className ?? '') && 'w-full', className)
 
@@ -412,17 +413,30 @@ interface FieldProps extends ComponentProps<'div'> {
   error?: string | null
 }
 
-/** A labelled control. With `label`, a single child control gets an id wired to the label. */
+type FieldControlProps = { id?: string; 'aria-describedby'?: string; 'aria-invalid'?: boolean }
+
+/**
+ * A labelled control. When exactly one child element is rendered (conditional children that render
+ * nothing don't count), it gets an id wired to the label, and the hint and error describe it.
+ */
 export const Field = ({ label, hint, error, className, children, ...props }: FieldProps) => {
   const generated = useId()
-  const only = Children.count(children) === 1 && isValidElement(children) ? children as ReactElement<{ id?: string }> : null
-  const id = only?.props.id ?? generated
+  const elements = Children.toArray(children).filter(isValidElement)
+  const control = elements.length === 1 && elements[0].type !== Fragment ? (elements[0] as ReactElement<FieldControlProps>) : null
+  const id = control?.props.id ?? generated
+  const hintId = hint ? `${id}-hint` : undefined
+  const errorId = error ? `${id}-error` : undefined
+  const wire = (child: ReactNode) => !isValidElement<FieldControlProps>(child) ? child : cloneElement(child, {
+    id,
+    'aria-describedby': cx(child.props['aria-describedby'], hintId, errorId) || undefined,
+    'aria-invalid': child.props['aria-invalid'] ?? (error ? true : undefined),
+  })
   return (
     <div className={cx('space-y-1', className)} {...props}>
-      {label && <Label htmlFor={only ? id : undefined}>{label}</Label>}
-      {only && label && !only.props.id ? cloneElement(only, { id }) : children}
-      {hint && <Hint>{hint}</Hint>}
-      {error && <p className="text-xs text-red-700">{error}</p>}
+      {label && <Label htmlFor={control ? id : undefined}>{label}</Label>}
+      {control ? Children.map(children, wire) : children}
+      {hint && <Hint id={hintId}>{hint}</Hint>}
+      {error && <p id={errorId} className="text-xs text-red-700">{error}</p>}
     </div>
   )
 }
@@ -435,8 +449,9 @@ export const FormActions = ({ className, ...props }: ComponentProps<'div'>) => (
   <div className={cx('flex flex-wrap justify-end gap-2 pt-2', className)} {...props} />
 )
 
+// The whole label is the hit area, padded to a tappable height on phones.
 export const Checkbox = ({ label, className, ...props }: ComponentProps<'input'> & { label: ReactNode }) => (
-  <label className={cx('inline-flex items-center gap-2 text-sm text-slate-700', className)}>
+  <label className={cx('inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-sm:min-h-10', className)}>
     <input type="checkbox" {...props} />
     {label}
   </label>
@@ -580,6 +595,27 @@ export const Notice = ({ tone, onRetry, onDismiss, className, children, ...props
   </div>
 )
 
+/**
+ * Runs actions on a loaded page (sync, toggle, delete) and keeps the outcome for a `Notice`,
+ * so a failure is never silent. `run` resolves to whether the action succeeded.
+ */
+export const useActionNotice = () => {
+  const [outcome, setOutcome] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+  const run = useCallback(async (action: () => Promise<unknown>, success?: string) => {
+    setOutcome(null)
+    try {
+      await action()
+    } catch (e) {
+      setOutcome({ tone: 'error', message: e instanceof Error ? e.message : String(e) })
+      return false
+    }
+    if (success) setOutcome({ tone: 'success', message: success })
+    return true
+  }, [])
+  const notice = outcome && <Notice tone={outcome.tone} onDismiss={() => setOutcome(null)}>{outcome.message}</Notice>
+  return { run, notice }
+}
+
 interface EmptyStateProps {
   message: ReactNode
   actionLabel?: string
@@ -635,7 +671,7 @@ export function ToggleGroup<T extends string>({ options, value, onChange, label 
     <div role="group" aria-label={label} className="flex flex-wrap gap-1">
       {options.map(o => (
         <button key={o.value} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)}
-          className={cx('px-3 py-1 rounded-full text-xs font-medium border transition-colors',
+          className={cx('px-3 py-1 rounded-full text-xs font-medium border transition-colors max-sm:min-h-10',
             o.value === value ? 'bg-primary border-primary text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50')}>
           {o.label}
         </button>
@@ -646,8 +682,9 @@ export function ToggleGroup<T extends string>({ options, value, onChange, label 
 
 // ---- Dialogs ----
 
-function useEscape(onEscape: () => void) {
+function useEscape(onEscape?: () => void) {
   useEffect(() => {
+    if (!onEscape) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onEscape()
     }
@@ -660,7 +697,8 @@ const MODAL_SIZES = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w
 
 interface ModalProps {
   title: ReactNode
-  onClose: () => void
+  /** Omit to make the dialog closable only by its own content, e.g. a one-time secret's Done button. */
+  onClose?: () => void
   children: ReactNode
   size?: keyof typeof MODAL_SIZES
   className?: string
@@ -709,7 +747,7 @@ export const Modal = ({ title, onClose, children, size = 'lg', className }: Moda
         className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto', MODAL_SIZES[size], className)}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h2>
-          <button aria-label="Close" className="text-slate-500 hover:text-slate-700 text-2xl leading-none" onClick={onClose}>&times;</button>
+          {onClose && <button aria-label="Close" className="text-slate-500 hover:text-slate-700 text-2xl leading-none" onClick={onClose}>&times;</button>}
         </div>
         <div ref={bodyRef} className="p-4">{children}</div>
       </div>

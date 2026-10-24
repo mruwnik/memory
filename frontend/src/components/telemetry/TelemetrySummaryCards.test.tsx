@@ -3,7 +3,7 @@ import { render, screen } from '@/test/utils'
 import { TelemetrySummaryCards } from './TelemetrySummaryCards'
 
 describe('TelemetrySummaryCards', () => {
-  it('renders all four card titles and subtitles', () => {
+  it('renders all four card titles', () => {
     render(
       <TelemetrySummaryCards totalTokens={0} totalCost={0} totalSessions={0} eventCount={0} />,
     )
@@ -12,7 +12,6 @@ describe('TelemetrySummaryCards', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument()
     expect(screen.getByText('Events')).toBeInTheDocument()
     expect(screen.getByText('Input + Output')).toBeInTheDocument()
-    expect(screen.getByText('API usage')).toBeInTheDocument()
   })
 
   it.each([
@@ -36,10 +35,10 @@ describe('TelemetrySummaryCards', () => {
   })
 
   it.each([
-    [0, '$0.0000'],
-    [0.1234, '$0.1234'],
-    [1.23456, '$1.2346'],
-    [12, '$12.0000'],
+    [0, '$0.00'],
+    [0.004, '<$0.01'],
+    [1.23456, '$1.23'],
+    [12, '$12.00'],
   ])('formats cost %f as %s', (cost, expected) => {
     render(
       <TelemetrySummaryCards totalTokens={0} totalCost={cost} totalSessions={0} eventCount={0} />,

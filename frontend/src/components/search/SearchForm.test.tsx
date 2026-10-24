@@ -49,7 +49,7 @@ describe('SearchForm', () => {
     installFetch()
     renderWithUser(<SearchForm isLoading={false} onSearch={() => {}} />)
     // Modalities section starts with all schema keys selected (createFlags default true)
-    await waitFor(() => expect(screen.getByText('Modalities (1 selected)')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove blog' })).toBeInTheDocument())
   })
 
   it('submits search params with the typed query and defaults', async () => {
@@ -78,10 +78,20 @@ describe('SearchForm', () => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    await waitFor(() => expect(screen.getByText('Modalities (1 selected)')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove blog' })).toBeInTheDocument())
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     expect(onSearch.mock.calls[0][0].modalities).toEqual(['blog'])
+  })
+
+  it('drops a modality removed from the picker', async () => {
+    installFetch()
+    const onSearch = vi.fn()
+    const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
+    await user.click(await screen.findByRole('button', { name: 'Remove blog' }))
+    await user.type(screen.getByRole('textbox', { name: 'Search query' }), 'q')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    expect(onSearch.mock.calls[0][0].modalities).toEqual([])
   })
 
   it('reflects the previews checkbox in config', async () => {

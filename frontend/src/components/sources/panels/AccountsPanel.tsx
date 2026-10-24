@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, GithubAccount, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
 import { SourceRow, StatusBadge, formatRelativeTime } from '../shared'
-import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, Textarea, buttonClass } from '@/components/shared/ui'
+import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, Textarea, buttonClass, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const AccountsPanel = () => {
@@ -25,6 +25,8 @@ export const AccountsPanel = () => {
   const [availableScopes, setAvailableScopes] = useState<GoogleAvailableScopes | null>(null)
   const [selectedScopes, setSelectedScopes] = useState<string[]>(['drive', 'calendar', 'gmail_read', 'gmail_send'])
   const [reauthorizingAccountId, setReauthorizingAccountId] = useState<number | null>(null)
+  const [validations, setValidations] = useState<Record<number, { status: string; message: string }>>({})
+  const { run, notice } = useActionNotice()
 
   // Track polling intervals for cleanup
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -79,23 +81,20 @@ export const AccountsPanel = () => {
     }
   }
 
-  const handleDeleteGithubAccount = async (id: number) => {
+  const handleDeleteGithubAccount = (id: number) => run(async () => {
     await deleteGithubAccount(id)
     loadData()
-  }
+  })
 
-  const handleToggleGithubActive = async (account: GithubAccount) => {
+  const handleToggleGithubActive = (account: GithubAccount) => run(async () => {
     await updateGithubAccount(account.id, { active: !account.active })
     loadData()
-  }
+  })
 
   const handleValidateGithubAccount = async (id: number) => {
-    try {
-      const result = await validateGithubAccount(id)
-      alert(result.message)
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Validation failed')
-    }
+    const result = await validateGithubAccount(id)
+      .catch(e => ({ status: 'error', message: e instanceof Error ? e.message : 'Validation failed' }))
+    setValidations(prev => ({ ...prev, [id]: result }))
   }
 
   // Google handlers
@@ -104,43 +103,27 @@ export const AccountsPanel = () => {
     if (!file) return
 
     setUploadingConfig(true)
-    setError(null)
-    try {
-      const config = await uploadGoogleOAuthConfig(file)
-      setOauthConfig(config)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to upload config')
-    } finally {
-      setUploadingConfig(false)
-    }
+    await run(async () => setOauthConfig(await uploadGoogleOAuthConfig(file)))
+    setUploadingConfig(false)
   }
 
-  const handleDeleteConfig = async () => {
-    try {
-      await deleteGoogleOAuthConfig()
-      setOauthConfig(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete config')
-    }
-  }
+  const handleDeleteConfig = () => run(async () => {
+    await deleteGoogleOAuthConfig()
+    setOauthConfig(null)
+  })
 
-  const handleConnectGoogle = async () => {
-    // Load available scopes and show modal
-    try {
-      if (!availableScopes) {
-        const scopes = await getGoogleAvailableScopes()
-        setAvailableScopes(scopes)
-      }
-      setReauthorizingAccountId(null)
-      setShowScopeModal(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load available scopes')
-    }
-  }
+  // Load available scopes and show the modal, to connect a new account (null) or re-authorize one.
+  const openScopeModal = (accountId: number | null) => run(async () => {
+    if (!availableScopes) setAvailableScopes(await getGoogleAvailableScopes())
+    setReauthorizingAccountId(accountId)
+    setShowScopeModal(true)
+  })
 
-  const handleScopeSelectionConfirm = async () => {
+  const handleConnectGoogle = () => openScopeModal(null)
+
+  const handleScopeSelectionConfirm = () => {
     setShowScopeModal(false)
-    try {
+    return run(async () => {
       const { authorization_url } = reauthorizingAccountId !== null
         ? await reauthorizeGoogleAccount(reauthorizingAccountId, selectedScopes)
         : await getGoogleAuthUrl(selectedScopes)
@@ -161,9 +144,7 @@ export const AccountsPanel = () => {
         if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
         pollingIntervalRef.current = null
       }, 60000)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to get Google auth URL')
-    }
+    })
   }
 
   const toggleScope = (scopeKey: string) => {
@@ -174,24 +155,12 @@ export const AccountsPanel = () => {
     )
   }
 
-  const handleDeleteGoogleAccount = async (id: number) => {
+  const handleDeleteGoogleAccount = (id: number) => run(async () => {
     await deleteGoogleAccount(id)
     loadData()
-  }
+  })
 
-  const handleReauthorizeGoogle = async (id: number) => {
-    // Load available scopes and show modal for reauthorization
-    try {
-      if (!availableScopes) {
-        const scopes = await getGoogleAvailableScopes()
-        setAvailableScopes(scopes)
-      }
-      setReauthorizingAccountId(id)
-      setShowScopeModal(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load available scopes')
-    }
-  }
+  const handleReauthorizeGoogle = (id: number) => openScopeModal(id)
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
@@ -205,6 +174,7 @@ export const AccountsPanel = () => {
 
   return (
     <>
+      {notice}
       <Section title="GitHub Accounts" actions={<Button variant="primary" onClick={() => setShowGithubForm(true)}>Add Account</Button>}>
         {githubAccounts.length === 0 ? (
           <EmptyState
@@ -228,7 +198,14 @@ export const AccountsPanel = () => {
                 additionalActions={
                   <Button size="sm" onClick={() => handleValidateGithubAccount(account.id)}>Validate</Button>
                 }
-              />
+              >
+                {validations[account.id] && (
+                  <Notice tone={validations[account.id].status === 'success' ? 'success' : 'error'}
+                    onDismiss={() => setValidations(({ [account.id]: _, ...rest }) => rest)}>
+                    {validations[account.id].message}
+                  </Notice>
+                )}
+              </SourceRow>
             ))}
           </List>
         )}
@@ -409,7 +386,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
 
         {formData.auth_type === 'pat' ? (
           <Field label={<>
-              Access Token {account?.has_access_token && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+              Access Token {account?.has_access_token && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
             <Input
               type="password"
               value={formData.access_token}
@@ -437,7 +414,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
               />
             </Field>
             <Field label={<>
-                Private Key {account?.has_private_key && <span className="text-slate-400">(leave blank to keep current)</span>}</>}>
+                Private Key {account?.has_private_key && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
               <Textarea
                 value={formData.private_key}
                 onChange={e => setFormData({ ...formData, private_key: e.target.value })}

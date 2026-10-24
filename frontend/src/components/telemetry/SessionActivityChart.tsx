@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import { EmptyState } from '@/components/shared/ui'
 
 interface SessionActivityChartProps {
   data: TelemetryMetricsResponse | null
@@ -16,11 +17,7 @@ interface SessionActivityChartProps {
 
 export const SessionActivityChart: React.FC<SessionActivityChartProps> = ({ data }) => {
   if (!data || data.data.length === 0) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No session data available
-      </div>
-    )
+    return <EmptyState message="No session data available" />
   }
 
   const chartData = data.data

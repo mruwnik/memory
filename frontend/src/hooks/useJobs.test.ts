@@ -72,7 +72,7 @@ describe('useJobs.listJobs', () => {
   it('throws on non-ok response', async () => {
     route(() => mockResponse({ status: 500, json: {} }))
     const { result } = renderHook(() => useJobs())
-    await expect(result.current.listJobs()).rejects.toThrow('Failed to fetch jobs: 500')
+    await expect(result.current.listJobs()).rejects.toThrow('Failed to fetch jobs (500)')
   })
 })
 
@@ -88,7 +88,7 @@ describe('useJobs.getJob', () => {
   it('throws on non-ok response', async () => {
     route(() => mockResponse({ status: 404, json: {} }))
     const { result } = renderHook(() => useJobs())
-    await expect(result.current.getJob(7)).rejects.toThrow('Failed to fetch job: 404')
+    await expect(result.current.getJob(7)).rejects.toThrow('Failed to fetch job (404)')
   })
 })
 
@@ -152,7 +152,7 @@ describe('useJobs.getUsersWithJobs', () => {
     route(() => mockResponse({ status: 500, json: {} }))
     const { result } = renderHook(() => useJobs())
     await expect(result.current.getUsersWithJobs()).rejects.toThrow(
-      'Failed to fetch job users: 500',
+      'Failed to fetch job users (500)',
     )
   })
 })

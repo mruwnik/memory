@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { TagsInput, IntervalInput, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, SubList, cx } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
@@ -19,6 +19,7 @@ export const GoogleDrivePanel = () => {
   const [addingFolderTo, setAddingFolderTo] = useState<number | null>(null)
   const [browsingFoldersFor, setBrowsingFoldersFor] = useState<number | null>(null)
   const [managingExclusionsFor, setManagingExclusionsFor] = useState<{ accountId: number; folder: GoogleFolder } | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -45,44 +46,48 @@ export const GoogleDrivePanel = () => {
     loadData()
   }
 
+  // The browser modals close before saving, so the outcome shows in the section's notice.
   const handleBrowseSelect = async (accountId: number, items: SelectedItem[]) => {
-    for (const item of items) {
-      await addGoogleFolder(accountId, {
-        folder_id: item.id,
-        folder_name: item.name,
-        recursive: item.is_folder ? item.recursive : false,
-      })
-    }
     setBrowsingFoldersFor(null)
+    await run(async () => {
+      for (const item of items) {
+        await addGoogleFolder(accountId, {
+          folder_id: item.id,
+          folder_name: item.name,
+          recursive: item.is_folder ? item.recursive : false,
+        })
+      }
+    })
     loadData()
   }
 
   const handleUpdateExclusions = async (accountId: number, folderId: number, excludeIds: string[]) => {
-    await updateGoogleFolder(accountId, folderId, { exclude_folder_ids: excludeIds })
     setManagingExclusionsFor(null)
+    await run(() => updateGoogleFolder(accountId, folderId, { exclude_folder_ids: excludeIds }))
     loadData()
   }
 
-  const handleDeleteFolder = async (accountId: number, folderId: number) => {
+  const handleDeleteFolder = (accountId: number, folderId: number) => run(async () => {
     await deleteGoogleFolder(accountId, folderId)
     loadData()
-  }
+  })
 
-  const handleToggleFolderActive = async (accountId: number, folderId: number, active: boolean) => {
+  const handleToggleFolderActive = (accountId: number, folderId: number, active: boolean) => run(async () => {
     await updateGoogleFolder(accountId, folderId, { active: !active })
     loadData()
-  }
+  })
 
-  const handleSyncFolder = async (accountId: number, folderId: number) => {
+  const handleSyncFolder = (accountId: number, folderId: number) => run(async () => {
     await syncGoogleFolder(accountId, folderId)
     loadData()
-  }
+  }, 'Sync queued')
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   return (
     <Section title="Google Drive Folders">
+      {notice}
       {accounts.length === 0 ? (
         <EmptyState message="No Google accounts connected. Add a Google account in the Accounts tab first." />
       ) : (
@@ -259,7 +264,7 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
         <div className="flex flex-wrap items-center gap-1 text-sm">
           {path.map((item, index) => (
             <span key={item.id} className="flex items-center gap-1">
-              {index > 0 && <span className="text-slate-400">›</span>}
+              {index > 0 && <span className="text-slate-500">›</span>}
               <button
                 className={cx(
                   'hover:underline',
@@ -458,7 +463,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
         <div className="flex flex-wrap items-center gap-1 text-sm">
           {path.map((item, index) => (
             <span key={item.id} className="flex items-center gap-1">
-              {index > 0 && <span className="text-slate-400">›</span>}
+              {index > 0 && <span className="text-slate-500">›</span>}
               <button
                 className={cx(
                   'hover:underline',

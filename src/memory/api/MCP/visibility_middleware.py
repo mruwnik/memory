@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import Tool, ToolResult
 
-from memory.api.MCP.visibility import get_visibility_checker
+from memory.api.MCP.visibility import get_call_checker, get_visibility_checker
 from memory.common.db.connection import DBSession, make_session
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ class VisibilityMiddleware(Middleware):
         or race conditions.
         """
         tool_name = context.message.name
-        checker = get_visibility_checker(tool_name)
+        checker = get_call_checker(tool_name)
 
         if checker is None:
             # Fail closed: refuse to invoke a tool that hasn't opted

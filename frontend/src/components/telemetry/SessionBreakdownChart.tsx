@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   BarChart,
   Bar,
@@ -10,7 +10,8 @@ import {
   Cell,
 } from 'recharts'
 import { SessionStatsResponse, SessionStats } from '@/hooks/useTelemetry'
-import { Select } from '@/components/shared/ui'
+import { Disclosure, EmptyState, Select, Table } from '@/components/shared/ui'
+import { formatCost } from '@/utils/format'
 
 type SortBy = 'tokens' | 'cost' | 'events'
 type UsageCategory = 'high' | 'medium' | 'low'
@@ -21,10 +22,11 @@ const sortLabels: Record<SortBy, string> = {
   events: 'Event Count',
 }
 
+// A sequential scale on the primary colour: heavier usage is darker, and none of it reads as an error.
 const categoryColors: Record<UsageCategory, string> = {
-  high: '#ef4444',    // red
-  medium: '#f59e0b',  // amber
-  low: '#10b981',     // green
+  high: '#4c51bf',
+  medium: '#7f9cf5',
+  low: '#c3dafe',
 }
 
 const categoryLabels: Record<UsageCategory, string> = {
@@ -37,17 +39,29 @@ interface SessionBreakdownChartProps {
   data: SessionStatsResponse | null
 }
 
+const NARROW = '(max-width: 639px)'
+
+// Phones get a narrower label column so the bars keep most of the width.
+const useNarrow = () => {
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.(NARROW).matches ?? false)
+  useEffect(() => {
+    const query = window.matchMedia?.(NARROW)
+    if (!query) return
+    const onChange = () => setNarrow(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  return narrow
+}
+
+const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
 export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ data }) => {
   const [sortBy, setSortBy] = useState<SortBy>('tokens')
   const [showCount, setShowCount] = useState<number>(15)
+  const narrow = useNarrow()
 
-  if (!data || data.sessions.length === 0) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No session data available
-      </div>
-    )
-  }
+  if (!data || data.sessions.length === 0) return <EmptyState message="No session data available" />
 
   const getSortValue = (session: SessionStats): number => {
     switch (sortBy) {
@@ -128,6 +142,8 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
           <Select
             value={showCount}
             onChange={(e) => setShowCount(Number(e.target.value))}
+            aria-label="Sessions shown"
+            className="w-auto"
           >
             <option value={10}>Top 10</option>
             <option value={15}>Top 15</option>
@@ -137,6 +153,8 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
           <Select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as SortBy)}
+            aria-label="Sort sessions by"
+            className="w-auto"
           >
             {(Object.keys(sortLabels) as SortBy[]).map((key) => (
               <option key={key} value={key}>
@@ -164,10 +182,10 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
           <YAxis
             type="category"
             dataKey="fullSessionId"
-            tickFormatter={(id: string) => labels.get(id) ?? id}
+            tickFormatter={(id: string) => truncate(labels.get(id) ?? id, narrow ? 16 : 36)}
             tick={{ fontSize: 11 }}
             stroke="#94a3b8"
-            width={230}
+            width={narrow ? 110 : 230}
           />
           <Tooltip
             content={({ active, payload }) => {
@@ -221,6 +239,31 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
       <div className="mt-4 text-sm text-slate-500 text-center">
         Showing {chartData.length} of {data.sessions.length} sessions
       </div>
+
+      {/* The chart's details live in a hover tooltip; this gives touch and keyboard users the same facts. */}
+      <Disclosure summary="Session details" className="mt-4">
+        <Table>
+          <thead>
+            <tr><th>Session</th><th>Usage</th><th>Tokens</th><th>Cost</th><th>Events</th><th>Last seen</th></tr>
+          </thead>
+          <tbody>
+            {chartData.map(d => (
+              <tr key={d.fullSessionId}>
+                <td className="max-w-xs">
+                  <div className="font-medium text-slate-800 break-words">{d.label}</div>
+                  {d.summary && <div className="text-xs text-slate-600 line-clamp-2">{d.summary}</div>}
+                  {d.project && <div className="text-xs text-slate-500 break-all">{d.project}</div>}
+                </td>
+                <td className="whitespace-nowrap">{categoryLabels[d.category]}</td>
+                <td className="tabular-nums">{formatNumber(d.total_tokens)}</td>
+                <td className="tabular-nums">{formatCost(d.total_cost)}</td>
+                <td className="tabular-nums">{d.event_count}</td>
+                <td className="whitespace-nowrap">{formatTimestamp(d.last_seen)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </Disclosure>
     </div>
   )
 }
@@ -229,12 +272,6 @@ function formatNumber(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
   return Math.round(value).toString()
-}
-
-function formatCost(value: number): string {
-  if (value >= 1) return `$${value.toFixed(2)}`
-  if (value >= 0.01) return `$${value.toFixed(3)}`
-  return `$${value.toFixed(4)}`
 }
 
 function formatTimestamp(isoString: string): string {

@@ -46,12 +46,20 @@ describe('RecentEventsTable', () => {
   })
 
   it.each([
-    ['cost.usage', 0.12345, '$0.1235'],
+    ['cost.usage', 0.12345, '$0.12'],
     ['token.usage', 12345, '12,345'],
     ['session.count', 7, '7'],
   ])('formats value for %s as %s', (name, value, expected) => {
     render(<RecentEventsTable events={[makeEvent({ name, value })]} />)
     expect(screen.getByText(expected)).toBeInTheDocument()
+  })
+
+  it.each([
+    [new Date().toISOString(), /^\d{2}:\d{2}:\d{2}$/],
+    ['2026-01-02T12:00:00Z', /Jan/],
+  ])('shows the date only for events before today (%s)', (timestamp, pattern) => {
+    render(<RecentEventsTable events={[makeEvent({ timestamp })]} />)
+    expect(screen.getAllByRole('cell')[0].textContent).toMatch(pattern)
   })
 
   it('renders a dash for null values', () => {

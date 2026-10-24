@@ -10,6 +10,7 @@ import {
   Legend,
 } from 'recharts'
 import { TelemetryMetricDataPoint, TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import { EmptyState } from '@/components/shared/ui'
 
 interface TokenUsageChartProps {
   data: TelemetryMetricsResponse | null
@@ -20,11 +21,7 @@ const bySource = (point: TelemetryMetricDataPoint) => point.source || 'unknown'
 
 export const TokenUsageChart: React.FC<TokenUsageChartProps> = ({ data, seriesOf = bySource }) => {
   if (!data || data.data.length === 0) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No token usage data available
-      </div>
-    )
+    return <EmptyState message="No token usage data available" />
   }
 
   const byTimestamp = new Map<string, Record<string, number>>()

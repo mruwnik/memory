@@ -277,8 +277,8 @@ describe('ProjectsPanel - inline owner/due-date editing', () => {
     const { user } = renderWithUser(<ProjectsPanel />)
     await screen.findByText('Alpha')
 
-    // "None" owner chip is clickable; admin team member Alice is selectable
-    await user.click(screen.getByTitle('No owner - click to assign'))
+    // An ownerless project offers "Set owner"; admin team member Alice is selectable
+    await user.click(screen.getByRole('button', { name: 'Set owner' }))
     await user.click(await screen.findByRole('button', { name: 'Alice' }))
 
     await waitFor(() => expect(updateProject).toHaveBeenCalledWith(1, { owner_id: 1 }))
@@ -288,7 +288,7 @@ describe('ProjectsPanel - inline owner/due-date editing', () => {
     const { user } = renderWithUser(<ProjectsPanel />)
     await screen.findByText('Alpha')
 
-    await user.click(screen.getByTitle('Click to set due date'))
+    await user.click(screen.getByRole('button', { name: 'Set due date' }))
     const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement
     await user.type(dateInput, '2030-01-15')
     await user.click(screen.getByRole('button', { name: 'Apply' }))

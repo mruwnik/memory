@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTasks, TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
 import { PRIORITY_ORDER, PRIORITY_TONES, dueLabel } from '@/constants/priority'
-import { Badge, Button, Card, ConfirmButton, EmptyState, FieldRow, Input, List, LoadingState, Notice, Page, Row, Select, ToggleGroup, Toolbar, cx } from '@/components/shared/ui'
+import { Badge, Button, Card, ConfirmButton, EmptyState, FieldRow, Input, List, LoadingState, Page, Row, Select, ToggleGroup, Toolbar, cx, useActionNotice } from '@/components/shared/ui'
 
 type StatusFilter = 'active' | 'completed' | 'all'
 
@@ -17,6 +17,7 @@ const Tasks = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
   const [editingTask, setEditingTask] = useState<number | null>(null)
   const [editTitle, setEditTitle] = useState('')
+  const { run, notice } = useActionNotice()
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -58,30 +59,22 @@ const Tasks = () => {
     loadTasks()
   }, [loadTasks])
 
-  const handleComplete = async (taskId: number) => {
-    try {
-      await completeTask(taskId)
-      loadTasks()
-    } catch (e) {
-      console.error('Failed to complete task:', e)
-    }
-  }
+  const handleComplete = (taskId: number) => run(async () => {
+    await completeTask(taskId)
+    loadTasks()
+  })
 
-  const handleDelete = async (taskId: number) => {
-    try {
-      await deleteTask(taskId)
-      setTasks(prev => prev.filter(t => t.id !== taskId))
-    } catch (e) {
-      console.error('Failed to delete task:', e)
-    }
-  }
+  const handleDelete = (taskId: number) => run(async () => {
+    await deleteTask(taskId)
+    setTasks(prev => prev.filter(t => t.id !== taskId))
+  })
 
   const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newTaskTitle.trim()) return
 
     setIsAdding(true)
-    try {
+    await run(async () => {
       await createTask({
         task_title: newTaskTitle.trim(),
         priority: newTaskPriority || undefined,
@@ -91,11 +84,8 @@ const Tasks = () => {
       setNewTaskPriority('')
       setNewTaskDueDate('')
       loadTasks()
-    } catch (e) {
-      console.error('Failed to create task:', e)
-    } finally {
-      setIsAdding(false)
-    }
+    })
+    setIsAdding(false)
   }
 
   const handleStartEdit = (task: TodoTask) => {
@@ -105,13 +95,11 @@ const Tasks = () => {
 
   const handleSaveEdit = async (taskId: number) => {
     if (!editTitle.trim()) return
-    try {
+    await run(async () => {
       await updateTask(taskId, { task_title: editTitle.trim() })
       setEditingTask(null)
       loadTasks()
-    } catch (e) {
-      console.error('Failed to update task:', e)
-    }
+    })
   }
 
   const handleCancelEdit = () => {
@@ -125,8 +113,10 @@ const Tasks = () => {
   return (
     <Page
       title="Tasks"
-      description={<span className="flex gap-3"><span>{activeCount} active</span><span>{completedCount} completed</span></span>}
+      description={!error && <span className="flex gap-3"><span>{activeCount} active</span><span>{completedCount} completed</span></span>}
       width="narrow"
+      error={error}
+      onRetry={loadTasks}
     >
       <Card>
         <form onSubmit={handleAddTask} className="space-y-3">
@@ -154,16 +144,16 @@ const Tasks = () => {
         ]} />
       </Toolbar>
 
-      {error && <Notice tone="error" onRetry={loadTasks}>{error}</Notice>}
+      {notice}
 
       {loading ? <LoadingState message="Loading tasks..." />
-        : !error && tasks.length === 0 ? (
+        : tasks.length === 0 ? (
           <EmptyState message={statusFilter === 'completed'
             ? 'No completed tasks yet'
             : statusFilter === 'active'
             ? 'No active tasks. Add one above!'
             : 'No tasks yet. Add one above!'} />
-        ) : tasks.length > 0 && (
+        ) : (
           <List>
             {tasks.map(task => {
               const done = task.status === 'done'

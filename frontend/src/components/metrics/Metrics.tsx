@@ -12,7 +12,7 @@ import { SummaryCards } from './SummaryCards'
 import { SystemHealthChart } from './SystemHealthChart'
 import { TaskDurationChart } from './TaskDurationChart'
 import { McpUsageChart } from './McpUsageChart'
-import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, ToggleGroup, Toolbar } from '@/components/shared/ui'
+import { Badge, Card, CardGrid, LoadingState, Notice, Page, RefreshButton, Table, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
 
 // System metrics are sampled minutely - 7 days max keeps memory reasonable
 const SYSTEM_METRICS_MAX_HOURS = 168
@@ -135,10 +135,10 @@ const Metrics: React.FC = () => {
               <McpUsageChart data={summary.metrics.filter(m => m.metric_type === 'mcp_call')} />
             </Card>
             <Card title="Recent Task Executions">
-              <TaskTable events={taskData?.events ?? []} />
+              <EventsTable nameHeader="Task" empty="No task events in this time range" events={taskData?.events ?? []} />
             </Card>
             <Card title="Recent MCP Calls">
-              <McpTable events={mcpData?.events ?? []} />
+              <EventsTable nameHeader="Tool" empty="No MCP calls in this time range" events={mcpData?.events ?? []} />
             </Card>
           </CardGrid>
         </>
@@ -187,8 +187,9 @@ const RefreshIntervalSelector: React.FC<RefreshIntervalSelectorProps> = ({ value
   )
 }
 
-// Task events table
-interface TaskTableProps {
+interface EventsTableProps {
+  nameHeader: string
+  empty: string
   events: Array<{
     id: number
     timestamp: string
@@ -198,98 +199,27 @@ interface TaskTableProps {
   }>
 }
 
-const TaskTable: React.FC<TaskTableProps> = ({ events }) => {
-  if (events.length === 0) {
-    return <p className="text-slate-500 text-center py-4">No task events in this time range</p>
-  }
+const STATUS_TONES: Record<string, Tone> = { success: 'success', failure: 'danger', error: 'danger', pending: 'warning' }
+
+const EventsTable: React.FC<EventsTableProps> = ({ nameHeader, empty, events }) => {
+  if (events.length === 0) return <p className="text-slate-500 text-center py-4">{empty}</p>
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-slate-200">
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Time</th>
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Task</th>
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Duration</th>
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Status</th>
+    <Table>
+      <thead>
+        <tr><th>Time</th><th>{nameHeader}</th><th>Duration</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {events.map(event => (
+          <tr key={event.id}>
+            <td className="text-slate-600">{formatTimestamp(event.timestamp)}</td>
+            <td className="text-slate-800 font-medium truncate max-w-48">{event.name}</td>
+            <td className="text-slate-600">{event.duration_ms !== null ? `${Math.round(event.duration_ms)}ms` : '-'}</td>
+            <td><Badge tone={STATUS_TONES[event.status ?? ''] ?? 'neutral'}>{event.status ?? 'unknown'}</Badge></td>
           </tr>
-        </thead>
-        <tbody>
-          {events.map(event => (
-            <tr key={event.id} className="border-b border-slate-100 hover:bg-slate-50">
-              <td className="py-2 px-3 text-slate-500">{formatTimestamp(event.timestamp)}</td>
-              <td className="py-2 px-3 text-slate-800 font-medium truncate max-w-48">{event.name}</td>
-              <td className="py-2 px-3 text-slate-600">{event.duration_ms !== null ? `${Math.round(event.duration_ms)}ms` : '-'}</td>
-              <td className="py-2 px-3">
-                <StatusBadge status={event.status} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-// MCP events table
-interface McpTableProps {
-  events: Array<{
-    id: number
-    timestamp: string
-    name: string
-    duration_ms: number | null
-    status: string | null
-  }>
-}
-
-const McpTable: React.FC<McpTableProps> = ({ events }) => {
-  if (events.length === 0) {
-    return <p className="text-slate-500 text-center py-4">No MCP calls in this time range</p>
-  }
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-slate-200">
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Time</th>
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Tool</th>
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Duration</th>
-            <th className="text-left py-2 px-3 font-medium text-slate-600">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {events.map(event => (
-            <tr key={event.id} className="border-b border-slate-100 hover:bg-slate-50">
-              <td className="py-2 px-3 text-slate-500">{formatTimestamp(event.timestamp)}</td>
-              <td className="py-2 px-3 text-slate-800 font-medium truncate max-w-48">{event.name}</td>
-              <td className="py-2 px-3 text-slate-600">{event.duration_ms !== null ? `${Math.round(event.duration_ms)}ms` : '-'}</td>
-              <td className="py-2 px-3">
-                <StatusBadge status={event.status} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-// Status badge component
-const StatusBadge: React.FC<{ status: string | null }> = ({ status }) => {
-  const colors: Record<string, string> = {
-    success: 'bg-green-100 text-green-700',
-    failure: 'bg-red-100 text-red-700',
-    error: 'bg-red-100 text-red-700',
-    pending: 'bg-yellow-100 text-yellow-700',
-  }
-
-  const colorClass = colors[status ?? ''] ?? 'bg-slate-100 text-slate-600'
-
-  return (
-    <span className={`${colorClass} px-2 py-0.5 rounded text-xs font-medium`}>
-      {status ?? 'unknown'}
-    </span>
+        ))}
+      </tbody>
+    </Table>
   )
 }
 

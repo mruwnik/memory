@@ -208,11 +208,11 @@ describe('TranscriptsPanel - edit flow', () => {
 describe('TranscriptsPanel - row actions', () => {
   beforeEach(() => listTranscriptAccounts.mockResolvedValue([account()]))
 
-  it('toggles active state via SourceCard status badge', async () => {
+  it('pauses an account from its row', async () => {
     const { user } = renderWithUser(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
-    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(updateTranscriptAccount).toHaveBeenCalledWith(1, { active: false }))
   })
 

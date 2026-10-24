@@ -4,13 +4,13 @@ import {
   type KeyDeleteResult, type KeyProvider, type KeyUpsert, type ProviderKey,
 } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
-import { usd } from './KeyPicker'
+import { formatCost } from '@/utils/format'
 import { Badge, Button, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select } from '@/components/shared/ui'
 
 type Keys = Record<KeyProvider, ProviderKey[]>
 type Save = (body: KeyUpsert) => Promise<void>
 
-const CAP_HINT = `Optional. Without one, ${usd(DEFAULT_KEY_DAILY_CAP_USD)}/day applies unless the agent sets a daily cap.`
+const CAP_HINT = `Optional. Without one, ${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day applies unless the agent sets a daily cap.`
 
 /** Runs `work`, tracking busy state and keeping its error message for the form. */
 function useSubmit() {
@@ -92,7 +92,7 @@ function EditKeyForm({ entry, edit, onSave, onDone }: { entry: ProviderKey; edit
   return (
     <form className="w-full flex flex-wrap items-start gap-2" onSubmit={save}>
       <Field className="flex-1 min-w-48" label={EDITS[edit].label} error={error}
-        hint={edit === 'cap' ? `Leave empty for no cap of its own (${usd(DEFAULT_KEY_DAILY_CAP_USD)}/day unless the agent sets one).` : undefined}>
+        hint={edit === 'cap' ? `Leave empty for no cap of its own (${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day unless the agent sets one).` : undefined}>
         {edit === 'key'
           ? <Input type="password" required autoComplete="off" value={value} onChange={e => setValue(e.target.value)} />
           : edit === 'label'
@@ -116,7 +116,7 @@ function KeyRow({ entry, onSave, onMakeDefault, onDelete }: {
   onDelete: () => void
 }) {
   const [edit, setEdit] = useState<Edit | null>(null)
-  const cap = entry.max_cost_usd_per_day ? `${usd(entry.max_cost_usd_per_day)}/day cap` : `${usd(DEFAULT_KEY_DAILY_CAP_USD)}/day default cap`
+  const cap = entry.max_cost_usd_per_day ? `${formatCost(entry.max_cost_usd_per_day)}/day cap` : `${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day default cap`
 
   return (
     <Row
@@ -203,7 +203,7 @@ export default function KeysPage() {
           ? "Agents with no key of yours for their model's provider use the server's key."
           : "Agents need a key of yours for their model's provider to run."}
       </>}
-      actions={<Button variant="primary" onClick={() => setAdding(true)}>Add key</Button>}
+      actions={<Button variant="primary" onClick={() => setAdding(true)}>New key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}
       onRetry={load}

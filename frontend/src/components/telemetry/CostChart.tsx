@@ -10,6 +10,8 @@ import {
   Legend,
 } from 'recharts'
 import { TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import { formatCost } from '@/utils/format'
+import { EmptyState } from '@/components/shared/ui'
 
 interface CostChartProps {
   data: TelemetryMetricsResponse | null
@@ -17,11 +19,7 @@ interface CostChartProps {
 
 export const CostChart: React.FC<CostChartProps> = ({ data }) => {
   if (!data || data.data.length === 0) {
-    return (
-      <div className="h-64 flex items-center justify-center text-slate-400">
-        No cost data available
-      </div>
-    )
+    return <EmptyState message="No cost data available" />
   }
 
   // Group by timestamp and aggregate by source
@@ -81,7 +79,7 @@ export const CostChart: React.FC<CostChartProps> = ({ data }) => {
         />
         <Tooltip
           formatter={(value: number, name: string) => [
-            `$${value.toFixed(4)}`,
+            formatCost(value),
             name === 'cumulative' ? 'Cumulative' : name
           ]}
           labelFormatter={(label) => `Time: ${label}`}

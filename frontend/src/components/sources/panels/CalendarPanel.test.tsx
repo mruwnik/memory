@@ -74,7 +74,7 @@ describe('CalendarPanel load states', () => {
   it('renders an error state when the list fetch fails', async () => {
     mockFetchRoutes({ ...routes([]), '/calendar-accounts': { status: 500, json: {} } })
     renderWithUser(<CalendarPanel />)
-    await waitFor(() => expect(screen.getByText('Failed to fetch calendar accounts')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Failed to fetch calendar accounts/)).toBeInTheDocument())
   })
 
   it('groups events under a collapsible calendar and expands on click', async () => {
@@ -144,11 +144,11 @@ describe('CalendarPanel create flow', () => {
 })
 
 describe('CalendarPanel mutate flows', () => {
-  it('toggles active via the status switch', async () => {
+  it('pauses an account with a PATCH', async () => {
     const mock = mockFetchRoutes(routes([caldavAccount]))
     const { user } = renderWithUser(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
-    await user.click(screen.getByRole('switch'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/calendar-accounts/2') && (init as RequestInit)?.method === 'PATCH',

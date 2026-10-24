@@ -200,7 +200,7 @@ describe('PollList - header', () => {
     mockMcp({ polling_list_polls: [makePoll()] })
     renderWithRouter(<PollList />)
     await screen.findByText('Team Sync')
-    const header = screen.getByRole('link', { name: 'Create New Poll' })
+    const header = screen.getByRole('link', { name: 'New poll' })
     expect(header).toHaveAttribute('href', '/ui/polls/new')
   })
 })

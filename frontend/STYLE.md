@@ -28,7 +28,8 @@ Each route component returns exactly one `<Page>`:
 </Page>
 ```
 
-- `loading` and `error` are for the initial load only. Errors from actions on a loaded page go in a `<Notice>`.
+- `loading` and `error` are for the initial load only. Actions on a loaded page (sync, toggle, delete) run through
+  `useActionNotice`, whose `notice` shows the failure (with the server's reason) or a short success; never swallow an error.
 - `fill` makes the content fill the viewport below the header, for split panes that scroll
   internally (Notes, Reports, Claude sessions). Use it with `width="full"`.
 - Use `<Section title actions? description?>` for titled blocks inside a page, and `<Card title? description? actions?>`
@@ -87,7 +88,9 @@ Show `LoadingState` / `EmptyState` in place of the list, and `Pager` under it fo
 - **Filters** go in the `Toolbar` (left); **refresh and bulk actions** go in its `actions` (right). With
   `selected`, the toolbar shows "N selected · Clear" before the bulk actions.
 - **Create and edit** open a `Modal`; only a single-field rename (a task title) edits inline.
-- **Destructive actions** use `ConfirmButton`, never `window.confirm` or an inline "Delete? Yes/No".
+- **Destructive actions** use `ConfirmButton`, never `window.confirm`/`alert` or an inline "Delete? Yes/No".
+- **On/off state** (an active source, an enabled schedule) is a static `Badge`; changing it is a row action ("Pause"/"Resume"),
+  not a clickable badge.
 - **Nested collections** (a GitHub account's repos, a bot's servers, run history) are a `SubList` in the
   row body; make its `title` an `ExpandToggle` when it loads lazily.
 - **Card grids** are only for media (Photos) and the Dashboard home tiles.
@@ -174,10 +177,10 @@ A page with only a couple of counts (Tasks, Check) puts them in the `Page` `desc
 | Facts and numbers | `DetailList`, `StatGrid` + `Stat` |
 | Collapsing | `Disclosure` (secondary blocks), `ExpandToggle` (a row's nested list) |
 | Split panes | `SplitView`, `PaneHeader` |
-| Form fields | `Field label hint error` around one `Input` / `Select` / `Textarea` (it wires the label to the control); `FieldRow` for two columns; `FormActions` for the submit row; `Checkbox label` |
+| Form fields | `Field label hint error` around one `Input` / `Select` / `Textarea` / `Combobox` / `MultiSelect` (it wires the label to the one control its children render, and the hint and error to its `aria-describedby`); `FieldRow` for two columns; `FormActions` for the submit row; `Checkbox label` |
 | Picking several values from a list | `MultiSelect options value onChange` (searchable, picked values as removable chips; `creatable` for free-form tags). Options are strings or `{ value, label?, description? }`; it takes `id`, so `Field` wires its label |
 | Status | `Badge tone` (`neutral`, `info`, `success`, `warning`, `danger`, `primary`) |
-| Messages | `Notice tone` (`error`, `warning`, `info`, `success`), with optional `onRetry` / `onDismiss` |
+| Messages | `Notice tone` (`error`, `warning`, `info`, `success`), with optional `onRetry` / `onDismiss`; `useActionNotice` for the outcome of actions. Hooks throw `apiError(response, fallback)`, which carries the server's `detail` |
 | Empty / loading / failed | `EmptyState` (`actionLabel`+`onAction`, or `action` for a link), `LoadingState`, `ErrorState`; `RowError` for one item's failure |
 | Switching views or filters | `Tabs` (views), `ToggleGroup` (filters, ranges, modes) |
 | Dialogs | `Modal title onClose size` (focus, Tab trap, closes on × or Escape, never on a backdrop click); `ConfirmButton confirm onConfirm` for destructive actions; `ConfirmDialog` when the question opens from somewhere else |

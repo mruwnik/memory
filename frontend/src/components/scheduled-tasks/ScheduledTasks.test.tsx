@@ -105,7 +105,7 @@ describe('ScheduledTasks', () => {
     const user = userEvent.setup()
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('Daily standup')).toBeInTheDocument())
-    await user.click(screen.getByText('Active'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     expect(toggleTask).toHaveBeenCalledWith('t1', false)
   })
 
@@ -175,6 +175,25 @@ describe('ScheduledTasks', () => {
     await waitFor(() => expect(screen.getByText('No execution history')).toBeInTheDocument())
   })
 
+  it('says why a delete failed and keeps the row', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 'del', topic: 'stuck' })])
+    deleteTask.mockRejectedValueOnce(new Error('Task is running'))
+    const user = userEvent.setup()
+    renderWithRouter(<ScheduledTasks />)
+    await waitFor(() => expect(screen.getByText('stuck')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Task is running')
+    expect(screen.getByText('stuck')).toBeInTheDocument()
+  })
+
+  it('links a paused agent schedule to its agent instead of resuming it here', async () => {
+    listTasks.mockResolvedValue([makeTask({ task_type: 'agent_run', enabled: false, data: { definition_id: 9 } })])
+    renderWithRouter(<ScheduledTasks />)
+    expect(await screen.findByRole('link', { name: 'Resume on agent page' })).toHaveAttribute('href', '/ui/agents/9')
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument()
+  })
+
   it('reverts an optimistic toggle when persisting fails', async () => {
     const task = makeTask({ id: 'flap', topic: 'flaky', enabled: true })
     listTasks.mockResolvedValue([task])
@@ -182,10 +201,11 @@ describe('ScheduledTasks', () => {
     const user = userEvent.setup()
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('flaky')).toBeInTheDocument())
-    await user.click(screen.getByText('Active'))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(toggleTask).toHaveBeenCalledWith('flap', false))
-    // After the failure it reverts to the enabled "Active" label.
+    // After the failure it reverts to the enabled "Active" label and says why.
     await waitFor(() => expect(screen.getByText('Active')).toBeInTheDocument())
+    expect(screen.getByRole('alert')).toHaveTextContent('nope')
   })
 
   it('shows a save error inside the edit form when updateTask fails', async () => {
@@ -318,13 +338,17 @@ describe('ScheduledTasks', () => {
     expect(await screen.findByDisplayValue('FOO=bar')).toBeInTheDocument()
   })
 
-  it('shows the per-filter empty message for the notification filter', async () => {
+  it.each([
+    ['Notifications', 'No notification tasks'],
+    ['Claude Sessions', 'No Claude session tasks'],
+    ['Agent Runs', 'No agent run tasks'],
+  ])('shows the empty message for the %s filter', async (filter, message) => {
     listTasks.mockResolvedValue([])
     const user = userEvent.setup()
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Notifications' }))
-    await waitFor(() => expect(screen.getByText('No notification tasks')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: filter }))
+    await waitFor(() => expect(screen.getByText(message)).toBeInTheDocument())
   })
 
   it('refreshes the list via the refresh button', async () => {

@@ -143,7 +143,7 @@ describe('TeamsPanel - create flow', () => {
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
-    await user.click(screen.getByRole('button', { name: 'New Team' }))
+    await user.click(screen.getByRole('button', { name: 'New team' }))
     await user.type(screen.getByPlaceholderText('Engineering Core'), 'My New Team')
 
     const slugInput = screen.getByPlaceholderText('engineering-core') as HTMLInputElement
@@ -162,7 +162,7 @@ describe('TeamsPanel - create flow', () => {
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
-    await user.click(screen.getByRole('button', { name: 'New Team' }))
+    await user.click(screen.getByRole('button', { name: 'New team' }))
     await user.type(screen.getByPlaceholderText('Engineering Core'), 'Dup')
     await user.click(screen.getByRole('button', { name: 'Create Team' }))
 
@@ -174,7 +174,7 @@ describe('TeamsPanel - create flow', () => {
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 
-    await user.click(screen.getByRole('button', { name: 'New Team' }))
+    await user.click(screen.getByRole('button', { name: 'New team' }))
     await user.type(screen.getByPlaceholderText('Engineering Core'), 'Team X')
     await user.type(screen.getByPlaceholderText('Search for people to add...'), 'bob')
     await clickPersonResult(user, 'Bob')

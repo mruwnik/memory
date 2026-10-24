@@ -297,5 +297,11 @@ describe('UserManagement API key flow', () => {
     expect(screen.getByRole('heading', { name: /Regenerate API Key/ })).toBeInTheDocument()
     await ue.click(screen.getByRole('button', { name: 'Regenerate' }))
     expect(await screen.findByText('mcp_secret123')).toBeInTheDocument()
+
+    await ue.keyboard('{Escape}')
+    expect(screen.getByText('mcp_secret123')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+    await ue.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByText('mcp_secret123')).not.toBeInTheDocument()
   })
 })
