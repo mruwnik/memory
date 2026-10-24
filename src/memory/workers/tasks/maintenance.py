@@ -6,7 +6,7 @@ from typing import Sequence, Any, cast
 
 from celery.backends.database.models import Task as CeleryTaskMeta
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
-from sqlalchemy import CursorResult, delete, func, inspect as sa_inspect, or_, update
+from sqlalchemy import CursorResult, and_, delete, func, inspect as sa_inspect, or_, update
 from sqlalchemy import select
 from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
 
@@ -44,6 +44,7 @@ from memory.common.celery_app import (
     REINGEST_EMPTY_SOURCE_ITEMS,
     REINGEST_ALL_EMPTY_SOURCE_ITEMS,
     PROCESS_RAW_ITEMS,
+    RUN_AGENT,
     PROCESS_RAW_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_ITEM,
@@ -325,6 +326,10 @@ def process_raw_item(item_id: int, item_type: str):
         return process_content_item(item, session)
 
 
+RAW_ITEM_GRACE = timedelta(hours=1)
+FAILED_ITEM_RETRY_WINDOW = timedelta(hours=48)
+
+
 @app.task(name=PROCESS_RAW_ITEMS)
 @tracked_task
 def process_raw_items(
@@ -332,7 +337,12 @@ def process_raw_items(
     modality: str | None = None,
     batch_size: int = 100,
 ):
-    """Find and process all items with embed_status='RAW'.
+    """Find and process items with embed_status='RAW', and retry recently FAILED ones.
+
+    RAW items updated within RAW_ITEM_GRACE are skipped: process_content_item
+    commits new items as RAW while it embeds them. FAILED items are retried
+    while inserted less than FAILED_ITEM_RETRY_WINDOW ago (about two daily
+    runs): a retry bumps updated_at, which would never let them age out.
 
     Can filter by item_type (e.g., 'slack_message') or modality (e.g., 'message').
     Dispatches individual process_raw_item tasks for each item found.
@@ -349,29 +359,38 @@ def process_raw_items(
         f"Finding RAW items to process (item_type={item_type}, modality={modality})"
     )
 
+    class_ = SourceItem
+    if item_type:
+        try:
+            class_ = get_item_class(item_type)
+        except ValueError as e:
+            logger.error(f"Error getting item class: {e}")
+            return {"status": "error", "error": str(e)}
+
+    now = datetime.now(timezone.utc)
     with make_session() as session:
-        query = session.query(SourceItem.id, SourceItem.type).filter(
-            SourceItem.embed_status == "RAW"
+        query = session.query(class_.id, class_.type, class_.embed_status).filter(
+            or_(
+                and_(
+                    class_.embed_status == "RAW",
+                    class_.updated_at < now - RAW_ITEM_GRACE,
+                ),
+                and_(
+                    class_.embed_status == "FAILED",
+                    class_.inserted_at >= now - FAILED_ITEM_RETRY_WINDOW,
+                ),
+            )
         )
-
-        if item_type:
-            try:
-                class_ = get_item_class(item_type)
-                query = session.query(class_.id, class_.type).filter(
-                    class_.embed_status == "RAW"
-                )
-            except ValueError as e:
-                logger.error(f"Error getting item class: {e}")
-                return {"status": "error", "error": str(e)}
-
         if modality:
-            query = query.filter(SourceItem.modality == modality)
+            query = query.filter(class_.modality == modality)
 
         items = query.limit(batch_size).all()
-        logger.info(f"Found {len(items)} RAW items to process")
+        logger.info(f"Found {len(items)} RAW or recently FAILED items to process")
 
-        for item_id, type_name in items:
-            process_raw_item.delay(item_id, type_name)  # type: ignore
+        for item_id, type_name, embed_status in items:
+            # reingest_item also clears chunks a failed Qdrant push left behind.
+            task = process_raw_item if embed_status == "RAW" else reingest_item
+            task.delay(item_id, type_name)  # type: ignore
 
         return {"status": "success", "queued": len(items)}
 
@@ -1182,19 +1201,50 @@ def cleanup_old_task_executions(retention_days: int | None = None) -> dict:
 RETENTION_DELETE_BATCH_SIZE = 5000
 
 
-def delete_in_batches(model, id_column, *conditions) -> int:
-    """Delete rows matching conditions, one committed batch at a time."""
-    deleted = 0
+def apply_in_batches(statement, id_column, *conditions) -> int:
+    """Run an UPDATE/DELETE over rows matching conditions, one committed batch at a time.
+
+    The statement must take each row out of conditions, or this never ends.
+    """
+    total = 0
     with make_session() as session:
         while True:
             batch = select(id_column).where(*conditions).limit(RETENTION_DELETE_BATCH_SIZE)
+            # Repeating conditions outside the subquery makes Postgres recheck them
+            # against a row changed concurrently, rather than only its id.
             result = cast(
-                CursorResult, session.execute(delete(model).where(id_column.in_(batch)))
+                CursorResult,
+                session.execute(statement.where(*conditions, id_column.in_(batch))),
             )
             session.commit()
             if result.rowcount == 0:
-                return deleted
-            deleted += result.rowcount
+                return total
+            total += result.rowcount
+
+
+LOST_JOB_ERROR = "Worker lost: still processing long after the task time limit"
+
+
+def fail_lost_jobs() -> int:
+    """Fail processing jobs whose worker died (time-limit SIGKILL, OOM, deploy).
+
+    tracked_task can't mark those failed itself. start_job stamps updated_at,
+    and nothing else touches it while a job runs.
+    """
+    now = datetime.now(timezone.utc)
+    time_limit = max(app.conf.task_time_limit, app.tasks[RUN_AGENT].time_limit)
+    cutoff = now - timedelta(seconds=2 * time_limit)
+    return apply_in_batches(
+        update(PendingJob).values(
+            status=JobStatus.FAILED.value,
+            error_message=LOST_JOB_ERROR,
+            completed_at=now,
+            updated_at=now,
+        ),
+        PendingJob.id,
+        PendingJob.status == JobStatus.PROCESSING.value,
+        PendingJob.updated_at < cutoff,
+    )
 
 
 @app.task(name=CLEANUP_OLD_TASK_RESULTS)
@@ -1205,7 +1255,9 @@ def cleanup_old_task_results(retention_days: int | None = None) -> dict:
         retention_days = settings.TASK_RESULT_RETENTION_DAYS
 
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
-    deleted = delete_in_batches(CeleryTaskMeta, CeleryTaskMeta.id, CeleryTaskMeta.date_done < cutoff)
+    deleted = apply_in_batches(
+        delete(CeleryTaskMeta), CeleryTaskMeta.id, CeleryTaskMeta.date_done < cutoff
+    )
 
     logger.info(f"Deleted {deleted} task results older than {retention_days} days")
     return {"deleted": deleted, "retention_days": retention_days}
@@ -1214,24 +1266,28 @@ def cleanup_old_task_results(retention_days: int | None = None) -> dict:
 @app.task(name=CLEANUP_OLD_PENDING_JOBS)
 @tracked_task
 def cleanup_old_pending_jobs(retention_days: int | None = None) -> dict:
-    """Delete complete/failed pending jobs older than retention_days.
+    """Fail lost jobs, then delete complete/failed jobs older than retention_days.
 
-    Pending and processing jobs are never deleted: they may still be running or
-    awaiting a retry.
+    Pending and live processing jobs are never deleted: they may still be
+    running or awaiting a retry.
     """
     if retention_days is None:
         retention_days = settings.PENDING_JOB_RETENTION_DAYS
 
+    failed_lost = fail_lost_jobs()
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-    deleted = delete_in_batches(
-        PendingJob,
+    deleted = apply_in_batches(
+        delete(PendingJob),
         PendingJob.id,
         PendingJob.status.in_([JobStatus.COMPLETE.value, JobStatus.FAILED.value]),
         PendingJob.created_at < cutoff,
     )
 
-    logger.info(f"Deleted {deleted} finished jobs older than {retention_days} days")
-    return {"deleted": deleted, "retention_days": retention_days}
+    logger.info(
+        f"Failed {failed_lost} lost jobs; deleted {deleted} finished jobs older than {retention_days} days"
+    )
+    return {"deleted": deleted, "failed_lost": failed_lost, "retention_days": retention_days}
 
 
 @app.task(name=CLEANUP_OLD_DONE_ONEOFF_TASKS)

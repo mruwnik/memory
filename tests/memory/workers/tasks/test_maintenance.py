@@ -1,5 +1,7 @@
 # FIXME: Most of this was vibe-coded
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, call
 from typing import cast
@@ -7,7 +9,8 @@ from typing import cast
 import pytest
 from celery.backends.database.models import Task as CeleryTaskMeta
 from PIL import Image
-from sqlalchemy import insert, update
+from sqlalchemy import insert, text, update
+from sqlalchemy.orm import Session
 
 from memory.common import qdrant as qd
 from memory.common import settings
@@ -38,6 +41,7 @@ from memory.workers.tasks.maintenance import (
     _payloads_equal,
 )
 import memory.workers.tasks.maintenance as maintenance_module
+from memory.workers.tasks.agents import run_agent
 
 from memory.common.db.models import JobStatus, PendingJob, ScheduledTask, TaskExecution
 
@@ -627,6 +631,61 @@ def test_reingest_empty_source_items_selection(
 
     assert result == {"status": "success", "items": int(requeued)}
     assert mock_reingest.call_args_list == [call(item.id, "MailMessage")][: int(requeued)]
+
+
+@pytest.mark.parametrize("item_type", [None, "mail_message"])
+@pytest.mark.parametrize(
+    "embed_status, inserted_hours_ago, updated_hours_ago, raw_queued, failed_queued",
+    [
+        ("RAW", 3, 2, True, False),
+        # Probably still being embedded by the task that created it.
+        ("RAW", 1, 0.5, False, False),
+        ("FAILED", 24, 0, False, True),
+        # Retries bump updated_at, so only inserted_at bounds them.
+        ("FAILED", 72, 0, False, False),
+        ("STORED", 3, 2, False, False),
+        ("SKIPPED", 3, 2, False, False),
+    ],
+)
+def test_process_raw_items_selection(
+    db_session,
+    item_type,
+    embed_status,
+    inserted_hours_ago,
+    updated_hours_ago,
+    raw_queued,
+    failed_queued,
+):
+    now = datetime.now(timezone.utc)
+    item = MailMessage(
+        sha256=b"raw_selection" + bytes(19),
+        size=100,
+        mime_type="message/rfc822",
+        embed_status=embed_status,
+        message_id="<raw-selection@example.com>",
+        subject="Subject",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Content",
+        folder="INBOX",
+        modality="mail",
+        inserted_at=now - timedelta(hours=inserted_hours_ago),
+        updated_at=now - timedelta(hours=updated_hours_ago),
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    with (
+        patch.object(maintenance_module.process_raw_item, "delay") as mock_process,
+        patch.object(reingest_item, "delay") as mock_reingest,
+    ):
+        result = maintenance_module.process_raw_items(item_type=item_type)
+
+    assert result == {"status": "success", "queued": int(raw_queued or failed_queued)}
+    assert mock_process.call_args_list == [call(item.id, "mail_message")][: int(raw_queued)]
+    assert mock_reingest.call_args_list == [call(item.id, "mail_message")][
+        : int(failed_queued)
+    ]
 
 
 def test_reingest_empty_source_items_invalid_type(db_session):
@@ -1948,7 +2007,8 @@ def make_job(status: str, age_days: int, **kwargs) -> PendingJob:
         (JobStatus.COMPLETE.value, 5, True),
         (JobStatus.FAILED.value, 5, True),
         (JobStatus.PENDING.value, 60, True),
-        (JobStatus.PROCESSING.value, 60, True),
+        # A lost processing job is failed first, then pruned like any failed job.
+        (JobStatus.PROCESSING.value, 60, False),
     ],
 )
 def test_cleanup_old_pending_jobs(db_session, status, age_days, kept):
@@ -1961,6 +2021,106 @@ def test_cleanup_old_pending_jobs(db_session, status, age_days, kept):
 
     db_session.expire_all()
     assert (db_session.get(PendingJob, job_id) is not None) == kept
+
+
+@pytest.mark.parametrize(
+    "status, started_hours_ago, expected_status",
+    [
+        (JobStatus.PROCESSING.value, 3, JobStatus.FAILED.value),
+        (JobStatus.PROCESSING.value, 1, JobStatus.PROCESSING.value),
+        (JobStatus.PENDING.value, 3, JobStatus.PENDING.value),
+        (JobStatus.COMPLETE.value, 3, JobStatus.COMPLETE.value),
+    ],
+)
+def test_cleanup_old_pending_jobs_fails_lost_jobs(
+    db_session, status, started_hours_ago, expected_status
+):
+    # Created long ago but (re)started recently must count from the start.
+    job = make_job(status, 10)
+    job.updated_at = datetime.now(timezone.utc) - timedelta(hours=started_hours_ago)
+    db_session.add(job)
+    db_session.commit()
+    job_id = job.id
+
+    maintenance_module.cleanup_old_pending_jobs(retention_days=30)
+
+    db_session.expire_all()
+    assert cast(PendingJob, db_session.get(PendingJob, job_id)).status == expected_status
+
+
+def test_cleanup_old_pending_jobs_fails_lost_jobs_across_batches(db_session, monkeypatch):
+    monkeypatch.setattr(maintenance_module, "RETENTION_DELETE_BATCH_SIZE", 2)
+    db_session.add_all([make_job(JobStatus.PROCESSING.value, 1) for _ in range(5)])
+    db_session.commit()
+
+    result = maintenance_module.cleanup_old_pending_jobs(retention_days=30)
+
+    db_session.expire_all()
+    assert result["failed_lost"] == 5
+    assert {
+        (j.status, j.error_message, j.completed_at is not None)
+        for j in db_session.query(PendingJob).filter(PendingJob.job_type == "test")
+    } == {(JobStatus.FAILED.value, maintenance_module.LOST_JOB_ERROR, True)}
+
+
+@pytest.mark.parametrize(
+    "agent_time_limit, started_hours_ago, expected_status",
+    [
+        (3 * 3600, 5, JobStatus.PROCESSING.value),
+        (3 * 3600, 7, JobStatus.FAILED.value),
+        (600, 3, JobStatus.FAILED.value),
+    ],
+)
+def test_fail_lost_jobs_allows_for_the_longest_task_limit(
+    db_session, monkeypatch, agent_time_limit, started_hours_ago, expected_status
+):
+    monkeypatch.setattr(run_agent, "time_limit", agent_time_limit)
+    job = make_job(JobStatus.PROCESSING.value, 1)
+    job.updated_at = datetime.now(timezone.utc) - timedelta(hours=started_hours_ago)
+    db_session.add(job)
+    db_session.commit()
+
+    maintenance_module.fail_lost_jobs()
+
+    db_session.expire_all()
+    assert cast(PendingJob, db_session.get(PendingJob, job.id)).status == expected_status
+
+
+def wait_for_lock_waiter(session: Session):
+    deadline = time.monotonic() + 10
+    waiting = text(
+        "SELECT count(*) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+    )
+    while not session.execute(waiting).scalar():
+        assert time.monotonic() < deadline, "fail_lost_jobs never blocked on the row lock"
+        session.rollback()
+        time.sleep(0.05)
+
+
+@pytest.mark.transactional_db
+def test_fail_lost_jobs_keeps_job_that_completes_concurrently(db_session, db_engine):
+    job = make_job(JobStatus.PROCESSING.value, 1)
+    job.updated_at = datetime.now(timezone.utc) - timedelta(hours=3)
+    db_session.add(job)
+    db_session.commit()
+
+    with Session(db_engine) as worker, ThreadPoolExecutor(1) as pool:
+        worker.execute(
+            update(PendingJob)
+            .where(PendingJob.id == job.id)
+            .values(status=JobStatus.COMPLETE.value)
+        )
+        failed = pool.submit(maintenance_module.fail_lost_jobs)
+        wait_for_lock_waiter(db_session)
+        worker.commit()
+        assert failed.result(timeout=10) == 0
+
+    db_session.expire_all()
+    assert (
+        cast(PendingJob, db_session.get(PendingJob, job.id)).status
+        == JobStatus.COMPLETE.value
+    )
 
 
 def test_cleanup_old_pending_jobs_deletes_across_batches(db_session, monkeypatch):

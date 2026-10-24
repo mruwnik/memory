@@ -32,7 +32,7 @@ def mock_make_session(db_session):
     with patch("memory.workers.tasks.reports.make_session", _mock_session):
         with patch(
             "memory.common.embedding.embed_source_item",
-            side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
+            side_effect=lambda item, *_: [_make_mock_chunk(item.id or 1)],
         ):
             with patch("memory.common.content_processing.push_to_qdrant"):
                 yield db_session

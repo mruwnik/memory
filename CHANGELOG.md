@@ -55,13 +55,28 @@ section has nothing in it:
   bound: `celery_taskmeta` (Celery results older than
   `TASK_RESULT_RETENTION_DAYS`, default 7) and `pending_jobs` (complete or
   failed jobs older than `PENDING_JOB_RETENTION_DAYS`, default 30; pending and
-  processing jobs are never deleted). Celery's own `celery.backend_cleanup` was
-  scheduled onto a queue no worker consumes, so it never ran; it is now
-  disabled (`result_expires=None`). The first run on a large table deletes a
-  lot, in committed batches of 5000 rows. Afterwards, run
-  `VACUUM (ANALYZE) celery_taskmeta, pending_jobs;` once to make the space
-  reusable. It does not shrink the files; `VACUUM FULL` does, but takes an
-  exclusive lock on each table while it runs, so only use it in a quiet window.
+  processing jobs are never deleted). Before pruning, it marks jobs still
+  `processing` more than twice the longest task time limit (2h by default:
+  the Celery limit, or the agent run limit if `AGENT_MAX_TIMEOUT_SEC` makes
+  that longer) after they started as `failed` ("Worker lost"): their worker
+  was killed (time limit, OOM, deploy) before it could record the outcome.
+  Celery's own `celery.backend_cleanup` was scheduled onto a queue no worker
+  consumes, so it never ran; it is now disabled (`result_expires=None`). The
+  first run on a large table deletes a lot, in committed batches of 5000 rows.
+  Afterwards, run `VACUUM (ANALYZE) celery_taskmeta, pending_jobs;` once to
+  make the space reusable. It does not shrink the files; `VACUUM FULL` does,
+  but takes an exclusive lock on each table while it runs, so only use it in a
+  quiet window.
+- Ingestion commits each new item (as `RAW`) before calling the embedding API,
+  so a slow Voyage call no longer outlasts Postgres' 60s idle-in-transaction
+  timeout, which killed the connection and rolled the item back. An item whose
+  embedding fails is now kept as `FAILED` rather than re-fetched by the next
+  sync. The daily `process_raw_items` retries `FAILED` items inserted in the
+  last 48 hours (so about twice each), and skips `RAW` items updated in the
+  last hour, which may still be embedding. Items that failed before this
+  release, or re-embeds of items older than 48 hours, are not retried
+  automatically; re-embed those with the `reingest_all_empty_source_items`
+  maintenance task.
 - Ingestion summaries now go through the Anthropic Message Batches API
   (`SUMMARIZER_USE_BATCH`, default `true`). Items are searchable at once, and
   their summary chunk arrives when the batch ends, usually within an hour.

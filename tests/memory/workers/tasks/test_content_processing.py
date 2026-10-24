@@ -1,5 +1,5 @@
 import hashlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -7,6 +7,7 @@ from memory.common.db.models import (
     BlogPost,
     Chunk,
     ChatMessage,
+    ForumPost,
     MailMessage,
     SourceItem,
 )
@@ -702,6 +703,56 @@ def test_process_content_item(
     assert db_item is not None
     assert str(db_item.embed_status) == expected_embed_status
     assert (queued == [mail_message.id]) is triggers_checked
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        ForumPost(
+            sha256=b"forum" + bytes(27),
+            size=100,
+            mime_type="text/markdown",
+            modality="forum",
+            embed_status="RAW",
+            url="https://www.lesswrong.com/posts/abc/slow-embed",
+            title="Slow embed",
+            content="Forum post content long enough to be chunked and embedded.",
+        ),
+        MailMessage(
+            sha256=b"mail" + bytes(28),
+            size=100,
+            mime_type="message/rfc822",
+            modality="mail",
+            embed_status="RAW",
+            message_id="<slow-embed@example.com>",
+            subject="Slow embed",
+            sender="sender@example.com",
+            recipients=["recipient@example.com"],
+            content="Mail content long enough to be chunked and embedded.",
+            folder="INBOX",
+        ),
+    ],
+)
+@pytest.mark.transactional_db
+@pytest.mark.filterwarnings("error::sqlalchemy.exc.SAWarning")
+def test_process_content_item_holds_no_transaction_while_embedding(
+    db_session, qdrant, mock_voyage_client, item
+):
+    # Voyage calls can outlast Postgres' idle_in_transaction_session_timeout,
+    # which kills the connection and fails the item.
+    in_transaction = []
+
+    def embed(chunks, *args, **kwargs):
+        in_transaction.append(db_session.in_transaction())
+        return Mock(embeddings=[[0.1] * 1024] * len(chunks))
+
+    mock_voyage_client.embed = embed
+    mock_voyage_client.multimodal_embed = embed
+
+    result = process_content_item(item, db_session)
+
+    assert result["status"] == "processed"
+    assert set(in_transaction) == {False}
 
 
 def test_safe_task_execution_success():

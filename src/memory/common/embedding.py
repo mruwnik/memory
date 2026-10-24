@@ -2,7 +2,7 @@ import hashlib
 import logging
 import threading
 import time
-from typing import Literal, cast
+from typing import Callable, Literal, cast
 
 import voyageai
 from PIL import Image
@@ -235,11 +235,20 @@ def embed_by_model(chunks: list[Chunk], model: str) -> list[Chunk]:
     return model_chunks
 
 
-def embed_source_item(item: SourceItem) -> list[Chunk]:
+def embed_source_item(
+    item: SourceItem, before_embed: Callable[[], None] = lambda: None
+) -> list[Chunk]:
+    """Chunk and embed item. before_embed runs once the chunks are built, before
+    any embedding API call, e.g. to end a DB transaction the calls would outlast."""
     batching = summarizer.batch_enabled()
     with summarizer.deferring(batching) as deferred:
         chunks = list(item.data_chunks())
     if chunks:
+        # make_chunk's backref put the chunks in item.chunks but not in the session,
+        # which before_embed's flush warns about. Callers assign the returned chunks.
+        for chunk in chunks:
+            chunk.source = None  # pyright: ignore[reportAttributeAccessIssue]
+        before_embed()
         text_chunks = embed_by_model(chunks, settings.TEXT_EMBEDDING_MODEL)
         mixed_chunks = embed_by_model(chunks, settings.MIXED_EMBEDDING_MODEL)
         chunks = text_chunks + mixed_chunks

@@ -45,7 +45,8 @@ def test_real_source_item_embeddings(real_voyage_client, qdrant):
         embed_status="QUEUED",
     )
 
-    part1, part2, summary = embed_source_item(item)
+    item.chunks = embed_source_item(item)
+    part1, part2, summary = item.chunks
     part1.id = "00000000-0000-0000-0000-000000000000"  # type: ignore
     part2.id = "00000000-0000-0000-0000-000000000001"  # type: ignore
     summary.id = "00000000-0000-0000-0000-000000000002"  # type: ignore
@@ -1105,7 +1106,7 @@ def test_real_observation_embeddings(real_voyage_client, qdrant):
 
     for item in items:
         item.update_confidences({"observation_accuracy": 0.8})
-        embed_source_item(item)
+        item.chunks = embed_source_item(item)
     push_to_qdrant(items)
 
     chunk_map = {str(c.id): c for item in items for c in item.chunks}

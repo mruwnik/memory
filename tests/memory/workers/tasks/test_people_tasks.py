@@ -39,7 +39,7 @@ def mock_make_session(db_session):
         # Mock embedding to return a fake chunk
         with patch(
             "memory.common.embedding.embed_source_item",
-            side_effect=lambda item: [_make_mock_chunk(item.id or 1)],
+            side_effect=lambda item, *_: [_make_mock_chunk(item.id or 1)],
         ):
             # Mock push_to_qdrant to do nothing
             with patch("memory.common.content_processing.push_to_qdrant"):

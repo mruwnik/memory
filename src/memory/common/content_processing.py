@@ -145,7 +145,9 @@ def create_content_hash(content: str | bytes, *additional_data: str) -> bytes:
     return hashlib.sha256(hash_input).digest()
 
 
-def embed_source_item(source_item: SourceItem) -> int:
+def embed_source_item(
+    source_item: SourceItem, before_embed: Callable[[], None] = lambda: None
+) -> int:
     """
     Generate embeddings for a source item's content.
 
@@ -155,6 +157,7 @@ def embed_source_item(source_item: SourceItem) -> int:
 
     Args:
         source_item: The SourceItem to embed
+        before_embed: Run before the embedding API calls (see embedding.embed_source_item)
 
     Returns:
         Number of successfully embedded chunks
@@ -173,7 +176,7 @@ def embed_source_item(source_item: SourceItem) -> int:
         return 0
 
     try:
-        chunks = embedding.embed_source_item(source_item)
+        chunks = embedding.embed_source_item(source_item, before_embed)
         if chunks:
             source_item.chunks = chunks
             source_item.embed_status = "QUEUED"  # type: ignore
@@ -343,7 +346,9 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     session.flush()
     item.apply_inherited_access_control()
 
-    chunks_count = embed_source_item(item)
+    # Embedding API calls can outlast Postgres' idle_in_transaction_session_timeout,
+    # which would kill the connection under the item, so commit before them.
+    chunks_count = embed_source_item(item, session.commit)
     session.flush()
 
     if not chunks_count:

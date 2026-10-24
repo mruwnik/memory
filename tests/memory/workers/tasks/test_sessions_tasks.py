@@ -78,7 +78,7 @@ def indexing_env(db_session, sessions_dir):
         patch("memory.workers.tasks.sessions.make_session", fake_session),
         patch(
             "memory.common.embedding.embed_source_item",
-            side_effect=lambda item: [make_chunk(item)],
+            side_effect=lambda item, *_: [make_chunk(item)],
         ),
         patch("memory.common.content_processing.push_chunks_to_qdrant"),
     ):
@@ -264,7 +264,7 @@ def test_index_session_halts_watermark_on_embedding_failure(
 
     calls = {"count": 0}
 
-    def flaky_embed(item):
+    def flaky_embed(item, *_):
         calls["count"] += 1
         if calls["count"] >= 2:
             raise IOError("voyage is down")
