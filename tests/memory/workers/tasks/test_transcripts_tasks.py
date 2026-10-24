@@ -11,6 +11,7 @@ from memory.common.db.models.source_items import Meeting
 from memory.common.content_processing import create_content_hash
 from memory.parsers.fireflies import FirefliesError
 from memory.workers.tasks import transcripts
+from memory.workers.tasks.meetings import link_attendees
 
 
 SAMPLE_FULL_TRANSCRIPT = {
@@ -466,52 +467,121 @@ def test_rescan_transcript_account_uses_full_provider(
     fake_client.list_transcripts.assert_called_once()
 
 
-def test_sync_all_transcript_accounts_dispatches_active(
-    db_session, transcript_account, regular_user, patch_session
-):
+@pytest.fixture
+def unpolled_accounts(db_session, regular_user):
     inactive = TranscriptAccount(
-        user_id=regular_user.id,
-        name="Inactive",
-        provider="fireflies",
-        active=False,
+        user_id=regular_user.id, name="Inactive", provider="fireflies", active=False
     )
     inactive.api_key = "x"
-    db_session.add(inactive)
+    push_only = TranscriptAccount(
+        user_id=regular_user.id, name="Push only", provider="generic"
+    )
+    db_session.add_all([inactive, push_only])
     db_session.commit()
+    return [inactive, push_only]
 
+
+@pytest.mark.parametrize(
+    "fan_out, per_account",
+    [
+        ("sync_all_transcript_accounts", "sync_transcript_account"),
+        ("rescan_all_transcript_accounts", "rescan_transcript_account"),
+    ],
+)
+def test_fan_out_dispatches_only_active_polling_accounts(
+    db_session, transcript_account, unpolled_accounts, patch_session, fan_out, per_account
+):
     with patch.object(
-        transcripts.sync_transcript_account, "delay", return_value=MagicMock(id="t-1")
+        getattr(transcripts, per_account), "delay", return_value=MagicMock(id="t-1")
     ) as delay:
-        result = transcripts.sync_all_transcript_accounts()
+        result = getattr(transcripts, fan_out)()
 
-    assert len(result) == 1
-    assert result[0]["account_id"] == transcript_account.id
+    assert [r["account_id"] for r in result] == [transcript_account.id]
     delay.assert_called_once_with(transcript_account.id)
 
 
-def test_rescan_all_transcript_accounts_dispatches_active(
-    db_session, transcript_account, regular_user, patch_session
+# ---------------------------------------------------------------------------
+# ingest_transcript_meeting (push notification -> one-meeting fetch)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_transcript_meeting_fetches_and_dispatches(
+    transcript_account, patch_session, patch_send_task
 ):
-    inactive = TranscriptAccount(
-        user_id=regular_user.id,
-        name="Inactive rescan",
-        provider="fireflies",
-        active=False,
-    )
-    inactive.api_key = "x"
-    db_session.add(inactive)
+    fake_client = MagicMock()
+    fake_client.get_transcript.return_value = SAMPLE_FULL_TRANSCRIPT
+    with patch(
+        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
+    ):
+        result = transcripts.ingest_transcript_meeting(
+            transcript_account.id, SAMPLE_FULL_TRANSCRIPT["id"]
+        )
+
+    assert result["status"] == "queued"
+    fake_client.get_transcript.assert_called_once_with(SAMPLE_FULL_TRANSCRIPT["id"])
+    assert [c["kwargs"]["external_id"] for c in patch_send_task] == [
+        SAMPLE_FULL_TRANSCRIPT["id"]
+    ]
+
+
+def test_ingest_transcript_meeting_skips_known_meeting(
+    db_session, transcript_account, patch_session, patch_send_task
+):
+    _add_meeting(db_session, transcript_account.id, datetime.now(timezone.utc), "KNOWN")
+    fake_client = MagicMock()
+    with patch(
+        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
+    ):
+        result = transcripts.ingest_transcript_meeting(transcript_account.id, "KNOWN")
+
+    assert result["status"] == "exists"
+    fake_client.get_transcript.assert_not_called()
+    assert patch_send_task == []
+
+
+@pytest.mark.parametrize("field, value", [("active", False), ("provider", "generic")])
+def test_ingest_transcript_meeting_ignores_unusable_account(
+    db_session, transcript_account, patch_session, patch_send_task, field, value
+):
+    setattr(transcript_account, field, value)
     db_session.commit()
+    fake_client = MagicMock()
+    with patch(
+        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
+    ):
+        result = transcripts.ingest_transcript_meeting(transcript_account.id, "M1")
 
-    with patch.object(
-        transcripts.rescan_transcript_account,
-        "delay",
-        return_value=MagicMock(id="r-1"),
-    ) as delay:
-        result = transcripts.rescan_all_transcript_accounts()
+    assert result["status"] == "error"
+    fake_client.get_transcript.assert_not_called()
 
-    assert len(result) == 1
-    assert result[0]["account_id"] == transcript_account.id
-    delay.assert_called_once_with(transcript_account.id)
+
+def failing_fireflies(retryable: bool):
+    fake_client = MagicMock()
+    fake_client.get_transcript.side_effect = FirefliesError("bad key", retryable=retryable)
+    return patch(
+        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
+    )
+
+
+def test_ingest_transcript_meeting_records_persistent_error_without_retry(
+    db_session, transcript_account, patch_session, patch_send_task
+):
+    with failing_fireflies(retryable=False):
+        result = transcripts.ingest_transcript_meeting(transcript_account.id, "M1")
+
+    assert result == {"status": "error", "error": "bad key"}
+    db_session.refresh(transcript_account)
+    assert transcript_account.sync_error == "bad key"
+
+
+def test_ingest_transcript_meeting_records_and_raises_transient_error(
+    db_session, transcript_account, patch_session, patch_send_task
+):
+    with failing_fireflies(retryable=True), pytest.raises(FirefliesError):
+        transcripts.ingest_transcript_meeting(transcript_account.id, "M1")
+
+    db_session.refresh(transcript_account)
+    assert transcript_account.sync_error == "bad key"
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +591,6 @@ def test_rescan_all_transcript_accounts_dispatches_active(
 
 def test_link_attendees_via_email_creates_person(db_session):
     """The email-based linking path creates a Person from a clean email."""
-    from memory.workers.tasks.meetings import link_attendees
 
     meeting = Meeting(
         title="Email Linking",
@@ -551,7 +620,6 @@ def test_link_attendees_via_email_creates_person(db_session):
 
 def test_link_attendees_via_email_links_existing_person(db_session):
     """If a Person already has the email, no new Person is created."""
-    from memory.workers.tasks.meetings import link_attendees
 
     person = Person(
         identifier="alice_existing",
@@ -583,7 +651,6 @@ def test_link_attendees_via_email_links_existing_person(db_session):
 def test_link_attendees_paired_name_and_email_create_one_person(db_session):
     """Regression: name+email for the same attendee must produce exactly one
     Person, not one per code path."""
-    from memory.workers.tasks.meetings import link_attendees
 
     meeting = Meeting(
         title="Paired",
@@ -611,10 +678,38 @@ def test_link_attendees_paired_name_and_email_create_one_person(db_session):
     assert p.display_name == "Alice Smith"
 
 
+@pytest.mark.parametrize("ann_name, expected_name", [("Ann", "Ann"), ("", "Ann Lee")])
+def test_link_attendees_pairs_are_never_mixed_with_names(db_session, ann_name, expected_name):
+    """Explicit pairs keep one person's email and name together even when
+    the email-less names list happens to be the same length."""
+
+    meeting = Meeting(
+        title="Pairs",
+        content="p",
+        sha256=create_content_hash(f"meeting:pairs:{ann_name}"),
+        modality="meeting",
+        mime_type="text/plain",
+        size=10,
+    )
+    db_session.add(meeting)
+    db_session.commit()
+
+    result = link_attendees(
+        db_session,
+        meeting,
+        attendee_names=["Bob"],
+        attendee_pairs=[("ann.lee@example.com", ann_name)],
+        create_missing=True,
+    )
+
+    assert result["created"] == 2
+    people = {p.display_name: p.contact_info or {} for p in meeting.attendees}
+    assert people == {expected_name: {"email": "ann.lee@example.com"}, "Bob": {}}
+
+
 def test_link_attendees_dedupes_repeated_emails(db_session):
     """A noisy upstream that lists the same email twice (different cases)
     should still produce a single Person and a single link."""
-    from memory.workers.tasks.meetings import link_attendees
 
     meeting = Meeting(
         title="Dedup",

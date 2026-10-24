@@ -1,6 +1,7 @@
-"""API endpoints for Transcript Account management (Fireflies, etc.)."""
+"""API endpoints for Transcript Account management (Fireflies, generic push, etc.)."""
 
 import logging
+import secrets
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,7 @@ from memory.api.auth import (
     resolve_user_filter,
 )
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
+from memory.common import settings
 from memory.common.celery_app import RESCAN_TRANSCRIPT_ACCOUNT, SYNC_TRANSCRIPT_ACCOUNT
 from memory.common.celery_app import app as celery_app
 from memory.common.data_source_access import (
@@ -24,7 +26,7 @@ from memory.common.data_source_access import (
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import TranscriptAccount
-from memory.common.transcripts import SUPPORTED_PROVIDERS
+from memory.common.transcripts import POLLING_PROVIDERS, SUPPORTED_PROVIDERS
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +36,8 @@ router = APIRouter(prefix="/transcript-accounts", tags=["transcript-accounts"])
 class TranscriptAccountCreate(BaseModel):
     name: str
     provider: str
-    api_key: str
-    webhook_secret: str | None = None
+    # Required for polling providers; push-only providers have none.
+    api_key: str | None = None
     tags: list[str] = []
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
@@ -45,8 +47,6 @@ class TranscriptAccountUpdate(BaseModel):
     name: str | None = None
     # Leave None to keep existing key; pass a string to rotate.
     api_key: str | None = None
-    # Pass "" to clear; None to keep; non-empty string to set/rotate.
-    webhook_secret: str | None = None
     tags: list[str] | None = None
     active: bool | None = None
     project_id: int | None = None
@@ -58,7 +58,9 @@ class TranscriptAccountResponse(SyncStatusResponse):
     name: str
     provider: str
     has_api_key: bool
-    has_webhook_secret: bool
+    webhook_secret_hint: str | None
+    ingest_url: str
+    polls: bool
     tags: list[str]
     last_sync_at: str | None
     active: bool
@@ -68,13 +70,30 @@ class TranscriptAccountResponse(SyncStatusResponse):
     sensitivity: str
 
 
+class WebhookSecretResponse(BaseModel):
+    secret: str
+    webhook_secret_hint: str
+    ingest_url: str
+
+
+def ingest_url(account_id: int) -> str:
+    return f"{settings.SERVER_URL}/transcripts/ingest/{account_id}"
+
+
+def secret_hint(account: TranscriptAccount) -> str | None:
+    secret = account.webhook_secret
+    return secret[-4:] if secret else None
+
+
 def account_to_response(account: TranscriptAccount) -> TranscriptAccountResponse:
     return TranscriptAccountResponse(
         id=cast(int, account.id),
         name=cast(str, account.name),
         provider=cast(str, account.provider),
         has_api_key=bool(account.api_key_encrypted),
-        has_webhook_secret=account.webhook_secret_encrypted is not None,
+        webhook_secret_hint=secret_hint(account),
+        ingest_url=ingest_url(account.id),
+        polls=account.provider in POLLING_PROVIDERS,
         tags=list(account.tags or []),
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         **sync_status_fields(account),
@@ -123,9 +142,8 @@ def create_account(
             detail=f"Unsupported provider. Supported: {', '.join(SUPPORTED_PROVIDERS)}",
         )
 
-    # Same justification as in update_account: api_key is the only auth path,
-    # an empty key would silently break every sync.
-    if not data.api_key:
+    # Polling providers can't sync without a key.
+    if data.provider in POLLING_PROVIDERS and not data.api_key:
         raise HTTPException(status_code=400, detail="api_key cannot be empty")
 
     existing = (
@@ -154,9 +172,8 @@ def create_account(
         project_id=data.project_id,
         sensitivity=data.sensitivity,
     )
-    account.api_key = data.api_key
-    if data.webhook_secret:
-        account.webhook_secret = data.webhook_secret
+    if data.api_key:
+        account.api_key = data.api_key
 
     db.add(account)
     try:
@@ -204,15 +221,10 @@ def update_account(
     if updates.name is not None:
         account.name = updates.name
     if updates.api_key is not None:
-        # Reject empty string explicitly: api_key is the *only* auth path for
-        # transcript providers (no IMAP/CalDAV-style alternative knobs), so
-        # an empty key would silently break every subsequent sync.
+        # Polling providers can't sync without a key.
         if not updates.api_key:
             raise HTTPException(status_code=400, detail="api_key cannot be empty")
         account.api_key = updates.api_key
-    if updates.webhook_secret is not None:
-        # Empty string clears the secret; non-empty rotates it.
-        account.webhook_secret = updates.webhook_secret or None
     if updates.tags is not None:
         account.tags = updates.tags
     if updates.active is not None:
@@ -255,6 +267,47 @@ def delete_account(
     return {"status": "deleted"}
 
 
+@router.post("/{account_id}/webhook-secret")
+def generate_webhook_secret(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> WebhookSecretResponse:
+    """Generate or rotate the push secret. The only response that contains it."""
+    account = get_user_account(db, TranscriptAccount, account_id, user)
+    secret = secrets.token_urlsafe(32)
+    account.webhook_secret = secret
+    db.commit()
+    return WebhookSecretResponse(
+        secret=secret,
+        webhook_secret_hint=secret[-4:],
+        ingest_url=ingest_url(account.id),
+    )
+
+
+@router.delete("/{account_id}/webhook-secret")
+def delete_webhook_secret(
+    account_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> TranscriptAccountResponse:
+    """Remove the push secret, which disables push ingest for this account."""
+    account = get_user_account(db, TranscriptAccount, account_id, user)
+    account.webhook_secret = None
+    db.commit()
+    db.refresh(account)
+    return account_to_response(account)
+
+
+def get_polled_account(
+    db: Session, account_id: int, user: User
+) -> TranscriptAccount:
+    account = get_user_account(db, TranscriptAccount, account_id, user)
+    if account.provider not in POLLING_PROVIDERS:
+        raise HTTPException(status_code=400, detail="This account is push-only")
+    return account
+
+
 @router.post("/{account_id}/sync")
 def trigger_sync(
     account_id: int,
@@ -262,9 +315,7 @@ def trigger_sync(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a quick sync for a transcript account."""
-    get_user_account(
-        db, TranscriptAccount, account_id, user
-    )  # Verify ownership; raises 404 otherwise.
+    get_polled_account(db, account_id, user)
     task = celery_app.send_task(SYNC_TRANSCRIPT_ACCOUNT, args=[account_id])
     return {"task_id": task.id, "status": "scheduled"}
 
@@ -276,8 +327,6 @@ def trigger_rescan(
     db: Session = Depends(get_session),
 ):
     """Manually trigger a full rescan for a transcript account."""
-    get_user_account(
-        db, TranscriptAccount, account_id, user
-    )  # Verify ownership; raises 404 otherwise.
+    get_polled_account(db, account_id, user)
     task = celery_app.send_task(RESCAN_TRANSCRIPT_ACCOUNT, args=[account_id])
     return {"task_id": task.id, "status": "scheduled"}

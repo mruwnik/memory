@@ -8,6 +8,8 @@ const deleteTranscriptAccount = vi.fn()
 const syncTranscriptAccount = vi.fn()
 const rescanTranscriptAccount = vi.fn()
 const listTranscriptProviders = vi.fn()
+const generateTranscriptWebhookSecret = vi.fn()
+const deleteTranscriptWebhookSecret = vi.fn()
 const listProjects = vi.fn()
 
 vi.mock('@/hooks/useSources', () => ({
@@ -19,6 +21,8 @@ vi.mock('@/hooks/useSources', () => ({
     syncTranscriptAccount,
     rescanTranscriptAccount,
     listTranscriptProviders,
+    generateTranscriptWebhookSecret,
+    deleteTranscriptWebhookSecret,
   }),
 }))
 
@@ -37,7 +41,9 @@ const account = (over: Record<string, unknown> = {}) => ({
   name: 'My Fireflies',
   provider: 'fireflies',
   has_api_key: true,
-  has_webhook_secret: false,
+  webhook_secret_hint: null,
+  ingest_url: 'https://mem.example/transcripts/ingest/1',
+  polls: true,
   tags: ['meetings'],
   last_sync_at: null,
   sync_error: null,
@@ -58,13 +64,19 @@ const passwordInputs = () =>
 beforeEach(() => {
   vi.clearAllMocks()
   listTranscriptAccounts.mockResolvedValue([])
-  listTranscriptProviders.mockResolvedValue(['fireflies', 'otter'])
+  listTranscriptProviders.mockResolvedValue(['fireflies', 'generic'])
   listProjects.mockResolvedValue([project])
   createTranscriptAccount.mockResolvedValue(account())
   updateTranscriptAccount.mockResolvedValue(account())
   deleteTranscriptAccount.mockResolvedValue(undefined)
   syncTranscriptAccount.mockResolvedValue({ task_id: 't', status: 'queued' })
   rescanTranscriptAccount.mockResolvedValue({ task_id: 't', status: 'queued' })
+  generateTranscriptWebhookSecret.mockResolvedValue({
+    secret: 'fresh-secret-abcd',
+    webhook_secret_hint: 'abcd',
+    ingest_url: 'https://mem.example/transcripts/ingest/1',
+  })
+  deleteTranscriptWebhookSecret.mockResolvedValue(account())
 })
 
 describe('TranscriptsPanel - load states', () => {
@@ -109,16 +121,14 @@ describe('TranscriptsPanel - load states', () => {
 })
 
 describe('TranscriptsPanel - create flow', () => {
-  it('creates an account sending provider + api_key + optional webhook secret', async () => {
+  it('creates an account sending provider + api_key', async () => {
     const { user } = renderWithUser(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
     await user.type(screen.getByPlaceholderText('My Fireflies'), 'Acct')
     // provider select defaults to first provider 'fireflies'
-    const [apiKey, webhook] = passwordInputs()
-    await user.type(apiKey, 'secret-key')
-    await user.type(webhook, 'hook')
+    await user.type(passwordInputs()[0], 'secret-key')
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
@@ -127,11 +137,26 @@ describe('TranscriptsPanel - create flow', () => {
           name: 'Acct',
           provider: 'fireflies',
           api_key: 'secret-key',
-          webhook_secret: 'hook',
           sensitivity: 'basic',
         }),
       ),
     )
+  })
+
+  it('creates a push-only account without an API key', async () => {
+    const { user } = renderWithUser(<TranscriptsPanel />)
+    await screen.findByText(/No transcript accounts configured/)
+
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
+    await user.type(screen.getByPlaceholderText('My Fireflies'), 'Pushed')
+    await user.selectOptions(screen.getByLabelText('Provider'), 'generic')
+    expect(passwordInputs()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(createTranscriptAccount).toHaveBeenCalledTimes(1))
+    const payload = createTranscriptAccount.mock.calls[0][0]
+    expect(payload).toMatchObject({ name: 'Pushed', provider: 'generic' })
+    expect(payload).not.toHaveProperty('api_key')
   })
 
   it('shows the "no providers" guard when provider list is empty', async () => {
@@ -159,9 +184,9 @@ describe('TranscriptsPanel - create flow', () => {
 })
 
 describe('TranscriptsPanel - edit flow', () => {
-  beforeEach(() => listTranscriptAccounts.mockResolvedValue([account({ has_webhook_secret: true })]))
+  beforeEach(() => listTranscriptAccounts.mockResolvedValue([account()]))
 
-  it('disables provider and omits api_key/webhook when left blank', async () => {
+  it('disables provider and omits api_key when left blank', async () => {
     const { user } = renderWithUser(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
@@ -175,7 +200,6 @@ describe('TranscriptsPanel - edit flow', () => {
     await waitFor(() => expect(updateTranscriptAccount).toHaveBeenCalledTimes(1))
     const payload = updateTranscriptAccount.mock.calls[0][1]
     expect(payload).not.toHaveProperty('api_key')
-    expect(payload).not.toHaveProperty('webhook_secret')
     expect(payload).toMatchObject({ name: 'My Fireflies' })
   })
 
@@ -189,19 +213,6 @@ describe('TranscriptsPanel - edit flow', () => {
 
     await waitFor(() =>
       expect(updateTranscriptAccount.mock.calls[0][1]).toMatchObject({ api_key: 'rotated' }),
-    )
-  })
-
-  it('clears the webhook secret when the remove checkbox is ticked', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
-    await screen.findByText('My Fireflies')
-
-    await user.click(screen.getByRole('button', { name: 'Edit' }))
-    await user.click(screen.getByLabelText('Remove existing webhook secret'))
-    await user.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() =>
-      expect(updateTranscriptAccount.mock.calls[0][1]).toMatchObject({ webhook_secret: '' }),
     )
   })
 })
@@ -247,5 +258,48 @@ describe('TranscriptsPanel - row actions', () => {
     renderWithUser(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
     expect(screen.getByRole('button', { name: 'Full rescan' })).toBeDisabled()
+  })
+})
+
+describe('TranscriptsPanel - push ingest', () => {
+  it('hides sync and rescan for push-only accounts', async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ provider: 'generic', polls: false, has_api_key: false })])
+    renderWithUser(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    expect(screen.queryByRole('button', { name: 'Sync' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Full rescan' })).not.toBeInTheDocument()
+    expect(screen.queryByText('No API key set')).not.toBeInTheDocument()
+  })
+
+  it('generates a secret and shows it once with the URL and an example curl', async () => {
+    listTranscriptAccounts.mockResolvedValue([account()])
+    const { user } = renderWithUser(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Push' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('https://mem.example/transcripts/ingest/1')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Generate secret' }))
+
+    await waitFor(() => expect(generateTranscriptWebhookSecret).toHaveBeenCalledWith(1))
+    expect(await within(dialog).findByText('fresh-secret-abcd')).toBeInTheDocument()
+    expect(within(dialog).getByText(/curl .*X-Hub-Signature/s)).toBeInTheDocument()
+  })
+
+  it('removes an existing secret', async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ webhook_secret_hint: 'wxyz' })])
+    const { user } = renderWithUser(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Push' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/wxyz/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Rotate secret' })).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Remove secret' }))
+    await user.click(within(screen.getAllByRole('dialog').at(-1)!).getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() => expect(deleteTranscriptWebhookSecret).toHaveBeenCalledWith(1))
+    expect(await within(dialog).findByRole('button', { name: 'Generate secret' })).toBeInTheDocument()
   })
 })

@@ -115,6 +115,15 @@ section has nothing in it:
   unchanged.
 - New EC2 first-boot script `deploy/aws/bootstrap.sh` and nightly host jobs in
   `deploy/aws/host/` (update, backup, reboot window); see deploy/aws/README.md.
+- Transcript accounts accept pushed transcripts at
+  `POST /transcripts/ingest/{account_id}`, authenticated by a per-account
+  secret generated in the UI (Sources → Transcripts → Push). A new `generic`
+  provider is push-only and needs no API key; Fireflies accounts can point
+  Fireflies webhooks at the same URL. The path bypasses the auth middleware,
+  so a reverse proxy that allow-lists public paths must allow
+  `/transcripts/ingest/`. The old free-text webhook secret field is gone and
+  the migration clears any secret stored through it, so owners must generate
+  a new one in the UI before pushing. Polling is unchanged.
 - MCP tools gated on "has any items" (organizer task and calendar tools,
   deadlines, books, observations) are still hidden from tool listings while
   their table is empty, but calling one no longer fails with "Access denied";
@@ -348,6 +357,9 @@ section has nothing in it:
   synced source table, and `sync_error` to `google_folders`, `github_repos` and
   `article_feeds`. Fast. Errors already stored show without a start time until
   the next sync.
+- `20261031_transcript_push_only`: makes `transcript_accounts.api_key_encrypted`
+  nullable and clears every stored `webhook_secret_encrypted`. Fast.
+  Downgrading deletes push-only (`generic`) accounts.
 
 ### Post-deploy commands
 

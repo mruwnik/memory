@@ -2,6 +2,7 @@
 Tests for transcript accounts API endpoints.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,7 +34,8 @@ def make_account(
         sensitivity=sensitivity,
         active=active,
     )
-    account.api_key = api_key
+    if api_key is not None:
+        account.api_key = api_key
     if webhook_secret is not None:
         account.webhook_secret = webhook_secret
     db_session.add(account)
@@ -75,12 +77,11 @@ def test_list_providers_returns_sorted_list(client, user, db_session, monkeypatc
     assert data == sorted(data)
 
 
-def test_list_providers_includes_fireflies(client, user, db_session):
-    """The default provider list should include the worker's only provider."""
+def test_list_providers_includes_polling_and_push_providers(client, user, db_session):
     response = client.get("/transcript-accounts/providers")
 
     assert response.status_code == 200
-    assert "fireflies" in response.json()
+    assert {"fireflies", "generic"} <= set(response.json())
 
 
 # Test list_accounts
@@ -161,7 +162,9 @@ def test_create_account_success(client, user, db_session):
     assert data["name"] == "My Fireflies"
     assert data["provider"] == "fireflies"
     assert data["has_api_key"] is True
-    assert data["has_webhook_secret"] is False
+    assert data["webhook_secret_hint"] is None
+    assert data["polls"] is True
+    assert data["ingest_url"].endswith(f"/transcripts/ingest/{data['id']}")
     assert data["tags"] == ["work", "meetings"]
     assert data["sensitivity"] == "internal"
     assert data["active"] is True
@@ -281,19 +284,24 @@ def test_create_account_empty_api_key_returns_400(client, user, db_session):
     assert "api_key" in response.json()["detail"].lower()
 
 
-def test_create_account_with_webhook_secret(client, user, db_session):
-    """Creating with webhook_secret should result in has_webhook_secret=True."""
-    payload = {
-        "name": "with-webhook",
-        "provider": "fireflies",
-        "api_key": "k",
-        "webhook_secret": "shh",
-    }
-
-    response = client.post("/transcript-accounts", json=payload)
+def test_create_push_only_account_needs_no_api_key(client, user, db_session):
+    response = client.post(
+        "/transcript-accounts", json={"name": "push", "provider": "generic"}
+    )
 
     assert response.status_code == 200
-    assert response.json()["has_webhook_secret"] is True
+    data = response.json()
+    assert data["has_api_key"] is False
+    assert data["polls"] is False
+
+
+def test_create_polling_account_without_api_key_returns_400(client, user, db_session):
+    response = client.post(
+        "/transcript-accounts", json={"name": "ff", "provider": "fireflies"}
+    )
+
+    assert response.status_code == 400
+    assert "api_key" in response.json()["detail"].lower()
 
 
 # Test get_account
@@ -390,57 +398,74 @@ def test_update_account_empty_api_key_returns_400(client, user, db_session):
     assert "empty" in response.json()["detail"].lower()
 
 
-def test_update_webhook_secret_set(client, user, db_session):
-    """PATCH webhook_secret=<non-empty> should set the secret."""
+def test_generate_webhook_secret_returns_it_once(client, user, db_session):
     account = make_account(db_session, user.id, name="wh", api_key="k")
-    assert account.webhook_secret_encrypted is None
 
-    response = client.patch(
-        f"/transcript-accounts/{account.id}",
-        json={"webhook_secret": "the-secret"},
-    )
+    response = client.post(f"/transcript-accounts/{account.id}/webhook-secret")
+
     assert response.status_code == 200
-    assert response.json()["has_webhook_secret"] is True
+    data = response.json()
+    secret = data["secret"]
+    assert len(secret) >= 32
+    assert data["webhook_secret_hint"] == secret[-4:]
+    assert data["ingest_url"].endswith(f"/transcripts/ingest/{account.id}")
+    db_session.refresh(account)
+    assert account.webhook_secret == secret
+    assert secret.encode() not in bytes(account.webhook_secret_encrypted)
+    listed = client.get(f"/transcript-accounts/{account.id}").json()
+    assert listed["webhook_secret_hint"] == secret[-4:]
+    assert secret not in json.dumps(listed)
+
+
+def test_rotate_webhook_secret_replaces_it(client, user, db_session):
+    account = make_account(
+        db_session, user.id, name="wh", api_key="k", webhook_secret="old-secret"
+    )
+
+    response = client.post(f"/transcript-accounts/{account.id}/webhook-secret")
 
     db_session.refresh(account)
-    assert account.webhook_secret == "the-secret"
+    assert account.webhook_secret == response.json()["secret"]
+    assert account.webhook_secret != "old-secret"
 
 
-def test_update_webhook_secret_clear_via_empty_string(client, user, db_session):
-    """PATCH webhook_secret="" should clear the secret."""
+def test_delete_webhook_secret_clears_it(client, user, db_session):
     account = make_account(
         db_session, user.id, name="wh", api_key="k", webhook_secret="initial"
     )
-    assert account.webhook_secret_encrypted is not None
 
-    response = client.patch(
-        f"/transcript-accounts/{account.id}", json={"webhook_secret": ""}
-    )
+    response = client.delete(f"/transcript-accounts/{account.id}/webhook-secret")
+
     assert response.status_code == 200
-    assert response.json()["has_webhook_secret"] is False
-
+    assert response.json()["webhook_secret_hint"] is None
     db_session.refresh(account)
     assert account.webhook_secret_encrypted is None
-    assert account.webhook_secret is None
 
 
-def test_update_webhook_secret_omitted_unchanged(client, user, db_session):
-    """PATCH without webhook_secret in body should leave the secret unchanged."""
+@pytest.mark.parametrize("method", ["post", "delete"])
+def test_webhook_secret_not_owned(regular_client, user, db_session, method):
+    other = make_other_user(db_session)
+    other_account = make_account(db_session, other.id, name="theirs", api_key="k")
+
+    response = getattr(regular_client, method)(
+        f"/transcript-accounts/{other_account.id}/webhook-secret"
+    )
+
+    assert response.status_code == 404
+
+
+def test_update_ignores_webhook_secret_field(client, user, db_session):
     account = make_account(
         db_session, user.id, name="wh", api_key="k", webhook_secret="keep-me"
     )
-    assert account.webhook_secret_encrypted is not None
-    original_encrypted = bytes(account.webhook_secret_encrypted)
 
     response = client.patch(
-        f"/transcript-accounts/{account.id}", json={"name": "renamed"}
+        f"/transcript-accounts/{account.id}",
+        json={"name": "renamed", "webhook_secret": "attacker-chosen"},
     )
-    assert response.status_code == 200
-    assert response.json()["has_webhook_secret"] is True
 
+    assert response.status_code == 200
     db_session.refresh(account)
-    assert account.webhook_secret_encrypted is not None
-    assert bytes(account.webhook_secret_encrypted) == original_encrypted
     assert account.webhook_secret == "keep-me"
 
 
@@ -576,6 +601,19 @@ def test_trigger_rescan_not_owned(mock_app, regular_client, user, db_session):
     mock_app.send_task.assert_not_called()
 
 
+@pytest.mark.parametrize("action", ["sync", "rescan"])
+@patch("memory.api.transcript_accounts.celery_app")
+def test_trigger_poll_on_push_only_account_returns_400(
+    mock_app, client, user, db_session, action
+):
+    account = make_account(db_session, user.id, provider="generic", api_key=None)
+
+    response = client.post(f"/transcript-accounts/{account.id}/{action}")
+
+    assert response.status_code == 400
+    mock_app.send_task.assert_not_called()
+
+
 # Full CRUD round-trip
 
 
@@ -594,7 +632,7 @@ def test_full_crud_round_trip(client, user, db_session):
     created = create_resp.json()
     account_id = created["id"]
     assert created["has_api_key"] is True
-    assert created["has_webhook_secret"] is False
+    assert created["webhook_secret_hint"] is None
     assert created["tags"] == ["foo", "bar"]
     assert created["sensitivity"] == "internal"
 

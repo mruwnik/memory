@@ -1125,8 +1125,10 @@ class TranscriptAccount(SyncStatusMixin, Base):
     """A meeting-transcript provider account (Fireflies, Granola, Otter, ...).
 
     Stores per-user credentials and sync state for transcript ingestion.
-    Drives the periodic poll in workers/tasks/transcripts.py and produces
-    Meeting source items via the existing process_meeting pipeline.
+    Polling providers drive the periodic poll in workers/tasks/transcripts.py;
+    any account with a webhook secret also accepts pushes at
+    /transcripts/ingest/{id}. Both produce Meeting source items via the
+    process_meeting pipeline.
     """
 
     __tablename__ = "transcript_accounts"
@@ -1145,13 +1147,17 @@ class TranscriptAccount(SyncStatusMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     provider: Mapped[str] = mapped_column(Text, nullable=False)
 
-    api_key_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # NULL for push-only providers, which never call the provider's API.
+    api_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Authenticates pushes to /transcripts/ingest/{id}.
     webhook_secret_encrypted: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True
     )
 
     @property
-    def api_key(self) -> str:
+    def api_key(self) -> str | None:
+        if self.api_key_encrypted is None:
+            return None
         return decrypt_value(self.api_key_encrypted)
 
     @api_key.setter

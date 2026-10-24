@@ -1,4 +1,4 @@
-"""Canonical list of transcript-provider names.
+"""Canonical lists of transcript-provider names.
 
 Lives in ``common`` so the api can validate ``provider`` values without
 importing ``memory.workers.tasks.transcripts`` — the workers.tasks package
@@ -7,8 +7,14 @@ decorators register on worker boot), and several of those modules require
 heavy dependencies (e.g. ``caldav`` in workers.tasks.calendar) that the
 api image deliberately does not install.
 
-The worker's PROVIDERS dispatch dict is asserted to match this tuple at
-import time (see workers.tasks.transcripts) so the two cannot drift.
+The worker's PROVIDERS dispatch dict is asserted to match POLLING_PROVIDERS
+at import time (see workers.tasks.transcripts) so the two cannot drift.
 """
 
-SUPPORTED_PROVIDERS: list[str] = sorted(["fireflies"])
+# Providers the worker polls with the account's API key.
+POLLING_PROVIDERS: list[str] = sorted(["fireflies"])
+
+# Push-only providers: no API key, content arrives at /transcripts/ingest/{id}.
+PUSH_ONLY_PROVIDERS: list[str] = sorted(["generic"])
+
+SUPPORTED_PROVIDERS: list[str] = sorted(POLLING_PROVIDERS + PUSH_ONLY_PROVIDERS)

@@ -138,6 +138,7 @@ SYNC_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.sync_all_transcript_accounts
 SYNC_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.sync_transcript_account"
 RESCAN_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.rescan_all_transcript_accounts"
 RESCAN_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.rescan_transcript_account"
+INGEST_TRANSCRIPT_MEETING = f"{TRANSCRIPTS_ROOT}.ingest_transcript_meeting"
 
 # Report tasks
 SYNC_REPORT = f"{REPORTS_ROOT}.sync_report"

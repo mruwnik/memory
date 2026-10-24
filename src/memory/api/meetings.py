@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import get_current_user
@@ -26,6 +26,15 @@ class MeetingCreate(BaseModel):
     source_tool: str | None = None
     external_id: str | None = None
     tags: list[str] | None = None
+
+    @field_validator("external_id")
+    @classmethod
+    def not_push_namespace(cls, value: str | None) -> str | None:
+        # Meeting dedupe is global: claiming a push id would silently drop
+        # that account's later push.
+        if value and value.startswith("push:"):
+            raise ValueError("external_id may not start with 'push:'")
+        return value
 
 
 class MeetingQueued(BaseModel):

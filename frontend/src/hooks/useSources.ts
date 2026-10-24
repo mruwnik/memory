@@ -433,7 +433,10 @@ export interface TranscriptAccount extends SyncStatus {
   name: string
   provider: string
   has_api_key: boolean
-  has_webhook_secret: boolean
+  // Last 4 chars of the push secret; the secret itself is only returned when generated.
+  webhook_secret_hint: string | null
+  ingest_url: string
+  polls: boolean
   tags: string[]
   last_sync_at: string | null
   active: boolean
@@ -447,8 +450,8 @@ export interface TranscriptAccount extends SyncStatus {
 export interface TranscriptAccountCreate {
   name: string
   provider: string
-  api_key: string
-  webhook_secret?: string
+  // Required for polling providers; push-only providers have none.
+  api_key?: string
   tags?: string[]
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
@@ -458,12 +461,16 @@ export interface TranscriptAccountUpdate {
   name?: string
   // Omit to keep current; non-empty string to rotate.
   api_key?: string
-  // Omit to keep current; "" to clear; non-empty string to set/rotate.
-  webhook_secret?: string
   tags?: string[]
   active?: boolean
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+}
+
+export interface TranscriptWebhookSecret {
+  secret: string
+  webhook_secret_hint: string
+  ingest_url: string
 }
 
 // Celery task response (for async jobs)
@@ -913,6 +920,18 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  const generateTranscriptWebhookSecret = useCallback(async (id: number): Promise<TranscriptWebhookSecret> => {
+    const response = await apiCall(`/transcript-accounts/${id}/webhook-secret`, { method: 'POST' })
+    if (!response.ok) throw await apiError(response, 'Failed to generate webhook secret')
+    return response.json()
+  }, [apiCall])
+
+  const deleteTranscriptWebhookSecret = useCallback(async (id: number): Promise<TranscriptAccount> => {
+    const response = await apiCall(`/transcript-accounts/${id}/webhook-secret`, { method: 'DELETE' })
+    if (!response.ok) throw await apiError(response, 'Failed to remove webhook secret')
+    return response.json()
+  }, [apiCall])
+
   // === Photos ===
 
   const deletePhoto = useCallback(async (id: number): Promise<void> => {
@@ -983,6 +1002,8 @@ export const useSources = () => {
     deleteTranscriptAccount,
     syncTranscriptAccount,
     rescanTranscriptAccount,
+    generateTranscriptWebhookSecret,
+    deleteTranscriptWebhookSecret,
     // Photos
     deletePhoto,
   }

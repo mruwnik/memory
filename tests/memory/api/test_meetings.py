@@ -56,6 +56,17 @@ def test_create_meeting_queues_job(client: TestClient, user):
     assert call_kwargs["task_kwargs"]["transcript"] == "Speaker 1: Hello\nSpeaker 2: Hi there"
 
 
+def test_create_meeting_rejects_push_namespace(client: TestClient, user):
+    """push: ids belong to transcript push ingest; claiming one would block that push."""
+    with patch("memory.api.meetings.dispatch_job") as mock_dispatch:
+        response = client.post(
+            "/meetings", json={"transcript": "Hi", "external_id": "push:5:rec-42"}
+        )
+
+    assert response.status_code == 422
+    mock_dispatch.assert_not_called()
+
+
 def test_create_meeting_minimal_request(client: TestClient, user):
     """Test creating a meeting with only required fields."""
     with patch("memory.api.meetings.dispatch_job") as mock_dispatch:

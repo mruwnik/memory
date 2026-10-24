@@ -109,7 +109,7 @@ class FirefliesError(Exception):
 class FirefliesClient:
     """Synchronous Fireflies GraphQL client for use in Celery tasks."""
 
-    def __init__(self, api_key: str, timeout: float = 30.0) -> None:
+    def __init__(self, api_key: str | None, timeout: float = 30.0) -> None:
         if not api_key:
             raise ValueError("api_key is required")
         self._api_key = api_key

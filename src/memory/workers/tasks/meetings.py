@@ -218,8 +218,12 @@ def link_attendees(
     attendee_names: Sequence[str | None] = (),
     attendee_emails: Sequence[str | None] = (),
     create_missing: bool = True,
+    attendee_pairs: Sequence[Sequence[str]] = (),
 ) -> dict:
     """Link attendee names and/or emails to Person records.
+
+    ``attendee_pairs`` are ``(email, name)`` pairs from a source that knows
+    which name goes with which email; they skip the index pairing below.
 
     Emails are processed first since they're a stable identifier — for
     Fireflies, meeting_attendees[].email is consistently populated while
@@ -256,7 +260,11 @@ def link_attendees(
     # match. Dedupe by email (case folded above) but preserve the first-seen
     # name for each email so we don't lose name signal to a noisy upstream
     # that lists the same address twice.
-    paired: list[tuple[str, str]] = []
+    paired: list[tuple[str, str]] = [
+        (email.strip().lower(), name.strip() or prettify_email_localpart(email.strip()))
+        for email, name in attendee_pairs
+        if email.strip()
+    ]
     leftover_emails: list[str] = []
     leftover_names: list[str] = []
     if normalized_emails and normalized_names and len(normalized_emails) == len(
@@ -497,6 +505,7 @@ def create_meeting_record(
     attendee_emails: list[str] | None = None,
     transcript_account_id: int | None = None,
     creator_id: int | None = None,
+    attendee_pairs: list[tuple[str, str]] | None = None,
 ) -> Meeting:
     """Create a new Meeting record from the provided data."""
     parsed_date = parse_due_date(meeting_date)
@@ -504,8 +513,9 @@ def create_meeting_record(
     # Prepend attendee identifiers to transcript so the LLM has a hint about
     # who's in the room. Names take precedence over emails for readability.
     full_transcript = transcript
+    pair_labels = [name or email for email, name in attendee_pairs or []]
     attendee_label = ", ".join(
-        v for v in ((attendee_names or []) + (attendee_emails or [])) if v
+        v for v in (pair_labels + (attendee_names or []) + (attendee_emails or [])) if v
     )
     if attendee_label:
         full_transcript = f"Attendees: {attendee_label}\n\n{transcript}"
@@ -559,6 +569,7 @@ def execute_meeting_processing(
     model: str | None,
     job_id: int | None,
     attendee_emails: list[str] | None = None,
+    attendee_pairs: list[tuple[str, str]] | None = None,
 ) -> dict:
     """
     Run the full processing pipeline on a meeting.
@@ -600,12 +611,13 @@ def execute_meeting_processing(
             }
 
         attendee_result = {"linked": 0, "created": 0, "skipped": []}
-        if attendee_names or attendee_emails:
+        if attendee_names or attendee_emails or attendee_pairs:
             attendee_result = link_attendees(
                 session,
                 meeting,
                 attendee_names=attendee_names or [],
                 attendee_emails=attendee_emails or [],
+                attendee_pairs=attendee_pairs or [],
             )
 
         session.commit()
@@ -666,6 +678,7 @@ def process_meeting(
     attendee_emails: list[str] | None = None,
     transcript_account_id: int | None = None,
     creator_id: int | None = None,
+    attendee_pairs: list[tuple[str, str]] | None = None,
 ):
     """
     Process a new meeting transcript.
@@ -687,6 +700,7 @@ def process_meeting(
         model: LLM model to use
         job_id: Optional job ID for status tracking
         creator_id: Uploader; synced meetings inherit their account's owner
+        attendee_pairs: (email, name) pairs known to belong to one attendee
     """
     logger.info(f"Processing new meeting (external_id={external_id}, job_id={job_id})")
 
@@ -728,6 +742,7 @@ def process_meeting(
             attendee_emails=attendee_emails,
             transcript_account_id=transcript_account_id,
             creator_id=creator_id,
+            attendee_pairs=attendee_pairs,
         )
 
         return execute_meeting_processing(
@@ -739,6 +754,7 @@ def process_meeting(
             model,
             job_id,
             attendee_emails=attendee_emails,
+            attendee_pairs=attendee_pairs,
         )
 
 

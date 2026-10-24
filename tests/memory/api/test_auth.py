@@ -57,6 +57,9 @@ from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
         # in-endpoint HMAC check fires.
         "/slack/events/5",
         "/slack/events/123?wizard_nonce=abc",
+        # Transcript push ingest authenticates per source by HMAC/bearer
+        # secret inside the endpoint.
+        "/transcripts/ingest/7",
         # /register and /revoke are RFC 7591 / RFC 7009 endpoints exposed
         # at root by the MCP SDK. DCR clients have no credentials at
         # registration time by definition, so the middleware bypass is
@@ -124,6 +127,9 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/ingest/uploads",  # overrun against /ingest/upload
         "/ingest/upload-config",
         "/ingestxxx",
+        "/transcripts/ingest",
+        "/transcripts",
+        "/transcript-accounts/7/webhook-secret",
         "",
     ],
 )

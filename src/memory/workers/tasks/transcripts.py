@@ -1,6 +1,6 @@
 """Periodic poll for meeting transcripts from external providers.
 
-Iterates active TranscriptAccount rows, fetches new transcripts via the
+Iterates active polling TranscriptAccount rows, fetches new transcripts via the
 provider's API, and dispatches process_meeting for each. Provider-agnostic
 shell — provider-specific logic lives in dedicated parsers
 (e.g. memory.parsers.fireflies).
@@ -20,6 +20,9 @@ API calls per page on the steady-state where most stubs are already known).
 
 The floor is computed from the Meeting table on every run rather than
 stored on the account, so a crash mid-sync leaves no inconsistency.
+
+``ingest_transcript_meeting`` is the push path's counterpart: a provider
+notification names one meeting, which is fetched and dispatched the same way.
 """
 
 import logging
@@ -30,6 +33,7 @@ from sqlalchemy import func
 
 from memory.common import settings
 from memory.common.celery_app import (
+    INGEST_TRANSCRIPT_MEETING,
     PROCESS_MEETING,
     RESCAN_ALL_TRANSCRIPT_ACCOUNTS,
     RESCAN_TRANSCRIPT_ACCOUNT,
@@ -41,7 +45,7 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import TranscriptAccount
 from memory.common.db.models.source_items import Meeting
 from memory.common.content_processing import safe_task_execution
-from memory.common.transcripts import SUPPORTED_PROVIDERS
+from memory.common.transcripts import POLLING_PROVIDERS
 from memory.parsers.fireflies import (
     DEFAULT_PAGE_LIMIT,
     FirefliesClient,
@@ -204,14 +208,14 @@ PROVIDERS: dict[str, Callable[..., int]] = {
     "fireflies": fireflies_walk,
 }
 
-# The api lists supported providers from memory.common.transcripts (it
+# The api lists polling providers from memory.common.transcripts (it
 # can't import this module without dragging in workers.tasks.* deps like
 # caldav). Assert the two stay in sync — drift would let the api accept a
 # provider name the worker can't dispatch (every sync would then fail
 # with "unsupported provider").
-assert set(PROVIDERS) == set(SUPPORTED_PROVIDERS), (
+assert set(PROVIDERS) == set(POLLING_PROVIDERS), (
     f"PROVIDERS keys {sorted(PROVIDERS)} != "
-    f"common.transcripts.SUPPORTED_PROVIDERS {SUPPORTED_PROVIDERS}"
+    f"common.transcripts.POLLING_PROVIDERS {POLLING_PROVIDERS}"
 )
 
 
@@ -354,14 +358,55 @@ def rescan_transcript_account(account_id: int) -> dict:
     )
 
 
+def polled_accounts(db: DBSession) -> list[TranscriptAccount]:
+    return (
+        db.query(TranscriptAccount)
+        .filter(
+            TranscriptAccount.active,
+            TranscriptAccount.provider.in_(POLLING_PROVIDERS),
+        )
+        .all()
+    )
+
+
+@app.task(
+    name=INGEST_TRANSCRIPT_MEETING,
+    autoretry_for=(FirefliesError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=3,
+)
+def ingest_transcript_meeting(account_id: int, meeting_id: str) -> dict:
+    """Fetch and dispatch one meeting a provider pushed a notification for."""
+    with make_session() as db:
+        account = db.get(TranscriptAccount, account_id)
+        if account is None or not account.active or account.provider != "fireflies":
+            return {"status": "error", "error": "account not found, inactive or not fireflies"}
+        if known_external_ids(db, [meeting_id]):
+            return {"status": "exists", "meeting_id": meeting_id}
+
+        try:
+            transcript = FirefliesClient(account.api_key).get_transcript(meeting_id)
+        except FirefliesError as exc:
+            logger.exception(f"push fetch failed for account {account_id}")
+            account.record_sync(exc)
+            db.commit()
+            if exc.retryable:
+                raise
+            return {"status": "error", "error": str(exc)}
+        if not transcript:
+            return {"status": "error", "error": "transcript not found"}
+        task_id = dispatch_transcript(transcript, account)
+        return {"status": "queued" if task_id else "empty", "task_id": task_id}
+
+
 @app.task(name=SYNC_ALL_TRANSCRIPT_ACCOUNTS)
 @safe_task_execution
 def sync_all_transcript_accounts() -> list[dict]:
-    """Dispatch a quick sync for every active TranscriptAccount."""
+    """Dispatch a quick sync for every active polling TranscriptAccount."""
     with make_session() as db:
-        accounts = (
-            db.query(TranscriptAccount).filter(TranscriptAccount.active).all()
-        )
+        accounts = polled_accounts(db)
         return [
             {
                 "account_id": account.id,
@@ -375,11 +420,9 @@ def sync_all_transcript_accounts() -> list[dict]:
 @app.task(name=RESCAN_ALL_TRANSCRIPT_ACCOUNTS)
 @safe_task_execution
 def rescan_all_transcript_accounts() -> list[dict]:
-    """Dispatch a full rescan for every active TranscriptAccount."""
+    """Dispatch a full rescan for every active polling TranscriptAccount."""
     with make_session() as db:
-        accounts = (
-            db.query(TranscriptAccount).filter(TranscriptAccount.active).all()
-        )
+        accounts = polled_accounts(db)
         return [
             {
                 "account_id": account.id,

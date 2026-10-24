@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { SourceRow, TagsInput } from '../shared'
-import { RowError, Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
+import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+
+// Mirrors PUSH_ONLY_PROVIDERS in memory/common/transcripts.py: these take no API key and are never polled.
+const PUSH_ONLY_PROVIDERS = ['generic']
 
 export const TranscriptsPanel = () => {
   const {
@@ -24,6 +27,7 @@ export const TranscriptsPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<TranscriptAccount | null>(null)
+  const [pushAccount, setPushAccount] = useState<TranscriptAccount | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
@@ -106,22 +110,28 @@ export const TranscriptsPanel = () => {
               onToggleActive={() => handleToggleActive(account)}
               onEdit={() => setEditingAccount(account)}
               onDelete={() => handleDelete(account.id)}
-              onSync={() => handleSync(account.id)}
-              additionalActions={
-                <Button size="sm"
-                  onClick={() => handleRescan(account.id)}
-                  disabled={!account.active}
-                  title="Walk back the full rescan window (slower; catches drift)"
-                >
-                  Full rescan
+              onSync={account.polls ? () => handleSync(account.id) : undefined}
+              additionalActions={<>
+                {account.polls && (
+                  <Button size="sm"
+                    onClick={() => handleRescan(account.id)}
+                    disabled={!account.active}
+                    title="Walk back the full rescan window (slower; catches drift)"
+                  >
+                    Full rescan
+                  </Button>
+                )}
+                <Button size="sm" onClick={() => setPushAccount(account)} title="URL and secret for pushing transcripts to this account">
+                  Push
                 </Button>
-              }
+              </>}
               meta={[
                 !!account.tags?.length && `Tags: ${account.tags.join(', ')}`,
                 `Sensitivity: ${account.sensitivity}`,
+                account.webhook_secret_hint && 'Push enabled',
               ]}
             >
-              {!account.has_api_key && <RowError>No API key set</RowError>}
+              {account.polls && !account.has_api_key && <RowError>No API key set</RowError>}
             </SourceRow>
           ))}
         </List>
@@ -145,6 +155,10 @@ export const TranscriptsPanel = () => {
           onCancel={() => setEditingAccount(null)}
         />
       )}
+
+      {pushAccount && (
+        <PushModal account={pushAccount} onClose={() => { setPushAccount(null); loadAccounts() }} />
+      )}
     </Section>
   )
 }
@@ -162,14 +176,13 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
     name: account?.name || '',
     provider: account?.provider || providers[0] || 'fireflies',
     api_key: '',
-    webhook_secret: '',
-    clear_webhook_secret: false,
     tags: account?.tags || [],
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const polls = account ? account.polls : !PUSH_ONLY_PROVIDERS.includes(formData.provider)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -183,33 +196,9 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
         sensitivity: formData.sensitivity,
       }
 
-      if (!account) {
-        // Create: provider + api_key are required
-        data.provider = formData.provider
-        data.api_key = formData.api_key
-        if (formData.webhook_secret) {
-          data.webhook_secret = formData.webhook_secret
-        }
-      } else {
-        // Edit: only send rotations
-        if (formData.api_key) {
-          data.api_key = formData.api_key
-        }
-        // Webhook tri-state — must check `clear_webhook_secret` BEFORE the
-        // truthy check on `webhook_secret`. Both branches deliberately
-        // require non-empty/checked input: if the user toggled the "Remove"
-        // checkbox on then off again, `webhook_secret` is left as "" and
-        // `clear_webhook_secret` is false — neither branch fires, so we
-        // omit the field and the backend leaves the existing secret alone.
-        // If you change `else if (formData.webhook_secret)` to a presence
-        // check, that "toggle then untoggle" path will silently CLEAR the
-        // secret instead. Don't.
-        if (formData.clear_webhook_secret) {
-          data.webhook_secret = ''
-        } else if (formData.webhook_secret) {
-          data.webhook_secret = formData.webhook_secret
-        }
-      }
+      if (!account) data.provider = formData.provider
+      // On edit a blank key means "keep the current one".
+      if (polls && formData.api_key) data.api_key = formData.api_key
 
       await onSubmit(data)
     } catch (e) {
@@ -252,8 +241,9 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
           />
         </Field>
 
-        <Field>
-          <Label>Provider</Label>
+        <Field label="Provider" hint={account
+          ? 'Provider cannot be changed after creation.'
+          : 'Generic accounts are push-only: transcripts arrive at the account\'s ingest URL.'}>
           <Select
             value={formData.provider}
             onChange={e => setFormData({ ...formData, provider: e.target.value })}
@@ -261,41 +251,23 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
             required
           >
             {providers.map(p => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p}>{PUSH_ONLY_PROVIDERS.includes(p) ? `${p} (push only)` : p}</option>
             ))}
           </Select>
-          {account && <Hint>Provider cannot be changed after creation.</Hint>}
         </Field>
 
-        <Field label={<>
-            API key {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
-          <Input
-            type="password"
-            value={formData.api_key}
-            onChange={e => setFormData({ ...formData, api_key: e.target.value })}
-            required={!account}
-            autoComplete="new-password"
-          />
-        </Field>
-
-        <Field>
-          <Label>
-            Webhook Secret {account && <span className="text-slate-500">(optional; leave blank to keep current)</span>}
-          </Label>
-          <Input
-            type="password"
-            value={formData.webhook_secret}
-            onChange={e => setFormData({ ...formData, webhook_secret: e.target.value, clear_webhook_secret: false })}
-            autoComplete="new-password"
-            disabled={formData.clear_webhook_secret}
-          />
-          {account && account.has_webhook_secret && (
-            <Checkbox checked={formData.clear_webhook_secret}
-              onChange={e => setFormData({ ...formData, clear_webhook_secret: e.target.checked, webhook_secret: '' })}
-              label="Remove existing webhook secret" />
-          )}
-          <Hint>Optional shared secret for webhook HMAC verification.</Hint>
-        </Field>
+        {polls && (
+          <Field label={<>
+              API key {account && <span className="text-slate-500">(leave blank to keep current)</span>}</>} hint="For Fireflies, generate one at fireflies.ai → Settings → Developer Settings.">
+            <Input
+              type="password"
+              value={formData.api_key}
+              onChange={e => setFormData({ ...formData, api_key: e.target.value })}
+              required={!account}
+              autoComplete="new-password"
+            />
+          </Field>
+        )}
 
         <Field label="Tags" hint="Tags inherited by Meetings produced from this account.">
           <TagsInput
@@ -338,6 +310,79 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
           </Button>
         </FormActions>
       </form>
+    </Modal>
+  )
+}
+
+const exampleCurl = (url: string, secret: string | null) => `SECRET='${secret ?? '<your secret>'}'
+BODY='{"external_id":"demo-1","title":"Demo","segments":[{"speaker":"Ann","text":"Hello"}]}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+curl -X POST '${url}' -H 'Content-Type: application/json' -H "X-Hub-Signature: sha256=$SIG" -d "$BODY"`
+
+const CopyButton = ({ text, label = 'Copy' }: { text: string; label?: string }) => {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Button size="sm" onClick={() => navigator.clipboard.writeText(text).then(() => setCopied(true), () => setCopied(false))}>
+      {copied ? 'Copied' : label}
+    </Button>
+  )
+}
+
+const PushModal = ({ account, onClose }: { account: TranscriptAccount; onClose: () => void }) => {
+  const { generateTranscriptWebhookSecret, deleteTranscriptWebhookSecret } = useSources()
+  const [hint, setHint] = useState(account.webhook_secret_hint)
+  const [secret, setSecret] = useState<string | null>(null)
+  const { run, notice } = useActionNotice()
+
+  const generate = () => run(async () => {
+    const result = await generateTranscriptWebhookSecret(account.id)
+    setSecret(result.secret)
+    setHint(result.webhook_secret_hint)
+  })
+
+  const remove = () => run(async () => {
+    await deleteTranscriptWebhookSecret(account.id)
+    setSecret(null)
+    setHint(null)
+  })
+
+  return (
+    <Modal title={`Push transcripts to ${account.name}`} onClose={onClose}>
+      <div className="space-y-4">
+        {notice}
+        <p className="text-sm text-slate-600">
+          POST transcripts as JSON to this URL, signed with the secret: an HMAC-SHA256 of the raw body in
+          {' '}<code>X-Hub-Signature: sha256=&lt;hex&gt;</code>, or <code>Authorization: Bearer &lt;secret&gt;</code>.
+          {' '}Each <code>external_id</code> is ingested once; re-sending it doesn't update the meeting.
+          {account.provider === 'fireflies' && ' Fireflies webhooks can use the same URL and secret.'}
+        </p>
+        <DetailList items={[
+          ['Ingest URL', <span className="flex items-center gap-2"><code className="break-all">{account.ingest_url}</code><CopyButton text={account.ingest_url} /></span>],
+          ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (push is disabled)'],
+        ]} />
+
+        {secret && (
+          <Notice tone="success">
+            <p>Copy the secret now. It won't be shown again.</p>
+            <span className="flex items-center gap-2 mt-2">
+              <code className="break-all">{secret}</code><CopyButton text={secret} />
+            </span>
+          </Notice>
+        )}
+
+        <div>
+          <p className="text-sm font-medium text-slate-700 mb-1">Example</p>
+          <pre className="bg-slate-100 p-3 rounded-lg text-xs overflow-x-auto"><code>{exampleCurl(account.ingest_url, secret)}</code></pre>
+        </div>
+
+        <FormActions>
+          {hint && <ConfirmButton size="md" confirm="Remove the secret? Pushes to this account will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}
+          {hint
+            ? <ConfirmButton variant="secondary" size="md" confirm="Rotate the secret? Senders using the current one will be rejected until updated." confirmLabel="Rotate" onConfirm={generate}>Rotate secret</ConfirmButton>
+            : <Button variant="primary" onClick={generate}>Generate secret</Button>}
+          <Button onClick={onClose}>Done</Button>
+        </FormActions>
+      </div>
     </Modal>
   )
 }
