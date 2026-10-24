@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { AccountsPanel } from './AccountsPanel'
 
 vi.mock('../Sources', () => ({
@@ -10,6 +10,7 @@ vi.mock('../Sources', () => ({
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
 const githubAccount = {
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 4,
   name: 'My GH',
   verified_login: 'octocat',
@@ -58,7 +59,7 @@ afterEach(() => {
 describe('AccountsPanel load states', () => {
   it('shows the OAuth config upload prompt when no config exists', async () => {
     mockFetchRoutes(routes({}))
-    renderWithUser(<AccountsPanel />)
+    renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('OAuth configuration required')).toBeInTheDocument())
     // No "Connect account" button without config
     expect(screen.queryByRole('button', { name: 'Connect account' })).not.toBeInTheDocument()
@@ -66,7 +67,7 @@ describe('AccountsPanel load states', () => {
 
   it('shows the github empty state with no accounts', async () => {
     mockFetchRoutes(routes({}))
-    renderWithUser(<AccountsPanel />)
+    renderWithRouter(<AccountsPanel />)
     await waitFor(() =>
       expect(screen.getByText(/No GitHub accounts configured/)).toBeInTheDocument(),
     )
@@ -74,7 +75,7 @@ describe('AccountsPanel load states', () => {
 
   it('renders a github account card and connect button once config is present', async () => {
     mockFetchRoutes(routes({ github: [githubAccount], config: oauthConfig }))
-    renderWithUser(<AccountsPanel />)
+    renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     expect(screen.getByText('Personal access token')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
@@ -83,7 +84,7 @@ describe('AccountsPanel load states', () => {
 
   it('renders a connected google account with disconnect/reauthorize controls', async () => {
     mockFetchRoutes(routes({ google: [googleAccount], config: oauthConfig }))
-    renderWithUser(<AccountsPanel />)
+    renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('GAcc')).toBeInTheDocument())
     expect(screen.getByText('g@gmail.com')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Re-authorize' })).toBeInTheDocument()
@@ -92,7 +93,7 @@ describe('AccountsPanel load states', () => {
 
   it('shows an error state when github list fails', async () => {
     mockFetchRoutes({ ...routes({}), '/github/accounts': { status: 500, json: {} } })
-    renderWithUser(<AccountsPanel />)
+    renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText(/Failed to fetch GitHub accounts/)).toBeInTheDocument())
   })
 })
@@ -100,7 +101,7 @@ describe('AccountsPanel load states', () => {
 describe('AccountsPanel github form', () => {
   it('creates a PAT account with the access token in the body', async () => {
     const mock = mockFetchRoutes(routes({ config: oauthConfig }))
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText(/No GitHub accounts configured/)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
@@ -122,7 +123,7 @@ describe('AccountsPanel github form', () => {
 
   it('reveals app fields when GitHub App auth type is selected', async () => {
     mockFetchRoutes(routes({ config: oauthConfig }))
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText(/No GitHub accounts configured/)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
@@ -134,7 +135,7 @@ describe('AccountsPanel github form', () => {
 
   it('disables the auth type select when editing', async () => {
     mockFetchRoutes(routes({ github: [githubAccount], config: oauthConfig }))
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = await screen.findByRole('dialog')
@@ -145,7 +146,7 @@ describe('AccountsPanel github form', () => {
 describe('AccountsPanel github actions', () => {
   it('toggles active with a PATCH', async () => {
     const mock = mockFetchRoutes(routes({ github: [githubAccount], config: oauthConfig }))
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
@@ -166,7 +167,7 @@ describe('AccountsPanel github actions', () => {
       '/github/accounts/4/validate': { json: result },
       ...routes({ github: [githubAccount], config: oauthConfig }),
     })
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Validate' }))
     expect(await screen.findByRole(role)).toHaveTextContent(result.message)
@@ -174,7 +175,7 @@ describe('AccountsPanel github actions', () => {
 
   it('deletes after confirming the dialog', async () => {
     const mock = mockFetchRoutes(routes({ github: [githubAccount], config: oauthConfig }))
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
@@ -200,7 +201,7 @@ describe('AccountsPanel google connect', () => {
         },
       },
     })
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Connect account' }))
     const dialog = await screen.findByRole('dialog')
@@ -218,7 +219,7 @@ describe('AccountsPanel google connect', () => {
       },
       '/google-drive/authorize': { json: { authorization_url: 'https://accounts.google.com/o/oauth2' } },
     })
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Connect account' }))
     const dialog = await screen.findByRole('dialog')

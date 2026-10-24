@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { FeedsPanel } from './FeedsPanel'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
 const feed = {
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 7,
   url: 'https://blog.example.com/feed.xml',
   title: 'Example Blog',
@@ -40,14 +41,14 @@ beforeEach(() => {
 describe('FeedsPanel load states', () => {
   it('shows empty state when there are no feeds', async () => {
     mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
-    renderWithUser(<FeedsPanel />)
+    renderWithRouter(<FeedsPanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('No RSS feeds configured')).toBeInTheDocument())
   })
 
   it('renders the feed title, url and description', async () => {
     mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
-    renderWithUser(<FeedsPanel />)
+    renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     expect(screen.getByText('A blog')).toBeInTheDocument()
     expect(screen.getByText(/Last checked:/)).toBeInTheDocument()
@@ -55,13 +56,13 @@ describe('FeedsPanel load states', () => {
 
   it('falls back to the url as the title when title is empty', async () => {
     mockFetchRoutes({ '/article-feeds': { json: [{ ...feed, title: null }] }, '/auth/me': authMe, __default: { json: {} } })
-    renderWithUser(<FeedsPanel />)
+    renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getAllByText(feed.url).length).toBeGreaterThan(0))
   })
 
   it('shows an error state with retry on list failure', async () => {
     mockFetchRoutes({ '/article-feeds': { status: 500, json: {} }, '/auth/me': authMe, __default: { json: {} } })
-    renderWithUser(<FeedsPanel />)
+    renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText(/Failed to fetch article feeds/)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
@@ -70,7 +71,7 @@ describe('FeedsPanel load states', () => {
 describe('FeedsPanel create flow', () => {
   it('submits a create with the entered url and default interval', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('No RSS feeds configured')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add feed' }))
     const dialog = await screen.findByRole('dialog')
@@ -94,7 +95,7 @@ describe('FeedsPanel create flow', () => {
       }
       return { ok: true, status: 200, json: async () => [] } as unknown as Response
     })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('No RSS feeds configured')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add feed' }))
     const dialog = await screen.findByRole('dialog')
@@ -155,7 +156,7 @@ describe('FeedsPanel mutate flows', () => {
 
   it('toggles active with a PATCH', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(postBody(mock, '/article-feeds/7', 'PATCH')).toEqual({ active: false }))
@@ -163,7 +164,7 @@ describe('FeedsPanel mutate flows', () => {
 
   it('deletes after confirmation', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
@@ -177,7 +178,7 @@ describe('FeedsPanel mutate flows', () => {
 
   it('disables the feed url field when editing', async () => {
     mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = await screen.findByRole('dialog')

@@ -27,6 +27,7 @@ const repo = {
 }
 
 const account = (overrides = {}) => ({
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 4,
   name: 'My GH',
   verified_login: 'octocat',

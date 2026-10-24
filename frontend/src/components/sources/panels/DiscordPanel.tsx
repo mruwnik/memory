@@ -3,6 +3,7 @@ import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, Discord
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
 import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
+import { LLMKeyField } from '../LLMKeyField'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
@@ -339,6 +340,7 @@ const ServerRow = ({
       actions={<>
         <AccessSelects projectId={server.project_id} sensitivity={server.sensitivity} projects={projects} disabled={updating}
           onChange={update} />
+        <LLMKeyField compact value={server.llm_key} onChange={llm_key => update({ llm_key })} />
         <PauseButton active={server.collect_messages} onClick={handleToggle} disabled={toggling} />
       </>}
     >

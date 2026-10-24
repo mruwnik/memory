@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useSources, GithubAccount, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
+import { useSources, GithubAccount, LLMKeyChoice, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
 import { FileButton, PopupBlockedNotice, SourceRow, StatusBadge, SyncFailingBadge, SyncFailure, formatRelativeTime, openPopup } from '../shared'
+import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, Section, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { useAuth } from '@/hooks/useAuth'
@@ -193,7 +194,7 @@ export const AccountsPanel = () => {
                 key={account.id}
                 title={account.name}
                 subtitle={account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App'}
-                meta={[account.repos.length > 0 && `${account.repos.length} repos tracked`]}
+                meta={[account.repos.length > 0 && `${account.repos.length} repos tracked`, `LLM: ${llmKeyLabel(account.llm_key)}`]}
                 active={account.active}
                 lastSyncAt={account.last_sync_at}
                 onToggleActive={() => handleToggleGithubActive(account)}
@@ -337,6 +338,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
     app_id: account?.app_id || undefined,
     installation_id: account?.installation_id || undefined,
     private_key: '',
+    llm_key: undefined as LLMKeyChoice | undefined,
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -354,6 +356,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
         if (formData.installation_id) data.installation_id = formData.installation_id
         if (formData.private_key) data.private_key = formData.private_key
       }
+      if (formData.llm_key !== undefined) data.llm_key = formData.llm_key
       await onSubmit(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save')
@@ -429,6 +432,8 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
             </Field>
           </>
         )}
+
+        <LLMKeyField value={account?.llm_key} onChange={llm_key => setFormData({ ...formData, llm_key })} />
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>

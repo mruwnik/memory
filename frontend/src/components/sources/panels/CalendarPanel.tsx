@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
+import { useSources, CalendarAccount, GoogleAccount, LLMKeyChoice } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { IntervalInput, ProjectSelect, SensitivitySelect, SourceRow, TagsInput, numberValue } from '../shared'
 import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 interface GroupedEvents {
   [calendarName: string]: CalendarEvent[]
@@ -137,6 +138,7 @@ export const CalendarPanel = () => {
                 active={account.active}
                 lastSyncAt={account.last_sync_at}
                 sync={account}
+                meta={[`LLM: ${llmKeyLabel(account.llm_key)}`]}
                 onToggleActive={() => handleToggleActive(account)}
                 onEdit={() => setEditingAccount(account)}
                 onDelete={() => handleDelete(account.id)}
@@ -213,6 +215,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
     sync_future_days: (account?.sync_future_days ?? 90) as number | '',
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
+    llm_key: undefined as LLMKeyChoice | undefined,
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -231,6 +234,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
         sync_future_days: formData.sync_future_days,
         project_id: formData.project_id,
         sensitivity: formData.sensitivity,
+        ...(formData.llm_key !== undefined ? { llm_key: formData.llm_key } : {}),
       }
 
       if (formData.calendar_type === 'caldav') {
@@ -374,6 +378,8 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>
         </FieldRow>
+
+        <LLMKeyField value={account?.llm_key} onChange={llm_key => setFormData({ ...formData, llm_key })} />
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>

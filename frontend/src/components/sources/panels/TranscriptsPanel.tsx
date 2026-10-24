@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, TranscriptAccount } from '@/hooks/useSources'
+import { useSources, TranscriptAccount, LLMKeyChoice } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectSelect, SensitivitySelect, SourceRow, TagsInput } from '../shared'
 import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 // Mirrors PUSH_ONLY_PROVIDERS in memory/common/transcripts.py: these take no API key and are never polled.
 const PUSH_ONLY_PROVIDERS = ['generic']
@@ -128,6 +129,7 @@ export const TranscriptsPanel = () => {
                 !!account.tags?.length && `Tags: ${account.tags.join(', ')}`,
                 `Sensitivity: ${account.sensitivity}`,
                 account.webhook_secret_hint && 'Push enabled',
+                `LLM: ${llmKeyLabel(account.llm_key)}`,
               ]}
             >
               {account.polls && !account.has_api_key && <RowError>No API key set</RowError>}
@@ -178,6 +180,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
     tags: account?.tags || [],
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
+    llm_key: undefined as LLMKeyChoice | undefined,
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -193,6 +196,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
         tags: formData.tags,
         project_id: formData.project_id,
         sensitivity: formData.sensitivity,
+        ...(formData.llm_key !== undefined ? { llm_key: formData.llm_key } : {}),
       }
 
       if (!account) data.provider = formData.provider
@@ -284,6 +288,8 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>
         </FieldRow>
+
+        <LLMKeyField value={account?.llm_key} onChange={llm_key => setFormData({ ...formData, llm_key })} />
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>

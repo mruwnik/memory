@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { EmailPanel, defaultSyncFolders } from './EmailPanel'
 import type { ImapFolder } from '@/hooks/useSources'
 
 const imapAccount = {
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 1,
   name: 'Work IMAP',
   email_address: 'work@example.com',
@@ -57,14 +58,14 @@ beforeEach(() => {
 describe('EmailPanel load states', () => {
   it('shows loading then the empty state when no accounts', async () => {
     mockFetchRoutes(baseRoutes([]))
-    renderWithUser(<EmailPanel />)
+    renderWithRouter(<EmailPanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
   })
 
   it('renders an error state with retry when the list fetch fails', async () => {
     const fetchMock = mockFetchRoutes({ ...baseRoutes([]), '/email-accounts': { status: 500, json: {} } })
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText(/Failed to fetch email accounts/)).toBeInTheDocument())
     const callsBefore = fetchMock.mock.calls.length
     await user.click(screen.getByText('Retry'))
@@ -73,7 +74,7 @@ describe('EmailPanel load states', () => {
 
   it('renders a populated account with imap server detail', async () => {
     mockFetchRoutes(baseRoutes([imapAccount]))
-    renderWithUser(<EmailPanel />)
+    renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     expect(screen.getByText('work@example.com')).toBeInTheDocument()
     expect(screen.getByText('imap.example.com:993')).toBeInTheDocument()
@@ -82,7 +83,7 @@ describe('EmailPanel load states', () => {
 
   it('shows a sync error banner when present', async () => {
     mockFetchRoutes(baseRoutes([{ ...imapAccount, sync_error: 'auth failed' }]))
-    renderWithUser(<EmailPanel />)
+    renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Sync failing: auth failed')).toBeInTheDocument())
   })
 })
@@ -90,7 +91,7 @@ describe('EmailPanel load states', () => {
 describe('EmailPanel create flow', () => {
   it('submits an IMAP account create with the entered fields', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([]))
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
@@ -143,7 +144,7 @@ describe('EmailPanel create flow', () => {
       if (url.includes('/google-drive/accounts')) return { ok: true, status: 200, json: async () => [gmailAccount], text: async () => '' } as unknown as Response
       return { ok: true, status: 200, headers: new Headers(), json: async () => ({ jsonrpc: '2.0', id: 1, result: { content: [{ text: JSON.stringify([[]]) }] } }), text: async () => JSON.stringify({ jsonrpc: '2.0', id: 1, result: { content: [{ text: JSON.stringify([[]]) }] } }) } as unknown as Response
     })
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
@@ -159,7 +160,7 @@ describe('EmailPanel create flow', () => {
   it('disables Save for gmail when no google accounts are connected', async () => {
     const fetchMock = mockFetchRoutes({ ...baseRoutes([]), '/google-drive/accounts': { json: [] } })
     void fetchMock
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
@@ -172,7 +173,7 @@ describe('EmailPanel create flow', () => {
 describe('EmailPanel mutate flows', () => {
   it('pauses an account with a PATCH', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([imapAccount]))
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
@@ -189,7 +190,7 @@ describe('EmailPanel mutate flows', () => {
     [{ json: { task_id: 't1' } }, 'status', 'Sync queued'],
   ])('reports the outcome of Sync', async (syncResponse, role, text) => {
     mockFetchRoutes({ '/email-accounts/1/sync': syncResponse, ...baseRoutes([imapAccount]) })
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Sync' }))
     expect((await screen.findByText(text)).closest('[role]')).toHaveAttribute('role', role)
@@ -197,7 +198,7 @@ describe('EmailPanel mutate flows', () => {
 
   it('deletes after confirming the dialog', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([imapAccount]))
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
@@ -211,7 +212,7 @@ describe('EmailPanel mutate flows', () => {
 
   it('does not delete when the confirm dialog is cancelled', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([imapAccount]))
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -223,7 +224,7 @@ describe('EmailPanel mutate flows', () => {
 
   it('triggers a sync POST from the Sync button', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([imapAccount]))
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Sync' }))
     await waitFor(() => {
@@ -238,7 +239,7 @@ describe('EmailPanel mutate flows', () => {
 describe('EmailPanel edit flow', () => {
   it('opens edit with the account type field disabled and omits empty password', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([imapAccount]))
-    const { user } = renderWithUser(<EmailPanel />)
+    const { user } = renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = await screen.findByRole('dialog')
@@ -252,6 +253,7 @@ describe('EmailPanel edit flow', () => {
       expect(JSON.parse((patch![1] as RequestInit).body as string)).not.toHaveProperty('password')
     })
   })
+
 })
 
 describe('defaultSyncFolders', () => {

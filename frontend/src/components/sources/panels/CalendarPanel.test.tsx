@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { CalendarPanel } from './CalendarPanel'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
 const caldavAccount = {
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 2,
   name: 'My CalDAV',
   calendar_type: 'caldav',
@@ -59,14 +60,14 @@ beforeEach(() => {
 describe('CalendarPanel load states', () => {
   it('shows the empty state when no calendar accounts exist', async () => {
     mockFetchRoutes(routes([]))
-    renderWithUser(<CalendarPanel />)
+    renderWithRouter(<CalendarPanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('No calendar accounts configured')).toBeInTheDocument())
   })
 
   it('renders a CalDAV account with its server url', async () => {
     mockFetchRoutes(routes([caldavAccount]))
-    renderWithUser(<CalendarPanel />)
+    renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     expect(screen.getByText('CalDAV: https://dav.example.com/cal/')).toBeInTheDocument()
     expect(screen.getByText('No events synced yet')).toBeInTheDocument()
@@ -74,7 +75,7 @@ describe('CalendarPanel load states', () => {
 
   it('renders an error state when the list fetch fails', async () => {
     mockFetchRoutes({ ...routes([]), '/calendar-accounts': { status: 500, json: {} } })
-    renderWithUser(<CalendarPanel />)
+    renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText(/Failed to fetch calendar accounts/)).toBeInTheDocument())
   })
 
@@ -93,7 +94,7 @@ describe('CalendarPanel load states', () => {
       meeting_link: null,
     }
     mockFetchRoutes(routes([caldavAccount], [event]))
-    const { user } = renderWithUser(<CalendarPanel />)
+    const { user } = renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     const calendarToggle = await screen.findByText('Work')
     expect(screen.getByText('Standup')).not.toBeVisible()
@@ -106,7 +107,7 @@ describe('CalendarPanel load states', () => {
 describe('CalendarPanel create flow', () => {
   it('submits a caldav create with credentials', async () => {
     const mock = mockFetchRoutes(routes([]))
-    const { user } = renderWithUser(<CalendarPanel />)
+    const { user } = renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('No calendar accounts configured')).toBeInTheDocument())
     await user.click(screen.getAllByRole('button', { name: 'Add calendar' })[0])
     const dialog = await screen.findByRole('dialog')
@@ -138,7 +139,7 @@ describe('CalendarPanel create flow', () => {
 
   it('shows the google account selector and requires a choice for google type', async () => {
     mockFetchRoutes(routes([]))
-    const { user } = renderWithUser(<CalendarPanel />)
+    const { user } = renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('No calendar accounts configured')).toBeInTheDocument())
     await user.click(screen.getAllByRole('button', { name: 'Add calendar' })[0])
     const dialog = await screen.findByRole('dialog')
@@ -150,7 +151,7 @@ describe('CalendarPanel create flow', () => {
 describe('CalendarPanel mutate flows', () => {
   it('pauses an account with a PATCH', async () => {
     const mock = mockFetchRoutes(routes([caldavAccount]))
-    const { user } = renderWithUser(<CalendarPanel />)
+    const { user } = renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
@@ -164,7 +165,7 @@ describe('CalendarPanel mutate flows', () => {
 
   it('deletes the account after confirming', async () => {
     const mock = mockFetchRoutes(routes([caldavAccount]))
-    const { user } = renderWithUser(<CalendarPanel />)
+    const { user } = renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
@@ -178,7 +179,7 @@ describe('CalendarPanel mutate flows', () => {
 
   it('triggers a sync POST', async () => {
     const mock = mockFetchRoutes(routes([caldavAccount]))
-    const { user } = renderWithUser(<CalendarPanel />)
+    const { user } = renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Sync' }))
     await waitFor(() => {

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
+import { useSources, GoogleAccount, GoogleFolder, DriveItem, LLMKeyChoice } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { IntervalInput, PauseButton, ProjectSelect, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+import { LLMKeyField } from '../LLMKeyField'
 
 export const GoogleDrivePanel = () => {
   const {
@@ -85,6 +86,11 @@ export const GoogleDrivePanel = () => {
     loadData()
   })
 
+  const handleFolderLLMKey = async (accountId: number, folderId: number, llm_key: LLMKeyChoice) => {
+    await updateGoogleFolder(accountId, folderId, { llm_key })
+    loadData()
+  }
+
   const handleSyncFolder = (accountId: number, folderId: number) => run(async () => {
     await syncGoogleFolder(accountId, folderId)
     loadData()
@@ -135,6 +141,7 @@ export const GoogleDrivePanel = () => {
                       </>}
                       meta={[folder.folder_path, `Last sync: ${formatRelativeTime(folder.last_sync_at)}`]}
                       actions={<>
+                        <LLMKeyField compact value={folder.llm_key} onChange={llm_key => handleFolderLLMKey(account.id, folder.id, llm_key)} />
                         <SyncButton onSync={() => handleSyncFolder(account.id, folder.id)} disabled={!folder.active || !account.active} label="Sync" />
                         {folder.recursive && (
                           <Button size="sm" onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}>Exclusions</Button>
@@ -210,6 +217,7 @@ interface SelectedItem {
 interface FolderAccess {
   project_id?: number
   sensitivity: Sensitivity
+  llm_key?: LLMKeyChoice
 }
 
 const Breadcrumb = ({ path, onNavigate }: { path: PathItem[]; onNavigate: (index: number) => void }) => (
@@ -669,6 +677,8 @@ const GoogleFolderForm = ({ folder, projects, onSubmit, onCancel }: GoogleFolder
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>
         </FieldRow>
+
+        {!folder && <LLMKeyField value={undefined} onChange={llm_key => setFormData({ ...formData, llm_key })} />}
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>

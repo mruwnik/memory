@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import type { LLMKeyChoice, LLMKeyView } from './useSources'
 import { useMCP } from './useMCP'
 import { apiError } from './apiError'
 
@@ -36,6 +37,7 @@ export interface DiscordServer {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key: LLMKeyView
 }
 
 export interface DiscordServerUpdate {
@@ -43,6 +45,7 @@ export interface DiscordServerUpdate {
   // Access control
   project_id?: number | null
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 // Types for Discord Channels

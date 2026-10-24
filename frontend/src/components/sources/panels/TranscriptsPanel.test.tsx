@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithUser, screen, waitFor, within } from '@/test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 
 const listTranscriptAccounts = vi.fn()
 const createTranscriptAccount = vi.fn()
@@ -37,6 +37,7 @@ vi.mock('../Sources', () => ({
 import { TranscriptsPanel } from './TranscriptsPanel'
 
 const account = (over: Record<string, unknown> = {}) => ({
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 1,
   name: 'My Fireflies',
   provider: 'fireflies',
@@ -82,23 +83,23 @@ beforeEach(() => {
 describe('TranscriptsPanel - load states', () => {
   it('shows loading first', () => {
     listTranscriptAccounts.mockReturnValue(new Promise(() => {}))
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
   it('passes the selected userId when listing accounts', async () => {
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     await waitFor(() => expect(listTranscriptAccounts).toHaveBeenCalledWith(7))
   })
 
   it('shows empty state when no accounts', async () => {
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     expect(await screen.findByText(/No transcript accounts configured/)).toBeInTheDocument()
   })
 
   it('shows error state and retries', async () => {
     listTranscriptAccounts.mockRejectedValueOnce(new Error('nope'))
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     expect(await screen.findByText('nope')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText(/No transcript accounts configured/)).toBeInTheDocument()
@@ -106,7 +107,7 @@ describe('TranscriptsPanel - load states', () => {
 
   it('renders a populated account card with provider, tags and sensitivity', async () => {
     listTranscriptAccounts.mockResolvedValue([account()])
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     expect(await screen.findByText('My Fireflies')).toBeInTheDocument()
     expect(screen.getByText('fireflies')).toBeInTheDocument()
     expect(screen.getByText('Tags: meetings')).toBeInTheDocument()
@@ -115,14 +116,14 @@ describe('TranscriptsPanel - load states', () => {
 
   it('warns when an account has no API key set', async () => {
     listTranscriptAccounts.mockResolvedValue([account({ has_api_key: false })])
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     expect(await screen.findByText('No API key set')).toBeInTheDocument()
   })
 })
 
 describe('TranscriptsPanel - create flow', () => {
   it('creates an account sending provider + api_key', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
@@ -144,7 +145,7 @@ describe('TranscriptsPanel - create flow', () => {
   })
 
   it('creates a push-only account without an API key', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
@@ -161,7 +162,7 @@ describe('TranscriptsPanel - create flow', () => {
 
   it('shows the "no providers" guard when provider list is empty', async () => {
     listTranscriptProviders.mockResolvedValue([])
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
@@ -171,7 +172,7 @@ describe('TranscriptsPanel - create flow', () => {
 
   it('surfaces a create error', async () => {
     createTranscriptAccount.mockRejectedValueOnce(new Error('bad key'))
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
@@ -187,7 +188,7 @@ describe('TranscriptsPanel - edit flow', () => {
   beforeEach(() => listTranscriptAccounts.mockResolvedValue([account()]))
 
   it('disables provider and omits api_key when left blank', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
@@ -204,7 +205,7 @@ describe('TranscriptsPanel - edit flow', () => {
   })
 
   it('sends api_key when a new value is entered', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
@@ -221,7 +222,7 @@ describe('TranscriptsPanel - row actions', () => {
   beforeEach(() => listTranscriptAccounts.mockResolvedValue([account()]))
 
   it('pauses an account from its row', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Pause' }))
@@ -229,7 +230,7 @@ describe('TranscriptsPanel - row actions', () => {
   })
 
   it('deletes via the confirm dialog', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Delete' }))
@@ -238,7 +239,7 @@ describe('TranscriptsPanel - row actions', () => {
   })
 
   it('triggers a sync', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Sync' }))
@@ -246,7 +247,7 @@ describe('TranscriptsPanel - row actions', () => {
   })
 
   it('triggers a full rescan', async () => {
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Full rescan' }))
@@ -255,7 +256,7 @@ describe('TranscriptsPanel - row actions', () => {
 
   it('disables full rescan for inactive accounts', async () => {
     listTranscriptAccounts.mockResolvedValue([account({ active: false })])
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
     expect(screen.getByRole('button', { name: 'Full rescan' })).toBeDisabled()
   })
@@ -264,7 +265,7 @@ describe('TranscriptsPanel - row actions', () => {
 describe('TranscriptsPanel - push ingest', () => {
   it('hides sync and rescan for push-only accounts', async () => {
     listTranscriptAccounts.mockResolvedValue([account({ provider: 'generic', polls: false, has_api_key: false })])
-    renderWithUser(<TranscriptsPanel />)
+    renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     expect(screen.queryByRole('button', { name: 'Sync' })).not.toBeInTheDocument()
@@ -274,7 +275,7 @@ describe('TranscriptsPanel - push ingest', () => {
 
   it('generates a secret and shows it once with the URL and an example curl', async () => {
     listTranscriptAccounts.mockResolvedValue([account()])
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Push' }))
@@ -289,7 +290,7 @@ describe('TranscriptsPanel - push ingest', () => {
 
   it('removes an existing secret', async () => {
     listTranscriptAccounts.mockResolvedValue([account({ webhook_secret_hint: 'wxyz' })])
-    const { user } = renderWithUser(<TranscriptsPanel />)
+    const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
     await user.click(screen.getByRole('button', { name: 'Push' }))

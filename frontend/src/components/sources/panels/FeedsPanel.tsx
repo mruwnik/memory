@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, ArticleFeed } from '@/hooks/useSources'
+import { useSources, ArticleFeed, LLMKeyChoice } from '@/hooks/useSources'
 import { SourceRow, TagsInput, IntervalInput } from '../shared'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 export const FeedsPanel = () => {
   const { listArticleFeeds, createArticleFeed, updateArticleFeed, deleteArticleFeed, syncArticleFeed } = useSources()
@@ -81,6 +82,7 @@ export const FeedsPanel = () => {
               lastSyncAt={feed.last_checked_at}
               lastSyncLabel="Last checked"
               sync={feed}
+              meta={[`LLM: ${llmKeyLabel(feed.llm_key)}`]}
               onToggleActive={() => handleToggleActive(feed)}
               onEdit={() => setEditingFeed(feed)}
               onDelete={() => handleDelete(feed.id)}
@@ -126,6 +128,7 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
     tags: feed?.tags || [],
     check_interval: feed?.check_interval || 1440,
     active: feed?.active ?? true,
+    llm_key: undefined as LLMKeyChoice | undefined,
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -187,6 +190,8 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
             onChange={tags => setFormData({ ...formData, tags })}
           />
         </Field>
+
+        <LLMKeyField value={feed?.llm_key} onChange={llm_key => setFormData({ ...formData, llm_key })} />
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>

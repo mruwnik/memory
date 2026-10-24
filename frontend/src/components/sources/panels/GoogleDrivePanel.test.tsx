@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithUser, screen, waitFor, within } from '@/test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 
 const listGoogleAccounts = vi.fn()
 const addGoogleFolder = vi.fn()
@@ -31,6 +31,7 @@ vi.mock('../Sources', () => ({
 import { GoogleDrivePanel } from './GoogleDrivePanel'
 
 const folder = (over: Record<string, unknown> = {}) => ({
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 100,
   folder_id: 'abc',
   folder_name: 'Docs',
@@ -89,18 +90,18 @@ beforeEach(() => {
 describe('GoogleDrivePanel - load states', () => {
   it('shows loading first', () => {
     listGoogleAccounts.mockReturnValue(new Promise(() => {}))
-    renderWithUser(<GoogleDrivePanel />)
+    renderWithRouter(<GoogleDrivePanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
   it('shows the "no accounts connected" message when there are none', async () => {
-    renderWithUser(<GoogleDrivePanel />)
+    renderWithRouter(<GoogleDrivePanel />)
     expect(await screen.findByText(/No Google accounts connected/)).toBeInTheDocument()
   })
 
   it('shows error state and retries', async () => {
     listGoogleAccounts.mockRejectedValueOnce(new Error('drive down'))
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     expect(await screen.findByText('drive down')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText(/No Google accounts connected/)).toBeInTheDocument()
@@ -108,7 +109,7 @@ describe('GoogleDrivePanel - load states', () => {
 
   it('renders accounts with no folders configured', async () => {
     listGoogleAccounts.mockResolvedValue([acct()])
-    renderWithUser(<GoogleDrivePanel />)
+    renderWithRouter(<GoogleDrivePanel />)
     expect(await screen.findByText('me@example.com')).toBeInTheDocument()
     expect(screen.getByText('No folders configured for sync')).toBeInTheDocument()
     expect(screen.getByText('Synced folders (0)')).toBeInTheDocument()
@@ -124,7 +125,7 @@ describe('GoogleDrivePanel - load states', () => {
         })],
       }),
     ])
-    renderWithUser(<GoogleDrivePanel />)
+    renderWithRouter(<GoogleDrivePanel />)
     expect(await screen.findByText('Docs')).toBeInTheDocument()
     expect(screen.getByText(/^Sync failing since [^()]+: token expired$/)).toBeInTheDocument()
     expect(screen.getByText(/^Sync failing since .+ \(3d ago\): File not found$/)).toBeInTheDocument()
@@ -137,7 +138,7 @@ describe('GoogleDrivePanel - load states', () => {
   it('shortens a long sync error until asked for the rest', async () => {
     const error = `HttpError 500 ${'backendError '.repeat(40)}end of error`
     listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ sync_error: error })] })])
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     expect(await screen.findByText(/^Sync failing: HttpError 500 .*…$/)).toBeInTheDocument()
     expect(screen.queryByText(/end of error/)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Show full error' }))
@@ -150,14 +151,14 @@ describe('GoogleDrivePanel - folder row actions', () => {
   beforeEach(() => listGoogleAccounts.mockResolvedValue([acct({ folders: [folder()] })]))
 
   it('pauses a folder', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(updateGoogleFolder).toHaveBeenCalledWith(1, 100, { active: false }))
   })
 
   it('removes a folder', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Remove' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }))
@@ -165,7 +166,7 @@ describe('GoogleDrivePanel - folder row actions', () => {
   })
 
   it('syncs a folder', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Sync' }))
     await waitFor(() => expect(syncGoogleFolder).toHaveBeenCalledWith(1, 100))
@@ -173,7 +174,7 @@ describe('GoogleDrivePanel - folder row actions', () => {
 
   it('shows a paused folder as inactive with a Resume action', async () => {
     listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ active: false })] })])
-    renderWithUser(<GoogleDrivePanel />)
+    renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     expect(screen.getByText('Inactive')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
@@ -181,7 +182,7 @@ describe('GoogleDrivePanel - folder row actions', () => {
 
   it('edits a folder, including its access control', async () => {
     listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ tags: ['a'], check_interval: 90 })] })])
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = screen.getByRole('dialog', { name: 'Edit folder' })
@@ -197,7 +198,7 @@ describe('GoogleDrivePanel - folder row actions', () => {
 
   it('clears a folder project by sending null', async () => {
     listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ project_id: 9 })] })])
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     const dialog = screen.getByRole('dialog', { name: 'Edit folder' })
@@ -211,7 +212,7 @@ describe('GoogleDrivePanel - Add by ID form', () => {
   beforeEach(() => listGoogleAccounts.mockResolvedValue([acct()]))
 
   it('submits a folder created from the form fields', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Add by ID' }))
@@ -229,7 +230,7 @@ describe('GoogleDrivePanel - Add by ID form', () => {
 
   it('surfaces an error from addGoogleFolder', async () => {
     addGoogleFolder.mockRejectedValueOnce(new Error('dup folder'))
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Add by ID' }))
@@ -241,7 +242,7 @@ describe('GoogleDrivePanel - Add by ID form', () => {
   })
 
   it('closes the form on Cancel', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Add by ID' }))
@@ -255,7 +256,7 @@ describe('GoogleDrivePanel - Browse & add', () => {
   beforeEach(() => listGoogleAccounts.mockResolvedValue([acct()]))
 
   it('lists drive items and disables Add Selected with nothing chosen', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
@@ -266,7 +267,7 @@ describe('GoogleDrivePanel - Browse & add', () => {
   })
 
   it('selecting an item and adding calls addGoogleFolder per selection', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
@@ -291,7 +292,7 @@ describe('GoogleDrivePanel - Browse & add', () => {
     browseGoogleDrive.mockResolvedValue({
       folder_id: 'root', folder_name: 'My Drive', parent_id: null, items: [], next_page_token: null,
     })
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
@@ -300,7 +301,7 @@ describe('GoogleDrivePanel - Browse & add', () => {
 
   it('shows an error when browsing fails', async () => {
     browseGoogleDrive.mockRejectedValueOnce(new Error('browse failed'))
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
@@ -308,7 +309,7 @@ describe('GoogleDrivePanel - Browse & add', () => {
   })
 
   it('navigates into a subfolder via the arrow button', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('me@example.com')
 
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
@@ -331,7 +332,7 @@ describe('GoogleDrivePanel - Exclusions', () => {
   )
 
   it('opens the exclusion browser preloaded with existing exclusions', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
 
     await user.click(screen.getByRole('button', { name: 'Exclusions' }))
@@ -343,7 +344,7 @@ describe('GoogleDrivePanel - Exclusions', () => {
     browseGoogleDrive.mockResolvedValue({
       folder_id: 'abc', folder_name: 'Docs', parent_id: null, items: [driveItem({ id: 'pre1', name: 'Old stuff' })], next_page_token: null,
     })
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
     await user.click(screen.getByRole('button', { name: 'Exclusions' }))
     await user.click(await screen.findByRole('button', { name: 'Remove exclusion Old stuff' }))
@@ -351,7 +352,7 @@ describe('GoogleDrivePanel - Exclusions', () => {
   })
 
   it('saving sends the set of excluded ids', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
 
     await user.click(screen.getByRole('button', { name: 'Exclusions' }))
@@ -372,7 +373,7 @@ describe('GoogleDrivePanel - Exclusions', () => {
   })
 
   it('only lists folders (filters out files) in the exclusion browser', async () => {
-    const { user } = renderWithUser(<GoogleDrivePanel />)
+    const { user } = renderWithRouter(<GoogleDrivePanel />)
     await screen.findByText('Docs')
 
     await user.click(screen.getByRole('button', { name: 'Exclusions' }))

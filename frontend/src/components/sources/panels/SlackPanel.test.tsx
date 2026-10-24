@@ -49,6 +49,7 @@ vi.mock('./SlackAppWizard', () => ({
 import { SlackPanel } from './SlackPanel'
 
 const workspace = (over: Record<string, unknown> = {}) => ({
+  llm_key: { choice: 'default', key_id: null, label: 'personal', provider: 'anthropic', paid_by_you: true, runs: true },
   id: 'W1',
   name: 'Acme',
   domain: 'acme',
@@ -236,6 +237,14 @@ describe('SlackPanel - workspace actions', () => {
 
     await user.selectOptions(screen.getByTitle('Sensitivity'), 'internal')
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { sensitivity: 'internal' }))
+  })
+
+  it('updates the LLM key', async () => {
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.selectOptions(screen.getByLabelText('LLM key'), 'none')
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { llm_key: 'none' }))
   })
 
   it('triggers a sync', async () => {

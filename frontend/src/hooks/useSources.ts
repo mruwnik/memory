@@ -8,6 +8,18 @@ export interface SyncStatus {
   sync_failing_since: string | null
 }
 
+export type LLMKeyChoice = number | 'default' | 'none'
+/** Which provider key pays for LLM work (summaries, extraction) on a source's items.
+ * Another user's key is never named: choice 'key' with a null key_id. */
+export interface LLMKeyView {
+  choice: 'default' | 'none' | 'key'
+  key_id: number | null
+  label: string | null
+  provider: string
+  paid_by_you: boolean
+  runs: boolean
+}
+
 // Types for Email Accounts
 export interface EmailAccount extends SyncStatus {
   id: number
@@ -38,6 +50,7 @@ export interface EmailAccount extends SyncStatus {
   // 'hidden' is a tombstone level (email accounts only) that excludes the
   // account's mail from search/visibility entirely — even for admins.
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential' | 'hidden'
+  llm_key: LLMKeyView
 }
 
 export interface EmailAccountCreate {
@@ -62,6 +75,7 @@ export interface EmailAccountCreate {
   // Access control
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential' | 'hidden'
+  llm_key?: LLMKeyChoice
 }
 
 export interface EmailAccountUpdate {
@@ -86,6 +100,7 @@ export interface EmailAccountUpdate {
   // Access control
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential' | 'hidden'
+  llm_key?: LLMKeyChoice
 }
 
 export interface EmailAccountTestRequest {
@@ -121,6 +136,7 @@ export interface ArticleFeed extends SyncStatus {
   active: boolean
   created_at: string
   updated_at: string
+  llm_key: LLMKeyView
 }
 
 export interface ArticleFeedCreate {
@@ -130,6 +146,7 @@ export interface ArticleFeedCreate {
   tags?: string[]
   check_interval?: number
   active?: boolean
+  llm_key?: LLMKeyChoice
 }
 
 export interface ArticleFeedUpdate {
@@ -138,6 +155,7 @@ export interface ArticleFeedUpdate {
   tags?: string[]
   check_interval?: number
   active?: boolean
+  llm_key?: LLMKeyChoice
 }
 
 // Types for GitHub
@@ -177,6 +195,7 @@ export interface GithubAccount {
   created_at: string
   updated_at: string
   repos: GithubRepo[]
+  llm_key: LLMKeyView
 }
 
 export interface GithubAccountCreate {
@@ -186,6 +205,7 @@ export interface GithubAccountCreate {
   app_id?: number
   installation_id?: number
   private_key?: string
+  llm_key?: LLMKeyChoice
 }
 
 export interface GithubAccountUpdate {
@@ -195,6 +215,7 @@ export interface GithubAccountUpdate {
   installation_id?: number
   private_key?: string
   active?: boolean
+  llm_key?: LLMKeyChoice
 }
 
 export interface GithubRepoCreate {
@@ -301,6 +322,7 @@ export interface GoogleFolder extends SyncStatus {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key: LLMKeyView
 }
 
 export interface GoogleAccount extends SyncStatus {
@@ -322,6 +344,7 @@ export interface GoogleFolderCreate {
   // Access control
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 export interface GoogleFolderUpdate {
@@ -335,6 +358,7 @@ export interface GoogleFolderUpdate {
   // Access control; null clears the project
   project_id?: number | null
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 // Types for Google OAuth scopes
@@ -391,6 +415,7 @@ export interface CalendarAccount extends SyncStatus {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key: LLMKeyView
 }
 
 export interface CalendarAccountCreate {
@@ -408,6 +433,7 @@ export interface CalendarAccountCreate {
   // Access control
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 export interface CalendarAccountUpdate {
@@ -425,6 +451,7 @@ export interface CalendarAccountUpdate {
   // Access control
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 // Types for Transcript Accounts (Fireflies, etc.)
@@ -445,6 +472,7 @@ export interface TranscriptAccount extends SyncStatus {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key: LLMKeyView
 }
 
 export interface TranscriptAccountCreate {
@@ -455,6 +483,7 @@ export interface TranscriptAccountCreate {
   tags?: string[]
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 export interface TranscriptAccountUpdate {
@@ -465,6 +494,7 @@ export interface TranscriptAccountUpdate {
   active?: boolean
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 export interface TranscriptWebhookSecret {

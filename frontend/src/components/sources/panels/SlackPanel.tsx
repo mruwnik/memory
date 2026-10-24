@@ -3,6 +3,7 @@ import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannel
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
+import { LLMKeyField } from '../LLMKeyField'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
@@ -287,6 +288,7 @@ const WorkspaceRow = ({
       actions={<>
         <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={updating}
           onChange={update} />
+        <LLMKeyField compact value={workspace.llm_key} onChange={llm_key => update({ llm_key })} />
         <PauseButton active={workspace.collect_messages} onClick={handleToggle} disabled={toggling} />
         {eventlessApps.filter(app => app.is_owner).map(app => (
           <Button key={app.id} size="sm" onClick={() => onResumeSetup(app)} title={`Resume the setup wizard for ${app.name}`}>

@@ -4,6 +4,7 @@ import { TagsInput, IntervalInput, PauseButton, StatusBadge, SyncButton, SyncFai
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../Sources'
+import { llmKeyLabel } from '../LLMKeyField'
 
 export const GitHubPanel = () => {
   const {
@@ -111,6 +112,7 @@ export const GitHubPanel = () => {
                 meta={[
                   account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App',
                   account.verified_login ? `verified as ${account.verified_login}` : 'unverified',
+                  `LLM: ${llmKeyLabel(account.llm_key)}`,
                 ]}
               >
                 <SubList

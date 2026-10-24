@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
+import { useSources, EmailAccount, LLMKeyChoice, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectSelect, SensitivitySelect, SourceRow, TagsInput, TestConnectionButton, numberValue } from '../shared'
 import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, Fieldset } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 export const EmailPanel = () => {
   const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount, listGoogleAccounts } = useSources()
@@ -93,6 +94,7 @@ export const EmailPanel = () => {
               meta={[
                 account.account_type === 'gmail' ? 'Gmail (OAuth)' : `${account.imap_server}:${account.imap_port}`,
                 !!account.folders?.length && `Folders: ${account.folders.join(', ')}`,
+                `LLM: ${llmKeyLabel(account.llm_key)}`,
               ]}
               onToggleActive={() => handleToggleActive(account)}
               onEdit={() => setEditingAccount(account)}
@@ -199,6 +201,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
     send_enabled: account?.send_enabled ?? true,
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden',
+    llm_key: undefined as LLMKeyChoice | undefined,
   })
   const { testEmailAccount } = useSources()
   const [submitting, setSubmitting] = useState(false)
@@ -229,6 +232,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
         send_enabled: formData.send_enabled,
         project_id: formData.project_id,
         sensitivity: formData.sensitivity,
+        ...(formData.llm_key !== undefined ? { llm_key: formData.llm_key } : {}),
       }
 
       if (formData.account_type === 'imap') {
@@ -422,6 +426,8 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             </SensitivitySelect>
           </Field>
         </FieldRow>
+
+        <LLMKeyField value={account?.llm_key} onChange={llm_key => setFormData({ ...formData, llm_key })} />
 
         <Checkbox checked={formData.send_enabled} onChange={e => setFormData({ ...formData, send_enabled: e.target.checked })}
           label="Enable sending emails from this account" />

@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import type { SlackAppSetupState } from './useSlackWizard'
-import type { SyncStatus } from './useSources'
+import type { LLMKeyChoice, LLMKeyView, SyncStatus } from './useSources'
 import { apiError } from './apiError'
 
 // Types for Slack Workspaces
@@ -29,6 +29,7 @@ export interface SlackWorkspace extends SyncStatus {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key: LLMKeyView
 }
 
 export interface SlackWorkspaceUpdate {
@@ -37,6 +38,7 @@ export interface SlackWorkspaceUpdate {
   // Access control
   project_id?: number | null
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
+  llm_key?: LLMKeyChoice
 }
 
 // Types for Slack Channels
