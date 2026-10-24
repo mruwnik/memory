@@ -56,12 +56,7 @@ async def test_api_key_is_limited_to_its_own_scopes(db_session, admin_user):
 async def test_no_effective_scopes_leaves_only_unscoped_tools(
     db_session, user_session, scopes
 ):
-    assert await listed(user_session.id, scopes) == {
-        "meta_get_current_time",
-        "agent_key_list",
-        "agent_key_upsert",
-        "agent_key_delete",
-    }
+    assert await listed(user_session.id, scopes) == {"meta_get_current_time"}
 
 
 @pytest.mark.asyncio
