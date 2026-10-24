@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
+from memory.agents import call
 from memory.common import settings
 from memory.common.db.models import SourceItem
 from memory.common.db.models import LLMProviderKey
@@ -662,6 +664,21 @@ def scripted_llm(monkeypatch):
     ScriptedProvider.script = []
     ScriptedProvider.requests = []
     yield ScriptedProvider
+
+
+@pytest.fixture
+def serial_llm_charges(monkeypatch):
+    """For tests that run system agents concurrently: every make_session() in a test
+    shares one connection, which two threads can't use at once."""
+    lock = threading.Lock()
+    for name in ("allowance", "charge"):
+        real = getattr(call, name)
+
+        def serialized(*args, real=real, **kwargs):
+            with lock:
+                return real(*args, **kwargs)
+
+        monkeypatch.setattr(call, name, serialized)
 
 
 @pytest.fixture

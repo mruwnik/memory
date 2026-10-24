@@ -73,6 +73,21 @@ async def test_search_with_modalities(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user, searcher_id", [(MagicMock(id=42), 42), (None, None)])
+@patch("memory.api.MCP.servers.core.search_base")
+@patch("memory.api.MCP.servers.core.filter_source_ids", return_value=None)
+async def test_search_runs_its_llm_stages_on_the_callers_keys(
+    _filter_ids, mock_search_base, user, searcher_id
+):
+    mock_search_base.return_value = []
+
+    with patch("memory.api.MCP.servers.core.get_mcp_current_user", return_value=user):
+        await search.fn(query="test")
+
+    assert mock_search_base.call_args.kwargs["searcher_id"] == searcher_id
+
+
+@pytest.mark.asyncio
 @patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.extract")
 @patch("memory.api.MCP.servers.core.filter_source_ids")

@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.orm.exc import DetachedInstanceError
 
+from memory.agents.provider_keys import Credential, credential, personal_key
+from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
 from memory.common import extract, settings
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
@@ -40,6 +42,19 @@ from memory.api.search.query_analysis import analyze_query, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
 
 logger = logging.getLogger(__name__)
+
+SEARCH_AGENTS = (HYDE, QUERY_ANALYSIS, CHUNK_SCORE)
+
+
+def searcher_keys(searcher_id: int | None) -> dict[str, Credential | None]:
+    """Each search agent's key: the searcher's usable default for its provider."""
+    if searcher_id is None:
+        return {a.slug: None for a in SEARCH_AGENTS}
+    agent_for = {a.provider: a for a in SEARCH_AGENTS}
+    with make_session() as db:
+        found = {p: personal_key(db, searcher_id, a) for p, a in agent_for.items()}
+        creds = {p: credential(k) if k is not None else None for p, k in found.items()}
+    return {a.slug: creds[a.provider] for a in SEARCH_AGENTS}
 
 
 def extract_query_terms(query: str) -> set[str]:
@@ -227,6 +242,7 @@ async def _run_llm_analysis(
     now: datetime,
     use_query_analysis: bool,
     use_hyde: bool,
+    keys: dict[str, Credential | None],
 ) -> tuple[QueryAnalysis | None, str | None]:
     """
     Run LLM-based query analysis and/or HyDE expansion in parallel.
@@ -243,11 +259,21 @@ async def _run_llm_analysis(
     tasks = []
 
     if use_query_analysis:
-        tasks.append(("analysis", analyze_query(query_text, now=now, timeout=3.0)))
+        tasks.append(
+            (
+                "analysis",
+                analyze_query(query_text, now=now, key=keys[QUERY_ANALYSIS.slug], timeout=3.0),
+            )
+        )
 
     if use_hyde and len(query_text.split()) >= 4:
         tasks.append(
-            ("hyde", expand_query_hyde(query_text, timeout=settings.HYDE_TIMEOUT))
+            (
+                "hyde",
+                expand_query_hyde(
+                    query_text, keys[HYDE.slug], timeout=settings.HYDE_TIMEOUT
+                ),
+            )
         )
 
     if not tasks:
@@ -605,6 +631,7 @@ async def search_chunks(
     filters: SearchFilters | None = None,
     timeout: int = 2,
     config: SearchConfig | None = None,
+    keys: dict[str, Credential | None] | None = None,
 ) -> list[Chunk]:
     """
     Search chunks using embedding similarity and optionally BM25.
@@ -650,9 +677,11 @@ async def search_chunks(
     # Read before any await so a clock pinned around this call (evals) applies.
     now = datetime.now(timezone.utc)
 
+    if keys is None:
+        keys = searcher_keys(None)
     # Run LLM-based operations in parallel (query analysis + HyDE)
     analysis_result, hyde_doc = await _run_llm_analysis(
-        query_text, now, use_query_analysis, use_hyde
+        query_text, now, use_query_analysis, use_hyde, keys
     )
     filters = await asyncio.to_thread(
         restrict_to_date_range, filters, analysis_result, modalities
@@ -740,6 +769,7 @@ async def search(
     modalities: set[str] | None = None,
     filters: SearchFilters | None = None,
     config: SearchConfig | None = None,
+    searcher_id: int | None = None,
 ) -> list[SearchResult]:
     """
     Search across knowledge base using text query and optional files.
@@ -760,6 +790,7 @@ async def search(
     if config is None:
         config = SearchConfig()
     allowed_modalities = modalities & ALL_COLLECTIONS.keys()
+    keys = await asyncio.to_thread(searcher_keys, searcher_id)
     chunks = await search_chunks(
         data,
         allowed_modalities,
@@ -767,11 +798,14 @@ async def search(
         filters,
         config.timeout,
         config,
+        keys=keys,
     )
     if settings.ENABLE_SEARCH_SCORING and config.useScores and data and data[0].data:
         query_item = data[0].data[0]
         if isinstance(query_item, str):
-            chunks = await scorer.rank_chunks(query_item, chunks, min_score=0.3)
+            chunks = await scorer.rank_chunks(
+                query_item, chunks, keys[CHUNK_SCORE.slug], min_score=0.3
+            )
         else:
             logger.debug(f"Skipping scoring: query is {type(query_item).__name__}, not str")
 

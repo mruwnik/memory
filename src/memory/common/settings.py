@@ -275,7 +275,6 @@ OVERLAP_TOKENS = int(os.getenv("OVERLAP_TOKENS", 50))
 OPENAI_API_KEY = secret_env("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = secret_env("ANTHROPIC_API_KEY")
 SUMMARIZER_MODEL = os.getenv("SUMMARIZER_MODEL", "anthropic/claude-haiku-5-5")
-RANKER_MODEL = os.getenv("RANKER_MODEL", "anthropic/claude-haiku-5-5")
 
 DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES = int(
     os.getenv("DEFAULT_LLM_RATE_LIMIT_WINDOW_MINUTES", 30)

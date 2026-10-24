@@ -11,10 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from memory.agents.provider_keys import credential
+from memory.api.search import hyde
 from memory.api.search.query_analysis import QueryAnalysis
 from memory.api.search.types import SearchConfig
 from memory.common import settings
 from memory.common.extract import DataChunk
+from tests.memory.agents.fakes import reply
 from memory.api.search.constants import (
     POPULARITY_BOOST,
     QUERY_TERM_BOOST,
@@ -939,3 +942,35 @@ async def test_apply_reranking_keeps_fused_order_when_rerank_stalls():
         )
 
     assert result == chunks
+
+
+def test_searcher_keys_are_the_searchers_usable_defaults(db_session, regular_user, llm_key):
+    assert set(search_module.searcher_keys(regular_user.id).values()) == {credential(llm_key)}
+
+
+def test_anonymous_searches_get_no_keys():
+    assert set(search_module.searcher_keys(None).values()) == {None}
+
+
+def test_keyless_searchers_get_no_keys(db_session, regular_user):
+    assert set(search_module.searcher_keys(regular_user.id).values()) == {None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("searcher_fixture, hyde_requests", [("llm_key", 1), ("regular_user", 0)])
+async def test_search_writes_a_hyde_passage_only_for_a_keyed_searcher(
+    db_session, regular_user, scripted_llm, monkeypatch, request, searcher_fixture, hyde_requests
+):
+    request.getfixturevalue(searcher_fixture)
+    monkeypatch.setattr(hyde, "_hyde_cache", {})
+    monkeypatch.setattr(search_module, "search_chunks_embeddings", AsyncMock(return_value={}))
+    scripted_llm.script = [reply("a passage")]
+
+    await search_module.search(
+        [DataChunk(data=["that essay about tabooing your words"])],
+        filters={"access_filter": None},
+        config=SearchConfig(useBm25=False, useHyde=True, useReranking=False, useQueryAnalysis=False),
+        searcher_id=regular_user.id,
+    )
+
+    assert len(scripted_llm.requests) == hyde_requests

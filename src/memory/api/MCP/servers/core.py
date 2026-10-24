@@ -409,6 +409,8 @@ async def search(
     )
     search_filters["access_filter"] = access_filter
 
+    user = get_mcp_current_user()
+    user_id = getattr(user, "id", None) if user else None
     upload_data = extract.extract_text(query, skip_summary=True)
     # An empty id list reads as "no restriction" downstream.
     results = (
@@ -419,6 +421,7 @@ async def search(
             modalities=modalities,
             filters=search_filters,
             config=config,
+            searcher_id=user_id,
         )
     )
 
@@ -426,8 +429,6 @@ async def search(
     # claim "all access is logged, including superadmin access" — that's only
     # true if we actually call log_search_access. Logged best-effort: a logging
     # failure must not fail the user's search.
-    user = get_mcp_current_user()
-    user_id = getattr(user, "id", None) if user else None
     if user_id is not None:
         try:
             log_search_access(user_id, query, len(results))

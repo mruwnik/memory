@@ -239,7 +239,7 @@ section has nothing in it:
   Set `SUMMARIZER_USE_BATCH=false` to summarize inline as before. The
   `SUMMARIZER_BATCH_*` settings tune batch size, retries and the
   submit/poll intervals.
-- `SUMMARIZER_MODEL` and `RANKER_MODEL` now default to
+- `SUMMARIZER_MODEL` now defaults to
   `anthropic/claude-haiku-5-5`. Values set explicitly in `.env` are kept.
 - `DISCORD_PROCESS_MESSAGES`, `DISCORD_MODEL` and `DISCORD_MAX_TOOL_CALLS` are
   removed; nothing read them. Delete them from `.env` if set.
@@ -401,6 +401,9 @@ section has nothing in it:
   receiver must listen on a LAN address instead.
 - The LLM API keys page moved to `/ui/keys` and is open to every user; key names are
   now unique per user (tools accept a key's name or id).
+- HyDE, query analysis and result scoring run on the searcher's default key for
+  their provider and are skipped for users without one; search still works.
+  `RANKER_MODEL` is removed; delete it from `.env` if set.
 
 ### Migrations
 

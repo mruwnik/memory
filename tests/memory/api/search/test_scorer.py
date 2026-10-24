@@ -1,97 +1,90 @@
 """Tests for scorer module."""
 
+import asyncio
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
+from PIL import Image
 
-from memory.api.search.scorer import SCORE_SCHEMA, score_chunk, rank_chunks
-
-
-@pytest.fixture
-def mock_chunk():
-    """Create a mock chunk for testing."""
-    chunk = MagicMock()
-    chunk.data = ["Some text content"]
-    chunk.relevance_score = None
-    return chunk
+from memory.agents.call import LLMError
+from memory.agents.provider_keys import credential
+from memory.api.search import scorer
+from tests.memory.agents.fakes import submitted
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "llm_response,expected_score",
-    [
-        (None, 0.0),  # Null response
-        ("", 0.0),  # Empty response
-        ('{"score": 0.75}', 0.75),
-    ],
-)
-async def test_score_chunk_llm_responses(mock_chunk, llm_response, expected_score):
-    """Tests score_chunk handling of various LLM responses."""
-    with patch(
-        "memory.api.search.scorer.llms.summarize", return_value=llm_response
-    ) as llm:
-        result = await score_chunk("test query", mock_chunk)
+pytestmark = pytest.mark.usefixtures("serial_llm_charges")
 
-    assert result.relevance_score == expected_score
-    assert llm.call_args.kwargs["json_schema"] == SCORE_SCHEMA
+
+def chunk_with_text(text, score=None):
+    return MagicMock(data=[text], relevance_score=score)
+
+
+async def slow():
+    await asyncio.sleep(5)
+    return submitted({"score": 0.0})
+
+
+async def rate_limited():
+    raise ConnectionError("429 rate limited")
+
+
+async def model_refused():
+    raise LLMError("answered without submitting a result")
 
 
 @pytest.mark.asyncio
-async def test_score_chunk_handles_chunk_data_error(mock_chunk):
-    """Returns chunk unchanged when data access fails."""
-    type(mock_chunk).data = property(
-        lambda self: (_ for _ in ()).throw(Exception("Error"))
-    )
+async def test_chunks_are_scored_on_the_searchers_key(db_session, llm_key, scripted_llm):
+    scripted_llm.script = [submitted({"score": 0.9}), submitted({"score": 0.1})]
+    chunks = [chunk_with_text("relevant"), chunk_with_text("noise")]
 
-    result = await score_chunk("test query", mock_chunk)
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key), min_score=0.3)
 
-    assert result is mock_chunk
+    assert [c.relevance_score for c in ranked] == [0.9]
 
 
 @pytest.mark.asyncio
-async def test_score_chunk_keeps_the_existing_score_when_the_llm_fails(mock_chunk):
-    mock_chunk.relevance_score = 0.6
-    with patch(
-        "memory.api.search.scorer.llms.summarize",
-        side_effect=Exception("LLM error"),
-    ):
-        result = await score_chunk("test query", mock_chunk)
+async def test_ranked_chunks_are_sorted_by_score(db_session, llm_key, scripted_llm):
+    scripted_llm.script = [submitted({"score": s}) for s in (0.3, 0.9, 0.5)]
+    chunks = [chunk_with_text(t) for t in ("a", "b", "c")]
 
-    assert result is mock_chunk
-    assert result.relevance_score == 0.6
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key))
+
+    assert [c.relevance_score for c in ranked] == [0.9, 0.5, 0.3]
 
 
 @pytest.mark.asyncio
-async def test_rank_chunks_sorts_by_relevance_score():
-    """Ranks chunks by relevance score in descending order."""
-    chunks = [MagicMock(data=["text"]) for _ in range(3)]
-    scores = [0.3, 0.9, 0.5]
+async def test_without_a_key_chunks_keep_their_scores(scripted_llm):
+    chunks = [chunk_with_text("a", score=0.5)]
 
-    async def mock_score_chunk(query, chunk):
-        idx = chunks.index(chunk)
-        chunk.relevance_score = scores[idx]
-        return chunk
+    assert await scorer.rank_chunks("query", chunks, None) == chunks
+    assert scripted_llm.requests == []
 
-    with patch("memory.api.search.scorer.score_chunk", side_effect=mock_score_chunk):
-        result = await rank_chunks("query", chunks)
 
-    assert result[0].relevance_score == 0.9
-    assert result[1].relevance_score == 0.5
-    assert result[2].relevance_score == 0.3
+@pytest.mark.parametrize("answer", [slow, rate_limited, model_refused])
+@pytest.mark.asyncio
+async def test_a_failed_score_keeps_the_rerankers_score(db_session, llm_key, scripted_llm, answer):
+    scripted_llm.script = [answer]
+    chunk = chunk_with_text("text", score=0.6)
+
+    result = await scorer.score_chunk("query", chunk, credential(llm_key), timeout=0.05)
+
+    assert (result is chunk, result.relevance_score) == (True, 0.6)
 
 
 @pytest.mark.asyncio
-async def test_rank_chunks_filters_by_min_score():
-    """Filters out chunks below min_score threshold."""
-    chunks = [MagicMock(data=["text"]) for _ in range(3)]
-    scores = [0.2, 0.5, 0.8]
+async def test_image_only_chunks_keep_their_score_unscored(db_session, llm_key, scripted_llm):
+    chunk = MagicMock(data=[Image.new("RGB", (1, 1))], relevance_score=0.4)
 
-    async def mock_score_chunk(query, chunk):
-        idx = chunks.index(chunk)
-        chunk.relevance_score = scores[idx]
-        return chunk
+    result = await scorer.score_chunk("query", chunk, credential(llm_key))
 
-    with patch("memory.api.search.scorer.score_chunk", side_effect=mock_score_chunk):
-        result = await rank_chunks("query", chunks, min_score=0.4)
+    assert (result.relevance_score, scripted_llm.requests) == (0.4, [])
 
-    assert len(result) == 2
-    assert all(c.relevance_score >= 0.4 for c in result)
+
+@pytest.mark.asyncio
+async def test_unreadable_chunks_are_returned_unscored(db_session, llm_key, scripted_llm):
+    chunk = MagicMock(relevance_score=0.2)
+    type(chunk).data = property(lambda self: (_ for _ in ()).throw(OSError("gone")))
+
+    result = await scorer.score_chunk("query", chunk, credential(llm_key))
+
+    assert (result is chunk, scripted_llm.requests) == (True, [])
