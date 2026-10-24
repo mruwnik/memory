@@ -15,7 +15,18 @@ from typing import TYPE_CHECKING
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Table,
+    UniqueConstraint,
+    select,
+    update,
+)
 from sqlalchemy.orm import Session, relationship, validates, Mapped, mapped_column
 
 from memory.common import settings
@@ -252,21 +263,31 @@ def delete_secret(session: Session, user_id: int, name: str) -> bool:
     return True
 
 
+def is_encrypted_column(column: Column) -> bool:
+    """Whether a column holds Fernet ciphertext produced by encrypt_value."""
+    return isinstance(column.type, LargeBinary) and (
+        column.name.endswith("_encrypted") or column.name == "encrypted_value"
+    )
+
+
+def encrypted_columns() -> dict[Table, list[Column]]:
+    """Every encrypted column in the schema, discovered from the models' metadata."""
+    found = {
+        table: [c for c in table.columns if is_encrypted_column(c)]
+        for table in Base.metadata.sorted_tables
+    }
+    return {table: columns for table, columns in found.items() if columns}
+
+
 def rotate_all_secrets(
     session: Session,
     old_key_secret: str,
     new_key_secret: str,
 ) -> int:
-    """Re-encrypt all secrets with a new master key.
+    """Re-encrypt every encrypted column with a new master key.
 
-    This is used when rotating the SECRETS_ENCRYPTION_KEY. The process:
-    1. Derive encryption keys from both old and new secrets
-    2. Decrypt each secret with the old key
-    3. Re-encrypt with the new key
-    4. Update the stored value
-
-    After running this, update SECRETS_ENCRYPTION_KEY in your environment
-    to the new value.
+    Used when rotating SECRETS_ENCRYPTION_KEY. After running this, update
+    SECRETS_ENCRYPTION_KEY in your environment to the new value.
 
     Args:
         session: Database session
@@ -274,7 +295,7 @@ def rotate_all_secrets(
         new_key_secret: The new SECRETS_ENCRYPTION_KEY value
 
     Returns:
-        Number of secrets rotated
+        Number of values re-encrypted
 
     Raises:
         InvalidToken: If old_key_secret doesn't match the current encryption
@@ -283,16 +304,25 @@ def rotate_all_secrets(
     old_key = derive_encryption_key(old_key_secret, salt)
     new_key = derive_encryption_key(new_key_secret, salt)
 
-    secrets = session.query(Secret).all()
     count = 0
-
-    for secret in secrets:
-        # Decrypt with old key
-        plaintext = decrypt_value_with_key(secret.encrypted_value, old_key)
-        # Re-encrypt with new key
-        secret.encrypted_value = encrypt_value_with_key(plaintext, new_key)
-        secret.updated_at = datetime.now(timezone.utc)
-        count += 1
+    for table, columns in encrypted_columns().items():
+        pk = list(table.primary_key.columns)
+        for row in session.execute(select(*pk, *columns)).mappings().all():
+            values = {
+                column: encrypt_value_with_key(
+                    decrypt_value_with_key(bytes(row[column]), old_key), new_key
+                )
+                for column in columns
+                if row[column] is not None
+            }
+            if not values:
+                continue
+            session.execute(
+                update(table)
+                .where(*(column == row[column] for column in pk))
+                .values(values)
+            )
+            count += len(values)
 
     return count
 
