@@ -146,6 +146,7 @@ def sync_note(
     tags: list[str] | None = None,
     save_to_file: bool = True,
     creator_id: int | None = None,
+    create_only: bool = False,
 ):
     confidences = confidences or {}
     tags = tags or []
@@ -188,6 +189,11 @@ def sync_note(
             return create_task_result(existing_note, "already_exists")
 
         note = session.query(Note).filter(Note.filename == filename).one_or_none()
+
+        if note and create_only:
+            # Closes the race between the MCP tool's check and this task running.
+            logger.warning("Refusing to overwrite existing note %s", filename)
+            return {"status": "already_exists", "note_id": note.id}
 
         if not note:
             note = Note(

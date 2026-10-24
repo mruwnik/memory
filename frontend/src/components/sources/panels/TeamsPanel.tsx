@@ -598,7 +598,7 @@ const PersonDetailsModal = ({ member, getPerson, onClose }: { member: TeamMember
                       {tidbit.tidbit_type && <Badge>{tidbit.tidbit_type}</Badge>}
                       {tidbit.tags?.map(tag => <Badge key={tag} tone="info">{tag}</Badge>)}
                     </>}
-                    meta={[tidbit.source, tidbit.inserted_at && new Date(tidbit.inserted_at).toLocaleDateString()]} />
+                    meta={[tidbit.source, tidbit.created_at && new Date(tidbit.created_at).toLocaleDateString()]} />
                 ))}
               </SubList>
             )}

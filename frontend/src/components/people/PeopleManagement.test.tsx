@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpCallsTo } from '../../hooks/mcpEnvelope.testhelper'
+import { mcpResult, mcpToolError, mcpCallsTo } from '../../hooks/mcpEnvelope.testhelper'
 import PeopleManagement from './PeopleManagement'
 
 const authMe = {
@@ -339,5 +339,95 @@ describe('PeopleManagement expand', () => {
     await waitFor(() => {
       expect(mcpCallsTo(fetchMock, 'people_fetch').length > 0).toBe(true)
     })
+  })
+})
+
+describe('PeopleManagement tidbits', () => {
+  const tidbit = { id: 7, person_id: 1, content: 'Likes tea', tidbit_type: 'preference', source: null, sensitivity: 'basic', project_id: null, tags: ['drinks'], creator_id: 1, created_at: null }
+
+  const routes = (extra: Record<string, ReturnType<typeof mcpResult>>) => mockFetchRoutes({
+    '/auth/me': authMe,
+    people_list_all: mcpResult([person()]),
+    teams_list_all: mcpResult({ teams: [], count: 0 }),
+    teams_fetch: mcpResult({ teams: [] }),
+    people_fetch: mcpResult(person({ tidbits: [tidbit] })),
+    ...extra,
+  })
+
+  const expand = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'Alice' }))
+    await screen.findByText('Likes tea')
+  }
+
+  it('adds a tidbit with the form values', async () => {
+    const fetchMock = routes({ people_tidbit_add: mcpResult({ status: 'queued' }) })
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await expand(user)
+
+    await user.click(screen.getByRole('button', { name: 'Add tidbit' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Only visible to you.')).toBeInTheDocument()
+    await user.type(within(dialog).getByLabelText(/Content/), 'Allergic to nuts')
+    await user.type(within(dialog).getByLabelText('Tags'), 'health, food')
+    await user.selectOptions(within(dialog).getByLabelText('Sensitivity'), 'internal')
+    await user.click(within(dialog).getByRole('button', { name: 'Add tidbit' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByText('Allergic to nuts')).toBeInTheDocument()
+    expect(JSON.parse(mcpCallsTo(fetchMock, 'people_tidbit_add')[0][1].body).params.arguments).toEqual({
+      identifier: 'alice', content: 'Allergic to nuts', tidbit_type: 'note', tags: ['health', 'food'], sensitivity: 'internal',
+    })
+  })
+
+  it('edits a tidbit, prefilled, by id', async () => {
+    const fetchMock = routes({ people_tidbit_update: mcpResult({ id: 7 }) })
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await expand(user)
+
+    await user.click(screen.getByRole('button', { name: /Edit tidbit: Likes tea/ }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText(/Content/)).toHaveValue('Likes tea')
+    await user.type(within(dialog).getByLabelText(/Content/), ' a lot')
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(JSON.parse(mcpCallsTo(fetchMock, 'people_tidbit_update')[0][1].body).params.arguments).toEqual({
+      tidbit_id: 7, content: 'Likes tea a lot', tidbit_type: 'preference', tags: ['drinks'], sensitivity: 'basic',
+    })
+  })
+
+  it('shows the server error inside the modal when saving fails', async () => {
+    routes({ people_tidbit_update: mcpToolError('You can only edit tidbits you created') })
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await expand(user)
+
+    await user.click(screen.getByRole('button', { name: /Edit tidbit/ }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save changes' }))
+
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent('You can only edit tidbits you created')
+  })
+
+  it('deletes a tidbit after confirming, and shows a failure on the page', async () => {
+    const fetchMock = routes({ people_tidbit_delete: mcpToolError('You can only delete tidbits you created') })
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await expand(user)
+
+    await user.click(screen.getByRole('button', { name: /Delete tidbit/ }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('You can only delete tidbits you created')).toBeInTheDocument()
+    expect(JSON.parse(mcpCallsTo(fetchMock, 'people_tidbit_delete')[0][1].body).params.arguments).toEqual({ tidbit_id: 7 })
+  })
+
+  it('hides Edit and Delete on tidbits the user did not create', async () => {
+    routes({
+      '/auth/me': { json: { ...authMe.json, user_id: 2, scopes: ['people:read'] } },
+    })
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await expand(user)
+
+    expect(screen.getByRole('button', { name: 'Add tidbit' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Edit tidbit/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Delete tidbit/ })).not.toBeInTheDocument()
   })
 })

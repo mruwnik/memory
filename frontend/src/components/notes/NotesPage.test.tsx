@@ -232,3 +232,70 @@ describe('NotesPage', () => {
     resolve(fileResult('done'))
   })
 })
+
+describe('NotesPage new note', () => {
+  const openModal = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole('button', { name: 'New note' }))
+    return screen.getByRole('dialog')
+  }
+
+  it('opens an empty editor for the new path and saves it with the title', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    const dialog = await openModal(user)
+    await user.type(within(dialog).getByLabelText(/Path/), 'work/ideas')
+    await user.type(within(dialog).getByLabelText('Title'), 'Ideas')
+    await user.click(within(dialog).getByRole('button', { name: 'Create note' }))
+
+    expect(fetchFile).not.toHaveBeenCalled()
+    expect(screen.getByText('work/ideas.md')).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'Note content' }), 'hello')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(saveNote).toHaveBeenCalledWith('work/ideas.md', 'hello', 'Ideas', true))
+    // The note is listed right away, before the background write is visible to a reload.
+    expect(await screen.findByText('ideas.md')).toBeInTheDocument()
+  })
+
+  it('re-checks a fresh listing so a note created elsewhere is not overwritten', async () => {
+    listNotes.mockResolvedValueOnce([['/notes/readme.md']]).mockResolvedValue([['/notes/readme.md', '/notes/other.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    const dialog = await openModal(user)
+    await user.type(within(dialog).getByLabelText(/Path/), 'other')
+    await user.click(within(dialog).getByRole('button', { name: 'Create note' }))
+    expect(await within(dialog).findByText('other.md already exists.')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['/', 'Enter a file name.'],
+    ['a/../b', 'The path can\'t contain empty, "." or ".." parts.'],
+    ['readme', 'readme.md already exists.'],
+  ])('rejects the path %j inline', async (path, message) => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    const dialog = await openModal(user)
+    await user.type(within(dialog).getByLabelText(/Path/), path)
+    await user.click(within(dialog).getByRole('button', { name: 'Create note' }))
+    expect(within(dialog).getByText(message)).toBeInTheDocument()
+    expect(saveNote).not.toHaveBeenCalled()
+  })
+
+  it('asks before discarding unsaved edits to open the new note', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    await user.click(await screen.findByText('readme.md'))
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByRole('textbox'), '!')
+
+    const dialog = await openModal(user)
+    await user.clear(within(dialog).getByLabelText(/Path/))
+    await user.type(within(dialog).getByLabelText(/Path/), 'fresh')
+    await user.click(within(dialog).getByRole('button', { name: 'Create note' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
+    expect(await screen.findByText('fresh.md')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Note content' })).toHaveValue('')
+  })
+})

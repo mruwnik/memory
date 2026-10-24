@@ -12,6 +12,11 @@ interface PersonCardProps {
   teamsLoading?: boolean
   tidbits?: Tidbit[]
   tidbitsLoading?: boolean
+  onAddTidbit: () => void
+  /** Whether the current user may change this tidbit (the backend allows only its creator or an admin). */
+  canEditTidbit: (tidbit: Tidbit) => boolean
+  onEditTidbit: (tidbit: Tidbit) => void
+  onDeleteTidbit: (tidbit: Tidbit) => void
   /** Selection checkbox for bulk actions. */
   select?: React.ReactNode
 }
@@ -23,7 +28,7 @@ const contactLink = (key: string, value: string) =>
     : key === 'phone' ? <a href={`tel:${value}`} className="text-primary hover:underline">{value}</a>
     : value
 
-const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams, teamsLoading, tidbits, tidbitsLoading, select }: PersonCardProps) => {
+const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams, teamsLoading, tidbits, tidbitsLoading, onAddTidbit, canEditTidbit, onEditTidbit, onDeleteTidbit, select }: PersonCardProps) => {
   // Nested objects (e.g. Slack workspace data) aren't contact details
   const contacts = Object.entries(person.contact_info ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')
 
@@ -57,7 +62,8 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
             )],
             ['Added', person.created_at && new Date(person.created_at).toLocaleDateString()],
           ]} />
-          <SubList title={tidbits?.length ? `Tidbits (${tidbits.length})` : 'Tidbits'} empty={tidbitsLoading ? 'Loading tidbits...' : 'No tidbits yet'}>
+          <SubList title={tidbits?.length ? `Tidbits (${tidbits.length})` : 'Tidbits'}
+            actions={<Button size="sm" onClick={onAddTidbit}>Add tidbit</Button>} empty={tidbitsLoading ? 'Loading tidbits...' : 'No tidbits yet'}>
             {!tidbitsLoading && tidbits?.map(tidbit => (
               <Row
                 key={tidbit.id}
@@ -69,7 +75,11 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
                   )}
                   {tidbit.tags?.map((tag, i) => <Badge tone="info" key={i}>{tag}</Badge>)}
                 </>}
-                meta={[tidbit.source, tidbit.inserted_at && new Date(tidbit.inserted_at).toLocaleDateString()]}
+                meta={[tidbit.source, tidbit.created_at && new Date(tidbit.created_at).toLocaleDateString()]}
+                actions={canEditTidbit(tidbit) && <>
+                  <Button size="sm" onClick={() => onEditTidbit(tidbit)} aria-label={`Edit tidbit: ${tidbit.content.slice(0, 40)}`}>Edit</Button>
+                  <ConfirmButton aria-label={`Delete tidbit: ${tidbit.content.slice(0, 40)}`} confirm="Delete this tidbit? This cannot be undone." onConfirm={() => onDeleteTidbit(tidbit)} />
+                </>}
               />
             ))}
           </SubList>

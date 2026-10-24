@@ -36,6 +36,7 @@ async def upsert(
     note_type: str | None = None,
     confidences: dict[str, float] | None = None,
     tags: list[str] | None = None,
+    create_only: bool = False,
 ) -> dict:
     """
     Create or update a note when user asks to save or record something.
@@ -49,6 +50,7 @@ async def upsert(
         note_type: Optional categorization of the note
         confidences: Dict of scores (0.0-1.0), e.g. {"observation_accuracy": 0.9}
         tags: Organization tags for filtering and discovery
+        create_only: Fail instead of updating when a note with this filename exists
     """
     confidences = confidences or {}
     tags = tags or []
@@ -58,6 +60,11 @@ async def upsert(
             filename = paths.to_db_filename(filename, base_dir=settings.NOTES_STORAGE_DIR)
         except ValueError as e:
             raise ValueError(f"Invalid filename: {e}")
+        if create_only:
+            with make_session() as session:
+                taken = session.query(Note.id).filter(Note.filename == filename).first()
+            if taken:
+                raise ValueError(f"A note already exists at {filename}")
 
     user = get_mcp_current_user()
     creator_id = user.id if user else None
@@ -74,6 +81,7 @@ async def upsert(
                 "confidences": confidences,
                 "tags": tags,
                 "creator_id": creator_id,
+                "create_only": create_only,
             },
         )
     except Exception:

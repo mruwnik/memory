@@ -238,6 +238,7 @@ describe('convenience wrappers', () => {
       filename: 'dir/MyNote.md',
       content: 'body',
       subject: 'MyNote',
+      create_only: false,
     })
   })
 

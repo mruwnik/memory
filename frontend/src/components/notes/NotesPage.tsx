@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useMCP } from '@/hooks/useMCP'
 import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Page, PaneHeader, SplitView, Textarea, ToggleGroup, useActionNotice } from '@/components/shared/ui'
 import { Markdown } from '@/components/shared/Markdown'
+import { NewNoteModal } from './NewNoteModal'
 
 interface TreeNode {
   files: string[]
@@ -131,6 +132,7 @@ export const NotesPage = () => {
   const [contentError, setContentError] = useState<string | null>(null)
   const { run, notice, clear: clearNotice } = useActionNotice()
   const requestedFileRef = useRef<string | null>(null)
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout>>()
   // Where our own navigation is taking ?file= (null: no file). Navigations commit in a transition, so until
   // it lands the URL still names the old file, which must not be taken as a Back/link to it.
   const pendingUrlFileRef = useRef<string | null | undefined>(undefined)
@@ -139,6 +141,8 @@ export const NotesPage = () => {
     pendingUrlFileRef.current = path
     setSearchParams(path ? { file: path } : {}, { replace })
   }
+  const [creating, setCreating] = useState(false)
+  const [draftSubject, setDraftSubject] = useState<string | undefined>()
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null)
 
   const hasChanges = editedContent !== null && editedContent !== fileContent
@@ -154,23 +158,27 @@ export const NotesPage = () => {
   // Get file path from URL
   const fileFromUrl = searchParams.get('file')
 
-  const loadFiles = useCallback(async () => {
+  const fetchFileList = useCallback(async (): Promise<string[]> => {
+    const result = await listNotes('/')
+    // Result is an array with the file list as first element
+    const fileList = Array.isArray(result) ? result[0] : result
+    // Strip /notes/ prefix from paths for cleaner tree display
+    return (Array.isArray(fileList) ? fileList : []).map((p: string) => p.replace(/^\/notes\//, ''))
+  }, [listNotes])
+
+  const loadFiles = useCallback(async (silent = false) => {
     try {
-      setLoading(true)
-      const result = await listNotes('/')
-      // Result is an array with the file list as first element
-      const fileList = Array.isArray(result) ? result[0] : result
-      // Strip /notes/ prefix from paths for cleaner tree display
-      const cleanPaths = (Array.isArray(fileList) ? fileList : [])
-        .map((p: string) => p.replace(/^\/notes\//, ''))
-      setFiles(cleanPaths)
+      if (!silent) setLoading(true)
+      const cleanPaths = await fetchFileList()
+      // A silent reload only reconciles after a save; the write may not have landed yet, so keep what is shown.
+      setFiles(prev => silent ? [...new Set([...prev, ...cleanPaths])] : cleanPaths)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load notes')
     } finally {
       setLoading(false)
     }
-  }, [listNotes])
+  }, [fetchFileList])
 
   const loadFileContent = useCallback(async (path: string) => {
     requestedFileRef.current = path
@@ -212,16 +220,30 @@ export const NotesPage = () => {
     if (!selectedFile || editedContent === null) return
     setSaving(true)
     // selectedFile is already clean (no /notes/ prefix)
-    const saved = await run(() => saveNote(selectedFile, editedContent))
+    const isNew = !files.includes(selectedFile)
+    const saved = await run(() => saveNote(selectedFile, editedContent, draftSubject, isNew))
     setSaving(false)
     if (!saved) return
     setFileContent(editedContent)
     setIsEditing(false)
-  }, [selectedFile, editedContent, saveNote, run])
+    setDraftSubject(undefined)
+    if (!isNew) return
+    setFiles(prev => [...prev, selectedFile])
+    // The note is written by a background task, so the listing is reconciled a moment later.
+    clearTimeout(reloadTimerRef.current)
+    reloadTimerRef.current = setTimeout(() => loadFiles(true), 1000)
+  }, [selectedFile, editedContent, draftSubject, files, saveNote, run, loadFiles])
+
+  useEffect(() => () => clearTimeout(reloadTimerRef.current), [])
 
   useEffect(() => {
     loadFiles()
   }, [loadFiles])
+
+  const expandParents = (path: string) => {
+    const parents = path.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))
+    setExpandedFolders(prev => new Set([...prev, ...parents]))
+  }
 
   // Back/Forward and links change ?file= without a click in the tree, so they go through the same discard check.
   useEffect(() => {
@@ -233,8 +255,7 @@ export const NotesPage = () => {
     leaveFile(() => {
       setSelectedFile(fileFromUrl)
       loadFileContent(fileFromUrl)
-      const parents = fileFromUrl.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))
-      setExpandedFolders(prev => new Set([...prev, ...parents]))
+      expandParents(fileFromUrl)
     })
   }, [fileFromUrl, files, selectedFile, loadFileContent, leaveFile])
 
@@ -256,14 +277,33 @@ export const NotesPage = () => {
     setUrlFile(path)
   })
 
+  const handleCreateNote = (path: string, subject?: string) => {
+    setCreating(false)
+    leaveFile(() => startDraft(path, subject))
+  }
+
+  const startDraft = (path: string, subject?: string) => {
+    requestedFileRef.current = path
+    clearNotice()
+    setContentError(null)
+    setLoadingContent(false)
+    setSelectedFile(path)
+    setFileContent('')
+    setEditedContent('')
+    setIsEditing(true)
+    setDraftSubject(subject)
+    expandParents(path)
+    setUrlFile(path)
+  }
+
   const tree = buildTree(files)
 
   return (
-    <Page title="Notes" width="full" fill>
+    <Page title="Notes" width="full" fill actions={<Button variant="primary" onClick={() => setCreating(true)}>New note</Button>}>
       <SplitView
         listTitle="Files"
         list={loading ? <LoadingState />
-          : error ? <ErrorState message={error} onRetry={loadFiles} />
+          : error ? <ErrorState message={error} onRetry={() => loadFiles()} />
           : files.length === 0 ? <div className="p-4"><EmptyState message="No notes found" /></div>
           : (
             <FolderNode
@@ -316,6 +356,10 @@ export const NotesPage = () => {
         onBack={() => leaveFile(() => { setSelectedFile(null); setUrlFile(null) })}
         backLabel="Files"
       />
+      {creating && (
+        <NewNoteModal fetchFiles={fetchFileList} folder={selectedFile?.split('/').slice(0, -1).join('/') ?? ''}
+          onCreate={handleCreateNote} onCancel={() => setCreating(false)} />
+      )}
       {pendingLeave && (
         <ConfirmDialog message={`Discard unsaved changes to ${selectedFile}?`} confirmLabel="Discard"
           onCancel={() => { setPendingLeave(null); setUrlFile(selectedFile, true) }}

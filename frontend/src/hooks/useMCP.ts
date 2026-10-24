@@ -168,10 +168,11 @@ export const useMCP = () => {
     return await mcpCall('core_fetch_file', { filename })
   }, [mcpCall])
 
-  const saveNote = useCallback(async (filename: string, content: string, subject?: string) => {
+  const saveNote = useCallback(async (filename: string, content: string, subject?: string, createOnly = false) => {
     return await mcpCall('notes_upsert', {
       filename,
       content,
+      create_only: createOnly,
       subject: subject || filename.split('/').pop()?.replace('.md', '') || 'Note',
     })
   }, [mcpCall])

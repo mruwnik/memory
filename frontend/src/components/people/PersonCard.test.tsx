@@ -25,8 +25,8 @@ const makeTidbit = (overrides: Partial<Tidbit> = {}): Tidbit => ({
   sensitivity: null,
   project_id: null,
   tags: [],
-  created_by: null,
-  inserted_at: null,
+  creator_id: null,
+  created_at: null,
   ...overrides,
 })
 
@@ -56,6 +56,10 @@ const baseProps = {
   onToggleExpand: vi.fn(),
   onEdit: vi.fn(),
   onDelete: vi.fn(),
+  onAddTidbit: vi.fn(),
+  canEditTidbit: () => true,
+  onEditTidbit: vi.fn(),
+  onDeleteTidbit: vi.fn(),
 }
 
 beforeEach(() => {

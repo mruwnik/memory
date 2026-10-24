@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Person, PersonCreate, PersonUpdate } from '../../hooks/usePeople'
-import { Button, Input, Modal, Notice, Textarea, Field, FieldRow, FormActions, requiredLabel } from '@/components/shared/ui'
+import { Button, Input, Modal, Notice, Textarea, Field, FieldRow, Fieldset, FormActions, requiredLabel } from '@/components/shared/ui'
 
 interface PersonFormModalProps {
   title: string
@@ -172,8 +172,7 @@ const PersonFormModal = ({
             />
           </Field>
 
-          <fieldset className="pt-2 space-y-3">
-            <legend className="text-sm font-medium text-slate-700 mb-3">Contact information</legend>
+          <Fieldset legend="Contact information" className="pt-2 space-y-3">
             <FieldRow>
               {CONTACT_FIELDS.map(({ key, label, type, placeholder }) => (
                 <Field key={key} label={label}>
@@ -187,7 +186,7 @@ const PersonFormModal = ({
                 </Field>
               ))}
             </FieldRow>
-          </fieldset>
+          </Fieldset>
 
           <Field label="Add a note">
             <Textarea

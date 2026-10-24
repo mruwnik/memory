@@ -1257,3 +1257,24 @@ def test_note_save_to_file_empty_subject_uses_untitled_fallback(subject, tmp_pat
 
     assert note.filename == "notes/untitled.md"
     assert (notes_dir / "untitled.md").read_text() == "content"
+
+
+def test_sync_note_create_only_refuses_existing_filename(mock_note_data, mock_make_session):
+    existing = Note(
+        subject="Existing",
+        content="original",
+        sha256=create_content_hash("original"),
+        modality="text",
+        mime_type="text/markdown",
+        size=8,
+        embed_status="RAW",
+        filename=mock_note_data["filename"],
+    )
+    mock_make_session.add(existing)
+    mock_make_session.commit()
+
+    result = notes.sync_note(**mock_note_data, create_only=True)
+
+    assert result == {"status": "already_exists", "note_id": existing.id}
+    mock_make_session.refresh(existing)
+    assert existing.content == "original"  # type: ignore

@@ -78,6 +78,39 @@ async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, mo
 
 
 @pytest.mark.asyncio
+async def test_create_note_create_only_rejects_existing_filename(
+    mock_settings, mock_celery, mock_notes_dir, db_session
+):
+    from memory.api.MCP.servers.notes import upsert
+    from memory.common.db.models import Note
+
+    db_session.add(
+        Note(
+            subject="Taken",
+            content="x",
+            sha256=b"1" * 32,
+            modality="text",
+            mime_type="text/markdown",
+            size=1,
+            filename="notes/taken.md",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="already exists"):
+        await upsert.fn(
+            subject="s", content="c", filename="taken.md", create_only=True
+        )
+    mock_celery.send_task.assert_not_called()
+
+    result = await upsert.fn(
+        subject="s", content="c", filename="fresh.md", create_only=True
+    )
+    assert result["status"] == "queued"
+    assert mock_celery.send_task.call_args.kwargs["kwargs"]["create_only"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_note_allows_valid_filename(mock_settings, mock_celery, mock_notes_dir):
     """Allows valid filenames in create_note."""
     from memory.api.MCP.servers.notes import upsert

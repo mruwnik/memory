@@ -1,16 +1,19 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { usePeople, type Person, type PersonCreate, type PersonUpdate, type Tidbit } from '../../hooks/usePeople'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useAuth } from '../../hooks/useAuth'
+import { usePeople, type Person, type PersonCreate, type PersonUpdate, type Tidbit, type TidbitInput } from '../../hooks/usePeople'
 import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
-import { Button, Checkbox, EmptyState, Input, Label, List, Modal, MultiSelect, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
+import TidbitFormModal from './TidbitFormModal'
+import { Button, Checkbox, EmptyState, Input, Label, List, Modal, MultiSelect, Notice, Page, RefreshButton, Select, Toolbar, useActionNotice } from '@/components/shared/ui'
 
 const PAGE_LIMIT = 200
 
 const PeopleManagement = () => {
-  const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople } = usePeople()
+  const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople, addTidbit, updateTidbit, deleteTidbit } = usePeople()
   const { getPersonTeams, listTeams, listMembers } = useTeams()
+  const { user, hasScope } = useAuth()
 
   const [people, setPeople] = useState<Person[]>([])
   const [capped, setCapped] = useState(false)
@@ -46,6 +49,17 @@ const PeopleManagement = () => {
   const [editLoading, setEditLoading] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
+
+  // Tidbit modal: adding to a person, or editing one of their tidbits
+  const [tidbitForm, setTidbitForm] = useState<{ identifier: string; tidbit?: Tidbit } | null>(null)
+  const [tidbitLoading, setTidbitLoading] = useState(false)
+  const [tidbitError, setTidbitError] = useState<string | null>(null)
+  const { run, notice, clear: clearNotice } = useActionNotice()
+  const reloadTimers = useRef(new Set<ReturnType<typeof setTimeout>>())
+  useEffect(() => {
+    const timers = reloadTimers.current
+    return () => timers.forEach(clearTimeout)
+  }, [])
 
   // Merge state
   const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set())
@@ -153,6 +167,54 @@ const PeopleManagement = () => {
     }
   }
 
+  const reloadDetails = async (identifier: string) => {
+    const details = await getPerson(identifier, true)
+    if (details) setPersonDetails(prev => ({ ...prev, [identifier]: details }))
+  }
+
+  const addPendingTidbit = (identifier: string, data: TidbitInput) =>
+    setPersonDetails(prev => {
+      const details = prev[identifier]
+      if (!details) return prev
+      const pending: Tidbit = {
+        ...data, id: -Date.now(), person_id: details.id, source: null, project_id: null,
+        creator_id: user?.id ?? null, created_at: new Date().toISOString(),
+      }
+      return { ...prev, [identifier]: { ...details, tidbits: [...(details.tidbits ?? []), pending] } }
+    })
+
+  const canEditTidbit = (tidbit: Tidbit) =>
+    tidbit.id > 0 && (hasScope('*') || (user != null && tidbit.creator_id === user.id))
+
+  const handleTidbitSubmit = async (data: TidbitInput) => {
+    if (!tidbitForm) return
+    const { identifier, tidbit } = tidbitForm
+    setTidbitLoading(true)
+    setTidbitError(null)
+    try {
+      await (tidbit ? updateTidbit(tidbit.id, data) : addTidbit(identifier, data))
+      setTidbitForm(null)
+      if (tidbit) return await reloadDetails(identifier)
+      // A new tidbit is written by a background task: show it now (id < 0, no actions yet) and reconcile later.
+      addPendingTidbit(identifier, data)
+      const timer = setTimeout(() => {
+        reloadTimers.current.delete(timer)
+        reloadDetails(identifier)
+      }, 1000)
+      reloadTimers.current.add(timer)
+    } catch (e) {
+      setTidbitError(e instanceof Error ? e.message : 'Failed to save tidbit')
+    } finally {
+      setTidbitLoading(false)
+    }
+  }
+
+  const handleTidbitDelete = (identifier: string, tidbit: Tidbit) =>
+    run(async () => {
+      await deleteTidbit(tidbit.id)
+      await reloadDetails(identifier)
+    })
+
   const toggleMergeSelection = (identifier: string) => {
     setSelectedForMerge(prev => {
       const next = new Set(prev)
@@ -240,6 +302,7 @@ const PeopleManagement = () => {
         loading={loading && people.length === 0}
       >
         {error && <Notice tone="error" onDismiss={() => setError(null)}>{error}</Notice>}
+        {notice}
 
         <Toolbar
           selected={selectedForMerge.size}
@@ -294,6 +357,10 @@ const PeopleManagement = () => {
                 teamsLoading={teamsLoading[person.identifier]}
                 tidbits={personDetails[person.identifier]?.tidbits}
                 tidbitsLoading={detailsLoading[person.identifier]}
+                onAddTidbit={() => { clearNotice(); setTidbitError(null); setTidbitForm({ identifier: person.identifier }) }}
+                canEditTidbit={canEditTidbit}
+                onEditTidbit={tidbit => { clearNotice(); setTidbitError(null); setTidbitForm({ identifier: person.identifier, tidbit }) }}
+                onDeleteTidbit={tidbit => handleTidbitDelete(person.identifier, tidbit)}
               />
             ))}
           </List>
@@ -329,6 +396,18 @@ const PeopleManagement = () => {
           error={editError}
           submitLabel="Save changes"
           isEdit
+        />
+      )}
+
+      {tidbitForm && (
+        <TidbitFormModal
+          title={tidbitForm.tidbit ? 'Edit tidbit' : 'Add tidbit'}
+          initialData={tidbitForm.tidbit}
+          onSubmit={handleTidbitSubmit}
+          onCancel={() => setTidbitForm(null)}
+          loading={tidbitLoading}
+          error={tidbitError}
+          submitLabel={tidbitForm.tidbit ? 'Save changes' : 'Add tidbit'}
         />
       )}
 

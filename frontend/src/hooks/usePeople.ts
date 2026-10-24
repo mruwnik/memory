@@ -10,8 +10,8 @@ export interface Tidbit {
   sensitivity: string | null
   project_id: number | null
   tags: string[]
-  created_by: number | null
-  inserted_at: string | null
+  creator_id: number | null
+  created_at: string | null
 }
 
 export interface Person {
@@ -48,6 +48,13 @@ export interface PersonUpdate {
   tags?: string[]
   project_id?: number
   sensitivity?: string
+}
+
+export interface TidbitInput {
+  content: string
+  tidbit_type: string
+  tags: string[]
+  sensitivity: string
 }
 
 export interface PersonFilters {
@@ -144,7 +151,22 @@ export const usePeople = () => {
     return result?.[0] || { success: false, error: 'Unknown error' }
   }, [mcpCall])
 
+  const addTidbit = useCallback(async (identifier: string, data: TidbitInput) => {
+    await mcpCall('people_tidbit_add', { identifier, ...data })
+  }, [mcpCall])
+
+  const updateTidbit = useCallback(async (tidbitId: number, data: TidbitInput) => {
+    await mcpCall('people_tidbit_update', { tidbit_id: tidbitId, ...data })
+  }, [mcpCall])
+
+  const deleteTidbit = useCallback(async (tidbitId: number) => {
+    await mcpCall('people_tidbit_delete', { tidbit_id: tidbitId })
+  }, [mcpCall])
+
   return {
+    addTidbit,
+    updateTidbit,
+    deleteTidbit,
     listPeople,
     getPerson,
     addPerson,
