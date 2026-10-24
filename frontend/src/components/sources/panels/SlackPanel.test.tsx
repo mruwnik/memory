@@ -20,6 +20,12 @@ vi.mock('@/hooks/useSlack', () => ({
   }),
 }))
 
+const getApp = vi.fn()
+
+vi.mock('@/hooks/useSlackWizard', () => ({
+  useSlackWizard: () => ({ getApp }),
+}))
+
 vi.mock('@/hooks/useProjects', () => ({
   useProjects: () => ({ listProjects }),
 }))
@@ -30,8 +36,8 @@ vi.mock('../Sources', () => ({
 
 // The panel renders SlackAppWizard, which depends on these hooks; stub them.
 vi.mock('./SlackAppWizard', () => ({
-  SlackAppWizard: ({ onCancel, onComplete }: { onCancel?: () => void; onComplete?: () => void }) => (
-    <div data-testid="slack-wizard">
+  SlackAppWizard: ({ initialApp, onCancel, onComplete }: { initialApp?: { id: number } | null; onCancel?: () => void; onComplete?: () => void }) => (
+    <div data-testid="slack-wizard" data-app-id={initialApp?.id ?? ''}>
       <button onClick={onCancel}>wizard-cancel</button>
       <button onClick={() => onComplete?.()}>wizard-complete</button>
     </div>
@@ -46,10 +52,14 @@ const workspace = (over: Record<string, unknown> = {}) => ({
   domain: 'acme',
   collect_messages: true,
   sync_interval_seconds: 3600,
-  last_sync_at: null,
+  last_sync_at: '2026-10-24T10:00:00Z',
   sync_error: null,
   channel_count: 2,
-  user_count: 5,
+  connected_users: 5,
+  user_connected: true,
+  poll_blocker: null,
+  sync_stale: false,
+  apps: [],
   project_id: null,
   sensitivity: 'basic',
   ...over,
@@ -79,6 +89,7 @@ beforeEach(() => {
   deleteWorkspace.mockResolvedValue(undefined)
   triggerSync.mockResolvedValue({ status: 'queued' })
   updateChannel.mockResolvedValue(channel())
+  getApp.mockResolvedValue({ id: 4, name: 'Acme app', setup_state: 'draft' })
 })
 
 describe('SlackPanel - load states', () => {
@@ -107,8 +118,34 @@ describe('SlackPanel - load states', () => {
     expect(await screen.findByText('Acme')).toBeInTheDocument()
     expect(screen.getByText('acme.slack.com')).toBeInTheDocument()
     expect(screen.getByText('2 channels')).toBeInTheDocument()
-    expect(screen.getByText('5 users')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Collecting' })).toBeInTheDocument()
+    expect(screen.getByText('5 connected users')).toBeInTheDocument()
+    expect(screen.getByText('Collecting')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collection on' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it.each([
+    [{ poll_blocker: 'Slack app 4 is inactive' }, 'Not collecting'],
+    [{ sync_error: 'rate limited' }, 'Sync failing'],
+    [{ sync_stale: true }, 'Stale'],
+    [{ last_sync_at: null }, 'Waiting for first sync'],
+  ])('does not claim to be collecting when %o', async (over, status) => {
+    listWorkspaces.mockResolvedValue([workspace(over)])
+    renderWithUser(<SlackPanel />)
+    expect(await screen.findByText(status)).toBeInTheDocument()
+    expect(screen.queryByText('Collecting')).not.toBeInTheDocument()
+  })
+
+  it('shows no collection status when collection is off', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ collect_messages: false, poll_blocker: null })])
+    renderWithUser(<SlackPanel />)
+    expect(await screen.findByRole('button', { name: 'Collection off' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByText('Collecting')).not.toBeInTheDocument()
+  })
+
+  it('explains why a collecting workspace is not polled', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ poll_blocker: 'Slack app 4 is inactive' })])
+    renderWithUser(<SlackPanel />)
+    expect(await screen.findByText('Not collecting: Slack app 4 is inactive')).toBeInTheDocument()
   })
 
   it('shows the workspace sync error', async () => {
@@ -154,7 +191,7 @@ describe('SlackPanel - workspace actions', () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
-    await user.click(screen.getByRole('button', { name: 'Collecting' }))
+    await user.click(screen.getByRole('button', { name: 'Collection on' }))
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { collect_messages: false }))
   })
 
@@ -183,6 +220,15 @@ describe('SlackPanel - workspace actions', () => {
     await waitFor(() => expect(triggerSync).toHaveBeenCalledWith('W1'))
   })
 
+  it('shows why Sync Now failed', async () => {
+    triggerSync.mockRejectedValueOnce(new Error('Nothing can poll this workspace'))
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: 'Sync Now' }))
+    expect(await screen.findByText('Nothing can poll this workspace')).toBeInTheDocument()
+  })
+
   it('disconnects after confirmation', async () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
@@ -201,6 +247,42 @@ describe('SlackPanel - workspace actions', () => {
     await user.click(screen.getByRole('button', { name: 'Disconnect' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(deleteWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+const draftApp = { id: 4, name: 'Acme app', setup_state: 'draft', is_owner: true }
+
+describe('SlackPanel - event setup', () => {
+  it('marks a workspace whose app has no push events as polling only', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ apps: [draftApp] })])
+    renderWithUser(<SlackPanel />)
+    expect(await screen.findByText('Polling only')).toBeInTheDocument()
+    expect(screen.getByText('Collecting')).toBeInTheDocument()
+  })
+
+  it.each(['live', 'degraded'])('does not mark a %s app as polling only', async (setup_state) => {
+    listWorkspaces.mockResolvedValue([workspace({ apps: [{ ...draftApp, setup_state }] })])
+    renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+    expect(screen.queryByText('Polling only')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Finish event setup' })).not.toBeInTheDocument()
+  })
+
+  it('resumes the existing app in the setup wizard', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ apps: [draftApp] })])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: 'Finish event setup' }))
+    expect(getApp).toHaveBeenCalledWith(4)
+    expect(await screen.findByTestId('slack-wizard')).toHaveAttribute('data-app-id', '4')
+  })
+
+  it('offers no setup action to someone who does not own the app', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ apps: [{ ...draftApp, is_owner: false }] })])
+    renderWithUser(<SlackPanel />)
+    expect(await screen.findByText('Polling only')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Finish event setup' })).not.toBeInTheDocument()
   })
 })
 

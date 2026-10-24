@@ -40,7 +40,6 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import SlackMessage
 from memory.common.db.models.slack import (
-    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -53,6 +52,7 @@ from memory.common.slack import (
     iter_messages,
     iter_thread_replies,
     iter_users,
+    workspace_poll_plan,
 )
 from memory.common.content_processing import (
     clear_item_chunks,
@@ -211,58 +211,37 @@ def get_workspace_credentials(
         SlackUserCredentials.workspace_id == workspace_id,
         SlackUserCredentials.slack_app_id == slack_app_id,
     )
-    for cred in query.all():
-        if not cred.is_token_expired() and cred.access_token:
-            return cred
-    return None
+    return next((cred for cred in query.all() if cred.is_usable()), None)
 
 
 @app.task(name=SYNC_ALL_SLACK_WORKSPACES)
 @tracked_task
 def sync_all_slack_workspaces() -> dict[str, Any]:
-    """Periodic safety-net polling task per slack-changes.md §3.5.
+    """Periodic polling of every collecting workspace, once per (SlackApp, workspace) pair.
 
-    Fans out per (SlackApp, workspace) pair, scoped to apps whose setup is
-    complete (``setup_state IN ('live', 'degraded')`` and ``is_active``).
-    Apps in ``draft`` or ``signing_verified`` are skipped — their setup is
-    not finished, no backfill is appropriate yet.
-
-    A workspace can legitimately be served by multiple SlackApps (per
-    §7 decision 5); each app sees only its own messages, so we issue a
-    distinct sync task per pairing.
+    Each app sees only its own messages, so a workspace served by several
+    apps gets one sync task per app.
     """
     logger.info("Starting sync of all Slack workspaces")
 
     with make_session() as session:
-        # Join through SlackUserCredentials to enumerate the (app, workspace)
-        # pairs. Restricting on SlackApp.setup_state is the gate that prevents
-        # us from polling against apps that are still being configured.
-        pairs = (
-            session.query(
-                SlackApp.id, SlackUserCredentials.workspace_id
-            )
-            .join(
-                SlackUserCredentials,
-                SlackUserCredentials.slack_app_id == SlackApp.id,
-            )
-            .join(
-                SlackWorkspace,
-                SlackWorkspace.id == SlackUserCredentials.workspace_id,
-            )
-            .filter(
-                SlackApp.setup_state.in_(("live", "degraded")),
-                SlackApp.is_active.is_(True),
-                SlackWorkspace.collect_messages.is_(True),
-            )
-            .distinct()
+        workspaces = (
+            session.query(SlackWorkspace)
+            .filter(SlackWorkspace.collect_messages.is_(True))
             .all()
         )
 
         triggered = 0
-        for slack_app_id, workspace_id in pairs:
-            workspace = session.get(SlackWorkspace, workspace_id)
-            if not workspace:
+        for workspace in workspaces:
+            app_ids, blocked = workspace_poll_plan(session, workspace.id)
+            if not app_ids:
+                logger.warning(
+                    f"Not polling Slack workspace {workspace.id} ({workspace.name}): "
+                    + "; ".join(blocked)
+                )
                 continue
+            if blocked:
+                logger.info(f"Slack workspace {workspace.id}: " + "; ".join(blocked))
             if workspace.last_sync_at:
                 elapsed = (
                     datetime.now(timezone.utc) - workspace.last_sync_at
@@ -270,14 +249,15 @@ def sync_all_slack_workspaces() -> dict[str, Any]:
                 if elapsed < workspace.sync_interval_seconds:
                     continue
 
-            app.send_task(
-                SYNC_SLACK_WORKSPACE,
-                kwargs={
-                    "workspace_id": workspace_id,
-                    "slack_app_id": slack_app_id,
-                },
-            )
-            triggered += 1
+            for slack_app_id in app_ids:
+                app.send_task(
+                    SYNC_SLACK_WORKSPACE,
+                    kwargs={
+                        "workspace_id": workspace.id,
+                        "slack_app_id": slack_app_id,
+                    },
+                )
+                triggered += 1
 
         logger.info(f"Triggered sync for {triggered} (app, workspace) pairs")
         return {"status": "completed", "workspaces_triggered": triggered}

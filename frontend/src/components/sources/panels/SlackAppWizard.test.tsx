@@ -83,6 +83,17 @@ describe('SlackAppWizard - initial step', () => {
     expect(screen.getByText('Step 7 of 7')).toBeInTheDocument()
   })
 
+  it.each([
+    ['no client secret', app({ client_secret_configured: false }), /Paste the Client Secret/, 'Step 2 of 7'],
+    ['no signing secret', app({ client_secret_configured: true }), /Paste the Signing Secret/, 'Step 4 of 7'],
+    ['unverified events URL', app({ client_secret_configured: true, signing_secret_configured: true }), nonce.events_url, 'Step 5 of 7'],
+    ['no test message', app({ setup_state: 'signing_verified' }), /Post the following token/, 'Step 6 of 7'],
+  ])('resumes an app with %s at that step', async (_label, initialApp, text, step) => {
+    renderWithUser(<SlackAppWizard initialApp={initialApp} />)
+    expect(await screen.findByText(text)).toBeInTheDocument()
+    expect(screen.getByText(step)).toBeInTheDocument()
+  })
+
   it('validates that both name and client_id are required', async () => {
     const { user } = renderWithUser(<SlackAppWizard />)
     await user.click(screen.getByRole('button', { name: 'Create app' }))

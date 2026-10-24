@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from memory.common.celery_app import SYNC_SLACK_WORKSPACE
 from memory.common.db.models import User, OAuthClientState
 from memory.common.db.models.slack import (
     SlackApp,
@@ -390,6 +391,109 @@ def test_trigger_sync_workspace_not_found(client, db_session, user):
     response = client.post("/slack/workspaces/T_NONEXISTENT/sync")
 
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("setup_state", ["draft", "signing_verified", "live"])
+@patch("memory.api.slack.celery_app")
+def test_trigger_sync_polls_whatever_the_event_setup_state(
+    mock_app, client, db_session, user, slack_app, slack_workspace, slack_credentials, setup_state
+):
+    slack_app.setup_state = setup_state
+    db_session.commit()
+
+    response = client.post(f"/slack/workspaces/{slack_workspace.id}/sync")
+
+    assert response.status_code == 200
+    mock_app.send_task.assert_called_once_with(
+        SYNC_SLACK_WORKSPACE,
+        kwargs={"workspace_id": slack_workspace.id, "slack_app_id": slack_app.id},
+    )
+
+
+def deactivate_app(credentials):
+    credentials.slack_app.is_active = False
+
+
+def expire_token(credentials):
+    credentials.token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+
+
+@pytest.mark.parametrize(
+    "break_polling, reason",
+    [
+        (deactivate_app, "is inactive"),
+        (expire_token, "has no unexpired token"),
+    ],
+)
+@patch("memory.api.slack.celery_app")
+def test_trigger_sync_refuses_when_nothing_can_poll(
+    mock_app, client, db_session, user, slack_workspace, slack_credentials, break_polling, reason
+):
+    break_polling(slack_credentials)
+    db_session.commit()
+
+    response = client.post(f"/slack/workspaces/{slack_workspace.id}/sync")
+
+    assert response.status_code == 409
+    assert reason in response.json()["detail"]
+    mock_app.send_task.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "break_polling, reason",
+    [
+        (deactivate_app, "is inactive"),
+        (expire_token, "has no unexpired token"),
+    ],
+)
+def test_workspace_reports_why_a_collecting_workspace_is_not_polled(
+    client, db_session, user, slack_workspace, slack_credentials, break_polling, reason
+):
+    break_polling(slack_credentials)
+    db_session.commit()
+
+    data = client.get(f"/slack/workspaces/{slack_workspace.id}").json()
+
+    assert reason in data["poll_blocker"]
+
+
+def test_workspace_lists_the_callers_apps_and_their_event_setup(
+    client, db_session, user, slack_app, slack_workspace, slack_credentials
+):
+    slack_app.setup_state = "draft"
+    slack_app.created_by_user_id = user.id
+    db_session.commit()
+
+    data = client.get(f"/slack/workspaces/{slack_workspace.id}").json()
+
+    assert data["poll_blocker"] is None
+    assert data["apps"] == [
+        {"id": slack_app.id, "name": "Test Slack App", "setup_state": "draft", "is_owner": True}
+    ]
+
+
+NOW = datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "last_sync_at, collect, stale",
+    [
+        (None, True, False),
+        (NOW - timedelta(minutes=30), True, False),
+        (NOW - timedelta(days=1), True, True),
+        (NOW - timedelta(days=1), False, False),
+    ],
+)
+def test_workspace_flags_a_stale_sync(
+    client, db_session, user, slack_workspace, slack_credentials, last_sync_at, collect, stale
+):
+    slack_workspace.collect_messages = collect
+    slack_workspace.last_sync_at = last_sync_at
+    db_session.commit()
+
+    data = client.get(f"/slack/workspaces/{slack_workspace.id}").json()
+
+    assert data["sync_stale"] is stale
 
 
 # ====== OAuth State tests ======

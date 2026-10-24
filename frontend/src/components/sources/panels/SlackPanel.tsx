@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSlack, SlackWorkspace, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
+import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
+import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, SyncButton, formatRelativeTime } from '../shared'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, cx } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Notice, Row, RowError, Section, SubList, Tone, cx } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
 
@@ -17,6 +18,7 @@ export const SlackPanel = () => {
     updateChannel,
   } = useSlack()
   const { listProjects } = useProjects()
+  const { getApp } = useSlackWizard()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
   const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[]>>({})
@@ -25,6 +27,8 @@ export const SlackPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [resumeApp, setResumeApp] = useState<SlackAppResponse | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -75,11 +79,27 @@ export const SlackPanel = () => {
   const handleConnect = () => {
     // Per-app wizard flow: register a SlackApp first, then OAuth into it.
     // No env-var single-app `/slack/authorize` endpoint anymore.
+    setResumeApp(null)
     setWizardOpen(true)
   }
 
-  const handleWizardComplete = () => {
+  const handleResumeSetup = async (app: SlackWorkspaceApp) => {
+    setActionError(null)
+    try {
+      setResumeApp(await getApp(app.id))
+      setWizardOpen(true)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to load the Slack app')
+    }
+  }
+
+  const closeWizard = () => {
     setWizardOpen(false)
+    setResumeApp(null)
+  }
+
+  const handleWizardComplete = () => {
+    closeWizard()
     loadData()
   }
 
@@ -104,7 +124,13 @@ export const SlackPanel = () => {
   }
 
   const handleSync = async (workspace: SlackWorkspace) => {
-    await triggerSync(workspace.id)
+    setActionError(null)
+    try {
+      await triggerSync(workspace.id)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to trigger sync')
+      return
+    }
     // Reload to show updated sync status
     loadData()
   }
@@ -138,10 +164,13 @@ export const SlackPanel = () => {
     <Section title="Slack" actions={<Button variant="primary" onClick={handleConnect}>Connect Workspace</Button>}>
       {wizardOpen && (
         <SlackAppWizard
+          key={resumeApp?.id ?? 'new'}
+          initialApp={resumeApp}
           onComplete={handleWizardComplete}
-          onCancel={() => setWizardOpen(false)}
+          onCancel={closeWizard}
         />
       )}
+      {actionError && <Notice tone="error" onDismiss={() => setActionError(null)}>{actionError}</Notice>}
 
       {workspaces.length === 0 ? (
         <EmptyState
@@ -167,6 +196,7 @@ export const SlackPanel = () => {
               onToggleCollect={() => handleToggleCollect(workspace)}
               onUpdateWorkspace={(updates) => handleUpdateWorkspace(workspace, updates)}
               onSync={() => handleSync(workspace)}
+              onResumeSetup={handleResumeSetup}
               onDisconnect={() => handleDisconnect(workspace)}
               onToggleChannelCollect={handleToggleChannelCollect}
               onUpdateChannel={handleUpdateChannel}
@@ -178,6 +208,28 @@ export const SlackPanel = () => {
   )
 }
 
+// Apps whose push events are verified; the others are reached only by polling.
+const EVENTS_LIVE = ['live', 'degraded']
+
+type CollectionStatus = 'Not collecting' | 'Sync failing' | 'Stale' | 'Waiting for first sync' | 'Collecting'
+
+const STATUS_TONES: Record<CollectionStatus, Tone> = {
+  'Not collecting': 'danger',
+  'Sync failing': 'danger',
+  Stale: 'warning',
+  'Waiting for first sync': 'neutral',
+  Collecting: 'success',
+}
+
+const collectionStatus = (workspace: SlackWorkspace): CollectionStatus | null => {
+  if (!workspace.collect_messages) return null
+  if (workspace.poll_blocker) return 'Not collecting'
+  if (workspace.sync_error) return 'Sync failing'
+  if (workspace.sync_stale) return 'Stale'
+  if (!workspace.last_sync_at) return 'Waiting for first sync'
+  return 'Collecting'
+}
+
 interface WorkspaceCardProps {
   workspace: SlackWorkspace
   channels: SlackChannel[]
@@ -187,6 +239,7 @@ interface WorkspaceCardProps {
   onToggleCollect: () => Promise<void>
   onUpdateWorkspace: (updates: SlackWorkspaceUpdate) => Promise<void>
   onSync: () => Promise<void>
+  onResumeSetup: (app: SlackWorkspaceApp) => void
   onDisconnect: () => void
   onToggleChannelCollect: (channel: SlackChannel) => Promise<void>
   onUpdateChannel: (channel: SlackChannel, updates: SlackChannelUpdate) => Promise<void>
@@ -201,6 +254,7 @@ const WorkspaceRow = ({
   onToggleCollect,
   onUpdateWorkspace,
   onSync,
+  onResumeSetup,
   onDisconnect,
   onToggleChannelCollect,
   onUpdateChannel,
@@ -235,13 +289,24 @@ const WorkspaceRow = ({
     }
   }
 
+  const status = collectionStatus(workspace)
+  const eventlessApps = workspace.apps.filter(app => !EVENTS_LIVE.includes(app.setup_state))
+
   return (
     <Row
       title={workspace.name}
+      badges={<>
+        {status && <Badge tone={STATUS_TONES[status]}>{status}</Badge>}
+        {workspace.collect_messages && !workspace.poll_blocker && eventlessApps.map(app => (
+          <Badge key={app.id} tone="info" title={`Push events aren't set up for ${app.name}, so new messages arrive on the periodic poll.${app.is_owner ? '' : " Ask the app's owner to finish its setup."}`}>
+            Polling only
+          </Badge>
+        ))}
+      </>}
       meta={[
         workspace.domain && `${workspace.domain}.slack.com`,
         `${workspace.channel_count} channels`,
-        `${workspace.user_count} users`,
+        `${workspace.connected_users} connected users`,
         workspace.last_sync_at && `Last sync: ${formatRelativeTime(workspace.last_sync_at)}`,
       ]}
       actions={<>
@@ -249,12 +314,18 @@ const WorkspaceRow = ({
           onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
         <Button size="sm" variant={workspace.collect_messages ? 'primary' : 'secondary'} aria-pressed={workspace.collect_messages}
           onClick={handleToggle} disabled={toggling}>
-          {workspace.collect_messages ? 'Collecting' : 'Not Collecting'}
+          {workspace.collect_messages ? 'Collection on' : 'Collection off'}
         </Button>
+        {eventlessApps.filter(app => app.is_owner).map(app => (
+          <Button key={app.id} size="sm" onClick={() => onResumeSetup(app)} title={`Resume the setup wizard for ${app.name}`}>
+            Finish event setup
+          </Button>
+        ))}
         <SyncButton onSync={onSync} label="Sync Now" />
         <ConfirmButton confirm={`Disconnect "${workspace.name}"? This will stop collecting messages from this workspace.`} onConfirm={onDisconnect}>Disconnect</ConfirmButton>
       </>}
     >
+      {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       {workspace.sync_error && <RowError>Error: {workspace.sync_error}</RowError>}
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels ({workspace.channel_count})</ExpandToggle>}

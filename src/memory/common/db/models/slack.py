@@ -317,6 +317,9 @@ class SlackUserCredentials(Base):
             expires = expires.replace(tzinfo=timezone.utc)
         return now >= expires
 
+    def is_usable(self) -> bool:
+        return bool(self.access_token) and not self.is_token_expired()
+
 
 class SlackChannel(Base):
     """Slack channel, DM, group DM, or MPIM metadata and collection settings."""

@@ -43,6 +43,14 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- Slack polling no longer waits for a Slack app's push-event setup. Any
+  workspace with collection on and an unexpired OAuth token on an active app is
+  polled, so workspaces whose app setup was never finished (stuck in `draft` or
+  `signing_verified`) start polling again after this deploys, and the first
+  sync backfills everything since they stopped. A collecting workspace that
+  still can't be polled logs a warning naming it and the reason, and "Sync Now"
+  returns that reason instead of silently doing nothing. The Sources page shows
+  "Polling only" for such apps, with a button that resumes the setup wizard.
 - Two new nightly maintenance tasks prune tables that previously grew without
   bound: `celery_taskmeta` (Celery results older than
   `TASK_RESULT_RETENTION_DAYS`, default 7) and `pending_jobs` (complete or

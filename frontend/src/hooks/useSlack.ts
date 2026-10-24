@@ -1,7 +1,15 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
+import type { SlackAppSetupState } from './useSlackWizard'
 
 // Types for Slack Workspaces
+export interface SlackWorkspaceApp {
+  id: number
+  name: string
+  setup_state: SlackAppSetupState
+  is_owner: boolean
+}
+
 export interface SlackWorkspace {
   id: string
   name: string
@@ -11,7 +19,12 @@ export interface SlackWorkspace {
   last_sync_at: string | null
   sync_error: string | null
   channel_count: number
-  user_count: number
+  connected_users: number
+  user_connected: boolean
+  // Why a collecting workspace won't be polled; null when it will be
+  poll_blocker: string | null
+  sync_stale: boolean
+  apps: SlackWorkspaceApp[]
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'

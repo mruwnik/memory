@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from memory.common.db.connection import DBSession
-from memory.common.db.models.slack import SlackUserCredentials
+from memory.common.db.models.slack import SlackApp, SlackUserCredentials
 from memory.common.db.models.users import User
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,36 @@ def user_has_workspace_membership(db: DBSession, workspace_id: str, user: User) 
         .first()
         is not None
     )
+
+
+def workspace_poll_plan(db: DBSession, workspace_id: str) -> tuple[list[int], list[str]]:
+    """The SlackApps whose credentials can poll this workspace, and why each other one can't.
+
+    Polling only needs an unexpired OAuth user token on an active app. An
+    app's ``setup_state`` tracks push-event delivery, which polling doesn't
+    use, so a workspace is polled even while its app's event setup is
+    unfinished.
+    """
+    credentials = (
+        db.query(SlackUserCredentials)
+        .filter(SlackUserCredentials.workspace_id == workspace_id)
+        .all()
+    )
+    if not credentials:
+        return [], ["no Slack credentials are connected"]
+
+    pollable: list[int] = []
+    blocked: list[str] = []
+    for app_id in sorted({c.slack_app_id for c in credentials}):
+        app = db.get(SlackApp, app_id)
+        if app is None or not app.is_active:
+            blocked.append(f"Slack app {app_id} is inactive")
+            continue
+        if not any(c.is_usable() for c in credentials if c.slack_app_id == app_id):
+            blocked.append(f"Slack app {app_id} has no unexpired token; reconnect the workspace")
+            continue
+        pollable.append(app_id)
+    return pollable, blocked
 
 
 class SlackAPIError(Exception):

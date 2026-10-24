@@ -29,11 +29,15 @@ type Step =
   | 'test-message'    // user posts the token; we poll for match
   | 'done'
 
-const SETUP_STATE_TO_STEP: Record<string, Step> = {
-  draft: 'client-secret',
-  signing_verified: 'test-message',
-  live: 'done',
-  degraded: 'done',
+// Resuming assumes OAuth already happened (the wizard is reopened from a
+// connected workspace), so a draft app with a client secret skips to the
+// signing secret.
+const resumeStep = (app: SlackAppResponse): Step => {
+  if (app.setup_state === 'live' || app.setup_state === 'degraded') return 'done'
+  if (app.setup_state === 'signing_verified') return 'test-message'
+  if (!app.client_secret_configured) return 'client-secret'
+  if (!app.signing_secret_configured) return 'signing-secret'
+  return 'events-url'
 }
 
 const POLL_INTERVAL_MS = 3000
@@ -77,10 +81,7 @@ export const SlackAppWizard = ({
   const wizard = useSlackWizard()
   const {user: authUser} = useAuth()
   const [app, setApp] = useState<SlackAppResponse | null>(initialApp)
-  const [step, setStep] = useState<Step>(() => {
-    if (!initialApp) return 'register'
-    return SETUP_STATE_TO_STEP[initialApp.setup_state] ?? 'client-secret'
-  })
+  const [step, setStep] = useState<Step>(() => initialApp ? resumeStep(initialApp) : 'register')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -95,6 +96,16 @@ export const SlackAppWizard = ({
 
   const callbackUrl = nonceData?.callback_url
   const eventsUrl = nonceData?.events_url
+
+  // A resumed wizard lands on these steps without the nonce that earlier steps issued.
+  useEffect(() => {
+    if (!app || nonceData || step !== 'events-url') return
+    let cancelled = false
+    wizard.issueWizardNonce(app.id)
+      .then(nonce => { if (!cancelled) setNonceData(nonce) })
+      .catch(e => { if (!cancelled) setError((e as Error).message) })
+    return () => { cancelled = true }
+  }, [app, nonceData, step, wizard])
 
   // === Polling for async state transitions ===
   // setup_state: draft → (url_verification) → signing_verified → (test message) → live
@@ -277,7 +288,7 @@ export const SlackAppWizard = ({
     <div className="border border-slate-200 rounded-lg p-5 my-4 bg-slate-50/50 space-y-4">
       <div className="flex items-baseline justify-between">
         <h4 className="text-base font-semibold text-slate-800">
-          Connect a Slack app
+          {initialApp ? `Finish setting up ${initialApp.name}` : 'Connect a Slack app'}
         </h4>
         <span className="text-xs text-slate-500">Step {stepIndex + 1} of 7</span>
       </div>

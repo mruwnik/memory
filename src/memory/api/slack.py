@@ -61,7 +61,7 @@ from memory.common.oauth_client import (
     store_state,
     validate_and_consume_state,
 )
-from memory.common.slack import user_has_workspace_membership
+from memory.common.slack import user_has_workspace_membership, workspace_poll_plan
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,21 @@ SLACK_SCOPES = [
 ]
 
 
+# A collecting workspace with no successful sync for this many polling
+# intervals is reported as stale.
+SLACK_STALE_SYNC_INTERVALS = 3
+
+
 # --- Response Models ---
+
+
+class SlackWorkspaceApp(BaseModel):
+    """A SlackApp the current user is connected to this workspace through."""
+
+    id: int
+    name: str
+    setup_state: str
+    is_owner: bool
 
 
 class SlackWorkspaceResponse(BaseModel):
@@ -115,6 +129,11 @@ class SlackWorkspaceResponse(BaseModel):
     channel_count: int
     connected_users: int  # Number of users with credentials for this workspace
     user_connected: bool  # Whether the current user has credentials
+    # Why a collecting workspace won't be polled; None when it will be (or collection is off)
+    poll_blocker: str | None
+    # Collecting, but no successful sync for several polling intervals
+    sync_stale: bool
+    apps: list[SlackWorkspaceApp]
     # Access control
     project_id: int | None
     sensitivity: str
@@ -254,6 +273,46 @@ def get_workspace_with_access(
     return workspace
 
 
+def poll_blocker(db: Session, ws: SlackWorkspace) -> str | None:
+    if not ws.collect_messages:
+        return None
+    app_ids, blocked = workspace_poll_plan(db, ws.id)
+    return None if app_ids else "; ".join(blocked)
+
+
+def is_sync_stale(ws: SlackWorkspace) -> bool:
+    if not ws.collect_messages or ws.last_sync_at is None:
+        return False
+    # The beat task only runs every SLACK_SYNC_INTERVAL, so a shorter
+    # per-workspace interval can't make syncs more frequent than that.
+    cadence = max(ws.sync_interval_seconds, settings.SLACK_SYNC_INTERVAL)
+    age = datetime.now(timezone.utc) - ws.last_sync_at
+    return age.total_seconds() > SLACK_STALE_SYNC_INTERVALS * cadence
+
+
+def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWorkspaceApp]:
+    apps = (
+        db.query(SlackApp)
+        .join(SlackUserCredentials, SlackUserCredentials.slack_app_id == SlackApp.id)
+        .filter(
+            SlackUserCredentials.workspace_id == ws.id,
+            SlackUserCredentials.user_id == user.id,
+        )
+        .order_by(SlackApp.id)
+        .distinct()
+        .all()
+    )
+    return [
+        SlackWorkspaceApp(
+            id=app.id,
+            name=app.name,
+            setup_state=app.setup_state,
+            is_owner=app.is_owner(user),
+        )
+        for app in apps
+    ]
+
+
 def workspace_to_response(
     ws: SlackWorkspace, db: Session, current_user: User
 ) -> SlackWorkspaceResponse:
@@ -293,6 +352,9 @@ def workspace_to_response(
         channel_count=channel_count,
         connected_users=connected_users,
         user_connected=user_connected,
+        poll_blocker=poll_blocker(db, ws),
+        sync_stale=is_sync_stale(ws),
+        apps=workspace_apps(db, ws, current_user),
         project_id=ws.project_id,
         sensitivity=ws.sensitivity or "basic",
     )
@@ -682,24 +744,17 @@ def trigger_sync(
 ):
     """Trigger a manual sync for a workspace.
 
-    A workspace can legitimately be served by multiple SlackApps (design
-    doc §7 decision 5), so we fan out one ``sync_slack_workspace`` task
-    per (slack_app_id, workspace_id) pair the user has credentials for.
+    Runs the periodic sync early: one ``sync_slack_workspace`` task per
+    SlackApp that can poll the workspace, 409 with the reasons if none can.
     """
     get_workspace_with_access(db, workspace_id, user)
 
-    app_ids = [
-        row[0]
-        for row in (
-            db.query(SlackUserCredentials.slack_app_id)
-            .filter(
-                SlackUserCredentials.workspace_id == workspace_id,
-                SlackUserCredentials.user_id == user.id,
-            )
-            .distinct()
-            .all()
+    app_ids, blocked = workspace_poll_plan(db, workspace_id)
+    if not app_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing can poll this workspace: " + "; ".join(blocked),
         )
-    ]
     for slack_app_id in app_ids:
         celery_app.send_task(
             SYNC_SLACK_WORKSPACE,

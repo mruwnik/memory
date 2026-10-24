@@ -1,9 +1,12 @@
 """Tests for Slack Celery tasks."""
 
+import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memory.common.celery_app import SYNC_SLACK_WORKSPACE
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackApp,
@@ -18,11 +21,7 @@ from memory.workers.tasks import slack
 @pytest.fixture
 def slack_user(db_session):
     """Create a test user for Slack workspace ownership."""
-    existing = db_session.query(User).filter(User.id == 1).first()
-    if existing:
-        return existing
     user = User(
-        id=1,
         name="Test User",
         email="test@example.com",
         password_hash="bcrypt_hash_placeholder",
@@ -959,3 +958,79 @@ def test_sync_slack_workspace_triggers_unlocked_channels(
     mock_app.send_task.assert_called_once()
 
 
+@pytest.mark.parametrize("setup_state", ["draft", "signing_verified", "live", "degraded"])
+@patch("memory.workers.tasks.slack.app")
+def test_sync_all_polls_whatever_the_event_setup_state(
+    mock_app, db_session, slack_app, slack_workspace, slack_credentials, setup_state
+):
+    slack_app.setup_state = setup_state
+    db_session.commit()
+
+    result = slack.sync_all_slack_workspaces()
+
+    assert result["workspaces_triggered"] == 1
+    mock_app.send_task.assert_called_once_with(
+        SYNC_SLACK_WORKSPACE,
+        kwargs={"workspace_id": slack_workspace.id, "slack_app_id": slack_app.id},
+    )
+
+
+def deactivate_app(session, credentials):
+    credentials.slack_app.is_active = False
+
+
+def expire_token(session, credentials):
+    credentials.token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+
+
+def remove_credentials(session, credentials):
+    session.delete(credentials)
+
+
+@pytest.mark.parametrize(
+    "break_polling, reason",
+    [
+        (deactivate_app, "is inactive"),
+        (expire_token, "has no unexpired token"),
+        (remove_credentials, "no Slack credentials"),
+    ],
+)
+@patch("memory.workers.tasks.slack.app")
+def test_sync_all_warns_when_a_collecting_workspace_cannot_be_polled(
+    mock_app, db_session, slack_workspace, slack_credentials, caplog, break_polling, reason
+):
+    break_polling(db_session, slack_credentials)
+    db_session.commit()
+
+    with caplog.at_level(logging.WARNING, logger=slack.logger.name):
+        result = slack.sync_all_slack_workspaces()
+
+    assert result["workspaces_triggered"] == 0
+    mock_app.send_task.assert_not_called()
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert slack_workspace.id in warnings[0]
+    assert reason in warnings[0]
+
+
+def collection_off(workspace):
+    workspace.collect_messages = False
+
+
+def synced_just_now(workspace):
+    workspace.last_sync_at = datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize("quiet_skip", [collection_off, synced_just_now])
+@patch("memory.workers.tasks.slack.app")
+def test_sync_all_skips_without_warning_when_nothing_is_wrong(
+    mock_app, db_session, slack_workspace, slack_credentials, caplog, quiet_skip
+):
+    quiet_skip(slack_workspace)
+    db_session.commit()
+
+    with caplog.at_level(logging.WARNING, logger=slack.logger.name):
+        slack.sync_all_slack_workspaces()
+
+    mock_app.send_task.assert_not_called()
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []

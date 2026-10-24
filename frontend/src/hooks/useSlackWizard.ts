@@ -16,7 +16,7 @@
 //
 // Frontend polls /apps/{id}/wizard-status to know when async transitions
 // (4, 6, 7) have completed.
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useAuth } from './useAuth'
 
 export type SlackAppSetupState =
@@ -189,17 +189,20 @@ export const useSlackWizard = () => {
     [apiCall],
   )
 
-  return {
-    listApps,
-    getApp,
-    createApp,
-    deleteApp,
-    setClientSecret,
-    setSigningSecret,
-    issueWizardNonce,
-    issueOAuthState,
-    getWizardStatus,
-    beginTestMessage,
-    pollTestMessage,
-  }
+  return useMemo(
+    () => ({
+      listApps,
+      getApp,
+      createApp,
+      deleteApp,
+      setClientSecret,
+      setSigningSecret,
+      issueWizardNonce,
+      issueOAuthState,
+      getWizardStatus,
+      beginTestMessage,
+      pollTestMessage,
+    }),
+    [listApps, getApp, createApp, deleteApp, setClientSecret, setSigningSecret, issueWizardNonce, issueOAuthState, getWizardStatus, beginTestMessage, pollTestMessage],
+  )
 }
