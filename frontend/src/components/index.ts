@@ -15,5 +15,6 @@ export { default as ResetPassword } from './auth/ResetPassword'
 export { CeleryOverview } from './celery'
 export { ScheduledTasks } from './scheduled-tasks'
 export { ReportsPage } from './reports'
+export { default as ModulesPage } from './modules/ModulesPage'
 
 // Note: Metrics, Telemetry, ClaudeSessions are lazy-loaded in App.tsx

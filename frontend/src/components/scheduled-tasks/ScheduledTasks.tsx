@@ -6,6 +6,7 @@ import { useDiscord } from '@/hooks/useDiscord'
 import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
 import { useAuth } from '@/hooks/useAuth'
+import { useModule } from '@/hooks/useModule'
 import { formatDateTimeInTimezone } from '@/utils/timezones'
 import { PauseButton, StatusBadge, formatRelativeTime } from '@/components/sources/shared'
 import { Badge, Button, ButtonLink, Checkbox, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, Fieldset, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
@@ -481,6 +482,7 @@ const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormP
     envId: null, repoUrl: '', allowedTools: '', enablePlaywright: false, useSavedWriteToken: false, runId: '', customEnvText: '',
   })
 
+  const claudeOn = useModule('claude_containers')
   const { listEnvironments } = useClaude()
   const [environments, setEnvironments] = useState<Environment[]>([])
   useEffect(() => {
@@ -511,8 +513,8 @@ const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormP
   return (
     <Modal title="New scheduled task" onClose={onCancel} size="xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <ToggleGroup label="Task type" value={taskType} onChange={setTaskType}
-          options={[{ value: 'notification', label: 'Notification' }, { value: 'claude_session', label: 'Claude session' }]} />
+        {claudeOn && <ToggleGroup label="Task type" value={taskType} onChange={setTaskType}
+          options={[{ value: 'notification', label: 'Notification' }, { value: 'claude_session', label: 'Claude session' }]} />}
         <Field label="Topic">
           <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
         </Field>
@@ -606,6 +608,7 @@ interface TaskRowProps {
 }
 
 const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
+  const claudeOn = useModule('claude_containers')
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
@@ -650,7 +653,9 @@ const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }
             ? <ButtonLink size="sm" to={`/ui/agents/${task.data?.definition_id}`}>Resume on agent page</ButtonLink>
             : <PauseButton active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
         )}
-        {task.task_type !== 'agent_run' && <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>}
+        {task.task_type !== 'agent_run' && (claudeOn || task.task_type !== 'claude_session') && (
+          <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>
+        )}
         <ConfirmButton confirm={`Delete "${task.topic || 'Untitled'}"?`} onConfirm={() => onDelete(task.id)} />
       </>}
     >
@@ -690,6 +695,7 @@ const ScheduledTasks = () => {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const { run, notice } = useActionNotice()
   const timezone = useAuth().user?.timezone ?? 'UTC'
+  const claudeOn = useModule('claude_containers')
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -754,7 +760,7 @@ const ScheduledTasks = () => {
     { value: 'notification', label: 'Notifications' },
     { value: 'claude_session', label: 'Claude sessions' },
     { value: 'agent_run', label: 'Agent runs' },
-  ]
+  ].filter(f => claudeOn || f.value !== 'claude_session')
 
   return (
     <Page

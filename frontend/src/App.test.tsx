@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, userEvent } from '@/test/utils'
+import { ALL_MODULES, render, screen, waitFor, userEvent } from '@/test/utils'
 
 // --- Hook mocks (drive auth/oauth state) ---
 const authState = {
@@ -7,7 +7,7 @@ const authState = {
   isLoading: false,
   logout: vi.fn(),
   checkAuth: vi.fn(async () => true),
-  user: { id: 1, name: 'Ada', email: 'a@b.c', user_type: 'human', scopes: ['*'] },
+  user: { id: 1, name: 'Ada', email: 'a@b.c', user_type: 'human', scopes: ['*'], modules: [...ALL_MODULES] },
   hasScope: vi.fn(() => true),
 }
 const oauthState = {
@@ -45,6 +45,7 @@ vi.mock('@/components', () => ({
   ConfigSources: () => <div>SNAPSHOTS</div>,
   CeleryOverview: () => <div>CELERY</div>,
   ScheduledTasks: () => <div>SCHEDULED</div>,
+  ModulesPage: () => <div>MODULES</div>,
   ReportsPage: () => <div>REPORTS</div>,
   ForgotPassword: () => <div>FORGOT_PASSWORD</div>,
   ResetPassword: () => <div>RESET_PASSWORD</div>,
@@ -75,6 +76,7 @@ beforeEach(() => {
   authState.isAuthenticated = false
   authState.isLoading = false
   authState.hasScope = vi.fn(() => true)
+  authState.user.modules = [...ALL_MODULES]
   authState.logout = vi.fn()
   authState.checkAuth = vi.fn(async () => true)
   oauthState.error = null
@@ -205,6 +207,32 @@ describe('App routing & auth', () => {
     setPath('/ui/claude')
     render(<App />)
     await waitFor(() => expect(screen.getByText('CLAUDE')).toBeInTheDocument())
+  })
+
+  it.each([
+    ['/ui/teams', 'teams', 'TEAMS'],
+    ['/ui/projects', 'projects', 'PROJECTS'],
+    ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
+    ['/ui/claude', 'claude_containers', 'CLAUDE'],
+  ])('redirects %s home while %s is off', async (path, module, marker) => {
+    authState.isAuthenticated = true
+    authState.user.modules = [...ALL_MODULES].filter(m => m !== module)
+    setPath(path)
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
+    expect(screen.queryByText(marker)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['/ui/teams', 'teams', 'TEAMS'],
+    ['/ui/projects', 'projects', 'PROJECTS'],
+    ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
+  ])('renders %s while %s is on', (path, module, marker) => {
+    authState.isAuthenticated = true
+    authState.user.modules = [module]
+    setPath(path)
+    render(<App />)
+    expect(screen.getByText(marker)).toBeInTheDocument()
   })
 
   it('completes OAuth callback and redirects to dashboard when ?code present', async () => {

@@ -21,6 +21,13 @@ MODULES: dict[str, bool] = {
     PROJECTS: False,
 }
 
+MODULE_DESCRIPTIONS: dict[str, str] = {
+    CLAUDE_CONTAINERS: "Claude Code containers, their configurations and scheduled Claude sessions",
+    MULTI_USER: "More than one human user",
+    TEAMS: "Teams and their members",
+    PROJECTS: "Projects and milestones",
+}
+
 MODULE_MCP_SERVERS: dict[str, frozenset[str]] = {
     CLAUDE_CONTAINERS: frozenset({"containers"}),
     TEAMS: frozenset({"teams"}),

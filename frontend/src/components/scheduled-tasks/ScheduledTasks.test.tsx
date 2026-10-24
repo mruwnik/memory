@@ -115,6 +115,32 @@ describe('ScheduledTasks', () => {
     })
   })
 
+  it('hides the Claude session filter and task type while claude_containers is off', async () => {
+    const { user } = renderWithRouter(<ScheduledTasks />, { modules: new Set() })
+    await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Claude sessions' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'New task' }))
+    expect(screen.queryByRole('button', { name: 'Claude session' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Message')).toBeInTheDocument()
+  })
+
+  it.each([
+    [new Set<string>(), false],
+    [new Set(['claude_containers']), true],
+  ])('offers editing an existing Claude session only while claude_containers is on (%j)', async (modules, editable) => {
+    listTasks.mockResolvedValue([claudeTask({ id: 'spawn' }), makeTask({ id: 'note', topic: 'Reminder' })])
+    renderWithRouter(<ScheduledTasks />, { modules })
+    await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(editable ? 2 : 1)
+  })
+
+  it('offers the Claude session task type while claude_containers is on', async () => {
+    const { user } = renderWithRouter(<ScheduledTasks />)
+    await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'New task' }))
+    expect(screen.getByRole('button', { name: 'Claude session' })).toBeInTheDocument()
+  })
+
   it('toggles a task optimistically and persists', async () => {
     const task = makeTask({ enabled: true })
     listTasks.mockResolvedValue([task])

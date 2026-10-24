@@ -1,5 +1,7 @@
+import type { Module } from '@/hooks/useModule'
+
 // The app's sections, shared by the sidebar (AppShell) and the Dashboard tiles.
-export interface NavItem { to: string; title: string; description: string; scope?: string }
+export interface NavItem { to: string; title: string; description: string; scope?: string; module?: Module }
 export interface NavSection { title: string; items: NavItem[] }
 
 export const NAV_SECTIONS: NavSection[] = [
@@ -11,8 +13,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/notes', title: 'Notes', description: 'Browse and view your notes' },
       { to: '/ui/reports', title: 'Reports', description: 'View and create rich HTML and PDF reports' },
       { to: '/ui/people', title: 'People', description: 'Track and manage people you know', scope: 'people' },
-      { to: '/ui/teams', title: 'Teams', description: 'Manage teams and their members' },
-      { to: '/ui/projects', title: 'Projects', description: 'Track projects and milestones' },
+      { to: '/ui/teams', title: 'Teams', description: 'Manage teams and their members', module: 'teams' },
+      { to: '/ui/projects', title: 'Projects', description: 'Track projects and milestones', module: 'projects' },
     ],
   },
   {
@@ -27,8 +29,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'AI',
     items: [
-      { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions' },
-      { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations' },
+      { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions', module: 'claude_containers' },
+      { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations', module: 'claude_containers' },
       { to: '/ui/keys', title: 'LLM keys', description: 'Your Anthropic and OpenAI keys pay for summaries, search steps and agents' },
     ],
   },
@@ -38,7 +40,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/metrics', title: 'Metrics', description: 'System health, task performance, and API usage' },
       { to: '/ui/telemetry', title: 'Telemetry', description: 'Claude Code usage, tokens, costs, and sessions' },
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
-      { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and Claude sessions' },
+      { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and agent runs' },
+      { to: '/ui/modules', title: 'Modules', description: 'Optional features this instance runs', scope: 'admin' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/ui/instance-settings', title: 'Instance settings', description: 'Voyage key, MCP servers and search limits for this instance', scope: 'admin' },
       { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
@@ -47,9 +50,15 @@ export const NAV_SECTIONS: NavSection[] = [
   },
 ]
 
-export const visibleSections = (hasScope: (scope: string) => boolean) =>
+export const isVisible = (
+  { scope, module }: Pick<NavItem, 'scope' | 'module'>,
+  hasScope: (scope: string) => boolean,
+  modules: ReadonlySet<string>,
+) => (!scope || hasScope(scope)) && (!module || modules.has(module))
+
+export const visibleSections = (hasScope: (scope: string) => boolean, modules: ReadonlySet<string>) =>
   NAV_SECTIONS
-    .map(s => ({ ...s, items: s.items.filter(i => !i.scope || hasScope(i.scope)) }))
+    .map(s => ({ ...s, items: s.items.filter(i => isVisible(i, hasScope, modules)) }))
     .filter(s => s.items.length)
 
 /** The item for the current location: the longest matching path, where a query (`?tab=secrets`) must also match. */

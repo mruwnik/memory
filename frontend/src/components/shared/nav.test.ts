@@ -1,3 +1,4 @@
+import { ALL_MODULES } from '@/test/utils'
 import { describe, it, expect } from 'vitest'
 import { NAV_SECTIONS, activeItem, visibleSections } from './nav'
 
@@ -19,16 +20,39 @@ describe('activeItem', () => {
   })
 })
 
+const titlesFor = (hasScope: (scope: string) => boolean, modules: ReadonlySet<string>) =>
+  visibleSections(hasScope, modules).flatMap(s => s.items.map(i => i.title))
+
 describe('visibleSections', () => {
   it('hides scoped items the user lacks', () => {
-    const titles = visibleSections(() => false).flatMap(s => s.items.map(i => i.title))
+    const titles = titlesFor(() => false, ALL_MODULES)
     expect(titles).not.toContain('Agents')
     expect(titles).not.toContain('User management')
     expect(titles).toContain('Search')
   })
 
   it('shows scoped items with the scope', () => {
-    const titles = visibleSections(s => s === 'agents').flatMap(s => s.items.map(i => i.title))
-    expect(titles).toContain('Agents')
+    expect(titlesFor(s => s === 'agents', ALL_MODULES)).toContain('Agents')
+  })
+
+  it.each([
+    ['Claude sessions', 'claude_containers'],
+    ['Claude configurations', 'claude_containers'],
+    ['Teams', 'teams'],
+    ['Projects', 'projects'],
+  ])('shows %s only while %s is on', (title, module) => {
+    const others = new Set([...ALL_MODULES].filter(m => m !== module))
+    expect(titlesFor(() => true, others)).not.toContain(title)
+    expect(titlesFor(() => true, new Set([module]))).toContain(title)
+  })
+
+  it('needs the scope as well as the module', () => {
+    expect(titlesFor(s => s !== 'claude_sessions', ALL_MODULES)).not.toContain('Claude sessions')
+  })
+
+  it('keeps core items with every module off', () => {
+    expect(titlesFor(() => true, new Set())).toEqual(
+      expect.arrayContaining(['Search', 'Agents', 'User management', 'Scheduled tasks']),
+    )
   })
 })

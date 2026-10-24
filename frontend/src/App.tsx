@@ -1,10 +1,11 @@
-import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, lazy, Suspense, type ReactNode } from 'react'
 import { createBrowserRouter, RouterProvider, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { getNeedsAccount } from '@/hooks/useSetup'
-import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
+import { ModulesContext, type Module } from '@/hooks/useModule'
+import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage, ModulesPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -14,6 +15,7 @@ import { SetupWizard } from '@/components/setup/SetupWizard'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
 import { AppShell } from '@/components/shared/AppShell'
+import { isVisible } from '@/components/shared/nav'
 import { LoadingState } from '@/components/shared/ui'
 
 // Lazy load heavy components (recharts ~300KB, xterm ~400KB)
@@ -24,6 +26,7 @@ const ClaudeSessions = lazy(() => import('@/components/claude/ClaudeSessions'))
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
   const { isAuthenticated, isLoading, logout, checkAuth, user, hasScope } = useAuth()
+  const modules = useMemo<ReadonlySet<string>>(() => new Set(user?.modules), [user])
   const { error, startOAuth, handleCallback, clearError } = useOAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -97,7 +100,7 @@ const AuthWrapper = () => {
     )
   }
 
-  const routes: { path: string; element: ReactNode; scope?: string }[] = [
+  const routes: { path: string; element: ReactNode; scope?: string; module?: Module }[] = [
     { path: '/ui/dashboard', element: <Dashboard hasScope={hasScope} /> },
     { path: '/ui/settings', element: <UserSettings /> },
     { path: '/ui/users', element: <UserManagement />, scope: 'admin:users' },
@@ -109,8 +112,8 @@ const AuthWrapper = () => {
     { path: '/ui/notes', element: <NotesPage /> },
     { path: '/ui/reports', element: <ReportsPage /> },
     { path: '/ui/people', element: <PeopleManagement />, scope: 'people' },
-    { path: '/ui/projects', element: <Projects /> },
-    { path: '/ui/teams', element: <Teams /> },
+    { path: '/ui/projects', element: <Projects />, module: 'projects' },
+    { path: '/ui/teams', element: <Teams />, module: 'teams' },
     { path: '/ui/telemetry', element: <Suspense fallback={<LoadingState />}><Telemetry /></Suspense> },
     { path: '/ui/jobs', element: <Jobs /> },
     { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
@@ -122,11 +125,12 @@ const AuthWrapper = () => {
     { path: '/ui/agents/runs/new', element: <AdHocRun />, scope: 'agents' },
     { path: '/ui/agents/runs/:runId', element: <RunView />, scope: 'agents' },
     { path: '/ui/agents/:id', element: <AgentEditor />, scope: 'agents' },
-    { path: '/ui/snapshots', element: <ConfigSources /> },
-    { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions' },
-    { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions' },
+    { path: '/ui/snapshots', element: <ConfigSources />, module: 'claude_containers' },
+    { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions', module: 'claude_containers' },
+    { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions', module: 'claude_containers' },
     { path: '/ui/instance-settings', element: <SettingsPage />, scope: 'admin' },
     { path: '/ui/celery', element: <CeleryOverview />, scope: 'admin' },
+    { path: '/ui/modules', element: <ModulesPage />, scope: 'admin' },
     { path: '/ui/polls', element: <PollList /> },
     { path: '/ui/polls/new', element: <PollCreate /> },
     { path: '/ui/polls/edit/:slug', element: <PollEdit /> },
@@ -136,25 +140,27 @@ const AuthWrapper = () => {
   const pollResults = <Route path="/ui/polls/results/:slug" element={<PollResults />} />
 
   return (
-    <Routes>
-      <Route path="/ui/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
-      <Route path="/ui/forgot-password" element={<ForgotPassword />} />
-      <Route path="/ui/reset-password" element={<ResetPassword />} />
-      <Route path="/ui/setup" element={<SetupWizard isAuthenticated={isAuthenticated} user={user} checkAuth={checkAuth} />} />
+    <ModulesContext.Provider value={modules}>
+      <Routes>
+        <Route path="/ui/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
+        <Route path="/ui/forgot-password" element={<ForgotPassword />} />
+        <Route path="/ui/reset-password" element={<ResetPassword />} />
+        <Route path="/ui/setup" element={<SetupWizard isAuthenticated={isAuthenticated} user={user} checkAuth={checkAuth} />} />
 
-      <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
-        {routes.map(({ path, element, scope }) => (
-          <Route key={path} path={path} element={isAuthenticated && (!scope || hasScope(scope)) ? element : home} />
-        ))}
-        {isAuthenticated && pollResults}
-      </Route>
+        <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
+          {routes.map(({ path, element, ...gate }) => (
+            <Route key={path} path={path} element={isAuthenticated && isVisible(gate, hasScope, modules) ? element : home} />
+          ))}
+          {isAuthenticated && pollResults}
+        </Route>
 
-      {/* Poll respond/results are public (no auth required) */}
-      <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
-      {!isAuthenticated && pollResults}
+        {/* Poll respond/results are public (no auth required) */}
+        <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
+        {!isAuthenticated && pollResults}
 
-      <Route path="*" element={home} />
-    </Routes>
+        <Route path="*" element={home} />
+      </Routes>
+    </ModulesContext.Provider>
   )
 }
 

@@ -4,6 +4,7 @@ import UserMenu from '@/components/common/UserMenu'
 import type { AuthUser } from '@/hooks/useAuth'
 import { cx, useDialogFocus, useEscape } from '@/components/shared/ui'
 import { activeItem, visibleSections } from '@/components/shared/nav'
+import { useModules } from '@/hooks/useModule'
 
 interface AppShellProps {
   user: AuthUser | null
@@ -13,7 +14,7 @@ interface AppShellProps {
 
 const SectionNav = ({ hasScope }: { hasScope: (scope: string) => boolean }) => {
   const { pathname, search } = useLocation()
-  const sections = visibleSections(hasScope)
+  const sections = visibleSections(hasScope, useModules())
   const current = activeItem(sections.flatMap(s => s.items), pathname, search)
   return (
     <div className="py-4 space-y-5">
