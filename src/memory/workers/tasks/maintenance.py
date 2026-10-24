@@ -44,7 +44,6 @@ from memory.common.celery_app import (
     REINGEST_EMPTY_SOURCE_ITEMS,
     REINGEST_ALL_EMPTY_SOURCE_ITEMS,
     PROCESS_RAW_ITEMS,
-    RUN_AGENT,
     PROCESS_RAW_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     UPDATE_METADATA_FOR_ITEM,
@@ -384,7 +383,7 @@ def process_raw_items(
         if modality:
             query = query.filter(class_.modality == modality)
 
-        items = query.limit(batch_size).all()
+        items = query.order_by(class_.inserted_at.desc()).limit(batch_size).all()
         logger.info(f"Found {len(items)} RAW or recently FAILED items to process")
 
         for item_id, type_name, embed_status in items:
@@ -1232,8 +1231,7 @@ def fail_lost_jobs() -> int:
     and nothing else touches it while a job runs.
     """
     now = datetime.now(timezone.utc)
-    time_limit = max(app.conf.task_time_limit, app.tasks[RUN_AGENT].time_limit)
-    cutoff = now - timedelta(seconds=2 * time_limit)
+    cutoff = now - timedelta(seconds=2 * app.conf.task_time_limit)
     return apply_in_batches(
         update(PendingJob).values(
             status=JobStatus.FAILED.value,

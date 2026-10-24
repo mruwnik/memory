@@ -41,7 +41,6 @@ from memory.workers.tasks.maintenance import (
     _payloads_equal,
 )
 import memory.workers.tasks.maintenance as maintenance_module
-from memory.workers.tasks.agents import run_agent
 
 from memory.common.db.models import JobStatus, PendingJob, ScheduledTask, TaskExecution
 
@@ -685,6 +684,37 @@ def test_process_raw_items_selection(
     assert mock_process.call_args_list == [call(item.id, "mail_message")][: int(raw_queued)]
     assert mock_reingest.call_args_list == [call(item.id, "mail_message")][
         : int(failed_queued)
+    ]
+
+
+def test_process_raw_items_retries_newest_failures_first(db_session):
+    now = datetime.now(timezone.utc)
+    items = [
+        MailMessage(
+            sha256=bytes([i]) * 32,
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="FAILED",
+            message_id=f"<order-{i}@example.com>",
+            subject="Subject",
+            sender="sender@example.com",
+            recipients=["recipient@example.com"],
+            content="Content",
+            folder="INBOX",
+            modality="mail",
+            inserted_at=now - timedelta(hours=hours_ago),
+        )
+        for i, hours_ago in enumerate([40, 2, 20], start=1)
+    ]
+    db_session.add_all(items)
+    db_session.commit()
+
+    with patch.object(reingest_item, "delay") as mock_reingest:
+        maintenance_module.process_raw_items(batch_size=2)
+
+    assert mock_reingest.call_args_list == [
+        call(items[1].id, "mail_message"),
+        call(items[2].id, "mail_message"),
     ]
 
 
@@ -2064,17 +2094,15 @@ def test_cleanup_old_pending_jobs_fails_lost_jobs_across_batches(db_session, mon
 
 
 @pytest.mark.parametrize(
-    "agent_time_limit, started_hours_ago, expected_status",
+    "started_hours_ago, expected_status",
     [
-        (3 * 3600, 5, JobStatus.PROCESSING.value),
-        (3 * 3600, 7, JobStatus.FAILED.value),
-        (600, 3, JobStatus.FAILED.value),
+        (1, JobStatus.PROCESSING.value),
+        (3, JobStatus.FAILED.value),
     ],
 )
-def test_fail_lost_jobs_allows_for_the_longest_task_limit(
-    db_session, monkeypatch, agent_time_limit, started_hours_ago, expected_status
+def test_fail_lost_jobs_allows_twice_the_task_time_limit(
+    db_session, started_hours_ago, expected_status
 ):
-    monkeypatch.setattr(run_agent, "time_limit", agent_time_limit)
     job = make_job(JobStatus.PROCESSING.value, 1)
     job.updated_at = datetime.now(timezone.utc) - timedelta(hours=started_hours_ago)
     db_session.add(job)

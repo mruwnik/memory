@@ -56,9 +56,8 @@ section has nothing in it:
   `TASK_RESULT_RETENTION_DAYS`, default 7) and `pending_jobs` (complete or
   failed jobs older than `PENDING_JOB_RETENTION_DAYS`, default 30; pending and
   processing jobs are never deleted). Before pruning, it marks jobs still
-  `processing` more than twice the longest task time limit (2h by default:
-  the Celery limit, or the agent run limit if `AGENT_MAX_TIMEOUT_SEC` makes
-  that longer) after they started as `failed` ("Worker lost"): their worker
+  `processing` more than twice the Celery task time limit (2h by
+  default) after they started as `failed` ("Worker lost"): their worker
   was killed (time limit, OOM, deploy) before it could record the outcome.
   Celery's own `celery.backend_cleanup` was scheduled onto a queue no worker
   consumes, so it never ran; it is now disabled (`result_expires=None`). The
