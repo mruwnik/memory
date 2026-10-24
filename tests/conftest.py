@@ -24,7 +24,7 @@ from memory.common import settings, summarizer
 from memory.common.db.models import SourceItem
 from memory.common.db.models import LLMProviderKey
 from memory.common.llms import registry
-from tests.memory.agents.fakes import FakeAnthropic, ScriptedProvider
+from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
 from tests.providers.email_provider import MockEmailProvider
 
 MOCK_SUMMARY_RESPONSE = json.dumps({"summary": "test summary", "tags": ["tag1", "tag2"]})
@@ -657,8 +657,9 @@ def regular_user(db_session):
 
 @pytest.fixture
 def scripted_llm(monkeypatch):
-    """System agents' anthropic calls answer from ScriptedProvider.script."""
+    """System agents' calls answer from ScriptedProvider.script."""
     monkeypatch.setitem(registry.PROVIDERS, "anthropic", FakeAnthropic)
+    monkeypatch.setitem(registry.PROVIDERS, "openai", FakeOpenAI)
     ScriptedProvider.script = []
     ScriptedProvider.requests = []
     yield ScriptedProvider

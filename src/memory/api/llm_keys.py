@@ -5,8 +5,8 @@ from typing import Literal
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from memory.agents.provider_keys import chosen_key, default_key, payer_id, usable
-from memory.agents.system import SOURCE_PROVIDER
+from memory.agents.provider_keys import chosen_key, payer_id, personal_key, usable
+from memory.agents.system import SOURCE_PROVIDERS, SUMMARISE
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import DBSession
 from memory.common.db.models import LLMKeyChoice, LLMProviderKey, User
@@ -31,27 +31,23 @@ def current_choice(holder: LLMKeyChoice) -> LLMKeyInput:
     return holder.llm_key_id if holder.llm_key_id is not None else "default"
 
 
-def may_choose_default(db: DBSession, user: User, holder: LLMKeyChoice) -> bool:
-    """Default spends the payer's keys, so only they or an admin may pick it, or whoever
-    chose the current key taking their own key off again."""
-    if user.id == payer_id(holder) or has_admin_scope(user):
-        return True
-    key = chosen_key(db, holder)
-    return key is not None and key.user_id == user.id
+def may_choose_default(user: User, holder: LLMKeyChoice) -> bool:
+    """Default spends the payer's keys, so only they or an admin may pick it."""
+    return user.id == payer_id(holder) or has_admin_scope(user)
 
 
 def apply_llm_key(
     db: DBSession, user: User, holder: LLMKeyChoice, value: LLMKeyInput | None
 ) -> None:
     """Set `holder`'s choice. The caller already passed the holder's visibility check.
-    "default" is limited by may_choose_default; an explicit key must be the caller's own
-    and for SOURCE_PROVIDER, and the caller pays."""
+    "default" is limited by may_choose_default; an explicit key must be the caller's own,
+    and the caller pays."""
     if value is None:
         return
     if value in ("default", "none"):
         if value == current_choice(holder):
             return
-        if value == "default" and not may_choose_default(db, user, holder):
+        if value == "default" and not may_choose_default(user, holder):
             raise HTTPException(
                 status_code=403,
                 detail="only the source's owner or an admin can put it back on the "
@@ -66,12 +62,6 @@ def apply_llm_key(
         raise HTTPException(status_code=400, detail=f"unknown API key {value}")
     if value == current_choice(holder):
         return
-    if key.provider != SOURCE_PROVIDER:
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{key.label}' is an {key.provider} key; LLM work on synced items "
-            f"runs on {SOURCE_PROVIDER}",
-        )
     holder.llm_key_id, holder.llm_disabled = key.id, False
 
 
@@ -83,24 +73,26 @@ def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyVie
             choice="none",
             key_id=None,
             label=None,
-            provider=SOURCE_PROVIDER,
+            provider=SOURCE_PROVIDERS[0],
             paid_by_you=False,
             runs=False,
-            can_choose_default=may_choose_default(db, viewer, holder),
+            can_choose_default=may_choose_default(viewer, holder),
         )
     key = chosen_key(db, holder)
     if key is not None:
-        pays = usable(key) if key.provider == SOURCE_PROVIDER else None
+        pays = usable(key) if key.provider in SOURCE_PROVIDERS else None
     else:
         payer = payer_id(holder)
-        pays = usable(default_key(db, payer, SOURCE_PROVIDER)) if payer is not None else None
+        pays = personal_key(db, payer, SUMMARISE) if payer is not None else None
     mine = pays is not None and pays.user_id == viewer.id
+    # Which provider another user's key is on is theirs to keep, like its name.
+    shown = next((k for k in (pays, key) if k is not None and k.user_id == viewer.id), None)
     return LLMKeyView(
         choice="key" if key is not None else "default",
         key_id=key.id if key is not None and key.user_id == viewer.id else None,
         label=pays.label if pays is not None and mine else None,
-        provider=SOURCE_PROVIDER,
+        provider=shown.provider if shown is not None else SOURCE_PROVIDERS[0],
         paid_by_you=mine,
         runs=pays is not None,
-        can_choose_default=may_choose_default(db, viewer, holder),
+        can_choose_default=may_choose_default(viewer, holder),
     )

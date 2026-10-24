@@ -123,9 +123,10 @@ def test_every_source_takes_and_shows_its_llm_choice(
     assert response.json()["llm_key"]["choice"] == choice
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
 @pytest.mark.parametrize("make", SOURCES)
-def test_an_explicit_key_is_kept_with_its_label(client, db_session, user, make):
-    mine = key(db_session, user.id, "work")
+def test_an_explicit_key_is_kept_with_its_label(client, db_session, user, make, provider):
+    mine = key(db_session, user.id, "work", provider=provider)
     _, url = make(db_session, user)
 
     response = client.patch(url, json={"llm_key": mine.id})
@@ -135,7 +136,7 @@ def test_an_explicit_key_is_kept_with_its_label(client, db_session, user, make):
         "choice": "key",
         "key_id": mine.id,
         "label": "work",
-        "provider": "anthropic",
+        "provider": provider,
         "paid_by_you": True,
         "runs": True,
         "can_choose_default": True,
@@ -185,8 +186,8 @@ CO_USERS = [(slack_co_user, "regular_client"), (discord_co_user, "regular_client
 VIEWERS = PAYERS + ADMINS + CO_USERS
 
 
-def on_their_key(db, user, admin_user, make):
-    theirs = key(db, admin_user.id, "theirs")
+def on_their_key(db, user, admin_user, make, provider="anthropic"):
+    theirs = key(db, admin_user.id, "theirs", provider=provider)
     row, url = make(db, user, admin_user)
     row.llm_key_id = theirs.id
     db.commit()
@@ -233,20 +234,22 @@ def test_only_the_default_payer_or_an_admin_may_choose_default(
 
 
 @pytest.mark.parametrize("make,client_fixture", CO_USERS)
-def test_whoever_chose_a_key_may_put_the_source_back_on_default(
+def test_a_co_user_cannot_reach_default_through_their_own_key(
     request, db_session, user, admin_user, make, client_fixture
 ):
+    """The payer turned LLM work off; picking your own key first mustn't unlock Default."""
     caller = request.getfixturevalue(client_fixture)
     mine = key(db_session, user.id, "mine")
     row, url = make(db_session, user, admin_user)
-    row.llm_key_id = mine.id
+    row.llm_disabled = True
     db_session.commit()
 
+    assert caller.patch(url, json={"llm_key": mine.id}).status_code == 200
     response = caller.patch(url, json={"llm_key": "default"})
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 403, response.text
     db_session.refresh(row)
-    assert (row.llm_disabled, row.llm_key_id) == (False, None)
+    assert (row.llm_disabled, row.llm_key_id) == (False, mine.id)
 
 
 @pytest.mark.parametrize(
@@ -254,7 +257,7 @@ def test_whoever_chose_a_key_may_put_the_source_back_on_default(
     [
         ("admin_user", "theirs", True),  # the payer
         ("user", "theirs", False),
-        ("user", "mine", True),
+        ("user", "mine", False),
         ("user", "default", False),
     ],
 )
@@ -287,20 +290,19 @@ def test_anyone_may_echo_an_unchanged_default(
 @pytest.mark.parametrize("start", ["theirs", "default"])
 @pytest.mark.parametrize(
     "setup,detail",
-    [("openai", "is an openai key"), ("theirs", "unknown API key"), ("missing", "unknown API key")],
+    [("theirs", "unknown API key"), ("missing", "unknown API key")],
 )
-def test_only_the_callers_own_source_provider_keys_may_be_chosen(
+def test_only_the_callers_own_keys_may_be_chosen(
     request, db_session, user, admin_user, make, client_fixture, start, setup, detail
 ):
     """Resending the hidden key a source is already on fails like an unknown id, so key
     ids can't be enumerated."""
     caller = request.getfixturevalue(client_fixture)
-    gpt = key(db_session, user.id, "gpt", provider="openai")
     row, url, theirs = on_their_key(db_session, user, admin_user, make)
     starts = {"theirs": theirs.id, "default": None}
     row.llm_key_id = starts[start]
     db_session.commit()
-    values = {"openai": gpt.id, "theirs": theirs.id, "missing": theirs.id + 1000}
+    values = {"theirs": theirs.id, "missing": theirs.id + 1000}
 
     response = caller.patch(url, json={"llm_key": values[setup]})
 
@@ -327,27 +329,39 @@ def test_a_user_who_cannot_see_a_source_cannot_change_it(
     assert (row.llm_disabled, row.llm_key_id) == (False, theirs.id)
 
 
-def test_default_shows_the_key_that_would_pay(db_session, user):
-    key(db_session, user.id, "personal", is_default=True)
+@pytest.mark.parametrize(
+    "defaults,pays",
+    [(["anthropic"], "anthropic"), (["openai"], "openai"), (["openai", "anthropic"], "anthropic")],
+)
+def test_default_shows_the_key_that_would_pay(db_session, user, defaults, pays):
+    for provider in defaults:
+        key(db_session, user.id, provider, provider=provider, is_default=True)
     row, _ = feed(db_session, user)
 
     view = llm_key_view(db_session, user, row)
 
-    assert (view.choice, view.label, view.paid_by_you, view.runs) == (
+    assert (view.choice, view.label, view.provider, view.paid_by_you, view.runs) == (
         "default",
-        "personal",
+        pays,
+        pays,
         True,
         True,
     )
 
 
-def test_someone_elses_default_is_not_named(db_session, user, admin_user):
-    key(db_session, admin_user.id, "theirs", is_default=True)
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_someone_elses_default_is_not_named(db_session, user, admin_user, provider):
+    key(db_session, admin_user.id, "theirs", provider=provider, is_default=True)
     row, _ = feed(db_session, admin_user)
 
     view = llm_key_view(db_session, user, row)
 
-    assert (view.label, view.paid_by_you, view.runs) == (None, False, True)
+    assert (view.label, view.paid_by_you, view.runs, view.provider) == (
+        None,
+        False,
+        True,
+        "anthropic",
+    )
 
 
 def test_a_payer_without_a_default_key_runs_nothing(db_session, user):
@@ -358,19 +372,27 @@ def test_a_payer_without_a_default_key_runs_nothing(db_session, user):
     assert (view.paid_by_you, view.runs) == (False, False)
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
 @pytest.mark.parametrize(
     "viewer,expected",
-    [("user", (False, None, False)), ("admin_user", (True, "theirs", True))],
+    [
+        ("user", (False, None, False, "anthropic")),
+        ("admin_user", (True, "theirs", True, None)),
+    ],
 )
 def test_a_chosen_key_is_named_only_to_its_owner(
-    request, db_session, user, admin_user, viewer, expected
+    request, db_session, user, admin_user, viewer, expected, provider
 ):
-    row, _, theirs = on_their_key(db_session, user, admin_user, own_email)
+    row, _, theirs = on_their_key(db_session, user, admin_user, own_email, provider)
 
     view = llm_key_view(db_session, request.getfixturevalue(viewer), row)
 
     assert (view.choice, view.runs) == ("key", True)
-    assert (view.key_id == theirs.id, view.label, view.paid_by_you) == expected
+    shown = expected[3] or provider
+    assert (view.key_id == theirs.id, view.label, view.paid_by_you, view.provider) == (
+        *expected[:3],
+        shown,
+    )
 
 
 def test_a_new_folder_takes_its_owners_key(client, db_session, user):

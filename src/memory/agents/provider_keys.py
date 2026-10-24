@@ -113,9 +113,10 @@ def usable(key: LLMProviderKey | None) -> LLMProviderKey | None:
 
 
 def personal_key(db: DBSession, user_id: int, agent: SystemAgent) -> LLMProviderKey | None:
-    """The user's usable default key for `agent`'s provider: what their searches and
-    their own items use."""
-    return usable(default_key(db, user_id, agent.provider))
+    """The user's first usable default key among `agent`'s providers: what their
+    searches and their own items use."""
+    defaults = (usable(default_key(db, user_id, p)) for p in agent.providers)
+    return next((k for k in defaults if k is not None), None)
 
 
 def payer_id(holder: LLMKeyChoice) -> int | None:
@@ -144,7 +145,7 @@ def ingest_key(db: DBSession, item: SourceItem, agent: SystemAgent) -> LLMProvid
         return None
     key = chosen_key(db, holder) if holder is not None else None
     if key is not None:
-        return usable(key) if key.provider == agent.provider else None
+        return usable(key) if key.provider in agent.providers else None
     registrant = (holder and holder.llm_registrant_id) or item.llm_registrant_id
     owner = item.resolve_creator_id() or registrant
     return personal_key(db, owner, agent) if owner is not None else None

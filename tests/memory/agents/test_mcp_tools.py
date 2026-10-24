@@ -14,6 +14,7 @@ from memory.common.db.models import (
     AgentRunStep,
     APIKey,
     APIKeyType,
+    LLMProviderKey,
 )
 from tests.conftest import mcp_auth_context
 
@@ -350,14 +351,28 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
 
 
 @pytest.mark.asyncio
-async def test_system_agents_are_listed_with_whether_the_viewer_can_pay(
-    db_session, regular_user, user_session, llm_key
+@pytest.mark.parametrize(
+    "defaults,model",
+    [
+        (["anthropic"], "anthropic/claude-haiku-5-5"),
+        (["openai"], "openai/gpt-6-luna"),
+        (["anthropic", "openai"], "anthropic/claude-haiku-5-5"),
+    ],
+)
+async def test_system_agents_are_listed_with_the_model_the_viewers_keys_run(
+    db_session, regular_user, user_session, defaults, model
 ):
+    for provider in defaults:
+        row = LLMProviderKey(user_id=regular_user.id, provider=provider, label=provider, is_default=True)
+        row.key = "sk-x"
+        db_session.add(row)
+    db_session.commit()
+
     with mcp_auth_context(user_session.id, scopes=["agents"]):
         listed = (await agent.system_list.fn())["agents"]
 
     entry = next(a for a in listed if a["slug"] == "system:summarise")
-    assert (entry["has_key"], entry["problem"], entry["provider"]) == (True, None, "anthropic")
+    assert (entry["has_key"], entry["problem"], entry["model"]) == (True, None, model)
 
 
 @pytest.mark.asyncio
@@ -368,7 +383,7 @@ async def test_system_agents_without_a_default_key_show_the_fix(
         listed = (await agent.system_list.fn())["agents"]
 
     assert {a["problem"] for a in listed} == {
-        "add a default anthropic key to run this; until then it is skipped"
+        "add a default anthropic or openai key to run this; until then it is skipped"
     }
 
 

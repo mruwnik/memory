@@ -5,7 +5,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from memory.agents.system import SUMMARISE
 from memory.common import settings, tokens
 
 logger = logging.getLogger(__name__)
@@ -73,7 +72,7 @@ def summarising(fn: Summarise | None) -> Iterator[None]:
 
 
 def batch_enabled() -> bool:
-    return settings.SUMMARIZER_USE_BATCH and SUMMARISE.provider == "anthropic"
+    return settings.SUMMARIZER_USE_BATCH
 
 
 @contextmanager

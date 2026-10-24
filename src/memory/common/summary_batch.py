@@ -57,7 +57,10 @@ def batch_client(api_key: str) -> anthropic.Anthropic:
 
 
 def summary_provider(key: Credential) -> AnthropicProvider:
-    return AnthropicProvider(api_key=key.key, model=split_model(SUMMARISE.model)[1])
+    model = SUMMARISE.model_for(AnthropicProvider.provider)
+    if model is None:
+        raise ValueError(f"{SUMMARISE.slug} has no {AnthropicProvider.provider} model")
+    return AnthropicProvider(api_key=key.key, model=split_model(model)[1])
 
 
 def batch_request(provider: AnthropicProvider, request: SummaryRequest) -> dict[str, Any]:

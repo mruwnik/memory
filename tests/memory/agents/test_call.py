@@ -4,7 +4,7 @@ import pytest
 
 from memory.agents import caps, provider_keys
 from memory.agents.call import LLMError, Record, run_agent, run_agent_sync
-from memory.agents.provider_keys import credential
+from memory.agents.provider_keys import Credential, credential
 from memory.agents.system import SUMMARISE
 from memory.common.db.models import AgentRun, AgentRunStep, LLMProviderKey, LLMSpend
 from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, key_rejected, reply, submitted
@@ -88,14 +88,29 @@ async def test_a_spent_key_is_refused_before_calling(db_session, regular_user, l
 
 
 @pytest.mark.asyncio
-async def test_a_key_for_another_provider_is_refused(db_session, regular_user, scripted_llm):
-    other = LLMProviderKey(user_id=regular_user.id, provider="openai", label="gpt")
-    other.key = "sk-openai"
-    db_session.add(other)
+@pytest.mark.parametrize(
+    "provider,model",
+    [("anthropic", "anthropic/claude-haiku-5-5"), ("openai", "openai/gpt-6-luna")],
+)
+async def test_the_keys_provider_picks_the_agents_model(db_session, regular_user, scripted_llm, provider, model):
+    key = LLMProviderKey(user_id=regular_user.id, provider=provider, label="k")
+    key.key = "sk-k"
+    db_session.add(key)
     db_session.commit()
+    scripted_llm.script = [submitted(SUMMARY)]
 
-    with pytest.raises(LLMError, match="needs an anthropic key"):
-        await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(other), record=Record.COST)
+    result = await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(key), record=Record.FULL)
+
+    assert scripted_llm.requests[0]["model"] == model
+    assert db_session.get(AgentRun, result.run_id).spec["model"] == model
+
+
+@pytest.mark.asyncio
+async def test_a_key_of_a_provider_the_agent_does_not_run_on_is_refused(regular_user, scripted_llm):
+    other = Credential(1, regular_user.id, "other", "k", "sk-k")
+
+    with pytest.raises(LLMError, match="needs an anthropic or openai key"):
+        await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=other, record=Record.COST)
     assert scripted_llm.requests == []
 
 

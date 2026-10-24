@@ -46,7 +46,7 @@ from memory.agents.provider_keys import (
     resolve_key_ref,
     usable,
 )
-from memory.agents.system import SYSTEM_AGENTS
+from memory.agents.system import SYSTEM_AGENTS, SystemAgent
 from memory.agents.triggers import (
     INGEST,
     Batch,
@@ -347,32 +347,32 @@ async def list_all() -> dict:
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def system_list() -> dict:
-    """The system agents memory runs for you (summaries, search steps): their
-    model, and whether you have a default key for its provider. They are defined
-    by memory and can't be edited."""
+    """The system agents memory runs for you (summaries, search steps): the model
+    each runs on for you, picked by the first provider you have a default key for,
+    and whether you have one. They are defined by memory and can't be edited."""
     user_id, _ = caller()
     with make_session() as db:
         has_key = {
             provider: usable(default_key(db, user_id, provider)) is not None
-            for provider in {a.provider for a in SYSTEM_AGENTS.values()}
+            for provider in {p for a in SYSTEM_AGENTS.values() for p in a.providers}
         }
-    return {
-        "agents": [
-            {
-                "slug": a.slug,
-                "title": a.title,
-                "description": a.description,
-                "use": a.use,
-                "model": a.model,
-                "provider": a.provider,
-                "has_key": has_key[a.provider],
-                "problem": None
-                if has_key[a.provider]
-                else f"add a default {a.provider} key to run this; until then it is skipped",
-            }
-            for a in SYSTEM_AGENTS.values()
-        ]
-    }
+
+    def entry(a: SystemAgent) -> dict:
+        provider = next((p for p in a.providers if has_key[p]), None)
+        return {
+            "slug": a.slug,
+            "title": a.title,
+            "description": a.description,
+            "use": a.use,
+            "model": a.model_for(provider) if provider else a.models[0],
+            "provider": provider or a.providers[0],
+            "has_key": provider is not None,
+            "problem": None
+            if provider
+            else f"add a default {' or '.join(a.providers)} key to run this; until then it is skipped",
+        }
+
+    return {"agents": [entry(a) for a in SYSTEM_AGENTS.values()]}
 
 
 @agent_mcp.tool()
@@ -918,7 +918,8 @@ async def server_upsert(
     "auto" detects OAuth. Returns the server, `authorize_url` when you must authorize
     it in a browser, `secret_sent_to` (the host a client secret you entered goes to),
     and `error` when it couldn't connect. Changing the URL drops its tokens. Editing
-    with `auth` omitted and the same URL and transport keeps its saved credentials.
+    with `auth` omitted and the same URL and transport keeps its saved credentials and
+    re-tests nothing: check the server's `status` and use agent_server_authorize to reconnect.
     """
     user_id = server_changes_allowed(caller()[0])
     name = name.strip()

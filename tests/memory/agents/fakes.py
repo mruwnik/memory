@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from memory.agents.builtins import BUILTIN_DEFS
 from memory.common.llms.anthropic_provider import ANTHROPIC_MODELS
+from memory.common.llms.openai_provider import OPENAI_MODELS
 from memory.common.llms.base import BaseLLMProvider
 from memory.common.llms.neutral import (
     AgentUsage,
@@ -118,6 +119,7 @@ class ScriptedProvider(BaseLLMProvider):
                 "messages": list(kwargs["messages"]),
                 "replay": list(kwargs["replay"]),
                 "api_key": self.api_key,
+                "model": f"{self.provider}/{self.model}",
             }
         )
         item = ScriptedProvider.script.pop(0)
@@ -145,6 +147,13 @@ class FakeAnthropic(ScriptedProvider):
 
     provider = "anthropic"
     MODELS = ANTHROPIC_MODELS
+
+
+class FakeOpenAI(ScriptedProvider):
+    """Real openai model info, scripted answers: for code that calls system agents."""
+
+    provider = "openai"
+    MODELS = OPENAI_MODELS
 
 
 FAKE_MODELS = ["anthropic/m", "openai/m"]

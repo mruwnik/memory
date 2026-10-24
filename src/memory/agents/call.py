@@ -123,6 +123,7 @@ def record_run(
     user: int,
     key: Credential,
     agent: SystemAgent,
+    model: str,
     prompt: str,
     completion: Completion,
     data: dict[str, Any] | None,
@@ -141,7 +142,7 @@ def record_run(
         run = AgentRun(
             user_id=user,
             definition_id=None,
-            spec=agent.spec_dict(),
+            spec=agent.spec_dict(model),
             input=prompt,
             status=(RunStatus.FAILED if error else RunStatus.DONE).value,
             result=result,
@@ -193,12 +194,11 @@ async def run_agent(
     connection errors, timeouts) propagate unchanged.
     """
     found = system_agent(agent)
-    if key.provider != found.provider:
-        raise LLMError(
-            f"{found.slug} runs on {found.model}, which needs an {found.provider} key"
-        )
+    model = found.model_for(key.provider)
+    if model is None:
+        raise LLMError(f"{found.slug} needs an {' or '.join(found.providers)} key")
     max_cost = await asyncio.to_thread(allowance, key)
-    provider = get_provider(found.model, api_key=key.key)
+    provider = get_provider(model, api_key=key.key)
     started = datetime.now(timezone.utc)
     try:
         completion = await provider.acomplete(**request_args(found, prompt))
@@ -206,9 +206,9 @@ async def run_agent(
         await asyncio.to_thread(refuse, key)
         raise LLMError(rejected_message(key)) from e
     except provider.KEY_FORBIDDEN as e:
-        logger.warning("%s: %s refused the request: %s", found.slug, found.model, e)
+        logger.warning("%s: %s refused the request: %s", found.slug, model, e)
         raise LLMError(
-            f"{found.provider} refused this request to {found.model}; "
+            f"{key.provider} refused this request to {model}; "
             "the key may not have access to it"
         ) from e
     try:
@@ -223,6 +223,7 @@ async def run_agent(
             user=user,
             key=key,
             agent=found,
+            model=model,
             prompt=prompt,
             completion=completion,
             data=data,

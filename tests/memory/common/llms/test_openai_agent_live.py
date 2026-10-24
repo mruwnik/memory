@@ -9,7 +9,10 @@ from decimal import Decimal
 
 import pytest
 
+from memory.agents.call import Record, run_agent
+from memory.agents.provider_keys import credential
 from memory.agents.runner import execute_run
+from memory.agents.system import SYSTEM_AGENTS
 from memory.common.db.models import AgentRun, AgentRunStep, LLMProviderKey
 from tests.memory.agents.fakes import FakeHub
 
@@ -108,3 +111,32 @@ async def test_a_native_web_search_run_is_billed_and_replays(db_session, regular
     assert finished.usage["web_searches"] >= 1, item_types
     assert finished.usage["input_tokens"] >= 0
     assert finished.cost_usd >= Decimal("0.01")
+
+
+SYSTEM_PROMPTS = {
+    "system:summarise": "Summarise in one sentence and tag: Alice moved the launch to Friday.",
+    "system:meeting-extract": "Alice: Bob, please send the deck by 2026-11-02. Bob: Will do.",
+    "system:hyde": "Search query: when is the launch?",
+    "system:query-analysis": "Content types: email, note. Today: 2026-10-25. Query: emails from last week about the launch",
+    "system:chunk-score": "Query: launch date\n\nChunk: The launch moved to Friday.",
+    "system:session-summary": "User: fix the failing login test. Assistant: fixed the expired fixture token.",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slug", list(SYSTEM_AGENTS))
+async def test_every_system_agent_answers_on_an_openai_key(db_session, regular_user, slug):
+    key = LLMProviderKey(user_id=regular_user.id, provider="openai", label="live", is_default=True)
+    key.key = LIVE_KEY
+    db_session.add(key)
+    db_session.commit()
+
+    result = await run_agent(
+        slug, SYSTEM_PROMPTS[slug], user=regular_user.id, key=credential(key), record=Record.FULL
+    )
+
+    run = db_session.get(AgentRun, result.run_id)
+    print(f"\n{slug}: ${result.cost} {result.data or result.text!r}")
+    assert run.spec["model"] == "openai/gpt-6-luna"
+    assert (result.data is not None) == (SYSTEM_AGENTS[slug].result_schema is not None)
+    assert result.text or result.data

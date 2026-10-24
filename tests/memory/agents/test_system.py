@@ -1,13 +1,17 @@
 import pytest
 
 from memory.agents.spec import AgentSpec, spec_errors
-from memory.agents.system import SOURCE_PROVIDER, SYSTEM_AGENTS, system_agent
+from memory.agents.system import SOURCE_PROVIDERS, SYSTEM_AGENTS, system_agent
 from memory.common.llms.tools import is_strict_schema
 
 
-@pytest.mark.parametrize("agent", list(SYSTEM_AGENTS.values()), ids=list(SYSTEM_AGENTS))
-def test_every_system_agent_is_a_valid_agent_spec(agent):
-    assert spec_errors(AgentSpec.model_validate(agent.spec_dict())) == []
+@pytest.mark.parametrize(
+    "agent,model",
+    [(a, m) for a in SYSTEM_AGENTS.values() for m in a.models],
+    ids=[f"{a.slug}-{m}" for a in SYSTEM_AGENTS.values() for m in a.models],
+)
+def test_every_system_agent_is_a_valid_agent_spec_on_each_of_its_models(agent, model):
+    assert spec_errors(AgentSpec.model_validate(agent.spec_dict(model))) == []
 
 
 @pytest.mark.parametrize("agent", list(SYSTEM_AGENTS.values()), ids=list(SYSTEM_AGENTS))
@@ -25,8 +29,13 @@ def test_result_schemas_are_strict_because_parse_result_trusts_strict_tool_use(a
     assert is_strict_schema(agent.result_schema)
 
 
-def test_ingest_agents_share_the_provider_source_keys_are_checked_against():
-    assert {a.provider for a in SYSTEM_AGENTS.values() if a.use == "ingest"} == {SOURCE_PROVIDER}
+def test_ingest_agents_share_the_providers_source_keys_are_checked_against():
+    assert {a.providers for a in SYSTEM_AGENTS.values() if a.use == "ingest"} == {SOURCE_PROVIDERS}
+
+
+@pytest.mark.parametrize("agent", list(SYSTEM_AGENTS.values()), ids=list(SYSTEM_AGENTS))
+def test_every_system_agent_runs_on_an_anthropic_or_an_openai_key(agent):
+    assert agent.providers == ("anthropic", "openai")
 
 
 def test_unknown_slugs_are_refused():

@@ -18,7 +18,7 @@ from memory.common.embedding import (
     embed_by_model,
 )
 from memory.common.extract import DataChunk, MulitmodalChunk
-from memory.common.db.models import Chunk, Note, SummaryRequest
+from memory.common.db.models import Chunk, LLMProviderKey, Note, SummaryRequest
 from tests.conftest import unique_sha256
 from tests.memory.agents.fakes import key_rejected, submitted
 
@@ -388,6 +388,22 @@ def test_batching_defers_keyed_summaries_without_calling_the_llm(
 
     assert scripted_llm.requests == []
     assert len(note.summary_requests) == 1
+
+
+def test_openai_keys_summarise_inline_because_only_anthropic_batches(
+    db_session, regular_user, scripted_llm, monkeypatch
+):
+    monkeypatch.setattr(settings, "SUMMARIZER_USE_BATCH", True)
+    gpt = LLMProviderKey(user_id=regular_user.id, provider="openai", label="gpt", is_default=True)
+    gpt.key = "sk-gpt"
+    db_session.add(gpt)
+    scripted_llm.script = [submitted({"summary": "short", "tags": ["t"]})]
+    note = note_by(db_session, regular_user.id)
+
+    embedding.embed_source_item(note)
+
+    assert [r["model"] for r in scripted_llm.requests] == ["openai/gpt-6-luna"]
+    assert note.summary_requests == []
 
 
 def test_reembedding_an_item_that_lost_its_key_drops_its_pending_requests(

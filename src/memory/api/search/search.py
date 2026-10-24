@@ -47,14 +47,14 @@ SEARCH_AGENTS = (HYDE, QUERY_ANALYSIS, CHUNK_SCORE)
 
 
 def searcher_keys(searcher_id: int | None) -> dict[str, Credential | None]:
-    """Each search agent's key: the searcher's usable default for its provider."""
+    """Each search agent's key: the searcher's first usable default among its providers."""
     if searcher_id is None:
         return {a.slug: None for a in SEARCH_AGENTS}
-    agent_for = {a.provider: a for a in SEARCH_AGENTS}
+    agent_for = {a.providers: a for a in SEARCH_AGENTS}
     with make_session() as db:
         found = {p: personal_key(db, searcher_id, a) for p, a in agent_for.items()}
         creds = {p: credential(k) if k is not None else None for p, k in found.items()}
-    return {a.slug: creds[a.provider] for a in SEARCH_AGENTS}
+    return {a.slug: creds[a.providers] for a in SEARCH_AGENTS}
 
 
 def extract_query_terms(query: str) -> set[str]:

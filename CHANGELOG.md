@@ -46,10 +46,12 @@ section has nothing in it:
 
 ### Manual steps
 
-- Add your own Anthropic key under LLM API keys before or right after
+- Add your own Anthropic or OpenAI key under LLM API keys before or right after
   updating, or ingest stops summarising and search drops HyDE and query
-  analysis. Claude sessions of users without a default Anthropic key stop being
-  summarised.
+  analysis. Claude sessions of users without a default key stop being
+  summarised. System agents run on Claude Haiku with an Anthropic key, else on
+  `gpt-6-luna` with an OpenAI key; summary batching (`SUMMARIZER_USE_BATCH`) only
+  applies to Anthropic keys, so OpenAI-paid summaries run inline at full price.
 - **Before updating**, let in-flight summary batches finish
   (`collect_summary_batches` runs every `SUMMARIZER_BATCH_POLL_INTERVAL`): the
   migration drops every queued summary request, since they were queued on the

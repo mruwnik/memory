@@ -55,28 +55,25 @@ def test_the_owners_default_key_pays_for_items_from_a_source_left_on_default(db_
     assert ingest_key(db_session, post, SUMMARISE) == default
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
 @pytest.mark.parametrize("chooser", ["regular_user", "admin_user"])
-def test_a_sources_explicit_key_pays_whoever_owns_it(request, db_session, regular_user, chooser):
+def test_a_sources_explicit_key_pays_whoever_owns_it(request, db_session, regular_user, chooser, provider):
     """Anyone who can see a source may switch it to their own key, and then they pay."""
     key(db_session, regular_user, "default", is_default=True)
-    explicit = key(db_session, request.getfixturevalue(chooser), "work")
+    explicit = key(db_session, request.getfixturevalue(chooser), "work", provider=provider)
     post = blog_post(db_session, feed_of(db_session, regular_user, llm_key_id=explicit.id))
     post.creator_id = regular_user.id
 
     assert ingest_key(db_session, post, SUMMARISE) == explicit
 
 
-@pytest.mark.parametrize("choice", ["disabled", "other_provider", "invalid"])
+@pytest.mark.parametrize("choice", ["disabled", "invalid"])
 def test_no_key_pays_when_the_source_says_so_or_its_key_cannot(db_session, regular_user, choice):
     key(db_session, regular_user, "default", is_default=True)
-    keys = {
-        "other_provider": key(db_session, regular_user, "gpt", provider="openai"),
-        "invalid": key(db_session, regular_user, "bad", status="invalid"),
-    }
+    invalid = key(db_session, regular_user, "bad", status="invalid")
     settings = {
         "disabled": {"llm_disabled": True},
-        "other_provider": {"llm_key_id": keys["other_provider"].id},
-        "invalid": {"llm_key_id": keys["invalid"].id},
+        "invalid": {"llm_key_id": invalid.id},
     }[choice]
     post = blog_post(db_session, feed_of(db_session, regular_user, **settings))
     post.creator_id = regular_user.id
@@ -184,7 +181,26 @@ def test_discord_dms_are_paid_for_by_the_bots_registrant(db_session, regular_use
     assert ingest_key(db_session, discord_message(db_session, 4), SUMMARISE) == default
 
 
-def test_searches_use_the_searchers_default_for_the_agents_provider(db_session, regular_user):
-    key(db_session, regular_user, "gpt", provider="openai", is_default=True)
+@pytest.mark.parametrize(
+    "defaults,pays",
+    [
+        (["anthropic"], "anthropic"),
+        (["openai"], "openai"),
+        (["openai", "anthropic"], "anthropic"),
+        ([], None),
+    ],
+)
+def test_a_users_anthropic_default_pays_before_their_openai_one(db_session, regular_user, defaults, pays):
+    for provider in defaults:
+        key(db_session, regular_user, provider, provider=provider, is_default=True)
 
-    assert personal_key(db_session, regular_user.id, SUMMARISE) is None
+    found = personal_key(db_session, regular_user.id, SUMMARISE)
+
+    assert getattr(found, "provider", None) == pays
+
+
+def test_a_rejected_anthropic_default_falls_back_to_the_openai_one(db_session, regular_user):
+    key(db_session, regular_user, "claude", is_default=True, status="invalid")
+    gpt = key(db_session, regular_user, "gpt", provider="openai", is_default=True)
+
+    assert ingest_key(db_session, note_by(db_session, regular_user), SUMMARISE) == gpt

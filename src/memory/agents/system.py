@@ -1,9 +1,9 @@
 """System agents: the prompts memory itself runs, defined in code.
 
-Each names one model, like any agent; it runs for a user only on their key for
-that model's provider. Prompts and schemas are fixed, so they stay cacheable
-and can be listed; anything that varies per call goes in the prompt passed to
-run_agent. Worker-safe: no API imports.
+Each names one model per provider, in the order a payer's keys are tried, so a
+user with only an OpenAI key still gets summaries and search help. Prompts and
+schemas are fixed, so they stay cacheable and can be listed; anything that varies
+per call goes in the prompt passed to run_agent. Worker-safe: no API imports.
 """
 
 from dataclasses import dataclass
@@ -21,26 +21,33 @@ class SystemAgent:
     title: str
     description: str
     use: Use
-    model: str
     system_prompt: str
     max_output_tokens: int
     result_schema: dict[str, Any] | None = None
     reasoning: ReasoningLevel = "off"
+    models: tuple[str, ...] = (
+        "anthropic/claude-haiku-5-5",
+        # The cheapest OpenAI model, and the only one that can run with reasoning off.
+        "openai/gpt-6-luna",
+    )
 
     @property
-    def provider(self) -> str:
-        return split_model(self.model)[0]
+    def providers(self) -> tuple[str, ...]:
+        return tuple(split_model(m)[0] for m in self.models)
+
+    def model_for(self, provider: str) -> str | None:
+        return next((m for m in self.models if split_model(m)[0] == provider), None)
 
     def params(self) -> GenerationParams:
         return GenerationParams(
             max_output_tokens=self.max_output_tokens, reasoning=self.reasoning, temperature=None
         )
 
-    def spec_dict(self) -> dict[str, Any]:
-        """The agent as an AgentSpec payload, for run snapshots and the agents view."""
+    def spec_dict(self, model: str) -> dict[str, Any]:
+        """The agent on `model` as an AgentSpec payload, for run snapshots."""
         return {
             "system_prompt": self.system_prompt,
-            "model": self.model,
+            "model": model,
             "max_output_tokens": self.max_output_tokens,
             "reasoning": self.reasoning,
             "result_schema": self.result_schema,
@@ -63,7 +70,6 @@ SUMMARISE = SystemAgent(
     title="Summaries and tags",
     description="Summarises long items and tags them when they are ingested.",
     use="ingest",
-    model="anthropic/claude-haiku-5-5",
     system_prompt="You are a helpful assistant that creates concise summaries and identifies key topics.",
     max_output_tokens=2048,
     result_schema=SUMMARY_SCHEMA,
@@ -110,7 +116,6 @@ MEETING_EXTRACT = SystemAgent(
     title="Meeting notes and action items",
     description="Summarises meeting transcripts and turns their action items into tasks.",
     use="ingest",
-    model="anthropic/claude-haiku-5-5",
     system_prompt=(
         "You are an expert at analyzing meeting transcripts and extracting actionable information.\n\n"
         "From the meeting transcript you are given, extract:\n"
@@ -139,7 +144,6 @@ HYDE = SystemAgent(
     title="Search: hypothetical passages",
     description="Writes a passage that would answer a vague query, so search can match its wording (HyDE).",
     use="search",
-    model="anthropic/claude-haiku-5-5",
     system_prompt=HYDE_SYSTEM_PROMPT,
     # A 2-3 sentence passage is ~150 tokens; the cap bounds the latency tail under the
     # search timeout, and a truncated passage still embeds fine.
@@ -220,7 +224,6 @@ QUERY_ANALYSIS = SystemAgent(
     title="Search: query analysis",
     description="Picks content types, date ranges and alternative phrasings from a search query.",
     use="search",
-    model="anthropic/claude-haiku-5-5",
     system_prompt=QUERY_ANALYSIS_PROMPT,
     max_output_tokens=1024,
     result_schema=QUERY_ANALYSIS_SCHEMA,
@@ -249,7 +252,6 @@ CHUNK_SCORE = SystemAgent(
     title="Search: relevance scoring",
     description="Scores each search result's relevance to the query when a search asks for scores.",
     use="search",
-    model="anthropic/claude-haiku-5-5",
     system_prompt=SCORE_CHUNK_SYSTEM_PROMPT,
     max_output_tokens=256,
     result_schema=SCORE_SCHEMA,
@@ -260,7 +262,6 @@ SESSION_SUMMARY = SystemAgent(
     title="Claude session summaries",
     description="Writes a one-line summary of each Claude Code session.",
     use="sessions",
-    model="anthropic/claude-haiku-5-5",
     system_prompt=(
         "You are summarizing a coding session between a user and an AI assistant.\n"
         "Write a concise 1-2 sentence summary of what was accomplished in this session.\n"
@@ -276,8 +277,8 @@ SYSTEM_AGENTS: dict[str, SystemAgent] = {
     for a in (SUMMARISE, MEETING_EXTRACT, HYDE, QUERY_ANALYSIS, CHUNK_SCORE, SESSION_SUMMARY)
 }
 
-# Every ingest agent runs on this provider, so one explicit key per source serves them all.
-SOURCE_PROVIDER = SUMMARISE.provider
+# Every ingest agent runs on these providers, so one explicit key per source serves them all.
+SOURCE_PROVIDERS = SUMMARISE.providers
 
 
 def system_agent(slug: str) -> SystemAgent:
