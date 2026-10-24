@@ -14,9 +14,13 @@ from memory.common.db.models import (
     Chunk,
     SourceItem,
     MailMessage,
+    EmailAttachment,
     BlogPost,
     EmailAccount,
+    Meeting,
     Project,
+    Task,
+    TranscriptAccount,
 )
 from memory.workers.tasks.maintenance import (
     clean_collection,
@@ -1241,6 +1245,7 @@ def test_update_source_access_control_persists_to_sql_rows(
     assert inherited.project_id == account_project.id
     assert inherited.sensitivity == "internal"
     assert inherited.project_id_inherited is True
+    assert inherited.creator_id == test_user.id
     # ...and the explicit override is left exactly as it was.
     assert explicit.project_id == other_project.id
     assert explicit.project_id_inherited is False
@@ -1361,6 +1366,78 @@ def test_update_source_access_control_crosses_batch_boundary(
     assert all(r.project_id_inherited is True for r in rows)
 
 
+def email_account_with_attachment(db_session, owner, project):
+    account = EmailAccount(
+        name="Derived",
+        email_address="derived@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="derived@example.com",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=owner.id,
+        project_id=project.id,
+        sensitivity="internal",
+    )
+    message = MailMessage(sha256=b"derived-msg" + bytes(21), email_account=account)
+    attachment = EmailAttachment(
+        sha256=b"derived-att" + bytes(21), modality="doc", mail_message=message
+    )
+    db_session.add_all([message, attachment])
+    return account, attachment
+
+
+def transcript_account_with_task(db_session, owner, project):
+    account = TranscriptAccount(
+        user_id=owner.id,
+        name="Derived FF",
+        provider="fireflies",
+        project_id=project.id,
+        sensitivity="internal",
+    )
+    account.api_key = "k"
+    meeting = Meeting(sha256=b"derived-meeting" + bytes(17), transcript_account=account)
+    task = Task(
+        sha256=b"derived-task" + bytes(20), task_title="Follow up", source_item=meeting
+    )
+    db_session.add_all([meeting, task])
+    return account, task
+
+
+@pytest.mark.parametrize(
+    "source_type,make_source",
+    [
+        ("email_account", email_account_with_attachment),
+        ("transcript_account", transcript_account_with_task),
+    ],
+)
+def test_update_source_access_control_resolves_derived_items(
+    db_session, qdrant, test_user, source_type, make_source
+):
+    """Attachments and meeting action items inherit from their parent item,
+    so a source's reconciliation must reach them too."""
+    project = Project(title="Derived Project", state="open")
+    db_session.add(project)
+    db_session.flush()
+    account, child = make_source(db_session, test_user, project)
+    db_session.commit()
+
+    result = update_source_access_control(
+        source_type, account.id, account.config_version
+    )
+
+    assert result["updated_items"] == 2
+    db_session.refresh(child)
+    assert (child.project_id, child.sensitivity, child.creator_id) == (
+        project.id,
+        "internal",
+        test_user.id,
+    )
+
+
 def make_recon_setup(db_session, test_user, n_messages):
     """Create a project, an EmailAccount on it, and n inherited MailMessages."""
     project = Project(title="Reconcile Project", state="open")
@@ -1478,7 +1555,11 @@ def test_reconcile_access_control_updates_qdrant_payload(
     _client, collection, point_id, payload = mock_set.call_args.args
     assert collection == "mail"
     assert point_id == chunk_id
-    assert payload == {"project_id": project.id, "sensitivity": "basic"}
+    assert payload == {
+        "project_id": project.id,
+        "sensitivity": "basic",
+        "creator_id": test_user.id,
+    }
 
 
 def test_reconcile_access_control_crosses_batch_boundary(
@@ -1542,7 +1623,67 @@ def test_reconcile_access_control_writes_qdrant_for_explicit_override(
     _client, collection, point_id, payload = mock_set.call_args.args
     assert collection == "mail"
     assert point_id == chunk_id
-    assert payload == {"project_id": other_project.id, "sensitivity": "basic"}
+    assert payload == {
+        "project_id": other_project.id,
+        "sensitivity": "basic",
+        "creator_id": test_user.id,
+    }
+
+
+@pytest.mark.parametrize("rewrite_payloads", [False, True])
+def test_reconcile_access_control_rewrite_payloads_writes_unchanged_items(
+    db_session, qdrant, test_user, rewrite_payloads
+):
+    """Rows the migration backfilled have no SQL change to detect, so their
+    payloads get creator_id only from an explicit rewrite."""
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    messages[0].apply_inherited_access_control()
+    db_session.add(
+        Chunk(
+            id=str(uuid.uuid4()),
+            source=messages[0],
+            content="chunk",
+            embedding_model="test-model",
+            collection_name="mail",
+        )
+    )
+    db_session.commit()
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        reconcile_access_control(rewrite_payloads=rewrite_payloads)
+
+    expected = {"project_id": project.id, "sensitivity": "basic", "creator_id": test_user.id}
+    assert [c.args[3] for c in mock_set.call_args_list] == [expected] * rewrite_payloads
+
+
+@pytest.mark.parametrize(
+    "make_source", [email_account_with_attachment, transcript_account_with_task]
+)
+def test_reconcile_access_control_propagates_parent_override_to_derived_items(
+    db_session, qdrant, test_user, make_source
+):
+    project = Project(title="Derived Project", state="open")
+    moved_to = Project(title="Moved", state="open")
+    db_session.add_all([project, moved_to])
+    db_session.flush()
+    _account, child = make_source(db_session, test_user, project)
+    db_session.flush()
+    parent = child.get_data_source()
+    parent.apply_inherited_access_control()
+    child.apply_inherited_access_control()
+    db_session.commit()
+    db_session.execute(
+        update(SourceItem)
+        .where(SourceItem.id == child.id)
+        .values(updated_at=datetime.now(timezone.utc) - timedelta(hours=5))
+    )
+    parent.project_id = moved_to.id
+    db_session.commit()
+
+    reconcile_access_control(updated_within_seconds=3600)
+
+    db_session.refresh(child)
+    assert (child.project_id, child.creator_id) == (moved_to.id, test_user.id)
 
 
 def make_task(db_session, user):

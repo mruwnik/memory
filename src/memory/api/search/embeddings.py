@@ -104,6 +104,7 @@ def build_access_qdrant_filter(
     Conditions include:
     - Person override: user's person is in the 'people' array
     - Public bypass: sensitivity is "public"
+    - Creator override: the user brought the item in (``creator_id``)
     - Project access: project_id matches a project + sensitivity is allowed
 
     Three meaningful return values:
@@ -139,6 +140,12 @@ def build_access_qdrant_filter(
         should_conditions.append({
             "key": "sensitivity",
             "match": {"value": "public"}
+        })
+
+    if access_filter.creator_id is not None:
+        should_conditions.append({
+            "key": "creator_id",
+            "match": {"value": access_filter.creator_id}
         })
 
     # Project access conditions

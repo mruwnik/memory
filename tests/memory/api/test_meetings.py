@@ -151,8 +151,7 @@ def test_create_meeting_does_not_exclude_transcript_from_params(client: TestClie
     assert "transcript" not in excluded
 
 
-def test_create_meeting_passes_user_id(client: TestClient, user):
-    """Test that user_id is passed to dispatch_job."""
+def test_create_meeting_records_uploader(client: TestClient, user):
     with patch("memory.api.meetings.dispatch_job") as mock_dispatch:
         mock_job = type("MockJob", (), {"id": 103, "status": "pending"})()
         mock_dispatch.return_value = type("DispatchResult", (), {
@@ -165,6 +164,7 @@ def test_create_meeting_passes_user_id(client: TestClient, user):
 
     call_kwargs = mock_dispatch.call_args.kwargs
     assert call_kwargs["user_id"] == user.id
+    assert call_kwargs["task_kwargs"]["creator_id"] == user.id
 
 
 def test_create_meeting_datetime_serialization(client: TestClient, user):

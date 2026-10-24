@@ -28,13 +28,17 @@ logger = logging.getLogger(__name__)
 
 @app.task(name=SYNC_WEBPAGE)
 @tracked_task
-def sync_webpage(url: str, tags: Iterable[str] | None = None) -> dict:
+def sync_webpage(
+    url: str, tags: Iterable[str] | None = None, feed_id: int | None = None
+) -> dict:
     """
     Synchronize a webpage from a URL.
 
     Args:
         url: URL of the webpage to parse and store
         tags: Additional tags to apply to the content
+        feed_id: ArticleFeed the page came from; the post inherits its access
+            control and owner
 
     Returns:
         dict: Summary of what was processed
@@ -64,6 +68,7 @@ def sync_webpage(url: str, tags: Iterable[str] | None = None) -> dict:
         mime_type="text/markdown",
         size=len(article.content.encode("utf-8")),
         images=[image for image in article.images],
+        feed_id=feed_id,
     )
 
     with make_session() as session:
@@ -138,7 +143,7 @@ def sync_article_feed(feed_id: int) -> dict:
                     continue
 
                 feed_tags = cast(list[str] | None, feed.tags) or []
-                task_ids.append(sync_webpage.delay(feed_item.url, feed_tags).id)  # type: ignore[attr-defined]
+                task_ids.append(sync_webpage.delay(feed_item.url, feed_tags, feed.id).id)  # type: ignore[attr-defined]
                 new_articles += 1
 
                 logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")
@@ -253,6 +258,7 @@ def sync_website_archive(
     tags = tags or []
     logger.info(f"Starting archive sync for: {url}")
 
+    feed_id = None
     if add_feed:
         with make_session() as session:
             feed = session.query(ArticleFeed).filter(ArticleFeed.url == url).first()
@@ -264,6 +270,7 @@ def sync_website_archive(
                 )
                 session.add(feed)
                 session.commit()
+            feed_id = feed.id
 
     # Get archive fetcher for the website
     fetcher = get_archive_fetcher(url)
@@ -286,7 +293,7 @@ def sync_website_archive(
             if existing:
                 continue
 
-            task_ids.append(sync_webpage.delay(feed_item.url, list(tags)).id)  # type: ignore[attr-defined]
+            task_ids.append(sync_webpage.delay(feed_item.url, list(tags), feed_id).id)  # type: ignore[attr-defined]
             new_articles += 1
 
             logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")

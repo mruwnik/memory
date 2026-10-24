@@ -61,6 +61,7 @@ if TYPE_CHECKING:
         Book,
         CalendarAccount,
         EmailAccount,
+        GithubRepo,
         GoogleFolder,
         Project,
         TranscriptAccount,
@@ -335,6 +336,10 @@ class EmailAttachment(SourceItem):
     def get_collections(cls) -> list[str]:
         """EmailAttachment can go to different collections based on mime_type"""
         return ["doc", "text", "blog", "photo", "book"]
+
+    def get_data_source(self) -> Any:
+        """Attachments inherit access control from their message."""
+        return self.mail_message
 
 
 class ChatMessage(SourceItem):
@@ -1189,6 +1194,8 @@ class GithubItem(SourceItem):
         "Person", foreign_keys=[author_person_id]
     )
 
+    repo: Mapped[GithubRepo | None] = relationship("GithubRepo", foreign_keys=[repo_id])
+
     __mapper_args__ = {
         "polymorphic_identity": "github_item",
     }
@@ -1207,6 +1214,10 @@ class GithubItem(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["github"]
+
+    def get_data_source(self) -> Any:
+        """The tracked repo, whose account owner owns the synced items."""
+        return self.repo
 
     def as_payload(self) -> GithubItemPayload:
         return GithubItemPayload(
@@ -1823,6 +1834,10 @@ class Task(SourceItem):
     def get_collections(cls) -> list[str]:
         return ["task"]
 
+    def get_data_source(self) -> Any:
+        """Tasks derived from an item (e.g. meeting action items) inherit from it."""
+        return self.source_item
+
     @property
     def title(self) -> str | None:
         return self.task_title
@@ -2117,6 +2132,10 @@ class Meeting(SourceItem):
     @classmethod
     def get_collections(cls) -> list[str]:
         return ["meeting"]
+
+    def get_data_source(self) -> Any:
+        """Get the transcript account for access control inheritance."""
+        return self.transcript_account
 
 
 class SessionSegmentPayload(SourceItemPayload):

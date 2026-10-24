@@ -5,9 +5,21 @@ import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import fakeredis
 import pytest
 
-from memory.common.db.models import Person, Task
+from memory.agents import triggers
+from memory.agents.triggers import IngestConfig
+from memory.common.access_control import user_can_access
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentTrigger,
+    HumanUser,
+    Person,
+    Project,
+    Task,
+    TranscriptAccount,
+)
 from memory.common.db.models.source_items import Meeting
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import meetings
@@ -829,6 +841,143 @@ def test_process_meeting_success(
     assert meeting.title == "Q1 Planning"
     assert meeting.summary == sample_extraction_response["summary"]
     assert meeting.extraction_status == "complete"
+
+
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_synced_meeting_visible_to_account_owner_not_to_non_member(
+    mock_extraction,
+    sample_extraction_response,
+    sample_transcript,
+    mock_make_session,
+    qdrant,
+    regular_user,
+):
+    mock_extraction.return_value = sample_extraction_response
+    db = mock_make_session
+    project = Project(title="Sales", state="open")
+    db.add(project)
+    db.flush()
+    account = TranscriptAccount(
+        user_id=regular_user.id,
+        name="FF",
+        provider="fireflies",
+        project_id=project.id,
+        sensitivity="internal",
+    )
+    account.api_key = "k"
+    outsider = HumanUser(
+        name="Outsider", email="outsider@example.com", password_hash="x", scopes=[]
+    )
+    db.add_all([account, outsider])
+    db.commit()
+
+    result = meetings.process_meeting(
+        transcript=sample_transcript,
+        external_id="synced-1",
+        transcript_account_id=account.id,
+    )
+    meeting = db.get(Meeting, result["meeting_id"])
+    tasks = db.query(Task).filter(Task.source_item_id == meeting.id).all()
+
+    assert len(tasks) == 3
+    assert {
+        (i.project_id, i.sensitivity, i.creator_id) for i in [meeting, *tasks]
+    } == {(project.id, "internal", regular_user.id)}
+    assert user_can_access(regular_user, meeting, {})
+    assert not user_can_access(outsider, meeting, {})
+    assert user_can_access(outsider, meeting, {project.id: "manager"})
+
+
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
+    mock_extraction,
+    sample_extraction_response,
+    sample_transcript,
+    mock_make_session,
+    qdrant,
+    regular_user,
+):
+    mock_extraction.return_value = sample_extraction_response
+    db = mock_make_session
+    project = Project(title="Sales", state="open")
+    db.add(project)
+    db.flush()
+    account = TranscriptAccount(
+        user_id=regular_user.id,
+        name="FF",
+        provider="fireflies",
+        project_id=project.id,
+        sensitivity="internal",
+    )
+    account.api_key = "k"
+    definition = AgentDefinition(
+        user_id=regular_user.id, name="t", spec={"system_prompt": "x", "model": "m"}
+    )
+    db.add_all([account, definition])
+    db.flush()
+    trigger = AgentTrigger(
+        definition_id=definition.id,
+        kind="ingest",
+        enabled=True,
+        config=IngestConfig.model_validate(
+            {"filter": {"source_types": ["meeting"]}}
+        ).model_dump(mode="json"),
+    )
+    db.add(trigger)
+    db.commit()
+
+    result = meetings.process_meeting(
+        transcript=sample_transcript,
+        external_id="synced-trigger",
+        transcript_account_id=account.id,
+    )
+
+    matched = triggers.match_ingest_triggers(result["meeting_id"], fakeredis.FakeRedis())
+    assert matched == [trigger.id]
+
+
+def test_detached_tasks_keep_their_resolved_access_control(db_session, regular_user):
+    project = Project(title="Sales", state="open")
+    db_session.add(project)
+    db_session.flush()
+    account = TranscriptAccount(
+        user_id=regular_user.id,
+        name="FF",
+        provider="fireflies",
+        project_id=project.id,
+        sensitivity="internal",
+    )
+    account.api_key = "k"
+    meeting = Meeting(sha256=uuid.uuid4().bytes * 2, transcript_account=account)
+    task = Task(sha256=uuid.uuid4().bytes * 2, task_title="Follow up", source_item=meeting)
+    db_session.add_all([meeting, task])
+    db_session.flush()
+    meeting.apply_inherited_access_control()
+    task.apply_inherited_access_control()
+
+    meetings.detach_meeting_tasks(db_session, meeting)
+    db_session.expire(task)
+    task.apply_inherited_access_control()
+
+    assert (task.project_id, task.sensitivity, task.creator_id) == (
+        project.id,
+        "internal",
+        regular_user.id,
+    )
+
+
+@patch("memory.workers.tasks.meetings.call_extraction_llm")
+def test_process_meeting_records_uploader_as_creator(
+    mock_extraction, sample_transcript, mock_make_session, qdrant, regular_user
+):
+    mock_extraction.return_value = {"summary": "s", "notes": "", "action_items": []}
+
+    result = meetings.process_meeting(
+        transcript=sample_transcript, creator_id=regular_user.id
+    )
+
+    meeting = mock_make_session.get(Meeting, result["meeting_id"])
+    assert meeting.creator_id == regular_user.id
 
 
 @patch("memory.workers.tasks.meetings.call_extraction_llm")

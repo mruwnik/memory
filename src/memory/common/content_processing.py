@@ -319,7 +319,8 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     Execute complete content processing workflow.
 
     Performs the full pipeline for processing a content item:
-    1. Add to database session and flush to get ID
+    1. Add to database session, flush to get ID, and resolve inherited
+       access control (so payloads and trigger matching see it)
     2. Generate embeddings and chunks
     3. Push embeddings to Qdrant vector store
     4. Commit transaction and return result
@@ -340,6 +341,7 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     status = "failed"
     session.add(item)
     session.flush()
+    item.apply_inherited_access_control()
 
     chunks_count = embed_source_item(item)
     session.flush()

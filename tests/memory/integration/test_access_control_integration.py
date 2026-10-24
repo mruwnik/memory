@@ -14,6 +14,9 @@ import uuid
 
 import pytest
 
+from memory.api.search.embeddings import build_access_qdrant_filter
+from memory.common.access_control import AccessCondition, AccessFilter
+from memory.common.content_processing import process_content_item
 from memory.common.db.models import Note, Person
 from memory.common.db.models.sources import GithubAccount, GithubRepo, Project
 from memory.common.db.models.users import HumanUser
@@ -534,6 +537,36 @@ def test_qdrant_search_access_filter_single_project(
     # Should find Alpha note but not Beta note
     assert note_alpha.id in source_ids
     assert note_beta.id not in source_ids
+
+
+@pytest.mark.parametrize("creator_id_offset,found", [(0, True), (1, False)])
+def test_qdrant_access_filter_finds_own_items_outside_projects(
+    db_session, qdrant, project_alpha, project_beta, regular_user, creator_id_offset, found
+):
+    note = Note(
+        content="Confidential note the user brought in under Project Beta",
+        modality="text",
+        sha256=unique_sha256("access-creator"),
+        project_id=project_beta.id,
+        sensitivity="confidential",
+        creator_id=regular_user.id,
+    )
+    process_content_item(note, db_session)
+    access_filter = AccessFilter(
+        conditions=[
+            AccessCondition(project_id=project_alpha.id, sensitivities=frozenset({"basic"}))
+        ],
+        creator_id=regular_user.id + creator_id_offset,
+    )
+
+    results = qdrant.scroll(
+        collection_name="text",
+        scroll_filter={"should": build_access_qdrant_filter(access_filter)},
+        with_payload=True,
+        limit=100,
+    )[0]
+
+    assert (note.id in {p.payload["source_id"] for p in results}) is found
 
 
 def test_qdrant_search_access_filter_sensitivity_levels(

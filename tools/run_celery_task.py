@@ -51,6 +51,7 @@ from memory.common.celery_app import (
     REINGEST_MISSING_CHUNKS,
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
+    RECONCILE_ACCESS_CONTROL,
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
     BACKUP_PATH,
@@ -80,6 +81,7 @@ TASK_MAPPINGS = {
         "reingest_all_empty_source_items": REINGEST_ALL_EMPTY_SOURCE_ITEMS,
         "update_metadata_for_item": UPDATE_METADATA_FOR_ITEM,
         "update_metadata_for_source_items": UPDATE_METADATA_FOR_SOURCE_ITEMS,
+        "reconcile_access_control": RECONCILE_ACCESS_CONTROL,
     },
     "blogs": {
         "sync_webpage": SYNC_WEBPAGE,
@@ -382,6 +384,20 @@ def maintenance_reingest_empty_source_items(ctx, item_type):
 def maintenance_reingest_all_empty_source_items(ctx):
     """Reingest all empty source items."""
     execute_task(ctx, "maintenance", "reingest_all_empty_source_items")
+
+
+@maintenance.command("reconcile-access-control")
+@click.option(
+    "--rewrite-payloads",
+    is_flag=True,
+    help="Rewrite every item's Qdrant access payload, even if nothing changed",
+)
+@click.pass_context
+def maintenance_reconcile_access_control(ctx, rewrite_payloads):
+    """Re-resolve every item's inherited access control (SQL rows and Qdrant)."""
+    execute_task(
+        ctx, "maintenance", "reconcile_access_control", rewrite_payloads=rewrite_payloads
+    )
 
 
 @maintenance.command("reingest-chunk")

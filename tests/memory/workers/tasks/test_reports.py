@@ -166,6 +166,23 @@ def test_sync_report_sets_creator(mock_make_session, admin_user):
     assert report.creator_id == admin_user.id
 
 
+def test_sync_report_update_keeps_first_creator(
+    mock_make_session, admin_user, regular_user
+):
+    for creator, body in [(admin_user, "<h1>V1</h1>"), (regular_user, "<h1>V2</h1>")]:
+        reports.sync_report(
+            file_path=str(settings.REPORT_STORAGE_DIR / "shared.html"),
+            title="Shared",
+            content=body,
+            report_format="html",
+            creator_id=creator.id,
+        )
+        mock_make_session.commit()
+
+    report = mock_make_session.query(Report).filter_by(filename="reports/shared.html").one()
+    assert report.creator_id == admin_user.id
+
+
 def test_sync_report_file_not_found(mock_make_session):
     """Test that missing file raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError):

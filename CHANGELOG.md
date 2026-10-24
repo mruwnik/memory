@@ -27,6 +27,13 @@ section has nothing in it:
 
 ### Manual steps
 
+- **Before updating**, check each transcript account's project and
+  sensitivity (Sources → Transcripts). Once updated, newly synced meetings and,
+  from the next daily sweep, existing ones take them on: every contributor on that
+  project will see every meeting synced from it, and its action items, and a
+  `public` account's meetings are visible to every user. Raise the sensitivity
+  (`internal` for leads, `confidential` for admins), or move the account to a
+  narrower project, wherever that is too wide.
 - External MCP servers must be registered again (Agents → MCP servers): the
   migration drops the old `mcp_servers` and `mcp_server_assignments` tables,
   whose tokens were stored in plaintext.
@@ -139,6 +146,28 @@ section has nothing in it:
   limit), so an external tool whose `mcp_<server id>_<name>` is longer is listed
   as unavailable.
 - The unused MCP connector plumbing in the LLM providers (`mcp_servers=`) is removed.
+- **Access widens**: synced items now record the owner of the account they came
+  from as their creator, and a creator can read their items whatever their
+  project and sensitivity, in SQL, BM25 and vector search alike. Owners are the
+  email, GitHub, Google Drive, calendar and transcript account's user, and the
+  article feed's user. Slack and Discord messages get none. Email attachments
+  and meeting action items take their parent's creator, so a transcript
+  account's owner can also update their meetings' action-item tasks. Uploads
+  through `/books/upload`, `/photos/upload` and `POST /meetings` record the
+  uploader. Updating a report keeps its first creator. Moving an account to a
+  project its owner can't access no longer hides its content from them; remove
+  the account instead.
+- **Meetings become visible to their project**: meetings now inherit project
+  and sensitivity from their transcript account (default `basic`), and their
+  action-item tasks and email attachments from their parent. Synced meetings
+  used to be visible only to superadmins and their attendees; now every
+  contributor on the account's project sees them. See Manual steps.
+- Items now resolve their inherited project, sensitivity and creator when they
+  are stored, so they are searchable by their project and fire their owner's
+  ingest triggers at once rather than after the next access-control sweep.
+- Qdrant: chunk payloads gain `creator_id`. Existing points get it from the
+  post-deploy command below; until then owners find their items outside their
+  projects through BM25 only.
 
 ### Migrations
 
@@ -153,6 +182,11 @@ section has nothing in it:
 - `20261027_llm_provider_keys`: creates the empty `llm_provider_keys` table, adds
   `key_source` (default `server`) and `provider_key_id` to `agent_runs`, and grants
   `llm_server_key` to users and API keys holding `agents`. Fast.
+- `20261028_source_item_creators`: **slow on large instances**. Sets
+  `source_item.creator_id` from the source owners above on every item that has
+  none, in batches of 50,000 ids, committing after each batch. It can run while
+  the app is up, and re-running it after a failure continues where it stopped.
+  This is the access widening described above. Downgrading leaves the creators.
 
 ### Post-deploy commands
 
@@ -164,4 +198,15 @@ replaces its chunks, so re-running is safe:
 for t in task calendar_event github_item slack_message person_tidbit; do
   docker compose exec -T worker python - maintenance reingest-empty-source-items --item-type "$t" < tools/run_celery_task.py
 done
+```
+
+Give existing meetings,
+their action items and email attachments their inherited project and
+sensitivity, and write `creator_id` into every Qdrant payload. The daily sweep
+at 05:30 resolves the SQL rows on its own, but only this command writes
+`creator_id` for items whose rows didn't change. It can take hours on a large
+instance and is safe to re-run:
+
+```bash
+docker compose exec -T worker python - maintenance reconcile-access-control --rewrite-payloads < tools/run_celery_task.py
 ```

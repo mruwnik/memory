@@ -108,6 +108,11 @@ class ArticleFeed(Base):
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "article_feed"
 
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.user_id
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Owner. Nullable for legacy rows that pre-date ownership tracking;
     # such rows are admin-only via list/get/update/delete (secure default).
@@ -170,6 +175,11 @@ class EmailAccount(Base):
     __tablename__ = "email_accounts"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "email_account"
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.user_id
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -467,6 +477,11 @@ class GithubRepo(Base):
     @property
     def repo_path(self) -> str:
         return f"{self.owner}/{self.name}"
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.account.user_id
 
 
 class Project(Base):
@@ -896,6 +911,11 @@ class GoogleFolder(Base):
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "google_folder"
 
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.account.user_id
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     account_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("google_accounts.id", ondelete="CASCADE"), nullable=False
@@ -986,6 +1006,11 @@ class CalendarAccount(Base):
     __tablename__ = "calendar_accounts"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "calendar_account"
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.user_id
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Owner. Nullable only because a backfill migration cannot infer the owner
@@ -1111,6 +1136,11 @@ class TranscriptAccount(Base):
     __tablename__ = "transcript_accounts"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "transcript_account"
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """User who owns content synced from this source."""
+        return self.user_id
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(

@@ -139,7 +139,7 @@ def sync_report(
             report.tags = tags  # type: ignore
         if project_id is not None:
             report.project_id = project_id  # type: ignore
-        if creator_id is not None:
+        if creator_id is not None and report.creator_id is None:
             report.creator_id = creator_id  # type: ignore
 
         return process_content_item(report, session)

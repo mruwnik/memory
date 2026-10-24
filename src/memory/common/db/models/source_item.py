@@ -74,6 +74,7 @@ class SourceItemPayload(TypedDict):
     people: Annotated[list[int], "IDs of associated Person records"]
     project_id: Annotated[int | None, "ID of the associated project"]
     sensitivity: Annotated[SensitivityLevel, "Sensitivity level: basic, internal, or confidential"]
+    creator_id: Annotated[int | None, "ID of the user who brought the item in"]
 
 
 @event.listens_for(Session, "before_flush")
@@ -648,6 +649,7 @@ class SourceItem(AccessControlMixin, Base):
             people=[p.id for p in self.people],
             project_id=self.project_id,
             sensitivity=sensitivity,
+            creator_id=self.creator_id,
         )
 
     @classmethod
@@ -710,7 +712,8 @@ class SourceItem(AccessControlMixin, Base):
         Get the primary data source for this item (e.g., EmailAccount, SlackWorkspace).
 
         Subclasses override to return their specific data source.
-        Used for resolving inherited project_id and sensitivity.
+        Used for resolving inherited project_id, sensitivity and creator_id
+        (the latter via the source's ``content_owner_id``).
 
         Note: prefer overriding :meth:`get_data_source_chain` when the item
         has a hierarchy (e.g. channel→workspace) so the channel's
@@ -790,6 +793,28 @@ class SourceItem(AccessControlMixin, Base):
 
         return project_id, sensitivity
 
+    def resolve_creator_id(self) -> int | None:
+        """The item's own creator, else the first owner along the source chain.
+
+        Unlike ``project_id`` / ``sensitivity``, a creator is never
+        re-resolved once set: it records who brought the item in (the MCP
+        caller, the uploader, or the owner of the account it was synced
+        from), so an explicit creator always wins and an inherited one stays
+        put if the source's owner later changes.
+        """
+        if self.creator_id is not None:
+            return self.creator_id
+        owners = (
+            getattr(source, "content_owner_id", None)
+            for source in self.get_data_source_chain()
+        )
+        return next((owner for owner in owners if owner is not None), None)
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """Owner that items derived from this one (tasks, attachments) inherit."""
+        return self.resolve_creator_id()
+
     def apply_inherited_access_control(self) -> tuple[int | None, str]:
         """Resolve access control and persist inherited values onto this row.
 
@@ -797,7 +822,8 @@ class SourceItem(AccessControlMixin, Base):
         ``project_id`` / ``sensitivity`` for whichever fields are still
         inherited (``*_inherited`` is True). Explicit overrides are left
         untouched. The ``*_inherited`` flags are re-asserted to True because
-        the ``set`` event listeners flip them to False on assignment.
+        the ``set`` event listeners flip them to False on assignment. A
+        missing ``creator_id`` is filled from :meth:`resolve_creator_id`.
 
         Writes are skipped when the value is unchanged, so calling this on
         an already-resolved row does not mark it dirty.
@@ -817,6 +843,11 @@ class SourceItem(AccessControlMixin, Base):
         if self.sensitivity_inherited and self.sensitivity != sensitivity:
             self.sensitivity = sensitivity
             self.sensitivity_inherited = True
+
+        if self.creator_id is None:
+            creator_id = self.resolve_creator_id()
+            if creator_id is not None:
+                self.creator_id = creator_id
 
         return project_id, sensitivity
 

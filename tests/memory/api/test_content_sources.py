@@ -55,6 +55,7 @@ def test_upload_book_returns_job_id(client: TestClient, mock_dispatch_job, user,
     assert call_kwargs["task_kwargs"]["title"] == "Test Book"
     assert call_kwargs["task_kwargs"]["author"] == "Test Author"
     assert call_kwargs["task_kwargs"]["tags"] == ["fiction", "test"]
+    assert call_kwargs["task_kwargs"]["creator_id"] == user.id
 
 
 def test_upload_book_invalid_extension(client: TestClient, user):
@@ -94,6 +95,7 @@ def test_upload_photo_returns_job_id(client: TestClient, mock_dispatch_job, user
     call_kwargs = mock_dispatch_job.call_args.kwargs
     assert call_kwargs["job_type"] == JobType.CONTENT_INGEST
     assert call_kwargs["task_kwargs"]["tags"] == ["vacation", "beach"]
+    assert call_kwargs["task_kwargs"]["creator_id"] == user.id
 
 
 def test_upload_photo_invalid_extension(client: TestClient, user):

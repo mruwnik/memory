@@ -298,6 +298,7 @@ def test_create_mail_message(db_session):
         "people": [],
         "project_id": None,
         "sensitivity": "basic",
+        "creator_id": None,
     }
 
 

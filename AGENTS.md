@@ -184,7 +184,7 @@ User (auth) ──1:0..1── Person (identity) ──M:N── Team ──M:N�
 - **Team**: access group with roles `member` / `lead` / `admin`
 - **Project**: content boundary; teams are assigned to projects
 
-**Content is accessible if ANY hold:** user has `admin` scope; user created the item; user's Person is linked to the item; item is `PUBLIC`; or the user has sufficient team role in the item's project.
+**Content is accessible if ANY hold:** user has `admin` scope; user is the item's creator (for synced items, the owner of the source account, resolved at ingest by `apply_inherited_access_control`; Slack and Discord messages have none); user's Person is linked to the item; item is `PUBLIC`; or the user has sufficient team role in the item's project.
 
 | Team role | Project role | Can access |
 |-----------|--------------|------------|

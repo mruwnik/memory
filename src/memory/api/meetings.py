@@ -84,6 +84,7 @@ def create_meeting(
             "source_tool": data.source_tool,
             "external_id": data.external_id,
             "tags": data.tags or [],
+            "creator_id": user.id,
         },
         external_id=data.external_id,
         user_id=user.id,

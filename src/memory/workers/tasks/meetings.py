@@ -354,6 +354,7 @@ def create_action_item_tasks(
 ) -> list[str]:
     """Create Task records for action items. Returns list of created task descriptions."""
     created_tasks = []
+    tasks = []
 
     for item in action_items:
         if not item.get("description"):
@@ -390,16 +391,28 @@ def create_action_item_tasks(
             task.people.append(assignee_person)
 
         session.add(task)
+        tasks.append(task)
         created_tasks.append(item["description"])
 
+    session.flush()
+    # Tasks copy the meeting's stored values, so the meeting resolves first.
+    meeting.apply_inherited_access_control()
+    for task in tasks:
+        task.apply_inherited_access_control()
     return created_tasks
 
 
 def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
-    """Detach action item tasks from a meeting (for reingest). Returns count detached."""
+    """Detach action item tasks from a meeting (for reingest). Returns count detached.
+
+    Detached tasks keep the access control they inherited from the meeting:
+    marking it explicit stops it from re-resolving to no source at all.
+    """
     tasks = session.query(Task).filter(Task.source_item_id == meeting.id).all()
     for task in tasks:
         task.source_item_id = None
+        task.project_id_inherited = False
+        task.sensitivity_inherited = False
     session.flush()
     return len(tasks)
 
@@ -483,6 +496,7 @@ def create_meeting_record(
     tags: list[str] | None,
     attendee_emails: list[str] | None = None,
     transcript_account_id: int | None = None,
+    creator_id: int | None = None,
 ) -> Meeting:
     """Create a new Meeting record from the provided data."""
     parsed_date = parse_due_date(meeting_date)
@@ -508,6 +522,7 @@ def create_meeting_record(
         tags=["meeting"] + (tags or []),
         extraction_status="processing",
         transcript_account_id=transcript_account_id,
+        creator_id=creator_id,
     )
     session.add(meeting)
     session.flush()
@@ -650,6 +665,7 @@ def process_meeting(
     job_id: int | None = None,
     attendee_emails: list[str] | None = None,
     transcript_account_id: int | None = None,
+    creator_id: int | None = None,
 ):
     """
     Process a new meeting transcript.
@@ -670,6 +686,7 @@ def process_meeting(
         system_prompt: Custom system prompt
         model: LLM model to use
         job_id: Optional job ID for status tracking
+        creator_id: Uploader; synced meetings inherit their account's owner
     """
     logger.info(f"Processing new meeting (external_id={external_id}, job_id={job_id})")
 
@@ -710,6 +727,7 @@ def process_meeting(
             tags,
             attendee_emails=attendee_emails,
             transcript_account_id=transcript_account_id,
+            creator_id=creator_id,
         )
 
         return execute_meeting_processing(

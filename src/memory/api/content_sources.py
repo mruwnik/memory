@@ -265,6 +265,7 @@ async def upload_book(
                 "tags": tag_list,
                 "title": title,
                 "author": author,
+                "creator_id": user.id,
             },
             user_id=user.id,
         )
@@ -336,6 +337,7 @@ async def upload_photo(
             task_kwargs={
                 "file_path": str(file_path),
                 "tags": tag_list,
+                "creator_id": user.id,
             },
             user_id=user.id,
         )

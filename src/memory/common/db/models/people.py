@@ -47,7 +47,6 @@ class PersonPayload(SourceItemPayload):
 class PersonTidbitPayload(SourceItemPayload):
     person_id: Annotated[int, "ID of the associated Person"]
     person_identifier: Annotated[str, "Identifier of the associated Person"]
-    creator_id: Annotated[int | None, "ID of the user who created this tidbit"]
     tidbit_type: Annotated[str, "Type of tidbit (note, preference, fact, etc.)"]
 
 
@@ -92,7 +91,6 @@ class PersonTidbit(SourceItem):
             **super().as_payload(),
             person_id=self.person_id,
             person_identifier=self.person.identifier if self.person else "",
-            creator_id=self.creator_id,
             tidbit_type=self.tidbit_type,
         )
 

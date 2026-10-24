@@ -135,6 +135,8 @@ def store_email_message(
             )
 
             db.flush()
+            for item in [mail_message, *mail_message.attachments]:
+                item.apply_inherited_access_control()
             vectorize_email(mail_message)
 
             db.commit()

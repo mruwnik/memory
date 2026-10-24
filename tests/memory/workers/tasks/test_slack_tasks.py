@@ -140,6 +140,50 @@ def test_add_slack_message_success(
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
+def test_dm_synced_through_another_users_authorization_gets_no_creator(
+    mock_build_cache,
+    mock_get_creds,
+    db_session,
+    sample_message_data,
+    slack_credentials,
+    slack_app,
+    slack_workspace,
+    qdrant,
+):
+    """The app's registrar must not become the creator of DMs that another
+    user's authorization collected: creators bypass project and sensitivity."""
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+    registrar = User(
+        name="Registrar", email="registrar@example.com", password_hash="x"
+    )
+    db_session.add(registrar)
+    db_session.flush()
+    slack_app.created_by_user_id = registrar.id
+    dm = SlackChannel(
+        id="D12345678",
+        workspace_id=slack_workspace.id,
+        name="dm",
+        channel_type="im",
+        is_private=True,
+        is_archived=False,
+        collect_messages=True,
+    )
+    db_session.add(dm)
+    db_session.commit()
+
+    slack.add_slack_message(**sample_message_data | {"channel_id": dm.id})
+
+    message = (
+        db_session.query(SlackMessage)
+        .filter_by(message_ts=sample_message_data["message_ts"])
+        .one()
+    )
+    assert message.creator_id is None
+
+
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
 def test_add_slack_message_already_exists(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):

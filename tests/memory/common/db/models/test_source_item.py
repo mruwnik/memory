@@ -1,14 +1,25 @@
+import importlib.util
+from datetime import datetime, timezone
+from pathlib import Path
 from sqlalchemy.orm import Session
 from unittest.mock import patch
 from typing import cast
 import pytest
 from PIL import Image
 from memory.common import settings, chunker, extract, tokens
+from memory.common.content_processing import process_content_item
 from memory.common.db.models.source_item import (
     Chunk,
 )
 from memory.common.db.models.source_items import (
+    BlogPost,
+    CalendarEvent,
+    EmailAttachment,
+    GithubItem,
+    GoogleDoc,
     MailMessage,
+    Meeting,
+    Task,
 )
 from memory.common.db.models.source_item import (
     SourceItem,
@@ -16,7 +27,30 @@ from memory.common.db.models.source_item import (
     add_pics,
     clean_filename,
 )
-from memory.common.db.models.sources import Project
+from memory.common.db.models.sources import (
+    ArticleFeed,
+    CalendarAccount,
+    EmailAccount,
+    GithubAccount,
+    GithubRepo,
+    GoogleAccount,
+    GoogleFolder,
+    Project,
+    TranscriptAccount,
+)
+from memory.common.db.models.users import HumanUser
+from tests.conftest import unique_sha256
+
+MIGRATION_PATH = (
+    Path(__file__).parents[5]
+    / "db/migrations/versions/20261028_source_item_creators.py"
+)
+migration_spec = importlib.util.spec_from_file_location(
+    "source_item_creators_migration", MIGRATION_PATH
+)
+assert migration_spec and migration_spec.loader
+creators_migration = importlib.util.module_from_spec(migration_spec)
+migration_spec.loader.exec_module(creators_migration)
 
 
 @pytest.fixture
@@ -324,6 +358,7 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
         "people": [],
         "project_id": None,
         "sensitivity": "basic",  # Default when not explicitly set
+        "creator_id": None,
     }
     assert chunk.item_metadata == expected_payload
 
@@ -348,6 +383,7 @@ def test_source_item_as_payload():
         "people": [],
         "project_id": None,
         "sensitivity": "basic",  # Default when not explicitly set
+        "creator_id": None,
     }
 
 
@@ -381,6 +417,7 @@ def test_source_item_display_contents(content, filename):
         "people": [],
         "project_id": None,
         "sensitivity": "basic",  # Default when not explicitly set
+        "creator_id": None,
     }
 
 
@@ -763,9 +800,11 @@ class _FakeMessage:
         chain,
         project_id_inherited=None,
         sensitivity_inherited=None,
+        creator_id=None,
     ):
         self.project_id = project_id
         self.sensitivity = sensitivity
+        self.creator_id = creator_id
         self._chain = chain
         # A value supplied to the constructor models an explicit override
         # (inherited=False) by default; pass *_inherited=True explicitly to
@@ -791,6 +830,11 @@ class _FakeMessage:
 
         return SourceItem.resolve_access_control(self)  # type: ignore[arg-type]
 
+    def resolve_creator_id(self):
+        from memory.common.db.models.source_item import SourceItem
+
+        return SourceItem.resolve_creator_id(self)  # type: ignore[arg-type]
+
     def apply_inherited_access_control(self):
         from memory.common.db.models.source_item import SourceItem
 
@@ -798,9 +842,10 @@ class _FakeMessage:
 
 
 class _FakeSource:
-    def __init__(self, project_id, sensitivity):
+    def __init__(self, project_id, sensitivity, content_owner_id=None):
         self.project_id = project_id
         self.sensitivity = sensitivity
+        self.content_owner_id = content_owner_id
 
 
 @pytest.mark.parametrize(
@@ -978,6 +1023,43 @@ def test_apply_inherited_access_control_leaves_explicit_override_untouched():
     assert msg.sensitivity_inherited is False
 
 
+@pytest.mark.parametrize(
+    "item_creator,chain_owners,expected",
+    [
+        (None, [None, 7], 7),
+        (None, [5, 7], 5),
+        (3, [7], 3),
+        (None, [None], None),
+        (None, [], None),
+    ],
+)
+def test_resolve_creator_id_prefers_item_then_chain(
+    item_creator, chain_owners, expected
+):
+    chain = [_FakeSource(None, None, owner) for owner in chain_owners]
+    msg = _FakeMessage(None, None, chain, creator_id=item_creator)
+    assert msg.resolve_creator_id() == expected
+
+
+@pytest.mark.parametrize(
+    "item_creator,chain_owner,expected",
+    [
+        (None, 7, 7),
+        (3, 7, 3),
+    ],
+)
+def test_apply_inherited_access_control_fills_missing_creator(
+    item_creator, chain_owner, expected
+):
+    msg = _FakeMessage(
+        None, None, [_FakeSource(10, "internal", chain_owner)], creator_id=item_creator
+    )
+
+    msg.apply_inherited_access_control()
+
+    assert msg.creator_id == expected
+
+
 def test_handle_duplicate_sha256_skips_db_query_when_all_items_have_no_sha256():
     """Pure-unit regression: previously the dead ``if not new_items: return``
     after the loop never short-circuited because ``new_items`` is computed
@@ -1106,3 +1188,190 @@ def test_apply_inherited_access_control_public_default_subclass(db_session: Sess
     assert effective == (None, "public")
     assert post.sensitivity == "public"
     assert post.sensitivity_inherited is True
+
+
+# ====== creator inheritance from data-source owners (real models) ======
+
+
+def make_user(db_session: Session, label: str) -> HumanUser:
+    user = HumanUser(
+        name=label,
+        email=f"{label}-{unique_sha256().hex()[:8]}@example.com",
+        password_hash="x",
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+def make_email_account(db_session: Session, owner: HumanUser) -> EmailAccount:
+    account = EmailAccount(
+        name="Owned",
+        email_address=f"{owner.id}@example.com",
+        imap_server="imap.example.com",
+        imap_port=993,
+        username="u",
+        password="pw",
+        use_ssl=True,
+        folders=["INBOX"],
+        tags=[],
+        active=True,
+        user_id=owner.id,
+    )
+    db_session.add(account)
+    return account
+
+
+def make_transcript_account(db_session: Session, owner: HumanUser) -> TranscriptAccount:
+    account = TranscriptAccount(user_id=owner.id, name="FF", provider="fireflies")
+    account.api_key = "k"
+    db_session.add(account)
+    return account
+
+
+def mail_message(db_session: Session, owner: HumanUser):
+    return MailMessage(
+        sha256=unique_sha256("mail"),
+        email_account=make_email_account(db_session, owner),
+    )
+
+
+def email_attachment(db_session: Session, owner: HumanUser):
+    return EmailAttachment(
+        sha256=unique_sha256("att"),
+        modality="doc",
+        mail_message=mail_message(db_session, owner),
+    )
+
+
+def github_item(db_session: Session, owner: HumanUser):
+    account = GithubAccount(user_id=owner.id, name="gh", auth_type="pat", active=True)
+    repo = GithubRepo(account=account, owner="org", name="repo")
+    db_session.add(repo)
+    db_session.flush()
+    return GithubItem(
+        sha256=unique_sha256("gh"),
+        modality="github",
+        kind="issue",
+        repo_path="org/repo",
+        repo_id=repo.id,
+    )
+
+
+def google_doc(db_session: Session, owner: HumanUser):
+    account = GoogleAccount(
+        user_id=owner.id, name="g", email=f"{owner.id}@gmail.example.com"
+    )
+    folder = GoogleFolder(account=account, folder_id="f1", folder_name="Folder")
+    return GoogleDoc(
+        sha256=unique_sha256("gdoc"),
+        modality="doc",
+        google_file_id=f"file-{owner.id}",
+        title="Doc",
+        folder=folder,
+    )
+
+
+def calendar_event(db_session: Session, owner: HumanUser):
+    account = CalendarAccount(
+        name="Cal", calendar_type="caldav", user_id=owner.id, active=True
+    )
+    return CalendarEvent(
+        sha256=unique_sha256("cal"),
+        event_title="Standup",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        calendar_account=account,
+    )
+
+
+def meeting(db_session: Session, owner: HumanUser):
+    return Meeting(
+        sha256=unique_sha256("meeting"),
+        transcript_account=make_transcript_account(db_session, owner),
+    )
+
+
+def meeting_task(db_session: Session, owner: HumanUser):
+    return Task(
+        sha256=unique_sha256("task"),
+        task_title="Follow up",
+        source_item=meeting(db_session, owner),
+    )
+
+
+def blog_post(db_session: Session, owner: HumanUser):
+    feed = ArticleFeed(user_id=owner.id, url=f"https://feed.example.com/{owner.id}")
+    return BlogPost(sha256=unique_sha256("blog"), modality="blog", feed=feed)
+
+
+SOURCE_OWNED_ITEMS = [
+    mail_message,
+    email_attachment,
+    github_item,
+    google_doc,
+    calendar_event,
+    meeting,
+    meeting_task,
+    blog_post,
+]
+
+
+@pytest.mark.parametrize("make_item", SOURCE_OWNED_ITEMS)
+def test_process_content_item_inherits_source_owner(
+    db_session: Session, qdrant, make_item
+):
+    owner = make_user(db_session, "owner")
+    item = make_item(db_session, owner)
+
+    process_content_item(item, db_session)
+    db_session.expire(item)
+
+    assert item.creator_id == owner.id
+
+
+@pytest.mark.parametrize("make_item", SOURCE_OWNED_ITEMS)
+def test_creator_backfill_migration_fills_source_owner(
+    db_session: Session, make_item
+):
+    owner = make_user(db_session, "owner")
+    item = make_item(db_session, owner)
+    db_session.add(item)
+    db_session.commit()
+
+    creators_migration.backfill(db_session.connection(), batch_size=1)
+    db_session.expire(item)
+
+    assert item.creator_id == owner.id
+
+
+@pytest.mark.parametrize("make_item", SOURCE_OWNED_ITEMS)
+def test_apply_inherited_access_control_keeps_explicit_creator(
+    db_session: Session, make_item
+):
+    owner = make_user(db_session, "owner")
+    uploader = make_user(db_session, "uploader")
+    item = make_item(db_session, owner)
+    item.creator_id = uploader.id
+    db_session.add(item)
+    db_session.commit()
+
+    item.apply_inherited_access_control()
+
+    assert item.creator_id == uploader.id
+
+
+def test_meeting_inherits_transcript_account_access_control(db_session: Session):
+    owner = make_user(db_session, "owner")
+    project = Project(title="Meetings", state="open")
+    db_session.add(project)
+    db_session.flush()
+    account = make_transcript_account(db_session, owner)
+    account.project_id = project.id
+    account.sensitivity = "internal"
+    item = Meeting(sha256=unique_sha256("meeting"), transcript_account=account)
+    task = Task(sha256=unique_sha256("task"), task_title="Do it", source_item=item)
+    db_session.add_all([item, task])
+    db_session.commit()
+
+    assert item.apply_inherited_access_control() == (project.id, "internal")
+    assert task.apply_inherited_access_control() == (project.id, "internal")

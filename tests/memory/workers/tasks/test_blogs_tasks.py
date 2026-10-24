@@ -129,6 +129,20 @@ def test_sync_webpage_success(mock_parse, mock_article, db_session, qdrant):
 
 
 @patch("memory.workers.tasks.blogs.parse_webpage")
+def test_sync_webpage_records_feed(
+    mock_parse, mock_article, sample_article_feed, db_session, qdrant
+):
+    mock_parse.return_value = mock_article
+
+    blogs.sync_webpage(
+        "https://example.com/article/1", ["test"], feed_id=sample_article_feed.id
+    )
+
+    blog_post = db_session.query(BlogPost).filter_by(url=mock_article.url).one()
+    assert blog_post.feed_id == sample_article_feed.id
+
+
+@patch("memory.workers.tasks.blogs.parse_webpage")
 def test_sync_webpage_empty_content(mock_parse, mock_empty_article, db_session):
     """Test webpage sync with empty content."""
     mock_parse.return_value = mock_empty_article
@@ -201,7 +215,7 @@ def test_sync_article_feed_success(
 
         # Verify sync_webpage was called with correct arguments
         mock_sync_webpage.delay.assert_called_once_with(
-            "https://example.com/article/1", ["test", "blog"]
+            "https://example.com/article/1", ["test", "blog"], sample_article_feed.id
         )
 
     # Verify last_checked_at was updated
@@ -271,7 +285,7 @@ def test_sync_article_feed_with_existing_articles(
 
         # Verify sync_webpage was only called for the new article
         mock_sync_webpage.delay.assert_called_once_with(
-            "https://example.com/article/2", ["test", "blog"]
+            "https://example.com/article/2", ["test", "blog"], sample_article_feed.id
         )
 
 
@@ -349,13 +363,13 @@ def test_sync_website_archive_success(
         assert result["max_pages_processed"] == 50
         assert mock_archive_fetcher.max_pages == 50
 
-        # Verify sync_webpage was called for both articles
+        feed = db_session.query(ArticleFeed).filter_by(url="https://example.com").one()
         assert mock_sync_webpage.delay.call_count == 2
         mock_sync_webpage.delay.assert_any_call(
-            "https://example.com/archive/1", ["archive"]
+            "https://example.com/archive/1", ["archive"], feed.id
         )
         mock_sync_webpage.delay.assert_any_call(
-            "https://example.com/archive/2", ["archive"]
+            "https://example.com/archive/2", ["archive"], feed.id
         )
 
 
@@ -482,9 +496,9 @@ def test_sync_website_archive_with_existing_articles(mock_get_fetcher, db_sessio
         assert result["new_articles"] == 1  # Only one new article
         assert result["task_ids"] == ["task-new"]
 
-        # Verify sync_webpage was only called for the new article
+        feed = db_session.query(ArticleFeed).filter_by(url="https://example.com").one()
         mock_sync_webpage.delay.assert_called_once_with(
-            "https://example.com/archive/2", ["archive"]
+            "https://example.com/archive/2", ["archive"], feed.id
         )
 
 
@@ -555,7 +569,7 @@ def test_sync_article_feed_tags_handling(
 
         # Verify sync_webpage was called with correct tags
         mock_sync_webpage.delay.assert_called_once_with(
-            "https://example.com/article/1", expected_tags
+            "https://example.com/article/1", expected_tags, feed.id
         )
 
 

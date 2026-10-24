@@ -8,6 +8,7 @@ from memory.common.db.models import (
     JobStatus,
     MailMessage,
     PendingJob,
+    Project,
     SourceItem,
     EmailAttachment,
 )
@@ -160,6 +161,41 @@ def test_process_email_with_attachment(db_session, test_email_account, qdrant):
     )
 
     assert attachments == [(None, "This is a test attachment", "text/plain")]
+
+
+def test_stored_email_inherits_account_access_before_embedding(
+    db_session, test_email_account, test_user, qdrant
+):
+    project = Project(title="Inbox", state="open")
+    db_session.add(project)
+    db_session.flush()
+    test_email_account.project_id = project.id
+    test_email_account.sensitivity = "internal"
+    db_session.commit()
+
+    mail_message_id = run_process_message(
+        account_id=test_email_account.id,
+        message_id="303",
+        folder="INBOX",
+        raw_email=EMAIL_WITH_ATTACHMENT_RAW,
+    )["mail_message_id"]
+
+    message = db_session.get(MailMessage, mail_message_id)
+    items = [message, *message.attachments]
+    chunks = [chunk for item in items for chunk in item.chunks]
+    payloads = [
+        point.payload
+        for chunk in chunks
+        for point in qdrant.retrieve(chunk.collection_name, [str(chunk.id)])
+    ]
+    assert len(items) == 2
+    assert {(i.project_id, i.sensitivity, i.creator_id) for i in items} == {
+        (project.id, "internal", test_user.id)
+    }
+    assert len(payloads) == len(chunks) > 0
+    assert {(p["project_id"], p["sensitivity"], p["creator_id"]) for p in payloads} == {
+        (project.id, "internal", test_user.id)
+    }
 
 
 def test_process_empty_message(db_session, test_email_account, qdrant):

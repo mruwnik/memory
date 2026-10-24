@@ -65,11 +65,13 @@ from memory.common.db.models.source_items import (
     BlogPost,
     CalendarEvent,
     DiscordMessage,
+    EmailAttachment,
     GoogleDoc,
     MailMessage,
     Meeting,
     SessionSegment,
     SlackMessage,
+    Task,
 )
 from memory.common.content_processing import (
     clear_item_chunks,
@@ -743,14 +745,32 @@ def paginate_source_items(session, model, condition, offset: int, limit: int):
     )
 
 
+def paginate_with_derived_items(
+    session, parent_ids, derived_model, derived_parent_column, offset: int, limit: int
+):
+    """Page through parent items plus the items derived from them.
+
+    Derived items (attachments, action-item tasks) inherit from their parent
+    rather than from the source directly, so they must be re-resolved along
+    with it. Ordering by id keeps parents ahead of what was derived from them.
+    """
+    derived_ids = select(derived_model.id).where(derived_parent_column.in_(parent_ids))
+    return paginate_source_items(
+        session, SourceItem,
+        or_(SourceItem.id.in_(parent_ids), SourceItem.id.in_(derived_ids)),
+        offset, limit,
+    )
+
+
 def get_items_for_source(
     session, source_type: str, source_id: int | str, offset: int = 0, limit: int = 100
 ):
     """Get items that belong to a data source for access control updates."""
     if source_type == "email_account":
-        return paginate_source_items(
-            session, MailMessage,
-            MailMessage.email_account_id == source_id, offset, limit,
+        return paginate_with_derived_items(
+            session,
+            select(MailMessage.id).where(MailMessage.email_account_id == source_id),
+            EmailAttachment, EmailAttachment.mail_message_id, offset, limit,
         )
     elif source_type == "slack_channel":
         return paginate_source_items(
@@ -802,9 +822,10 @@ def get_items_for_source(
             session, BlogPost, BlogPost.feed_id == source_id, offset, limit,
         )
     elif source_type == "transcript_account":
-        return paginate_source_items(
-            session, Meeting,
-            Meeting.transcript_account_id == source_id, offset, limit,
+        return paginate_with_derived_items(
+            session,
+            select(Meeting.id).where(Meeting.transcript_account_id == source_id),
+            Task, Task.source_item_id, offset, limit,
         )
     else:
         raise ValueError(f"Unknown source type: {source_type}")
@@ -834,7 +855,10 @@ def update_source_access_control(
 
     Rows with an explicit override (``project_id_inherited`` /
     ``sensitivity_inherited`` is False) are left untouched; only inherited
-    values are (re-)resolved.
+    values are (re-)resolved. A missing ``creator_id`` is filled from the
+    source's owner, but a set one is never moved: it records who brought
+    the item in, and no code path reassigns a source's owner, so owner
+    changes neither dispatch this task nor rewrite existing creators.
 
     Args:
         source_type: Type of data source (email_account, slack_channel, etc.)
@@ -852,10 +876,8 @@ def update_source_access_control(
     dispatched (a) on a data source's config change, by the ``after_commit``
     listener in ``models/access_control_events.py``, and (b) on a schedule by
     the ``reconcile_access_control`` beat task — the backstop that catches
-    content ingested under a source whose config never changes. Ingestion
-    still writes the raw ``self.project_id`` /
-    ``self.sensitivity``, so a freshly-ingested inherited item stays
-    unresolved until one of those dispatches runs ("eventual consistency").
+    content whose parent item changed. Ingestion resolves each item itself
+    (``process_content_item``) before embedding it.
     """
     logger.info(
         f"Updating access control for {source_type} {source_id} (version {config_version})"
@@ -919,6 +941,7 @@ def update_source_access_control(
                             {
                                 "project_id": resolved_project_id,
                                 "sensitivity": resolved_sensitivity,
+                                "creator_id": item.creator_id,
                             },
                         )
                         updated_chunks += 1
@@ -959,9 +982,64 @@ def update_source_access_control(
     }
 
 
+def derived_items(session, parent_ids: list[int]) -> list[SourceItem]:
+    """Attachments and action-item tasks of the given items."""
+    derived_ids = select(Task.id).where(Task.source_item_id.in_(parent_ids)).union(
+        select(EmailAttachment.id).where(EmailAttachment.mail_message_id.in_(parent_ids))
+    )
+    return (
+        session.query(SourceItem)
+        .options(selectinload(SourceItem.chunks))
+        .filter(SourceItem.id.in_(derived_ids))
+        .order_by(SourceItem.id)
+        .all()
+    )
+
+
+def reconcile_item(client, item: SourceItem, rewrite_payloads: bool) -> bool:
+    """Resolve one item onto its row and, when needed, its Qdrant payloads.
+
+    Returns whether the payloads were rewritten.
+    """
+    before = (item.project_id, item.sensitivity, item.creator_id)
+    project_id, sensitivity = item.apply_inherited_access_control()
+    # Skip the Qdrant rewrite only when the row is fully inherited AND the
+    # resolved values didn't change — that's the case where we can trust
+    # Qdrant is in sync, because this same loop is the only thing that ever
+    # wrote it. For rows with any explicit override there is no event-driven
+    # dispatch from item-level writes (see #86), so the periodic sweep is the
+    # only path that can land the override in Qdrant — always rewrite.
+    # set_payload is idempotent, so the redundant case is cheap.
+    fully_inherited = item.project_id_inherited and item.sensitivity_inherited
+    unchanged = (item.project_id, item.sensitivity, item.creator_id) == before
+    if fully_inherited and unchanged and not rewrite_payloads:
+        return False
+    payload = {
+        "project_id": project_id,
+        "sensitivity": sensitivity,
+        "creator_id": item.creator_id,
+    }
+    for chunk in item.chunks:
+        if not chunk.id or not chunk.collection_name:
+            continue
+        try:
+            qdrant.set_payload(client, chunk.collection_name, str(chunk.id), payload)
+        except Exception as e:
+            # Best-effort: the next run (or config dispatch) reconciles a
+            # chunk a transient error skipped.
+            logger.error(
+                "reconcile_access_control: failed to update chunk %s: %s",
+                chunk.id,
+                e,
+            )
+    return True
+
+
 @app.task(name=RECONCILE_ACCESS_CONTROL)
 @tracked_task
-def reconcile_access_control(updated_within_seconds: int | None = None):
+def reconcile_access_control(
+    updated_within_seconds: int | None = None, rewrite_payloads: bool = False
+):
     """Reconcile inherited access control for source *items*.
 
     Resolves each item's project_id / sensitivity onto its SQL row and Qdrant
@@ -979,6 +1057,14 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
       items whose row changed within the window.
     - ``updated_within_seconds=None`` (daily): every item — the full sweep.
 
+    Attachments and action-item tasks copy their parent's stored values, so
+    whenever a parent's payload is rewritten its derived items are
+    reconciled with it, even if their own rows didn't change.
+
+    ``rewrite_payloads`` rewrites every examined item's payload even when
+    nothing changed, for payloads written before a field (``creator_id``)
+    existed.
+
     Lost-dispatch recovery window: a config change whose ``after_commit``
     dispatch was lost (broker briefly down — the listener logs and swallows
     the failure) does not move any *item's* ``updated_at``, so the recent
@@ -989,8 +1075,8 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
     hard breakage.
 
     Idempotent: ``apply_inherited_access_control`` skips unchanged rows, the
-    Qdrant payload is rewritten only when the resolved values actually moved,
-    and explicit overrides are never touched.
+    Qdrant payload is rewritten only when the resolved values actually moved
+    (or ``rewrite_payloads``), and explicit overrides are never touched.
 
     Cost note: per item this lazy-loads the data-source chain
     (``apply_inherited_access_control`` -> ``resolve_access_control`` ->
@@ -1025,46 +1111,14 @@ def reconcile_access_control(updated_within_seconds: int | None = None):
                 break
             last_id = items[-1].id
 
+            changed_ids = []
             for item in items:
-                before = (item.project_id, item.sensitivity)
-                project_id, sensitivity = item.apply_inherited_access_control()
                 reconciled += 1
-                # Skip the Qdrant rewrite only when the row is fully
-                # inherited AND the resolved values didn't change — that's
-                # the case where we can trust Qdrant is in sync, because
-                # this same loop is the only thing that ever wrote it.
-                # For rows with any explicit override there is no
-                # event-driven dispatch from item-level writes (see #86),
-                # so the periodic sweep is the only path that can land
-                # the override in Qdrant — always rewrite. set_payload is
-                # idempotent, so the redundant case is cheap.
-                fully_inherited = (
-                    item.project_id_inherited and item.sensitivity_inherited
-                )
-                if fully_inherited and (item.project_id, item.sensitivity) == before:
-                    continue
-                changed += 1
-                for chunk in item.chunks:
-                    if not chunk.id or not chunk.collection_name:
-                        continue
-                    try:
-                        qdrant.set_payload(
-                            client,
-                            chunk.collection_name,
-                            str(chunk.id),
-                            {
-                                "project_id": project_id,
-                                "sensitivity": sensitivity,
-                            },
-                        )
-                    except Exception as e:
-                        # Best-effort: the next run (or config dispatch)
-                        # reconciles a chunk a transient error skipped.
-                        logger.error(
-                            "reconcile_access_control: failed to update chunk %s: %s",
-                            chunk.id,
-                            e,
-                        )
+                if reconcile_item(client, item, rewrite_payloads):
+                    changed += 1
+                    changed_ids.append(item.id)
+            for item in derived_items(session, changed_ids):
+                reconcile_item(client, item, rewrite_payloads)
 
             session.commit()
 
