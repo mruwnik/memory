@@ -86,22 +86,6 @@ class ScriptedProvider(BaseLLMProvider):
     def __init__(self, api_key: str, model: str):
         super().__init__(api_key, model, usage_tracker=InMemoryUsageTracker(configs={}))
 
-    def _initialize_client(self):
-        return None
-
-    def generate(self, *a, **kw):
-        raise NotImplementedError
-
-    def stream(self, *a, **kw):
-        raise NotImplementedError
-
-    async def agenerate(self, *a, **kw):
-        raise NotImplementedError
-
-    async def astream(self, *a, **kw):
-        raise NotImplementedError
-        yield
-
     def check_request(
         self, tool_choice: str, params: GenerationParams, replay: list[Replay | None]
     ):

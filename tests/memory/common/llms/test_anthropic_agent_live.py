@@ -56,12 +56,6 @@ SEARCH = ToolDefinition(name="web_search", description="search", input_schema={}
 FETCH = ToolDefinition(name="web_fetch", description="fetch", input_schema={})
 
 
-@pytest.fixture(autouse=True)
-def mock_anthropic_client():
-    """Overrides the conftest fixture of the same name: these calls are real."""
-    yield
-
-
 @pytest.fixture(scope="module", autouse=True)
 def spend_report():
     yield

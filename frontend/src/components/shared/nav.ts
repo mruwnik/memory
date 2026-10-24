@@ -30,7 +30,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions' },
       { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations' },
-      { to: '/ui/keys', title: 'LLM API keys', description: 'Your Anthropic and OpenAI keys: they pay for summaries, search, and agents' },
+      { to: '/ui/keys', title: 'LLM API keys', description: 'Anthropic keys pay for summaries, search, and agents; OpenAI keys are stored but not used yet' },
     ],
   },
   {
