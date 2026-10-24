@@ -42,11 +42,12 @@ async def expand_query_hyde(query: str, key: Credential | None, timeout: float =
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"HyDE expansion timed out for: {query[:50]}...")
+        logger.warning("HyDE expansion timed out")
         return None
     except Exception as e:
         # LLMError or any provider's transient error: search goes on without the passage.
-        logger.warning(f"HyDE expansion failed: {e!r}")
+        # Its text can carry the key's label.
+        logger.warning(f"HyDE expansion failed: {type(e).__name__}")
         return None
     passage = result.text.strip()
     if not passage:

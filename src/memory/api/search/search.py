@@ -287,7 +287,7 @@ async def _run_llm_analysis(
         for i, (name, _) in enumerate(tasks):
             result = results[i]
             if isinstance(result, BaseException):
-                logger.warning(f"{name} failed: {result}")
+                logger.warning(f"{name} failed: {type(result).__name__}")
                 continue
 
             if name == "analysis" and result:
@@ -296,7 +296,7 @@ async def _run_llm_analysis(
                 hyde_doc = result
 
     except Exception as e:
-        logger.warning(f"Parallel LLM calls failed: {e}")
+        logger.warning(f"Parallel LLM calls failed: {type(e).__name__}")
 
     return analysis_result, hyde_doc
 

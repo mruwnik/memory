@@ -1,6 +1,7 @@
 """Tests for query_analysis module."""
 
 import asyncio
+import logging
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -103,12 +104,17 @@ async def test_without_a_key_analysis_is_skipped(scripted_llm):
 
 @pytest.mark.parametrize("answer", [slow, rate_limited, model_refused, reply("not a submission")])
 @pytest.mark.asyncio
-async def test_a_failed_analysis_searches_the_query_as_typed(db_session, llm_key, scripted_llm, answer):
+async def test_a_failed_analysis_searches_the_query_as_typed(
+    db_session, llm_key, scripted_llm, caplog, answer
+):
     scripted_llm.script = [answer]
 
-    result = await query_analysis.analyze_query("q", NOW, credential(llm_key), timeout=0.05)
+    with caplog.at_level(logging.DEBUG, logger=query_analysis.__name__):
+        result = await query_analysis.analyze_query("secret q", NOW, credential(llm_key), timeout=0.05)
 
-    assert (result.success, result.cleaned_query, query_analysis._analysis_cache) == (False, "q", {})
+    assert (result.success, result.cleaned_query, query_analysis._analysis_cache) == (False, "secret q", {})
+    # The searcher's own failures aren't the operator's, and stay out of their logs.
+    assert [(r.levelno, "secret" in r.getMessage()) for r in caplog.records] == [(logging.WARNING, False)]
 
 
 @pytest.mark.parametrize(

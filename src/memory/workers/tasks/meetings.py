@@ -387,7 +387,7 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     try:
         extracted = call_extraction_llm(meeting.content or "", credential(found))
     except (LLMError, *PROVIDER_ERRORS) as e:
-        logger.warning(f"Failed to extract meeting {meeting.id}: {e}")
+        logger.warning(f"Failed to extract meeting {meeting.id}: {type(e).__name__}")
         meeting.extraction_status = "failed"
         return {"status": "error", "error": str(e)}
 

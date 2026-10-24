@@ -145,12 +145,13 @@ async def analyze_query(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Query analysis timed out for: {query[:50]}...")
+        logger.warning("Query analysis timed out")
         record_metric("search", "query_analysis", status="timeout", labels={"query_length": len(query)})
         return result
     except Exception as e:
-        # LLMError or any provider's transient error: search goes on unanalysed.
-        logger.error(f"Query analysis failed: {e!r}")
+        # LLMError (mostly the searcher's own key spent or refused) or a provider's
+        # transient error: search goes on unanalysed. Its text can carry the key's label.
+        logger.warning(f"Query analysis failed: {type(e).__name__}")
         record_metric("search", "query_analysis", status="error", labels={"error": type(e).__name__})
         return result
 

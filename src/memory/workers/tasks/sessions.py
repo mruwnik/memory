@@ -106,7 +106,7 @@ def generate_summary(conversation: str, key: Credential) -> str:
             record=Record.COST,
         )
     except (LLMError, *PROVIDER_ERRORS) as e:
-        logger.error(f"Failed to generate summary: {e}")
+        logger.warning(f"Failed to generate summary: {type(e).__name__}")
         return ""
     return result.text.strip()
 

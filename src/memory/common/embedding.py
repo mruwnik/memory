@@ -249,7 +249,7 @@ def summariser(key: Credential) -> summarizer.Summarise:
             ).data
         # A summary is optional: a provider outage shouldn't fail the item's ingest.
         except (LLMError, *PROVIDER_ERRORS) as e:
-            logger.warning("summary skipped: %s", e)
+            logger.warning("summary skipped: %s", type(e).__name__)
             return None
 
     return summarise

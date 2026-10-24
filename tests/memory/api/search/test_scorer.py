@@ -1,6 +1,7 @@
 """Tests for scorer module."""
 
 import asyncio
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,31 +61,74 @@ async def test_without_a_key_chunks_keep_their_scores(scripted_llm):
     assert scripted_llm.requests == []
 
 
-@pytest.mark.parametrize("answer", [slow, rate_limited, model_refused])
+async def malformed():
+    return submitted({"score": "high"})
+
+
+@pytest.mark.parametrize("answer", [slow, rate_limited, model_refused, malformed])
 @pytest.mark.asyncio
 async def test_a_failed_score_keeps_the_rerankers_score(db_session, llm_key, scripted_llm, answer):
     scripted_llm.script = [answer]
     chunk = chunk_with_text("text", score=0.6)
 
-    result = await scorer.score_chunk("query", chunk, credential(llm_key), timeout=0.05)
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key), timeout=0.05)
 
-    assert (result is chunk, result.relevance_score) == (True, 0.6)
+    assert [(c, c.relevance_score) for c in ranked] == [(chunk, 0.6)]
+
+
+@pytest.mark.asyncio
+async def test_failed_scores_log_one_warning_per_search_without_user_text(
+    db_session, llm_key, scripted_llm, caplog
+):
+    async def pool_spent():
+        raise LLMError(f"your API key {llm_key.label!r} reached its daily limit")
+
+    scripted_llm.script = [pool_spent] * 3
+    chunks = [chunk_with_text("private words") for _ in range(3)]
+
+    with caplog.at_level(logging.DEBUG, logger=scorer.__name__):
+        await scorer.rank_chunks("secret query", chunks, credential(llm_key))
+
+    messages = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert messages == [(logging.WARNING, "Scoring failed for some of 3 chunks: LLMError")]
+
+
+@pytest.mark.asyncio
+async def test_scoring_runs_a_bounded_number_of_calls_at_once(db_session, llm_key, scripted_llm):
+    active, peak = 0, 0
+
+    async def answer():
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return submitted({"score": 0.5})
+
+    chunk_count = scorer.MAX_CONCURRENT_SCORES * 2
+    scripted_llm.script = [answer] * chunk_count
+    chunks = [chunk_with_text(str(i)) for i in range(chunk_count)]
+
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key))
+
+    assert len(ranked) == chunk_count
+    assert 1 < peak <= scorer.MAX_CONCURRENT_SCORES
 
 
 @pytest.mark.asyncio
 async def test_image_only_chunks_keep_their_score_unscored(db_session, llm_key, scripted_llm):
     chunk = MagicMock(data=[Image.new("RGB", (1, 1))], relevance_score=0.4)
 
-    result = await scorer.score_chunk("query", chunk, credential(llm_key))
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key))
 
-    assert (result.relevance_score, scripted_llm.requests) == (0.4, [])
+    assert ([c.relevance_score for c in ranked], scripted_llm.requests) == ([0.4], [])
 
 
 @pytest.mark.asyncio
-async def test_unreadable_chunks_are_returned_unscored(db_session, llm_key, scripted_llm):
+async def test_unreadable_chunks_keep_their_score_unscored(db_session, llm_key, scripted_llm):
     chunk = MagicMock(relevance_score=0.2)
     type(chunk).data = property(lambda self: (_ for _ in ()).throw(OSError("gone")))
 
-    result = await scorer.score_chunk("query", chunk, credential(llm_key))
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key))
 
-    assert (result is chunk, scripted_llm.requests) == (True, [])
+    assert ([c.relevance_score for c in ranked], scripted_llm.requests) == ([0.2], [])
