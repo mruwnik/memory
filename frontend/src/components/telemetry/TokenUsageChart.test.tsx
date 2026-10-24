@@ -81,6 +81,15 @@ describe('TokenUsageChart', () => {
     expect(readData()[0].unknown).toBe(10)
   })
 
+  it('splits series with a custom seriesOf', () => {
+    const data = makeResponse([
+      { timestamp: '2026-05-29T00:00:00Z', source: 'a', api_key_id: 4, sum: 10 },
+      { timestamp: '2026-05-29T00:00:00Z', source: 'b', api_key_id: 4, sum: 5 },
+    ])
+    render(<TokenUsageChart data={data} seriesOf={(p) => `key ${p.api_key_id}`} />)
+    expect(readData()[0]['key 4']).toBe(15)
+  })
+
   it('sorts chart points ascending by timestamp', () => {
     const data = makeResponse([
       { timestamp: '2026-05-29T02:00:00Z', source: 'a', sum: 1 },

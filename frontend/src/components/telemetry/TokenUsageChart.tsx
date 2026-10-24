@@ -9,13 +9,16 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import { TelemetryMetricDataPoint, TelemetryMetricsResponse } from '@/hooks/useTelemetry'
 
 interface TokenUsageChartProps {
   data: TelemetryMetricsResponse | null
+  seriesOf?: (point: TelemetryMetricDataPoint) => string
 }
 
-export const TokenUsageChart: React.FC<TokenUsageChartProps> = ({ data }) => {
+const bySource = (point: TelemetryMetricDataPoint) => point.source || 'unknown'
+
+export const TokenUsageChart: React.FC<TokenUsageChartProps> = ({ data, seriesOf = bySource }) => {
   if (!data || data.data.length === 0) {
     return (
       <div className="h-64 flex items-center justify-center text-slate-400">
@@ -24,7 +27,6 @@ export const TokenUsageChart: React.FC<TokenUsageChartProps> = ({ data }) => {
     )
   }
 
-  // Group by timestamp and aggregate by source
   const byTimestamp = new Map<string, Record<string, number>>()
 
   for (const point of data.data) {
@@ -33,8 +35,8 @@ export const TokenUsageChart: React.FC<TokenUsageChartProps> = ({ data }) => {
       byTimestamp.set(ts, {})
     }
     const record = byTimestamp.get(ts)!
-    const source = (point.source as string) || 'unknown'
-    record[source] = (record[source] || 0) + (point.sum ?? 0)
+    const series = seriesOf(point)
+    record[series] = (record[series] || 0) + (point.sum ?? 0)
   }
 
   // Get all unique sources

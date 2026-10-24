@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   useTelemetry,
   TelemetryMetricsResponse,
   TelemetryRawResponse,
   ToolUsageResponse,
   SessionStatsResponse,
+  TelemetryApiKey,
   TelemetryUser,
 } from '@/hooks/useTelemetry'
 import { TokenUsageChart } from './TokenUsageChart'
@@ -15,7 +16,7 @@ import { RecentEventsTable } from './RecentEventsTable'
 import { ToolBreakdownChart } from './ToolBreakdownChart'
 import { SessionBreakdownChart } from './SessionBreakdownChart'
 import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
-import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, ToggleGroup, Toolbar } from '@/components/shared/ui'
+import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, Select, ToggleGroup, Toolbar } from '@/components/shared/ui'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 
@@ -50,8 +51,11 @@ const Telemetry: React.FC = () => {
   const [toolUsage, setToolUsage] = useState<ToolUsageResponse | null>(null)
   const [sessionStats, setSessionStats] = useState<SessionStatsResponse | null>(null)
   const [usersWithTelemetry, setUsersWithTelemetry] = useState<TelemetryUser[]>([])
+  const [apiKeys, setApiKeys] = useState<TelemetryApiKey[]>([])
+  const [apiKeyId, setApiKeyId] = useState<number | undefined>(undefined)
+  const [keyUsage, setKeyUsage] = useState<TelemetryMetricsResponse | null>(null)
 
-  const { getMetrics, getRawEvents, getToolUsage, getSessionStats, getUsersWithTelemetry } = useTelemetry()
+  const { getMetrics, getRawEvents, getToolUsage, getSessionStats, getApiKeysWithTelemetry, getUsersWithTelemetry } = useTelemetry()
 
   // Load users with telemetry data for the selector filter
   useEffect(() => {
@@ -64,7 +68,31 @@ const Telemetry: React.FC = () => {
   // Note: id=0 is a placeholder meaning "user not loaded yet", so treat it as undefined
   const userId = selectedUser.id !== 0 ? selectedUser.id : undefined
 
+  useEffect(() => {
+    let cancelled = false
+    getApiKeysWithTelemetry(userId)
+      .then((keys) => {
+        if (cancelled) return
+        setApiKeys(keys)
+        setApiKeyId((id) => (keys.some((k) => k.id === id) ? id : undefined))
+      })
+      .catch(console.error)
+    return () => {
+      cancelled = true
+    }
+  }, [getApiKeysWithTelemetry, userId])
+
+  const latestLoad = useRef(0)
+
+  // Keys belong to a user, so drop the selection in the same render as the user change.
+  const changeUser = (next: typeof selectedUser) => {
+    setSelectedUser(next)
+    setApiKeyId(undefined)
+  }
+
   const loadData = useCallback(async () => {
+    const load = ++latestLoad.current
+    const isStale = () => load !== latestLoad.current
     setLoading(true)
     setError(null)
 
@@ -72,14 +100,19 @@ const Telemetry: React.FC = () => {
     const to = new Date()
 
     try {
-      const [tokenRes, costRes, sessionRes, eventsRes, toolRes, sessionStatsRes] = await Promise.all([
-        getMetrics('token.usage', { from, to, granularity, groupBy: ['source'], userId }),
-        getMetrics('cost.usage', { from, to, granularity, groupBy: ['source'], userId }),
-        getMetrics('session.count', { from, to, granularity, groupBy: [], userId }),
-        getRawEvents({ from, to, limit: 50, userId }),
+      const filters = { from, to, userId, apiKeyId }
+      const [tokenRes, costRes, sessionRes, eventsRes, toolRes, sessionStatsRes, keyUsageRes] = await Promise.all([
+        getMetrics('token.usage', { ...filters, granularity, groupBy: ['source'] }),
+        getMetrics('cost.usage', { ...filters, granularity, groupBy: ['source'] }),
+        getMetrics('session.count', { ...filters, granularity, groupBy: [] }),
+        getRawEvents({ ...filters, limit: 50 }),
         getToolUsage({ from, to, userId }),
-        getSessionStats({ from, to, userId }),
+        getSessionStats(filters),
+        apiKeyId === undefined
+          ? getMetrics('token.usage', { ...filters, granularity, groupBy: ['api_key_id'] })
+          : Promise.resolve(null),
       ])
+      if (isStale()) return
 
       setTokenUsage(tokenRes)
       setCostUsage(costRes)
@@ -87,13 +120,15 @@ const Telemetry: React.FC = () => {
       setRecentEvents(eventsRes)
       setToolUsage(toolRes)
       setSessionStats(sessionStatsRes)
+      setKeyUsage(keyUsageRes)
       setLastRefresh(new Date())
     } catch (err) {
+      if (isStale()) return
       setError(err instanceof Error ? err.message : 'Failed to load telemetry')
     } finally {
-      setLoading(false)
+      if (!isStale()) setLoading(false)
     }
-  }, [timeRange, getMetrics, getRawEvents, getToolUsage, getSessionStats, userId])
+  }, [timeRange, getMetrics, getRawEvents, getToolUsage, getSessionStats, userId, apiKeyId])
 
   useEffect(() => {
     loadData()
@@ -104,6 +139,7 @@ const Telemetry: React.FC = () => {
   const totalCost = costUsage?.data.reduce((sum, d) => sum + (d.sum ?? 0), 0) ?? 0
   const totalSessions = sessionActivity?.data.reduce((sum, d) => sum + d.count, 0) ?? 0
   const eventCount = recentEvents?.total ?? 0
+  const keyNames = new Map(apiKeys.map((k) => [k.id, apiKeyName(k)]))
 
   return (
     <Page
@@ -115,7 +151,19 @@ const Telemetry: React.FC = () => {
         <RefreshButton onClick={loadData} loading={loading} label="Refresh telemetry" />
       </>}>
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-        <UserSelector value={selectedUser} onChange={setSelectedUser} filterToUsers={usersWithTelemetry} />
+        <UserSelector value={selectedUser} onChange={changeUser} filterToUsers={usersWithTelemetry} />
+        {apiKeys.length > 0 && (
+          <Select
+            aria-label="API key"
+            value={apiKeyId ?? ''}
+            onChange={(e) => setApiKeyId(e.target.value ? Number(e.target.value) : undefined)}
+          >
+            <option value="">All API keys</option>
+            {apiKeys.map((k) => (
+              <option key={k.id} value={k.id}>{apiKeyName(k)}</option>
+            ))}
+          </Select>
+        )}
       </Toolbar>
 
       {error && <Notice tone="error" onRetry={loadData}>{error}</Notice>}
@@ -143,7 +191,23 @@ const Telemetry: React.FC = () => {
             <Card title="Recent Events">
               <RecentEventsTable events={recentEvents?.events ?? []} />
             </Card>
-            <Card title="Token Usage by Tool" className="lg:col-span-2">
+            {apiKeys.length > 0 && apiKeyId === undefined && (
+              <Card title="Token Usage by API Key" className="lg:col-span-2">
+                <TokenUsageChart
+                  data={keyUsage}
+                  seriesOf={(p) => (p.api_key_id == null ? 'No key' : keyNames.get(p.api_key_id) ?? `Key #${p.api_key_id}`)}
+                />
+              </Card>
+            )}
+            <Card
+              title="Token Usage by Tool"
+              className="lg:col-span-2"
+              description={
+                apiKeyId === undefined
+                  ? undefined
+                  : 'Tool usage comes from session transcripts and covers all API keys.'
+              }
+            >
               <ToolBreakdownChart data={toolUsage} />
             </Card>
             <Card title="Session Breakdown" className="lg:col-span-2"
@@ -172,6 +236,9 @@ const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({ value, onChange }
 
   return <ToggleGroup label="Time range" options={ranges} value={value} onChange={onChange} />
 }
+
+const apiKeyName = (key: TelemetryApiKey): string =>
+  `${key.name || `${key.key_type} key #${key.id}`}${key.revoked ? ' (revoked)' : ''}`
 
 const formatTimestamp = (isoString: string): string => {
   const date = new Date(isoString)

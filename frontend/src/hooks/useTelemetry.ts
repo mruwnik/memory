@@ -10,6 +10,7 @@ export interface TelemetryEvent {
   session_id: string | null
   source: string | null
   tool_name: string | null
+  api_key_id: number | null
   attributes: Record<string, unknown>
   body: string | null
 }
@@ -32,6 +33,7 @@ export interface TelemetryMetricDataPoint {
   source?: string | null
   tool_name?: string | null
   session_id?: string | null
+  api_key_id?: number | null
   [key: string]: unknown
 }
 
@@ -73,6 +75,9 @@ export interface ToolUsageResponse {
 
 export interface SessionStats {
   session_id: string
+  label: string
+  summary: string | null
+  project: string | null
   total_tokens: number
   total_cost: number
   event_count: number
@@ -81,9 +86,17 @@ export interface SessionStats {
 }
 
 export interface SessionStatsResponse {
-  from: string
-  to: string
+  from_time: string
+  to_time: string
   sessions: SessionStats[]
+}
+
+export interface TelemetryApiKey {
+  id: number
+  name: string | null
+  key_type: string
+  user_id: number
+  revoked: boolean
 }
 
 export interface TelemetryUser {
@@ -114,6 +127,7 @@ export const useTelemetry = () => {
       to?: Date
       limit?: number
       offset?: number
+      apiKeyId?: number
       userId?: number  // Admin only: filter by specific user, omit for all users
     } = {}
   ): Promise<TelemetryRawResponse> => {
@@ -126,6 +140,7 @@ export const useTelemetry = () => {
     if (options.to) params.set('to', options.to.toISOString())
     if (options.limit) params.set('limit', options.limit.toString())
     if (options.offset) params.set('offset', options.offset.toString())
+    if (options.apiKeyId !== undefined) params.set('api_key_id', options.apiKeyId.toString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/raw?${params}`)
@@ -143,6 +158,7 @@ export const useTelemetry = () => {
       to?: Date
       source?: string
       groupBy?: string[]
+      apiKeyId?: number
       userId?: number  // Admin only: filter by specific user, omit for all users
     } = {}
   ): Promise<TelemetryMetricsResponse> => {
@@ -155,6 +171,7 @@ export const useTelemetry = () => {
     if (options.groupBy) {
       options.groupBy.forEach(g => params.append('group_by', g))
     }
+    if (options.apiKeyId !== undefined) params.set('api_key_id', options.apiKeyId.toString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
     const response = await apiCall(`/telemetry/metrics?${params}`)
@@ -187,91 +204,32 @@ export const useTelemetry = () => {
     options: {
       from?: Date
       to?: Date
+      apiKeyId?: number
       userId?: number
     } = {}
   ): Promise<SessionStatsResponse> => {
-    const { from, to, userId } = options
+    const params = new URLSearchParams()
+    if (options.from) params.set('from', options.from.toISOString())
+    if (options.to) params.set('to', options.to.toISOString())
+    if (options.apiKeyId !== undefined) params.set('api_key_id', options.apiKeyId.toString())
+    if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
-    // Fetch token and cost metrics grouped by session_id
-    // Use max granularity (1440 = 1 day) to minimize data points per session.
-    // Sessions spanning multiple days will have multiple data points which are
-    // aggregated below.
-    const [tokenRes, costRes] = await Promise.all([
-      getMetrics('token.usage', {
-        from,
-        to,
-        granularity: 1440,
-        groupBy: ['session_id'],
-        userId,
-      }),
-      getMetrics('cost.usage', {
-        from,
-        to,
-        granularity: 1440,
-        groupBy: ['session_id'],
-        userId,
-      }),
-    ])
-
-    // Aggregate token data by session_id
-    const sessionMap = new Map<string, {
-      total_tokens: number
-      total_cost: number
-      event_count: number
-      first_seen: string
-      last_seen: string
-    }>()
-
-    for (const d of tokenRes.data) {
-      const sessionId = d.session_id
-      if (!sessionId) continue
-
-      const existing = sessionMap.get(sessionId)
-      if (existing) {
-        existing.total_tokens += d.sum ?? 0
-        existing.event_count += d.count
-        if (d.timestamp && d.timestamp < existing.first_seen) {
-          existing.first_seen = d.timestamp
-        }
-        if (d.timestamp && d.timestamp > existing.last_seen) {
-          existing.last_seen = d.timestamp
-        }
-      } else {
-        sessionMap.set(sessionId, {
-          total_tokens: d.sum ?? 0,
-          total_cost: 0,
-          event_count: d.count,
-          first_seen: d.timestamp,
-          last_seen: d.timestamp,
-        })
-      }
+    const response = await apiCall(`/telemetry/sessions?${params}`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch session stats: ${response.status}`)
     }
+    return parseJsonResponse<SessionStatsResponse>(response)
+  }, [apiCall])
 
-    // Add cost data
-    for (const d of costRes.data) {
-      const sessionId = d.session_id
-      if (!sessionId) continue
-
-      const existing = sessionMap.get(sessionId)
-      if (existing) {
-        existing.total_cost += d.sum ?? 0
-      }
+  const getApiKeysWithTelemetry = useCallback(async (userId?: number): Promise<TelemetryApiKey[]> => {
+    const params = new URLSearchParams()
+    if (userId !== undefined) params.set('user_id', userId.toString())
+    const response = await apiCall(`/telemetry/api-keys?${params}`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch telemetry API keys: ${response.status}`)
     }
-
-    // Convert to array and sort by total tokens descending
-    const sessions: SessionStats[] = Array.from(sessionMap.entries())
-      .map(([session_id, stats]) => ({
-        session_id,
-        ...stats,
-      }))
-      .sort((a, b) => b.total_tokens - a.total_tokens)
-
-    return {
-      from: tokenRes.from,
-      to: tokenRes.to,
-      sessions,
-    }
-  }, [getMetrics])
+    return parseJsonResponse<TelemetryApiKey[]>(response)
+  }, [apiCall])
 
   const getUsersWithTelemetry = useCallback(async (): Promise<TelemetryUser[]> => {
     const response = await apiCall('/telemetry/users')
@@ -286,6 +244,7 @@ export const useTelemetry = () => {
     getMetrics,
     getToolUsage,
     getSessionStats,
+    getApiKeysWithTelemetry,
     getUsersWithTelemetry,
   }
 }

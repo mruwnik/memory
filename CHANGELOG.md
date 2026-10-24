@@ -240,6 +240,11 @@ section has nothing in it:
   This is the access widening described above. Downgrading leaves the creators.
 - `20261028_claude_sessions_scope`: grants `claude_sessions` to users who own a
   Claude config snapshot or environment. Fast.
+- `20261029_telemetry_api_key`: adds a nullable `api_key_id` to
+  `telemetry_events` with a foreign key and a partial index. The index is built
+  concurrently, so telemetry writes keep flowing, but the build reads the whole
+  table and can take a while on large instances. Events stored before it have
+  no key.
 
 ### Post-deploy commands
 

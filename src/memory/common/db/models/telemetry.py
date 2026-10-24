@@ -15,7 +15,9 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
+    text,
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -51,6 +53,11 @@ class TelemetryEvent(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     user: Mapped[User] = relationship("User", lazy="select")
 
+    # The API key that sent the event; None for session-token and server-side writes
+    api_key_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Event classification
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)  # 'metric' or 'log'
     name: Mapped[str] = mapped_column(String(100), nullable=False)  # e.g., 'token.usage', 'user_prompt'
@@ -78,6 +85,12 @@ class TelemetryEvent(Base):
         Index("idx_telemetry_events_type_name", "event_type", "name"),
         Index("idx_telemetry_events_session", "session_id", "timestamp"),
         Index("idx_telemetry_events_source", "source", "timestamp"),
+        Index(
+            "idx_telemetry_events_api_key",
+            "api_key_id",
+            "timestamp",
+            postgresql_where=text("api_key_id IS NOT NULL"),
+        ),
         # GIN index for JSONB attribute queries
         Index("idx_telemetry_events_attrs", "attributes", postgresql_using="gin"),
     )

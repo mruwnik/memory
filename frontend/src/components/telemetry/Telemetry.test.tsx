@@ -120,9 +120,13 @@ const toolUsageResponse = {
   ],
 }
 
+const sessionsResponse = { from_time: 'a', to_time: 'b', sessions: [] }
+
+const laptopKey = { id: 4, name: 'laptop', key_type: 'internal', user_id: 2, revoked: false }
+
 // Routes: telemetry/users must be matched before telemetry/metrics since both
 // share the "/telemetry/" substring and the first include() match wins.
-const baseRoutes = (me: typeof adminUser) => json({
+const baseRoutes = (me: typeof adminUser, apiKeys: unknown[] = []) => json({
   '/auth/me': { json: me },
   '/telemetry/users': { json: [{ id: 1, name: 'Admin', email: 'admin@example.com' }] },
   '/users': {
@@ -137,6 +141,8 @@ const baseRoutes = (me: typeof adminUser) => json({
       },
     ],
   },
+  '/telemetry/api-keys': { json: apiKeys },
+  '/telemetry/sessions': { json: sessionsResponse },
   '/telemetry/metrics': { json: metricsResponse(1500, 2) },
   '/telemetry/raw': { json: rawResponse },
   '/sessions/stats/tool-usage': { json: toolUsageResponse },
@@ -178,6 +184,8 @@ describe('Telemetry container', () => {
       json({
         '/auth/me': { json: regularUser },
         '/telemetry/users': { json: [] },
+        '/telemetry/api-keys': { json: [] },
+        '/telemetry/sessions': { json: sessionsResponse },
         '/telemetry/metrics': { status: 500, json: { detail: 'boom' } },
         '/telemetry/raw': { json: rawResponse },
         '/sessions/stats/tool-usage': { json: toolUsageResponse },
@@ -235,5 +243,48 @@ describe('Telemetry container', () => {
     await waitFor(() => expect(screen.getByText('Recent Events')).toBeInTheDocument())
     const table = screen.getByRole('table')
     expect(within(table).getByText('token.usage')).toBeInTheDocument()
+  })
+
+  it('hides the API key filter when no key has sent telemetry', async () => {
+    setAuthCookies()
+    mockFetchRoutes(baseRoutes(regularUser))
+    renderWithRouter(<Telemetry />)
+
+    await waitFor(() => expect(screen.getByText('Token Usage')).toBeInTheDocument())
+    expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
+    expect(screen.queryByText('Token Usage by API Key')).not.toBeInTheDocument()
+  })
+
+  it('filters every chart by the chosen API key', async () => {
+    setAuthCookies()
+    const fetchMock = mockFetchRoutes(baseRoutes(regularUser, [laptopKey]))
+    const { user } = renderWithRouter(<Telemetry />)
+
+    expect(await screen.findByText('Token Usage by API Key')).toBeInTheDocument()
+    await user.selectOptions(await screen.findByLabelText('API key'), 'laptop')
+
+    const urls = () => fetchMock.mock.calls.map((c) => String(c[0]))
+    await waitFor(() =>
+      expect(urls().filter((u) => u.includes('/telemetry/sessions')).at(-1)).toContain('api_key_id=4'),
+    )
+    expect(urls().filter((u) => u.includes('/telemetry/metrics')).at(-1)).toContain('api_key_id=4')
+    expect(urls().filter((u) => u.includes('/telemetry/raw')).at(-1)).toContain('api_key_id=4')
+    expect(screen.queryByText('Token Usage by API Key')).not.toBeInTheDocument()
+  })
+
+  it('skips the per-key usage request once a key is selected', async () => {
+    setAuthCookies()
+    const fetchMock = mockFetchRoutes(baseRoutes(regularUser, [laptopKey]))
+    const { user } = renderWithRouter(<Telemetry />)
+
+    await user.selectOptions(await screen.findByLabelText('API key'), 'laptop')
+    await waitFor(() => expect(screen.queryByText('Token Usage by API Key')).not.toBeInTheDocument())
+    const keyedUsage = () =>
+      fetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('group_by=api_key_id'))
+    const before = keyedUsage().length
+    await user.click(screen.getByRole('button', { name: 'Refresh telemetry' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh telemetry' })).toBeEnabled())
+    expect(keyedUsage()).toHaveLength(before)
   })
 })

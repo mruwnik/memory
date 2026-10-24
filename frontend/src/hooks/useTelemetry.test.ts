@@ -54,6 +54,7 @@ describe('useTelemetry getRawEvents', () => {
       to,
       limit: 50,
       offset: 10,
+      apiKeyId: 4,
       userId: 7,
     })
     const { url } = callTo(fetchMock, '/telemetry/raw')
@@ -65,6 +66,7 @@ describe('useTelemetry getRawEvents', () => {
     expect(url).toContain(`to=${encodeURIComponent(to.toISOString())}`)
     expect(url).toContain('limit=50')
     expect(url).toContain('offset=10')
+    expect(url).toContain('api_key_id=4')
     expect(url).toContain('user_id=7')
   })
 
@@ -94,6 +96,7 @@ describe('useTelemetry getMetrics', () => {
       granularity: 60,
       source: 'cli',
       groupBy: ['session_id', 'tool_name'],
+      apiKeyId: 4,
       userId: 3,
     })
     const { url } = callTo(fetchMock, '/telemetry/metrics')
@@ -102,6 +105,7 @@ describe('useTelemetry getMetrics', () => {
     expect(url).toContain('source=cli')
     expect(url).toContain('group_by=session_id')
     expect(url).toContain('group_by=tool_name')
+    expect(url).toContain('api_key_id=4')
     expect(url).toContain('user_id=3')
   })
 
@@ -153,88 +157,29 @@ describe('useTelemetry getUsersWithTelemetry', () => {
   })
 })
 
-describe('useTelemetry getSessionStats aggregation', () => {
-  // getSessionStats issues two getMetrics calls (token.usage, cost.usage) in
-  // parallel and merges them by session_id.
-  function routeMetrics(tokenData: unknown[], costData: unknown[]) {
-    return mockFetch(async (input, init) => {
-      const url = String(input)
-      if (url.includes('/telemetry/metrics')) {
-        const body = String(init?.body ?? '') // GET has no body; disambiguate via URL
-        const isCost = url.includes('metric=cost.usage')
-        const data = isCost ? costData : tokenData
-        void body
-        return mockResponse({
-          json: { metric: isCost ? 'cost.usage' : 'token.usage', from: 'F', to: 'T', data },
-          headers: JSON_HEADERS,
-        })
-      }
-      return mockResponse({ json: {}, headers: JSON_HEADERS })
-    })
-  }
-
-  it('aggregates tokens and cost per session and sorts by total_tokens desc', async () => {
-    routeMetrics(
-      [
-        { timestamp: '2024-01-01', count: 2, sum: 100, session_id: 's1' },
-        { timestamp: '2024-01-02', count: 3, sum: 50, session_id: 's1' },
-        { timestamp: '2024-01-01', count: 1, sum: 500, session_id: 's2' },
-      ],
-      [
-        { timestamp: '2024-01-01', count: 2, sum: 1.5, session_id: 's1' },
-        { timestamp: '2024-01-01', count: 1, sum: 9.0, session_id: 's2' },
-      ],
-    )
-    const r = await setup().getSessionStats()
-    expect(r.from).toBe('F')
-    expect(r.to).toBe('T')
-    expect(r.sessions.map((s) => s.session_id)).toEqual(['s2', 's1'])
-
-    const s1 = r.sessions.find((s) => s.session_id === 's1')!
-    expect(s1.total_tokens).toBe(150)
-    expect(s1.event_count).toBe(5)
-    expect(s1.total_cost).toBe(1.5)
-    expect(s1.first_seen).toBe('2024-01-01')
-    expect(s1.last_seen).toBe('2024-01-02')
-
-    const s2 = r.sessions.find((s) => s.session_id === 's2')!
-    expect(s2.total_tokens).toBe(500)
-    expect(s2.total_cost).toBe(9.0)
+describe('useTelemetry getSessionStats', () => {
+  it('fetches server-aggregated sessions with every filter', async () => {
+    const payload = { from_time: 'a', to_time: 'b', sessions: [] }
+    const fetchMock = mockJson(payload)
+    const r = await setup().getSessionStats({ apiKeyId: 4, userId: 9 })
+    expect(r).toEqual(payload)
+    const { url } = callTo(fetchMock, '/telemetry/sessions')
+    expect(url).toContain('api_key_id=4')
+    expect(url).toContain('user_id=9')
   })
 
-  it('skips data points with no session_id', async () => {
-    routeMetrics(
-      [
-        { timestamp: 't', count: 1, sum: 10, session_id: null },
-        { timestamp: 't', count: 1, sum: 20, session_id: 's1' },
-      ],
-      [],
-    )
-    const r = await setup().getSessionStats()
-    expect(r.sessions).toHaveLength(1)
-    expect(r.sessions[0].session_id).toBe('s1')
+  it('throws a status-bearing error on non-ok', async () => {
+    mockJson({}, 500)
+    await expect(setup().getSessionStats()).rejects.toThrow('Failed to fetch session stats: 500')
   })
+})
 
-  it('treats a null sum as zero when aggregating', async () => {
-    routeMetrics([{ timestamp: 't', count: 1, sum: null, session_id: 's1' }], [])
-    const r = await setup().getSessionStats()
-    expect(r.sessions[0].total_tokens).toBe(0)
-  })
-
-  it('ignores cost data for sessions absent from token data', async () => {
-    routeMetrics(
-      [{ timestamp: 't', count: 1, sum: 5, session_id: 's1' }],
-      [{ timestamp: 't', count: 1, sum: 99, session_id: 'orphan' }],
-    )
-    const r = await setup().getSessionStats()
-    expect(r.sessions).toHaveLength(1)
-    expect(r.sessions[0].session_id).toBe('s1')
-    expect(r.sessions[0].total_cost).toBe(0)
-  })
-
-  it('returns an empty session list when there is no data', async () => {
-    routeMetrics([], [])
-    const r = await setup().getSessionStats()
-    expect(r.sessions).toEqual([])
+describe('useTelemetry getApiKeysWithTelemetry', () => {
+  it('returns the keys for the selected user', async () => {
+    const keys = [{ id: 4, name: 'laptop', key_type: 'internal', user_id: 9, revoked: false }]
+    const fetchMock = mockJson(keys)
+    const r = await setup().getApiKeysWithTelemetry(9)
+    expect(r).toEqual(keys)
+    expect(callTo(fetchMock, '/telemetry/api-keys').url).toContain('user_id=9')
   })
 })

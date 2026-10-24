@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from memory.common.db.connection import make_session
-from memory.common.db.models import TelemetryEvent
+from memory.common.db.models import APIKey, TelemetryEvent
 
 logger = logging.getLogger(__name__)
 
@@ -271,12 +271,15 @@ def record_event(
         session.commit()
 
 
-def write_events_to_db(events: list[ParsedTelemetryEvent], user_id: int) -> int:
+def write_events_to_db(
+    events: list[ParsedTelemetryEvent], user_id: int, api_key_id: int | None = None
+) -> int:
     """Write parsed events to the database.
 
     Args:
         events: List of parsed telemetry events
         user_id: ID of the user who reported these events
+        api_key_id: ID of the API key that sent them, if any
 
     Returns:
         Number of events written
@@ -285,10 +288,15 @@ def write_events_to_db(events: list[ParsedTelemetryEvent], user_id: int) -> int:
         return 0
 
     with make_session() as session:
+        # The key may have been deleted since the request was authenticated;
+        # a dangling id would fail the foreign key and lose the whole batch.
+        if api_key_id is not None and session.get(APIKey, api_key_id) is None:
+            api_key_id = None
         for event in events:
             db_event = TelemetryEvent(
                 timestamp=event.timestamp,
                 user_id=user_id,
+                api_key_id=api_key_id,
                 event_type=event.event_type,
                 name=event.name,
                 value=event.value,

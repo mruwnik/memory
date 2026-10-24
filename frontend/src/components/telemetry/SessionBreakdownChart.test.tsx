@@ -15,7 +15,9 @@ vi.mock('recharts', () => {
       <div data-testid="cell" data-fill={String(fill ?? '')} />
     ),
     XAxis: () => <div />,
-    YAxis: () => <div />,
+    YAxis: ({ dataKey, tickFormatter }: { dataKey?: string; tickFormatter?: (v: string) => string }) => (
+      <div data-testid="yaxis" data-key={dataKey} data-tick-for-a={tickFormatter?.('a')} />
+    ),
     CartesianGrid: () => <div />,
     Tooltip: () => <div />,
   }
@@ -29,6 +31,9 @@ const readData = () =>
 
 const makeSession = (overrides: Partial<SessionStats>): SessionStats => ({
   session_id: 'sess',
+  label: 'sess',
+  summary: null,
+  project: null,
   total_tokens: 0,
   total_cost: 0,
   event_count: 0,
@@ -38,8 +43,8 @@ const makeSession = (overrides: Partial<SessionStats>): SessionStats => ({
 })
 
 const makeResponse = (sessions: SessionStats[]): SessionStatsResponse => ({
-  from: '2026-05-29T00:00:00Z',
-  to: '2026-05-29T01:00:00Z',
+  from_time: '2026-05-29T00:00:00Z',
+  to_time: '2026-05-29T01:00:00Z',
   sessions,
 })
 
@@ -58,6 +63,19 @@ describe('SessionBreakdownChart', () => {
     render(<SessionBreakdownChart data={data} />)
     expect(screen.getByText('No session data available')).toBeInTheDocument()
     expect(screen.queryByTestId('chart')).not.toBeInTheDocument()
+  })
+
+  it('plots each session on a unique category even when labels collide', () => {
+    const data = makeResponse([
+      makeSession({ session_id: 'a', label: 'memory · 2026-05-29', total_tokens: 100 }),
+      makeSession({ session_id: 'b', label: 'memory · 2026-05-29', total_tokens: 50 }),
+    ])
+    render(<SessionBreakdownChart data={data} />)
+    const axis = screen.getByTestId('yaxis')
+    const key = axis.getAttribute('data-key') as string
+    const categories = readData().map((d: Record<string, string>) => d[key])
+    expect(new Set(categories).size).toBe(2)
+    expect(axis.getAttribute('data-tick-for-a')).toBe('memory · 2026-05-29')
   })
 
   it('sorts sessions by total tokens descending by default', () => {
@@ -128,12 +146,22 @@ describe('SessionBreakdownChart', () => {
     expect(screen.getByText('Showing 10 of 10 sessions')).toBeInTheDocument()
   })
 
-  it('truncates long session ids in the chart label', () => {
+  it('labels each bar with the session name and keeps the summary and id for the tooltip', () => {
     const data = makeResponse([
-      makeSession({ session_id: 'abcdefghijklmnopqrstuvwxyz', total_tokens: 1 }),
+      makeSession({
+        session_id: 'ec2a0d98-dbca-4399-92fc-516ad323da36',
+        label: 'Added API key grouping',
+        summary: 'Added API key grouping. Then tests.',
+        total_tokens: 1,
+      }),
     ])
     render(<SessionBreakdownChart data={data} />)
-    expect(readData()[0].sessionId).toBe('abcdefgh...uvwxyz')
+    const [bar] = readData()
+    expect([bar.label, bar.summary, bar.fullSessionId]).toEqual([
+      'Added API key grouping',
+      'Added API key grouping. Then tests.',
+      'ec2a0d98-dbca-4399-92fc-516ad323da36',
+    ])
   })
 
   it('renders category count legend badges', () => {

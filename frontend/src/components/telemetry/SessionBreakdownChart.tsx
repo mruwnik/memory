@@ -80,8 +80,10 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
   // Sort by selected metric and take top N
   const sortedSessions = [...data.sessions].sort((a, b) => getSortValue(b) - getSortValue(a))
   const chartData = sortedSessions.slice(0, showCount).map(session => ({
-    sessionId: formatSessionId(session.session_id),
+    label: session.label,
     fullSessionId: session.session_id,
+    summary: session.summary,
+    project: session.project,
     value: getSortValue(session),
     total_tokens: session.total_tokens,
     total_cost: session.total_cost,
@@ -91,6 +93,8 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
     category: getCategory(session.total_tokens),
   }))
 
+  // Labels aren't unique, and recharts merges equal category values, so bars are keyed by id.
+  const labels = new Map(data.sessions.map(s => [s.session_id, s.label]))
   const maxValue = chartData.length > 0 ? Math.max(...chartData.map(d => d.value)) : 1
 
   // Count sessions by category (single pass)
@@ -147,7 +151,7 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
         <BarChart
           data={chartData}
           layout="vertical"
-          margin={{ top: 5, right: 30, left: 110, bottom: 5 }}
+          margin={{ top: 5, right: 30, left: 10, bottom: 5 }}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
           <XAxis
@@ -159,24 +163,26 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
           />
           <YAxis
             type="category"
-            dataKey="sessionId"
+            dataKey="fullSessionId"
+            tickFormatter={(id: string) => labels.get(id) ?? id}
             tick={{ fontSize: 11 }}
             stroke="#94a3b8"
-            width={105}
+            width={230}
           />
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload || !payload.length) return null
               const d = payload[0].payload
               return (
-                <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-lg text-sm min-w-[260px]">
+                <div className="bg-white border border-slate-200 rounded-lg p-3 shadow-lg text-sm min-w-[260px] max-w-sm">
                   <div className="flex items-center gap-2 mb-2">
                     <span
-                      className="w-3 h-3 rounded-full"
+                      className="w-3 h-3 rounded-full shrink-0"
                       style={{ backgroundColor: categoryColors[d.category as UsageCategory] }}
                     />
-                    <p className="font-semibold text-slate-800">{d.fullSessionId}</p>
+                    <p className="font-semibold text-slate-800">{d.label}</p>
                   </div>
+                  {d.summary && <p className="text-slate-600 mb-2">{d.summary}</p>}
                   <div className="space-y-1.5 text-slate-600">
                     <p>
                       <span className="text-slate-500">Tokens:</span>{' '}
@@ -191,6 +197,8 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
                       <span className="font-medium">{d.event_count}</span>
                     </p>
                     <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-500">
+                      {d.project && <p className="break-all">{d.project}</p>}
+                      <p className="font-mono break-all">{d.fullSessionId}</p>
                       <p>First seen: {formatTimestamp(d.first_seen)}</p>
                       <p>Last seen: {formatTimestamp(d.last_seen)}</p>
                     </div>
@@ -215,12 +223,6 @@ export const SessionBreakdownChart: React.FC<SessionBreakdownChartProps> = ({ da
       </div>
     </div>
   )
-}
-
-function formatSessionId(id: string): string {
-  // Truncate long session IDs to show beginning and end
-  if (id.length <= 16) return id
-  return `${id.slice(0, 8)}...${id.slice(-6)}`
 }
 
 function formatNumber(value: number): string {
