@@ -34,7 +34,7 @@ GENERIC_BODY = {
 }
 
 
-def make_account(db_session, user_id, *, provider="generic", secret=SECRET, active=True, tags=None):
+def make_account(db_session, user_id, *, provider="generic", secret: str | None = SECRET, active=True, tags=None):
     account = TranscriptAccount(
         user_id=user_id,
         name=f"push-{provider}",

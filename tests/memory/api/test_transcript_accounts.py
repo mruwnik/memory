@@ -17,7 +17,7 @@ def make_account(
     *,
     name="Personal",
     provider="fireflies",
-    api_key="ff_test_key",
+    api_key: str | None = "ff_test_key",
     webhook_secret=None,
     tags=None,
     project_id=None,
@@ -375,6 +375,7 @@ def test_update_account_active_toggle_round_trip(client, user, db_session):
 def test_update_account_rotates_api_key(client, user, db_session):
     """PATCH api_key=<new> rotates the key (stored bytes change, decrypts to new)."""
     account = make_account(db_session, user.id, name="rot", api_key="old-key")
+    assert account.api_key_encrypted is not None
     old_encrypted = bytes(account.api_key_encrypted)
 
     response = client.patch(
@@ -383,6 +384,7 @@ def test_update_account_rotates_api_key(client, user, db_session):
     assert response.status_code == 200
 
     db_session.refresh(account)
+    assert account.api_key_encrypted is not None
     new_encrypted = bytes(account.api_key_encrypted)
     assert new_encrypted != old_encrypted
     assert account.api_key == "new-key"
@@ -411,6 +413,7 @@ def test_generate_webhook_secret_returns_it_once(client, user, db_session):
     assert data["ingest_url"].endswith(f"/transcripts/ingest/{account.id}")
     db_session.refresh(account)
     assert account.webhook_secret == secret
+    assert account.webhook_secret_encrypted is not None
     assert secret.encode() not in bytes(account.webhook_secret_encrypted)
     listed = client.get(f"/transcript-accounts/{account.id}").json()
     assert listed["webhook_secret_hint"] == secret[-4:]
