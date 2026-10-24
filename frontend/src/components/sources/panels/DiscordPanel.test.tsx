@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { DiscordPanel } from './DiscordPanel'
@@ -43,6 +43,10 @@ const routes = (opts: { bots?: unknown[]; servers?: unknown[]; users?: unknown[]
 beforeEach(() => {
   clearCookies()
   setAuthCookies()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('DiscordPanel load states', () => {
@@ -152,8 +156,9 @@ describe('DiscordPanel bot actions', () => {
     expect(del).toBeFalsy()
   })
 
-  it('opens the bot invite url in a new tab', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+  it('opens the tab during the click and then points it at the invite url, without an opener', async () => {
+    const popup = { location: { href: '' }, close: vi.fn(), opener: window as Window | null }
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window)
     mockFetchRoutes({
       '/discord/bots/bot-1/invite': { json: { invite_url: 'https://discord.com/invite/xyz' } },
       ...routes({ bots: [bot] }),
@@ -161,7 +166,21 @@ describe('DiscordPanel bot actions', () => {
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add to server' }))
-    await waitFor(() => expect(openSpy).toHaveBeenCalledWith('https://discord.com/invite/xyz', '_blank'))
+    expect(openSpy).toHaveBeenCalledWith('', '_blank', expect.any(String))
+    await waitFor(() => expect(popup.location.href).toBe('https://discord.com/invite/xyz'))
+    expect(popup.opener).toBeNull()
+  })
+
+  it('offers the invite as a link when the popup is blocked', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    mockFetchRoutes({
+      '/discord/bots/bot-1/invite': { json: { invite_url: 'https://discord.com/invite/xyz' } },
+      ...routes({ bots: [bot] }),
+    })
+    const { user } = renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Add to server' }))
+    expect(await screen.findByRole('link', { name: 'Open the Discord invite' })).toHaveAttribute('href', 'https://discord.com/invite/xyz')
   })
 })
 
@@ -173,7 +192,7 @@ describe('DiscordPanel servers', () => {
     await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
     expect(await screen.findByText('My Server')).toBeInTheDocument()
     expect(screen.getByText('42 members')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Not collecting' })).toBeInTheDocument()
+    expect(screen.getByText('Paused')).toBeInTheDocument()
   })
 
   it('toggles server message collection with a PATCH', async () => {
@@ -182,7 +201,7 @@ describe('DiscordPanel servers', () => {
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
     await screen.findByText('My Server')
-    await user.click(screen.getByRole('button', { name: 'Not collecting' }))
+    await user.click(screen.getByRole('button', { name: 'Resume' }))
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/discord/servers/srv-1') && (init as RequestInit)?.method === 'PATCH',
@@ -275,12 +294,10 @@ describe('DiscordPanel channels', () => {
     await screen.findByText('My Server')
     await user.click(screen.getByRole('button', { name: /Channels/ }))
     expect(await screen.findByText('general')).toBeInTheDocument()
-    // collect_messages null => inheriting; effective_collect mirrors the MCP
-    // resolved value (also null here) so it renders "Inherit (no)".
-    expect(screen.getByText('Inherit (no)')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Collect messages' })).toHaveDisplayValue('Inherit (collect)')
   })
 
-  it('renders explicit collecting and skipping channel states', async () => {
+  it('renders explicit collect and skip channel states', async () => {
     mockFetchRoutes({
       ...routes({ bots: [bot], servers: [server] }),
       '/mcp/discord_list_channels': mcp({
@@ -296,11 +313,11 @@ describe('DiscordPanel channels', () => {
     await screen.findByText('My Server')
     await user.click(screen.getByRole('button', { name: /Channels/ }))
     await screen.findByText('on-chan')
-    expect(screen.getByText('Collecting')).toBeInTheDocument()
-    expect(screen.getByText('Skipping')).toBeInTheDocument()
+    const selects = screen.getAllByRole('combobox', { name: 'Collect messages' })
+    expect(selects.map(s => (s as HTMLSelectElement).value)).toEqual(['collect', 'skip'])
   })
 
-  it('cycles a channel collect state (inherit -> on) with a PATCH', async () => {
+  it('sets a channel to skip in one PATCH', async () => {
     const mock = mockFetchRoutes({
       ...routes({ bots: [bot], servers: [server] }),
       '/mcp/discord_list_channels': mcp({ channels: [mcpChannel({ collect_messages: null })] }),
@@ -311,14 +328,14 @@ describe('DiscordPanel channels', () => {
     await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
     await screen.findByText('My Server')
     await user.click(screen.getByRole('button', { name: /Channels/ }))
-    const chanBtn = await screen.findByText(/Inherit/)
-    await user.click(chanBtn)
+    await screen.findByText('general')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Collect messages' }), 'skip')
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/discord/channels/chan-1') && (init as RequestInit)?.method === 'PATCH',
       )
       expect(patch).toBeTruthy()
-      expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ collect_messages: true })
+      expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ collect_messages: false })
     })
   })
 
@@ -346,7 +363,7 @@ describe('DiscordPanel channels', () => {
     })
   })
 
-  it('shows the loading placeholder before channels arrive', async () => {
+  it('says so when a server has no channels', async () => {
     mockFetchRoutes({
       ...routes({ bots: [bot], servers: [server] }),
       '/mcp/discord_list_channels': mcp({ channels: [] }),
@@ -356,7 +373,21 @@ describe('DiscordPanel channels', () => {
     await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
     await screen.findByText('My Server')
     await user.click(screen.getByRole('button', { name: /Channels/ }))
-    expect(await screen.findByText('Loading...')).toBeInTheDocument()
+    expect(await screen.findByText('No channels')).toBeInTheDocument()
+  })
+
+  it('shows a channel load failure with a retry', async () => {
+    mockFetchRoutes({
+      ...routes({ bots: [bot], servers: [server] }),
+      '/mcp/discord_list_channels': { status: 500, json: {} },
+    })
+    const { user } = renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Servers \(1\)/ }))
+    await screen.findByText('My Server')
+    await user.click(screen.getByRole('button', { name: /Channels/ }))
+    expect(await screen.findByText(/Couldn't load channels/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })
 
@@ -402,6 +433,18 @@ describe('DiscordPanel manage users', () => {
       )
       expect(del).toBeTruthy()
     })
+  })
+
+  it('reports a failed user load instead of opening an empty list', async () => {
+    mockFetchRoutes({
+      '/discord/bots/bot-1/users': { status: 500, json: { detail: 'bot users down' } },
+      ...routes({ bots: [bot] }),
+    })
+    const { user } = renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Manage users' }))
+    expect(await screen.findByText(/bot users down/)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('disables removal of the last authorized user', async () => {

@@ -24,11 +24,6 @@ const contactLink = (key: string, value: string) =>
     : value
 
 const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams, teamsLoading, tidbits, tidbitsLoading, select }: PersonCardProps) => {
-  const hasDetails = (person.aliases && person.aliases.length > 0) ||
-    (person.contact_info && Object.keys(person.contact_info).length > 0) ||
-    (teams && teams.length > 0) ||
-    (tidbits && tidbits.length > 0)
-
   // Nested objects (e.g. Slack workspace data) aren't contact details
   const contacts = Object.entries(person.contact_info ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')
 
@@ -41,8 +36,8 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
         </span>
       </div>}
       title={person.display_name}
-      onSelect={hasDetails ? onToggleExpand : undefined}
-      expanded={hasDetails ? expanded : undefined}
+      onSelect={onToggleExpand}
+      expanded={expanded}
       badges={person.tags?.map(tag => <Badge key={tag}>{tag}</Badge>)}
       meta={[`@${person.identifier}`]}
       actions={<>
@@ -50,7 +45,7 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
         <ConfirmButton confirm={`Delete ${person.display_name}? This cannot be undone.`} onConfirm={onDelete} />
       </>}
     >
-      {expanded && hasDetails && (
+      {expanded && (
         <>
           <DetailList items={[
             ['Also known as', !!person.aliases?.length && (
@@ -62,24 +57,22 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
             )],
             ['Added', person.created_at && new Date(person.created_at).toLocaleDateString()],
           ]} />
-          {(tidbitsLoading || !!tidbits?.length) && (
-            <SubList title={tidbitsLoading ? 'Tidbits' : `Tidbits (${tidbits!.length})`} empty={tidbitsLoading && 'Loading tidbits...'}>
-              {!tidbitsLoading && tidbits!.map(tidbit => (
-                <Row
-                  key={tidbit.id}
-                  title={<span className="font-normal whitespace-pre-wrap">{tidbit.content}</span>}
-                  badges={<>
-                    {tidbit.tidbit_type && <Badge>{tidbit.tidbit_type}</Badge>}
-                    {tidbit.sensitivity && tidbit.sensitivity !== 'basic' && (
-                      <Badge tone={SENSITIVITY_TONES[tidbit.sensitivity] ?? 'warning'}>{tidbit.sensitivity}</Badge>
-                    )}
-                    {tidbit.tags?.map((tag, i) => <Badge tone="info" key={i}>{tag}</Badge>)}
-                  </>}
-                  meta={[tidbit.source, tidbit.inserted_at && new Date(tidbit.inserted_at).toLocaleDateString()]}
-                />
-              ))}
-            </SubList>
-          )}
+          <SubList title={tidbits?.length ? `Tidbits (${tidbits.length})` : 'Tidbits'} empty={tidbitsLoading ? 'Loading tidbits...' : 'No tidbits yet'}>
+            {!tidbitsLoading && tidbits?.map(tidbit => (
+              <Row
+                key={tidbit.id}
+                title={<span className="font-normal whitespace-pre-wrap">{tidbit.content}</span>}
+                badges={<>
+                  {tidbit.tidbit_type && <Badge>{tidbit.tidbit_type}</Badge>}
+                  {tidbit.sensitivity && tidbit.sensitivity !== 'basic' && (
+                    <Badge tone={SENSITIVITY_TONES[tidbit.sensitivity] ?? 'warning'}>{tidbit.sensitivity}</Badge>
+                  )}
+                  {tidbit.tags?.map((tag, i) => <Badge tone="info" key={i}>{tag}</Badge>)}
+                </>}
+                meta={[tidbit.source, tidbit.inserted_at && new Date(tidbit.inserted_at).toLocaleDateString()]}
+              />
+            ))}
+          </SubList>
         </>
       )}
     </Row>

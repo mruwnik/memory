@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useBooks, Book } from '@/hooks/useBooks'
-import { Badge, EmptyState, ErrorState, List, LoadingState, Notice, Row, Section, buttonClass } from '@/components/shared/ui'
+import { Badge, EmptyState, ErrorState, List, LoadingState, Notice, Row, Section } from '@/components/shared/ui'
+import { FileButton } from '../shared'
 
 export const BooksPanel = () => {
   const { listBooks, uploadBook } = useBooks()
@@ -13,11 +14,10 @@ export const BooksPanel = () => {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadBooks = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const data = await listBooks()
       setBooks(data)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load books')
     } finally {
@@ -59,11 +59,8 @@ export const BooksPanel = () => {
       title="Books"
       description={`${books.length} books`}
       actions={
-        <label className={buttonClass('primary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
-          {uploading ? 'Uploading...' : 'Upload books'}
-          <input ref={fileInputRef} type="file" accept=".epub,.pdf,.mobi,.azw,.azw3" multiple
-            onChange={handleUpload} disabled={uploading} className="hidden" />
-        </label>
+        <FileButton inputRef={fileInputRef} label="Upload books" busy={uploading}
+          accept=".epub,.pdf,.mobi,.azw,.azw3" multiple onChange={handleUpload} />
       }
     >
       {uploadError && <Notice tone="error">{uploadError}</Notice>}

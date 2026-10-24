@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
+import { Link, useNavigate } from 'react-router-dom'
 import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 
 // Stub every child panel so the container test exercises only tab/URL/context
@@ -29,6 +30,11 @@ vi.mock('../common/UserSelector', async () => {
 })
 
 import Sources from './Sources'
+
+const Back = () => {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>back</button>
+}
 
 const meWith = (scopes: string[]) => ({
   json: { user_id: 1, name: 'Admin', email: 'a@b.c', user_type: 'human', scopes },
@@ -81,5 +87,17 @@ describe('Sources container', () => {
     mockFetchRoutes({ '/auth/me': meWith(['*']), __default: { json: {} } })
     renderWithRouter(<Sources />)
     await waitFor(() => expect(screen.getByTestId('user-selector')).toBeInTheDocument())
+  })
+
+  it('follows the URL when a link elsewhere or Back changes ?tab=', async () => {
+    mockFetchRoutes({ '/auth/me': meWith(['teams']), __default: { json: {} } })
+    const { user } = renderWithRouter(<><Link to="/?tab=secrets">Secrets link</Link><Back /><Sources /></>)
+    await user.click(screen.getByRole('link', { name: 'Secrets link' }))
+    expect(screen.getByTestId('panel-secrets')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Secrets' })).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Email' }))
+    expect(screen.getByTestId('panel-email')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'back' }))
+    expect(screen.getByTestId('panel-secrets')).toBeInTheDocument()
   })
 })

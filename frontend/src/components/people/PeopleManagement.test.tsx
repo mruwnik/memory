@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpResult, mcpCallsTo } from '../../hooks/mcpEnvelope.testhelper'
@@ -57,6 +58,20 @@ describe('PeopleManagement list states', () => {
     expect(await screen.findByText('Alice')).toBeInTheDocument()
     expect(screen.getByText('Bob')).toBeInTheDocument()
     expect(screen.getByText('Showing 2 people')).toBeInTheDocument()
+  })
+
+  it('says the list was capped even when a team filter leaves fewer people', async () => {
+    const many = Array.from({ length: 200 }, (_, i) => person({ id: i + 1, identifier: `p${i}`, display_name: `P${i}` }))
+    mockFetchRoutes({
+      '/auth/me': authMe,
+      people_list_all: mcpResult(many),
+      teams_list_all: mcpResult({ teams: [{ id: 5, name: 'Core' }], count: 1 }),
+      teams_fetch: mcpResult({ team: { id: 5, name: 'Core', members: [{ identifier: 'p1' }] } }),
+    })
+    const user = userEvent.setup()
+    renderWithRouter(<PeopleManagement />)
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Team' }), '5')
+    expect(await screen.findByText(/Showing 1 person, from the first 200 loaded/)).toBeInTheDocument()
   })
 
   it('shows an error banner when the list call rejects', async () => {
@@ -271,6 +286,24 @@ describe('PeopleManagement merge flow', () => {
       const merge = mcpCallsTo(fetchMock, 'people_merge')[0]
       expect(merge).toBeTruthy()
     })
+  })
+
+  it('shows a merge failure inside the merge modal', async () => {
+    mockFetchRoutes({
+      '/auth/me': authMe,
+      people_list_all: mcpResult([person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })]),
+      teams_list_all: mcpResult({ teams: [], count: 0 }),
+      people_merge: mcpResult({ success: false, error: 'merge refused' }),
+    })
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await screen.findByText('Alice')
+    const checkboxes = screen.getAllByRole('checkbox', { name: /for merge/ })
+    await user.click(checkboxes[0])
+    expect(screen.getByText('Select one more person to merge')).toBeInTheDocument()
+    await user.click(checkboxes[1])
+    await user.click(screen.getByRole('button', { name: /Merge$/ }))
+    await user.click(screen.getByRole('button', { name: 'Merge people' }))
+    expect(await within(screen.getByRole('dialog')).findByText('merge refused')).toBeInTheDocument()
   })
 
   it('clears merge selection', async () => {

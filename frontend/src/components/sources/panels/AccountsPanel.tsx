@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, GithubAccount, GoogleAccount, GoogleOAuthConfig, GoogleAvailableScopes } from '@/hooks/useSources'
-import { SourceRow, StatusBadge, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, Section, Select, Textarea, buttonClass, useActionNotice } from '@/components/shared/ui'
+import { FileButton, PopupBlockedNotice, SourceRow, StatusBadge, SyncFailingBadge, SyncFailure, formatRelativeTime, openPopup } from '../shared'
+import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, Section, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
+import { useAuth } from '@/hooks/useAuth'
 
 export const AccountsPanel = () => {
   const {
@@ -11,6 +12,7 @@ export const AccountsPanel = () => {
     getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
   } = useSources()
   const { userId } = useSourcesContext()
+  const { user: authUser } = useAuth()
 
   const [githubAccounts, setGithubAccounts] = useState<GithubAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
@@ -27,27 +29,21 @@ export const AccountsPanel = () => {
   const [reauthorizingAccountId, setReauthorizingAccountId] = useState<number | null>(null)
   const [validations, setValidations] = useState<Record<number, { status: string; message: string }>>({})
   const { run, notice } = useActionNotice()
+  const [googleWait, setGoogleWait] = useState<'waiting' | 'timeout' | null>(null)
+  const [blockedGoogleUrl, setBlockedGoogleUrl] = useState<string | null>(null)
 
-  // Track polling intervals for cleanup
-  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Refs to avoid stale closures in polling callbacks
-  const googleAccountsRef = useRef(googleAccounts)
-  const reauthorizingAccountIdRef = useRef(reauthorizingAccountId)
-  googleAccountsRef.current = googleAccounts
-  reauthorizingAccountIdRef.current = reauthorizingAccountId
+  const configInputRef = useRef<HTMLInputElement>(null)
+  const waitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Cleanup intervals on unmount
-  useEffect(() => {
-    return () => {
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
-      if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
-    }
-  }, [])
+  const stopWaiting = (outcome: 'timeout' | null = null) => {
+    if (waitTimeoutRef.current) clearTimeout(waitTimeoutRef.current)
+    waitTimeoutRef.current = null
+    setGoogleWait(outcome)
+  }
+
+  useEffect(() => () => { if (waitTimeoutRef.current) clearTimeout(waitTimeoutRef.current) }, [])
 
   const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const [githubData, googleData, configData] = await Promise.all([
         listGithubAccounts(userId),
@@ -57,6 +53,7 @@ export const AccountsPanel = () => {
       setGithubAccounts(githubData)
       setGoogleAccounts(googleData)
       setOauthConfig(configData)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
@@ -100,6 +97,7 @@ export const AccountsPanel = () => {
   // Google handlers
   const handleConfigUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
 
     setUploadingConfig(true)
@@ -121,29 +119,30 @@ export const AccountsPanel = () => {
 
   const handleConnectGoogle = () => openScopeModal(null)
 
+  // Google's callback page posts here once the account is saved (google_callback in google_drive.py).
+  // The popup's closed state isn't used: Google's COOP headers can make it read closed mid-sign-in.
+  useEffect(() => {
+    if (googleWait !== 'waiting' || !authUser) return
+    const channel = new BroadcastChannel(`google-oauth-${authUser.id}`)
+    channel.onmessage = event => {
+      if (event.data?.type !== 'oauth-complete') return
+      stopWaiting()
+      setBlockedGoogleUrl(null)
+      run(async () => setGoogleAccounts(await listGoogleAccounts(userId)))
+    }
+    return () => channel.close()
+  }, [googleWait, authUser, run, listGoogleAccounts, userId])
+
   const handleScopeSelectionConfirm = () => {
     setShowScopeModal(false)
+    stopWaiting()
     return run(async () => {
-      const { authorization_url } = reauthorizingAccountId !== null
+      const { blockedUrl } = await openPopup(async () => (reauthorizingAccountId !== null
         ? await reauthorizeGoogleAccount(reauthorizingAccountId, selectedScopes)
-        : await getGoogleAuthUrl(selectedScopes)
-      window.open(authorization_url, '_blank', 'width=600,height=700')
-      // Clear any existing polling
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
-      if (pollingTimeoutRef.current) clearTimeout(pollingTimeoutRef.current)
-      // Poll for new/updated accounts (use refs to avoid stale closure)
-      pollingIntervalRef.current = setInterval(async () => {
-        const newAccounts = await listGoogleAccounts()
-        if (newAccounts.length > googleAccountsRef.current.length || reauthorizingAccountIdRef.current !== null) {
-          setGoogleAccounts(newAccounts)
-          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
-          pollingIntervalRef.current = null
-        }
-      }, 2000)
-      pollingTimeoutRef.current = setTimeout(() => {
-        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current)
-        pollingIntervalRef.current = null
-      }, 60000)
+        : await getGoogleAuthUrl(selectedScopes)).authorization_url)
+      setBlockedGoogleUrl(blockedUrl)
+      setGoogleWait('waiting')
+      waitTimeoutRef.current = setTimeout(() => stopWaiting('timeout'), 5 * 60_000)
     })
   }
 
@@ -166,15 +165,20 @@ export const AccountsPanel = () => {
   if (error) return <ErrorState message={error} onRetry={loadData} />
 
   const uploadButton = (label: string) => (
-    <label className={buttonClass('secondary', 'sm')}>
-      {uploadingConfig ? 'Uploading...' : label}
-      <input type="file" accept=".json" onChange={handleConfigUpload} disabled={uploadingConfig} className="hidden" />
-    </label>
+    <FileButton inputRef={configInputRef} label={label} busy={uploadingConfig} accept=".json"
+      onChange={handleConfigUpload} variant="secondary" size="sm" />
   )
 
   return (
     <>
       {notice}
+      <PopupBlockedNotice url={blockedGoogleUrl} label="Open Google sign-in" onDismiss={() => setBlockedGoogleUrl(null)} />
+      {googleWait === 'waiting' && <Notice tone="info" onDismiss={() => stopWaiting()}>Waiting for Google. Finish signing in in the popup.</Notice>}
+      {googleWait === 'timeout' && (
+        <Notice tone="warning" onDismiss={() => setGoogleWait(null)}>
+          Stopped waiting for Google. If you finish signing in later, reload the page to see the account.
+        </Notice>
+      )}
       <Section title="GitHub accounts" actions={<Button variant="primary" onClick={() => setShowGithubForm(true)}>Add account</Button>}>
         {githubAccounts.length === 0 ? (
           <EmptyState
@@ -235,7 +239,7 @@ export const AccountsPanel = () => {
           </Card>
         ) : (
           <>
-            <Disclosure summary="OAuth Configuration">
+            <Disclosure summary="OAuth configuration">
               <div className="space-y-3">
                 <DetailList items={[
                   ['Project', oauthConfig.project_id],
@@ -386,7 +390,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
 
         {formData.auth_type === 'pat' ? (
           <Field label={<>
-              Access Token {account?.has_access_token && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
+              Access token {account?.has_access_token && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
             <Input
               type="password"
               value={formData.access_token}
@@ -414,7 +418,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
               />
             </Field>
             <Field label={<>
-                Private Key {account?.has_private_key && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
+                Private key {account?.has_private_key && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
               <Textarea
                 value={formData.private_key}
                 onChange={e => setFormData({ ...formData, private_key: e.target.value })}

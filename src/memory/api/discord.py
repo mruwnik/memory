@@ -498,8 +498,9 @@ def update_server(
     snap_pid, snap_sens = server.project_id, server.sensitivity
     if updates.collect_messages is not None:
         server.collect_messages = updates.collect_messages
-    if updates.project_id is not None:
-        assert_project_membership(db, user, updates.project_id)
+    if "project_id" in updates.model_fields_set:
+        if updates.project_id is not None:
+            assert_project_membership(db, user, updates.project_id)
         server.project_id = updates.project_id
     if updates.sensitivity is not None:
         server.sensitivity = updates.sensitivity
@@ -543,11 +544,13 @@ def update_channel(
     if channel.server and not user_can_manage_server(user, db, channel.server):
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    # Allow setting to None (inherit) - check if key is present, not if value is None
     snap_pid, snap_sens = channel.project_id, channel.sensitivity
-    channel.collect_messages = updates.collect_messages
-    if updates.project_id is not None:
-        assert_project_membership(db, user, updates.project_id)
+    # None is a value here (inherit, no project), so only fields sent in the body change.
+    if "collect_messages" in updates.model_fields_set:
+        channel.collect_messages = updates.collect_messages
+    if "project_id" in updates.model_fields_set:
+        if updates.project_id is not None:
+            assert_project_membership(db, user, updates.project_id)
         channel.project_id = updates.project_id
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity

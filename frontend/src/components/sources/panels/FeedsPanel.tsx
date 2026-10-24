@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, ArticleFeed } from '@/hooks/useSources'
 import { SourceRow, TagsInput, IntervalInput } from '../shared'
-import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea } from '@/components/shared/ui'
+import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const FeedsPanel = () => {
@@ -14,11 +14,10 @@ export const FeedsPanel = () => {
   const [editingFeed, setEditingFeed] = useState<ArticleFeed | null>(null)
 
   const loadFeeds = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const data = await listArticleFeeds(userId)
       setFeeds(data)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load feeds')
     } finally {
@@ -28,60 +27,43 @@ export const FeedsPanel = () => {
 
   useEffect(() => { loadFeeds() }, [loadFeeds])
 
+  const { run, notice } = useActionNotice()
+
+  // Form handlers throw, so the open modal shows the failure and keeps the input.
   const handleCreate = async (data: any) => {
-    try {
-      await createArticleFeed(data)
-      setShowForm(false)
-      loadFeeds()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create feed')
-    }
+    await createArticleFeed(data)
+    setShowForm(false)
+    loadFeeds()
   }
 
   const handleUpdate = async (data: any) => {
-    if (editingFeed) {
-      try {
-        await updateArticleFeed(editingFeed.id, data)
-        setEditingFeed(null)
-        loadFeeds()
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to update feed')
-      }
-    }
+    if (!editingFeed) return
+    await updateArticleFeed(editingFeed.id, data)
+    setEditingFeed(null)
+    loadFeeds()
   }
 
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteArticleFeed(id)
-      loadFeeds()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete feed')
-    }
-  }
+  const handleDelete = (id: number) => run(async () => {
+    await deleteArticleFeed(id)
+    loadFeeds()
+  })
 
-  const handleToggleActive = async (feed: ArticleFeed) => {
-    try {
-      await updateArticleFeed(feed.id, { active: !feed.active })
-      loadFeeds()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to toggle feed status')
-    }
-  }
+  const handleToggleActive = (feed: ArticleFeed) => run(async () => {
+    await updateArticleFeed(feed.id, { active: !feed.active })
+    loadFeeds()
+  })
 
-  const handleSync = async (id: number) => {
-    try {
-      await syncArticleFeed(id)
-      loadFeeds()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to sync feed')
-    }
-  }
+  const handleSync = (id: number) => run(async () => {
+    await syncArticleFeed(id)
+    loadFeeds()
+  })
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadFeeds} />
 
   return (
     <Section title="RSS feeds" actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add feed</Button>}>
+      {notice}
       {feeds.length === 0 ? (
         <EmptyState
           message="No RSS feeds configured"

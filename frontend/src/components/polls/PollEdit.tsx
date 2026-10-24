@@ -10,7 +10,16 @@ import {
   toUTCDatetime,
   fromUTCToLocal,
 } from '../../utils/timezones'
-import { Button, Card, Field, FieldRow, Input, Label, Notice, Page, Select, Textarea } from '@/components/shared/ui'
+import { rangeErrors } from './pollForm'
+import { Button, Card, Field, FieldRow, Input, Notice, Page, Select, Textarea, requiredLabel } from '@/components/shared/ui'
+
+const STATUS_LABELS: Record<PollStatus, string> = { open: 'Open', closed: 'Closed', finalized: 'Finalized', cancelled: 'Cancelled' }
+const STATUS_HINTS: Record<PollStatus, string> = {
+  open: 'Respondents can submit their availability',
+  closed: 'No new responses allowed, but not finalized yet',
+  finalized: 'Poll is complete with a scheduled time',
+  cancelled: 'Poll was cancelled and accepts no responses',
+}
 
 interface FormData {
   title: string
@@ -118,6 +127,7 @@ export const PollEdit: React.FC = () => {
   if (loading || !formData || !poll) {
     return <Page back={back} title="Edit poll" width="narrow" loading={loading && 'Loading poll...'} error={loading ? null : error ?? 'Poll not found'} />
   }
+  const errors = rangeErrors(formData)
 
   return (
     <Page back={back} title="Edit poll" width="narrow">
@@ -125,7 +135,7 @@ export const PollEdit: React.FC = () => {
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Poll title *">
+        <Field label={requiredLabel('Poll title')}>
           <Input
             type="text"
             id="title"
@@ -148,10 +158,7 @@ export const PollEdit: React.FC = () => {
           />
         </Field>
 
-        <div className="mb-4">
-          <Label htmlFor="status" className="mb-1">
-            Status
-          </Label>
+        <Field label="Status" hint={STATUS_HINTS[formData.status]}>
           <Select
             id="status"
             name="status"
@@ -160,17 +167,13 @@ export const PollEdit: React.FC = () => {
           >
             <option value="open">Open</option>
             <option value="closed">Closed</option>
-            <option value="finalized">Finalized</option>
+            {/* Finalizing needs a meeting time, so it happens on the results page; keep a finalized or cancelled poll's status selectable as-is. */}
+            {formData.status !== 'open' && formData.status !== 'closed' && <option value={formData.status}>{STATUS_LABELS[formData.status]}</option>}
           </Select>
-          <p className="mt-1 text-xs text-slate-500">
-            {formData.status === 'open' && 'Respondents can submit their availability'}
-            {formData.status === 'closed' && 'No new responses allowed, but not finalized yet'}
-            {formData.status === 'finalized' && 'Poll is complete with a scheduled time'}
-          </p>
-        </div>
+        </Field>
 
         <FieldRow>
-          <Field label="Start date *">
+          <Field label={requiredLabel('Start date')}>
             <Input
               type="date"
               id="date_start"
@@ -181,7 +184,7 @@ export const PollEdit: React.FC = () => {
             />
           </Field>
 
-          <Field label="End date *">
+          <Field label={requiredLabel('End date')} error={errors.date}>
             <Input
               type="date"
               id="date_end"
@@ -207,7 +210,7 @@ export const PollEdit: React.FC = () => {
             </Select>
           </Field>
 
-          <Field label="End hour">
+          <Field label="End hour" error={errors.hour}>
             <Select
               id="time_end"
               name="time_end"
@@ -222,10 +225,7 @@ export const PollEdit: React.FC = () => {
         </FieldRow>
 
         <FieldRow>
-          <div>
-            <Label htmlFor="slot_duration" className="mb-1">
-              Time slot duration
-            </Label>
+          <Field label="Time slot duration" hint={poll.response_count > 0 && 'Cannot change slot duration when responses exist'}>
             <Select
               id="slot_duration"
               name="slot_duration"
@@ -238,12 +238,7 @@ export const PollEdit: React.FC = () => {
               <option value={30}>30 minutes</option>
               <option value={60}>1 hour</option>
             </Select>
-            {poll.response_count > 0 && (
-              <p className="mt-1 text-xs text-slate-500">
-                Cannot change slot duration when responses exist
-              </p>
-            )}
-          </div>
+          </Field>
 
           <Field label="Display timezone">
             <Select
@@ -275,7 +270,7 @@ export const PollEdit: React.FC = () => {
           </Button>
           <Button variant="primary"
             type="submit"
-            disabled={isSubmitting || !formData.title}
+            disabled={isSubmitting || !formData.title || !!errors.date || !!errors.hour}
           >
             {isSubmitting ? 'Saving...' : 'Save changes'}
           </Button>

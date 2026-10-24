@@ -7,6 +7,7 @@ import pytest
 
 from memory.common.celery_app import SYNC_SLACK_WORKSPACE
 from memory.common.db.models import User, OAuthClientState
+from memory.common.db.models.sources import Project
 from memory.common.db.models.slack import (
     SlackApp,
     SlackChannel,
@@ -356,6 +357,35 @@ def test_update_channel_inherit_collect_messages(
     assert slack_channel.collect_messages is None
     # should_collect should inherit from workspace
     assert slack_channel.should_collect == slack_workspace.collect_messages
+
+
+@pytest.mark.parametrize(
+    "body, keeps_project",
+    [({"project_id": None}, False), ({"sensitivity": "internal"}, True)],
+)
+@pytest.mark.parametrize("target", ["workspace", "channel"])
+def test_update_changes_only_the_fields_sent(
+    client, db_session, user, slack_workspace, slack_credentials, slack_channel,
+    target, body, keeps_project,
+):
+    project = Project(title="Slack project", state="open")
+    db_session.add(project)
+    db_session.flush()
+    slack_workspace.project_id = slack_channel.project_id = project.id
+    slack_channel.collect_messages = False
+    db_session.commit()
+    row, url = {
+        "workspace": (slack_workspace, f"/slack/workspaces/{slack_workspace.id}"),
+        "channel": (slack_channel, f"/slack/channels/{slack_channel.id}"),
+    }[target]
+    collecting = row.collect_messages
+
+    response = client.patch(url, json=body)
+
+    assert response.status_code == 200
+    db_session.refresh(row)
+    assert (row.project_id is not None) is keeps_project
+    assert row.collect_messages is collecting
 
 
 def test_update_channel_not_found(client, db_session, user):

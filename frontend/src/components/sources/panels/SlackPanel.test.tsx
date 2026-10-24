@@ -127,7 +127,7 @@ describe('SlackPanel - load states', () => {
     expect(screen.getByText('2 channels')).toBeInTheDocument()
     expect(screen.getByText('5 connected users')).toBeInTheDocument()
     expect(screen.getByText('Collecting')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Collection on' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument()
   })
 
   it.each([
@@ -142,10 +142,11 @@ describe('SlackPanel - load states', () => {
     expect(screen.queryByText('Collecting')).not.toBeInTheDocument()
   })
 
-  it('shows no collection status when collection is off', async () => {
+  it('shows a paused workspace with a Resume action', async () => {
     listWorkspaces.mockResolvedValue([workspace({ collect_messages: false, poll_blocker: null })])
     renderWithUser(<SlackPanel />)
-    expect(await screen.findByRole('button', { name: 'Collection off' })).toHaveAttribute('aria-pressed', 'false')
+    expect(await screen.findByText('Paused')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.queryByText('Collecting')).not.toBeInTheDocument()
   })
 
@@ -216,7 +217,7 @@ describe('SlackPanel - workspace actions', () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
-    await user.click(screen.getByRole('button', { name: 'Collection on' }))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { collect_messages: false }))
   })
 
@@ -355,21 +356,58 @@ describe('SlackPanel - channels', () => {
     expect(await screen.findByText('general')).toBeInTheDocument()
   })
 
-  it('cycles channel collect state inherit -> on', async () => {
+  it.each([
+    [null, 'skip', false],
+    [null, 'collect', true],
+    [false, 'inherit', null],
+  ])('sets a channel with collect_messages %s to %s in one step', async (current, choice, sent) => {
+    listChannels.mockResolvedValue([channel({ collect_messages: current })])
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
     await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
     await screen.findByText('general')
-
-    // collect_messages is null (inherit) -> next should be true
-    const channelRow = screen.getByText('general').closest('li')!
-    await user.click(within(channelRow).getByRole('button', { name: /Inherit/ }))
-    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('C1', { collect_messages: true }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Collect messages' }), choice)
+    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('C1', { collect_messages: sent }))
+    expect(updateChannel).toHaveBeenCalledTimes(1)
   })
 
-  it('updates a channel project assignment', async () => {
-    listChannels.mockResolvedValue([channel()])
+  it('names what an inheriting channel inherits', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ collect_messages: false })])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    await screen.findByText('general')
+    expect(screen.getByRole('option', { name: 'Inherit (skip)' })).toBeInTheDocument()
+  })
+
+  it('says so when a workspace has no channels', async () => {
+    listChannels.mockResolvedValue([])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    expect(await screen.findByText('No channels')).toBeInTheDocument()
+    expect(screen.queryByText('Loading channels...')).not.toBeInTheDocument()
+  })
+
+  it('shows why channels failed to load and retries', async () => {
+    listChannels.mockRejectedValueOnce(new Error('slack 503'))
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    expect(await screen.findByText(/slack 503/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('general')).toBeInTheDocument()
+  })
+
+  it.each([
+    [null, '9', 9],
+    [9, '', null],
+  ])('changes a channel project from %s to %s', async (current, option, sent) => {
+    listChannels.mockResolvedValue([channel({ project_id: current })])
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
@@ -378,8 +416,8 @@ describe('SlackPanel - channels', () => {
 
     const channelRow = screen.getByText('general').closest('li')!
     const selects = within(channelRow).getAllByRole('combobox')
-    await user.selectOptions(selects[0], '9')
-    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('C1', { project_id: 9 }))
+    await user.selectOptions(selects[0], option)
+    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('C1', { project_id: sent }))
   })
 
   it('disables controls for an archived channel', async () => {

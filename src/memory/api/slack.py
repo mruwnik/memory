@@ -655,8 +655,9 @@ def update_workspace(
         workspace.collect_messages = updates.collect_messages
     if updates.sync_interval_seconds is not None:
         workspace.sync_interval_seconds = updates.sync_interval_seconds
-    if updates.project_id is not None:
-        assert_project_membership(db, user, updates.project_id)
+    if "project_id" in updates.model_fields_set:
+        if updates.project_id is not None:
+            assert_project_membership(db, user, updates.project_id)
         workspace.project_id = updates.project_id
     if updates.sensitivity is not None:
         workspace.sensitivity = updates.sensitivity
@@ -807,9 +808,11 @@ def update_channel(
     get_workspace_with_access(db, channel.workspace_id, user)
 
     snap_pid, snap_sens = channel.project_id, channel.sensitivity
-    channel.collect_messages = updates.collect_messages
-    if updates.project_id is not None:
-        assert_project_membership(db, user, updates.project_id)
+    if "collect_messages" in updates.model_fields_set:
+        channel.collect_messages = updates.collect_messages
+    if "project_id" in updates.model_fields_set:
+        if updates.project_id is not None:
+            assert_project_membership(db, user, updates.project_id)
         channel.project_id = updates.project_id
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity

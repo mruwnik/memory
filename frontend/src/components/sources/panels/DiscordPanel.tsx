@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
-import { AccessSelects, PauseButton, StatusBadge, SyncButton, formatRelativeTime } from '../shared'
+import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
@@ -28,7 +28,7 @@ export const DiscordPanel = () => {
 
   const [bots, setBots] = useState<DiscordBot[]>([])
   const [servers, setServers] = useState<DiscordServer[]>([])
-  const [channelsByServer, setChannelsByServer] = useState<Record<string, DiscordChannel[]>>({})
+  const [channelsByServer, setChannelsByServer] = useState<Record<string, DiscordChannel[] | Error>>({})
   const [projects, setProjects] = useState<Project[]>([])
   const [expandedBot, setExpandedBot] = useState<string | null>(null)
   const [expandedServer, setExpandedServer] = useState<string | null>(null)
@@ -38,11 +38,10 @@ export const DiscordPanel = () => {
   const [usersByBot, setUsersByBot] = useState<Record<string, BotUser[]>>({})
   const [allUsers, setAllUsers] = useState<User[]>([])
   const [managingUsersBot, setManagingUsersBot] = useState<DiscordBot | null>(null)
+  const [blockedInvite, setBlockedInvite] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const [botsData, projectsData] = await Promise.all([
         listBots(userId),
@@ -56,6 +55,7 @@ export const DiscordPanel = () => {
         const serversData = await listServers()
         setServers(serversData)
       }
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
@@ -68,13 +68,13 @@ export const DiscordPanel = () => {
   }, [loadData])
 
   const loadChannels = async (serverId: string) => {
-    if (channelsByServer[serverId]) return // Already loaded
-
+    if (Array.isArray(channelsByServer[serverId])) return
+    setChannelsByServer(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => id !== serverId)))
     try {
       const channels = await listChannels(serverId)
       setChannelsByServer(prev => ({ ...prev, [serverId]: channels }))
     } catch (e) {
-      console.error('Failed to load channels:', e)
+      setChannelsByServer(prev => ({ ...prev, [serverId]: e instanceof Error ? e : new Error(String(e)) }))
     }
   }
 
@@ -104,33 +104,16 @@ export const DiscordPanel = () => {
   })
 
   const handleGetInviteUrl = (botId: string) => run(async () => {
-    const result = await getBotInviteUrl(botId)
-    window.open(result.invite_url, '_blank')
+    const { blockedUrl } = await openPopup(async () => (await getBotInviteUrl(botId)).invite_url, '', false)
+    setBlockedInvite(blockedUrl)
   })
 
-  const loadBotUsers = async (botId: string) => {
-    if (usersByBot[botId]) return usersByBot[botId]
-    try {
-      const users = await listBotUsers(botId)
-      setUsersByBot(prev => ({ ...prev, [botId]: users }))
-      return users
-    } catch (e) {
-      console.error('Failed to load bot users:', e)
-      return []
-    }
-  }
-
-  const handleManageUsers = async (bot: DiscordBot) => {
-    // Load users for this bot and all system users
-    await loadBotUsers(bot.id)
-    try {
-      const users = await listUsers()
-      setAllUsers(users)
-    } catch (e) {
-      console.error('Failed to load users:', e)
-    }
+  const handleManageUsers = (bot: DiscordBot) => run(async () => {
+    const [botUsers, users] = await Promise.all([usersByBot[bot.id] ?? listBotUsers(bot.id), listUsers()])
+    setUsersByBot(prev => ({ ...prev, [bot.id]: botUsers }))
+    setAllUsers(users)
     setManagingUsersBot(bot)
-  }
+  })
 
   const handleAddUserToBot = async (botId: string, userId: number) => {
     await addBotUser(botId, userId)
@@ -172,31 +155,10 @@ export const DiscordPanel = () => {
       setChannelsByServer(prev => ({ ...prev, [channel.server_id!]: channels }))
     } else {
       // For DM channels (no server_id), update the channel in place
-      setChannelsByServer(prev => {
-        const updated = { ...prev }
-        for (const serverId of Object.keys(updated)) {
-          updated[serverId] = updated[serverId].map(ch =>
-            ch.id === channel.id ? updatedChannel : ch
-          )
-        }
-        return updated
-      })
+      setChannelsByServer(prev => Object.fromEntries(Object.entries(prev).map(([serverId, channels]) =>
+        [serverId, Array.isArray(channels) ? channels.map(ch => ch.id === channel.id ? updatedChannel : ch) : channels])))
     }
   })
-
-  const handleToggleChannelCollect = async (channel: DiscordChannel) => {
-    // Cycle through: inherit (null) -> on (true) -> off (false) -> inherit (null)
-    let newValue: boolean | null
-    if (channel.collect_messages === null) {
-      newValue = true
-    } else if (channel.collect_messages === true) {
-      newValue = false
-    } else {
-      newValue = null
-    }
-
-    await handleUpdateChannel(channel, { collect_messages: newValue })
-  }
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadData} />
@@ -204,6 +166,7 @@ export const DiscordPanel = () => {
   return (
     <Section title="Discord" actions={<Button variant="primary" onClick={() => setAddingBot(true)}>Add bot</Button>}>
       {notice}
+      <PopupBlockedNotice url={blockedInvite} label="Open the Discord invite" onDismiss={() => setBlockedInvite(null)} />
       {bots.length === 0 ? (
         <EmptyState
           message="No Discord bots configured. Add a bot to start collecting messages."
@@ -222,6 +185,7 @@ export const DiscordPanel = () => {
               expanded={expandedBot === bot.id}
               expandedServer={expandedServer}
               onToggleExpand={() => setExpandedBot(expandedBot === bot.id ? null : bot.id)}
+              onRetryChannels={loadChannels}
               onExpandServer={(serverId) => {
                 setExpandedServer(expandedServer === serverId ? null : serverId)
                 if (expandedServer !== serverId) {
@@ -233,7 +197,6 @@ export const DiscordPanel = () => {
               onDelete={() => handleDeleteBot(bot)}
               onToggleServerCollect={handleToggleServerCollect}
               onUpdateServer={handleUpdateServer}
-              onToggleChannelCollect={handleToggleChannelCollect}
               onUpdateChannel={handleUpdateChannel}
               onGetInviteUrl={() => handleGetInviteUrl(bot.id)}
               onManageUsers={() => handleManageUsers(bot)}
@@ -266,21 +229,21 @@ export const DiscordPanel = () => {
 interface BotCardProps {
   bot: DiscordBot
   servers: DiscordServer[]
-  channelsByServer: Record<string, DiscordChannel[]>
+  channelsByServer: Record<string, DiscordChannel[] | Error>
   projects: Project[]
   expanded: boolean
   expandedServer: string | null
   onToggleExpand: () => void
   onExpandServer: (serverId: string) => void
+  onRetryChannels: (serverId: string) => void
   onToggleActive: () => void
   onRefresh: () => Promise<unknown>
   onDelete: () => void
   onToggleServerCollect: (server: DiscordServer) => Promise<unknown>
   onUpdateServer: (server: DiscordServer, updates: DiscordServerUpdate) => Promise<unknown>
-  onToggleChannelCollect: (channel: DiscordChannel) => Promise<unknown>
   onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<unknown>
   onGetInviteUrl: () => Promise<unknown>
-  onManageUsers: () => Promise<void>
+  onManageUsers: () => Promise<unknown>
 }
 
 const BotRow = ({
@@ -292,12 +255,12 @@ const BotRow = ({
   expandedServer,
   onToggleExpand,
   onExpandServer,
+  onRetryChannels,
   onToggleActive,
   onRefresh,
   onDelete,
   onToggleServerCollect,
   onUpdateServer,
-  onToggleChannelCollect,
   onUpdateChannel,
   onGetInviteUrl,
   onManageUsers,
@@ -327,13 +290,13 @@ const BotRow = ({
             <ServerRow
               key={server.id}
               server={server}
-              channels={channelsByServer[server.id] || []}
+              channels={channelsByServer[server.id]}
+              onRetryChannels={() => onRetryChannels(server.id)}
               projects={projects}
               expanded={expandedServer === server.id}
               onToggleExpand={() => onExpandServer(server.id)}
               onToggleCollect={() => onToggleServerCollect(server)}
               onUpdate={(updates) => onUpdateServer(server, updates)}
-              onToggleChannelCollect={onToggleChannelCollect}
               onUpdateChannel={onUpdateChannel}
             />
           ))}
@@ -344,81 +307,51 @@ const BotRow = ({
 
 interface ServerCardProps {
   server: DiscordServer
-  channels: DiscordChannel[]
+  channels: DiscordChannel[] | Error | undefined
+  onRetryChannels: () => void
   projects: Project[]
   expanded: boolean
   onToggleExpand: () => void
   onToggleCollect: () => Promise<unknown>
   onUpdate: (updates: DiscordServerUpdate) => Promise<unknown>
-  onToggleChannelCollect: (channel: DiscordChannel) => Promise<unknown>
   onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<unknown>
 }
 
 const ServerRow = ({
   server,
   channels,
+  onRetryChannels,
   projects,
   expanded,
   onToggleExpand,
   onToggleCollect,
   onUpdate,
-  onToggleChannelCollect,
   onUpdateChannel,
 }: ServerCardProps) => {
-  const [toggling, setToggling] = useState(false)
-  const [updating, setUpdating] = useState(false)
-
-  const handleToggle = async () => {
-    setToggling(true)
-    try {
-      await onToggleCollect()
-    } finally {
-      setToggling(false)
-    }
-  }
-
-  const handleProjectChange = async (projectId: number | undefined) => {
-    setUpdating(true)
-    try {
-      await onUpdate({ project_id: projectId || null })
-    } finally {
-      setUpdating(false)
-    }
-  }
-
-  const handleSensitivityChange = async (sensitivity: 'public' | 'basic' | 'internal' | 'confidential') => {
-    setUpdating(true)
-    try {
-      await onUpdate({ sensitivity })
-    } finally {
-      setUpdating(false)
-    }
-  }
+  const [toggling, handleToggle] = useBusy(onToggleCollect)
+  const [updating, update] = useBusy(onUpdate)
 
   return (
     <Row
       title={server.name}
+      badges={<Badge tone={server.collect_messages ? 'success' : 'neutral'}>{server.collect_messages ? 'Collecting' : 'Paused'}</Badge>}
       meta={[server.member_count ? `${server.member_count} members` : null, `${server.channel_count} channels`]}
       actions={<>
         <AccessSelects projectId={server.project_id} sensitivity={server.sensitivity} projects={projects} disabled={updating}
-          onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
-        <Button size="sm" variant={server.collect_messages ? 'primary' : 'secondary'} aria-pressed={server.collect_messages}
-          onClick={handleToggle} disabled={toggling}>
-          {server.collect_messages ? 'Collecting' : 'Not collecting'}
-        </Button>
+          onChange={update} />
+        <PauseButton active={server.collect_messages} onClick={handleToggle} disabled={toggling} />
       </>}
     >
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels</ExpandToggle>}
-        empty={expanded && 'Loading...'}
+        {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}
       >
-        {expanded && channels.map(channel => (
+        {expanded && Array.isArray(channels) && channels.map(channel => (
             <ChannelRow
               key={channel.id}
               channel={channel}
               projects={projects}
               serverCollecting={server.collect_messages}
-              onToggle={() => onToggleChannelCollect(channel)}
               onUpdate={(updates) => onUpdateChannel(channel, updates)}
             />
           ))}
@@ -431,44 +364,11 @@ interface ChannelRowProps {
   channel: DiscordChannel
   projects: Project[]
   serverCollecting: boolean
-  onToggle: () => Promise<unknown>
   onUpdate: (updates: DiscordChannelUpdate) => Promise<unknown>
 }
 
-const ChannelRow = ({ channel, projects, serverCollecting, onToggle, onUpdate }: ChannelRowProps) => {
-  const [toggling, setToggling] = useState(false)
-  const [updating, setUpdating] = useState(false)
-
-  const handleToggle = async () => {
-    setToggling(true)
-    try {
-      await onToggle()
-    } finally {
-      setToggling(false)
-    }
-  }
-
-  const handleProjectChange = async (projectId: number | undefined) => {
-    setUpdating(true)
-    try {
-      await onUpdate({ project_id: projectId || null })
-    } finally {
-      setUpdating(false)
-    }
-  }
-
-  const handleSensitivityChange = async (sensitivity: 'public' | 'basic' | 'internal' | 'confidential') => {
-    setUpdating(true)
-    try {
-      await onUpdate({ sensitivity })
-    } finally {
-      setUpdating(false)
-    }
-  }
-
-  // Determine display state
-  const isInheriting = channel.collect_messages === null
-  const effectivelyCollecting = channel.effective_collect
+const ChannelRow = ({ channel, projects, serverCollecting, onUpdate }: ChannelRowProps) => {
+  const [updating, update] = useBusy(onUpdate)
 
   // Channel type icons
   const typeIcon = {
@@ -485,15 +385,9 @@ const ChannelRow = ({ channel, projects, serverCollecting, onToggle, onUpdate }:
       title={<><span aria-hidden="true" className="text-slate-500 mr-1">{typeIcon}</span><span>{channel.name}</span></>}
       actions={<>
         <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={updating}
-          onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
-        <Button size="sm" onClick={handleToggle} disabled={toggling}
-          title={isInheriting
-            ? `Inheriting from server (${serverCollecting ? 'collecting' : 'not collecting'})`
-            : channel.collect_messages ? 'Explicitly collecting' : 'Explicitly not collecting'}>
-          {isInheriting
-            ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
-            : channel.collect_messages ? 'Collecting' : 'Skipping'}
-        </Button>
+          onChange={update} />
+        <CollectSelect value={channel.collect_messages} inherited={serverCollecting} disabled={updating}
+          onChange={collect_messages => update({ collect_messages })} />
       </>}
     />
   )

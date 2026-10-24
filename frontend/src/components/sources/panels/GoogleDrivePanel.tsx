@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { TagsInput, IntervalInput, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, Select, SubList, cx, useActionNotice } from '@/components/shared/ui'
+import { IntervalInput, PauseButton, ProjectSelect, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const GoogleDrivePanel = () => {
@@ -18,12 +18,11 @@ export const GoogleDrivePanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [addingFolderTo, setAddingFolderTo] = useState<number | null>(null)
   const [browsingFoldersFor, setBrowsingFoldersFor] = useState<number | null>(null)
+  const [editingFolder, setEditingFolder] = useState<{ accountId: number; folder: GoogleFolder } | null>(null)
   const [managingExclusionsFor, setManagingExclusionsFor] = useState<{ accountId: number; folder: GoogleFolder } | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const [accountsData, projectsData] = await Promise.all([
         listGoogleAccounts(userId),
@@ -31,6 +30,7 @@ export const GoogleDrivePanel = () => {
       ])
       setAccounts(accountsData)
       setProjects(projectsData)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
@@ -46,8 +46,15 @@ export const GoogleDrivePanel = () => {
     loadData()
   }
 
+  const handleEditFolder = async ({ accountId, folder }: { accountId: number; folder: GoogleFolder }, data: FolderFormData) => {
+    const { folder_name, recursive, include_shared, tags, check_interval, project_id, sensitivity } = data
+    await updateGoogleFolder(accountId, folder.id, { folder_name, recursive, include_shared, tags, check_interval, project_id: project_id ?? null, sensitivity })
+    setEditingFolder(null)
+    loadData()
+  }
+
   // The browser modals close before saving, so the outcome shows in the section's notice.
-  const handleBrowseSelect = async (accountId: number, items: SelectedItem[]) => {
+  const handleBrowseSelect = async (accountId: number, items: SelectedItem[], access: FolderAccess) => {
     setBrowsingFoldersFor(null)
     await run(async () => {
       for (const item of items) {
@@ -55,6 +62,7 @@ export const GoogleDrivePanel = () => {
           folder_id: item.id,
           folder_name: item.name,
           recursive: item.is_folder ? item.recursive : false,
+          ...access,
         })
       }
     })
@@ -119,7 +127,7 @@ export const GoogleDrivePanel = () => {
                         </a>
                       }
                       badges={<>
-                        {!folder.active && <Badge>Disabled</Badge>}
+                        <StatusBadge active={folder.active} />
                         {folder.recursive && <Badge tone="info">Recursive</Badge>}
                         {folder.include_shared && <Badge tone="primary">Shared</Badge>}
                         {folder.exclude_folder_ids.length > 0 && <Badge tone="warning">{folder.exclude_folder_ids.length} excluded</Badge>}
@@ -131,9 +139,8 @@ export const GoogleDrivePanel = () => {
                         {folder.recursive && (
                           <Button size="sm" onClick={() => setManagingExclusionsFor({ accountId: account.id, folder })}>Exclusions</Button>
                         )}
-                        <Button size="sm" onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)}>
-                          {folder.active ? 'Disable' : 'Enable'}
-                        </Button>
+                        <PauseButton active={folder.active} onClick={() => handleToggleFolderActive(account.id, folder.id, folder.active)} />
+                        <Button size="sm" onClick={() => setEditingFolder({ accountId: account.id, folder })}>Edit</Button>
                         <ConfirmButton confirm={`Remove "${folder.folder_name}" from sync?`} onConfirm={() => handleDeleteFolder(account.id, folder.id)}>
                           Remove
                         </ConfirmButton>
@@ -150,17 +157,26 @@ export const GoogleDrivePanel = () => {
 
       {addingFolderTo && (
         <GoogleFolderForm
-          accountId={addingFolderTo}
           projects={projects}
           onSubmit={(data) => handleAddFolder(addingFolderTo, data)}
           onCancel={() => setAddingFolderTo(null)}
         />
       )}
 
+      {editingFolder && (
+        <GoogleFolderForm
+          folder={editingFolder.folder}
+          projects={projects}
+          onSubmit={(data) => handleEditFolder(editingFolder, data)}
+          onCancel={() => setEditingFolder(null)}
+        />
+      )}
+
       {browsingFoldersFor && (
         <FolderBrowser
           accountId={browsingFoldersFor}
-          onSelect={(items) => handleBrowseSelect(browsingFoldersFor, items)}
+          projects={projects}
+          onSelect={(items, access) => handleBrowseSelect(browsingFoldersFor, items, access)}
           onCancel={() => setBrowsingFoldersFor(null)}
         />
       )}
@@ -191,17 +207,39 @@ interface SelectedItem {
   recursive: boolean
 }
 
+interface FolderAccess {
+  project_id?: number
+  sensitivity: Sensitivity
+}
+
+const Breadcrumb = ({ path, onNavigate }: { path: PathItem[]; onNavigate: (index: number) => void }) => (
+  <nav aria-label="Folder path">
+    <ol className="flex flex-wrap items-center gap-1 text-sm">
+      {path.map((item, index) => (
+        <li key={item.id} className="flex items-center gap-1">
+          {index > 0 && <span aria-hidden="true" className="text-slate-500">›</span>}
+          {index === path.length - 1
+            ? <span aria-current="location" className="text-slate-800 font-medium">{item.name}</span>
+            : <button type="button" className="text-primary hover:underline" onClick={() => onNavigate(index)}>{item.name}</button>}
+        </li>
+      ))}
+    </ol>
+  </nav>
+)
+
 interface FolderBrowserProps {
   accountId: number
-  onSelect: (items: SelectedItem[]) => void
+  projects: Project[]
+  onSelect: (items: SelectedItem[], access: FolderAccess) => void
   onCancel: () => void
 }
 
-const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) => {
+const FolderBrowser = ({ accountId, projects, onSelect, onCancel }: FolderBrowserProps) => {
   const { browseGoogleDrive } = useSources()
   const [path, setPath] = useState<PathItem[]>([{ id: 'root', name: 'My Drive' }])
   const [items, setItems] = useState<DriveItem[]>([])
   const [selected, setSelected] = useState<Map<string, SelectedItem>>(new Map())
+  const [access, setAccess] = useState<FolderAccess>({ sensitivity: 'basic' })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -257,36 +295,18 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
   }
 
   const handleAdd = () => {
-    onSelect(Array.from(selected.values()))
+    onSelect(Array.from(selected.values()), access)
   }
 
   return (
     <Modal title="Browse Google Drive" onClose={onCancel}>
       <div className="space-y-4">
-        {/* Breadcrumb */}
-        <div className="flex flex-wrap items-center gap-1 text-sm">
-          {path.map((item, index) => (
-            <span key={item.id} className="flex items-center gap-1">
-              {index > 0 && <span className="text-slate-500">›</span>}
-              <button
-                className={cx(
-                  'hover:underline',
-                  index === path.length - 1 ? 'text-slate-800 font-medium' : 'text-primary'
-                )}
-                onClick={() => navigateToPathIndex(index)}
-                disabled={index === path.length - 1}
-              >
-                {item.name}
-              </button>
-            </span>
-          ))}
-        </div>
+        <Breadcrumb path={path} onNavigate={navigateToPathIndex} />
 
-        {/* Content */}
         {error && <Notice tone="error">{error}</Notice>}
 
         {loading ? (
-          <div className="text-sm text-slate-500 py-8 text-center">Loading...</div>
+          <LoadingState />
         ) : items.length === 0 ? (
           <div className="text-sm text-slate-500 py-8 text-center">This folder is empty</div>
         ) : (
@@ -298,10 +318,11 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
               )}>
                 <input
                   type="checkbox"
+                  aria-label={item.name}
                   checked={selected.has(item.id)}
                   onChange={() => toggleSelect(item)}
                 />
-                <span className="text-lg">{item.is_folder ? '📁' : '📄'}</span>
+                <span aria-hidden="true" className="text-lg">{item.is_folder ? '📁' : '📄'}</span>
                 {item.id === 'shared' ? (
                   <span className="flex-1 text-slate-700">{item.name}</span>
                 ) : (
@@ -324,7 +345,7 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
                 {item.is_folder && (
                   <Button size="sm"
                     onClick={() => navigateToFolder(item)}
-                    title="Browse folder"
+                    aria-label={`Open folder ${item.name}`}
                   >
                     →
                   </Button>
@@ -333,6 +354,16 @@ const FolderBrowser = ({ accountId, onSelect, onCancel }: FolderBrowserProps) =>
             ))}
           </div>
         )}
+
+        <FieldRow>
+          <Field label="Project" hint="Project for access control">
+            <ProjectSelect value={access.project_id} projects={projects}
+              onChange={project_id => setAccess({ ...access, project_id })} />
+          </Field>
+          <Field label="Sensitivity" hint="Visibility level for files from the added folders">
+            <SensitivitySelect value={access.sensitivity} onChange={sensitivity => setAccess({ ...access, sensitivity })} />
+          </Field>
+        </FieldRow>
 
         {/* Footer */}
         <div className="flex items-center justify-between pt-2 border-t border-slate-100">
@@ -394,7 +425,13 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
     try {
       const response = await browseGoogleDrive(accountId, folderId)
       // Only show folders, not files
-      setItems(response.items.filter(item => item.is_folder))
+      const folders = response.items.filter(item => item.is_folder)
+      setItems(folders)
+      // Saved exclusions are bare IDs; name them once browsing reaches them.
+      setExcluded(prev => new Map([...prev].map(([id, ex]) => {
+        const seen = ex.name === id && folders.find(f => f.id === id)
+        return [id, seen ? { ...ex, name: seen.name } : ex]
+      })))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load folder')
     } finally {
@@ -448,11 +485,12 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
             <div className="flex flex-wrap gap-2">
               {Array.from(excluded.values()).map(item => (
                 <span key={item.id} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-amber-200 rounded text-sm" title={item.path}>
-                  📁 {item.name}
+                  <span aria-hidden="true">📁</span> {item.name}
                   <button
+                    type="button"
                     className="text-amber-600 hover:text-amber-800"
                     onClick={() => removeExclusion(item.id)}
-                    title="Remove exclusion"
+                    aria-label={`Remove exclusion ${item.name}`}
                   >
                     ×
                   </button>
@@ -462,30 +500,12 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
           </Notice>
         )}
 
-        {/* Breadcrumb */}
-        <div className="flex flex-wrap items-center gap-1 text-sm">
-          {path.map((item, index) => (
-            <span key={item.id} className="flex items-center gap-1">
-              {index > 0 && <span className="text-slate-500">›</span>}
-              <button
-                className={cx(
-                  'hover:underline',
-                  index === path.length - 1 ? 'text-slate-800 font-medium' : 'text-primary'
-                )}
-                onClick={() => navigateToPathIndex(index)}
-                disabled={index === path.length - 1}
-              >
-                {item.name}
-              </button>
-            </span>
-          ))}
-        </div>
+        <Breadcrumb path={path} onNavigate={navigateToPathIndex} />
 
-        {/* Content */}
         {error && <Notice tone="error">{error}</Notice>}
 
         {loading ? (
-          <div className="text-sm text-slate-500 py-8 text-center">Loading...</div>
+          <LoadingState />
         ) : items.length === 0 ? (
           <div className="text-sm text-slate-500 py-8 text-center">No subfolders in this folder</div>
         ) : (
@@ -497,10 +517,11 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
               )}>
                 <input
                   type="checkbox"
+                  aria-label={item.name}
                   checked={excluded.has(item.id)}
                   onChange={() => toggleExclude(item)}
                 />
-                <span className="text-lg">📁</span>
+                <span aria-hidden="true" className="text-lg">📁</span>
                 <a
                   className="flex-1 text-slate-700 hover:text-primary"
                   href={`https://drive.google.com/drive/folders/${item.id}`}
@@ -515,7 +536,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
                 )}
                 <Button size="sm"
                   onClick={() => navigateToFolder(item)}
-                  title="Browse subfolder"
+                  aria-label={`Open folder ${item.name}`}
                 >
                   →
                 </Button>
@@ -544,25 +565,37 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
   )
 }
 
-// === Google Folder Form (Add by ID) ===
+// === Google Folder Form (add by ID, or edit) ===
+
+interface FolderFormData {
+  folder_id: string
+  folder_name: string
+  recursive: boolean
+  include_shared: boolean
+  tags: string[]
+  check_interval: number
+  project_id?: number
+  sensitivity: Sensitivity
+}
 
 interface GoogleFolderFormProps {
-  accountId: number
+  /** The folder to edit; omitted to add one by ID. */
+  folder?: GoogleFolder
   projects: Project[]
-  onSubmit: (data: any) => Promise<void>
+  onSubmit: (data: FolderFormData) => Promise<void>
   onCancel: () => void
 }
 
-const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFolderFormProps) => {
-  const [formData, setFormData] = useState({
-    folder_id: '',
-    folder_name: '',
-    recursive: true,
-    include_shared: false,
-    tags: [] as string[],
-    check_interval: 60,
-    project_id: undefined as number | undefined,
-    sensitivity: 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
+const GoogleFolderForm = ({ folder, projects, onSubmit, onCancel }: GoogleFolderFormProps) => {
+  const [formData, setFormData] = useState<FolderFormData>({
+    folder_id: folder?.folder_id ?? '',
+    folder_name: folder?.folder_name ?? '',
+    recursive: folder?.recursive ?? true,
+    include_shared: folder?.include_shared ?? false,
+    tags: folder?.tags ?? [],
+    check_interval: folder?.check_interval ?? 60,
+    project_id: folder?.project_id ?? undefined,
+    sensitivity: folder?.sensitivity ?? 'basic',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -581,19 +614,21 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
   }
 
   return (
-    <Modal title="Add Google Drive folder" onClose={onCancel}>
+    <Modal title={folder ? 'Edit folder' : 'Add Google Drive folder'} onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Folder ID" hint="Find this in the folder URL after /folders/">
-          <Input
-            type="text"
-            value={formData.folder_id}
-            onChange={e => setFormData({ ...formData, folder_id: e.target.value })}
-            required
-            placeholder="From Google Drive URL"
-          />
-        </Field>
+        {!folder && (
+          <Field label="Folder ID" hint="Find this in the folder URL after /folders/">
+            <Input
+              type="text"
+              value={formData.folder_id}
+              onChange={e => setFormData({ ...formData, folder_id: e.target.value })}
+              required
+              placeholder="From Google Drive URL"
+            />
+          </Field>
+        )}
 
         <Field label="Folder name">
           <Input
@@ -627,35 +662,18 @@ const GoogleFolderForm = ({ accountId, projects, onSubmit, onCancel }: GoogleFol
 
         <FieldRow>
           <Field label="Project" hint="Project for access control">
-            <Select
-              value={formData.project_id || ''}
-              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-            >
-              <option value="">None</option>
-              {projects.map(project => (
-                <option key={project.id} value={project.id}>
-                  {project.title} ({project.repo_path})
-                </option>
-              ))}
-            </Select>
+            <ProjectSelect value={formData.project_id} projects={projects}
+              onChange={project_id => setFormData({ ...formData, project_id })} />
           </Field>
           <Field label="Sensitivity" hint="Visibility level for files from this folder">
-            <Select
-              value={formData.sensitivity}
-              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
-            >
-              <option value="public">Public</option>
-              <option value="basic">Basic</option>
-              <option value="internal">Internal</option>
-              <option value="confidential">Confidential</option>
-            </Select>
+            <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>
         </FieldRow>
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" type="submit" disabled={submitting}>
-            {submitting ? 'Adding...' : 'Add folder'}
+            {folder ? (submitting ? 'Saving...' : 'Save') : (submitting ? 'Adding...' : 'Add folder')}
           </Button>
         </FormActions>
       </form>

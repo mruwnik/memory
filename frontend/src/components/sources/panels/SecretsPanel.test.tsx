@@ -160,6 +160,7 @@ describe('SecretsPanel - delete flow', () => {
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     expect(await screen.findByText('cannot delete')).toBeInTheDocument()
+    expect(screen.getByText('api-key')).toBeInTheDocument()
   })
 })
 
@@ -202,6 +203,7 @@ describe('SecretsPanel - reveal & copy', () => {
     await user.click(screen.getByRole('button', { name: 'Copy to clipboard' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('s3cr3t-value'))
     expect(getSecretValue).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Copied api-key')).toBeInTheDocument()
   })
 
   it('shows an error when revealing fails', async () => {
@@ -211,5 +213,6 @@ describe('SecretsPanel - reveal & copy', () => {
 
     await user.click(screen.getByRole('button', { name: 'Reveal value' }))
     expect(await screen.findByText('forbidden')).toBeInTheDocument()
+    expect(screen.getByText('api-key')).toBeInTheDocument()
   })
 })

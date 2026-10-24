@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { usePolls } from '../../hooks/usePolls'
 import type { Poll, PollStatus } from '../../hooks/usePolls'
 import { formatShortDate } from '../../utils/timezones'
-import { ButtonLink, ConfirmButton, EmptyState, List, LoadingState, Notice, Page, Row, Select, Toolbar } from '@/components/shared/ui'
+import { Button, ButtonLink, ConfirmButton, EmptyState, List, LoadingState, Notice, Page, Row, Select, Toolbar, useActionNotice, copyText } from '@/components/shared/ui'
 import { PollStatusBadge } from './PollStatusBadge'
 
 export const PollList: React.FC = () => {
@@ -12,6 +12,7 @@ export const PollList: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<PollStatus | ''>('')
   const [actionLoading, setActionLoading] = useState<number | null>(null)
+  const { run, notice } = useActionNotice()
 
   const loadPolls = useCallback(async () => {
     setLoading(true)
@@ -32,14 +33,8 @@ export const PollList: React.FC = () => {
 
   const handleDelete = async (pollId: number) => {
     setActionLoading(pollId)
-    try {
-      await deletePoll(pollId)
-      setPolls(polls.filter(p => p.id !== pollId))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete poll')
-    } finally {
-      setActionLoading(null)
-    }
+    if (await run(() => deletePoll(pollId))) setPolls(polls.filter(p => p.id !== pollId))
+    setActionLoading(null)
   }
 
   return (
@@ -57,7 +52,8 @@ export const PollList: React.FC = () => {
         </Select>
       </Toolbar>
 
-      {error && <Notice tone="error">{error}</Notice>}
+      {error && <Notice tone="error" onRetry={loadPolls}>{error}</Notice>}
+      {notice}
 
       {loading ? (
         <LoadingState message="Loading polls..." />
@@ -80,9 +76,10 @@ export const PollList: React.FC = () => {
                 poll.finalized_time && `Meeting: ${new Date(poll.finalized_time).toLocaleString()}`,
               ]}
               actions={<>
-                <ButtonLink size="sm" to={`/ui/polls/results/${poll.slug}`}>View results</ButtonLink>
                 <ButtonLink size="sm" to={`/ui/polls/edit/${poll.slug}`}>Edit</ButtonLink>
-                <ButtonLink size="sm" to={`/ui/polls/respond/${poll.slug}`}>Share</ButtonLink>
+                <Button size="sm" onClick={() => run(() => copyText(`${window.location.origin}/ui/polls/respond/${poll.slug}`), 'Link copied')}>
+                  Copy link
+                </Button>
                 <ConfirmButton confirm={`Delete the poll "${poll.title}"?`} onConfirm={() => handleDelete(poll.id)}
                   disabled={actionLoading === poll.id} title="Delete poll" />
               </>}

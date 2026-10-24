@@ -753,6 +753,31 @@ async def test_update_task_due_date(db_session, sample_tasks):
     assert "2025-01-15" in result["due_date"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "updates, cleared, kept",
+    [
+        ({"due_date": None}, "due_date", "priority"),
+        ({"priority": None}, "priority", "due_date"),
+    ],
+)
+async def test_update_task_none_clears_only_that_field(
+    db_session, sample_tasks, updates, cleared, kept
+):
+    from memory.api.MCP.servers.organizer import update_task
+
+    update_task_fn = get_fn(update_task)
+
+    with patch(
+        "memory.api.MCP.servers.organizer.make_session",
+        return_value=db_session.__enter__(),
+    ):
+        result = await update_task_fn(task_id=sample_tasks[0].id, **updates)
+
+    assert result[cleared] is None
+    assert result[kept] is not None
+
+
 # =============================================================================
 # Tests for get_upcoming
 # =============================================================================

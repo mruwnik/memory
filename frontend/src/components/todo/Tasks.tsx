@@ -1,9 +1,60 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useTasks, TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
+import { useTasks, TodoTask, TodoTaskFilters, TodoTaskUpdate, TaskPriority } from '@/hooks/useTasks'
 import { PRIORITY_ORDER, PRIORITY_TONES, dueLabel } from '@/constants/priority'
-import { Badge, Button, Card, ConfirmButton, EmptyState, FieldRow, Input, List, LoadingState, Page, Row, Select, ToggleGroup, Toolbar, cx, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, Card, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Page, Row, Select, ToggleGroup, Toolbar, cx, useActionNotice } from '@/components/shared/ui'
 
 type StatusFilter = 'active' | 'completed' | 'all'
+
+const LIMIT = 100
+const COUNT_LABELS: Record<StatusFilter, string> = { active: 'active', completed: 'completed', all: 'tasks' }
+
+const PriorityOptions = () => <>
+  <option value="">No priority</option>
+  <option value="low">Low</option>
+  <option value="medium">Medium</option>
+  <option value="high">High</option>
+  <option value="urgent">Urgent</option>
+</>
+
+/** Only changed fields are sent: an omitted priority or due date is left unchanged, null clears it, and resending the date would drop its time of day. */
+const TaskEditModal = ({ task, onSave, onClose }: { task: TodoTask; onSave: (update: TodoTaskUpdate) => Promise<unknown>; onClose: () => void }) => {
+  const initialDue = task.due_date?.slice(0, 10) ?? ''
+  const [title, setTitle] = useState(task.task_title)
+  const [priority, setPriority] = useState<string>(task.priority ?? '')
+  const [due, setDue] = useState(initialDue)
+  const [saving, setSaving] = useState(false)
+  const { run, notice } = useActionNotice()
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    await run(() => onSave({
+      task_title: title.trim(),
+      priority: priority === (task.priority ?? '') ? undefined : (priority || null) as TaskPriority | null,
+      due_date: due === initialDue ? undefined : due || null,
+    }))
+    setSaving(false)
+  }
+
+  return (
+    <Modal title="Edit task" onClose={onClose} size="md">
+      <form onSubmit={submit} className="space-y-4">
+        {notice}
+        <Field label="Title"><Input value={title} onChange={e => setTitle(e.target.value)} autoFocus /></Field>
+        <FieldRow>
+          <Field label="Priority">
+            <Select value={priority} onChange={e => setPriority(e.target.value)}><PriorityOptions /></Select>
+          </Field>
+          <Field label="Due date"><Input type="date" value={due} onChange={e => setDue(e.target.value)} /></Field>
+        </FieldRow>
+        <FormActions>
+          <Button type="button" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={saving || !title.trim()}>{saving ? 'Saving...' : 'Save'}</Button>
+        </FormActions>
+      </form>
+    </Modal>
+  )
+}
 
 const Tasks = () => {
   const { listTasks, completeTask, createTask, updateTask, deleteTask } = useTasks()
@@ -15,8 +66,7 @@ const Tasks = () => {
   const [newTaskDueDate, setNewTaskDueDate] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
-  const [editingTask, setEditingTask] = useState<number | null>(null)
-  const [editTitle, setEditTitle] = useState('')
+  const [editingTask, setEditingTask] = useState<TodoTask | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadTasks = useCallback(async () => {
@@ -24,7 +74,7 @@ const Tasks = () => {
     try {
       const filters: TodoTaskFilters = {
         include_completed: statusFilter === 'completed' || statusFilter === 'all',
-        limit: 100,
+        limit: LIMIT,
       }
       if (statusFilter === 'completed') {
         filters.status = 'done'
@@ -59,8 +109,8 @@ const Tasks = () => {
     loadTasks()
   }, [loadTasks])
 
-  const handleComplete = (taskId: number) => run(async () => {
-    await completeTask(taskId)
+  const handleToggleDone = (task: TodoTask) => run(async () => {
+    await (task.status === 'done' ? updateTask(task.id, { status: 'pending' }) : completeTask(task.id))
     loadTasks()
   })
 
@@ -88,32 +138,19 @@ const Tasks = () => {
     setIsAdding(false)
   }
 
-  const handleStartEdit = (task: TodoTask) => {
-    setEditingTask(task.id)
-    setEditTitle(task.task_title)
-  }
-
-  const handleSaveEdit = async (taskId: number) => {
-    if (!editTitle.trim()) return
-    await run(async () => {
-      await updateTask(taskId, { task_title: editTitle.trim() })
-      setEditingTask(null)
-      loadTasks()
-    })
-  }
-
-  const handleCancelEdit = () => {
+  const handleSaveEdit = async (task: TodoTask, update: TodoTaskUpdate) => {
+    await updateTask(task.id, update)
     setEditingTask(null)
-    setEditTitle('')
+    loadTasks()
   }
 
-  const activeCount = tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length
-  const completedCount = tasks.filter(t => t.status === 'done').length
+  // The API returns no totals, so a full page means there may be more.
+  const count = `${tasks.length >= LIMIT ? `${LIMIT}+` : tasks.length} ${COUNT_LABELS[statusFilter]}`
 
   return (
     <Page
       title="Tasks"
-      description={!error && <span className="flex gap-3"><span>{activeCount} active</span><span>{completedCount} completed</span></span>}
+      description={!error && !loading && count}
       width="narrow"
       error={error}
       onRetry={loadTasks}
@@ -126,14 +163,12 @@ const Tasks = () => {
             <Button variant="primary" type="submit" disabled={isAdding || !newTaskTitle.trim()}>Add task</Button>
           </div>
           <FieldRow>
-            <Select value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value)} aria-label="Priority">
-              <option value="">No priority</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="urgent">Urgent</option>
-            </Select>
-            <Input type="date" value={newTaskDueDate} onChange={(e) => setNewTaskDueDate(e.target.value)} aria-label="Due date" />
+            <Field label="Priority">
+              <Select value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value)}><PriorityOptions /></Select>
+            </Field>
+            <Field label="Due date">
+              <Input type="date" value={newTaskDueDate} onChange={(e) => setNewTaskDueDate(e.target.value)} />
+            </Field>
           </FieldRow>
         </form>
       </Card>
@@ -166,33 +201,21 @@ const Tasks = () => {
                     <button type="button"
                       className={cx('w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors',
                         done ? 'bg-success border-success text-white' : 'border-slate-300 hover:border-primary')}
-                      onClick={() => !done && handleComplete(task.id)}
-                      title={done ? 'Completed' : 'Mark as complete'}
-                      aria-label={done ? 'Completed' : `Mark "${task.task_title}" as complete`}
-                      disabled={done}
+                      onClick={() => handleToggleDone(task)}
+                      title={done ? 'Reopen' : 'Mark as complete'}
+                      aria-label={done ? `Reopen "${task.task_title}"` : `Mark "${task.task_title}" as complete`}
                     >
                       {done && <span aria-hidden="true" className="text-sm">✓</span>}
                     </button>
                   }
-                  title={editingTask === task.id ? (
-                    <span className="flex gap-2">
-                      <Input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} className="flex-1" autoFocus
-                        aria-label="Task title"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSaveEdit(task.id)
-                          if (e.key === 'Escape') handleCancelEdit()
-                        }} />
-                      <Button size="sm" variant="primary" onClick={() => handleSaveEdit(task.id)}>Save</Button>
-                      <Button size="sm" onClick={handleCancelEdit}>Cancel</Button>
-                    </span>
-                  ) : <span className={cx(done && 'line-through')}>{task.task_title}</span>}
-                  badges={editingTask !== task.id && <>
+                  title={<span className={cx(done && 'line-through')}>{task.task_title}</span>}
+                  badges={<>
                     {task.priority && <Badge tone={PRIORITY_TONES[task.priority] ?? 'neutral'}>{task.priority}</Badge>}
                     {task.status === 'in_progress' && <Badge tone="info">In progress</Badge>}
                     {due && <Badge tone={due.tone}>{due.text}</Badge>}
                   </>}
-                  actions={editingTask !== task.id && <>
-                    {!done && <Button size="sm" onClick={() => handleStartEdit(task)} title="Edit">Edit</Button>}
+                  actions={<>
+                    {!done && <Button size="sm" onClick={() => setEditingTask(task)}>Edit</Button>}
                     <ConfirmButton confirm={`Delete "${task.task_title}"?`} onConfirm={() => handleDelete(task.id)} title="Delete" />
                   </>}
                 />
@@ -200,6 +223,9 @@ const Tasks = () => {
             })}
           </List>
         )}
+      {editingTask && (
+        <TaskEditModal task={editingTask} onClose={() => setEditingTask(null)} onSave={update => handleSaveEdit(editingTask, update)} />
+      )}
     </Page>
   )
 }

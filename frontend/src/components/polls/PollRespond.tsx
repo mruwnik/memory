@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { getPollBySlug, submitPollResponse, getPollResults, getResponseByToken, updatePollResponse } from '../../hooks/usePolls'
 import type { Poll, AvailabilitySlot, SlotAggregation, AvailabilityLevel } from '../../hooks/usePolls'
 import PollGrid from './PollGrid'
 import { getBrowserTimezone, COMMON_TIMEZONES, formatTimezone } from '../../utils/timezones'
-import { Button, ButtonLink, Card, Field, FieldRow, Input, Notice, Page, Select, ToggleGroup } from '@/components/shared/ui'
+import { Button, ButtonLink, Card, Field, FieldRow, Input, Notice, Page, Select, ToggleGroup, useActionNotice, requiredLabel, copyText } from '@/components/shared/ui'
 
 export const PollRespond: React.FC = () => {
   const { slug } = useParams<{ slug: string }>()
@@ -25,6 +25,7 @@ export const PollRespond: React.FC = () => {
   const [responseEditToken, setResponseEditToken] = useState<string | null>(null)
   const [existingResponseId, setExistingResponseId] = useState<number | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
+  const { run, notice } = useActionNotice()
 
   // Helper to get/set edit token from localStorage
   const getStoredToken = (pollSlug: string): string | null => {
@@ -167,30 +168,34 @@ export const PollRespond: React.FC = () => {
 
     return (
       <Page title={poll.title} width="narrow">
-          <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
-            <h2 className="text-xl font-semibold text-green-800 mb-2">Response submitted!</h2>
-            <p className="text-green-700 mb-4">Your availability has been recorded.</p>
+          <Notice tone="success">
+            <h2 className="font-semibold">Response submitted</h2>
+            <p>Your availability has been recorded.</p>
+          </Notice>
+          {notice}
+          <Card>
             {editUrl && (
-              <div className="bg-white border border-slate-200 rounded-lg p-4 mb-4 text-left">
+              <div className="mb-4">
                 <p className="text-sm text-slate-600 mb-2">Save this link to edit your response later:</p>
                 <div className="flex gap-2">
                   <Input
                     type="text"
                     readOnly
                     value={editUrl}
+                    aria-label="Edit link"
                     onClick={(e) => (e.target as HTMLInputElement).select()}
                     className="flex-1 bg-slate-50"
                   />
                   <Button
                     type="button"
-                    onClick={() => navigator.clipboard.writeText(editUrl)}
+                    onClick={() => run(() => copyText(editUrl), 'Link copied')}
                   >
                     Copy
                   </Button>
                 </div>
               </div>
             )}
-            <div className="flex justify-center gap-3">
+            <div className="flex flex-wrap gap-3">
               <Button variant="primary"
                 type="button"
                 onClick={() => setSubmitted(false)}
@@ -199,7 +204,7 @@ export const PollRespond: React.FC = () => {
               </Button>
               <ButtonLink to={`/ui/polls/results/${slug}`}>View results</ButtonLink>
             </div>
-          </div>
+          </Card>
       </Page>
     )
   }
@@ -214,7 +219,7 @@ export const PollRespond: React.FC = () => {
           {/* Name and Timezone */}
           <Card>
             <FieldRow>
-              <Field label="Your name *">
+              <Field label={requiredLabel('Your name')}>
                 <Input
                   type="text"
                   id="respondentName"
@@ -243,7 +248,7 @@ export const PollRespond: React.FC = () => {
           </Card>
 
           {/* Availability Level Selector */}
-          <Card title="Availability level" description="Click and drag on the grid to mark your availability">
+          <Card title="Availability level" description="Click and drag on the grid, or use the arrow keys and Space, to mark your availability">
             <ToggleGroup label="Availability level" value={String(currentLevel)} onChange={v => setCurrentLevel(Number(v) as typeof currentLevel)}
               options={[{ value: '1', label: 'Available' }, { value: '2', label: 'If needed' }]} />
           </Card>
@@ -289,9 +294,9 @@ export const PollRespond: React.FC = () => {
           <div className="text-center">
             <p className="text-slate-600">
               {poll.response_count} {poll.response_count === 1 ? 'response' : 'responses'} so far.{' '}
-              <a href={`/ui/polls/results/${slug}`} className="text-primary hover:underline">
+              <Link to={`/ui/polls/results/${slug}`} className="text-primary hover:underline">
                 View full results
-              </a>
+              </Link>
             </p>
           </div>
         )}

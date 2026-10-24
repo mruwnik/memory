@@ -13,8 +13,18 @@ from memory.common.db.models import Report, SourceItem
 # === Serving endpoint tests ===
 
 
-def test_serve_html_report_has_csp_headers(client: TestClient, user, db_session):
-    """HTML reports must include CSP sandbox headers to prevent XSS."""
+@pytest.mark.parametrize(
+    "allow_scripts, connect_urls, sandbox, connect_src",
+    [
+        (False, None, [], None),
+        (True, None, ["allow-scripts"], ["'none'"]),
+        (True, ["https://api.example.com"], ["allow-scripts"], ["https://api.example.com"]),
+    ],
+)
+def test_serve_html_report_has_csp_headers(
+    client: TestClient, user, db_session, allow_scripts, connect_urls, sandbox, connect_src
+):
+    """HTML reports are sandboxed into an opaque origin, even when scripted, so 'self' would buy nothing."""
     html_file = settings.REPORT_STORAGE_DIR / "test.html"
     html_file.write_text("<h1>Test</h1>")
 
@@ -25,6 +35,8 @@ def test_serve_html_report_has_csp_headers(client: TestClient, user, db_session)
         report_format="html",
         filename="reports/test.html",
         sha256=b"\x00" * 32,
+        allow_scripts=allow_scripts,
+        allowed_connect_urls=connect_urls,
     )
     db_session.add(report)
     db_session.commit()
@@ -32,7 +44,9 @@ def test_serve_html_report_has_csp_headers(client: TestClient, user, db_session)
     response = client.get("/reports/test.html")
 
     assert response.status_code == 200, response.text
-    assert "sandbox" in response.headers.get("content-security-policy", "")
+    csp = response.headers.get("content-security-policy", "")
+    directives = {words[0]: words[1:] for words in (d.split() for d in csp.split(";"))}
+    assert (directives["sandbox"], directives.get("connect-src")) == (sandbox, connect_src)
     assert response.headers.get("x-content-type-options") == "nosniff"
 
 

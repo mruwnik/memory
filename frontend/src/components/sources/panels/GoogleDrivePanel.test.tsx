@@ -149,10 +149,10 @@ describe('GoogleDrivePanel - load states', () => {
 describe('GoogleDrivePanel - folder row actions', () => {
   beforeEach(() => listGoogleAccounts.mockResolvedValue([acct({ folders: [folder()] })]))
 
-  it('toggles a folder active state (Disable)', async () => {
+  it('pauses a folder', async () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('Docs')
-    await user.click(screen.getByRole('button', { name: 'Disable' }))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(updateGoogleFolder).toHaveBeenCalledWith(1, 100, { active: false }))
   })
 
@@ -171,11 +171,39 @@ describe('GoogleDrivePanel - folder row actions', () => {
     await waitFor(() => expect(syncGoogleFolder).toHaveBeenCalledWith(1, 100))
   })
 
-  it('shows the Enable label when a folder is inactive', async () => {
+  it('shows a paused folder as inactive with a Resume action', async () => {
     listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ active: false })] })])
     renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('Docs')
-    expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument()
+    expect(screen.getByText('Inactive')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
+  })
+
+  it('edits a folder, including its access control', async () => {
+    listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ tags: ['a'], check_interval: 90 })] })])
+    const { user } = renderWithUser(<GoogleDrivePanel />)
+    await screen.findByText('Docs')
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit folder' })
+    expect(within(dialog).queryByPlaceholderText('From Google Drive URL')).not.toBeInTheDocument()
+    await user.selectOptions(within(dialog).getByLabelText('Project'), '9')
+    await user.selectOptions(within(dialog).getByLabelText('Sensitivity'), 'internal')
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateGoogleFolder).toHaveBeenCalledWith(1, 100, expect.objectContaining({
+      folder_name: 'Docs', tags: ['a'], check_interval: 90, project_id: 9, sensitivity: 'internal',
+    })))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('clears a folder project by sending null', async () => {
+    listGoogleAccounts.mockResolvedValue([acct({ folders: [folder({ project_id: 9 })] })])
+    const { user } = renderWithUser(<GoogleDrivePanel />)
+    await screen.findByText('Docs')
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit folder' })
+    await user.selectOptions(within(dialog).getByLabelText('Project'), '')
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateGoogleFolder).toHaveBeenCalledWith(1, 100, expect.objectContaining({ project_id: null })))
   })
 })
 
@@ -244,15 +272,17 @@ describe('GoogleDrivePanel - Browse & add', () => {
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     await screen.findByText('Folder One')
 
-    const checkboxes = screen.getAllByRole('checkbox')
-    await user.click(checkboxes[0]) // select the folder
+    await user.click(screen.getByRole('checkbox', { name: 'Folder One' }))
     expect(screen.getByText('1 item selected')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog')
+    await user.selectOptions(within(dialog).getByLabelText('Project'), '9')
+    await user.selectOptions(within(dialog).getByLabelText('Sensitivity'), 'confidential')
 
     await user.click(screen.getByRole('button', { name: 'Add selected' }))
     await waitFor(() =>
       expect(addGoogleFolder).toHaveBeenCalledWith(
         1,
-        { folder_id: 'f1', folder_name: 'Folder One', recursive: true },
+        { folder_id: 'f1', folder_name: 'Folder One', recursive: true, project_id: 9, sensitivity: 'confidential' },
       ),
     )
   })
@@ -284,9 +314,12 @@ describe('GoogleDrivePanel - Browse & add', () => {
     await user.click(screen.getByRole('button', { name: 'Browse & add' }))
     await screen.findByText('Folder One')
 
-    const arrow = document.querySelector('button[title="Browse folder"]') as HTMLButtonElement
-    await user.click(arrow)
+    await user.click(screen.getByRole('button', { name: 'Open folder Folder One' }))
     await waitFor(() => expect(browseGoogleDrive).toHaveBeenLastCalledWith(1, 'f1'))
+    const crumbs = within(screen.getByRole('navigation', { name: 'Folder path' }))
+    expect(crumbs.getByText('Folder One')).toHaveAttribute('aria-current', 'location')
+    await user.click(crumbs.getByRole('button', { name: 'My Drive' }))
+    await waitFor(() => expect(browseGoogleDrive).toHaveBeenLastCalledWith(1, 'root'))
   })
 })
 
@@ -306,6 +339,17 @@ describe('GoogleDrivePanel - Exclusions', () => {
     expect(screen.getByText('Excluded folders (1)')).toBeInTheDocument()
   })
 
+  it('names a previously excluded folder once browsing reaches it, and removes it', async () => {
+    browseGoogleDrive.mockResolvedValue({
+      folder_id: 'abc', folder_name: 'Docs', parent_id: null, items: [driveItem({ id: 'pre1', name: 'Old stuff' })], next_page_token: null,
+    })
+    const { user } = renderWithUser(<GoogleDrivePanel />)
+    await screen.findByText('Docs')
+    await user.click(screen.getByRole('button', { name: 'Exclusions' }))
+    await user.click(await screen.findByRole('button', { name: 'Remove exclusion Old stuff' }))
+    expect(screen.queryByText('Excluded folders (1)')).not.toBeInTheDocument()
+  })
+
   it('saving sends the set of excluded ids', async () => {
     const { user } = renderWithUser(<GoogleDrivePanel />)
     await screen.findByText('Docs')
@@ -315,8 +359,7 @@ describe('GoogleDrivePanel - Exclusions', () => {
 
     // Tick a new subfolder to exclude
     const dialog = screen.getByRole('dialog')
-    const checkboxes = within(dialog).getAllByRole('checkbox')
-    await user.click(checkboxes[0])
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Folder One' }))
 
     await user.click(screen.getByRole('button', { name: 'Save exclusions' }))
     await waitFor(() =>

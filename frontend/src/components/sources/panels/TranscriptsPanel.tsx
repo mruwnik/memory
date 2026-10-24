@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { SourceRow, TagsInput } from '../shared'
-import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
+import { ProjectSelect, SensitivitySelect, SourceRow, TagsInput } from '../shared'
+import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 // Mirrors PUSH_ONLY_PROVIDERS in memory/common/transcripts.py: these take no API key and are never polled.
@@ -31,8 +31,6 @@ export const TranscriptsPanel = () => {
   const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const [accountData, providerData, projectData] = await Promise.all([
         listTranscriptAccounts(userId),
@@ -42,6 +40,7 @@ export const TranscriptsPanel = () => {
       setAccounts(accountData)
       setProviders(providerData)
       setProjects(projectData)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load transcript accounts')
     } finally {
@@ -277,29 +276,12 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
         </Field>
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control.">
-            <Select
-              value={formData.project_id || ''}
-              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-            >
-              <option value="">None</option>
-              {projects.map(project => (
-                <option key={project.id} value={project.id}>
-                  {project.title} ({project.repo_path})
-                </option>
-              ))}
-            </Select>
+          <Field label="Project" hint="Project for access control">
+            <ProjectSelect value={formData.project_id} projects={projects}
+              onChange={project_id => setFormData({ ...formData, project_id })} />
           </Field>
           <Field label="Sensitivity" hint="Visibility of meetings from this account.">
-            <Select
-              value={formData.sensitivity}
-              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
-            >
-              <option value="public">Public</option>
-              <option value="basic">Basic</option>
-              <option value="internal">Internal</option>
-              <option value="confidential">Confidential</option>
-            </Select>
+            <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>
         </FieldRow>
 
@@ -318,15 +300,6 @@ const exampleCurl = (url: string, secret: string | null) => `SECRET='${secret ??
 BODY='{"external_id":"demo-1","title":"Demo","segments":[{"speaker":"Ann","text":"Hello"}]}'
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
 curl -X POST '${url}' -H 'Content-Type: application/json' -H "X-Hub-Signature: sha256=$SIG" -d "$BODY"`
-
-const CopyButton = ({ text, label = 'Copy' }: { text: string; label?: string }) => {
-  const [copied, setCopied] = useState(false)
-  return (
-    <Button size="sm" onClick={() => navigator.clipboard.writeText(text).then(() => setCopied(true), () => setCopied(false))}>
-      {copied ? 'Copied' : label}
-    </Button>
-  )
-}
 
 const PushModal = ({ account, onClose }: { account: TranscriptAccount; onClose: () => void }) => {
   const { generateTranscriptWebhookSecret, deleteTranscriptWebhookSecret } = useSources()

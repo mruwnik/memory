@@ -1,5 +1,6 @@
 """API endpoints for Google Drive configuration."""
 
+import html
 import json
 import os
 import secrets
@@ -83,7 +84,7 @@ class FolderUpdate(BaseModel):
     check_interval: int | None = None
     active: bool | None = None
     exclude_folder_ids: list[str] | None = None
-    # Access control
+    # Access control: an explicit null project_id clears it, an omitted one is unchanged
     project_id: int | None = None
     sensitivity: str | None = None
 
@@ -411,7 +412,7 @@ def google_callback(
     """Handle Google OAuth2 callback."""
     if error:
         return HTMLResponse(
-            content=f"<html><body><h1>Authorization Failed</h1><p>{error}</p></body></html>",
+            content=f"<html><body><h1>Authorization Failed</h1><p>{html.escape(error)}</p></body></html>",
             status_code=400,
         )
 
@@ -481,13 +482,21 @@ def google_callback(
 
         session.commit()
 
+    # The opener listens on this channel: Google's COOP headers can sever its
+    # handle on this popup, so popup.closed isn't a reliable completion signal.
+    channel_name_js = json.dumps(f"google-oauth-{user_id}")
     return HTMLResponse(
-        content="""
+        content=f"""
         <html>
             <body>
                 <h1>Google Drive Connected Successfully!</h1>
                 <p>You can close this window and configure folders to sync.</p>
-                <script>window.close();</script>
+                <script>
+                    const channel = new BroadcastChannel({channel_name_js});
+                    channel.postMessage({{ type: 'oauth-complete' }});
+                    channel.close();
+                    window.close();
+                </script>
             </body>
         </html>
         """,
@@ -722,8 +731,9 @@ def update_folder(
     if updates.exclude_folder_ids is not None:
         folder.exclude_folder_ids = updates.exclude_folder_ids
 
-    if updates.project_id is not None:
-        assert_project_membership(db, user, updates.project_id)
+    if "project_id" in updates.model_fields_set:
+        if updates.project_id is not None:
+            assert_project_membership(db, user, updates.project_id)
         folder.project_id = updates.project_id
     if updates.sensitivity is not None:
         folder.sensitivity = updates.sensitivity

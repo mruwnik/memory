@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
+import { fireEvent, renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import type { TodoTask, TodoTaskFilters } from '@/hooks/useTasks'
 import Tasks from './Tasks'
@@ -56,15 +56,14 @@ describe('Tasks page', () => {
     await waitFor(() => expect(screen.getByText('recovered')).toBeInTheDocument())
   })
 
-  it('renders the active/completed counts', async () => {
-    listTasks.mockResolvedValue([
-      makeTask({ id: 1, status: 'pending' }),
-      makeTask({ id: 2, status: 'done' }),
-      makeTask({ id: 3, status: 'in_progress' }),
-    ])
+  it.each([
+    [3, '3 active'],
+    [100, '100+ active'],
+  ])('counts only the loaded filter (%i tasks)', async (n, text) => {
+    listTasks.mockResolvedValue(Array.from({ length: n }, (_, i) => makeTask({ id: i + 1 })))
     renderWithRouter(<Tasks />)
-    await waitFor(() => expect(screen.getByText('2 active')).toBeInTheDocument())
-    expect(screen.getByText('1 completed')).toBeInTheDocument()
+    expect(await screen.findByText(text)).toBeInTheDocument()
+    expect(screen.queryByText(/completed/)).not.toBeInTheDocument()
   })
 
   it.each([
@@ -94,7 +93,7 @@ describe('Tasks page', () => {
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(listTasks).toHaveBeenCalled())
     await user.type(screen.getByPlaceholderText('What needs to be done?'), 'Buy milk')
-    await user.selectOptions(screen.getByRole('combobox'), 'high')
+    await user.selectOptions(screen.getByLabelText('Priority'), 'high')
     await user.click(screen.getByRole('button', { name: 'Add task' }))
     expect(createTask).toHaveBeenCalledWith({
       task_title: 'Buy milk',
@@ -150,34 +149,68 @@ describe('Tasks page', () => {
     expect(deleteTask).not.toHaveBeenCalled()
   })
 
-  it('edits a task title inline and saves', async () => {
-    listTasks.mockResolvedValue([makeTask({ id: 4, task_title: 'old' })])
+  it('edits title, priority and due date in a dialog', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 4, task_title: 'old', priority: 'low', due_date: '2026-01-01T00:00:00Z' })])
     const user = userEvent.setup()
     renderWithRouter(<Tasks />)
-    await waitFor(() => expect(screen.getByText('old')).toBeInTheDocument())
-    await user.click(screen.getByTitle('Edit'))
-    const editInput = screen.getByDisplayValue('old')
-    await user.clear(editInput)
-    await user.type(editInput, 'new title')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
-    expect(updateTask).toHaveBeenCalledWith(4, { task_title: 'new title' })
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit task' })
+    await user.clear(within(dialog).getByLabelText('Title'))
+    await user.type(within(dialog).getByLabelText('Title'), 'new title')
+    await user.selectOptions(within(dialog).getByLabelText('Priority'), 'high')
+    fireEvent.change(within(dialog).getByLabelText('Due date'), { target: { value: '2026-02-03' } })
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect(updateTask).toHaveBeenCalledWith(4, { task_title: 'new title', priority: 'high', due_date: '2026-02-03' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('cancels inline editing without calling updateTask', async () => {
+  it('keeps the dialog open and says why when saving fails', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 4, task_title: 'old' })])
+    updateTask.mockRejectedValueOnce(new Error('save broke'))
+    const user = userEvent.setup()
+    renderWithRouter(<Tasks />)
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save' }))
+    expect(await within(screen.getByRole('dialog')).findByText('save broke')).toBeInTheDocument()
+  })
+
+  it('leaves an unchanged due date alone when saving', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 4, task_title: 'old', due_date: '2026-01-01T09:30:00Z' })])
+    const user = userEvent.setup()
+    renderWithRouter(<Tasks />)
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save' }))
+    expect(updateTask).toHaveBeenCalledWith(4, { task_title: 'old', priority: undefined, due_date: undefined })
+  })
+
+  it('clears the priority and due date when they are emptied', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 4, task_title: 'old', priority: 'low', due_date: '2026-01-01T09:30:00Z' })])
+    const user = userEvent.setup()
+    renderWithRouter(<Tasks />)
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit task' })
+    await user.selectOptions(within(dialog).getByLabelText('Priority'), '')
+    fireEvent.change(within(dialog).getByLabelText('Due date'), { target: { value: '' } })
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect(updateTask).toHaveBeenCalledWith(4, { task_title: 'old', priority: null, due_date: null })
+  })
+
+  it('cancels editing without calling updateTask', async () => {
     listTasks.mockResolvedValue([makeTask({ id: 4, task_title: 'unchanged' })])
     const user = userEvent.setup()
     renderWithRouter(<Tasks />)
     await waitFor(() => expect(screen.getByText('unchanged')).toBeInTheDocument())
-    await user.click(screen.getByTitle('Edit'))
-    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
     expect(updateTask).not.toHaveBeenCalled()
     expect(screen.getByText('unchanged')).toBeInTheDocument()
   })
 
-  it('marks a done task with a checkmark and disables its complete button', async () => {
+  it('reopens a done task from its checkmark', async () => {
     listTasks.mockResolvedValue([makeTask({ id: 5, task_title: 'completed task', status: 'done' })])
+    const user = userEvent.setup()
     renderWithRouter(<Tasks />)
-    await waitFor(() => expect(screen.getByText('completed task')).toBeInTheDocument())
-    expect(screen.getByTitle('Completed')).toBeDisabled()
+    await user.click(await screen.findByRole('button', { name: 'Reopen "completed task"' }))
+    expect(updateTask).toHaveBeenCalledWith(5, { status: 'pending' })
   })
 })

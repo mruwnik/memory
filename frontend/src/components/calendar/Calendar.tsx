@@ -4,7 +4,7 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
-import { Button, Card, Checkbox, LoadingState, Modal, Notice, Page, buttonClass } from '@/components/shared/ui'
+import { Badge, Button, Card, Checkbox, DetailList, LoadingState, Modal, Notice, Page, buttonClass } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -132,18 +132,14 @@ const Calendar = () => {
     if (!isAdmin) return
 
     const loadUsers = async () => {
+      if (currentUser) setEnabledUsers(new Set([currentUser.id]))
       try {
         const userList = await listUsers()
-        // Only show human users
-        const humanUsers = userList.filter(u => u.user_type === 'human')
-        setUsers(humanUsers)
-        // Default: only current user enabled
-        if (currentUser) {
-          setEnabledUsers(new Set([currentUser.id]))
-        }
-        setUsersLoaded(true)
+        setUsers(userList.filter(u => u.user_type === 'human'))
       } catch {
-        // Silently fail - user filter just won't appear
+        // Without the user list there is no Users filter; events still load for the current user.
+      } finally {
+        setUsersLoaded(true)
       }
     }
 
@@ -321,11 +317,11 @@ const Calendar = () => {
   const formatEventTime = (event: CalendarEvent) => {
     if (event.all_day) return ''
     const date = new Date(event.start_time)
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(' ', '')
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   }
 
   const formatDateHeader = (date: Date) => {
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleDateString(undefined, {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -383,7 +379,7 @@ const Calendar = () => {
       <Card flush className="relative grid grid-cols-7 overflow-hidden">
         {/* Day headers */}
         {DAYS_OF_WEEK.map(day => (
-          <div key={day} className="py-3 text-center text-sm font-semibold text-slate-600 bg-slate-50 border-b border-slate-200">
+          <div key={day} aria-hidden="true" className="py-3 text-center text-sm font-semibold text-slate-600 bg-slate-50 border-b border-slate-200">
             {day}
           </div>
         ))}
@@ -392,6 +388,8 @@ const Calendar = () => {
         {calendarDays.map((day, index) => (
           <div
             key={index}
+            role="group"
+            aria-label={day.date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
             className={`min-h-28 p-2 border-b border-r border-slate-100 ${
               !day.isCurrentMonth ? 'bg-slate-50/50' : 'bg-white'
             } ${day.isToday ? 'bg-primary/10' : ''}`}
@@ -409,32 +407,27 @@ const Calendar = () => {
             </div>
             <div className="space-y-1">
               {day.events.slice(0, 4).map((event) => (
-                <div
+                <button
+                  type="button"
                   key={`${event.id}-${event.start_time}`}
-                  className={`text-xs p-1 rounded truncate cursor-pointer ${
+                  className={`block w-full text-left text-xs p-1 rounded truncate focus-visible:outline-2 focus-visible:outline-primary ${
                     event.all_day
-                      ? 'bg-primary/20 text-primary'
+                      ? 'bg-primary/20 text-primary-dark'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                   title={`${event.event_title}${event.location ? ` - ${event.location}` : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSelectedEvent(event)
-                  }}
+                  onClick={() => setSelectedEvent(event)}
                 >
                   {!event.all_day && (
-                    <span className="font-medium text-primary mr-1">{formatEventTime(event)}</span>
+                    <span className="font-medium text-primary-dark mr-1">{formatEventTime(event)}</span>
                   )}
                   <span>{event.event_title}</span>
-                </div>
+                </button>
               ))}
               {day.events.length > 4 && (
                 <Button variant="link"
                   className="pl-1"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSelectedDayEvents({ date: day.date, events: day.events })
-                  }}
+                  onClick={() => setSelectedDayEvents({ date: day.date, events: day.events })}
                 >
                   +{day.events.length - 4} more
                 </Button>
@@ -454,9 +447,10 @@ const Calendar = () => {
         <Modal title={formatDateHeader(selectedDayEvents.date)} onClose={() => setSelectedDayEvents(null)}>
           <div className="space-y-2">
               {selectedDayEvents.events.map((event) => (
-                <div
+                <button
+                  type="button"
                   key={`${event.id}-${event.start_time}`}
-                  className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                  className={`block w-full text-left p-3 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
                     event.all_day
                       ? 'bg-primary/10 hover:bg-primary/20'
                       : 'bg-slate-50 hover:bg-slate-100'
@@ -466,25 +460,25 @@ const Calendar = () => {
                     setSelectedEvent(event)
                   }}
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="w-16 shrink-0 text-sm">
+                  <span className="flex items-start gap-3">
+                    <span className="block w-16 shrink-0 text-sm">
                       {event.all_day ? (
-                        <span className="text-primary font-medium">All day</span>
+                        <span className="text-primary-dark font-medium">All day</span>
                       ) : (
                         <span className="text-slate-600">{formatEventTime(event)}</span>
                       )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-slate-800">{event.event_title}</div>
+                    </span>
+                    <span className="block flex-1 min-w-0">
+                      <span className="block font-medium text-slate-800">{event.event_title}</span>
                       {event.location && (
-                        <div className="text-xs text-slate-500 truncate">{event.location}</div>
+                        <span className="block text-xs text-slate-500 truncate">{event.location}</span>
                       )}
                       {event.calendar_name && (
-                        <div className="text-xs text-slate-500 mt-1">{event.calendar_name}</div>
+                        <span className="block text-xs text-slate-500 mt-1">{event.calendar_name}</span>
                       )}
-                    </div>
-                  </div>
-                </div>
+                    </span>
+                  </span>
+                </button>
               ))}
             </div>
         </Modal>
@@ -493,90 +487,26 @@ const Calendar = () => {
       {/* Event Detail Modal */}
       {selectedEvent && (
         <Modal title={selectedEvent.event_title} onClose={() => setSelectedEvent(null)} size="md">
-          <div className="space-y-4">
-              <div className="flex">
-                <span className="w-24 text-sm text-slate-500 shrink-0">Date</span>
-                <span className="text-sm text-slate-800">
-                  {new Date(selectedEvent.start_time).toLocaleDateString('en-US', {
-                    weekday: 'long',
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric'
-                  })}
-                </span>
+          <DetailList items={[
+            ['Date', formatDateHeader(eventDate(selectedEvent))],
+            ['Time', selectedEvent.all_day ? 'All day' : <>
+              {formatEventTime(selectedEvent)}
+              {selectedEvent.end_time && <> – {formatEventTime({ ...selectedEvent, start_time: selectedEvent.end_time })}</>}
+            </>],
+            ['Location', selectedEvent.location],
+            ['Calendar', selectedEvent.calendar_name],
+            ['Repeats', selectedEvent.recurrence_rule && <Badge tone="primary">Recurring event</Badge>],
+            ['Meeting', selectedEvent.meeting_link && (
+              <a href={selectedEvent.meeting_link} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Join meeting</a>
+            )],
+            ['Attendees', selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {selectedEvent.attendees.map((email, i) => (
+                  <Button size="sm" key={i} onClick={() => handleAttendeeClick(email)}>{email}</Button>
+                ))}
               </div>
-
-              <div className="flex">
-                <span className="w-24 text-sm text-slate-500 shrink-0">Time</span>
-                <span className="text-sm text-slate-800">
-                  {selectedEvent.all_day ? 'All day' : (
-                    <>
-                      {new Date(selectedEvent.start_time).toLocaleTimeString('en-US', {
-                        hour: 'numeric',
-                        minute: '2-digit'
-                      })}
-                      {selectedEvent.end_time && (
-                        <> – {new Date(selectedEvent.end_time).toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit'
-                        })}</>
-                      )}
-                    </>
-                  )}
-                </span>
-              </div>
-
-              {selectedEvent.location && (
-                <div className="flex">
-                  <span className="w-24 text-sm text-slate-500 shrink-0">Location</span>
-                  <span className="text-sm text-slate-800">{selectedEvent.location}</span>
-                </div>
-              )}
-
-              {selectedEvent.calendar_name && (
-                <div className="flex">
-                  <span className="w-24 text-sm text-slate-500 shrink-0">Calendar</span>
-                  <span className="text-sm text-slate-800">{selectedEvent.calendar_name}</span>
-                </div>
-              )}
-
-              {selectedEvent.recurrence_rule && (
-                <div className="flex">
-                  <span className="w-24 text-sm text-slate-500 shrink-0">Repeats</span>
-                  <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">Recurring event</span>
-                </div>
-              )}
-
-              {selectedEvent.meeting_link && (
-                <div className="flex">
-                  <span className="w-24 text-sm text-slate-500 shrink-0">Meeting</span>
-                  <a
-                    href={selectedEvent.meeting_link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-primary hover:underline"
-                  >
-                    Join meeting
-                  </a>
-                </div>
-              )}
-
-              {selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
-                <div className="flex">
-                  <span className="w-24 text-sm text-slate-500 shrink-0">Attendees</span>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedEvent.attendees.map((email, i) => (
-                      <Button size="sm"
-                        key={i}
-                        onClick={() => handleAttendeeClick(email)}
-                      >
-                        {email}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            )],
+          ]} />
         </Modal>
       )}
 
@@ -600,9 +530,7 @@ const Calendar = () => {
                       <div className="text-xs text-slate-500 mb-1">Also known as</div>
                       <div className="flex flex-wrap gap-1">
                         {selectedAttendee.person.aliases.map((alias, i) => (
-                          <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                            {alias}
-                          </span>
+                          <Badge key={i}>{alias}</Badge>
                         ))}
                       </div>
                     </div>
@@ -631,9 +559,7 @@ const Calendar = () => {
                       <div className="text-xs text-slate-500 mb-1">Tags</div>
                       <div className="flex flex-wrap gap-1">
                         {selectedAttendee.person.tags.map((tag, i) => (
-                          <span key={i} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
-                            {tag}
-                          </span>
+                          <Badge key={i} tone="primary">{tag}</Badge>
                         ))}
                       </div>
                     </div>
@@ -643,7 +569,7 @@ const Calendar = () => {
               ) : (
                 <div className="text-center py-4">
                   <div className="text-slate-500 mb-2">No profile found for this person</div>
-                  <div className="text-xs text-slate-500">You can add them to your contacts via the People section</div>
+                  <Link to="/ui/people" className="text-sm text-primary hover:underline">Add them in People</Link>
                 </div>
               )}
             </div>
@@ -661,14 +587,17 @@ const Calendar = () => {
   )
 }
 
+/** The local date an event falls on; an all-day event's stored UTC midnight names its date in UTC. */
+function eventDate(event: CalendarEvent): Date {
+  const start = new Date(event.start_time)
+  return event.all_day ? new Date(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()) : start
+}
+
 /** Dedupe key: normalize title + date for comparison */
 function getDedupeKey(event: CalendarEvent): string {
   const title = event.event_title.toLowerCase().trim()
-  const eventDate = new Date(event.start_time)
   // For all-day events, just use the date; for timed events, include time
-  if (event.all_day) {
-    return `${title}|${eventDate.getFullYear()}-${eventDate.getMonth()}-${eventDate.getDate()}`
-  }
+  if (event.all_day) return `${title}|${new Date(event.start_time).toISOString().slice(0, 10)}`
   return `${title}|${event.start_time}`
 }
 
@@ -677,16 +606,16 @@ function getEventsForDate(date: Date, events: CalendarEvent[]): CalendarEvent[] 
   const month = date.getMonth()
   const day = date.getDate()
 
+  const localDay = [new Date(year, month, day).getTime(), new Date(year, month, day + 1).getTime()]
+  // All-day events are stored as UTC midnight to UTC midnight, so they belong to the cell's date in UTC.
+  const utcDay = [Date.UTC(year, month, day), Date.UTC(year, month, day + 1)]
   const dayEvents = events.filter(event => {
     if (!event.start_time) return false
-    try {
-      const eventDate = new Date(event.start_time)
-      return eventDate.getFullYear() === year &&
-             eventDate.getMonth() === month &&
-             eventDate.getDate() === day
-    } catch {
-      return false
-    }
+    const [dayStart, dayEnd] = event.all_day ? utcDay : localDay
+    const start = new Date(event.start_time).getTime()
+    // End is exclusive; an event with no (or a zero-length) end still shows on its start day.
+    const end = Math.max(event.end_time ? new Date(event.end_time).getTime() : start, start + 1)
+    return start < dayEnd && end > dayStart
   })
 
   // Deduplicate events with same title at same time (e.g., holidays in multiple calendars)

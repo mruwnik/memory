@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { Combobox, ConfirmButton, Field, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
+import { Combobox, ConfirmButton, CopyButton, Field, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -100,6 +100,19 @@ describe('Field', () => {
     const input = screen.getByRole('textbox', { name: 'Target' })
     expect(input).toHaveAccessibleDescription('Who gets it Required')
     expect(input).toHaveAttribute('aria-invalid', 'true')
+  })
+})
+
+describe('CopyButton', () => {
+  it.each([
+    ['works', { writeText: vi.fn().mockResolvedValue(undefined) }, 'Copied'],
+    ['is missing, as on plain http', undefined, 'Copy failed'],
+  ])('says so when the clipboard %s', async (_, clipboard, outcome) => {
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true })
+    render(<CopyButton text="abc" />)
+    await user.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(await screen.findByRole('button', { name: outcome })).toBeInTheDocument()
   })
 })
 

@@ -157,9 +157,25 @@ describe('PersonFormModal edit mode', () => {
       aliases: ['ali'],
       tags: ['work'],
       content: undefined,
-      contact_info: { email: 'a@x.com', phone: '555' },
+      contact_info: { email: 'a@x.com', phone: '555', github: null, twitter: null, website: null },
       replace_aliases: true,
     })
+  })
+
+  it('sends a cleared contact field as null so it is removed', async () => {
+    const user = userEvent.setup()
+    render(<PersonFormModal {...baseProps} submitLabel="Save changes" isEdit initialData={makePerson()} />)
+    await user.clear(screen.getByLabelText('Phone'))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual(
+      { email: 'a@x.com', phone: null, github: null, twitter: null, website: null })
+  })
+
+  it('asks for an identifier when the name has no ASCII letters to build one from', async () => {
+    const user = userEvent.setup()
+    render(<PersonFormModal {...baseProps} />)
+    await user.type(screen.getByLabelText(/Display name/), '山田')
+    expect(screen.getByLabelText(/Identifier/)).toHaveAccessibleDescription(/type an identifier/i)
   })
 
   it('does not auto-generate identifier from name in edit mode', async () => {

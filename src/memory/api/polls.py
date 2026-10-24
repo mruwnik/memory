@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
+from memory.api.auth import get_session_user
 from memory.common.db.connection import get_session
 from memory.common.db.models import (
     AvailabilityPoll,
@@ -503,10 +504,12 @@ def update_response(
 @router.get("/respond/{slug}/results")
 def get_poll_results(
     slug: str,
+    request: Request,
     db: DBSession = Depends(get_session),
 ) -> dict:
-    """Get aggregated poll results (public)."""
+    """Get aggregated poll results (public); is_owner tells the frontend whether to show management."""
     poll = get_poll_by_slug_or_404(slug, db)
+    viewer = get_session_user(request, db)
     aggregated = aggregate_availability(poll)
 
     # Find best slots (most available respondents)
@@ -521,4 +524,5 @@ def get_poll_results(
         "response_count": poll.response_count,
         "aggregated": [s.model_dump() for s in aggregated],
         "best_slots": [s.model_dump() for s in best_slots],
+        "is_owner": viewer is not None and viewer.id == poll.user_id,
     }

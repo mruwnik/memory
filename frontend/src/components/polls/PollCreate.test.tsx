@@ -10,6 +10,7 @@ import {
   mcpToolFromRequest,
   mockFetch,
   mockResponse,
+  fireEvent,
 } from '@/test/utils'
 import PollCreate from './PollCreate'
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
@@ -70,6 +71,21 @@ describe('PollCreate - rendering', () => {
     expect(submit).toBeDisabled()
     await user.type(screen.getByLabelText(/Poll title/), 'Sprint Planning')
     expect(submit).toBeEnabled()
+  })
+})
+
+describe('PollCreate - range validation', () => {
+  it.each([
+    ['End date', '2020-01-01', 'End date must be on or after the start date'],
+    ['End hour', '9', 'End hour must be after the start hour'],
+  ])('flags an %s before the start and blocks submit', async (label, value, message) => {
+    mockMcp({})
+    const { user } = renderCreate()
+    await user.type(screen.getByLabelText(/Poll title/), 'Sprint Planning')
+    const field = screen.getByLabelText(new RegExp(label))
+    fireEvent.change(field, { target: { value } })
+    expect(field).toHaveAccessibleDescription(message)
+    expect(screen.getByRole('button', { name: 'Create poll' })).toBeDisabled()
   })
 })
 

@@ -153,10 +153,15 @@ describe('App routing & auth', () => {
     expect(screen.getByText(marker)).toBeInTheDocument()
   })
 
-  it('allows the public poll results route without auth', () => {
+  it.each([
+    [false, 0],
+    [true, 1],
+  ])('renders poll results (signed in: %s) with %i app shell', (signedIn, shells) => {
+    authState.isAuthenticated = signedIn
     setPath('/ui/polls/results/my-slug')
     render(<App />)
     expect(screen.getByText('POLL_RESULTS')).toBeInTheDocument()
+    expect(screen.queryAllByRole('navigation', { name: 'Sections' })).toHaveLength(shells)
   })
 
   it('gates the celery route behind the admin scope (redirects non-admin)', async () => {

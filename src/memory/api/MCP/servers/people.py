@@ -104,11 +104,14 @@ def _filter_tidbits_by_access(
 
 
 def _deep_merge(base: dict, updates: dict) -> dict:
-    """Deep merge two dictionaries, with updates taking precedence."""
+    """Deep merge two dictionaries, with updates taking precedence; a None update removes the key, at any depth."""
     result = dict(base)
     for key, value in updates.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+        if value is None:
+            result.pop(key, None)
+        elif isinstance(value, dict):
+            existing = result.get(key)
+            result[key] = _deep_merge(existing if isinstance(existing, dict) else {}, value)
         else:
             result[key] = value
     return result
@@ -320,7 +323,7 @@ async def upsert(
     Update mode (person exists):
     - display_name: Replaces if provided
     - aliases: Union with existing (or replace if replace_aliases=True)
-    - contact_info: Deep merge with existing
+    - contact_info: Deep merge with existing; a null value removes that key
 
     To add information/notes about a person, use tidbit_add() instead.
 
@@ -389,7 +392,7 @@ async def upsert(
                 identifier=identifier,
                 display_name=display_name,
                 aliases=aliases or [],
-                contact_info=contact_info or {},
+                contact_info=_deep_merge({}, contact_info or {}),
             )
             session.add(person)
             status = "created"

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithUser, mockFetch, mockFetchRoutes, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { GitHubPanel } from './GitHubPanel'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
@@ -93,11 +93,19 @@ describe('GitHubPanel load states', () => {
 })
 
 describe('GitHubPanel repo actions', () => {
-  it('toggles a repo enabled state with a PATCH', async () => {
+  it('shows a paused repo with a Resume action', async () => {
+    mockFetchRoutes(routes([account({ repos: [{ ...repo, active: false }] })]))
+    renderWithUser(<GitHubPanel />)
+    await waitFor(() => expect(screen.getByText('octocat/hello')).toBeInTheDocument())
+    expect(screen.getAllByText('Inactive')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
+  })
+
+  it('pauses a repo with a PATCH', async () => {
     const mock = mockFetchRoutes(routes([account({ repos: [repo] })]))
     const { user } = renderWithUser(<GitHubPanel />)
     await waitFor(() => expect(screen.getByText('octocat/hello')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Disable' }))
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => {
       const patch = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/repos/50') && (init as RequestInit)?.method === 'PATCH',
@@ -159,7 +167,7 @@ describe('GitHubPanel add repo form', () => {
     const dialog = await screen.findByRole('dialog')
     await within(dialog).findByText('octocat/hello')
     await user.click(within(dialog).getByRole('checkbox'))
-    await user.click(within(dialog).getByRole('button', { name: /Add 1 Repository/ }))
+    await user.click(within(dialog).getByRole('button', { name: /Add 1 repo$/ }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
         ([url, init]) => String(url).endsWith('/accounts/4/repos') && (init as RequestInit)?.method === 'POST',
@@ -280,14 +288,15 @@ describe('GitHubPanel add project form', () => {
     })
   })
 
-  it('shows a validation error when submitting without selecting a project', async () => {
-    mockFetchRoutes({ ...availProjectsRoute([availProject()]), ...routes([account()]) })
+  it('fetches projects once the owner is typed and disables submit until one is picked', async () => {
+    const mock = mockFetchRoutes({ ...availProjectsRoute([availProject()]), ...routes([account()]) })
     const { user } = renderWithUser(<GitHubPanel />)
     await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add project' }))
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByPlaceholderText('e.g., my-organization'), 'octocat')
     await within(dialog).findByText(/Roadmap 2030/)
+    expect(mock.mock.calls.filter(([url]) => String(url).includes('available-projects'))).toHaveLength(1)
     // The submit button is disabled until a project is selected.
     expect(within(dialog).getByRole('button', { name: 'Add project' })).toBeDisabled()
   })
@@ -419,7 +428,7 @@ describe('GitHubPanel repo form selection helpers', () => {
     const dialog = await screen.findByRole('dialog')
     // The existing repo is pre-checked; uncheck it to mark for removal.
     await user.click(within(dialog).getByRole('checkbox'))
-    await user.click(within(dialog).getByRole('button', { name: /Remove 1 Repository/ }))
+    await user.click(within(dialog).getByRole('button', { name: /Remove 1 repo$/ }))
     await waitFor(() => {
       const del = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/repos/50') && (init as RequestInit)?.method === 'DELETE',
@@ -454,5 +463,37 @@ describe('GitHubPanel repo form selection helpers', () => {
     await user.click(screen.getByRole('button', { name: 'Add repo' }))
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText(/Failed to fetch available repos/)).toBeInTheDocument()
+  })
+})
+
+describe('GitHubPanel repo form partial failure', () => {
+  it('reloads tracked repos after a failed batch so a retry does not repeat removals', async () => {
+    const repo2 = { ...repo, id: 51, name: 'world', repo_path: 'octocat/world' }
+    let tracked = [repo, repo2]
+    const mock = mockFetch(async (input, init) => {
+      const url = String(input)
+      if (url.includes('/available-repos')) return mockResponse({ json: [availRepo(), availRepo({ name: 'world', full_name: 'octocat/world' })] })
+      if (url.includes('/repos/50')) {
+        tracked = tracked.filter(r => r.id !== 50)
+        return mockResponse({ json: {} })
+      }
+      if (url.includes('/repos/51')) return mockResponse({ status: 500, json: { detail: 'github down' } })
+      if (url.includes('/projects')) return mockResponse({ json: [] })
+      if (url.includes('/github/accounts')) return mockResponse({ json: [account({ repos: tracked })] })
+      return mockResponse(url.includes('/auth/me') ? authMe : { json: {} })
+    })
+    const deletes = (id: number) => mock.mock.calls.filter(([url, init]) => String(url).includes(`/repos/${id}`) && init?.method === 'DELETE').length
+    const { user } = renderWithUser(<GitHubPanel />)
+    await waitFor(() => expect(screen.getByText('octocat/world')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Add repo' }))
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText('octocat/hello')
+    await user.click(within(dialog).getByRole('button', { name: 'None' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Remove 2 repos' }))
+    expect(await within(dialog).findByText('github down')).toBeInTheDocument()
+
+    await user.click(await within(dialog).findByRole('button', { name: 'Remove 1 repo' }))
+    await waitFor(() => expect(deletes(51)).toBe(2))
+    expect(deletes(50)).toBe(1)
   })
 })

@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, CalendarAccount, GoogleAccount } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
-import { SourceRow, TagsInput, IntervalInput } from '../shared'
-import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
+import { IntervalInput, ProjectSelect, SensitivitySelect, SourceRow, TagsInput, numberValue } from '../shared'
+import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 interface GroupedEvents {
@@ -29,8 +29,6 @@ export const CalendarPanel = () => {
   const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       // Calculate date range: 30 days in past to 90 days in future
       const startDate = new Date()
@@ -53,6 +51,7 @@ export const CalendarPanel = () => {
       setGoogleAccounts(googleData)
       setProjects(projectData)
       setEvents(eventsData)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
@@ -210,8 +209,8 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
     google_account_id: account?.google_account_id || undefined as number | undefined,
     tags: account?.tags || [],
     check_interval: account?.check_interval || 15,
-    sync_past_days: account?.sync_past_days || 30,
-    sync_future_days: account?.sync_future_days || 90,
+    sync_past_days: (account?.sync_past_days ?? 30) as number | '',
+    sync_future_days: (account?.sync_future_days ?? 90) as number | '',
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
   })
@@ -280,7 +279,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
 
         {formData.calendar_type === 'caldav' ? (
           <>
-            <Field label="CalDAV Server URL">
+            <Field label="CalDAV server URL">
               <Input
                 type="url"
                 value={formData.caldav_url}
@@ -310,13 +309,12 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
             </Field>
           </>
         ) : (
-          <Field>
-            <Label>Google account</Label>
-            {googleAccounts.length === 0 ? (
-              <Hint>
-                No Google accounts connected. Add a Google account in the Accounts tab first.
-              </Hint>
-            ) : (
+          googleAccounts.length === 0 ? (
+            <Hint>
+              No Google accounts connected. Add a Google account in the Accounts tab first.
+            </Hint>
+          ) : (
+            <Field label="Google account">
               <Select
                 value={formData.google_account_id || ''}
                 onChange={e => setFormData({ ...formData, google_account_id: parseInt(e.target.value) || undefined })}
@@ -327,8 +325,8 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
                   <option key={ga.id} value={ga.id}>{ga.email}</option>
                 ))}
               </Select>
-            )}
-          </Field>
+            </Field>
+          )
         )}
 
         <FieldRow>
@@ -336,7 +334,8 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
             <Input
               type="number"
               value={formData.sync_past_days}
-              onChange={e => setFormData({ ...formData, sync_past_days: parseInt(e.target.value) || 30 })}
+              onChange={e => setFormData({ ...formData, sync_past_days: numberValue(e.target.value) })}
+              required
               min={0}
               max={365}
             />
@@ -345,7 +344,8 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
             <Input
               type="number"
               value={formData.sync_future_days}
-              onChange={e => setFormData({ ...formData, sync_future_days: parseInt(e.target.value) || 90 })}
+              onChange={e => setFormData({ ...formData, sync_future_days: numberValue(e.target.value) })}
+              required
               min={0}
               max={365}
             />
@@ -367,28 +367,11 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
 
         <FieldRow>
           <Field label="Project" hint="Project for access control">
-            <Select
-              value={formData.project_id || ''}
-              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-            >
-              <option value="">None</option>
-              {projects.map(project => (
-                <option key={project.id} value={project.id}>
-                  {project.title} ({project.repo_path})
-                </option>
-              ))}
-            </Select>
+            <ProjectSelect value={formData.project_id} projects={projects}
+              onChange={project_id => setFormData({ ...formData, project_id })} />
           </Field>
           <Field label="Sensitivity" hint="Visibility level for calendar events">
-            <Select
-              value={formData.sensitivity}
-              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' })}
-            >
-              <option value="public">Public</option>
-              <option value="basic">Basic</option>
-              <option value="internal">Internal</option>
-              <option value="confidential">Confidential</option>
-            </Select>
+            <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>
         </FieldRow>
 

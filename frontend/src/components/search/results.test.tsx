@@ -35,6 +35,12 @@ describe('Metadata', () => {
     expect(screen.getByRole('link', { name: value })).toHaveAttribute('href', href)
   })
 
+  it.each(['javascript:alert(1)', 'data:text/html,x'])('renders a non-http url %s as text, not a link', (url) => {
+    renderWithUser(<Metadata metadata={{ url }} />)
+    expect(screen.getByText(url)).toBeInTheDocument()
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  })
+
   it('renders strings plainly, JSON-stringifies other values and drops empty ones', () => {
     renderWithUser(<Metadata metadata={{ author: 'Tolkien', pages: 42, skip: null, gone: undefined }} />)
     expect(screen.getByText('Tolkien')).toBeInTheDocument()
@@ -58,9 +64,14 @@ describe('SearchResult titles', () => {
     expect(screen.getAllByText(title)[0]).toBeInTheDocument()
   })
 
-  it('renders nothing for an unknown type', () => {
-    const { container } = render({ mime_type: 'application/zip' })
-    expect(container.querySelector('li')).toBeNull()
+  it.each([
+    ['application/epub+zip', { filename: 'book.epub', metadata: { title: 'A Book' } }, 'A Book'],
+    [null, { filename: 'data.bin' }, 'data.bin'],
+  ])('falls back to a generic result for an unhandled %s type', (mime_type, overrides, title) => {
+    render({ mime_type: mime_type as string, content: 'some preview', ...overrides })
+    expect(screen.getAllByText(title)[0]).toBeInTheDocument()
+    expect(screen.getByText('some preview')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open file' })).toHaveAttribute('href', `/files/${overrides.filename}`)
   })
 })
 

@@ -1,8 +1,8 @@
 import { useMCP } from '@/hooks/useMCP'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DynamicFilters } from './DynamicFilters'
 import { CollectionMetadata } from '@/types/mcp'
-import { Button, Card, Checkbox, Disclosure, Field, Input, MultiSelect } from '@/components/shared/ui'
+import { Button, Card, Checkbox, Disclosure, Field, Input, MultiSelect, Notice } from '@/components/shared/ui'
 
 type Filter = {
     tags?: string[]
@@ -30,7 +30,12 @@ export interface SearchParams {
 interface SearchFormProps {
     isLoading: boolean
     onSearch: (params: SearchParams) => void
+    /** The query in the URL: run when it changes (a link, reload, Back), not when this form just submitted it. */
+    urlQuery?: string
 }
+
+const DEFAULT_LIMIT = 10
+const clampLimit = (limit: number | '') => Math.min(100, Math.max(1, limit === '' ? DEFAULT_LIMIT : limit))
 
 const createFlags = (items: string[], defaultValue = false, selected: string[] = []): Record<string, boolean> =>
     Object.fromEntries(items.map(item => [item, defaultValue || selected.includes(item)]))
@@ -43,19 +48,22 @@ const cleanFilters = (filters: Record<string, any>): Record<string, any> =>
         .filter(([_, value]) => value !== null && value !== '' && value !== undefined)
         .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {})
 
-export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
-    const [query, setQuery] = useState('')
+export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormProps) => {
+    const [query, setQuery] = useState(urlQuery)
     const [previews, setPreviews] = useState(false)
     const [useScores, setUseScores] = useState(false)
     const [modalities, setModalities] = useState<Record<string, boolean>>({})
     const [schemas, setSchemas] = useState<Record<string, CollectionMetadata>>({})
     const [tags, setTags] = useState<Record<string, boolean>>({})
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
-    const [limit, setLimit] = useState(10)
+    const [limit, setLimit] = useState<number | ''>(DEFAULT_LIMIT)
     const [useBm25, setUseBm25] = useState<boolean | undefined>(true)
     const [useHyde, setUseHyde] = useState<boolean | undefined>(true)
     const [useReranking, setUseReranking] = useState<boolean | undefined>(true)
     const [useQueryAnalysis, setUseQueryAnalysis] = useState<boolean | undefined>(true)
+    const [filtersReady, setFiltersReady] = useState(false)
+    const [filtersError, setFiltersError] = useState<string | null>(null)
+    const submittedQuery = useRef<string | null>(null)
     const { getMetadataSchemas, getTags } = useMCP()
 
     useEffect(() => {
@@ -68,24 +76,24 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
            setModalities(createFlags(Object.keys(schemas), true))
            setTags(createFlags(tags))
         }
-        setupFilters().catch((e) => {
-            console.error('Failed to load search filters:', e)
-        })
+        setupFilters()
+            .catch(e => setFiltersError(e instanceof Error ? e.message : String(e)))
+            .finally(() => setFiltersReady(true))
     }, [getMetadataSchemas, getTags])
 
     const handleFilterChange = (field: string, value: any) =>
         setDynamicFilters(prev => ({ ...prev, [field]: value }))
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault()
-
+    const search = (query: string) => {
+        submittedQuery.current = query
+        setLimit(clampLimit(limit))
         onSearch({
             query,
             modalities: getSelectedItems(modalities),
             config: {
                 previews,
                 useScores,
-                limit,
+                limit: clampLimit(limit),
                 useBm25,
                 useHyde,
                 useReranking,
@@ -98,9 +106,23 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
         })
     }
 
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault()
+        search(query)
+    }
+
+    // Wait for the modalities so a URL search uses the same defaults as a typed one.
+    useEffect(() => {
+        if (!filtersReady || !urlQuery || urlQuery === submittedQuery.current) return
+        setQuery(urlQuery)
+        search(urlQuery)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [urlQuery, filtersReady])
+
     return (
         <Card>
         <form onSubmit={handleSubmit}>
+            {filtersError && <Notice tone="warning" className="mb-4">Couldn't load search filters: {filtersError}</Notice>}
             <div className="flex gap-4 items-center mb-6">
                 <Input
                     type="text"
@@ -122,7 +144,7 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
             <div className="space-y-4">
                 <div className="flex flex-col gap-2">
                     <Checkbox checked={previews} onChange={(e) => setPreviews(e.target.checked)} label="Include content previews" />
-                    <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with a LLM before returning" />
+                    <Checkbox checked={useScores} onChange={(e) => setUseScores(e.target.checked)} label="Score results with an LLM before returning" />
                 </div>
 
                 <Disclosure summary="Search enhancements">
@@ -171,13 +193,8 @@ export const SearchForm = ({ isLoading, onSearch }: SearchFormProps) => {
                     <Input
                         type="number"
                         value={limit}
-                        onChange={(e) => {
-                            const parsed = parseInt(e.target.value, 10)
-                            // Clamp to [1, 100] so an in-progress / out-of-range
-                            // value can never exceed max= (which would silently
-                            // block form submission) or run away on edit.
-                            setLimit(Number.isNaN(parsed) ? 1 : Math.min(100, Math.max(1, parsed)))
-                        }}
+                        onChange={(e) => setLimit(e.target.value === '' ? '' : Number(e.target.value))}
+                        onBlur={() => setLimit(clampLimit(limit))}
                         onFocus={(e) => e.target.select()}
                         min={1}
                         max={100}

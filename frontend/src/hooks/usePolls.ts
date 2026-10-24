@@ -58,6 +58,7 @@ export interface PollResults {
   response_count: number
   aggregated: SlotAggregation[]
   best_slots: SlotAggregation[]
+  is_owner: boolean
 }
 
 export interface CreatePollRequest {

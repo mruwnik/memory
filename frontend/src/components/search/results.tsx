@@ -13,8 +13,10 @@ export type SearchItem = {
 
 const fileUrl = (filename: string) => `${SERVER_URL}/files/${filename}`
 
+const isHttpUrl = (value: unknown) => typeof value === 'string' && /^https?:\/\//i.test(value)
+
 const metadataValue = (key: string, value: unknown) =>
-    key === 'url' ? <a href={value as string} className="text-primary hover:underline break-all">{value as string}</a>
+    key === 'url' && isHttpUrl(value) ? <a href={value as string} className="text-primary hover:underline break-all">{value as string}</a>
         : key === 'filename' ? <a href={fileUrl(value as string)} className="text-primary hover:underline">{value as string}</a>
         : typeof value === 'string' ? value
         : JSON.stringify(value)
@@ -72,15 +74,22 @@ const KINDS: { match: string; title: (r: SearchItem) => string; body: (r: Search
         title: r => r.metadata?.title || r.metadata?.subject,
         body: r => r.content && <Markdown>{r.content}</Markdown>,
     },
+    {
+        match: '',
+        title: r => r.metadata?.title || r.filename || r.metadata?.url,
+        body: r => <>
+            {r.content && <p className="text-slate-600 whitespace-pre-wrap line-clamp-6">{r.content}</p>}
+            {r.filename && <a href={fileUrl(r.filename)} className="text-primary hover:underline">Open file</a>}
+        </>,
+    },
 ]
 
 export const SearchResult = ({ result }: { result: SearchItem }) => {
-    const kind = KINDS.find(k => result.mime_type?.startsWith(k.match))
-    if (!kind) return null
+    const kind = KINDS.find(k => (result.mime_type ?? '').startsWith(k.match))!
     const title = kind.title(result) || 'Untitled'
     return (
         <Row title={title} badges={result.tags?.map((tag, i) => <Badge key={i}>{tag}</Badge>)}>
-            <Metadata metadata={result.metadata} />
+            {result.metadata && <Disclosure summary="Details"><Metadata metadata={result.metadata} /></Disclosure>}
             {kind.body(result, title)}
             {result.chunks?.length > 0 && <Chunks chunks={result.chunks} />}
         </Row>

@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext } from 'react'
+import { createContext, useContext } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import UserSelector, { SelectedUser, useUserSelection } from '../common/UserSelector'
 import { useAuth } from '../../hooks/useAuth'
@@ -52,8 +52,8 @@ type TabType = typeof TABS[number]['value']
 const Sources = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
-  const initialTab = TABS.find(t => t.value === tabParam)?.value ?? 'accounts'
-  const [activeTab, setActiveTab] = useState<TabType>(initialTab)
+  const activeTab: TabType = TABS.find(t => t.value === tabParam)?.value ?? 'accounts'
+  const setActiveTab = (tab: TabType) => setSearchParams(tab === 'accounts' ? {} : { tab })
   const ActivePanel = TABS.find(t => t.value === activeTab)!.panel
   const [selectedUser, setSelectedUser] = useUserSelection('sourcesSelectedUser')
   const { hasScope } = useAuth()
@@ -63,15 +63,6 @@ const Sources = () => {
 
   // Compute userId for API calls
   const userId = selectedUser.id || undefined
-
-  // Update URL when tab changes
-  useEffect(() => {
-    if (activeTab !== 'accounts') {
-      setSearchParams({ tab: activeTab })
-    } else {
-      setSearchParams({})
-    }
-  }, [activeTab, setSearchParams])
 
   return (
     <SourcesContext.Provider value={{ selectedUser, userId }}>

@@ -3,6 +3,10 @@ import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { AccountsPanel } from './AccountsPanel'
 
+vi.mock('../Sources', () => ({
+  useSourcesContext: () => ({ userId: 3, selectedUser: { type: 'user', id: 3, name: 'Other' } }),
+}))
+
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
 const githubAccount = {
@@ -47,6 +51,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -100,7 +105,7 @@ describe('AccountsPanel github form', () => {
     await user.click(screen.getByRole('button', { name: 'Add account' }))
     const dialog = await screen.findByRole('dialog')
     await user.type(field(dialog, 'Name'), 'CI Bot')
-    await user.type(field(dialog, /Access Token/), 'ghp_secret')
+    await user.type(field(dialog, /Access token/), 'ghp_secret')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
@@ -124,7 +129,7 @@ describe('AccountsPanel github form', () => {
     await user.selectOptions(field(dialog, 'Authentication type'), 'app')
     expect(within(dialog).getByText('App ID')).toBeInTheDocument()
     expect(within(dialog).getByText('Installation ID')).toBeInTheDocument()
-    expect(within(dialog).getByText(/Private Key/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Private key/)).toBeInTheDocument()
   })
 
   it('disables the auth type select when editing', async () => {
@@ -218,8 +223,53 @@ describe('AccountsPanel google connect', () => {
     await user.click(screen.getByRole('button', { name: 'Connect account' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Connect' }))
-    await waitFor(() =>
-      expect(openSpy).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2', '_blank', expect.any(String)),
-    )
+    expect(openSpy).toHaveBeenCalledWith('', '_blank', expect.any(String))
+    expect(await screen.findByRole('link', { name: 'Open Google sign-in' })).toHaveAttribute('href', 'https://accounts.google.com/o/oauth2')
+  })
+
+  const googleRoutes = {
+    '/google-drive/accounts/8/reauthorize': { json: { authorization_url: 'https://accounts.google.com/reauth' } },
+    ...routes({ config: oauthConfig, google: [googleAccount] }),
+    '/google-drive/available-scopes': { json: { scopes: { drive: { scope: 's1', label: 'Drive', description: 'd' } } } },
+    '/google-drive/authorize': { json: { authorization_url: 'https://accounts.google.com/new' } },
+  }
+
+  it.each([
+    ['Connect account', 'Connect', 'https://accounts.google.com/new'],
+    ['Re-authorize', 'Update permissions', 'https://accounts.google.com/reauth'],
+  ])('%s waits for the callback page\'s message, then reloads the selected user\'s accounts', async (open, confirm, authUrl) => {
+    // closed: true is what a COOP-severed handle reads mid-sign-in, so it must not end the wait.
+    const popup = { location: { href: '' }, closed: false, close: vi.fn() }
+    vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window)
+    const mock = mockFetchRoutes(googleRoutes)
+    const { user } = renderWithUser(<AccountsPanel />)
+    await user.click(await screen.findByRole('button', { name: open }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: confirm }))
+
+    await waitFor(() => expect(popup.location.href).toBe(authUrl))
+    popup.closed = true
+    expect(screen.getByText(/Waiting for Google/)).toBeInTheDocument()
+    const accountLoads = () => mock.mock.calls.filter(([url]) => String(url).endsWith('/google-drive/accounts?user_id=3')).length
+    const before = accountLoads()
+
+    const channel = new BroadcastChannel('google-oauth-1')
+    channel.postMessage({ type: 'oauth-complete' })
+    channel.close()
+    await waitFor(() => expect(screen.queryByText(/Waiting for Google/)).not.toBeInTheDocument())
+    await waitFor(() => expect(accountLoads()).toBe(before + 1))
+  })
+
+  it('says when it stops waiting for Google', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const popup = { location: { href: '' }, closed: false, close: vi.fn() }
+    vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window)
+    mockFetchRoutes(googleRoutes)
+    const { user } = renderWithUser(<AccountsPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Connect account' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Connect' }))
+    await screen.findByText(/Waiting for Google/)
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(await screen.findByText(/Stopped waiting for Google/)).toBeInTheDocument()
   })
 })

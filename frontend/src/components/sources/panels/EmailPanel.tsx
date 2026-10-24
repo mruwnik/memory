@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { SourceRow, TagsInput, TestConnectionButton } from '../shared'
-import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, Label, List, LoadingState, Modal, Notice, Section, Select, useActionNotice } from '@/components/shared/ui'
+import { ProjectSelect, SensitivitySelect, SourceRow, TagsInput, TestConnectionButton, numberValue } from '../shared'
+import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, Fieldset } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 
 export const EmailPanel = () => {
@@ -19,8 +19,6 @@ export const EmailPanel = () => {
   const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const [emailData, googleData, projectData] = await Promise.all([
         listEmailAccounts(userId),
@@ -30,6 +28,7 @@ export const EmailPanel = () => {
       setAccounts(emailData)
       setGoogleAccounts(googleData)
       setProjects(projectData)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
@@ -161,8 +160,7 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
     )
 
   return (
-    <Field>
-      <Label>Folders to sync</Label>
+    <Fieldset legend="Folders to sync">
       <Hint>Leave all unchecked to sync only INBOX.</Hint>
       <div className="max-h-48 overflow-y-auto border border-slate-200 rounded p-2 flex flex-col gap-1">
         {folders.map(folder => (
@@ -171,7 +169,7 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
             label={<>{folder.name}{!folder.selectable && <span className="text-xs italic">(not selectable)</span>}</>} />
         ))}
       </div>
-    </Field>
+    </Fieldset>
   )
 }
 
@@ -189,12 +187,12 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
     email_address: account?.email_address || '',
     account_type: account?.account_type || 'imap' as 'imap' | 'gmail',
     imap_server: account?.imap_server || '',
-    imap_port: account?.imap_port || 993,
+    imap_port: (account?.imap_port ?? 993) as number | '',
     username: account?.username || '',
     password: '',
     use_ssl: account?.use_ssl ?? true,
     smtp_server: account?.smtp_server || '',
-    smtp_port: account?.smtp_port || 587,
+    smtp_port: (account?.smtp_port ?? 587) as number | '',
     google_account_id: account?.google_account_id || undefined as number | undefined,
     folders: account?.folders || [],
     tags: account?.tags || [],
@@ -279,7 +277,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             onChange={e => setFormData({ ...formData, account_type: e.target.value as 'imap' | 'gmail' })}
             disabled={!!account}
           >
-            <option value="imap">IMAP (Standard Email)</option>
+            <option value="imap">IMAP (standard email)</option>
             <option value="gmail">Gmail (OAuth)</option>
           </Select>
         </Field>
@@ -297,7 +295,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             </Field>
 
             <FieldRow>
-              <Field label="IMAP Server">
+              <Field label="IMAP server">
                 <Input
                   type="text"
                   value={formData.imap_server}
@@ -310,7 +308,8 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                 <Input
                   type="number"
                   value={formData.imap_port}
-                  onChange={e => setFormData({ ...formData, imap_port: parseInt(e.target.value) })}
+                  onChange={e => setFormData({ ...formData, imap_port: numberValue(e.target.value) })}
+                  required
                   required
                 />
               </Field>
@@ -339,7 +338,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
               onTest={() => testEmailAccount({
                 id: account?.id,
                 imap_server: formData.imap_server,
-                imap_port: formData.imap_port,
+                imap_port: Number(formData.imap_port),
                 username: formData.username,
                 password: formData.password || undefined,
                 use_ssl: formData.use_ssl,
@@ -359,7 +358,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
 
             <FieldRow>
               <Field label={<>
-                  SMTP Server <span className="text-slate-500">(optional)</span></>}>
+                  SMTP server <span className="text-slate-500">(optional)</span></>}>
                 <Input
                   type="text"
                   value={formData.smtp_server}
@@ -367,25 +366,23 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                   placeholder="smtp.example.com"
                 />
               </Field>
-              <Field label="SMTP Port">
+              <Field label="SMTP port">
                 <Input
                   type="number"
                   value={formData.smtp_port}
-                  onChange={e => setFormData({ ...formData, smtp_port: parseInt(e.target.value) || 587 })}
+                  onChange={e => setFormData({ ...formData, smtp_port: numberValue(e.target.value) })}
                 />
               </Field>
             </FieldRow>
             <Hint>SMTP settings for sending email. If not set, will be inferred from IMAP server.</Hint>
           </>
         ) : (
-          <Field>
-            <Label>Google account</Label>
-            {googleAccounts.length === 0 ? (
-              <Hint>
-                No Google accounts connected. Add a Google account in the Accounts tab first.
-              </Hint>
-            ) : (
-              <>
+          googleAccounts.length === 0 ? (
+            <Hint>
+              No Google accounts connected. Add a Google account in the Accounts tab first.
+            </Hint>
+          ) : (
+            <Field label="Google account" hint="Gmail uses OAuth for secure access. The email address will be set automatically.">
                 <Select
                   value={formData.google_account_id || ''}
                   onChange={e => {
@@ -404,12 +401,8 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                     <option key={ga.id} value={ga.id}>{ga.email}</option>
                   ))}
                 </Select>
-                <Hint>
-                  Gmail uses OAuth for secure access. The email address will be set automatically.
-                </Hint>
-              </>
-            )}
-          </Field>
+            </Field>
+          )
         )}
 
         <Field label="Tags">
@@ -420,30 +413,14 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
         </Field>
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control (from GitHub milestones)">
-            <Select
-              value={formData.project_id || ''}
-              onChange={e => setFormData({ ...formData, project_id: e.target.value ? parseInt(e.target.value) : undefined })}
-            >
-              <option value="">None</option>
-              {projects.map(project => (
-                <option key={project.id} value={project.id}>
-                  {project.title} ({project.repo_path})
-                </option>
-              ))}
-            </Select>
+          <Field label="Project" hint="Project for access control">
+            <ProjectSelect value={formData.project_id} projects={projects}
+              onChange={project_id => setFormData({ ...formData, project_id })} />
           </Field>
           <Field label="Sensitivity" hint="Visibility level for emails from this account">
-            <Select
-              value={formData.sensitivity}
-              onChange={e => setFormData({ ...formData, sensitivity: e.target.value as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden' })}
-            >
-              <option value="public">Public</option>
-              <option value="basic">Basic</option>
-              <option value="internal">Internal</option>
-              <option value="confidential">Confidential</option>
+            <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })}>
               <option value="hidden">Hidden (excluded from search)</option>
-            </Select>
+            </SensitivitySelect>
           </Field>
         </FieldRow>
 

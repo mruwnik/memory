@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMCP } from '@/hooks/useMCP'
-import { Button, ConfirmDialog, ErrorState, LoadingState, Page, PaneHeader, SplitView, Textarea, ToggleGroup } from '@/components/shared/ui'
+import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Page, PaneHeader, SplitView, Textarea, ToggleGroup, useActionNotice } from '@/components/shared/ui'
 import { Markdown } from '@/components/shared/Markdown'
 
 interface TreeNode {
@@ -61,13 +61,14 @@ const FolderNode = ({
       {name && (
         <button
           onClick={() => onToggleFolder(path)}
+          aria-expanded={isExpanded}
           className="w-full text-left px-3 py-1.5 hover:bg-slate-100 flex items-center gap-2 text-sm"
           style={{ paddingLeft: `${paddingLeft + 12}px` }}
         >
-          <span className="text-slate-500 w-4">
+          <span aria-hidden="true" className="text-slate-500 w-4">
             {isExpanded ? '▼' : '▶'}
           </span>
-          <span className="text-amber-600">📁</span>
+          <span aria-hidden="true" className="text-amber-600">📁</span>
           <span className="text-slate-700 font-medium">{name}</span>
         </button>
       )}
@@ -95,14 +96,15 @@ const FolderNode = ({
               <button
                 key={fileName}
                 onClick={() => onSelectFile(filePath)}
+                aria-current={isSelected || undefined}
                 className={`w-full text-left px-3 py-1.5 flex items-center gap-2 text-sm ${
                   isSelected
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-primary/10 text-primary-dark'
                     : 'hover:bg-slate-100 text-slate-600'
                 }`}
                 style={{ paddingLeft: `${(name ? depth + 1 : depth) * 16 + 12 + 16}px` }}
               >
-                <span className="text-slate-500">📄</span>
+                <span aria-hidden="true" className="text-slate-500">📄</span>
                 <span>{fileName}</span>
               </button>
             )
@@ -126,10 +128,28 @@ export const NotesPage = () => {
   const [loadingContent, setLoadingContent] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [contentError, setContentError] = useState<string | null>(null)
+  const { run, notice, clear: clearNotice } = useActionNotice()
+  const requestedFileRef = useRef<string | null>(null)
+  // Where our own navigation is taking ?file= (null: no file). Navigations commit in a transition, so until
+  // it lands the URL still names the old file, which must not be taken as a Back/link to it.
+  const pendingUrlFileRef = useRef<string | null | undefined>(undefined)
+  const setUrlFile = (path: string | null, replace = false) => {
+    if (path === fileFromUrl) return
+    pendingUrlFileRef.current = path
+    setSearchParams(path ? { file: path } : {}, { replace })
+  }
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null)
 
   const hasChanges = editedContent !== null && editedContent !== fileContent
-  const leaveFile = (go: () => void) => hasChanges ? setPendingLeave(() => go) : go()
+  const leaveFile = useCallback((go: () => void) => hasChanges ? setPendingLeave(() => go) : go(), [hasChanges])
+
+  useEffect(() => {
+    if (!hasChanges) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [hasChanges])
 
   // Get file path from URL
   const fileFromUrl = searchParams.get('file')
@@ -153,12 +173,17 @@ export const NotesPage = () => {
   }, [listNotes])
 
   const loadFileContent = useCallback(async (path: string) => {
+    requestedFileRef.current = path
+    clearNotice()
     try {
       setLoadingContent(true)
+      setFileContent(null)
+      setContentError(null)
       setEditedContent(null)
       setIsEditing(false)
       // Add /notes/ prefix back for the API call
       const result = await fetchFile(`/notes/${path}`)
+      if (requestedFileRef.current !== path) return
       // Result structure: [{ content: [{ type, mime_type, data }] }]
       // For text files, all chunks are joined together
       const fileData = result?.[0]
@@ -176,52 +201,42 @@ export const NotesPage = () => {
       setFileContent(content)
       setEditedContent(content)
     } catch (e) {
-      setFileContent(`Error loading file: ${e instanceof Error ? e.message : 'Unknown error'}`)
+      if (requestedFileRef.current !== path) return
+      setContentError(e instanceof Error ? e.message : 'Failed to load note')
     } finally {
-      setLoadingContent(false)
+      if (requestedFileRef.current === path) setLoadingContent(false)
     }
-  }, [fetchFile])
+  }, [fetchFile, clearNotice])
 
   const handleSave = useCallback(async () => {
     if (!selectedFile || editedContent === null) return
-    try {
-      setSaving(true)
-      // selectedFile is already clean (no /notes/ prefix)
-      await saveNote(selectedFile, editedContent)
-      setFileContent(editedContent)
-      setIsEditing(false)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save')
-    } finally {
-      setSaving(false)
-    }
-  }, [selectedFile, editedContent, saveNote])
+    setSaving(true)
+    // selectedFile is already clean (no /notes/ prefix)
+    const saved = await run(() => saveNote(selectedFile, editedContent))
+    setSaving(false)
+    if (!saved) return
+    setFileContent(editedContent)
+    setIsEditing(false)
+  }, [selectedFile, editedContent, saveNote, run])
 
   useEffect(() => {
     loadFiles()
   }, [loadFiles])
 
-  // Sync URL -> state: when URL changes or files load, select the file from URL
+  // Back/Forward and links change ?file= without a click in the tree, so they go through the same discard check.
   useEffect(() => {
-    if (fileFromUrl && files.length > 0 && fileFromUrl !== selectedFile) {
-      // Check if file exists in our list
-      if (files.includes(fileFromUrl)) {
-        setSelectedFile(fileFromUrl)
-        loadFileContent(fileFromUrl)
-        // Expand parent folders
-        const parts = fileFromUrl.split('/')
-        const folders: string[] = []
-        for (let i = 0; i < parts.length - 1; i++) {
-          folders.push(parts.slice(0, i + 1).join('/'))
-        }
-        setExpandedFolders(prev => {
-          const next = new Set(prev)
-          folders.forEach(f => next.add(f))
-          return next
-        })
-      }
+    if (pendingUrlFileRef.current !== undefined) {
+      if (fileFromUrl === pendingUrlFileRef.current) pendingUrlFileRef.current = undefined
+      return
     }
-  }, [fileFromUrl, files, selectedFile, loadFileContent])
+    if (!fileFromUrl || fileFromUrl === selectedFile || !files.includes(fileFromUrl)) return
+    leaveFile(() => {
+      setSelectedFile(fileFromUrl)
+      loadFileContent(fileFromUrl)
+      const parents = fileFromUrl.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))
+      setExpandedFolders(prev => new Set([...prev, ...parents]))
+    })
+  }, [fileFromUrl, files, selectedFile, loadFileContent, leaveFile])
 
   const handleToggleFolder = (path: string) => {
     setExpandedFolders((prev) => {
@@ -238,7 +253,7 @@ export const NotesPage = () => {
   const handleSelectFile = (path: string) => leaveFile(() => {
     setSelectedFile(path)
     loadFileContent(path)
-    setSearchParams({ file: path })
+    setUrlFile(path)
   })
 
   const tree = buildTree(files)
@@ -248,8 +263,8 @@ export const NotesPage = () => {
       <SplitView
         listTitle="Files"
         list={loading ? <LoadingState />
-          : error ? <ErrorState message={error} />
-          : files.length === 0 ? <p className="p-4 text-center text-slate-600">No notes found</p>
+          : error ? <ErrorState message={error} onRetry={loadFiles} />
+          : files.length === 0 ? <div className="p-4"><EmptyState message="No notes found" /></div>
           : (
             <FolderNode
               name=""
@@ -266,7 +281,7 @@ export const NotesPage = () => {
           <>
             <PaneHeader
               title={selectedFile}
-              actions={<>
+              actions={fileContent !== null && <>
                 {hasChanges && <span className="text-xs text-amber-800">Unsaved changes</span>}
                 <ToggleGroup label="View mode" value={isEditing ? 'edit' : 'preview'} onChange={v => setIsEditing(v === 'edit')}
                   options={[{ value: 'preview', label: 'Preview' }, { value: 'edit', label: 'Edit' }]} />
@@ -275,9 +290,12 @@ export const NotesPage = () => {
                 </Button>
               </>}
             />
-            <div className="flex-1 flex flex-col overflow-hidden p-4">
+            <div className="flex-1 flex flex-col gap-3 overflow-hidden p-4">
+              {notice}
               {loadingContent ? (
                 <LoadingState message="Loading content..." />
+              ) : contentError ? (
+                <ErrorState message={contentError} onRetry={() => loadFileContent(selectedFile)} />
               ) : isEditing ? (
                 <Textarea
                   value={editedContent ?? ''}
@@ -295,12 +313,12 @@ export const NotesPage = () => {
           </>
         )}
         placeholder="Select a file to view its content"
-        onBack={() => leaveFile(() => { setSelectedFile(null); setSearchParams({}) })}
+        onBack={() => leaveFile(() => { setSelectedFile(null); setUrlFile(null) })}
         backLabel="Files"
       />
       {pendingLeave && (
         <ConfirmDialog message={`Discard unsaved changes to ${selectedFile}?`} confirmLabel="Discard"
-          onCancel={() => setPendingLeave(null)}
+          onCancel={() => { setPendingLeave(null); setUrlFile(selectedFile, true) }}
           onConfirm={() => { setPendingLeave(null); pendingLeave() }} />
       )}
     </Page>

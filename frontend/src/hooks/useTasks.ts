@@ -25,10 +25,11 @@ export interface TodoTaskCreate {
   tags?: string[]
 }
 
+/** Omitted fields are unchanged; null clears the priority or due date. */
 export interface TodoTaskUpdate {
   task_title?: string
-  due_date?: string
-  priority?: TaskPriority
+  due_date?: string | null
+  priority?: TaskPriority | null
   status?: TaskStatus
   tags?: string[]
 }

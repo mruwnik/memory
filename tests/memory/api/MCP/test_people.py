@@ -275,6 +275,31 @@ async def test_upsert_update_success(db_session, admin_session, sample_people):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identifier, update, expected",
+    [
+        ("alice_chen", {"phone": None, "email": "a@new.com"}, {"email": "a@new.com"}),
+        (
+            "alice_chen",
+            {"discord": {"id": None, "name": "ac"}},
+            {"email": "alice@example.com", "phone": "555-1234", "discord": {"name": "ac"}},
+        ),
+        ("new_person", {"phone": None, "discord": {"id": None}}, {"discord": {}}),
+    ],
+)
+async def test_upsert_null_contact_value_is_not_stored(
+    db_session, admin_session, sample_people, identifier, update, expected
+):
+    upsert_fn = get_fn(upsert)
+    with mcp_auth_context(admin_session.id):
+        await upsert_fn(identifier=identifier, display_name="Someone", contact_info=update)
+
+    db_session.expire_all()
+    person = db_session.query(Person).filter(Person.identifier == identifier).first()
+    assert person.contact_info == expected
+
+
+@pytest.mark.asyncio
 async def test_upsert_create_requires_display_name(db_session, admin_session):
     """Test that creating a new person requires display_name."""
     upsert_fn = get_fn(upsert)

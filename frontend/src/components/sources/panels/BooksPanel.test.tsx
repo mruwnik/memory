@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpResult, mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
@@ -63,6 +63,17 @@ describe('BooksPanel load states', () => {
 })
 
 describe('BooksPanel upload flow', () => {
+  it('opens the file picker from a keyboard-reachable Upload books button', async () => {
+    mockFetchRoutes({ '/mcp/books_list_books': mcpResult([book]), '/auth/me': authMe, __default: { json: {} } })
+    const pick = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+    const { user } = renderWithUser(<BooksPanel />)
+    await waitFor(() => expect(screen.getByText('Dune')).toBeInTheDocument())
+    screen.getByRole('button', { name: 'Upload books' }).focus()
+    await user.keyboard('{Enter}')
+    expect(pick).toHaveBeenCalled()
+    pick.mockRestore()
+  })
+
   it('uploads a selected file and shows the success banner', async () => {
     const mock = mockFetchRoutes({
       '/mcp/books_list_books': mcpResult([]),

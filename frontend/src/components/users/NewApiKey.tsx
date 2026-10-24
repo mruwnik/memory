@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { Button, FormActions, Notice } from '@/components/shared/ui'
+import { Button, FormActions, Notice, copyText } from '@/components/shared/ui'
 
 /** A just-generated API key, shown once with a way to copy it. */
 export const NewApiKey = ({ apiKey, onDone }: { apiKey: string; onDone: () => void }) => {
   const [copied, setCopied] = useState<boolean | null>(null)
-  const copy = () => navigator.clipboard.writeText(apiKey).then(() => setCopied(true), () => setCopied(false))
+  const copy = () => copyText(apiKey).then(() => setCopied(true), () => setCopied(false))
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">Copy the API key now. It won't be shown again.</p>

@@ -120,6 +120,8 @@ const AuthWrapper = () => {
     { path: '/ui/polls/edit/:slug', element: <PollEdit /> },
   ]
   const home = <Navigate to={isAuthenticated ? '/ui/dashboard' : '/ui/login'} replace />
+  // Results are public, but a signed-in owner reaches them from Polls and should keep the app chrome.
+  const pollResults = <Route path="/ui/polls/results/:slug" element={<PollResults />} />
 
   return (
     <Routes>
@@ -131,11 +133,12 @@ const AuthWrapper = () => {
         {routes.map(({ path, element, scope }) => (
           <Route key={path} path={path} element={isAuthenticated && (!scope || hasScope(scope)) ? element : home} />
         ))}
+        {isAuthenticated && pollResults}
       </Route>
 
       {/* Poll respond/results are public (no auth required) */}
       <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
-      <Route path="/ui/polls/results/:slug" element={<PollResults />} />
+      {!isAuthenticated && pollResults}
 
       <Route path="*" element={home} />
     </Routes>

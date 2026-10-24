@@ -49,14 +49,15 @@ describe('ForumsPanel', () => {
     await waitFor(() => expect(screen.getByText('rate limited')).toBeInTheDocument())
   })
 
-  it('falls back to defaults when a number field is cleared', async () => {
+  it('keeps a cleared number field empty for retyping and sends the typed value', async () => {
     const mock = mockFetchRoutes({ '/forums/sync': { json: { task_id: 'x', status: 'queued' } }, '/auth/me': authMe, __default: { json: {} } })
     const { user } = renderWithUser(<ForumsPanel />)
-    await user.clear(numberInput('Days back'))
+    await user.clear(numberInput('Min karma'))
+    expect(numberInput('Min karma')).toHaveValue(null)
+    await user.type(numberInput('Min karma'), '0')
     await user.click(screen.getByRole('button', { name: 'Sync LessWrong' }))
     await waitFor(() => expect(screen.getByText(/LessWrong sync started/)).toBeInTheDocument())
-    // empty parseInt -> NaN -> fallback 30 days; just assert a since date was sent
     const call = mock.mock.calls.find(([url]) => String(url).includes('/forums/sync'))!
-    expect(JSON.parse((call[1] as RequestInit).body as string).since).toBeTruthy()
+    expect(JSON.parse((call[1] as RequestInit).body as string).min_karma).toBe(0)
   })
 })

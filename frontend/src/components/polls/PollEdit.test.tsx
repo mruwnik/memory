@@ -10,6 +10,8 @@ import {
   mcpToolFromRequest,
   mockFetch,
   mockResponse,
+  fireEvent,
+  within,
 } from '@/test/utils'
 import PollEdit from './PollEdit'
 import type { Poll } from '@/hooks/usePolls'
@@ -125,6 +127,25 @@ describe('PollEdit - populated form', () => {
     expect(
       screen.getByText('No new responses allowed, but not finalized yet'),
     ).toBeInTheDocument()
+  })
+
+  it.each([
+    ['open', ['open', 'closed']],
+    ['finalized', ['open', 'closed', 'finalized']],
+  ])('offers finalizing only via the results page (status %s)', async (status, values) => {
+    mockEdit({ loadResult: makePoll({ status: status as 'open' }) })
+    renderEdit()
+    await screen.findByDisplayValue('Editable Poll')
+    expect(within(screen.getByLabelText('Status')).getAllByRole('option').map(o => (o as HTMLOptionElement).value)).toEqual(values)
+  })
+
+  it('flags an end hour before the start hour and blocks save', async () => {
+    mockEdit()
+    renderEdit()
+    await screen.findByDisplayValue('Editable Poll')
+    fireEvent.change(screen.getByLabelText('End hour'), { target: { value: '1' } })
+    expect(screen.getByLabelText('End hour')).toHaveAccessibleDescription('End hour must be after the start hour')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
   })
 
   it('enables the slot duration selector when there are no responses', async () => {

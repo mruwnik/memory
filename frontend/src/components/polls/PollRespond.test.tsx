@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import {
   render,
@@ -37,6 +37,7 @@ function makeResults(overrides: Partial<PollResults> = {}): PollResults {
     response_count: 0,
     aggregated: [],
     best_slots: [],
+    is_owner: false,
     ...overrides,
   }
 }
@@ -199,9 +200,12 @@ describe('PollRespond - submission', () => {
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
     fireEvent.mouseDown(cell)
     await user.click(screen.getByRole('button', { name: 'Submit availability' }))
-    expect(await screen.findByText('Response submitted!')).toBeInTheDocument()
-    const editInput = screen.getByDisplayValue(/\?edit=tok-123$/)
-    expect(editInput).toBeInTheDocument()
+    expect(await screen.findByText('Response submitted')).toBeInTheDocument()
+    expect((screen.getByRole('textbox', { name: 'Edit link' }) as HTMLInputElement).value).toMatch(/\?edit=tok-123$/)
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    await user.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\?edit=tok-123$/))
+    expect(await screen.findByText('Link copied')).toBeInTheDocument()
   })
 
   it('shows an error banner when submission fails', async () => {
@@ -217,7 +221,7 @@ describe('PollRespond - submission', () => {
     const { user } = renderRespond()
     await user.type(await screen.findByLabelText(/Your name/), 'Dave')
     await user.click(screen.getByRole('button', { name: 'Submit availability' }))
-    await screen.findByText('Response submitted!')
+    await screen.findByText('Response submitted')
     await user.click(screen.getByRole('button', { name: 'Edit response' }))
     expect(
       await screen.findByRole('button', { name: 'Submit availability' }),
@@ -249,7 +253,7 @@ describe('PollRespond - edit mode via token', () => {
     const { user } = renderRespond('/ui/polls/respond/respond-me?edit=tok-xyz')
     await screen.findByDisplayValue('Existing User')
     await user.click(screen.getByRole('button', { name: 'Update availability' }))
-    expect(await screen.findByText('Response submitted!')).toBeInTheDocument()
+    expect(await screen.findByText('Response submitted')).toBeInTheDocument()
   })
 
   it('falls back to a fresh form when the edit token is invalid', async () => {

@@ -40,7 +40,8 @@ export interface PersonCreate {
 export interface PersonUpdate {
   display_name?: string
   aliases?: string[]
-  contact_info?: Record<string, string>
+  /** Merged into the stored contact info; null removes a key. */
+  contact_info?: Record<string, string | null>
   replace_aliases?: boolean
   content?: string  // Add a tidbit
   tidbit_type?: string

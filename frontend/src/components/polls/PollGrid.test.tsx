@@ -265,7 +265,7 @@ describe('PollGrid - heatmap mode', () => {
     expect(within(cell).getByText('3')).toBeInTheDocument()
   })
 
-  it('builds a respondents tooltip on aggregated cells', () => {
+  it('names the respondents in the tooltip and accessible label of aggregated cells', () => {
     render(
       <PollGrid
         datetimeStart={START}
@@ -280,6 +280,7 @@ describe('PollGrid - heatmap mode', () => {
     )
     const cell = screen.getByLabelText(/9:00 AM on .*: 3 available, 1 if needed/)
     expect(cell).toHaveAttribute('title', expect.stringContaining('Alice, Bob, Carol'))
+    expect(cell).toHaveAccessibleName(expect.stringContaining('(Alice, Bob, Carol)'))
   })
 
   it('renders no buttons in heatmap mode', () => {

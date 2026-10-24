@@ -108,7 +108,7 @@ describe('SearchForm', () => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    await user.click(screen.getByLabelText('Score results with a LLM before returning'))
+    await user.click(screen.getByLabelText('Score results with an LLM before returning'))
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     expect(onSearch.mock.calls[0][0].config.useScores).toBe(true)
@@ -137,29 +137,28 @@ describe('SearchForm', () => {
     expect(onSearch.mock.calls[0][0].config.limit).toBe(25)
   })
 
-  it('clamps an over-max limit to 100 so it cannot block submission', async () => {
+  it.each([
+    ['1025', 100],
+    ['{Backspace}', 10],
+  ])('clamps a limit typed as %j to %s when the search runs', async (typed, sent) => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    const limit = screen.getByRole('spinbutton') as HTMLInputElement
-    fireEvent.change(limit, { target: { value: '1025' } })
-    expect(limit).toHaveValue(100)
+    await user.clear(screen.getByRole('spinbutton'))
+    await user.type(screen.getByRole('spinbutton'), typed)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
     await waitFor(() => expect(onSearch).toHaveBeenCalled())
-    expect(onSearch.mock.calls[0][0].config.limit).toBe(100)
+    expect(onSearch.mock.calls[0][0].config.limit).toBe(sent)
   })
 
-  it('clamps the limit to 1 when cleared to an empty/invalid value', async () => {
+  it('lets a cleared limit be retyped without snapping to a default', async () => {
     installFetch()
-    const onSearch = vi.fn()
-    const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
+    const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={vi.fn()} />)
     const limit = screen.getByRole('spinbutton')
-    fireEvent.change(limit, { target: { value: '' } })
-    await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
-    await user.click(screen.getByRole('button', { name: 'Search' }))
-    await waitFor(() => expect(onSearch).toHaveBeenCalled())
-    expect(onSearch.mock.calls[0][0].config.limit).toBe(1)
+    await user.clear(limit)
+    await user.type(limit, '50')
+    expect(limit).toHaveValue(50)
   })
 
   it('includes dynamic filters once a modality field is filled', async () => {
@@ -182,8 +181,7 @@ describe('SearchForm', () => {
     expect(onSearch).not.toHaveBeenCalled()
   })
 
-  it('logs and recovers when schema loading fails', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('says when the filters fail to load and still renders the form', async () => {
     mockFetch(async (input) => {
       const url = typeof input === 'string' ? input : input.toString()
       if (url.includes('/auth/me')) {
@@ -192,9 +190,7 @@ describe('SearchForm', () => {
       return mockResponse({ status: 500, json: { detail: 'boom' } })
     })
     renderWithUser(<SearchForm isLoading={false} onSearch={() => {}} />)
-    await waitFor(() => expect(errSpy).toHaveBeenCalledWith('Failed to load search filters:', expect.anything()))
-    // form still renders despite the failure
+    expect(await screen.findByText(/Couldn't load search filters/)).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Search your knowledge base...')).toBeInTheDocument()
-    errSpy.mockRestore()
   })
 })

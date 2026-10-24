@@ -97,7 +97,7 @@ describe('SlackAppWizard - initial step', () => {
   it('validates that both name and client_id are required', async () => {
     const { user } = renderWithUser(<SlackAppWizard onCancel={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Create app' }))
-    expect(await screen.findByText('Both name and client_id are required')).toBeInTheDocument()
+    expect(await screen.findByText('Display name and client ID are required')).toBeInTheDocument()
     expect(createApp).not.toHaveBeenCalled()
   })
 
@@ -147,7 +147,7 @@ describe('SlackAppWizard - register -> client-secret -> oauth', () => {
   it('requires a non-empty client secret', async () => {
     const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Save and continue' }))
-    expect(await screen.findByText('client_secret is required')).toBeInTheDocument()
+    expect(await screen.findByText('Client secret is required')).toBeInTheDocument()
     expect(setClientSecret).not.toHaveBeenCalled()
   })
 
@@ -178,10 +178,25 @@ describe('SlackAppWizard - oauth redirect', () => {
     await user.click(screen.getByRole('button', { name: 'Authorize workspace' }))
     await waitFor(() => expect(issueOAuthState).toHaveBeenCalledWith(5))
     expect(openSpy).toHaveBeenCalledTimes(1)
-    const url = openSpy.mock.calls[0][0] as string
+    const url = (await screen.findByRole('link', { name: 'Open Slack authorization' })).getAttribute('href')!
     expect(url).toContain('https://slack.com/oauth/v2/authorize?')
     expect(url).toContain('client_id=cid-123')
     expect(url).toContain('state=signed-state')
+    openSpy.mockRestore()
+  })
+
+  it('opens the popup during the click and points it at Slack once the state is minted', async () => {
+    const popup = { location: { href: '' }, close: vi.fn() }
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window)
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
+    const input = document.querySelector('input[type="password"]') as HTMLInputElement
+    await user.type(input, 'sec')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+    await user.click(await screen.findByRole('button', { name: 'Authorize workspace' }))
+
+    expect(openSpy).toHaveBeenCalledWith('', '_blank', expect.any(String))
+    await waitFor(() => expect(popup.location.href).toContain('state=signed-state'))
+    expect(screen.queryByText(/blocked the popup/)).not.toBeInTheDocument()
     openSpy.mockRestore()
   })
 })
@@ -214,7 +229,7 @@ describe('SlackAppWizard - signing-secret -> events-url', () => {
     await advanceToSigningSecret(user)
 
     await user.click(screen.getByRole('button', { name: 'Save and continue' }))
-    expect(await screen.findByText('signing_secret is required')).toBeInTheDocument()
+    expect(await screen.findByText('Signing secret is required')).toBeInTheDocument()
     expect(setSigningSecret).not.toHaveBeenCalled()
   })
 
@@ -242,7 +257,22 @@ describe('SlackAppWizard - test message', () => {
     await user.click(screen.getByRole('button', { name: 'Start 60-second window' }))
     await waitFor(() => expect(beginTestMessage).toHaveBeenCalledTimes(1))
     expect(beginTestMessage.mock.calls[0][0]).toBe(5)
-    expect(screen.getByText('Status: waiting')).toBeInTheDocument()
+    expect(screen.getByText('Waiting for the message...')).toBeInTheDocument()
+  })
+
+  it('copies the test token and says so', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onCancel={vi.fn()} />)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await user.click(screen.getByRole('button', { name: 'Copy token' }))
+    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\S/))
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
+
+  it('submits a step with Enter', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
+    await user.type(document.querySelector('input[type="password"]') as HTMLInputElement, 'super-secret{Enter}')
+    await waitFor(() => expect(setClientSecret).toHaveBeenCalledWith(5, 'super-secret'))
   })
 
   it('surfaces an error if beginTestMessage rejects', async () => {

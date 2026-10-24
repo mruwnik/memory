@@ -6,11 +6,14 @@ import PersonCard from './PersonCard'
 import PersonFormModal from './PersonFormModal'
 import { Button, Checkbox, EmptyState, Input, Label, List, Modal, MultiSelect, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
 
+const PAGE_LIMIT = 200
+
 const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople } = usePeople()
   const { getPersonTeams, listTeams, listMembers } = useTeams()
 
   const [people, setPeople] = useState<Person[]>([])
+  const [capped, setCapped] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -49,6 +52,7 @@ const PeopleManagement = () => {
   const [showMergeModal, setShowMergeModal] = useState(false)
   const [mergeLoading, setMergeLoading] = useState(false)
   const [mergePrimaryId, setMergePrimaryId] = useState<string | null>(null)
+  const [mergeError, setMergeError] = useState<string | null>(null)
 
   // Expanded card state
   const [expandedIdentifier, setExpandedIdentifier] = useState<string | null>(null)
@@ -65,8 +69,9 @@ const PeopleManagement = () => {
       let data = await listPeople({
         search: debouncedSearchTerm || undefined,
         tags: tagFilter.length > 0 ? tagFilter : undefined,
-        limit: 200,
+        limit: PAGE_LIMIT,
       })
+      setCapped(data.length >= PAGE_LIMIT)
 
       // If team filter is active, filter to only people in that team
       if (teamFilter !== null) {
@@ -179,10 +184,10 @@ const PeopleManagement = () => {
         clearMergeSelection()
         await loadPeople()
       } else {
-        setError(result.error || 'Failed to merge people')
+        setMergeError(result.error || 'Failed to merge people')
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to merge people')
+      setMergeError(e instanceof Error ? e.message : 'Failed to merge people')
     } finally {
       setMergeLoading(false)
     }
@@ -228,7 +233,8 @@ const PeopleManagement = () => {
     <>
       <Page
         title="People"
-        description={people.length > 0 && `Showing ${people.length} ${people.length === 1 ? 'person' : 'people'}`}
+        description={people.length > 0 && `Showing ${people.length} ${people.length === 1 ? 'person' : 'people'}`
+          + (capped ? `, from the first ${PAGE_LIMIT} loaded; search to find others` : '')}
         actions={<Button variant="primary" onClick={() => setShowCreateModal(true)}>New person</Button>}
         width="default"
         loading={loading && people.length === 0}
@@ -239,9 +245,11 @@ const PeopleManagement = () => {
           selected={selectedForMerge.size}
           onClearSelection={clearMergeSelection}
           actions={<>
+            {selectedForMerge.size === 1 && <span className="text-xs text-slate-500">Select one more person to merge</span>}
             {selectedForMerge.size >= 2 && (
               <Button onClick={() => {
                 setMergePrimaryId(Array.from(selectedForMerge)[0])
+                setMergeError(null)
                 setShowMergeModal(true)
               }}>Merge</Button>
             )}
@@ -377,6 +385,8 @@ const PeopleManagement = () => {
                 </div>
               </div>
             </Notice>
+
+            {mergeError && <Notice tone="error" className="mb-4">{mergeError}</Notice>}
 
             <div className="flex justify-end gap-3">
               <Button

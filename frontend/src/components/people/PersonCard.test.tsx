@@ -103,40 +103,23 @@ describe('PersonCard actions', () => {
 })
 
 describe('PersonCard expand affordance', () => {
-  it('has no expand toggle when there are no details', () => {
+  it('toggles expand from the name even when nothing is loaded yet', async () => {
+    const user = userEvent.setup()
     render(<PersonCard {...baseProps} person={makePerson()} />)
-    expect(screen.queryByRole('button', { name: 'Alice Chen' })).not.toBeInTheDocument()
-  })
-
-  it.each([
-    ['aliases', makePerson({ aliases: ['ali'] })],
-    ['contact_info', makePerson({ contact_info: { email: 'a@x.com' } })],
-  ])('toggles expand from the name when person has %s', async (_label, person) => {
-    const user = userEvent.setup()
-    render(<PersonCard {...baseProps} person={person} />)
     await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
     expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
   })
 
-  it('toggles expand when teams are present', async () => {
-    const user = userEvent.setup()
-    render(<PersonCard {...baseProps} person={makePerson()} teams={[makeTeam()]} />)
-    await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
-    expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
-  })
-
-  it('toggles expand when tidbits are present', async () => {
-    const user = userEvent.setup()
-    render(<PersonCard {...baseProps} person={makePerson()} tidbits={[makeTidbit()]} />)
-    await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
-    expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
-  })
-
-  it('does not toggle when clicking the Edit button even with details', async () => {
+  it('does not toggle when clicking the Edit button', async () => {
     const user = userEvent.setup()
     render(<PersonCard {...baseProps} person={makePerson({ aliases: ['ali'] })} />)
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     expect(baseProps.onToggleExpand).not.toHaveBeenCalled()
+  })
+
+  it('says there are no tidbits when an expanded person has none', () => {
+    render(<PersonCard {...baseProps} person={makePerson()} expanded tidbits={[]} />)
+    expect(screen.getByText('No tidbits yet')).toBeInTheDocument()
   })
 })
 

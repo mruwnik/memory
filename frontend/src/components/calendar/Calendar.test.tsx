@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import type { CalendarEvent } from '@/hooks/useCalendar'
@@ -39,6 +39,12 @@ const onDay = (day: number, o: Partial<CalendarEvent> = {}): CalendarEvent => {
     ...o,
   }
 }
+
+// Ingest stores an all-day event as UTC midnight to the next UTC midnight.
+const allDayOn = (day: number) => new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), day)).toISOString()
+
+const originalTZ = process.env.TZ
+afterEach(() => { process.env.TZ = originalTZ })
 
 beforeEach(() => {
   localStorage.clear()
@@ -84,14 +90,17 @@ describe('Calendar', () => {
     await waitFor(() => expect(getEventsForMonths.mock.calls.length).toBeGreaterThan(before))
   })
 
-  it('opens an event detail modal on click', async () => {
+  it('opens an event detail modal from the keyboard, the event grouped under its date', async () => {
     getEventsForMonths.mockResolvedValue([
       onDay(10, { event_title: 'Lunch', location: 'Cafe', calendar_name: 'Personal' }),
     ])
     const user = userEvent.setup()
     renderWithRouter(<Calendar />)
-    await waitFor(() => expect(screen.getByText('Lunch')).toBeInTheDocument())
-    await user.click(screen.getByText('Lunch'))
+    const now = new Date()
+    const dayLabel = new Date(now.getFullYear(), now.getMonth(), 10).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+    const day = await screen.findByRole('group', { name: dayLabel })
+    within(day).getByRole('button', { name: /Lunch/ }).focus()
+    await user.keyboard('{Enter}')
     await waitFor(() => expect(screen.getByText('Location')).toBeInTheDocument())
     expect(screen.getByText('Cafe')).toBeInTheDocument()
   })
@@ -103,7 +112,8 @@ describe('Calendar', () => {
     renderWithRouter(<Calendar />)
     await waitFor(() => expect(screen.getByText('+2 more')).toBeInTheDocument())
     await user.click(screen.getByText('+2 more'))
-    await waitFor(() => expect(screen.getByText('E5')).toBeInTheDocument())
+    await user.click(await within(screen.getByRole('dialog')).findByRole('button', { name: /E5/ }))
+    expect(await screen.findByRole('dialog', { name: 'E5' })).toBeInTheDocument()
   })
 
   it('filters events by calendar via the Calendars dropdown', async () => {
@@ -207,7 +217,7 @@ describe('Calendar', () => {
     getEventsForMonths.mockResolvedValue([
       onDay(11, {
         event_title: 'Holiday', all_day: true,
-        start_time: new Date(new Date().getFullYear(), new Date().getMonth(), 11).toISOString(),
+        start_time: allDayOn(11),
         meeting_link: 'https://meet.example/x', recurrence_rule: 'FREQ=YEARLY',
       }),
     ])
@@ -240,13 +250,41 @@ describe('Calendar', () => {
   })
 
   it('deduplicates same-title all-day events across calendars', async () => {
-    const day = new Date(new Date().getFullYear(), new Date().getMonth(), 20).toISOString()
+    const day = allDayOn(20)
     getEventsForMonths.mockResolvedValue([
       onDay(20, { id: 1, event_title: 'NewYear', all_day: true, start_time: day, calendar_name: 'A' }),
       onDay(20, { id: 2, event_title: 'NewYear', all_day: true, start_time: day, calendar_name: 'B' }),
     ])
     renderWithRouter(<Calendar />)
     await waitFor(() => expect(screen.getAllByText('NewYear')).toHaveLength(1))
+  })
+
+  it('shows a multi-day event on every day it spans', async () => {
+    const y = new Date().getFullYear()
+    const m = new Date().getMonth()
+    getEventsForMonths.mockResolvedValue([
+      onDay(10, { event_title: 'Offsite', start_time: new Date(y, m, 10, 18).toISOString(), end_time: new Date(y, m, 12, 9).toISOString() }),
+    ])
+    renderWithRouter(<Calendar />)
+    const dayGroup = (d: number) => screen.getByRole('group', { name: new Date(y, m, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) })
+    await screen.findAllByText('Offsite')
+    expect([10, 11, 12, 13].map(d => within(dayGroup(d)).queryByText('Offsite') !== null)).toEqual([true, true, true, false])
+  })
+
+  it.each(['Europe/Berlin', 'America/New_York', 'UTC'])('shows an all-day event only on its own date in %s', async tz => {
+    process.env.TZ = tz
+    const y = new Date().getFullYear()
+    const m = new Date().getMonth()
+    getEventsForMonths.mockResolvedValue([
+      onDay(10, { event_title: 'Holiday', all_day: true, start_time: allDayOn(10), end_time: allDayOn(11) }),
+    ])
+    renderWithRouter(<Calendar />)
+    const dayGroup = (d: number) => screen.getByRole('group', { name: new Date(y, m, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) })
+    await screen.findByText('Holiday')
+    expect([9, 10, 11].map(d => within(dayGroup(d)).queryByText('Holiday') !== null)).toEqual([false, true, false])
+    await userEvent.setup().click(screen.getByText('Holiday'))
+    const date = new Date(y, m, 10).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    expect(within(screen.getByRole('dialog', { name: 'Holiday' })).getByText(date)).toBeInTheDocument()
   })
 
   it('shows person aliases, contact info and identifier in the attendee popup', async () => {
@@ -287,6 +325,14 @@ describe('Calendar admin user filter', () => {
   beforeEach(() => {
     hasScope.mockImplementation((s: string) => s === 'admin' || s === '*')
     listUsers.mockResolvedValue(adminUsers)
+  })
+
+  it('still loads the current user\'s events when the user list fails', async () => {
+    listUsers.mockRejectedValue(new Error('users down'))
+    getEventsForMonths.mockResolvedValue([onDay(15, { event_title: 'Standup' })])
+    renderWithRouter(<Calendar />)
+    expect(await screen.findByText('Standup')).toBeInTheDocument()
+    expect(getEventsForMonths.mock.calls.at(-1)?.[2]).toEqual([1])
   })
 
   it('shows a Users filter listing only human users for admins', async () => {

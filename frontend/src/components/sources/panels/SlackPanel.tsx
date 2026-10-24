@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { AccessSelects, SyncButton, SyncFailure, formatRelativeTime } from '../shared'
+import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { SlackAppWizard } from './SlackAppWizard'
@@ -22,7 +22,7 @@ export const SlackPanel = () => {
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
   const [apps, setApps] = useState<SlackAppResponse[]>([])
-  const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[]>>({})
+  const [channelsByWorkspace, setChannelsByWorkspace] = useState<Record<string, SlackChannel[] | Error>>({})
   const [projects, setProjects] = useState<Project[]>([])
   const [expandedWorkspace, setExpandedWorkspace] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -71,13 +71,13 @@ export const SlackPanel = () => {
   }, [loadData, userId])
 
   const loadChannels = async (workspaceId: string) => {
-    if (channelsByWorkspace[workspaceId]) return
-
+    if (Array.isArray(channelsByWorkspace[workspaceId])) return
+    setChannelsByWorkspace(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => id !== workspaceId)))
     try {
       const channels = await listChannels(workspaceId)
       setChannelsByWorkspace(prev => ({ ...prev, [workspaceId]: channels }))
     } catch (e) {
-      console.error('Failed to load channels:', e)
+      setChannelsByWorkspace(prev => ({ ...prev, [workspaceId]: e instanceof Error ? e : new Error(String(e)) }))
     }
   }
 
@@ -139,20 +139,6 @@ export const SlackPanel = () => {
     setChannelsByWorkspace(prev => ({ ...prev, [channel.workspace_id]: channels }))
   })
 
-  const handleToggleChannelCollect = async (channel: SlackChannel) => {
-    // Cycle through: inherit (null) -> on (true) -> off (false) -> inherit (null)
-    let newValue: boolean | null
-    if (channel.collect_messages === null) {
-      newValue = true
-    } else if (channel.collect_messages === true) {
-      newValue = false
-    } else {
-      newValue = null
-    }
-
-    await handleUpdateChannel(channel, { collect_messages: newValue })
-  }
-
   // Apps the user started but never authorized: resuming one avoids creating a duplicate in Slack.
   const connectedAppIds = new Set(workspaces.flatMap(w => w.apps.map(a => a.id)))
   const unfinishedApps = apps.filter(app => app.is_owner && !EVENTS_LIVE.includes(app.setup_state) && !connectedAppIds.has(app.id))
@@ -180,7 +166,8 @@ export const SlackPanel = () => {
             <WorkspaceRow
               key={workspace.id}
               workspace={workspace}
-              channels={channelsByWorkspace[workspace.id] || []}
+              channels={channelsByWorkspace[workspace.id]}
+              onRetryChannels={() => loadChannels(workspace.id)}
               projects={projects}
               expanded={expandedWorkspace === workspace.id}
               onToggleExpand={() => {
@@ -194,7 +181,6 @@ export const SlackPanel = () => {
               onSync={() => handleSync(workspace)}
               onResumeSetup={handleResumeSetup}
               onDisconnect={() => handleDisconnect(workspace)}
-              onToggleChannelCollect={handleToggleChannelCollect}
               onUpdateChannel={handleUpdateChannel}
             />
           ))}
@@ -248,7 +234,8 @@ const collectionStatus = (workspace: SlackWorkspace): CollectionStatus | null =>
 
 interface WorkspaceCardProps {
   workspace: SlackWorkspace
-  channels: SlackChannel[]
+  channels: SlackChannel[] | Error | undefined
+  onRetryChannels: () => void
   projects: Project[]
   expanded: boolean
   onToggleExpand: () => void
@@ -257,13 +244,13 @@ interface WorkspaceCardProps {
   onSync: () => Promise<unknown>
   onResumeSetup: (app: SlackWorkspaceApp) => void
   onDisconnect: () => void
-  onToggleChannelCollect: (channel: SlackChannel) => Promise<unknown>
   onUpdateChannel: (channel: SlackChannel, updates: SlackChannelUpdate) => Promise<unknown>
 }
 
 const WorkspaceRow = ({
   workspace,
   channels,
+  onRetryChannels,
   projects,
   expanded,
   onToggleExpand,
@@ -272,38 +259,10 @@ const WorkspaceRow = ({
   onSync,
   onResumeSetup,
   onDisconnect,
-  onToggleChannelCollect,
   onUpdateChannel,
 }: WorkspaceCardProps) => {
-  const [toggling, setToggling] = useState(false)
-  const [updating, setUpdating] = useState(false)
-
-  const handleToggle = async () => {
-    setToggling(true)
-    try {
-      await onToggleCollect()
-    } finally {
-      setToggling(false)
-    }
-  }
-
-  const handleProjectChange = async (projectId: number | undefined) => {
-    setUpdating(true)
-    try {
-      await onUpdateWorkspace({ project_id: projectId || null })
-    } finally {
-      setUpdating(false)
-    }
-  }
-
-  const handleSensitivityChange = async (sensitivity: 'public' | 'basic' | 'internal' | 'confidential') => {
-    setUpdating(true)
-    try {
-      await onUpdateWorkspace({ sensitivity })
-    } finally {
-      setUpdating(false)
-    }
-  }
+  const [toggling, handleToggle] = useBusy(onToggleCollect)
+  const [updating, update] = useBusy(onUpdateWorkspace)
 
   const status = collectionStatus(workspace)
   const eventlessApps = workspace.apps.filter(app => !EVENTS_LIVE.includes(app.setup_state))
@@ -312,7 +271,7 @@ const WorkspaceRow = ({
     <Row
       title={workspace.name}
       badges={<>
-        {status && <Badge tone={STATUS_TONES[status]}>{status}</Badge>}
+        {status ? <Badge tone={STATUS_TONES[status]}>{status}</Badge> : <Badge>Paused</Badge>}
         {workspace.collect_messages && !workspace.poll_blocker && eventlessApps.map(app => (
           <Badge key={app.id} tone="info" title={`Push events aren't set up for ${app.name}, so new messages arrive on the periodic poll.${app.is_owner ? '' : " Ask the app's owner to finish its setup."}`}>
             Polling only
@@ -327,11 +286,8 @@ const WorkspaceRow = ({
       ]}
       actions={<>
         <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={updating}
-          onProject={handleProjectChange} onSensitivity={handleSensitivityChange} />
-        <Button size="sm" variant={workspace.collect_messages ? 'primary' : 'secondary'} aria-pressed={workspace.collect_messages}
-          onClick={handleToggle} disabled={toggling}>
-          {workspace.collect_messages ? 'Collection on' : 'Collection off'}
-        </Button>
+          onChange={update} />
+        <PauseButton active={workspace.collect_messages} onClick={handleToggle} disabled={toggling} />
         {eventlessApps.filter(app => app.is_owner).map(app => (
           <Button key={app.id} size="sm" onClick={() => onResumeSetup(app)} title={`Resume the setup wizard for ${app.name}`}>
             Finish event setup
@@ -345,15 +301,14 @@ const WorkspaceRow = ({
       <SyncFailure status={workspace} />
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels ({workspace.channel_count})</ExpandToggle>}
-        empty={expanded && 'Loading channels...'}
+        {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}
       >
-        {expanded && channels.map(channel => (
+        {expanded && Array.isArray(channels) && channels.map(channel => (
           <ChannelRow
             key={channel.id}
             channel={channel}
             projects={projects}
             workspaceCollecting={workspace.collect_messages}
-            onToggle={() => onToggleChannelCollect(channel)}
             onUpdate={(updates) => onUpdateChannel(channel, updates)}
           />
         ))}
@@ -366,24 +321,11 @@ interface ChannelRowProps {
   channel: SlackChannel
   projects: Project[]
   workspaceCollecting: boolean
-  onToggle: () => Promise<unknown>
   onUpdate: (updates: SlackChannelUpdate) => Promise<unknown>
 }
 
-const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate }: ChannelRowProps) => {
-  const [toggling, setToggling] = useState(false)
-
-  const handleToggle = async () => {
-    setToggling(true)
-    try {
-      await onToggle()
-    } finally {
-      setToggling(false)
-    }
-  }
-
-  const isInheriting = channel.collect_messages === null
-  const effectivelyCollecting = channel.effective_collect
+const ChannelRow = ({ channel, projects, workspaceCollecting, onUpdate }: ChannelRowProps) => {
+  const [updating, update] = useBusy(onUpdate)
 
   // Channel type icons
   const typeIcon = {
@@ -400,16 +342,10 @@ const ChannelRow = ({ channel, projects, workspaceCollecting, onToggle, onUpdate
       title={<span className={cx(channel.is_private && 'italic')}><span aria-hidden="true" className="text-slate-500 mr-1">{typeIcon}</span><span>{channel.name}</span></span>}
       badges={channel.is_archived && <Badge>Archived</Badge>}
       actions={<>
-        <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={channel.is_archived}
-          onProject={id => onUpdate({ project_id: id })} onSensitivity={sensitivity => onUpdate({ sensitivity })} />
-        <Button size="sm" onClick={handleToggle} disabled={toggling || channel.is_archived}
-          title={isInheriting
-            ? `Inheriting from workspace (${workspaceCollecting ? 'collecting' : 'not collecting'})`
-            : channel.collect_messages ? 'Explicitly collecting' : 'Explicitly not collecting'}>
-          {isInheriting
-            ? `Inherit (${effectivelyCollecting ? 'yes' : 'no'})`
-            : channel.collect_messages ? 'Collecting' : 'Skipping'}
-        </Button>
+        <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={updating || channel.is_archived}
+          onChange={update} />
+        <CollectSelect value={channel.collect_messages} inherited={workspaceCollecting} disabled={updating || channel.is_archived}
+          onChange={collect_messages => update({ collect_messages })} />
       </>}
     />
   )

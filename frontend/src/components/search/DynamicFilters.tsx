@@ -1,6 +1,6 @@
 import { FilterInput } from './FilterInput'
 import { CollectionMetadata, SchemaArg } from '@/types/mcp'
-import { Disclosure, Field, Label } from '@/components/shared/ui'
+import { Disclosure, Field } from '@/components/shared/ui'
 
 const formatFieldLabel = (field: string): string =>
     field.replace(/_/g, ' ').replace(/^\w/, l => l.toUpperCase())
@@ -99,7 +99,7 @@ export const DynamicFilters = ({
 
     return (
         <div className="space-y-4">
-            <Label>Filters</Label>
+            <h3 className="text-sm font-medium text-slate-700">Filters</h3>
             <div className="space-y-3">
                 {commonFields.length > 0 && (
                     <Disclosure summary="Document properties" open>

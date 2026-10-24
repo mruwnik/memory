@@ -332,8 +332,8 @@ export interface GoogleFolderUpdate {
   check_interval?: number
   active?: boolean
   exclude_folder_ids?: string[]
-  // Access control
-  project_id?: number
+  // Access control; null clears the project
+  project_id?: number | null
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 

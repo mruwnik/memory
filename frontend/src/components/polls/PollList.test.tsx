@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   renderWithRouter,
   screen,
@@ -9,6 +9,7 @@ import {
   mcpToolFromRequest,
   mockFetch,
   mockResponse,
+  userEvent,
 } from '@/test/utils'
 import PollList from './PollList'
 import type { Poll } from '@/hooks/usePolls'
@@ -92,22 +93,16 @@ describe('PollList - populated list', () => {
     expect(screen.getByText('closed')).toBeInTheDocument()
   })
 
-  it('renders results/edit/share links pointing at the poll slug', async () => {
+  it('links the title to results and Edit to the editor, and copies the respond link', async () => {
     mockMcp({ polling_list_polls: [makePoll({ slug: 'team-sync' })] })
+    const user = userEvent.setup()
     renderWithRouter(<PollList />)
-    await screen.findByText('Team Sync')
-    expect(screen.getByRole('link', { name: 'View results' })).toHaveAttribute(
-      'href',
-      '/ui/polls/results/team-sync',
-    )
-    expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute(
-      'href',
-      '/ui/polls/edit/team-sync',
-    )
-    expect(screen.getByRole('link', { name: 'Share' })).toHaveAttribute(
-      'href',
-      '/ui/polls/respond/team-sync',
-    )
+    expect(await screen.findByRole('link', { name: 'Team Sync' })).toHaveAttribute('href', '/ui/polls/results/team-sync')
+    expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute('href', '/ui/polls/edit/team-sync')
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    await user.click(screen.getByRole('button', { name: 'Copy link' }))
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/ui/polls/respond/team-sync'))
+    expect(await screen.findByText('Link copied')).toBeInTheDocument()
   })
 
   it('renders a finalized meeting banner when finalized_time is set', async () => {

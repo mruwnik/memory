@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
+import { Link } from 'react-router-dom'
+import { fireEvent, renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import { NotesPage } from './NotesPage'
 
@@ -26,10 +27,12 @@ describe('NotesPage', () => {
     await waitFor(() => expect(screen.getByText('No notes found')).toBeInTheDocument())
   })
 
-  it('renders an error state when listing fails', async () => {
-    listNotes.mockRejectedValue(new Error('mcp down'))
+  it('renders an error state with retry when listing fails', async () => {
+    listNotes.mockRejectedValueOnce(new Error('mcp down')).mockResolvedValue([['/notes/readme.md']])
+    const user = userEvent.setup()
     renderWithRouter(<NotesPage />)
-    await waitFor(() => expect(screen.getByText('mcp down')).toBeInTheDocument())
+    await user.click(await screen.findByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('readme.md')).toBeInTheDocument()
   })
 
   it('builds a folder tree and lists files, stripping the /notes/ prefix', async () => {
@@ -48,8 +51,10 @@ describe('NotesPage', () => {
     await waitFor(() => expect(screen.getByText('work')).toBeInTheDocument())
     await user.click(screen.getByText('work'))
     expect(screen.getByText('todo.md')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-expanded', 'true')
     await user.click(screen.getByText('work'))
     expect(screen.queryByText('todo.md')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('shows the placeholder when no file is selected', async () => {
@@ -116,6 +121,97 @@ describe('NotesPage', () => {
     await user.click(target())
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
     await waitFor(() => expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument())
+  })
+
+  it('asks before a URL change replaces unsaved edits, and restores the URL on cancel', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md', '/notes/other.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<><NotesPage /><Link to="?file=other.md">go other</Link></>, { initialEntries: ['/ui/notes?file=readme.md'] })
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByRole('textbox'), '!')
+
+    await user.click(screen.getByText('go other'))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('textbox')).toHaveValue('# Hello\n\nbody!')
+    expect(fetchFile).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'readme.md' })).toHaveAttribute('aria-current', 'true')
+
+    await user.click(screen.getByText('go other'))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
+    await waitFor(() => expect(fetchFile).toHaveBeenLastCalledWith('/notes/other.md'))
+  })
+
+  it('warns before the tab closes only while there are unsaved edits', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />, { initialEntries: ['/ui/notes?file=readme.md'] })
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    expect(fireEvent(window, new Event('beforeunload', { cancelable: true }))).toBe(true)
+    await user.type(await screen.findByRole('textbox'), '!')
+    expect(fireEvent(window, new Event('beforeunload', { cancelable: true }))).toBe(false)
+  })
+
+  it('shows a load failure with retry and offers no editing until the note loads', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    fetchFile.mockRejectedValueOnce(new Error('fetch broke'))
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    await user.click(await screen.findByText('readme.md'))
+    expect(await screen.findByText('fetch broke')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('heading', { name: 'Hello' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+  })
+
+  it('shows a save failure inline and keeps the file tree and edits', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    saveNote.mockRejectedValueOnce(new Error('disk full'))
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    await user.click(await screen.findByText('readme.md'))
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByRole('textbox'), '!')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('disk full')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /readme\.md/ })).toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toHaveValue('# Hello\n\nbody!')
+  })
+
+  it('shows the last clicked note when an earlier load answers late', async () => {
+    listNotes.mockResolvedValue([['/notes/a.md', '/notes/b.md']])
+    let answerA: (value: unknown) => void = () => {}
+    fetchFile.mockImplementation((path: string) => path === '/notes/a.md'
+      ? new Promise(resolve => { answerA = resolve })
+      : Promise.resolve(fileResult('B text')))
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    await user.click(await screen.findByText('a.md'))
+    await user.click(screen.getByText('b.md'))
+    expect(await screen.findByText('B text')).toBeInTheDocument()
+    answerA(fileResult('A text'))
+    await new Promise(r => setTimeout(r, 0))
+    expect(fetchFile.mock.calls).toEqual([['/notes/a.md'], ['/notes/b.md']])
+    expect(screen.queryByText('A text')).not.toBeInTheDocument()
+    expect(screen.getByText('B text')).toBeInTheDocument()
+  })
+
+  it('drops a save failure notice when another note is opened', async () => {
+    listNotes.mockResolvedValue([['/notes/a.md', '/notes/b.md']])
+    saveNote.mockRejectedValueOnce(new Error('disk full'))
+    const user = userEvent.setup()
+    renderWithRouter(<NotesPage />)
+    await user.click(await screen.findByText('a.md'))
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByRole('textbox'), '!')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('disk full')
+    await user.click(screen.getByText('b.md'))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
+    await waitFor(() => expect(fetchFile).toHaveBeenCalledWith('/notes/b.md'))
+    expect(screen.queryByText('disk full')).not.toBeInTheDocument()
   })
 
   it('auto-selects and loads a file from the ?file= URL param', async () => {

@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useState, type ComponentProps, type RefObject } from 'react'
 import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
-import { Badge, Button, ConfirmButton, Input, Notice, Row, RowError, Select } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Input, Notice, Row, RowError, Select, Fieldset } from '@/components/shared/ui'
+
+/** A number input's state: '' while cleared, so editing never snaps back to a default. */
+export const numberValue = (value: string): number | '' => value === '' ? '' : Number(value)
 
 // Format relative time
 export const formatRelativeTime = (dateString: string | null): string => {
@@ -54,9 +57,66 @@ export const SyncFailure = ({ status }: { status: SyncStatus }) => {
 }
 
 /** The row action that stops or restarts collection for a source shown with a StatusBadge. */
-export const PauseButton = ({ active, onClick }: { active: boolean; onClick: () => void }) => (
-  <Button size="sm" onClick={onClick}>{active ? 'Pause' : 'Resume'}</Button>
+export const PauseButton = ({ active, onClick, disabled }: { active: boolean; onClick: () => void; disabled?: boolean }) => (
+  <Button size="sm" onClick={onClick} disabled={disabled}>{active ? 'Pause' : 'Resume'}</Button>
 )
+
+const COLLECT_CHOICES = { inherit: null, collect: true, skip: false } as const
+
+/** A chat channel's collection override: inherit the workspace/server setting, or force it on or off. */
+export const CollectSelect = ({ value, inherited, disabled, onChange }: {
+  value: boolean | null
+  inherited: boolean
+  disabled?: boolean
+  onChange: (value: boolean | null) => void
+}) => (
+  <Select className="w-auto py-1 text-xs" aria-label="Collect messages" title="Collect messages" disabled={disabled}
+    value={value === null ? 'inherit' : value ? 'collect' : 'skip'}
+    onChange={e => onChange(COLLECT_CHOICES[e.target.value as keyof typeof COLLECT_CHOICES])}>
+    <option value="inherit">Inherit ({inherited ? 'collect' : 'skip'})</option>
+    <option value="collect">Collect</option>
+    <option value="skip">Skip</option>
+  </Select>
+)
+
+/**
+ * SubList `empty` and `footer` for a nested list loaded on expand: `items` is undefined while
+ * loading and an Error when the load failed.
+ */
+export const lazySubList = (items: unknown[] | Error | undefined, noun: string, onRetry: () => void) => ({
+  empty: items === undefined ? `Loading ${noun}...` : !(items instanceof Error) && `No ${noun}`,
+  footer: items instanceof Error && <Notice tone="error" onRetry={onRetry}>Couldn't load {noun}: {items.message}</Notice>,
+})
+
+/**
+ * Opens a popup for a URL that is only known after an await. Call it inside the click handler:
+ * browsers allow a popup only during the click, so the window opens blank first. Resolves to the
+ * URL when the browser blocked the popup, for the caller to offer as a link. `noopener` can't be
+ * a window feature here (window.open would return null), so a popup that doesn't need its opener
+ * passes keepOpener = false to drop it before navigating.
+ */
+export const openPopup = async (getUrl: () => Promise<string>, features = 'width=600,height=700', keepOpener = true) => {
+  const popup = window.open('', '_blank', features)
+  let url: string
+  try {
+    url = await getUrl()
+  } catch (e) {
+    popup?.close()
+    throw e
+  }
+  if (popup && !popup.closed) {
+    if (!keepOpener) popup.opener = null
+    popup.location.href = url
+  }
+  return { blockedUrl: popup ? null : url }
+}
+
+/** Offers a blocked popup's URL as a link. */
+export const PopupBlockedNotice = ({ url, label, onDismiss }: { url: string | null; label: string; onDismiss: () => void }) => url ? (
+  <Notice tone="warning" onDismiss={onDismiss}>
+    Your browser blocked the popup. <a href={url} target="_blank" rel="noopener noreferrer" className="underline font-medium">{label}</a>
+  </Notice>
+) : null
 
 // Sync Button
 interface SyncButtonProps {
@@ -131,9 +191,12 @@ interface TagsInputProps {
   tags: string[]
   onChange: (tags: string[]) => void
   placeholder?: string
+  /** Set by Field so its label and hint reach the text input. */
+  id?: string
+  'aria-describedby'?: string
 }
 
-export const TagsInput = ({ tags, onChange, placeholder = 'Add tag...' }: TagsInputProps) => {
+export const TagsInput = ({ tags, onChange, placeholder = 'Add tag...', id, 'aria-describedby': describedBy }: TagsInputProps) => {
   const [input, setInput] = useState('')
 
   const addTag = () => {
@@ -164,6 +227,7 @@ export const TagsInput = ({ tags, onChange, placeholder = 'Add tag...' }: TagsIn
             <button
               type="button"
               onClick={() => removeTag(tag)}
+              aria-label={`Remove tag ${tag}`}
               className="text-slate-500 hover:text-slate-600"
             >
               &times;
@@ -172,6 +236,8 @@ export const TagsInput = ({ tags, onChange, placeholder = 'Add tag...' }: TagsIn
         ))}
       </div>
       <Input
+        id={id}
+        aria-describedby={describedBy}
         type="text"
         value={input}
         onChange={e => setInput(e.target.value)}
@@ -198,28 +264,29 @@ export const IntervalInput = ({ value, onChange, label = 'Check interval' }: Int
   const setMinutes = (m: number) => onChange(hours * 60 + m)
 
   return (
-    <div className="space-y-1">
-      <label className="text-sm font-medium text-slate-700">{label}</label>
+    <Fieldset legend={label}>
       <div className="flex items-center gap-2">
         <Input
           type="number"
           min="0"
+          aria-label="Hours"
           value={hours}
           onChange={e => setHours(parseInt(e.target.value) || 0)}
           className="w-16 text-center"
         />
-        <span className="text-slate-500">h</span>
+        <span aria-hidden="true" className="text-slate-500">h</span>
         <Input
           type="number"
           min="0"
           max="59"
+          aria-label="Minutes"
           value={minutes}
           onChange={e => setMinutes(parseInt(e.target.value) || 0)}
           className="w-16 text-center"
         />
-        <span className="text-slate-500">m</span>
+        <span aria-hidden="true" className="text-slate-500">m</span>
       </div>
-    </div>
+    </Fieldset>
   )
 }
 
@@ -275,26 +342,82 @@ export const SourceRow = ({
   </Row>
 )
 
-const SENSITIVITIES = ['public', 'basic', 'internal', 'confidential'] as const
+/** The sensitivities every source accepts. Email accounts also accept "hidden", passed as an extra option. */
+export const SENSITIVITIES = ['public', 'basic', 'internal', 'confidential'] as const
+export type Sensitivity = typeof SENSITIVITIES[number]
+
+type SelectProps = Omit<ComponentProps<'select'>, 'value' | 'onChange'>
+type AccessProject = { id: number; title: string; repo_path?: string | null }
+
+/** Picks a source's project; `Field` wires its label. */
+export const ProjectSelect = ({ value, projects, onChange, ...props }: SelectProps & {
+  value: number | null | undefined
+  projects: AccessProject[]
+  onChange: (id: number | undefined) => void
+}) => (
+  <Select {...props} value={value || ''} onChange={e => onChange(e.target.value ? parseInt(e.target.value) : undefined)}>
+    <option value="">No project</option>
+    {projects.map(p => <option key={p.id} value={p.id}>{p.repo_path ? `${p.title} (${p.repo_path})` : p.title}</option>)}
+  </Select>
+)
+
+/** Picks a source's sensitivity; `children` adds options beyond SENSITIVITIES. */
+export const SensitivitySelect = <T extends string = Sensitivity>({ value, onChange, children, ...props }: SelectProps & {
+  value: T
+  onChange: (value: T) => void
+}) => (
+  <Select {...props} value={value} onChange={e => onChange(e.target.value as T)}>
+    {SENSITIVITIES.map(v => <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>)}
+    {children}
+  </Select>
+)
 
 /** Project and sensitivity pickers for a chat workspace, server or channel row. */
-export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onProject, onSensitivity }: {
+/** Wraps an async action with a flag that is true while it runs, to disable the controls that started it. */
+export const useBusy = <A extends unknown[]>(action: (...args: A) => Promise<unknown>) => {
+  const [busy, setBusy] = useState(false)
+  const run = async (...args: A) => {
+    setBusy(true)
+    try {
+      await action(...args)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return [busy, run] as const
+}
+
+/** Inline project and sensitivity pickers for a row; "No project" sends project_id: null. */
+export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onChange }: {
   projectId: number | null | undefined
   sensitivity: string
-  projects: { id: number; title: string }[]
+  projects: AccessProject[]
   disabled: boolean
-  onProject: (id: number | undefined) => void
-  onSensitivity: (s: typeof SENSITIVITIES[number]) => void
+  onChange: (updates: { project_id?: number | null; sensitivity?: Sensitivity }) => void
 }) => (
   <>
-    <Select className="w-auto py-1 text-xs" value={projectId || ''} disabled={disabled} title="Project" aria-label="Project"
-      onChange={e => onProject(e.target.value ? parseInt(e.target.value) : undefined)}>
-      <option value="">No project</option>
-      {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-    </Select>
-    <Select className="w-auto py-1 text-xs" value={sensitivity} disabled={disabled} title="Sensitivity" aria-label="Sensitivity"
-      onChange={e => onSensitivity(e.target.value as typeof SENSITIVITIES[number])}>
-      {SENSITIVITIES.map(v => <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>)}
-    </Select>
+    <ProjectSelect className="w-auto py-1 text-xs" value={projectId} projects={projects} disabled={disabled} title="Project" aria-label="Project"
+      onChange={id => onChange({ project_id: id ?? null })} />
+    <SensitivitySelect className="w-auto py-1 text-xs" value={sensitivity as Sensitivity} disabled={disabled} title="Sensitivity" aria-label="Sensitivity"
+      onChange={s => onChange({ sensitivity: s })} />
+  </>
+)
+
+interface FileButtonProps extends Pick<ComponentProps<typeof Button>, 'variant' | 'size'> {
+  inputRef: RefObject<HTMLInputElement | null>
+  label: string
+  busy?: boolean
+  accept: string
+  multiple?: boolean
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+}
+
+/** A real button that opens a hidden file picker, so uploads work from the keyboard. */
+export const FileButton = ({ inputRef, label, busy, accept, multiple, onChange, variant = 'primary', size }: FileButtonProps) => (
+  <>
+    <Button variant={variant} size={size} onClick={() => inputRef.current?.click()} disabled={busy}>
+      {busy ? 'Uploading...' : label}
+    </Button>
+    <input ref={inputRef} type="file" accept={accept} multiple={multiple} onChange={onChange} className="hidden" tabIndex={-1} />
   </>
 )

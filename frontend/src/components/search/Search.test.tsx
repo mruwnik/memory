@@ -2,13 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithRouter, mcpToolFromRequest, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
+import { useLocation } from 'react-router-dom'
 import Search from './Search'
+
+const LocationProbe = () => <div data-testid="location">{useLocation().search}</div>
 
 const schemas = {
   blog: { schema: { author: { type: 'string', description: 'Author' } }, size: 0 },
 }
 
-const installFetch = (opts: { results?: unknown[]; searchFails?: boolean } = {}) =>
+const installFetch = (opts: { results?: unknown[]; searchFails?: boolean; schemasFail?: boolean } = {}) =>
   mockFetch(async (input, init) => {
     const url = typeof input === 'string' ? input : input.toString()
     const tool = mcpToolFromRequest(input, init)
@@ -16,6 +19,7 @@ const installFetch = (opts: { results?: unknown[]; searchFails?: boolean } = {})
       return mockResponse({ json: { user_id: 1, name: 'T', email: 't@e.com', user_type: 'human', scopes: ['*'] } })
     }
     if (tool === 'meta_get_metadata_schemas') {
+      if (opts.schemasFail) return mockResponse({ status: 500, json: { detail: 'schemas down' } })
       return mockResponse({ json: mcpEnvelopeJson(schemas) })
     }
     if (tool === 'core_search') {
@@ -57,7 +61,7 @@ describe('Search', () => {
     const { user } = renderWithRouter(<Search />)
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'query')
     await user.click(screen.getByRole('button', { name: 'Search' }))
-    await waitFor(() => expect(screen.getByText('Found 2 results')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Found 2 results'))
     expect(screen.getByText('alpha.txt')).toBeInTheDocument()
     expect(screen.getByText('beta.txt')).toBeInTheDocument()
   })
@@ -98,5 +102,25 @@ describe('Search', () => {
       ([u, init]) => mcpToolFromRequest(u, init) === 'core_search',
     )
     expect(searchCalls).toHaveLength(0)
+  })
+
+  it('runs the search in the URL on load and puts a new query in the URL', async () => {
+    const fetchMock = installFetch({ results: [textResult('alpha.txt')] })
+    const { user } = renderWithRouter(<><Search /><LocationProbe /></>, { initialEntries: ['/ui/search?q=alpha'] })
+    expect(await screen.findByText('alpha.txt')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Search your knowledge base...')).toHaveValue('alpha')
+    const query = screen.getByPlaceholderText('Search your knowledge base...')
+    await user.clear(query)
+    await user.type(query, 'beta')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?q=beta'))
+    const searched = fetchMock.mock.calls.filter(([u, init]) => mcpToolFromRequest(u, init) === 'core_search')
+    expect(searched).toHaveLength(2)
+  })
+
+  it('says when the search filters fail to load', async () => {
+    installFetch({ schemasFail: true })
+    renderWithRouter(<Search />)
+    expect(await screen.findByText(/Couldn't load search filters/)).toBeInTheDocument()
   })
 })

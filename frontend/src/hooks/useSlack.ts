@@ -58,7 +58,7 @@ export interface SlackChannel {
 export interface SlackChannelUpdate {
   collect_messages?: boolean | null
   // Access control
-  project_id?: number
+  project_id?: number | null
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
 }
 

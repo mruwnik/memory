@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
+import pytest
 
 from memory.api.google_drive import (
     AVAILABLE_GOOGLE_SCOPES,
@@ -331,13 +332,15 @@ def test_google_callback_parses_scopes_from_url(
     # Call callback with scope parameter (as Google would send it)
     scope_string = "email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/gmail.send openid"
 
-    google_callback(
+    response = google_callback(
         request=mock_request,
         code="auth_code",
         state="valid_state",
         error=None,
         scope=scope_string,
     )
+
+    assert 'new BroadcastChannel("google-oauth-1")' in bytes(response.body).decode()
 
     # Verify scopes were parsed and saved correctly
     expected_scopes = scope_string.split()
@@ -503,3 +506,38 @@ def test_list_accounts_reports_folder_sync_failure(client, db_session, user):
         "<HttpError 404 File not found>",
         since.isoformat(),
     )
+
+
+@pytest.mark.parametrize(
+    "body, keeps_project",
+    [
+        ({"project_id": None}, False),
+        ({"active": False}, True),
+    ],
+)
+def test_update_folder_null_clears_project_and_omitted_keeps_it(
+    client, db_session, user, body, keeps_project
+):
+    from memory.common.db.models.sources import GoogleAccount, GoogleFolder, Project
+
+    project = Project(title="Drive project", state="open")
+    account = GoogleAccount(user_id=user.id, name="Drive", email="drive@example.com")
+    folder = GoogleFolder(account=account, folder_id="f", folder_name="F", project=project)
+    db_session.add(folder)
+    db_session.commit()
+
+    response = client.patch(
+        f"/google-drive/accounts/{account.id}/folders/{folder.id}", json=body
+    )
+
+    assert response.status_code == 200
+    db_session.refresh(folder)
+    assert (folder.project_id is not None) is keeps_project
+
+
+def test_google_callback_escapes_error():
+    from memory.api.google_drive import google_callback
+
+    response = google_callback(request=Mock(), error="<script>x</script>")
+
+    assert "<script>x" not in bytes(response.body).decode()

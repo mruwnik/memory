@@ -444,7 +444,7 @@ export const PollGrid: React.FC<PollGridProps> = ({
               // Build accessible label
               let ariaLabel: string
               if (isHeatmapMode && aggregated) {
-                ariaLabel = `${timeLabel} on ${dateLabel}: ${aggregated.available_count} available, ${aggregated.if_needed_count} if needed`
+                ariaLabel = `${timeLabel} on ${dateLabel}: ${aggregated.available_count} available, ${aggregated.if_needed_count} if needed${aggregated.respondents.length ? ` (${aggregated.respondents.join(', ')})` : ''}`
               } else if (isSelected) {
                 const levelLabel = selectedSlot?.availability_level === 2 ? 'if needed' : 'available'
                 ariaLabel = `${timeLabel} on ${dateLabel}: selected as ${levelLabel}`

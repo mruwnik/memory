@@ -84,7 +84,7 @@ describe('FeedsPanel create flow', () => {
     })
   })
 
-  it('switches the panel to its error state on create failure', async () => {
+  it('shows a create failure inside the open form, keeping the input', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
     mock.mockImplementation(async (input, init) => {
       const url = String(input)
@@ -100,13 +100,59 @@ describe('FeedsPanel create flow', () => {
     const dialog = await screen.findByRole('dialog')
     await user.type(field(dialog, 'Feed URL'), 'https://bad')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
-    // handleCreate catches the error and flips the whole panel to ErrorState.
-    expect(await screen.findByText('bad feed url')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(await within(dialog).findByText('bad feed url')).toBeInTheDocument()
+    expect(field(dialog, 'Feed URL')).toHaveValue('https://bad')
+  })
+})
+
+describe('FeedsPanel form labels', () => {
+  it('labels the tags input, tag remove buttons and the interval fields', async () => {
+    mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
+    const { user } = renderWithUser(<FeedsPanel />)
+    await waitFor(() => expect(screen.getByText('No RSS feeds configured')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Add feed' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Tags'), 'news{Enter}')
+    expect(within(dialog).getByRole('button', { name: 'Remove tag news' })).toBeInTheDocument()
+    const interval = within(dialog).getByRole('group', { name: 'Check interval' })
+    expect(within(interval).getByLabelText('Hours')).toHaveValue(24)
+    expect(within(interval).getByLabelText('Minutes')).toHaveValue(0)
   })
 })
 
 describe('FeedsPanel mutate flows', () => {
+  it('keeps the list on screen while it refetches after an action', async () => {
+    const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
+    let gets = 0
+    mock.mockImplementation(async (input, init) => {
+      const method = (init as RequestInit)?.method ?? 'GET'
+      if (String(input).includes('/article-feeds') && method === 'GET' && ++gets > 1) return new Promise<Response>(() => {})
+      return { ok: true, status: 200, json: async () => String(input).includes('/article-feeds') ? [feed] : {} } as unknown as Response
+    })
+    const { user } = renderWithUser(<FeedsPanel />)
+    await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
+    await waitFor(() => expect(gets).toBe(2))
+    expect(screen.getByText('Example Blog')).toBeInTheDocument()
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+  })
+
+  it('shows a delete failure inline and keeps the list', async () => {
+    const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
+    mock.mockImplementation(async (input, init) => {
+      if ((init as RequestInit)?.method === 'DELETE') {
+        return { ok: false, status: 500, json: async () => ({ detail: 'delete broke' }) } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => String(input).includes('/article-feeds') ? [feed] : {} } as unknown as Response
+    })
+    const { user } = renderWithUser(<FeedsPanel />)
+    await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText(/delete broke/)).toBeInTheDocument()
+    expect(screen.getByText('Example Blog')).toBeInTheDocument()
+  })
+
   it('toggles active with a PATCH', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
     const { user } = renderWithUser(<FeedsPanel />)

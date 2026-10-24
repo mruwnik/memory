@@ -74,9 +74,10 @@ describe('ReportsPage', () => {
     renderWithRouter(<ReportsPage />)
     await waitFor(() => expect(screen.getByText('No reports yet.')).toBeInTheDocument())
     await user.click(screen.getAllByRole('button', { name: 'New report' })[0])
-    const submitBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create report' })
-    await user.click(submitBtn)
-    expect(await screen.findByText('Title and content are required')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Create report' }))
+    expect(within(dialog).getByLabelText('Title')).toBeInvalid()
+    expect(within(dialog).getByLabelText('HTML content')).toBeInvalid()
     expect(createReport).not.toHaveBeenCalled()
   })
 
@@ -95,15 +96,38 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(screen.getByText('Report queued for processing...')).toBeInTheDocument())
   })
 
-  it('selects a report and renders the HTML iframe viewer', async () => {
-    listReports.mockResolvedValue([makeReport({ id: 5, title: 'Viewable' })])
+  it('keeps polling after a create until the new report shows up', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    listReports.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+      .mockResolvedValue([makeReport({ id: 3, title: 'Late report' })])
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    renderWithRouter(<ReportsPage />)
+    await waitFor(() => expect(screen.getByText('No reports yet.')).toBeInTheDocument())
+    await user.click(screen.getAllByRole('button', { name: 'New report' })[0])
+    await user.type(screen.getByPlaceholderText('Report title'), 'Late report')
+    await user.type(screen.getByPlaceholderText(/My Report/), '<p>x</p>')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create report' }))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(screen.getByText('Report queued for processing...')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(await screen.findByText('Late report')).toBeInTheDocument()
+    expect(screen.queryByText('Report queued for processing...')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    [false, ''],
+    [true, 'allow-scripts'],
+  ])('renders the HTML iframe viewer without same-origin (allow_scripts=%s)', async (allowScripts, sandbox) => {
+    listReports.mockResolvedValue([
+      makeReport({ id: 5, title: 'Viewable', metadata: { report_format: 'html', allow_scripts: allowScripts } }),
+    ])
     const user = userEvent.setup()
     renderWithRouter(<ReportsPage />)
     await waitFor(() => expect(screen.getByText('Viewable')).toBeInTheDocument())
     await user.click(screen.getByText('Viewable'))
-    await waitFor(() =>
-      expect(screen.getByTitle('Viewable')).toHaveAttribute('src', '/reports/quarterly.html'),
-    )
+    const frame = await screen.findByTitle('Viewable')
+    expect(frame).toHaveAttribute('src', '/reports/quarterly.html')
+    expect(frame).toHaveAttribute('sandbox', sandbox)
   })
 
   it('shows an Open PDF action for PDF reports', async () => {
@@ -128,6 +152,18 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(deleteReport).toHaveBeenCalledWith(9))
   })
 
+  it('shows a delete failure in the detail pane and keeps the list', async () => {
+    deleteReport.mockRejectedValueOnce(new Error('delete broke'))
+    listReports.mockResolvedValue([makeReport({ id: 9, title: 'Delete me' })])
+    const user = userEvent.setup()
+    renderWithRouter(<ReportsPage />)
+    await user.click(await screen.findByText('Delete me'))
+    await user.click(await screen.findByRole('button', { name: 'Delete' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('delete broke')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Delete me/ })).toBeInTheDocument()
+  })
+
   it('edits an HTML report: fetches current content and re-creates with metadata', async () => {
     const fetchMock = mockFetch(async () => mockResponse({ text: '<h1>old</h1>', status: 200 }))
     listReports.mockResolvedValue([makeReport({ id: 11, title: 'Editable', filename: 'reports/e.html' })])
@@ -136,10 +172,46 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(screen.getByText('Editable')).toBeInTheDocument())
     await user.click(screen.getByText('Editable'))
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(within(screen.getByRole('dialog')).getByLabelText('Title'), ' v2')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(createReport).toHaveBeenCalled())
     expect(fetchMock).toHaveBeenCalledWith('/reports/e.html')
+    expect(createReport.mock.calls.at(-1)?.[0]).toBe('Editable v2')
     // 4th positional arg: the existing report's name within the reports directory
     expect(createReport.mock.calls.at(-1)?.[3]).toBe('e.html')
+  })
+
+  it('closes an edit that changes nothing without re-saving or waiting', async () => {
+    listReports.mockResolvedValue([makeReport({ id: 11, title: 'Editable', filename: 'reports/e.html' })])
+    const user = userEvent.setup()
+    renderWithRouter(<ReportsPage />)
+    await user.click(await screen.findByText('Editable'))
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(createReport).not.toHaveBeenCalled()
+    expect(screen.queryByText(/queued|processing/i)).not.toBeInTheDocument()
+  })
+
+  it('stops polling when the page unmounts mid-request', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let release: (value: Report[]) => void = () => {}
+    listReports.mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise<Report[]>(resolve => { release = resolve }))
+      .mockResolvedValue([])
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const { unmount } = renderWithRouter(<ReportsPage />)
+    await screen.findByText('No reports yet.')
+    await user.click(screen.getAllByRole('button', { name: 'New report' })[0])
+    await user.type(screen.getByPlaceholderText('Report title'), 'R')
+    await user.type(screen.getByPlaceholderText(/My Report/), '<p>x</p>')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create report' }))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(listReports).toHaveBeenCalledTimes(2)
+
+    unmount()
+    release([])
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(listReports).toHaveBeenCalledTimes(2)
   })
 })

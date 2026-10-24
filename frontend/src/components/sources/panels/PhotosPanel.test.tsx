@@ -138,7 +138,7 @@ describe('PhotosPanel - delete flow', () => {
     expect(screen.getByText('beach.jpg')).toBeInTheDocument()
   })
 
-  it('shows an error and closes the dialog when delete fails', async () => {
+  it('shows a delete failure inline, closes the dialog and keeps the grid', async () => {
     deletePhoto.mockRejectedValueOnce(new Error('delete blew up'))
     const { user } = renderWithUser(<PhotosPanel />)
     await screen.findByText('beach.jpg')
@@ -147,5 +147,7 @@ describe('PhotosPanel - delete flow', () => {
     await user.click(screen.getByRole('button', { name: 'Confirm' }))
 
     expect(await screen.findByText('delete blew up')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByText('beach.jpg')).toBeInTheDocument()
   })
 })

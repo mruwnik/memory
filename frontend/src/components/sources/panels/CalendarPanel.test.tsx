@@ -111,9 +111,11 @@ describe('CalendarPanel create flow', () => {
     await user.click(screen.getAllByRole('button', { name: 'Add calendar' })[0])
     const dialog = await screen.findByRole('dialog')
     await user.type(field(dialog, 'Name'), 'Home')
-    await user.type(field(dialog, 'CalDAV Server URL'), 'https://dav.home/cal/')
+    await user.type(field(dialog, 'CalDAV server URL'), 'https://dav.home/cal/')
     await user.type(field(dialog, 'Username'), 'homeuser')
     await user.type(field(dialog, /Password/), 'pw')
+    await user.clear(field(dialog, 'Sync past days'))
+    await user.type(field(dialog, 'Sync past days'), '0')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
@@ -130,6 +132,7 @@ describe('CalendarPanel create flow', () => {
       caldav_url: 'https://dav.home/cal/',
       caldav_username: 'homeuser',
       caldav_password: 'pw',
+      sync_past_days: 0,
     })
   })
 

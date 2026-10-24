@@ -412,23 +412,21 @@ async def serve_report(
     response = FileResponse(file_path, media_type=mime_type)
     # Check if report allows scripts (for system-generated interactive reports)
     if report.allow_scripts:
-        # Build connect-src directive with allowed external URLs.
+        # Only the report's allowed external URLs: the sandbox gives it an
+        # opaque origin, so 'self' requests would carry no cookies and fail CORS.
         # Sanitize to prevent CSP directive injection via stored values.
-        connect_sources = ["'self'"]
-        if report.allowed_connect_urls:
-            connect_sources.extend(
-                sanitize_csp_source_list(report.allowed_connect_urls)
-            )
-        connect_src = " ".join(connect_sources)
+        connect_sources = sanitize_csp_source_list(report.allowed_connect_urls or [])
+        connect_src = " ".join(connect_sources) or "'none'"
 
-        # Relaxed CSP for trusted system-generated reports with JavaScript
+        # No allow-same-origin: with it, report JS runs as the app origin and
+        # can read the viewer's tokens and call the API as them.
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; "
             "style-src 'unsafe-inline'; "
             "img-src data: blob:; "
             "script-src 'self' 'unsafe-inline'; "
             f"connect-src {connect_src}; "
-            "sandbox allow-scripts allow-same-origin"
+            "sandbox allow-scripts"
         )
     else:
         response.headers["Content-Security-Policy"] = STRICT_SANDBOX_CSP

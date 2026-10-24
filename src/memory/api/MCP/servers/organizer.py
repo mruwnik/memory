@@ -5,7 +5,7 @@ MCP subserver for organizational tools: calendar, todos, reminders.
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 
@@ -29,6 +29,9 @@ from memory.common.db.models.journal import JournalEntry, build_journal_access_f
 from memory.common.tasks import TaskDict, get_tasks, task_to_dict
 
 logger = logging.getLogger(__name__)
+
+# Lets update_task tell an omitted argument from an explicit None (clear).
+_UNSET: Any = "__UNSET__"
 
 organizer_mcp = FastMCP("org")
 
@@ -261,8 +264,8 @@ async def create_task(
 async def update_task(
     task_id: int,
     title: str | None = None,
-    due_date: str | None = None,
-    priority: Literal["low", "medium", "high", "urgent"] | None = None,
+    due_date: str | None = _UNSET,
+    priority: Literal["low", "medium", "high", "urgent"] | None = _UNSET,
     status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
     tags: list[str] | None = None,
 ) -> TaskDict:
@@ -273,8 +276,8 @@ async def update_task(
     Args:
         task_id: ID of the task to update (required)
         title: New task title
-        due_date: New due date in ISO format
-        priority: New priority (low, medium, high, urgent)
+        due_date: New due date in ISO format; null removes it, omit to keep it
+        priority: New priority (low, medium, high, urgent); null removes it, omit to keep it
         status: New status (pending, in_progress, done, cancelled)
         tags: New tags list
 
@@ -307,12 +310,14 @@ async def update_task(
 
         if title is not None:
             task.task_title = title
-        if due_date is not None:
+        if due_date is None:
+            task.due_date = None
+        elif due_date is not _UNSET:
             parsed = parse_iso_datetime(due_date)
             if parsed is None:
                 raise ValueError(f"Invalid due_date format: {due_date}")
             task.due_date = parsed
-        if priority is not None:
+        if priority is not _UNSET:
             task.priority = priority
         if status is not None:
             task.status = status

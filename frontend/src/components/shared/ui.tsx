@@ -407,6 +407,32 @@ export const Hint = ({ className, ...props }: ComponentProps<'p'>) => (
   <p className={cx('text-xs text-slate-600', className)} {...props} />
 )
 
+/** A Field label with the required marker, spoken as "(required)". */
+export const requiredLabel = (label: ReactNode) => (
+  <>{label} <span className="text-red-500" aria-hidden="true">*</span><span className="sr-only"> (required)</span></>
+)
+
+/** A group of related controls (radios, checkboxes, paired inputs) under one label. */
+export const Fieldset = ({ legend, className, children, ...props }: ComponentProps<'fieldset'> & { legend: ReactNode }) => (
+  <fieldset className={cx('space-y-1', className)} {...props}>
+    <legend className="text-sm font-medium text-slate-700">{legend}</legend>
+    {children}
+  </fieldset>
+)
+
+/** Rejects instead of throwing when the Clipboard API is missing, as it is on plain-http installs. */
+export const copyText = (text: string) => Promise.resolve().then(() => navigator.clipboard.writeText(text))
+
+/** Copies `text` and says whether it worked on the button itself. */
+export const CopyButton = ({ text, label = 'Copy', size = 'sm', ...props }: Omit<ButtonProps, 'onClick'> & { text: string; label?: string }) => {
+  const [copied, setCopied] = useState<boolean | null>(null)
+  return (
+    <Button type="button" size={size} {...props} onClick={() => copyText(text).then(() => setCopied(true), () => setCopied(false))}>
+      {copied === null ? label : copied ? 'Copied' : 'Copy failed'}
+    </Button>
+  )
+}
+
 interface FieldProps extends ComponentProps<'div'> {
   label?: ReactNode
   hint?: ReactNode
@@ -735,8 +761,9 @@ export const useActionNotice = () => {
     if (success) setOutcome({ tone: 'success', message: success })
     return true
   }, [])
-  const notice = outcome && <Notice tone={outcome.tone} onDismiss={() => setOutcome(null)}>{outcome.message}</Notice>
-  return { run, notice }
+  const clear = useCallback(() => setOutcome(null), [])
+  const notice = outcome && <Notice tone={outcome.tone} onDismiss={clear}>{outcome.message}</Notice>
+  return { run, notice, clear }
 }
 
 interface EmptyStateProps {

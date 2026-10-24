@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import AvailabilityPoll, PollResponse, PollAvailability, PollStatus
+from memory.api.auth import create_user_session
+from memory.common.db.models import AvailabilityPoll, HumanUser, PollResponse, PollAvailability, PollStatus
 
 
 # Note: app_client, client, and user fixtures are defined in conftest.py
@@ -333,6 +334,30 @@ def test_get_poll_results_empty(client: TestClient, sample_poll):
     assert data["response_count"] == 0
     assert data["aggregated"] == []
     assert data["best_slots"] == []
+
+
+@pytest.mark.parametrize(
+    "viewer, is_owner",
+    [("owner", True), ("other", False), ("anonymous", False)],
+)
+def test_get_poll_results_says_whether_viewer_owns_poll(
+    client: TestClient, sample_poll, db_session, viewer, is_owner
+):
+    other = HumanUser(name="Other", email="other@example.com", password_hash="x")
+    db_session.add(other)
+    db_session.commit()
+    tokens = {
+        "owner": create_user_session(sample_poll.user_id, db_session),
+        "other": create_user_session(other.id, db_session),
+        "anonymous": "",
+    }
+
+    response = client.get(
+        f"/polls/respond/{sample_poll.slug}/results",
+        headers={"Authorization": f"Bearer {tokens[viewer]}"},
+    )
+
+    assert response.json()["is_owner"] is is_owner
 
 
 # Model tests

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useSources } from '@/hooks/useSources'
-import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, buttonClass , Section } from '@/components/shared/ui'
+import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, Section, useActionNotice } from '@/components/shared/ui'
+import { FileButton } from '../shared'
 
 interface Photo {
   id: number
@@ -24,16 +25,16 @@ export const PhotosPanel = () => {
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
   const [photoToDelete, setPhotoToDelete] = useState<Photo | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const { run, notice } = useActionNotice()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadPhotos = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const response = await apiCall('/photos')
       if (!response.ok) throw new Error('Failed to fetch photos')
       const data = await response.json()
       setPhotos(data)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load photos')
     } finally {
@@ -89,16 +90,12 @@ export const PhotosPanel = () => {
   const handleDelete = async () => {
     if (!photoToDelete) return
     setDeleting(true)
-    try {
+    await run(async () => {
       await deletePhoto(photoToDelete.id)
       setPhotos(photos.filter(p => p.id !== photoToDelete.id))
-      setPhotoToDelete(null)
-    } catch (e) {
-      setPhotoToDelete(null)  // Close dialog before showing error
-      setError(e instanceof Error ? e.message : 'Failed to delete photo')
-    } finally {
-      setDeleting(false)
-    }
+    })
+    setPhotoToDelete(null)
+    setDeleting(false)
   }
 
   if (loading) return <LoadingState />
@@ -106,19 +103,10 @@ export const PhotosPanel = () => {
 
   return (
     <Section title="Photos" description={`${photos.length} photos`} actions={
-          <label className={buttonClass('primary', 'md', uploading ? 'opacity-50 cursor-not-allowed' : '')}>
-            {uploading ? 'Uploading...' : 'Upload photos'}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif"
-              multiple
-              onChange={handleUpload}
-              disabled={uploading}
-              className="hidden"
-            />
-          </label>
+          <FileButton inputRef={fileInputRef} label="Upload photos" busy={uploading}
+            accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif" multiple onChange={handleUpload} />
         }>
+      {notice}
       {uploadError && <Notice tone="error">{uploadError}</Notice>}
       {uploadSuccess && <Notice tone="success">{uploadSuccess}</Notice>}
 

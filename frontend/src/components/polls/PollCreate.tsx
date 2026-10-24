@@ -8,7 +8,8 @@ import {
   formatTimezone,
   toUTCDatetime,
 } from '../../utils/timezones'
-import { Button, Card, Field, FieldRow, Input, Notice, Page, Select, Textarea } from '@/components/shared/ui'
+import { rangeErrors } from './pollForm'
+import { Button, Card, Field, FieldRow, Input, Notice, Page, Select, Textarea, requiredLabel } from '@/components/shared/ui'
 
 // Get tomorrow's date as default start
 function getDefaultStartDate(): string {
@@ -52,6 +53,7 @@ export const PollCreate: React.FC = () => {
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const errors = rangeErrors(formData)
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -96,7 +98,7 @@ export const PollCreate: React.FC = () => {
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Poll title *">
+        <Field label={requiredLabel('Poll title')}>
           <Input
             type="text"
             id="title"
@@ -120,7 +122,7 @@ export const PollCreate: React.FC = () => {
         </Field>
 
         <FieldRow>
-          <Field label="Start date *">
+          <Field label={requiredLabel('Start date')}>
             <Input
               type="date"
               id="date_start"
@@ -131,7 +133,7 @@ export const PollCreate: React.FC = () => {
             />
           </Field>
 
-          <Field label="End date *">
+          <Field label={requiredLabel('End date')} error={errors.date}>
             <Input
               type="date"
               id="date_end"
@@ -157,7 +159,7 @@ export const PollCreate: React.FC = () => {
             </Select>
           </Field>
 
-          <Field label="End hour">
+          <Field label="End hour" error={errors.hour}>
             <Select
               id="time_end"
               name="time_end"
@@ -215,7 +217,7 @@ export const PollCreate: React.FC = () => {
           </Button>
           <Button variant="primary"
             type="submit"
-            disabled={isSubmitting || !formData.title}
+            disabled={isSubmitting || !formData.title || !!errors.date || !!errors.hour}
           >
             {isSubmitting ? 'Creating...' : 'Create poll'}
           </Button>

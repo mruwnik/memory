@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSecrets, Secret, SecretWithValue } from '@/hooks/useSecrets'
-import { Button, EmptyState, ErrorState, Field, FormActions, Input, Label, LoadingState, Modal, Notice, Textarea , ConfirmButton, List, Row, Section } from '@/components/shared/ui'
+import { Button, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, Textarea, ConfirmButton, List, Row, Section, useActionNotice } from '@/components/shared/ui'
 
 export const SecretsPanel = () => {
   const { listSecrets, createSecret, updateSecret, deleteSecret, getSecretValue } = useSecrets()
@@ -13,11 +13,10 @@ export const SecretsPanel = () => {
   const [loadingReveal, setLoadingReveal] = useState<Record<number, boolean>>({})
 
   const loadSecrets = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const data = await listSecrets()
       setSecrets(data)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load secrets')
     } finally {
@@ -27,86 +26,49 @@ export const SecretsPanel = () => {
 
   useEffect(() => { loadSecrets() }, [loadSecrets])
 
+  const { run, notice } = useActionNotice()
+
+  const forget = (id: number) => setRevealedSecrets(prev => {
+    const next = { ...prev }
+    delete next[id]
+    return next
+  })
+
+  // Form handlers throw, so the open modal shows the failure.
   const handleCreate = async (data: { name: string; value: string; description?: string }) => {
-    try {
-      await createSecret(data)
-      setShowForm(false)
-      loadSecrets()
-    } catch (e) {
-      throw e // Re-throw so the form can display the error
-    }
+    await createSecret(data)
+    setShowForm(false)
+    loadSecrets()
   }
 
   const handleUpdate = async (data: { value?: string; description?: string }) => {
-    if (editingSecret) {
-      try {
-        await updateSecret(editingSecret.id, data)
-        setEditingSecret(null)
-        // Clear revealed value if it was updated
-        if (data.value) {
-          setRevealedSecrets(prev => {
-            const next = { ...prev }
-            delete next[editingSecret.id]
-            return next
-          })
-        }
-        loadSecrets()
-      } catch (e) {
-        throw e
-      }
-    }
+    if (!editingSecret) return
+    await updateSecret(editingSecret.id, data)
+    setEditingSecret(null)
+    if (data.value) forget(editingSecret.id)
+    loadSecrets()
   }
 
-  const handleDelete = async (id: number) => {
-    try {
-      await deleteSecret(id)
-      setRevealedSecrets(prev => {
-        const next = { ...prev }
-        delete next[id]
-        return next
-      })
-      loadSecrets()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete secret')
-    }
-  }
+  const handleDelete = (id: number) => run(async () => {
+    await deleteSecret(id)
+    forget(id)
+    loadSecrets()
+  })
 
   const handleToggleReveal = async (secret: Secret) => {
-    if (revealedSecrets[secret.id]) {
-      // Hide the secret
-      setRevealedSecrets(prev => {
-        const next = { ...prev }
-        delete next[secret.id]
-        return next
-      })
-    } else {
-      // Reveal the secret
-      setLoadingReveal(prev => ({ ...prev, [secret.id]: true }))
-      try {
-        const data = await getSecretValue(secret.id)
-        setRevealedSecrets(prev => ({ ...prev, [secret.id]: data.value }))
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to reveal secret')
-      } finally {
-        setLoadingReveal(prev => ({ ...prev, [secret.id]: false }))
-      }
-    }
+    if (revealedSecrets[secret.id]) return forget(secret.id)
+    setLoadingReveal(prev => ({ ...prev, [secret.id]: true }))
+    await run(async () => {
+      const data = await getSecretValue(secret.id)
+      setRevealedSecrets(prev => ({ ...prev, [secret.id]: data.value }))
+    })
+    setLoadingReveal(prev => ({ ...prev, [secret.id]: false }))
   }
 
-  const handleCopy = async (secret: Secret) => {
-    const value = revealedSecrets[secret.id]
-    if (value) {
-      await navigator.clipboard.writeText(value)
-    } else {
-      // Fetch and copy without revealing
-      try {
-        const data = await getSecretValue(secret.id)
-        await navigator.clipboard.writeText(data.value)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to copy secret')
-      }
-    }
-  }
+  const handleCopy = (secret: Secret) => run(async () => {
+    const value = revealedSecrets[secret.id] ?? (await getSecretValue(secret.id)).value
+    await navigator.clipboard.writeText(value)
+  }, `Copied ${secret.name}`)
 
   if (loading) return <LoadingState />
   if (error) return <ErrorState message={error} onRetry={loadSecrets} />
@@ -116,6 +78,7 @@ export const SecretsPanel = () => {
       description="Encrypted storage for API keys, tokens, and other sensitive values"
       actions={<Button variant="primary" onClick={() => setShowForm(true)}>Add secret</Button>}
     >
+      {notice}
       {secrets.length === 0 ? (
         <EmptyState message="No secrets configured" actionLabel="Add secret" onAction={() => setShowForm(true)} />
       ) : (
@@ -164,7 +127,7 @@ const SecretRow = ({ secret, revealedValue, isRevealing, onToggleReveal, onCopy,
       <div className="flex-1 min-w-0 font-mono text-sm bg-slate-100 rounded px-2 py-1">
         {revealedValue
           ? <span className="text-slate-800 break-all">{revealedValue}</span>
-          : <span className="text-slate-500" aria-label="Hidden value">{'*'.repeat(24)}</span>}
+          : <span className="text-slate-500"><span aria-hidden="true">{'*'.repeat(24)}</span><span className="sr-only">Hidden value</span></span>}
       </div>
       <Button variant="ghost" size="icon" onClick={onToggleReveal} disabled={isRevealing}
         title={revealedValue ? 'Hide value' : 'Reveal value'} aria-label={revealedValue ? 'Hide value' : 'Reveal value'}>
@@ -246,8 +209,7 @@ const SecretForm = ({ secret, onSubmit, onCancel }: SecretFormProps) => {
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field>
-          <Label>Name</Label>
+        <Field label="Name" hint="Must be a valid identifier (letters, digits, and -_*+!?'<>=)">
           <Input
             type="text"
             value={formData.name}
@@ -257,9 +219,6 @@ const SecretForm = ({ secret, onSubmit, onCancel }: SecretFormProps) => {
             placeholder="api-key or github-token"
             className="font-mono"
           />
-          <p className="text-xs text-slate-500 mt-1">
-            Must be a valid identifier (letters, digits, and -_*+!?'&lt;&gt;=)
-          </p>
         </Field>
 
         <Field label={secret ? 'New value (leave empty to keep current)' : 'Value'}>

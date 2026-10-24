@@ -12,7 +12,8 @@ import {
   type SlackAppResponse,
   useSlackWizard,
 } from '../../../hooks/useSlackWizard'
-import { Button, Field, FormActions, Hint, Input, Modal, Notice } from '@/components/shared/ui'
+import { Button, Field, FormActions, Hint, Input, Modal, Notice, CopyButton } from '@/components/shared/ui'
+import { PopupBlockedNotice, openPopup } from '../shared'
 
 interface SlackAppWizardProps {
   initialApp?: SlackAppResponse | null
@@ -42,6 +43,25 @@ const resumeStep = (app: SlackAppResponse, connected: boolean): Step => {
 }
 
 const POLL_INTERVAL_MS = 3000
+
+const TEST_STATUS_TEXT: Record<string, string> = {
+  waiting: 'Waiting for the message...',
+  matched: 'Message received.',
+  expired: 'No message arrived in 60 seconds. Start the window again and post the token.',
+}
+
+const submit = (handler: () => void) => (e: React.FormEvent) => {
+  e.preventDefault()
+  handler()
+}
+
+// Hand-selecting a long URL is hard on touch screens, so each value gets a copy button.
+const CopyableCode = ({ value, label }: { value: string; label: string }) => (
+  <div className="flex items-start gap-2">
+    <code className="block flex-1 min-w-0 break-all whitespace-pre-wrap font-mono text-xs bg-slate-100 border border-slate-200 rounded px-3 py-2 text-slate-800">{value}</code>
+    <CopyButton text={value} label={label} />
+  </div>
+)
 
 // OAuth scopes requested for both bot and user tokens. Read-only across
 // the workspace surface (channels/groups/im/mpim history + read), users +
@@ -86,6 +106,7 @@ export const SlackAppWizard = ({
   const [step, setStep] = useState<Step>(() => initialApp ? resumeStep(initialApp, initialAppConnected) : 'register')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [blockedOAuthUrl, setBlockedOAuthUrl] = useState<string | null>(null)
 
   const [name, setName] = useState(initialApp?.name ?? '')
   const [clientId, setClientId] = useState(initialApp?.client_id ?? '')
@@ -173,7 +194,7 @@ export const SlackAppWizard = ({
   const handleRegister = useCallback(async () => {
     clearError()
     if (!name.trim() || !clientId.trim()) {
-      setError('Both name and client_id are required')
+      setError('Display name and client ID are required')
       return
     }
     setBusy(true)
@@ -192,7 +213,7 @@ export const SlackAppWizard = ({
     if (!app) return
     clearError()
     if (!clientSecret.trim()) {
-      setError('client_secret is required')
+      setError('Client secret is required')
       return
     }
     setBusy(true)
@@ -222,16 +243,18 @@ export const SlackAppWizard = ({
     clearError()
     setBusy(true)
     try {
-      const state = await wizard.issueOAuthState(app.id)
-      const params = new URLSearchParams({
-        client_id: app.client_id,
-        scope: SLACK_OAUTH_SCOPES,
-        user_scope: SLACK_OAUTH_SCOPES,
-        redirect_uri: callbackUrl,
-        state,
+      const { blockedUrl } = await openPopup(async () => {
+        const state = await wizard.issueOAuthState(app.id)
+        const params = new URLSearchParams({
+          client_id: app.client_id,
+          scope: SLACK_OAUTH_SCOPES,
+          user_scope: SLACK_OAUTH_SCOPES,
+          redirect_uri: callbackUrl,
+          state,
+        })
+        return `https://slack.com/oauth/v2/authorize?${params.toString()}`
       })
-      const authUrl = `https://slack.com/oauth/v2/authorize?${params.toString()}`
-      window.open(authUrl, '_blank', 'width=600,height=700')
+      setBlockedOAuthUrl(blockedUrl)
     } catch (e) {
       handleError(e)
     } finally {
@@ -243,7 +266,7 @@ export const SlackAppWizard = ({
     if (!app) return
     clearError()
     if (!signingSecret.trim()) {
-      setError('signing_secret is required')
+      setError('Signing secret is required')
       return
     }
     setBusy(true)
@@ -283,7 +306,6 @@ export const SlackAppWizard = ({
     return order.indexOf(step)
   }, [step])
 
-  const codeBlock = 'block w-full break-all whitespace-pre-wrap font-mono text-xs bg-slate-100 border border-slate-200 rounded px-3 py-2 text-slate-800'
 
   const finish = () => (app ? onComplete?.(app) : onCancel())
 
@@ -293,7 +315,8 @@ export const SlackAppWizard = ({
       <div className="space-y-4">
         <p className="text-xs text-slate-500">Step {stepIndex + 1} of 7</p>
 
-        <div className="h-1 w-full bg-slate-200 rounded overflow-hidden">
+        <div role="progressbar" aria-label="Setup progress" aria-valuemin={1} aria-valuemax={7} aria-valuenow={stepIndex + 1}
+          className="h-1 w-full bg-slate-200 rounded overflow-hidden">
           <div
             className="h-full bg-primary transition-all"
             style={{width: `${((stepIndex + 1) / 7) * 100}%`}}
@@ -303,7 +326,7 @@ export const SlackAppWizard = ({
         {error && <Notice tone="error">{error}</Notice>}
 
         {step === 'register' && (
-          <div className="space-y-4">
+          <form onSubmit={submit(handleRegister)} className="space-y-4">
             <p className="text-sm text-slate-600">
               Create a new Slack app at{' '}
               <a
@@ -336,19 +359,15 @@ export const SlackAppWizard = ({
             </Field>
             <FormActions>
               <Button type="button" onClick={onCancel}>Cancel</Button>
-              <Button variant="primary"
-                type="button"
-                onClick={handleRegister}
-                disabled={busy}
-              >
+              <Button variant="primary" type="submit" disabled={busy}>
                 {busy ? 'Creating…' : 'Create app'}
               </Button>
             </FormActions>
-          </div>
+          </form>
         )}
 
         {step === 'client-secret' && app && (
-          <div className="space-y-4">
+          <form onSubmit={submit(handleClientSecret)} className="space-y-4">
             <p className="text-sm text-slate-600">
               Paste the Client Secret from Slack's "Basic Information" page.
             </p>
@@ -362,15 +381,11 @@ export const SlackAppWizard = ({
             </Field>
             <FormActions>
               <Button type="button" onClick={onCancel}>Cancel</Button>
-              <Button variant="primary"
-                type="button"
-                onClick={handleClientSecret}
-                disabled={busy}
-              >
+              <Button variant="primary" type="submit" disabled={busy}>
                 {busy ? 'Storing…' : 'Save and continue'}
               </Button>
             </FormActions>
-          </div>
+          </form>
         )}
 
         {step === 'oauth' && app && callbackUrl && (
@@ -379,10 +394,11 @@ export const SlackAppWizard = ({
               On Slack's "OAuth &amp; Permissions" page, set your{' '}
               <strong>Redirect URL</strong> to:
             </p>
-            <code className={codeBlock}>{callbackUrl}</code>
+            <CopyableCode value={callbackUrl} label="Copy redirect URL" />
             <p className="text-sm text-slate-600">
               Then click below to launch the OAuth flow:
             </p>
+            <PopupBlockedNotice url={blockedOAuthUrl} label="Open Slack authorization" onDismiss={() => setBlockedOAuthUrl(null)} />
             <FormActions>
               <Button type="button" onClick={onCancel}>Cancel</Button>
               <Button variant="primary"
@@ -400,7 +416,7 @@ export const SlackAppWizard = ({
         )}
 
         {step === 'signing-secret' && app && (
-          <div className="space-y-4">
+          <form onSubmit={submit(handleSigningSecret)} className="space-y-4">
             <p className="text-sm text-slate-600">
               Paste the Signing Secret from Slack's "Basic Information" page.
             </p>
@@ -414,15 +430,11 @@ export const SlackAppWizard = ({
             </Field>
             <FormActions>
               <Button type="button" onClick={onCancel}>Cancel</Button>
-              <Button variant="primary"
-                type="button"
-                onClick={handleSigningSecret}
-                disabled={busy}
-              >
+              <Button variant="primary" type="submit" disabled={busy}>
                 {busy ? 'Storing…' : 'Save and continue'}
               </Button>
             </FormActions>
-          </div>
+          </form>
         )}
 
         {step === 'events-url' && app && eventsUrl && (
@@ -431,7 +443,7 @@ export const SlackAppWizard = ({
               On Slack's "Event Subscriptions" page, enable events and set the{' '}
               <strong>Request URL</strong> to:
             </p>
-            <code className={codeBlock}>{eventsUrl}</code>
+            <CopyableCode value={eventsUrl} label="Copy request URL" />
             <p className="text-sm font-medium text-slate-700">
               Subscribe to bot events:
             </p>
@@ -461,7 +473,7 @@ export const SlackAppWizard = ({
               Almost done. Post the following token in any Slack channel the
               connected user can see:
             </p>
-            <code className={codeBlock}>{testToken}</code>
+            <CopyableCode value={testToken} label="Copy token" />
             <FormActions>
               <Button type="button" onClick={onCancel}>Cancel</Button>
               <Button variant="primary"
@@ -473,7 +485,7 @@ export const SlackAppWizard = ({
               </Button>
             </FormActions>
             {testStatus && (
-              <p className="text-sm text-slate-600">Status: {testStatus}</p>
+              <p role="status" className="text-sm text-slate-600">{TEST_STATUS_TEXT[testStatus] ?? testStatus}</p>
             )}
             <Hint>
               Once the message arrives, the app moves to "live" automatically.

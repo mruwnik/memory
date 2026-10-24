@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import { TagsInput, IntervalInput, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, Label, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice } from '@/components/shared/ui'
+import { TagsInput, IntervalInput, PauseButton, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset } from '@/components/shared/ui'
+import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../Sources'
 
 export const GitHubPanel = () => {
@@ -20,8 +21,6 @@ export const GitHubPanel = () => {
   const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
     try {
       const accountsData = await listGithubAccounts(userId)
       setAccounts(accountsData)
@@ -38,6 +37,7 @@ export const GitHubPanel = () => {
         })
       )
       setAccountProjects(projectsMap)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
@@ -65,6 +65,9 @@ export const GitHubPanel = () => {
   const handleRepoFormCancel = () => {
     setAddingRepoTo(null)
   }
+
+  // Refreshes the tracked repos without the panel's loading state, which would unmount the open repo form.
+  const refreshAccounts = async () => setAccounts(await listGithubAccounts(userId))
 
   const handleToggleRepoActive = (accountId: number, repoId: number, active: boolean) => run(async () => {
     await updateGithubRepo(accountId, repoId, { active: !active })
@@ -121,7 +124,7 @@ export const GitHubPanel = () => {
                       title={repo.repo_path}
                       muted={!repo.active}
                       badges={<>
-                        {!repo.active && <Badge>Disabled</Badge>}
+                        <StatusBadge active={repo.active} />
                         {repo.track_issues && <Badge tone="info">Issues</Badge>}
                         {repo.track_prs && <Badge tone="primary">PRs</Badge>}
                         {repo.track_comments && <Badge tone="success">Comments</Badge>}
@@ -130,9 +133,7 @@ export const GitHubPanel = () => {
                       meta={[`Last sync: ${formatRelativeTime(repo.last_sync_at)}`]}
                       actions={<>
                         <SyncButton onSync={() => handleSyncRepo(account.id, repo.id)} disabled={!repo.active || !account.active} label="Sync" />
-                        <Button size="sm" onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)}>
-                          {repo.active ? 'Disable' : 'Enable'}
-                        </Button>
+                        <PauseButton active={repo.active} onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)} />
                         <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => run(async () => { await handleDeleteRepo(account.id, repo.id); loadData() })}>Remove</ConfirmButton>
                       </>}
                     >
@@ -181,6 +182,7 @@ export const GitHubPanel = () => {
             onAdd={(data) => handleAddRepo(addingRepoTo, data)}
             onRemove={(repoId) => handleDeleteRepo(addingRepoTo, repoId)}
             onComplete={handleRepoFormComplete}
+            onPartialFailure={refreshAccounts}
             onCancel={handleRepoFormCancel}
           />
         )
@@ -211,6 +213,8 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
   const [selectedProject, setSelectedProject] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Waits for a pause in typing so an org name fetches its projects once, not per keystroke.
+  const debouncedOwner = useDebounce(owner.trim(), 400)
 
   // Track which projects are already added
   const existingProjectKeys = new Set(
@@ -257,8 +261,7 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
           />
         </Field>
 
-        <Field>
-          <Label>Owner type</Label>
+        <Fieldset legend="Owner type">
           <div className="flex gap-4">
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -287,20 +290,19 @@ const GitHubProjectForm = ({ accountId, existingProjects, onAdd, onCancel }: Git
               User
             </label>
           </div>
-        </Field>
+        </Fieldset>
 
-        {owner.trim() && (
-          <Field>
-            <Label>Select project</Label>
+        {debouncedOwner && debouncedOwner === owner.trim() && (
+          <Fieldset legend="Project">
             <ProjectSelector
               accountId={accountId}
-              owner={owner.trim()}
+              owner={debouncedOwner}
               isOrg={isOrg}
               existingProjectKeys={existingProjectKeys}
               selectedProject={selectedProject}
               onSelect={setSelectedProject}
             />
-          </Field>
+          </Fieldset>
         )}
 
         <FormActions>
@@ -341,22 +343,24 @@ const ProjectSelector = ({
   const [search, setSearch] = useState('')
 
   useEffect(() => {
+    // A reply for an owner or type the user has since changed must not replace the newer list.
+    let stale = false
     const loadProjects = async () => {
       setLoading(true)
       setError(null)
       onSelect(null) // Reset selection when loading new projects
       try {
         const available = await listAvailableProjects(accountId, owner, isOrg, false)
-        // Sort by title
-        available.sort((a, b) => a.title.localeCompare(b.title))
-        setProjects(available)
+        if (stale) return
+        setProjects([...available].sort((a, b) => a.title.localeCompare(b.title)))
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load projects')
+        if (!stale) setError(e instanceof Error ? e.message : 'Failed to load projects')
       } finally {
-        setLoading(false)
+        if (!stale) setLoading(false)
       }
     }
     loadProjects()
+    return () => { stale = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onSelect is stable in behavior
     // but defined inline by parent; including it would cause infinite re-fetches
   }, [accountId, owner, isOrg, listAvailableProjects])
@@ -366,22 +370,15 @@ const ProjectSelector = ({
     (project.short_description?.toLowerCase().includes(search.toLowerCase()) ?? false)
   )
 
-  if (loading) {
-    return <div className="text-sm text-slate-500 py-4">Loading projects...</div>
-  }
-
-  if (error) {
-    return <div className="text-sm text-red-600 py-4">{error}</div>
-  }
-
-  if (projects.length === 0) {
-    return <div className="text-sm text-slate-500 py-4">No projects found for {owner}</div>
-  }
+  if (loading) return <LoadingState message="Loading projects..." />
+  if (error) return <Notice tone="error">{error}</Notice>
+  if (projects.length === 0) return <p className="text-sm text-slate-500 py-4">No projects found for {owner}</p>
 
   return (
     <div className="space-y-2">
       <Input
-        type="text"
+        type="search"
+        aria-label="Filter projects"
         placeholder="Filter projects..."
         value={search}
         onChange={e => setSearch(e.target.value)}
@@ -490,24 +487,14 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
     onChange(newMonitored)
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-60 flex flex-col items-center justify-center text-sm text-slate-500">
-        <div className="w-6 h-6 border-2 border-slate-200 border-t-primary rounded-full animate-spin mb-2"></div>
-        <p>Loading repositories...</p>
-        <p className="text-xs text-slate-500 mt-1">This may take a moment for large accounts</p>
-      </div>
-    )
-  }
-
-  if (error) {
-    return <div className="text-sm text-red-600 py-4">{error}</div>
-  }
+  if (loading) return <LoadingState message="Loading repositories... This may take a moment for large accounts." />
+  if (error) return <Notice tone="error">{error}</Notice>
 
   return (
     <div className="space-y-2">
       <Input
-        type="text"
+        type="search"
+        aria-label="Filter repositories"
         placeholder="Filter repositories..."
         value={search}
         onChange={e => setSearch(e.target.value)}
@@ -557,10 +544,14 @@ interface GitHubRepoFormProps {
   onAdd: (data: any) => Promise<void>
   onRemove: (repoId: number) => Promise<void>
   onComplete: () => void  // Called after successful changes (triggers reload)
+  /** Called when the batch stopped partway, so the form diffs against what is now tracked. */
+  onPartialFailure: () => Promise<void>
   onCancel: () => void    // Called when cancelled without changes
 }
 
-const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, onComplete, onCancel }: GitHubRepoFormProps) => {
+const plural = (n: number) => `${n} ${n === 1 ? 'repo' : 'repos'}`
+
+const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, onComplete, onPartialFailure, onCancel }: GitHubRepoFormProps) => {
   const [monitoredRepos, setMonitoredRepos] = useState<Set<string>>(() => new Set(existingRepos))
   const [formData, setFormData] = useState({
     track_issues: true,
@@ -609,7 +600,8 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
 
       onComplete() // Close modal and trigger single reload
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update repositories')
+      setError(e instanceof Error ? e.message : 'Failed to update repos')
+      await onPartialFailure().catch(() => {})
     } finally {
       setSubmitting(false)
       setProgress(null)
@@ -617,7 +609,7 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
   }
 
   return (
-    <Modal title="Manage repositories" onClose={onCancel}>
+    <Modal title="Manage repos" onClose={onCancel}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
@@ -631,15 +623,14 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
 
         {toAdd.length > 0 && (
           <>
-            <Field>
-              <Label>Track (for new repos):</Label>
-              <div className="flex flex-wrap gap-4 mt-2">
+            <Fieldset legend="Track for new repos">
+              <div className="flex flex-wrap gap-4">
                 <Checkbox checked={formData.track_issues} onChange={e => setFormData({ ...formData, track_issues: e.target.checked })} label="Issues" />
                 <Checkbox checked={formData.track_prs} onChange={e => setFormData({ ...formData, track_prs: e.target.checked })} label="Pull requests" />
                 <Checkbox checked={formData.track_comments} onChange={e => setFormData({ ...formData, track_comments: e.target.checked })} label="Comments" />
                 <Checkbox checked={formData.track_project_fields} onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })} label="Project fields" />
               </div>
-            </Field>
+            </Fieldset>
 
             <IntervalInput
               value={formData.check_interval}
@@ -656,6 +647,8 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
           </>
         )}
 
+        {toRemove.length > 0 && <Notice tone="warning">Saving stops tracking {toRemove.join(', ')}.</Notice>}
+
         <FormActions>
           <Button type="button" onClick={onCancel} disabled={submitting}>Cancel</Button>
           <Button variant="primary" type="submit" disabled={submitting || !hasChanges}>
@@ -664,10 +657,10 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
               : !hasChanges
                 ? 'No changes'
                 : toAdd.length > 0 && toRemove.length > 0
-                  ? `Add ${toAdd.length}, Remove ${toRemove.length}`
+                  ? `Add ${toAdd.length}, remove ${toRemove.length}`
                   : toAdd.length > 0
-                    ? `Add ${toAdd.length} ${toAdd.length === 1 ? 'Repository' : 'Repositories'}`
-                    : `Remove ${toRemove.length} ${toRemove.length === 1 ? 'Repository' : 'Repositories'}`}
+                    ? `Add ${plural(toAdd.length)}`
+                    : `Remove ${plural(toRemove.length)}`}
           </Button>
         </FormActions>
       </form>
