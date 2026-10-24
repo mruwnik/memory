@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate, JournalEntry } from '@/hooks/useProjects'
 import { useTeams, Team } from '@/hooks/useTeams'
 import { useJournal } from '@/hooks/useJournal'
-import { usePeople, Person } from '@/hooks/usePeople'
+import { usePeople } from '@/hooks/usePeople'
+import { PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
 import { Badge, Button, ConfirmButton, cx, EmptyState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, MultiSelect, Notice, Page, Row, RowError, Select, SubList, Textarea, ToggleGroup, Toolbar, useActionNotice } from '@/components/shared/ui'
 
 
@@ -30,7 +31,6 @@ export const ProjectsPanel = () => {
   const [projects, setProjects] = useState<Project[]>([])
   const [tree, setTree] = useState<ProjectTreeNode[]>([])
   const [availableTeams, setAvailableTeams] = useState<Team[]>([])
-  const [availablePeople, setAvailablePeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'tree' | 'list'>(() => {
@@ -79,22 +79,20 @@ export const ProjectsPanel = () => {
     setError(null)
     try {
       const state = stateFilter === 'all' ? undefined : stateFilter
-      const [projectsList, treeData, teamsList, people] = await Promise.all([
+      const [projectsList, treeData, teamsList] = await Promise.all([
         listProjects({ state, include_teams: true, limit: 500 }),
         getProjectTree({ state }),
         listTeams(),
-        listPeople({ limit: 200 }),
       ])
       setProjects(projectsList)
       setTree(treeData)
       setAvailableTeams(teamsList)
-      setAvailablePeople(people)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load projects')
     } finally {
       setLoading(false)
     }
-  }, [listProjects, getProjectTree, listTeams, listPeople, stateFilter])
+  }, [listProjects, getProjectTree, listTeams, stateFilter])
 
   useEffect(() => {
     loadData()
@@ -250,7 +248,7 @@ export const ProjectsPanel = () => {
           onSubmit={handleCreate}
           onClose={() => setShowCreateModal(false)}
           availableTeams={availableTeams}
-          availablePeople={availablePeople}
+          listPeople={listPeople}
         />
       )}
 
@@ -261,7 +259,7 @@ export const ProjectsPanel = () => {
           projects={projects}
           onSubmit={data => handleUpdate(editingProject.id, data)}
           onClose={() => setEditingProject(null)}
-          availablePeople={availablePeople}
+          listPeople={listPeople}
         />
       )}
 
@@ -558,7 +556,7 @@ interface ProjectFormModalProps {
   onSubmit: (data: ProjectCreate | ProjectUpdate) => Promise<void>
   onClose: () => void
   availableTeams?: Team[]  // Required for create, used for team selection
-  availablePeople?: Person[]  // For owner selection
+  listPeople: ListPeople
 }
 
 const ProjectFormModal = ({
@@ -568,7 +566,7 @@ const ProjectFormModal = ({
   onSubmit,
   onClose,
   availableTeams = [],
-  availablePeople = [],
+  listPeople,
 }: ProjectFormModalProps) => {
   const isEditing = !!project
   const isGithubBacked = project?.repo_path !== null
@@ -728,20 +726,8 @@ const ProjectFormModal = ({
         </Field>
 
         <Field label="Owner" hint="Assign someone responsible for this project.">
-          <Select
-            value={formData.owner_id ?? ''}
-            onChange={e => setFormData({
-              ...formData,
-              owner_id: e.target.value ? Number(e.target.value) : null,
-            })}
-          >
-            <option value="">No owner</option>
-            {availablePeople.map(person => (
-              <option key={person.id} value={person.id}>
-                {person.display_name || person.identifier}
-              </option>
-            ))}
-          </Select>
+          <PersonSelect value={formData.owner_id} current={project?.owner} listPeople={listPeople}
+            onChange={owner_id => setFormData({ ...formData, owner_id })} />
         </Field>
 
         <Field label="Due date" hint="Optional deadline for this project.">

@@ -262,6 +262,30 @@ describe('TeamsPanel - edit flow', () => {
     await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ description: '', tags: [] })))
   })
 
+  it('searches people by name to pick the owner', async () => {
+    listPeople.mockResolvedValue([person({ id: 2, identifier: 'bob', display_name: 'Bob' })])
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    await user.type(screen.getByRole('combobox', { name: 'Owner' }), 'bo')
+    await user.click(await screen.findByRole('option', { name: 'Bob' }, { timeout: 2000 }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ owner: 2 })))
+  })
+
+  it('clears the owner with an explicit null', async () => {
+    listTeams.mockResolvedValue([team({ owner_id: 2, owner: { id: 2, identifier: 'bob', display_name: 'Bob' } })])
+    const { user } = renderWithUser(<TeamsPanel />)
+    await openEdit(user)
+
+    expect(screen.getByRole('combobox', { name: 'Owner' })).toHaveValue('Bob')
+    await user.click(screen.getByRole('button', { name: 'Clear owner' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTeam).toHaveBeenCalledWith('engineering', expect.objectContaining({ owner: null })))
+  })
+
 })
 
 describe('TeamsPanel - archive flow', () => {
@@ -376,7 +400,7 @@ describe('TeamsPanel - members modal', () => {
   })
 
   it('shows a failed people search instead of an empty result', async () => {
-    listPeople.mockResolvedValueOnce([]).mockRejectedValue(new Error('people down'))
+    listPeople.mockRejectedValue(new Error('people down'))
     const { user } = renderWithUser(<TeamsPanel />)
     await screen.findByText('Engineering')
 

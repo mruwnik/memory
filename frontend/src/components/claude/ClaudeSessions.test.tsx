@@ -220,14 +220,22 @@ describe('ClaudeSessions', () => {
     expect(spawnSession.mock.calls[0][0]).toMatchObject({ dev_channels_server: 'http://ch' })
   })
 
-  it('requires an initial prompt to schedule a recurring session', async () => {
+  it('checks for the prompt on submit, not while typing the schedule', async () => {
     const user = userEvent.setup()
     renderClaude('/ui/claude')
     await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'New session' }))
     await user.type(screen.getByRole('textbox', { name: 'Schedule (optional)' }), '0 9 * * *')
-    expect(screen.getByRole('textbox', { name: 'Initial prompt' })).toHaveAccessibleDescription(/Required for a scheduled session/)
-    expect(screen.getByRole('button', { name: 'Schedule recurring session' })).toBeDisabled()
+    const prompt = screen.getByRole('textbox', { name: 'Initial prompt' })
+    expect(prompt).not.toHaveAccessibleDescription(/Required for a scheduled session/)
+
+    await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
+    expect(prompt).toHaveAccessibleDescription(/Required for a scheduled session/)
+    expect(prompt).toHaveFocus()
+    expect(scheduleSession).not.toHaveBeenCalled()
+
+    await user.type(prompt, 'x')
+    expect(prompt).not.toHaveAccessibleDescription(/Required for a scheduled session/)
   })
 
   it('schedules a recurring session when a prompt and cron are set', async () => {

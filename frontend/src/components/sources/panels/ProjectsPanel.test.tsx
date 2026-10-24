@@ -197,16 +197,31 @@ describe('ProjectsPanel - edit flow', () => {
     )
   })
 
-  it('offers anyone as the owner', async () => {
+  it('searches people by name to pick the owner', async () => {
     listProjects.mockResolvedValue([project()])
     const { user } = renderWithUser(<ProjectsPanel />)
     await screen.findByText('Alpha')
 
     await user.click(screen.getByRole('button', { name: 'Edit' }))
-    await user.selectOptions(screen.getByLabelText('Owner'), 'Alice')
+    await user.type(screen.getByRole('combobox', { name: 'Owner' }), 'ali')
+    await user.click(await screen.findByRole('option', { name: 'Alice' }, { timeout: 2000 }))
+    expect(listPeople).toHaveBeenCalledWith({ search: 'ali', limit: 10 })
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(updateProject).toHaveBeenCalledWith(1, expect.objectContaining({ owner_id: 1 })))
+  })
+
+  it('shows the current owner and clears it', async () => {
+    listProjects.mockResolvedValue([project({ owner_id: 7, owner: { id: 7, identifier: 'zed', display_name: 'Zed' } })])
+    const { user } = renderWithUser(<ProjectsPanel />)
+    await screen.findByText('Alpha')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByRole('combobox', { name: 'Owner' })).toHaveValue('Zed')
+    await user.click(screen.getByRole('button', { name: 'Clear owner' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateProject).toHaveBeenCalledWith(1, expect.objectContaining({ owner_id: null })))
   })
 
   it('restricts editable fields for GitHub-backed projects', async () => {

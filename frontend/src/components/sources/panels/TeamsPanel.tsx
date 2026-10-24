@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject, TeamSaved } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
+import { PersonSearch, PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
 import { Badge, Button, Checkbox, ConfirmButton, DetailList, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FormActions, Input, Modal, Notice, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e)
@@ -23,7 +24,6 @@ export const TeamsPanel = () => {
   const { run, notice } = useActionNotice()
 
   const [teams, setTeams] = useState<Team[]>([])
-  const [availablePeople, setAvailablePeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
@@ -37,18 +37,13 @@ export const TeamsPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      const [teamsList, people] = await Promise.all([
-        listTeams({ include_inactive: showInactive, include_projects: true }),
-        listPeople({ limit: 100 }),
-      ])
-      setTeams(teamsList)
-      setAvailablePeople(people)
+      setTeams(await listTeams({ include_inactive: showInactive, include_projects: true }))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load teams')
     } finally {
       setLoading(false)
     }
-  }, [listTeams, listPeople, showInactive])
+  }, [listTeams, showInactive])
 
   useEffect(() => {
     loadTeams()
@@ -123,7 +118,6 @@ export const TeamsPanel = () => {
           onSubmit={(data, members) => handleCreate(data as TeamCreate, members)}
           onClose={() => setShowCreateModal(false)}
           listPeople={listPeople}
-          availablePeople={availablePeople}
         />
       )}
 
@@ -133,7 +127,6 @@ export const TeamsPanel = () => {
           onSubmit={data => handleUpdate(editingTeam.slug, data)}
           onClose={() => setEditingTeam(null)}
           listPeople={listPeople}
-          availablePeople={availablePeople}
         />
       )}
 
@@ -208,82 +201,16 @@ const TeamRow = ({
   </Row>
 )
 
-type ListPeople = (filters?: { search?: string; limit?: number }) => Promise<Person[]>
-
-/** Searches people by name and offers each match with an "Add" action. */
-const PersonSearch = ({ label, listPeople, exclude, onAdd }: {
-  label: string
-  listPeople: ListPeople
-  exclude: Set<number>
-  onAdd: (person: Person) => void
-}) => {
-  const [term, setTerm] = useState('')
-  const [results, setResults] = useState<Person[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!term.trim()) {
-      setResults(null)
-      return
-    }
-    // A response for an older term must not overwrite a newer one
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      setError(null)
-      try {
-        const people = await listPeople({ search: term, limit: 10 })
-        if (!cancelled) setResults(people)
-      } catch (e) {
-        if (cancelled) return
-        setError(`Search failed: ${errorText(e)}`)
-        setResults(null)
-      }
-    }, 300)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [term, listPeople])
-
-  const matches = results?.filter(p => !exclude.has(p.id))
-  const add = (person: Person) => {
-    onAdd(person)
-    setTerm('')
-  }
-
-  return (
-    <div className="space-y-2">
-      <Field label={label} error={error}>
-        <Input type="search" value={term} onChange={e => setTerm(e.target.value)} placeholder="Search people by name"
-          onKeyDown={e => e.key === 'Enter' && e.preventDefault()} />
-      </Field>
-      <p role="status" className="sr-only">{matches && `${matches.length} match${matches.length !== 1 ? 'es' : ''}`}</p>
-      {matches && (matches.length === 0
-        ? <p className="text-sm text-slate-600">No matching people</p>
-        : (
-          <List className="max-h-48 overflow-y-auto">
-            {matches.map(person => (
-              <Row key={person.id} title={person.display_name} meta={[`@${person.identifier}`]}
-                actions={<Button type="button" size="sm" onClick={() => add(person)} aria-label={`Add ${person.display_name}`}>Add</Button>} />
-            ))}
-          </List>
-        ))}
-    </div>
-  )
-}
-
 const TeamFormModal = ({
   team,
   onSubmit,
   onClose,
   listPeople,
-  availablePeople = [],
 }: {
   team?: Team
   onSubmit: (data: TeamCreate | TeamUpdate, members: Person[]) => Promise<void>
   onClose: () => void
   listPeople: ListPeople
-  availablePeople?: Person[]
 }) => {
   const [name, setName] = useState(team?.name || '')
   const [slug, setSlug] = useState(team?.slug || '')
@@ -369,17 +296,7 @@ const TeamFormModal = ({
         </Field>
 
         <Field label="Owner" hint="Assign someone responsible for this team">
-          <Select
-            value={ownerId ?? ''}
-            onChange={e => setOwnerId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">No owner</option>
-            {availablePeople.map(person => (
-              <option key={person.id} value={person.id}>
-                {person.display_name || person.identifier}
-              </option>
-            ))}
-          </Select>
+          <PersonSelect value={ownerId} current={team?.owner} listPeople={listPeople} onChange={setOwnerId} />
         </Field>
 
         {!isEditing && (

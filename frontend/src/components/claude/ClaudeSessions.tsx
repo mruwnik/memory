@@ -134,6 +134,8 @@ const ClaudeSessions = () => {
     return localStorage.getItem(CUSTOM_ENV_STORAGE_KEY) || ''
   })
   const [initialPrompt, setInitialPrompt] = useState<string>('')
+  const [promptError, setPromptError] = useState<string | null>(null)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
   const [runId, setRunId] = useState<string>('')
   const [cronExpression, setCronExpression] = useState<string>('')
   const [scheduling, setScheduling] = useState(false)
@@ -561,7 +563,12 @@ const ClaudeSessions = () => {
               ) : (
                 <form className="space-y-6" onSubmit={(e) => {
                   e.preventDefault()
-                  if (!selectedConfig || (cronExpression && !initialPrompt)) return
+                  if (!selectedConfig) return
+                  if (cronExpression && !initialPrompt) {
+                    setPromptError('Required for a scheduled session.')
+                    promptRef.current?.focus()
+                    return
+                  }
                   if (cronExpression) handleScheduleSession()
                   else handleSpawnSession()
                 }}>
@@ -667,10 +674,14 @@ const ClaudeSessions = () => {
                   </Field>
 
                   <Field label="Initial prompt" hint="Claude starts working on it straight away. Optional, except for a schedule."
-                    error={cronExpression && !initialPrompt ? 'Required for a scheduled session.' : null}>
+                    error={promptError}>
                     <Textarea
+                      ref={promptRef}
                       value={initialPrompt}
-                      onChange={(e) => setInitialPrompt(e.target.value)}
+                      onChange={(e) => {
+                        setInitialPrompt(e.target.value)
+                        setPromptError(null)
+                      }}
                       placeholder="Start Claude with this prompt..."
                       rows={3}
                     />
@@ -710,7 +721,7 @@ const ClaudeSessions = () => {
                   {/* Actions */}
                   <div className="flex gap-3">
                     <Button variant="primary" type="submit"
-                      disabled={spawning || scheduling || !selectedConfig || (!!cronExpression && !initialPrompt)}
+                      disabled={spawning || scheduling || !selectedConfig}
                     >
                       {spawning
                         ? 'Starting...'
