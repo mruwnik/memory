@@ -303,7 +303,8 @@ class Chunk(Base):
 
 
 class SummaryRequest(Base):
-    """A summary+tags LLM call for a source item, resolved via the Message Batches API.
+    """A summary+tags LLM call for a source item, resolved via the Message Batches API
+    on the key that pays for it.
 
     Rows are created at embed time (pending), stamped with the batch id on
     submission (submitted), and deleted once the result has been applied.
@@ -315,6 +316,9 @@ class SummaryRequest(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     source_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), nullable=False
+    )
+    provider_key_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("llm_provider_keys.id", ondelete="CASCADE"), nullable=False
     )
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     # Metadata of the summary chunk to create; NULL = only the tags are wanted
@@ -343,6 +347,7 @@ class SummaryRequest(Base):
         Index("summary_request_status_idx", "status"),
         Index("summary_request_batch_idx", "batch_id"),
         Index("summary_request_source_idx", "source_id"),
+        Index("summary_request_key_idx", "provider_key_id"),
     )
 
 

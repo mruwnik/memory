@@ -2160,3 +2160,19 @@ def test_cleanup_old_pending_jobs_deletes_across_batches(db_session, monkeypatch
 
     # The tracked_task wrapper adds its own running job, which is recent and kept.
     assert result["deleted"] == 5
+
+
+@pytest.mark.parametrize(
+    "use_batch, expected",
+    [
+        (True, {"status": "success", "batch_ids": ["batch-a", "batch-b"]}),
+        (False, {"status": "disabled"}),
+    ],
+)
+def test_submit_summary_batch_reports_each_keys_batch(monkeypatch, use_batch, expected):
+    monkeypatch.setattr(settings, "SUMMARIZER_USE_BATCH", use_batch)
+    monkeypatch.setattr(
+        maintenance_module.summary_batch, "submit_pending", lambda session: ["batch-a", "batch-b"]
+    )
+
+    assert maintenance_module.submit_summary_batch() == expected

@@ -18,7 +18,7 @@ from memory.common.embedding import (
     embed_by_model,
 )
 from memory.common.extract import DataChunk, MulitmodalChunk
-from memory.common.db.models import Chunk, Note
+from memory.common.db.models import Chunk, Note, SummaryRequest
 from tests.conftest import unique_sha256
 from tests.memory.agents.fakes import key_rejected, submitted
 
@@ -396,10 +396,13 @@ def test_reembedding_an_item_that_lost_its_key_drops_its_pending_requests(
     monkeypatch.setattr(settings, "SUMMARIZER_USE_BATCH", True)
     note = note_by(db_session, regular_user.id)
     embedding.embed_source_item(note)
-    db_session.delete(llm_key)
-    db_session.flush()
+    db_session.commit()
+    queued = db_session.query(SummaryRequest).count()
+    llm_key.status = "invalid"
+    db_session.commit()
 
     embedding.embed_source_item(note)
+    db_session.commit()
 
-    assert note.summary_requests == []
+    assert (queued, db_session.query(SummaryRequest).count()) == (1, 0)
     assert scripted_llm.requests == []

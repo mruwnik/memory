@@ -42,12 +42,19 @@ section has nothing in it:
   with a clear error without it; nothing else changes.
 - The api and workers now check settings at startup and refuse to start,
   listing everything that's missing. Both require `VOYAGE_API_KEY`. Workers
-  also require the key for `SUMMARIZER_MODEL`'s provider: `ANTHROPIC_API_KEY`
-  by default, or `OPENAI_API_KEY` for `openai/` models. A working deployment
-  already has these.
+  also require the key for `SUMMARIZER_MODEL`'s provider (`ANTHROPIC_API_KEY`
+  by default, or `OPENAI_API_KEY` for `openai/` models), which meeting
+  extraction and session summaries still run on; ingest summaries use users'
+  own keys instead. A working deployment already has these.
 
 ### Manual steps
 
+- **Before updating**, let in-flight summary batches finish
+  (`collect_summary_batches` runs every `SUMMARIZER_BATCH_POLL_INTERVAL`): the
+  migration drops every queued summary request, since they were queued on the
+  server's key. The queue is drained once
+  `SELECT count(*) FROM summary_request WHERE status != 'failed'` is 0; items
+  whose requests are dropped get their summary when next reingested.
 - **Before updating**, check each transcript account's project and
   sensitivity (Sources → Transcripts). Once updated, newly synced meetings and,
   from the next daily sweep, existing ones take them on: every contributor on that
@@ -241,6 +248,11 @@ section has nothing in it:
   like other ingest LLM work; meetings without one are stored with extraction
   `skipped`. Its prompt, system prompt and model can no longer be overridden
   per call.
+- Batch summaries are sent as one batch per paying key, at half the key's
+  synchronous price against its daily cap. A key that runs out of daily cap
+  or that its provider rejects keeps its requests queued until it can pay; a
+  batch the provider refuses (a 4xx other than auth or rate limit) uses up one of
+  the requests' `SUMMARIZER_BATCH_MAX_ATTEMPTS`, and the reason is logged.
 - Ingestion summaries now go through the Anthropic Message Batches API
   (`SUMMARIZER_USE_BATCH`, default `true`). Items are searchable at once, and
   their summary chunk arrives when the batch ends, usually within an hour.
@@ -460,6 +472,8 @@ section has nothing in it:
 - `20261029_source_llm_keys`: adds `llm_key_id`/`llm_disabled` to every source table and
   `discord_bots.created_by_user_id` (backfilled with each bot's lowest-id authorized user).
   Fast.
+- `20261029_summary_request_keys`: deletes all `summary_request` rows (see Manual steps)
+  and adds `provider_key_id`. Fast.
 
 ### Post-deploy commands
 

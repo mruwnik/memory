@@ -282,9 +282,13 @@ def embed_source_item(
     # including one from before the item lost its key.
     requests = [
         SummaryRequest(
-            prompt=d.prompt, chunk_metadata=d.chunk_metadata, modality=d.modality
+            prompt=d.prompt,
+            chunk_metadata=d.chunk_metadata,
+            modality=d.modality,
+            provider_key_id=key.id,
         )
         for d in deferred
+        if key is not None
     ]
     item.summary_requests = requests if chunks else []
     return chunks

@@ -464,17 +464,6 @@ class AnthropicProvider(BaseLLMProvider):
 
         return None, current_tool_use
 
-    def batch_request(
-        self,
-        custom_id: str,
-        messages: list[Message],
-        system_prompt: str | None,
-        settings: LLMSettings,
-    ) -> dict[str, Any]:
-        """A Message Batches API request equivalent to `generate` with the same arguments."""
-        params = self._build_request_kwargs(messages, system_prompt, None, settings)
-        return {"custom_id": custom_id, "params": params}
-
     def generate(
         self,
         messages: list[Message],

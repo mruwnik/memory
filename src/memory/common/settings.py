@@ -707,7 +707,7 @@ CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None
 
 # Ingestion summaries go through the Anthropic Message Batches API (50% cheaper,
 # results usually within the hour) instead of one synchronous call per item.
-# Only applies when SUMMARIZER_MODEL is an anthropic/ model.
+# Only applies while system:summarise runs on an anthropic model.
 SUMMARIZER_USE_BATCH = boolean_env("SUMMARIZER_USE_BATCH", True)
 SUMMARIZER_BATCH_MAX_REQUESTS = int(os.getenv("SUMMARIZER_BATCH_MAX_REQUESTS", 2000))
 # Batches API caps a batch at 256MB; stay well under it.
@@ -728,9 +728,10 @@ LLM_PROVIDER_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY
 def missing_required_settings(values: Any, role: str) -> list[str]:
     """Empty settings that the given process ("api" or "worker") can't run without.
 
-    Everything embeds via Voyage, and workers summarize every ingest via
-    SUMMARIZER_MODEL. The api gets no .env, so its SUMMARIZER_MODEL is always
-    the default, and its LLM calls (HyDE, query analysis) are best-effort.
+    Everything embeds via Voyage, and workers extract meetings and summarise
+    sessions via SUMMARIZER_MODEL on the server's key. The api gets no .env, so
+    its SUMMARIZER_MODEL is always the default, and its LLM calls (HyDE, query
+    analysis) are best-effort.
     """
     required = ["VOYAGE_API_KEY"]
     provider = values.SUMMARIZER_MODEL.split("/", 1)[0]

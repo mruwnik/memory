@@ -1346,7 +1346,7 @@ def submit_summary_batch() -> dict:
     if not summarizer.batch_enabled():
         return {"status": "disabled"}
     with make_session() as session:
-        return {"status": "success", "batch_id": summary_batch.submit_pending(session)}
+        return {"status": "success", "batch_ids": summary_batch.submit_pending(session)}
 
 
 @app.task(name=COLLECT_SUMMARY_BATCHES)
