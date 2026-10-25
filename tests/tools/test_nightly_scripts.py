@@ -1,12 +1,10 @@
 import datetime
-import io
 import os
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 
 import pytest
 
@@ -311,6 +309,21 @@ def test_update_keeps_the_old_config_when_ssm_is_unusable(host, param, value):
     assert call_lines(host, "update.sh") == []
 
 
+def test_a_reset_backup_key_keeps_the_box_key_but_still_renders_the_rest(host):
+    """A signer the owner revoked must reach the box even while the update is held back."""
+    (host.parent / "ssm" / "backup_encryption_key").write_text("reset-key\n")
+
+    code, output = nightly(host, "nightly-update")
+
+    assert code != 0, output
+    assert "backup_encryption_key differs" in output
+    assert (host.parent / "allowed_signers").read_text() == SIGNERS + "\n"
+    ops_env = (host.parent / "ops.env").read_text().splitlines()
+    assert ["BACKUP_ENCRYPTION_KEY=backup-key-5e1", "MIN_AGE_HOURS=72"] == [ops_env[0], ops_env[4]]
+    assert "reset-key" not in output
+    assert call_lines(host, "update.sh") == []
+
+
 def test_update_fails_without_touching_config_when_ssm_is_unreachable(host):
     code, output = nightly(host, "nightly-update", FAKE_FAIL="ssm")
 
@@ -419,15 +432,14 @@ def test_encrypt_snippet_produces_what_restore_decrypts(tmp_path):
 
     assert "sync ebooks" in manifest.splitlines()
     assert "notes.tar.gz.enc" in {p.name for p in out.iterdir()}
-    decrypt = (
-        "import sys; from memory.workers.tasks.backup import get_cipher; "
-        "sys.stdout.buffer.write(get_cipher().decrypt(open(sys.argv[1], 'rb').read()))"
-    )
-    plain = subprocess.run(
-        [sys.executable, "-c", decrypt, str(out / "notes.tar.gz.enc")],
-        env=env, capture_output=True, check=True, timeout=120,
-    ).stdout  # fmt: skip
-    with tarfile.open(fileobj=io.BytesIO(plain), mode="r:gz") as tar:
-        member = tar.extractfile("notes/a.md")
-        assert member is not None
-        assert member.read() == b"note"
+    restore = (REPO_ROOT / "tools" / "ops" / "restore-latest-backup.sh").read_text()
+    fernet = re.findall(r"^FERNET='(.*?)'$", restore, re.S | re.M)[0]
+    restored = tmp_path / "restored"
+    # The archive's key is a superseded one: restore tries every key it knows.
+    subprocess.run(
+        [sys.executable, "-c", fernet.replace('"/app/memory_files"', repr(str(restored)))],
+        input=(out / "notes.tar.gz.enc").read_bytes(),
+        env={**env, "BACKUP_ENCRYPTION_KEY": "k-current", "BACKUP_KEYS": "k-current\nk-test"},
+        capture_output=True, check=True, timeout=120,
+    )  # fmt: skip
+    assert (restored / "notes" / "a.md").read_text() == "note"

@@ -143,7 +143,7 @@ run "all_roles" {
       for r, docs in {
         observe  = ["status", "logs"]
         maintain = ["restart", "update-to", "disk-cleanup", "reboot"]
-        recover  = ["rollback", "restore-latest-backup"]
+        recover  = ["rollback", "restore-latest-backup", "rotate-keys"]
       } :
       toset([for s in jsondecode(aws_iam_role_policy.operator[r].policy).Statement : s.Resource if s.Sid == "RunOwnDocuments"][0]) ==
       toset(concat([output.instance_arn], [for d in docs : aws_ssm_document.op[d].arn]))
@@ -190,9 +190,15 @@ run "all_roles" {
       for a, d in aws_ssm_document.op : a => endswith(trimspace(yamldecode(d.content).mainSteps[0].inputs.runCommand[0]), "--yes")
       } == {
       status = false, logs = false, restart = false, update-to = false, disk-cleanup = false
-      reboot = true, rollback = true, restore-latest-backup = true
+      reboot = true, rollback = true, restore-latest-backup = true, rotate-keys = true
     }
     error_message = "exactly the destructive documents pass --yes"
+  }
+  assert {
+    condition = toset([
+      for a, d in aws_ssm_document.op : a if yamldecode(d.content).mainSteps[0].inputs.timeoutSeconds == 14400
+    ]) == toset(["update-to", "rollback", "restore-latest-backup", "rotate-keys"])
+    error_message = "every document that takes a full pg_dump gets 14400 s: SIGKILL skips the failure traps"
   }
 }
 
@@ -231,6 +237,35 @@ run "restart_service_pattern" {
       can(regex(yamldecode(aws_ssm_document.op["restart"].content).parameters.service.allowedPattern, v))
     ] == [true, true, true, false, false, false, false]
     error_message = "service must be empty or a plain name with no leading dash"
+  }
+}
+
+run "rotate_keys_names_pattern" {
+  command = plan
+  assert {
+    condition = [
+      for v in ["", "REDIS_PASSWORD", "REDIS_PASSWORD,POSTGRES_PASSWORD", "--yes", "A B", "A;id", "A,", "redis_password"] :
+      can(regex(yamldecode(aws_ssm_document.op["rotate-keys"].content).parameters.only.allowedPattern, v))
+    ] == [true, true, true, false, false, false, false, false]
+    error_message = "only must be empty or comma-separated upper-case key names"
+  }
+}
+
+run "instance_writes_only_the_secrets_it_rotates" {
+  assert {
+    condition = toset(one([for s in jsondecode(aws_iam_role_policy.instance.policy).Statement : s.Resource if s.Sid == "RotateOwnKeys"])) == toset(concat(
+      [for k in ["secrets_encryption_key", "postgres_password", "redis_password", "backup_encryption_key"] : "arn:aws:ssm:eu-central-1:111111111111:parameter/memory/${k}"],
+      ["arn:aws:ssm:eu-central-1:111111111111:parameter/memory/previous/*"],
+    ))
+    error_message = "the instance may write only the generated secrets and their superseded copies, never config or admin_password"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.instance.policy).Statement : s.Action if s.Sid == "RotateOwnKeys"]) == "ssm:PutParameter"
+    error_message = "RotateOwnKeys must grant only ssm:PutParameter"
+  }
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.instance.policy).Statement : contains(flatten([s.Action]), "ssm:DeleteParameter") if s.Effect == "Allow"])
+    error_message = "the instance must not delete parameters: the kept keys under previous/ are the only copy some backups have"
   }
 }
 

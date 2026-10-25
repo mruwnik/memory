@@ -26,6 +26,12 @@ locals {
     reboot                = { role = "maintain", args = "--yes", parameters = {} }
     rollback              = { role = "recover", args = "--yes", parameters = {}, timeout = 14400 }
     restore-latest-backup = { role = "recover", args = "--yes", parameters = {}, timeout = 14400 }
+    rotate-keys = {
+      role       = "recover"
+      args       = "--only={{ only }} --yes"
+      parameters = { only = { type = "String", default = "", allowedPattern = "^([A-Z_]+(,[A-Z_]+)*)?$", description = "Comma-separated key names; empty rotates all" } }
+      timeout    = 14400
+    }
   }
 
   document_content = { for a, v in local.actions : a => yamlencode({

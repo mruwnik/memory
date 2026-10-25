@@ -11,8 +11,10 @@
 # Reads s3://$S3_BACKUP_BUCKET/$S3_BACKUP_PREFIX with the aws cli (the instance
 # role), region $S3_BACKUP_REGION, or a local directory with the same layout
 # when BACKUP_SOURCE is set. BACKUP_ENCRYPTION_KEY (or BACKUP_ENCRYPTION_KEY_FILE)
-# comes from the environment or .env. Qdrant is restored first, then Postgres,
-# then files, so a Qdrant failure leaves Postgres untouched.
+# comes from the environment or .env; a backup taken before a key rotation is
+# read with a superseded key (lib.sh previous_keys), and its stored secrets are
+# moved to the current SECRETS_ENCRYPTION_KEY. Qdrant is restored first, then
+# Postgres, then files, so a Qdrant failure leaves Postgres untouched.
 set -Eeuo pipefail
 declare -F parse_args >/dev/null || source "$(dirname "$0")/lib.sh"
 parse_args "$@"
@@ -35,7 +37,9 @@ if [[ -z $BACKUP_ENCRYPTION_KEY ]]; then
     [[ -n $key_file && -r $key_file ]] && BACKUP_ENCRYPTION_KEY=$(head -n1 "$key_file")
 fi
 : "${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
-export BACKUP_ENCRYPTION_KEY
+# Every key a backup inside the retention can be under, one per line; never printed.
+BACKUP_KEYS=$({ echo "$BACKUP_ENCRYPTION_KEY"; previous_keys backup_encryption_key; } | awk 'NF && !seen[$0]++')
+export BACKUP_KEYS
 BUCKET=$(config_value S3_BACKUP_BUCKET)
 PREFIX=$(config_value S3_BACKUP_PREFIX)
 PREFIX=${PREFIX:-memory}
@@ -67,6 +71,18 @@ src_sync() {
     aws s3 sync "s3://$BUCKET/$PREFIX/$1" "$2" --region "$REGION"
 }
 decrypt() { openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY 2>/dev/null; }
+# Fetches $1 once, then decrypts it into $2 with the first backup key whose
+# result $3 accepts: a wrong key only shows at the end of the stream.
+fetch_decrypted() {
+    local key
+    src_cat "$1" > "$2.enc" || return 1
+    while read -r -u 3 key; do
+        BACKUP_ENCRYPTION_KEY=$key decrypt < "$2.enc" > "$2" && "$3" "$2" && { rm -f "$2.enc"; return; }
+    done 3<<<"$BACKUP_KEYS"
+    return 1
+}
+is_gzip() { gzip -t "$1" 2>/dev/null; }
+is_tar() { tar -tf "$1" > /dev/null 2>&1; }
 
 mkdir -p "$STATE_DIR"
 databases=$(src_ls databases/) || { echo "could not list the backup source" >&2; exit 1; }
@@ -89,18 +105,31 @@ echo "files: $(tr '\n' ' ' <<<"$file_archives $file_dirs")"
 stage=$(mktemp -d "$STATE_DIR/restore-tmp.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 stage_failed() {
-    echo "could not fetch and decrypt $1 (free_mb=$(( $(free_bytes) / 1048576 )) in $STATE_DIR); wrong BACKUP_ENCRYPTION_KEY, corrupt object or full disk?" >&2
+    echo "could not fetch and decrypt $1 (free_mb=$(( $(free_bytes) / 1048576 )) in $STATE_DIR); no known BACKUP_ENCRYPTION_KEY, corrupt object or full disk?" >&2
     exit 1
 }
-src_cat "databases/postgres-$latest.sql.gz.enc" | decrypt > "$stage/postgres.sql.gz" \
-    && gzip -t "$stage/postgres.sql.gz" || stage_failed "postgres-$latest.sql.gz.enc"
-src_cat "databases/qdrant-$latest.snapshot.enc" | decrypt > "$stage/qdrant.snapshot" \
-    && tar -tf "$stage/qdrant.snapshot" > /dev/null 2>&1 || stage_failed "qdrant-$latest.snapshot.enc"
+fetch_decrypted "databases/postgres-$latest.sql.gz.enc" "$stage/postgres.sql.gz" is_gzip \
+    || stage_failed "postgres-$latest.sql.gz.enc"
+fetch_decrypted "databases/qdrant-$latest.snapshot.enc" "$stage/qdrant.snapshot" is_tar \
+    || stage_failed "qdrant-$latest.snapshot.enc"
 
-FERNET='import io, sys, tarfile
+FERNET='import io, os, sys, tarfile
+from cryptography.fernet import MultiFernet
 from memory.workers.tasks.backup import get_cipher
-data = get_cipher().decrypt(sys.stdin.buffer.read())
+cipher = MultiFernet([get_cipher(key) for key in os.environ["BACKUP_KEYS"].split()])
+data = cipher.decrypt(sys.stdin.buffer.read())
 tarfile.open(fileobj=io.BytesIO(data), mode="r:gz").extractall("/app/memory_files", filter="data")'
+
+# A wrong key yields no gzip stream, so tar fails before extracting anything.
+extract_archive() {
+    local key archive=$stage/archive
+    src_cat "$1" > "$archive" || return 1
+    while read -r -u 3 key; do
+        BACKUP_ENCRYPTION_KEY=$key decrypt < "$archive" | tar -xz -C "$FILES_DIR" 2>>"$RESTORE_LOG" \
+            && { rm -f "$archive"; return; }
+    done 3<<<"$BACKUP_KEYS"
+    return 1
+}
 
 restore_files() {
     local name dir restored=()
@@ -108,9 +137,9 @@ restore_files() {
     for name in $file_archives; do
         case "$name" in
             # The worker extracts as the app user already.
-            *.enc) src_cat "$name" | $COMPOSE run --rm --no-deps -T -e BACKUP_ENCRYPTION_KEY --entrypoint python worker -c "$FERNET" 2>>"$RESTORE_LOG" ;;
+            *.enc) src_cat "$name" | $COMPOSE run --rm --no-deps -T -e BACKUP_KEYS --entrypoint python worker -c "$FERNET" 2>>"$RESTORE_LOG" ;;
             *)
-                src_cat "$name" | decrypt | tar -xz -C "$FILES_DIR" 2>>"$RESTORE_LOG"
+                extract_archive "$name"
                 restored+=("$FILES_DIR/${name%%.tar.gz.*}") ;;
         esac
     done
@@ -145,6 +174,7 @@ restore_qdrant "$stage/qdrant.snapshot" "$safety_qdrant"
 RESTORE_STEP=postgres
 log "Restoring Postgres"
 restore_postgres "$stage/postgres.sql.gz"
+rekey_restored
 RESTORE_STEP=files
 log "Restoring files"
 restore_files

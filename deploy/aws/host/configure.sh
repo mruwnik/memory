@@ -32,6 +32,18 @@ for name in backup_encryption_key s3_backup_bucket s3_backup_prefix s3_backup_re
     value=$(param "$name")
     env_lines+=("$(printf '%s=%q' "$(tr '[:lower:]' '[:upper:]' <<<"$name")" "$value")")
 done
+# Only rotate-keys.sh changes the backup key, and it writes both copies. A
+# different SSM value is a reset (an older module, a replaced parameter), and
+# taking it would leave the box's backups under a key it no longer has. The
+# rest is still rendered, so a revoked signer reaches the box, and the exit
+# status holds the update back until the owner settles it.
+key_reset=0
+current=$(grep '^BACKUP_ENCRYPTION_KEY=' "$OPS_ENV" 2>/dev/null || true)
+if [[ -n $current && $current != "${env_lines[0]}" ]]; then
+    echo "SSM backup_encryption_key differs from the one this box backs up with; keeping the box's" >&2
+    env_lines[0]=$current
+    key_reset=1
+fi
 # DISK_PATH is the data volume, which status and disk-cleanup measure.
 env_lines+=(
     "MIN_AGE_HOURS=$delay" "MEMORY_SSM_PREFIX=$MEMORY_SSM_PREFIX"
@@ -66,3 +78,4 @@ mkdir -p "$UNIT_DIR/apt-daily-upgrade.service.d"
 install -m 0644 "$here/apt-daily-upgrade.conf" "$UNIT_DIR/apt-daily-upgrade.service.d/memory.conf"
 systemctl daemon-reload
 systemctl enable --now "${timers[@]}"
+exit "$key_reset"

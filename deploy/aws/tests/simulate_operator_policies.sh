@@ -31,12 +31,13 @@ prefix_arn=$param_path
     || { echo "no operator roles are enabled; turn them on and re-apply" >&2; exit 2; }
 
 failed=0
+# want: allow, deny (explicit) or refuse (anything but allowed).
 expect() {
     local want=$1 role=$2 action=$3 resource=$4 got
     got=$(aws iam simulate-principal-policy --policy-source-arn "$role" \
         --action-names "$action" --resource-arns "$resource" \
         --query 'EvaluationResults[0].EvalDecision' --output text)
-    if [[ $want == allow && $got != allowed || $want == deny && $got != explicitDeny ]]; then
+    if [[ $want == allow && $got != allowed || $want == deny && $got != explicitDeny || $want == refuse && $got == allowed ]]; then
         echo "FAIL ${role##*/} $action $resource: $got (want $want)"
         failed=1
     else
@@ -63,6 +64,8 @@ while read -r name role; do
     expect deny "$role" ssm:GetParameter "$param"
     expect deny "$role" ssm:GetParametersByPath "$param_path"
     expect deny "$role" ssm:PutParameter "$prefix_arn/release_signers"
+    expect deny "$role" ssm:PutParameter "$param"
+    expect deny "$role" ssm:GetParametersByPath "$prefix_arn/previous/secrets_encryption_key"
     expect deny "$role" ssm:GetCommandInvocation "*"
     expect deny "$role" ssm:ListCommandInvocations "*"
     expect deny "$role" ssm:ListCommands "*"
@@ -82,5 +85,16 @@ done < <(get '.operator_role_arns.value | to_entries[] | "\(.key) \(.value)"')
 expect deny "$instance_role" s3:PutObject "arn:$partition:s3:::$bucket/x/cmd/i-0/awsrunShellScript/s/stdout"
 expect allow "$instance_role" s3:PutObject "arn:$partition:s3:::$bucket/memory/databases/postgres.enc"
 expect allow "$instance_role" s3:PutObject "arn:$partition:s3:::$output_bucket/ops/cmd/i-0/awsrunShellScript/s/stdout"
+
+# rotate-keys.sh writes the generated secrets and the kept copies, and deletes neither.
+expect allow "$instance_role" ssm:PutParameter "$param"
+expect allow "$instance_role" ssm:PutParameter "$prefix_arn/previous/backup_encryption_key/20260101T000000Z-1"
+expect allow "$instance_role" kms:Encrypt "$kms"
+expect refuse "$instance_role" ssm:DeleteParameter "$prefix_arn/previous/backup_encryption_key/20260101T000000Z-1"
+expect refuse "$instance_role" ssm:DeleteParameter "$param"
+for other in release_signers domain admin_password voyage_api_key; do
+    expect refuse "$instance_role" ssm:PutParameter "$prefix_arn/$other"
+done
+expect refuse "$instance_role" ssm:PutParameter "arn:$partition:ssm:$region:$account:parameter/other-stack/postgres_password"
 
 exit "$failed"

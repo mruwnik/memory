@@ -36,6 +36,13 @@ if [[ -e $RESTORE_FAILED_MARKER ]]; then
 else
     echo "restore_failed=no"
 fi
+# Only the state and the key names are printed.
+rotate=$(awk 'NR==1' "$ROTATE_MARKER" 2>/dev/null | tr -cd 'A-Za-z_ =,' || true)
+case "${rotate%% *}" in
+    started) echo "rotate_keys=unfinished since=$(date -u -r "$ROTATE_MARKER" +%FT%TZ)" ;;
+    failed) echo "rotate_keys=failed since=$(date -u -r "$ROTATE_MARKER" +%FT%TZ) $(xargs <<<"${rotate#failed}")" ;;
+    *) echo "rotate_keys=none" ;;
+esac
 echo "[backup]"
 # Only the first word of the marker is read, and only ok or failed is printed.
 result=$(awk 'NR==1 {print $1}' "$LAST_BACKUP_MARKER" 2>/dev/null || true)

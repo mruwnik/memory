@@ -22,10 +22,9 @@ S3 = {
 }
 SUPPLIED = {
     "POSTGRES_PASSWORD": "pg-supplied-Aa11Bb22",
-    "JWT_SECRET": "jwt-supplied-Cc33Dd44",
     "REDIS_PASSWORD": "redis-supplied-Ee55Ff66",
 }
-SECRET_FILES = ["postgres_password.txt", "jwt_secret.txt", "voyage_key.txt"]
+SECRET_FILES = ["postgres_password.txt", "voyage_key.txt"]
 
 
 @pytest.fixture
@@ -40,7 +39,7 @@ def project(tmp_path):
     fake.write_text(
         f'#!/bin/sh\necho "$@" >> "{tmp_path}/docker.log"\n'
         f'[ "$1" != compose ] || echo "$PWD" >> "{tmp_path}/docker.cwd"\n'
-        f'[ "$1" != compose ] || echo "$REDIS_PASSWORD$POSTGRES_PASSWORD$JWT_SECRET" >> "{tmp_path}/docker.env"\n'
+        f'[ "$1" != compose ] || echo "$REDIS_PASSWORD$POSTGRES_PASSWORD" >> "{tmp_path}/docker.env"\n'
         f'[ "$1 $2" != "network inspect" ] || grep -qx "$3" "{tmp_path}/docker.networks" 2>/dev/null\n'
     )
     fake.chmod(0o755)
@@ -140,7 +139,6 @@ def test_supplied_secrets_are_used(project):
 
     env = read_env(project)
     assert (project / "secrets" / "postgres_password.txt").read_text() == SUPPLIED["POSTGRES_PASSWORD"]
-    assert (project / "secrets" / "jwt_secret.txt").read_text() == SUPPLIED["JWT_SECRET"]
     assert env["REDIS_PASSWORD"] == SUPPLIED["REDIS_PASSWORD"]
     assert (project / "secrets" / "voyage_key.txt").read_text() == REQUIRED["VOYAGE_API_KEY"]
 
@@ -233,7 +231,7 @@ def test_supplied_secrets_do_not_reach_compose_environment(project, earlier_runs
     assert (project / "docker.env").read_text().strip() == ""
 
 
-@pytest.mark.parametrize("var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "JWT_SECRET"])
+@pytest.mark.parametrize("var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "POSTGRES_PASSWORD"])
 @pytest.mark.parametrize("bad", ["a b", "a$b", "a|b"])
 def test_rejects_unsafe_values_naming_variable_but_not_value(project, var, bad):
     result = install(project, {**REQUIRED, var: bad})
@@ -251,13 +249,16 @@ def test_rerun_tightens_permissions_and_keeps_existing_optional_keys(project):
     (project / ".env").write_text("REDIS_PASSWORD=old\n")
     for f in [project / ".env", *(project / "secrets").iterdir()]:
         f.chmod(0o644)
+    # rotate-keys.sh keeps superseded keys here.
+    (project / "secrets" / "previous").mkdir(mode=0o700)
 
     result = install(project, REQUIRED)
 
     assert result.returncode == 0, result.stderr
     assert (project / "secrets" / "openai_key.txt").read_text() == "hand-written"
-    modes = {mode(f) for f in [project / ".env", *(project / "secrets").iterdir()]}
-    assert modes == {0o600}
+    files = [project / ".env", *(project / "secrets").glob("*.txt")]
+    assert {mode(f) for f in files} == {0o600}
+    assert mode(project / "secrets" / "previous") == 0o700
 
 
 BACKUP_VARS = ["S3_BACKUP_BUCKET", "S3_BACKUP_PREFIX", "S3_BACKUP_REGION", "BACKUP_ENCRYPTION_KEY"]

@@ -6,7 +6,6 @@ resource "random_password" "secret" {
   for_each = toset([
     "admin_password",
     "postgres_password",
-    "jwt_secret",
     "redis_password",
     "secrets_encryption_key",
     "backup_encryption_key",
@@ -16,10 +15,8 @@ resource "random_password" "secret" {
 }
 
 locals {
-  secrets = merge(
-    { for k, v in random_password.secret : k => v.result },
-    { voyage_api_key = var.voyage_api_key },
-  )
+  # tools/ops/rotate-keys.sh may replace these on the box.
+  rotated_secrets = ["secrets_encryption_key", "postgres_password", "redis_password", "backup_encryption_key"]
 
   config = {
     domain             = var.domain
@@ -36,12 +33,30 @@ locals {
   }
 }
 
+# Only the first value comes from here: once rotate-keys.sh has replaced one,
+# the box's value is the live one, and an apply must not put the old one back.
 resource "aws_ssm_parameter" "secret" {
-  for_each = nonsensitive(toset(keys(local.secrets)))
+  for_each = toset(keys(random_password.secret))
   name     = "${local.ssm_prefix}/${each.key}"
   type     = "SecureString"
   key_id   = aws_kms_key.this.arn
-  value    = local.secrets[each.key]
+  value    = random_password.secret[each.key].result
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_ssm_parameter" "voyage_api_key" {
+  name   = "${local.ssm_prefix}/voyage_api_key"
+  type   = "SecureString"
+  key_id = aws_kms_key.this.arn
+  value  = var.voyage_api_key
+}
+
+moved {
+  from = aws_ssm_parameter.secret["voyage_api_key"]
+  to   = aws_ssm_parameter.voyage_api_key
 }
 
 # Re-read by the box before each update, so changing release_signers or the

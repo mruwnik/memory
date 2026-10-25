@@ -43,6 +43,7 @@ if [[ $PREVIOUS_SHA == "$TARGET_SHA" ]]; then
 fi
 
 log "Rolling back to $PREVIOUS"
+rekey_with_previous=0
 if [[ $MIGRATED == 1 ]]; then
     [[ -f $BACKUP ]] || { echo "pre-update dump is missing: $BACKUP" >&2; exit 1; }
     [[ $DRY_RUN == 1 ]] || check_dump "$BACKUP"
@@ -50,6 +51,14 @@ if [[ $MIGRATED == 1 ]]; then
     RESTORE_STEP=postgres
     run $COMPOSE stop "${APP_SERVICES[@]}"
     restore_postgres "$BACKUP"
+    # The pre-update dump may predate a key rotation. The release rolled back
+    # to moves its secrets, so a broken current image can't block the rollback;
+    # a release from before rotate-keys can't, and the current one does it now.
+    if git cat-file -e "$PREVIOUS_SHA:src/memory/common/db/rekey.py" 2>/dev/null; then
+        rekey_with_previous=1
+    else
+        rekey_restored
+    fi
 else
     arm_restore_failure_trap
     run $COMPOSE stop "${APP_SERVICES[@]}"
@@ -57,7 +66,9 @@ fi
 left_tags=$(git tag --points-at "$HEAD_SHA" --list 'v*')
 run git checkout --detach "$PREVIOUS_SHA"
 export APP_VERSION=$PREVIOUS
-run $COMPOSE up -d --build
+run $COMPOSE build
+((rekey_with_previous == 0)) || rekey_restored
+run $COMPOSE up -d
 [[ $DRY_RUN == 1 ]] && exit 0
 
 wait_healthy "$PREVIOUS" > /dev/null

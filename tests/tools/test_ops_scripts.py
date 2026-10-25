@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import time
 
 import pytest
 
@@ -19,7 +20,8 @@ SECRETS = {
 
 # FAKE_FAIL is a comma list of steps that exit 1: pg_restore, psql, health, createdb,
 # qdrant_restore (the one-off qdrant run), qdrant_check (the final collections
-# check), fernet (the worker file restore).
+# check), fernet (the worker file restore), rekey (the first re-encryption of the
+# stored secrets), rekey_back (every later one). FAKE_DB_BYTES is the database size.
 FAKE_COMPOSE = """#!/usr/bin/env bash
 echo "$*" >> "$FAKE_LOG"
 fails() { [[ ,${FAKE_FAIL:-}, == *,$1,* ]]; }
@@ -34,7 +36,8 @@ case "$*" in
     "ps -a -q") echo container1 ;;
     "config --services") printf 'api\\nworker\\npostgres\\n' ;;
     *pg_restore*) cat >/dev/null; echo "row: secret-row" >&2; fails pg_restore && exit 1 ;;
-    *psql*) cat > "$FAKE_LOG.psql"; echo "row: secret-row" >&2; fails psql && exit 1 ;;
+    *pg_database_size*) echo "${FAKE_DB_BYTES:-1000}" ;;
+    *psql*) cat >> "$FAKE_LOG.psql"; echo "row: secret-row" >&2; fails psql && exit 1 ;;
     *createdb*) fails createdb && exit 1 ;;
     *"exec -T qdrant bash -c"*)
         method=${@: -2:1}; path=${@: -1}
@@ -52,6 +55,11 @@ case "$*" in
         fails qdrant_restore && exit 1
         for a in "$@"; do [[ $a == *:/restore/full.snapshot:ro ]] && cat "${a%%:*}" > "$FAKE_LOG.snapshot"; done
         ;;
+    *"memory.common.db.rekey"*)
+        echo "to=${ROTATE_SECRETS_TO:-} from=$(tr '\\n' , <<<"${ROTATE_SECRETS_FROM:-}")" >> "$FAKE_LOG.rekey"
+        runs=$(wc -l < "$FAKE_LOG.rekey")
+        { fails rekey && ((runs == 1)); } || { fails rekey_back && ((runs > 1)); } && exit 1
+        echo "secrets_reencrypted=${FAKE_REKEYED:-3}" ;;
     *"--entrypoint python worker"*) cat >> "$FAKE_LOG.fernet"; fails fernet && exit 1 ;;
 esac
 exit 0
@@ -82,11 +90,29 @@ esac
 FAKE_SHUTDOWN = """#!/usr/bin/env bash
 echo "shutdown $*" >> "$FAKE_LOG"
 """
-# Maps s3://bucket/prefix/<rest> onto $FAKE_S3/<rest>.
+# Maps s3://bucket/prefix/<rest> onto $FAKE_S3/<rest>, and SSM parameter <name>
+# onto $FAKE_SSM<name> (its KMS key in $FAKE_SSM.kms<name>). FAKE_FAIL=ssm_put fails writes,
+# ssm_read reads by path.
 FAKE_AWS = """#!/usr/bin/env bash
 echo "aws $*" >> "$FAKE_LOG"
 local_path() { echo "$FAKE_S3/${1#s3://bucket/pfx/}"; }
 case "$2" in
+    put-parameter)
+        [[ ,${FAKE_FAIL:-}, == *,ssm_put,* ]] && exit 1
+        python3 -c 'import json, os, sys
+p = json.load(open(sys.argv[1]))
+dest = os.environ["FAKE_SSM"] + p["Name"]
+kms = os.environ["FAKE_SSM"] + ".kms" + p["Name"]
+for path, value in [(dest, p["Value"]), (kms, p["KeyId"])]:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").write(value)' "${4#file://}" ;;
+    get-parameters-by-path)
+        [[ ,${FAKE_FAIL:-}, == *,ssm_read,* ]] && exit 1
+        for f in "$FAKE_SSM$4"/*; do
+            [[ -f $f ]] || continue
+            printf '%s\\t' "$(cat "$f")"
+        done
+        echo ;;
     ls) p=$(local_path "$3"); [[ -d $p ]] || exit 1
         for f in "$p"/*; do
             [[ -d $f ]] && echo "                           PRE $(basename "$f")/" \\
@@ -145,6 +171,7 @@ def ops(box, script, *args, **env):
             "PATH": f"{tmp / 'bin'}:/usr/bin:/bin",
             "FAKE_LOG": str(tmp / "calls.log"),
             "FAKE_S3": str(tmp / "s3"),
+            "FAKE_SSM": str(tmp / "ssm"),
             "COMPOSE": str(tmp / "bin" / "compose"),
             "DOCKER": str(tmp / "bin" / "docker"),
             "OPS_ENV": str(tmp / "no-ops.env"),
@@ -385,6 +412,7 @@ def test_logs_rejects_a_bad_line_count(box, lines):
         ("rollback", "pg_restore"),
         ("restore-latest-backup", "dropdb"),
         ("reboot", "shutdown"),
+        ("rotate-keys", "pg_dump"),
     ],
 )
 def test_destructive_scripts_refuse_without_yes(box, backup_set, script, expected_call):
@@ -420,16 +448,38 @@ def test_disk_cleanup_prunes_update_and_pre_restore_dumps_separately(box):
     update_dumps = [f"postgres-2025010{i}-000000-v1.dump" for i in range(1, 4)]
     safety_dumps = [f"pre-restore-2025010{i}-000000.dump" for i in range(1, 4)]
     qdrant_tars = [f"pre-restore-qdrant-2025010{i}-000000.tar.gz" for i in range(1, 4)]
-    make_dumps(box, update_dumps + safety_dumps + qdrant_tars)
+    rotate_dumps = [f"pre-rotate-2025010{i}T000000Z.dump" for i in range(1, 4)]
+    make_dumps(box, update_dumps + safety_dumps + qdrant_tars + rotate_dumps)
 
     code, output = ops(box, "disk-cleanup", KEEP_BACKUPS="1")
 
     assert code == 0, output
     assert sorted(p.name for p in (box / "backups").iterdir()) == sorted(
-        [safety_dumps[-1], update_dumps[-1], qdrant_tars[-1]]
+        [safety_dumps[-1], update_dumps[-1], qdrant_tars[-1], rotate_dumps[-1]]
     )
     assert "docker image prune -af" in calls(box)
     assert "freed_bytes=" in output
+
+
+@pytest.mark.parametrize(
+    "marker, work_kept",
+    [("last-backup", False), ("rotate-keys", True)],
+    ids=["no-rotation-pending", "rotation-unfinished-or-failed"],
+)
+def test_disk_cleanup_removes_what_killed_runs_left(box, marker, work_kept):
+    """Only day-old partials are from killed runs, and a work dir matters only while a rotation is unsettled."""
+    make_dumps(box, ["postgres-20250101-000000-v1.dump.partial", "pre-rotate-1.dump.partial", "keep.dump", "writing.dump.partial"])
+    day_old = time.time() - 2 * 86400
+    for name in ["postgres-20250101-000000-v1.dump.partial", "pre-rotate-1.dump.partial"]:
+        os.utime(box / "backups" / name, (day_old, day_old))
+    (box.parent / "state" / "rotate-work.abc").mkdir(parents=True)
+    state(box, marker).write_text("failed\n")
+
+    code, output = ops(box, "disk-cleanup")
+
+    assert code == 0, output
+    assert sorted(p.name for p in (box / "backups").iterdir()) == ["keep.dump", "writing.dump.partial"]
+    assert (box.parent / "state" / "rotate-work.abc").exists() == work_kept
 
 
 def test_restore_picks_newest_complete_set_and_loads_decrypted_data(box, backup_set):
@@ -448,7 +498,9 @@ def test_restore_picks_newest_complete_set_and_loads_decrypted_data(box, backup_
     assert "chown -R 1000:1000" in log
     assert (box.parent / "calls.log.fernet").read_text() == "fernet-bytes"
     # .env may not hold the key (on EC2 it lives only in ops.env)
-    assert "-e BACKUP_ENCRYPTION_KEY --entrypoint python worker" in log
+    assert "-e BACKUP_KEYS --entrypoint python worker" in log
+    # Never rotated: no release code runs on the restored database.
+    assert "memory.common.db.rekey" not in log
     assert (box / "memory_files" / "emails" / "a.eml").read_text() == "mail"
     assert (box / "memory_files" / "ebooks" / "b.epub").read_text() == "book"
     assert not state(box, "restore-failed").exists()
@@ -868,6 +920,7 @@ def test_update_to_rejects_anything_but_a_release_tag(box, tag):
         ("update-to", ["v1.2.3"]),
         ("rollback", ["--yes"]),
         ("restore-latest-backup", ["--yes"]),
+        ("rotate-keys", ["--yes"]),
         ("restart", []),
         ("reboot", ["--yes"]),
         ("disk-cleanup", []),
@@ -1029,3 +1082,398 @@ def test_status_reports_the_data_and_root_disks(box):
     assert code == 0, output
     assert re.search(r"^disk_used_pct=\d+%$", output, re.M)
     assert re.search(r"^root_disk_used_pct=\d+%$", output, re.M)
+
+
+def test_restore_reads_a_backup_under_a_superseded_key(box, backup_set):
+    """After a rotation the newest backups still use the old keys."""
+    add_file_backups(box, backup_set)
+    (box / "secrets" / "previous" / "backup_encryption_key").mkdir(parents=True)
+    (box / "secrets" / "previous" / "backup_encryption_key" / "20260101T000000Z-1-0").write_text(KEY)
+    (box / "secrets" / "previous" / "secrets_encryption_key").mkdir(parents=True)
+    (box / "secrets" / "previous" / "secrets_encryption_key" / "20260101T000000Z-1-0").write_text("old-sek")
+
+    code, output = ops(
+        box,
+        "restore-latest-backup",
+        "--yes",
+        BACKUP_ENCRYPTION_KEY="the-new-key",
+        BACKUP_SOURCE=str(backup_set),
+    )
+
+    assert code == 0, output
+    assert (box.parent / "calls.log.psql").read_text() == "NEW SQL"
+    assert (box / "memory_files" / "emails" / "a.eml").read_text() == "mail"
+    log = calls(box)
+    assert log.index("psql") < log.index("memory.common.db.rekey") < log.rindex("up -d")
+    assert "old-sek" in (box.parent / "calls.log.rekey").read_text()
+    assert KEY not in output and "old-sek" not in output
+
+
+def test_restore_on_ec2_reads_superseded_keys_from_ssm(box, backup_set):
+    ssm = box.parent / "ssm" / "memory" / "previous"
+    (ssm / "backup_encryption_key").mkdir(parents=True)
+    (ssm / "backup_encryption_key" / "20260101T000000Z-1-0").write_text(KEY)
+    (ssm / "secrets_encryption_key").mkdir(parents=True)
+    (ssm / "secrets_encryption_key" / "20260101T000000Z-1-0").write_text("old-sek")
+
+    code, output = ops(
+        box,
+        "restore-latest-backup",
+        "--yes",
+        BACKUP_ENCRYPTION_KEY="the-new-key",
+        S3_BACKUP_BUCKET="bucket",
+        S3_BACKUP_PREFIX="pfx",
+        MEMORY_SSM_PREFIX="/memory",
+    )
+
+    assert code == 0, output
+    assert (box.parent / "calls.log.psql").read_text() == "NEW SQL"
+    assert "old-sek" in (box.parent / "calls.log.rekey").read_text()
+    # Downloaded once, though the first key tried is the wrong one.
+    assert calls(box).count("databases/postgres-20250102.sql.gz.enc") == 1
+
+
+def test_restore_refuses_before_stopping_anything_when_ssm_keys_are_unreadable(box, backup_set):
+    code, output = ops(
+        box,
+        "restore-latest-backup",
+        "--yes",
+        **RESTORE_ENV,
+        BACKUP_SOURCE=str(backup_set),
+        MEMORY_SSM_PREFIX="/memory",
+        FAKE_FAIL="ssm_read",
+    )
+
+    assert code != 0
+    assert "could not read the kept backup_encryption_key values from SSM" in output
+    assert "stop" not in calls(box)
+
+
+def test_restore_reports_secrets_it_could_not_move(box, backup_set):
+    (box / "secrets" / "previous" / "secrets_encryption_key").mkdir(parents=True)
+    (box / "secrets" / "previous" / "secrets_encryption_key" / "20260101T000000Z-1-0").write_text("old-sek")
+
+    code, output = ops(
+        box, "restore-latest-backup", "--yes", **RESTORE_ENV, BACKUP_SOURCE=str(backup_set), FAKE_FAIL="rekey"
+    )
+
+    assert code != 0
+    assert "RESTORE FAILED in step secrets" in output
+    assert "could not be moved to the current SECRETS_ENCRYPTION_KEY" in output
+
+
+@pytest.mark.parametrize(
+    "previous_files, rekeys_after_build",
+    [([], False), (["src/memory/common/db/rekey.py"], True)],
+    ids=["previous-predates-rekey", "previous-can-rekey"],
+)
+def test_rollback_moves_restored_secrets_with_the_release_it_rolls_back_to(
+    box, previous_files, rekeys_after_build
+):
+    """A broken current image can't block the rollback, unless the previous release can't rekey."""
+    for name in previous_files:
+        (box / name).parent.mkdir(parents=True, exist_ok=True)
+        (box / name).write_text("")
+    git(box, "add", ".")
+    git(box, "commit", "--quiet", "--amend", "-m", "v1")
+    git(box, "tag", "-f", "v1")
+    release_records(box, "update-in-progress")
+    (box / "secrets" / "previous" / "secrets_encryption_key").mkdir(parents=True)
+    (box / "secrets" / "previous" / "secrets_encryption_key" / "20260101T000000Z-1-0").write_text("old-sek")
+
+    code, output = ops(box, "rollback", "--yes")
+
+    assert code == 0, output
+    log = calls(box)
+    assert log.index("pg_restore -U") < log.index("memory.common.db.rekey") < log.rindex("up -d")
+    assert (log.index("build") < log.index("memory.common.db.rekey")) == rekeys_after_build
+
+
+OLD = {
+    "SECRETS_ENCRYPTION_KEY": "old-sek-1a",
+    "POSTGRES_PASSWORD": "old-pg-3c",
+    "REDIS_PASSWORD": "old-redis-4d",
+    "BACKUP_ENCRYPTION_KEY": "old-backup-5e",
+    "TRANSFER_TOKEN_SECRET": "old-transfer-6f",
+}
+SECRET_FILES = ["SECRETS_ENCRYPTION_KEY", "POSTGRES_PASSWORD"]
+DOTENV_KEYS = ["REDIS_PASSWORD", "BACKUP_ENCRYPTION_KEY", "TRANSFER_TOKEN_SECRET"]
+IN_SSM = ["SECRETS_ENCRYPTION_KEY", "POSTGRES_PASSWORD", "REDIS_PASSWORD", "BACKUP_ENCRYPTION_KEY"]
+
+
+@pytest.fixture
+def keyed(box):
+    """A box whose secrets/ and .env hold every key rotate-keys generates."""
+    (box / "secrets").mkdir(mode=0o700)
+    (box.parent / "calls.log.psql").touch()
+    for name in SECRET_FILES:
+        (box / "secrets" / f"{name.lower()}.txt").write_text(OLD[name])
+    (box / ".env").write_text(
+        "APP_NAME=memory\n"
+        + "".join(f"{name}={OLD[name]}\n" for name in DOTENV_KEYS)
+        + "VOYAGE_API_KEY=voyage-secret-0b3e\n"
+    )
+    return box
+
+
+def dotenv(path):
+    return dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+
+
+def current_keys(box, env_file=None):
+    values = {name: (box / "secrets" / f"{name.lower()}.txt").read_text() for name in SECRET_FILES}
+    env = dotenv(env_file or box / ".env")
+    return values | {name: env.get(name, "") for name in [*DOTENV_KEYS, "VOYAGE_API_KEY"]}
+
+
+def keyring(folder, name):
+    """Key `name`'s kept values, by entry, in the box's or SSM's previous/ folder."""
+    return {p.name: p.read_text() for p in sorted((folder / name.lower()).glob("*"))}
+
+
+def box_keyring(box, name):
+    return keyring(box / "secrets" / "previous", name)
+
+
+def ssm_values(ssm):
+    return {name: (ssm / name.lower()).read_text() for name in IN_SSM}
+
+
+def test_rotate_keys_replaces_every_generated_key_without_showing_any(keyed):
+    code, output = ops(keyed, "rotate-keys", "--yes")
+
+    assert code == 0, output
+    new = current_keys(keyed)
+    assert all(new[name] != OLD[name] and len(new[name]) >= 32 for name in OLD)
+    assert len(set(new[name] for name in OLD)) == len(OLD)
+    assert new["VOYAGE_API_KEY"] == "voyage-secret-0b3e"
+    log = calls(keyed)
+    leaked = [v for v in [*OLD.values(), *(new[n] for n in OLD)] if v in output or v in log]
+    assert leaked == []
+    assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in [keyed / ".env", *(keyed / "secrets").glob("*.txt")])
+    assert f"PASSWORD '{new['POSTGRES_PASSWORD']}'" in (keyed.parent / "calls.log.psql").read_text()
+    assert (keyed.parent / "calls.log.rekey").read_text().startswith(
+        f"to={new['SECRETS_ENCRYPTION_KEY']} from={OLD['SECRETS_ENCRYPTION_KEY']},"
+    )
+    assert "secrets_reencrypted=3" in output
+    assert log.index("pg_dump") < log.index("stop api") < log.index("psql -q") < log.index("up -d --force-recreate")
+    assert [p.read_text() for p in (keyed / "backups").glob("pre-rotate-*.dump")] == ["DUMPDATA\n"]
+    assert not list((keyed / "backups").glob("*.partial"))
+    assert not state(keyed, "rotate-keys").exists()
+    assert "status=healthy" in output
+
+
+def test_rotate_keys_keeps_the_old_and_new_keys_backups_need(keyed):
+    code, output = ops(keyed, "rotate-keys", "--yes")
+
+    assert code == 0, output
+    new = current_keys(keyed)
+    assert list(box_keyring(keyed, "BACKUP_ENCRYPTION_KEY").values()) == [OLD["BACKUP_ENCRYPTION_KEY"], new["BACKUP_ENCRYPTION_KEY"]]
+    assert list(box_keyring(keyed, "SECRETS_ENCRYPTION_KEY").values()) == [OLD["SECRETS_ENCRYPTION_KEY"], new["SECRETS_ENCRYPTION_KEY"]]
+    assert box_keyring(keyed, "POSTGRES_PASSWORD") == {}
+    assert stat.S_IMODE((keyed / "secrets" / "previous").stat().st_mode) == 0o700
+
+
+def test_a_second_rotation_keeps_every_key_used(keyed):
+    ops(keyed, "rotate-keys", "--yes", "--only=BACKUP_ENCRYPTION_KEY")
+    first = current_keys(keyed)["BACKUP_ENCRYPTION_KEY"]
+
+    code, output = ops(keyed, "rotate-keys", "--yes", "--only=BACKUP_ENCRYPTION_KEY")
+
+    assert code == 0, output
+    second = current_keys(keyed)["BACKUP_ENCRYPTION_KEY"]
+    assert list(box_keyring(keyed, "BACKUP_ENCRYPTION_KEY").values()) == [OLD["BACKUP_ENCRYPTION_KEY"], first, first, second]
+
+
+@pytest.mark.parametrize(
+    "only, rotated",
+    [
+        (["--only", "REDIS_PASSWORD"], {"REDIS_PASSWORD"}),
+        (["--only=POSTGRES_PASSWORD,REDIS_PASSWORD"], {"POSTGRES_PASSWORD", "REDIS_PASSWORD"}),
+        (["--only="], set(OLD)),
+    ],
+)
+def test_rotate_keys_only_rotates_the_named_keys(keyed, only, rotated):
+    code, output = ops(keyed, "rotate-keys", "--yes", *only)
+
+    assert code == 0, output
+    new = current_keys(keyed)
+    assert {name for name in OLD if new[name] != OLD[name]} == rotated
+    assert ("memory.common.db.rekey" in calls(keyed)) == ("SECRETS_ENCRYPTION_KEY" in rotated)
+    assert ("psql -q" in calls(keyed)) == ("POSTGRES_PASSWORD" in rotated)
+
+
+@pytest.mark.parametrize("name", ["VOYAGE_API_KEY", "ADMIN_PASSWORD", "JWT_SECRET", "redis_password", "X;rm"])
+def test_rotate_keys_refuses_keys_it_does_not_generate(keyed, name):
+    code, output = ops(keyed, "rotate-keys", "--yes", f"--only={name}")
+
+    assert code == 2
+    assert "unknown key" in output
+    assert calls(keyed) == ""
+
+
+def test_rotate_keys_says_a_derived_transfer_secret_rotates_with_the_secrets_key(keyed):
+    (keyed / ".env").write_text("REDIS_PASSWORD=old-redis-4d\n")
+
+    code, output = ops(keyed, "rotate-keys", "--yes")
+
+    assert code == 0, output
+    assert "TRANSFER_TOKEN_SECRET: derived from SECRETS_ENCRYPTION_KEY" in output
+    assert "BACKUP_ENCRYPTION_KEY: not configured" in output
+    assert "TRANSFER_TOKEN_SECRET" not in (keyed / ".env").read_text()
+
+
+def test_rotate_keys_dry_run_changes_nothing(keyed):
+    code, output = ops(keyed, "rotate-keys", "--dry-run")
+
+    assert code == 0, output
+    assert {name: current_keys(keyed)[name] for name in OLD} == OLD
+    assert not (keyed / "backups").exists()
+    assert "stop" not in calls(keyed)
+
+
+def test_rotate_keys_refuses_without_room_for_the_dump(keyed):
+    code, output = ops(keyed, "rotate-keys", "--yes", FAKE_DB_BYTES=str(2**60))
+
+    assert code == 1
+    assert "Not enough disk" in output
+    assert "pg_dump" not in calls(keyed)
+    assert {name: current_keys(keyed)[name] for name in OLD} == OLD
+
+
+def test_rotate_keys_keeps_only_the_newest_pre_rotate_dumps(keyed):
+    make_dumps(keyed, [f"pre-rotate-2025010{i}T000000Z-1.dump" for i in range(1, 4)])
+
+    code, output = ops(keyed, "rotate-keys", "--yes", KEEP_BACKUPS="2")
+
+    assert code == 0, output
+    names = sorted(p.name for p in (keyed / "backups").glob("pre-rotate-*.dump"))
+    assert names[0] == "pre-rotate-20250103T000000Z-1.dump"
+    assert len(names) == 2
+
+
+def ec2(box):
+    """The EC2 layout: the backup key only in ops.env, every generated key in SSM."""
+    ops_env = box.parent / "ops.env"
+    ops_env.write_text(f"BACKUP_ENCRYPTION_KEY={OLD['BACKUP_ENCRYPTION_KEY']}\nS3_BACKUP_BUCKET=bucket\n")
+    env = dotenv(box / ".env")
+    del env["BACKUP_ENCRYPTION_KEY"]
+    (box / ".env").write_text("".join(f"{k}={v}\n" for k, v in env.items()))
+    ssm = box.parent / "ssm" / "memory"
+    ssm.mkdir(parents=True)
+    for name in IN_SSM:
+        (ssm / name.lower()).write_text(OLD[name])
+    return ops_env, ssm
+
+
+def ec2_keys(box, ops_env):
+    return current_keys(box) | {"BACKUP_ENCRYPTION_KEY": dotenv(ops_env)["BACKUP_ENCRYPTION_KEY"]}
+
+
+def rotate_on_ec2(box, ops_env, **env):
+    return ops(box, "rotate-keys", "--yes", OPS_ENV=str(ops_env), MEMORY_SSM_PREFIX="/memory", **env)
+
+
+def test_rotate_keys_on_ec2_updates_ssm_and_ops_env(keyed):
+    ops_env, ssm = ec2(keyed)
+
+    code, output = rotate_on_ec2(keyed, ops_env)
+
+    assert code == 0, output
+    new = ec2_keys(keyed, ops_env)
+    assert dotenv(ops_env)["S3_BACKUP_BUCKET"] == "bucket"
+    assert ssm_values(ssm) == {name: new[name] for name in IN_SSM}
+    assert not set(ssm_values(ssm).values()) & set(OLD.values())
+    assert {(keyed.parent / "ssm.kms" / "memory" / name.lower()).read_text() for name in IN_SSM} == {"alias/memory"}
+    assert {name: list(keyring(ssm / "previous", name).values()) for name in ["SECRETS_ENCRYPTION_KEY", "BACKUP_ENCRYPTION_KEY"]} == {
+        name: [OLD[name], new[name]] for name in ["SECRETS_ENCRYPTION_KEY", "BACKUP_ENCRYPTION_KEY"]
+    }
+    assert not (ssm / "previous" / "postgres_password").exists()
+    leaked = [v for v in [*OLD.values(), *(new[n] for n in OLD)] if v in output or v in calls(keyed)]
+    assert leaked == []
+    assert not list(keyed.parent.glob("state/rotate-work.*"))
+
+
+@pytest.mark.parametrize("failing, postgres_changed", [("rekey", True), ("ssm_put", False)])
+def test_failed_rotation_puts_every_old_key_back(keyed, failing, postgres_changed):
+    ops_env, ssm = ec2(keyed)
+    before = current_keys(keyed)
+
+    code, output = rotate_on_ec2(keyed, ops_env, FAKE_FAIL=failing)
+
+    assert code != 0
+    assert "ROTATION FAILED" in output
+    assert "previous keys are back" in output
+    assert current_keys(keyed) == before
+    assert dotenv(ops_env)["BACKUP_ENCRYPTION_KEY"] == OLD["BACKUP_ENCRYPTION_KEY"]
+    assert ssm_values(ssm) == {name: OLD[name] for name in IN_SSM}
+    psql = (keyed.parent / "calls.log.psql").read_text()
+    assert psql.endswith(f"PASSWORD '{OLD['POSTGRES_PASSWORD']}';\n") == postgres_changed
+    assert calls(keyed).count("up -d --force-recreate") == 1
+    assert state(keyed, "rotate-keys").read_text() == "failed kept_new= unsettled=\n"
+    assert all(v not in output for v in OLD.values())
+
+
+def test_rotation_that_leaves_the_stack_unhealthy_puts_the_old_keys_back(keyed):
+    code, output = ops(keyed, "rotate-keys", "--yes", FAKE_FAIL="health", HEALTH_TIMEOUT="1")
+
+    assert code != 0
+    assert "ROTATION FAILED in step starting" in output
+    assert "not healthy" in output
+    assert {name: current_keys(keyed)[name] for name in OLD} == OLD
+    rekeys = (keyed.parent / "calls.log.rekey").read_text().splitlines()
+    assert rekeys[-1].startswith(f"to={OLD['SECRETS_ENCRYPTION_KEY']} from=")
+
+
+def test_a_failed_undo_keeps_the_secrets_key_the_database_is_on(keyed):
+    ops_env, ssm = ec2(keyed)
+
+    code, output = rotate_on_ec2(keyed, ops_env, FAKE_FAIL="health,rekey_back", HEALTH_TIMEOUT="1")
+
+    assert code != 0
+    now = ec2_keys(keyed, ops_env)
+    secrets_key = now["SECRETS_ENCRYPTION_KEY"]
+    others = ["POSTGRES_PASSWORD", "REDIS_PASSWORD", "BACKUP_ENCRYPTION_KEY", "TRANSFER_TOKEN_SECRET"]
+    assert (keyed.parent / "calls.log.rekey").read_text().startswith(f"to={secrets_key} ")
+    assert ssm_values(ssm)["SECRETS_ENCRYPTION_KEY"] == secrets_key != OLD["SECRETS_ENCRYPTION_KEY"]
+    assert list(box_keyring(keyed, "SECRETS_ENCRYPTION_KEY").values()) == [OLD["SECRETS_ENCRYPTION_KEY"], secrets_key]
+    assert {name: now[name] for name in others} == {name: OLD[name] for name in others}
+    assert "The database is on the new SECRETS_ENCRYPTION_KEY" in output
+    assert "--only=SECRETS_ENCRYPTION_KEY" in output
+    assert state(keyed, "rotate-keys").read_text() == "failed kept_new=SECRETS_ENCRYPTION_KEY unsettled=\n"
+    assert secrets_key not in output
+
+
+def test_a_rotation_that_cannot_be_undone_says_so_and_keeps_the_old_files(keyed):
+    code, output = ops(keyed, "rotate-keys", "--yes", FAKE_FAIL="psql")
+
+    assert code != 0
+    assert "ROTATION FAILED in step postgres" in output
+    assert "failed too" in output
+    assert "previous keys are back" not in output
+    assert "--only=POSTGRES_PASSWORD again" in output
+    assert state(keyed, "rotate-keys").read_text() == "failed kept_new= unsettled=POSTGRES_PASSWORD\n"
+    (work,) = keyed.parent.glob("state/rotate-work.*")
+    assert stat.S_IMODE(work.stat().st_mode) == 0o700
+    assert {name: current_keys(keyed)[name] for name in OLD} == OLD
+    assert all(v not in output for v in OLD.values())
+
+
+@pytest.mark.parametrize(
+    "marker, line",
+    [
+        ("started 20260101T000000Z-1\n", "rotate_keys=unfinished since="),
+        (
+            "failed kept_new=SECRETS_ENCRYPTION_KEY,POSTGRES_PASSWORD unsettled=REDIS_PASSWORD\n",
+            "kept_new=SECRETS_ENCRYPTION_KEY,POSTGRES_PASSWORD unsettled=REDIS_PASSWORD",
+        ),
+    ],
+)
+def test_status_reports_an_unfinished_or_failed_rotation(box, marker, line):
+    state(box, "rotate-keys").parent.mkdir(parents=True, exist_ok=True)
+    state(box, "rotate-keys").write_text(marker)
+
+    code, output = ops(box, "status")
+
+    assert code == 0, output
+    assert line in output

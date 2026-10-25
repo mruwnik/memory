@@ -133,8 +133,8 @@ def backup_lock(lock_name: str = "backup_all"):
 _BACKUP_KEY_SALT = b"memory-backup-encryption-salt-v2"
 
 
-def get_cipher() -> Fernet:
-    """Create Fernet cipher from ``BACKUP_ENCRYPTION_KEY`` via PBKDF2.
+def get_cipher(passphrase: str | None = None) -> Fernet:
+    """Create Fernet cipher from ``passphrase`` (default ``BACKUP_ENCRYPTION_KEY``) via PBKDF2.
 
     Routes through ``derive_encryption_key`` (PBKDF2-HMAC-SHA256 with
     480k iterations, OWASP-recommended) so the work factor matches the
@@ -149,10 +149,10 @@ def get_cipher() -> Fernet:
     matching code revision; the ciphertext format is identical, only
     the key derivation changes across version bumps.
     """
-    if not settings.BACKUP_ENCRYPTION_KEY:
+    passphrase = passphrase or settings.BACKUP_ENCRYPTION_KEY
+    if not passphrase:
         raise ValueError("BACKUP_ENCRYPTION_KEY not set in environment")
-    key = derive_encryption_key(settings.BACKUP_ENCRYPTION_KEY, _BACKUP_KEY_SALT)
-    return Fernet(key)
+    return Fernet(derive_encryption_key(passphrase, _BACKUP_KEY_SALT))
 
 
 # Maximum size for in-memory Fernet encryption (100MB)

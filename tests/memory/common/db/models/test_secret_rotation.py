@@ -1,8 +1,9 @@
 import pytest
 from cryptography.fernet import InvalidToken
-from sqlalchemy import LargeBinary
+from sqlalchemy import LargeBinary, text
 
 from memory.common import settings
+from memory.common.db import rekey
 from memory.common.db.models import Base, Secret
 from memory.common.db.models.secrets import (
     create_secret,
@@ -11,7 +12,7 @@ from memory.common.db.models.secrets import (
     derive_encryption_key,
     encrypted_columns,
     is_encrypted_column,
-    rotate_all_secrets,
+    rekey_all_secrets,
 )
 
 # Binary columns that are not ciphertext. Anything else of type LargeBinary must
@@ -45,7 +46,7 @@ def test_every_binary_column_is_rotated_or_declared_plaintext():
     )
 
 
-def test_rotation_reencrypts_secrets_and_user_keys(db_session, regular_user):
+def test_rekey_reencrypts_secrets_and_user_keys(db_session, regular_user):
     old, new = "old-master-key", "new-master-key"
     salt = settings.SECRETS_ENCRYPTION_SALT
     old_key, new_key = derive_encryption_key(old, salt), derive_encryption_key(new, salt)
@@ -54,17 +55,97 @@ def test_rotation_reencrypts_secrets_and_user_keys(db_session, regular_user):
     regular_user.ssh_private_key_encrypted = encrypt_value_with_key("ssh-key", old_key)
     db_session.flush()
 
-    rotated = rotate_all_secrets(db_session, old, new)
+    rotated = rekey_all_secrets(db_session, new, [old])
     db_session.expire_all()
 
-    assert rotated >= 2
+    assert rotated == 2
     assert decrypt_value_with_key(db_session.get(Secret, secret.id).encrypted_value, new_key) == "s3cret"
     assert decrypt_value_with_key(regular_user.ssh_private_key_encrypted, new_key) == "ssh-key"
 
 
-def test_rotation_with_wrong_old_key_fails(db_session, regular_user):
-    create_secret(db_session, regular_user.id, "tok", "s3cret")
+def stored_under(db_session, user, key_secret, name="tok"):
+    key = derive_encryption_key(key_secret, settings.SECRETS_ENCRYPTION_SALT)
+    secret = create_secret(db_session, user.id, name, "x")
+    secret.encrypted_value = encrypt_value_with_key("s3cret", key)
     db_session.flush()
+    return secret
+
+
+def decrypted_with(db_session, secret, key_secret):
+    db_session.expire_all()
+    key = derive_encryption_key(key_secret, settings.SECRETS_ENCRYPTION_SALT)
+    return decrypt_value_with_key(db_session.get(Secret, secret.id).encrypted_value, key)
+
+
+@pytest.mark.parametrize(
+    "stored_key, candidates, rekeyed",
+    [
+        ("old", ["old"], 1),
+        ("older", ["old", "older"], 1),
+        ("target", ["old"], 0),
+        ("target", [], 0),
+    ],
+)
+def test_rekey_moves_secrets_from_whichever_key_they_are_under(
+    db_session, regular_user, stored_key, candidates, rekeyed
+):
+    secret = stored_under(db_session, regular_user, stored_key)
+
+    assert rekey_all_secrets(db_session, "target", candidates) == rekeyed
+    assert decrypted_with(db_session, secret, "target") == "s3cret"
+
+
+def test_rekey_with_nothing_stored_does_nothing(db_session):
+    assert rekey_all_secrets(db_session, "target", ["old"]) == 0
+
+
+def test_rekey_refuses_when_no_key_decrypts(db_session, regular_user):
+    secret = stored_under(db_session, regular_user, "lost")
 
     with pytest.raises(InvalidToken):
-        rotate_all_secrets(db_session, "not-the-key", "new-master-key")
+        rekey_all_secrets(db_session, "target", ["old"])
+    assert decrypted_with(db_session, secret, "lost") == "s3cret"
+
+
+def test_rekey_moves_each_value_from_its_own_key(db_session, regular_user):
+    """A restore that failed part-way, or an interrupted rotation, can leave the values under different keys."""
+    under_old = stored_under(db_session, regular_user, "old")
+    under_target = stored_under(db_session, regular_user, "target", "tok2")
+
+    assert rekey_all_secrets(db_session, "target", ["old"]) == 1
+    assert decrypted_with(db_session, under_old, "target") == "s3cret"
+    assert decrypted_with(db_session, under_target, "target") == "s3cret"
+
+
+def test_rekey_follows_the_database_schema_not_the_models(db_session, regular_user):
+    """A restored dump can be older than this code (no llm_provider_keys yet), and a
+    rolled-back one can have a column this code no longer declares."""
+    secret = stored_under(db_session, regular_user, "old")
+    old_key = derive_encryption_key("old", settings.SECRETS_ENCRYPTION_SALT)
+    db_session.execute(text("DROP TABLE llm_provider_keys CASCADE"))
+    db_session.execute(text("ALTER TABLE secrets ADD COLUMN legacy_encrypted bytea"))
+    db_session.execute(
+        text("UPDATE secrets SET legacy_encrypted = :v WHERE id = :id"),
+        {"v": encrypt_value_with_key("legacy", old_key), "id": secret.id},
+    )
+
+    assert rekey_all_secrets(db_session, "target", ["old"]) == 2
+    legacy = db_session.execute(text("SELECT legacy_encrypted FROM secrets WHERE id = :id"), {"id": secret.id}).scalar()
+    target_key = derive_encryption_key("target", settings.SECRETS_ENCRYPTION_SALT)
+    assert decrypt_value_with_key(bytes(legacy), target_key) == "legacy"
+
+
+@pytest.mark.parametrize(
+    "keys, code, out, stored_key",
+    [("unrelated\nold", 0, "secrets_reencrypted=1\n", "target"), ("unrelated", 1, "", "old")],
+)
+def test_rekey_entry_point_takes_keys_from_the_environment_and_prints_only_a_count(
+    db_session, regular_user, monkeypatch, capsys, keys, code, out, stored_key
+):
+    secret = stored_under(db_session, regular_user, "old")
+    monkeypatch.setenv("ROTATE_SECRETS_TO", "target")
+    monkeypatch.setenv("ROTATE_SECRETS_FROM", keys)
+
+    assert rekey.main() == code
+    assert capsys.readouterr().out == out
+    assert decrypted_with(db_session, secret, stored_key) == "s3cret"

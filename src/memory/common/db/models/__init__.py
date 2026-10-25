@@ -122,7 +122,7 @@ from memory.common.db.models.secrets import (
     update_secret,
     delete_secret,
     list_secrets,
-    rotate_all_secrets,
+    rekey_all_secrets,
     encrypt_value,
     decrypt_value,
 )
@@ -356,7 +356,7 @@ __all__ = [
     "update_secret",
     "delete_secret",
     "list_secrets",
-    "rotate_all_secrets",
+    "rekey_all_secrets",
     "encrypt_value",
     "decrypt_value",
     # Payloads

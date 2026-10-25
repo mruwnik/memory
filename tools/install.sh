@@ -8,8 +8,7 @@ ENV_FILE="$PROJECT_DIR/.env"
 
 # --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD,
 # VOYAGE_API_KEY. Optional, used instead of generating: POSTGRES_PASSWORD,
-# JWT_SECRET, REDIS_PASSWORD, OPENAI_API_KEY,
-# ANTHROPIC_API_KEY, APP_NAME, BACKUP_ENCRYPTION_KEY. Anything already installed is
+# REDIS_PASSWORD, OPENAI_API_KEY, ANTHROPIC_API_KEY, APP_NAME, BACKUP_ENCRYPTION_KEY. Anything already installed is
 # kept. S3 backups need an explicit choice: S3_BACKUP_BUCKET (with optional
 # S3_BACKUP_PREFIX and S3_BACKUP_REGION) to enable them, or S3_BACKUP=off.
 NON_INTERACTIVE=false
@@ -30,7 +29,7 @@ if [ "$NON_INTERACTIVE" = true ]; then
 
     # Values land unquoted in .env and in sed expressions; ADMIN_PASSWORD only
     # travels through the environment, so it is unrestricted.
-    for var in DOMAIN ADMIN_EMAIL VOYAGE_API_KEY POSTGRES_PASSWORD JWT_SECRET \
+    for var in DOMAIN ADMIN_EMAIL VOYAGE_API_KEY POSTGRES_PASSWORD \
         REDIS_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY APP_NAME S3_BACKUP_BUCKET \
         S3_BACKUP_PREFIX S3_BACKUP_REGION BACKUP_ENCRYPTION_KEY KBNET_SUBNET \
         KBNET_GATEWAY; do
@@ -219,14 +218,6 @@ if secret_exists "postgres_password.txt"; then
 else
     write_secret "postgres_password.txt" "${POSTGRES_PASSWORD:-$(generate_secret)}"
     success "Generated PostgreSQL password"
-fi
-
-# JWT secret
-if secret_exists "jwt_secret.txt"; then
-    success "JWT secret already exists"
-else
-    write_secret "jwt_secret.txt" "${JWT_SECRET:-$(generate_secret)}"
-    success "Generated JWT secret"
 fi
 
 # Redis password (stored in .env, not secrets/)
@@ -528,8 +519,10 @@ else
     success "Created Docker network $api_network"
 fi
 
-# Files written by earlier versions of this script may be looser
-chmod 600 "$ENV_FILE" "$SECRETS_DIR"/* 2>/dev/null || true
+# Files written by earlier versions of this script may be looser; secrets/previous
+# (the keys tools/ops/rotate-keys.sh keeps for backups) is a directory and keeps its mode.
+chmod 600 "$ENV_FILE" 2>/dev/null || true
+find "$SECRETS_DIR" -maxdepth 1 -type f -exec chmod 600 {} + 2>/dev/null || true
 
 # ─────────────────────────────────────────────────────────────────────
 # Summary
@@ -571,7 +564,7 @@ fi
 if [ "$NON_INTERACTIVE" = true ]; then
     # Supplied values already live in .env and secrets/; compose interpolates the
     # shell environment ahead of .env, so a stale one would override what is stored.
-    unset POSTGRES_PASSWORD JWT_SECRET REDIS_PASSWORD SERVER_URL API_PORT \
+    unset POSTGRES_PASSWORD REDIS_PASSWORD SERVER_URL API_PORT \
         FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES
     cd "$PROJECT_DIR"
     # --wait blocks on the api healthcheck, which needs migrations to have run

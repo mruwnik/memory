@@ -29,6 +29,11 @@ When an operator sets up an account for someone else, the owner has to end up as
 5. The account leaves the organization (Organizations → Leave organization, from the owner's account). An organization's management account can otherwise get in at any time.
 6. The owner deletes the `OrganizationAccountAccessRole` role in IAM. It lets the management account in, and leaving the organization doesn't remove it. Check IAM for any other user or role they don't recognise.
 7. The owner runs `terraform apply` with their own credentials, setting `operator_account_id` to the operator's account and turning on the roles they want (see below). The owner keeps the Terraform state: it holds the generated secrets.
+8. If the operator could have seen the secrets before the hand-over (they ran an apply, or held the state), the owner:
+   - moves the Terraform state to a backend only they can read, since a refresh writes the current values into it;
+   - changes the admin password in the app (`admin_password` is the web login, and rotation doesn't touch it);
+   - replaces the Voyage key at Voyage, puts the new one in `voyage_api_key` (re-apply) and in `/opt/memory/secrets/voyage_key.txt` on the box, and runs `restart`;
+   - runs `sudo /opt/memory/tools/ops/rotate-keys.sh --yes` on the box once data matters ([Rotating keys](#rotating-keys)).
 
 ## What your operator can and can't do
 
@@ -36,9 +41,9 @@ The operator works from their own AWS account, through up to three roles you swi
 
 - **observe**: see whether the app is healthy, and read its recent error messages.
 - **maintain**: restart it, install a release, free disk space, reboot.
-- **recover**: roll back an update or restore the latest backup. Both can lose your most recent changes, so leave this off unless something is broken.
+- **recover**: roll back an update, restore the latest backup, or rotate the keys Memory generated. The first two can lose your most recent changes, and a failed rotation can leave the app down, so leave this off unless something is broken or you want the operator to rotate keys.
 
-The operator can't log in to the machine, read your notes, emails or files, read or decrypt the backups, see your passwords or keys, or change what these actions do. Only you can change them, by re-applying. Every action they run is recorded in your account's CloudTrail (in the AWS console under CloudTrail → Event history).
+The operator can't log in to the machine, read your notes, emails or files, read or decrypt the backups, see your passwords or keys (rotation makes the new ones on the box and never shows them), or change what these actions do. Only you can change them, by re-applying. Every action they run is recorded in your account's CloudTrail (in the AWS console under CloudTrail → Event history).
 
 Two limits:
 
@@ -125,7 +130,7 @@ Their output is in the journal, for example `journalctl -u memory-update`. `stat
 - **OS updates.** unattended-upgrades installs updates from every configured origin (Ubuntu, Docker and Caddy). The reboot window above replaces its own automatic reboot.
 - **App updates.** The update job refreshes `allowed_signers` and the delay in `ops.env` on every run, so `update-to` uses them too, even with `auto_update` off. A changed `domain` reaches the Caddyfile the same way, but the app's `SERVER_URL` in `.env` keeps the domain it was installed with. A night with nothing to install leaves no update log. A tag that fails to install goes into `/var/lib/memory/skip-tags`. The job doesn't retry it, but still installs a newer release. `update-to` can install it explicitly. Each run writes `last-update-check` (ok or failed), which `status` reports along with the timers and a failed `memory-update` unit. Unattended upgrades wait for the nightly jobs and block them in turn, because an upgrade can restart dockerd.
 - **Backups.** Containers can't reach the instance role, so the backups run on the host. Its database dumps go through the compose `backup` service, with the role's short-lived credentials for that run only. Those are the instance role's full credentials, so that one container can do whatever the role can: read the SSM secrets, use the KMS key, and read and write the backup bucket. The job waits until the credentials have at least an hour left, so an upload can't outlive them. Private file directories are encrypted in a one-off worker container and uploaded by the host. The app's own S3 backup task stays off: `.env` has no backup bucket. The instance role can't delete, so nothing is pruned: the bucket's lifecycle expires old backups. A file deleted from a synced, unencrypted directory (ebooks, comics and the like) stays in the backup until it expires, and a restore brings it back.
-- **Disaster recovery.** `BACKUP_ENCRYPTION_KEY` and `SECRETS_ENCRYPTION_KEY` live in SSM, as well as on the box. Restoring into a fresh data volume needs both: the first decrypts the backups, the second the secrets stored in the database.
+- **Disaster recovery.** `BACKUP_ENCRYPTION_KEY` and `SECRETS_ENCRYPTION_KEY` live in SSM, as well as on the box. Restoring into a fresh data volume needs both: the first decrypts the backups, the second the secrets stored in the database. After a rotation, the values backups still need stay in SSM under `/<name>/previous/<key>/`, and `restore-latest-backup` reads them there, so a backup from before the rotation restores onto a new volume too.
 
 ## Repair actions
 
@@ -139,6 +144,7 @@ Their output is in the journal, for example `journalctl -u memory-update`. `stat
 | `reboot` | maintain | Reboots in one minute |
 | `rollback` | recover | Restores the pre-update dump and checks out the previous version |
 | `restore-latest-backup` | recover | Restores the newest backup, after keeping a fresh dump |
+| `rotate-keys [only]` | recover | Rotates the keys Memory generated (secrets encryption, Postgres, Redis, backup), or only the comma-separated names in `only`, after keeping a fresh dump; puts the old ones back if anything fails |
 
 Every action except `status` and `logs` refuses with "busy" while another one, or a nightly job, is running.
 
@@ -147,6 +153,21 @@ Each document embeds `tools/ops/lib.sh` and the action's script as they were whe
 A document's name ends in a hash of its content, for example `memory-status-1a2b3c4d`. A changed script makes a new document and deletes the old one, so no earlier version stays runnable. The `documents` output has the current names, and the operator roles always point at them.
 
 You can run any of these yourself on the box, for example `sudo /opt/memory/tools/ops/status.sh`. A careful owner never needs the operator.
+
+### Rotating keys
+
+`rotate-keys` makes new values on the box. It writes them to the files the stack reads and to the SSM parameters, and never prints them. The instance role may overwrite only those generated parameters (not the config, `admin_password` or `voyage_api_key`), and write parameters under `/<name>/previous/`. Those hold the backup and secrets keys that backups need, and the box never deletes them: a bucket version can outlive `backup_retention_days` by as much again. [UPDATING.md](../../UPDATING.md#rotating-keys) lists what each key affects, and has the command to delete the kept keys older than your oldest backup.
+
+`ssm:PutParameter` can also attach a parameter policy (an expiration deletes the parameter and its history) or move it to another KMS key, and IAM can't limit that. So a compromised box could destroy these copies, as it could the backups' keys on its own disk. SSM keeps the last 100 values of each parameter (`aws ssm get-parameter-history --with-decryption`, owner only), which is the way back from a value overwritten by mistake.
+
+Terraform sets each of these parameters once and ignores its value after that, so a re-apply doesn't undo a rotation. The box also refuses a `backup_encryption_key` in SSM that differs from the one it backs up with, so a parameter reset by an older module or a replacement can't take over its backups. It keeps its own key, still takes the rest of the config (signers included), and holds updates back (`last_update_check=failed`) until you fix the SSM value or rotate. `terraform destroy` doesn't remove the `previous/` parameters. Delete them afterwards with:
+
+```bash
+aws ssm get-parameters-by-path --path /<name>/previous --recursive --query 'Parameters[].Name' --output text \
+  | xargs -n 10 aws ssm delete-parameters --names
+```
+
+The state still holds the values the last refresh read.
 
 ## Operator access
 
@@ -191,7 +212,7 @@ aws s3 cp s3://<ops_output_bucket>/ops/<command id>/<instance id>/awsrunShellScr
 
 Output appears once the command finishes, under `s3://<bucket>/<prefix>/<command id>/<instance id>/awsrunShellScript/<step>/{stdout,stderr}`. `<step>` is the action name with `_` for `-`, such as `update_to`.
 
-To check the roles after an apply, turn all three on and run `tests/simulate_operator_policies.sh`. It uses IAM policy simulation to confirm two things. First, each role is explicitly denied shells, `AWS-RunShellScript`, the other roles' documents, command-output APIs, `kms:Decrypt`, the backup bucket and parameter reads and writes. Second, it may read the ops-output bucket. `terraform test` runs the plan-level checks with mock providers and needs no AWS access.
+To check the roles after an apply, turn all three on and run `tests/simulate_operator_policies.sh`. It uses IAM policy simulation to confirm two things. First, each role is explicitly denied shells, `AWS-RunShellScript`, the other roles' documents, command-output APIs, `kms:Decrypt`, the backup bucket and parameter reads and writes. Second, it may read the ops-output bucket. It also checks that the instance role may write only the parameters `rotate-keys` rotates. `terraform test` runs the plan-level checks with mock providers and needs no AWS access.
 
 ## Releases and revocation
 

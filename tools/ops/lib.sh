@@ -55,6 +55,8 @@ state_paths() {
     # Written by restore-latest-backup.sh and rollback.sh when they fail part-way.
     RESTORE_FAILED_MARKER=$STATE_DIR/restore-failed
     RESTORE_LOG=$STATE_DIR/restore.log
+    # Written by rotate-keys.sh: "started", or "failed" and the keys left new or unsettled.
+    ROTATE_MARKER=$STATE_DIR/rotate-keys
     # Written by the nightly backup timer: "ok" or "failed" as the first word.
     LAST_BACKUP_MARKER=$STATE_DIR/last-backup
 }
@@ -191,7 +193,52 @@ check_dump() {
     esac || { echo "dump is not readable: $(basename "$1")" >&2; return 1; }
 }
 
-# Replaces the database from a dump; the caller has stopped the app services.
+# rotate-keys.sh keeps every BACKUP_ENCRYPTION_KEY and SECRETS_ENCRYPTION_KEY
+# value backups may need, in secrets/previous/<name>/ and on EC2 in SSM under
+# $MEMORY_SSM_PREFIX/previous/<name>/. Each rotation adds <timestamp>-<pid>-0,
+# the value it replaced, and -1, the new one. Nothing overwrites or deletes an
+# entry: whether a backup or the live database still needs a value can't be
+# told safely from here, and a kept value costs next to nothing.
+KEYRING=secrets/previous
+# The kept values of key $1 (its SSM name), one per line, for callers to
+# capture: never print them.
+previous_keys() {
+    local f
+    for f in "$KEYRING/$1"/*; do
+        [[ -f $f ]] && { cat "$f"; echo; }
+    done
+    [[ -n ${MEMORY_SSM_PREFIX:-} ]] || return 0
+    aws ssm get-parameters-by-path --path "$MEMORY_SSM_PREFIX/previous/$1" --with-decryption \
+        --query 'Parameters[].Value' --output text 2>/dev/null | tr '\t' '\n' | awk '$0 != "None"' \
+        || { echo "could not read the kept $1 values from SSM" >&2; return 1; }
+}
+
+# Re-encrypts the stored secrets under $2 (default: the configured key) from
+# whichever of the keys in $3 and the kept ones each is under, logging to $1,
+# and prints the count.
+rekey_secrets() {
+    local from out
+    from=$(printf '%s\n' "${3:-}"; previous_keys secrets_encryption_key) || return 1
+    out=$(ROTATE_SECRETS_TO=${2:-} ROTATE_SECRETS_FROM=$from $COMPOSE run --rm --no-deps -T \
+        -e ROTATE_SECRETS_TO -e ROTATE_SECRETS_FROM --entrypoint python worker -m memory.common.db.rekey 2>>"$1") \
+        || { echo "re-encrypting the stored secrets failed; details in $1 (owner only)" >&2; return 1; }
+    grep -E '^secrets_reencrypted=[0-9]+$' <<<"$out" || return 1
+}
+
+# A dump from before a rotation holds the stored secrets under a kept key. With
+# none kept (never rotated) there is nothing to move them from, and no release
+# code runs.
+rekey_restored() {
+    local kept step=$RESTORE_STEP
+    [[ $DRY_RUN == 1 ]] && return
+    RESTORE_STEP=secrets
+    kept=$(previous_keys secrets_encryption_key)
+    [[ -z $kept ]] || rekey_secrets "$RESTORE_LOG"
+    RESTORE_STEP=$step
+}
+
+# Replaces the database from a dump; the caller has stopped the app services,
+# and calls rekey_restored once the image that will run on it is built.
 # Stderr goes to an owner-only log because restore errors quote the offending row.
 restore_postgres() {
     local dump=$1
@@ -215,7 +262,7 @@ restore_postgres() {
 
 # Armed before the first destructive step; prints a fixed line, never content.
 # RESTORE_STEP names where it failed: qdrant-copy, qdrant-restore,
-# qdrant-putback-failed, postgres, files, starting, or anything else.
+# qdrant-putback-failed, postgres, secrets, files, starting, or anything else.
 RESTORE_STEP=preparing
 arm_restore_failure_trap() {
     SAFETY_DUMP=${1:-}
@@ -234,6 +281,7 @@ restore_failed() {
         qdrant-restore) effect="Qdrant was put back from its safety copy; Postgres and files are untouched." ;;
         qdrant-putback-failed) effect="Putting the previous Qdrant data back failed and Qdrant may be down; Postgres and files are untouched." ;;
         postgres) effect="Qdrant is already restored; the database may be dropped or partly loaded." ;;
+        secrets) effect="The database is restored, but its stored secrets could not be moved to the current SECRETS_ENCRYPTION_KEY." ;;
         files) effect="Qdrant and Postgres are restored; some files may be missing." ;;
         starting)
             effect="Qdrant, Postgres and files are restored."

@@ -92,6 +92,30 @@ section has nothing in it:
   every merged Slack/GitHub account, and single-value uses (email target,
   Discord suggestion) take the primary's. The people edit form only sends
   contact fields that changed.
+- `tools/ops/rotate-keys.sh --yes [--only=NAME,...]` rotates the keys Memory
+  generates: `SECRETS_ENCRYPTION_KEY` (re-encrypting the stored secrets),
+  `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `BACKUP_ENCRYPTION_KEY` and an
+  explicitly set `TRANSFER_TOKEN_SECRET`. It keeps a fresh dump, stops the app,
+  writes the new values (and on EC2 the SSM parameters), recreates the
+  containers and puts the old values back if anything fails. It prints names and
+  counts only. The backup and secrets keys backups need stay in
+  `secrets/previous/` (and SSM `<prefix>/previous/`) indefinitely; UPDATING.md
+  has the command to delete the ones older than your oldest backup. On Docker
+  installs, copy `secrets/` and `.env` off the machine after rotating.
+  `restore-latest-backup.sh` and `rollback.sh` use them: a backup from before a
+  rotation restores, and its stored secrets move to the current key. On EC2 it
+  is the operator document `rotate-keys` in the `recover` role. See
+  [UPDATING.md](UPDATING.md#rotating-keys).
+- `JWT_SECRET` is gone: nothing read it. `install.sh` no longer writes
+  `secrets/jwt_secret.txt`, which you may delete, and on EC2 the next apply
+  deletes the `jwt_secret` parameter.
+- **EC2:** the re-apply adds the `rotate-keys` document, lets the instance write
+  its generated secrets and create `previous/*` (`ssm:PutParameter` there,
+  `kms:Encrypt`). Terraform no longer resets those SSM values
+  on apply (`ignore_changes`); `voyage_api_key` moves to its own resource,
+  without a replacement. If SSM's `backup_encryption_key` differs from the one
+  the box backs up with, the box keeps its own, and the nightly update stops
+  after rendering the rest of the config.
 - The Claude "New session" form saves GitHub tokens on the server (encrypted,
   per user, only the last 4 characters are ever shown) instead of in the
   browser's localStorage, and clears the old localStorage copy on load. Users

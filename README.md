@@ -41,7 +41,7 @@ git clone <this-repo> memory && cd memory
 ```
 
 The installer will:
-- Generate `secrets/postgres_password.txt`, `secrets/jwt_secret.txt`, and a Redis password
+- Generate `secrets/postgres_password.txt` and a Redis password
 - Prompt for the three API keys and write them to `.env` + `secrets/*.txt`
 - Set DB / Redis / Qdrant defaults in `.env` (Postgres on `localhost:15432`, etc.)
 - Detect your Docker group GID (needed for Claude session orchestration)
@@ -49,7 +49,7 @@ The installer will:
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `JWT_SECRET`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are used instead of generating or skipping them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 

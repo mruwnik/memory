@@ -13,6 +13,7 @@ resource "aws_kms_key" "this" {
   deletion_window_in_days = 30
 }
 
+# tools/ops/rotate-keys.sh encrypts with alias/<the SSM prefix without its slash>.
 resource "aws_kms_alias" "this" {
   name          = "alias/${var.name}"
   target_key_id = aws_kms_key.this.key_id
@@ -75,7 +76,7 @@ resource "aws_instance" "this" {
 
   tags = { Name = var.name }
 
-  depends_on = [aws_ssm_parameter.config, aws_ssm_parameter.secret, aws_route_table_association.this]
+  depends_on = [aws_ssm_parameter.config, aws_ssm_parameter.secret, aws_ssm_parameter.voyage_api_key, aws_route_table_association.this]
 }
 
 resource "aws_volume_attachment" "data" {
@@ -122,8 +123,20 @@ resource "aws_iam_role_policy" "instance" {
       {
         Sid      = "UseOwnKey"
         Effect   = "Allow"
-        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"]
         Resource = aws_kms_key.this.arn
+      },
+      # rotate-keys.sh replaces the generated secrets and keeps the values
+      # backups need under previous/; config, admin_password and voyage_api_key
+      # stay the owner's.
+      {
+        Sid    = "RotateOwnKeys"
+        Effect = "Allow"
+        Action = "ssm:PutParameter"
+        Resource = concat(
+          [for k in local.rotated_secrets : "arn:${local.partition}:ssm:${var.region}:${local.account_id}:parameter${local.ssm_prefix}/${k}"],
+          ["arn:${local.partition}:ssm:${var.region}:${local.account_id}:parameter${local.ssm_prefix}/previous/*"],
+        )
       },
       # No delete: versioning plus the lifecycle rule handle retention, so a
       # compromised instance can overwrite backups but not destroy their history.

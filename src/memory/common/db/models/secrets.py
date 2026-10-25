@@ -10,9 +10,9 @@ import functools
 import logging
 import re
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from sqlalchemy import (
@@ -21,6 +21,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     LargeBinary,
+    MetaData,
     String,
     Table,
     UniqueConstraint,
@@ -270,50 +271,54 @@ def is_encrypted_column(column: Column) -> bool:
     )
 
 
-def encrypted_columns() -> dict[Table, list[Column]]:
-    """Every encrypted column in the schema, discovered from the models' metadata."""
+def encrypted_columns(metadata: MetaData = Base.metadata) -> dict[Table, list[Column]]:
+    """Every encrypted column in `metadata`: the models', or a database's as reflected."""
     found = {
         table: [c for c in table.columns if is_encrypted_column(c)]
-        for table in Base.metadata.sorted_tables
+        for table in metadata.sorted_tables
     }
     return {table: columns for table, columns in found.items() if columns}
 
 
-def rotate_all_secrets(
-    session: Session,
-    old_key_secret: str,
-    new_key_secret: str,
-) -> int:
-    """Re-encrypt every encrypted column with a new master key.
+def reencrypted(token: bytes, target: Fernet, sources: MultiFernet) -> bytes | None:
+    """`token` encrypted under `target`, or None when it already is."""
+    try:
+        target.decrypt(token)
+    except InvalidToken:
+        return target.encrypt(sources.decrypt(token))
+    return None
 
-    Used when rotating SECRETS_ENCRYPTION_KEY. After running this, update
-    SECRETS_ENCRYPTION_KEY in your environment to the new value.
 
-    Args:
-        session: Database session
-        old_key_secret: The current SECRETS_ENCRYPTION_KEY value
-        new_key_secret: The new SECRETS_ENCRYPTION_KEY value
+def rekey_all_secrets(session: Session, target: str, candidates: Iterable[str]) -> int:
+    """Re-encrypt every stored encrypted value under `target`, each from
+    whichever of `candidates` decrypts it.
+
+    Used to rotate SECRETS_ENCRYPTION_KEY, and after loading a dump taken
+    before a rotation. The columns come from the database, not the models:
+    after a restore or a rollback its schema can be older or newer than this code.
 
     Returns:
         Number of values re-encrypted
 
     Raises:
-        InvalidToken: If old_key_secret doesn't match the current encryption
+        InvalidToken: If neither `target` nor any candidate decrypts some
+            value; the caller must roll back
     """
     salt = settings.SECRETS_ENCRYPTION_SALT
-    old_key = derive_encryption_key(old_key_secret, salt)
-    new_key = derive_encryption_key(new_key_secret, salt)
+    to = Fernet(derive_encryption_key(target, salt))
+    sources = MultiFernet([to, *(Fernet(derive_encryption_key(k, salt)) for k in candidates)])
+    live = MetaData()
+    live.reflect(bind=session.connection())
 
     count = 0
-    for table, columns in encrypted_columns().items():
+    for table, columns in encrypted_columns(live).items():
         pk = list(table.primary_key.columns)
         for row in session.execute(select(*pk, *columns)).mappings().all():
             values = {
-                column: encrypt_value_with_key(
-                    decrypt_value_with_key(bytes(row[column]), old_key), new_key
-                )
+                column: value
                 for column in columns
                 if row[column] is not None
+                and (value := reencrypted(bytes(row[column]), to, sources)) is not None
             }
             if not values:
                 continue

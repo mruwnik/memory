@@ -219,6 +219,7 @@ through fixed SSM documents). Output is numbers and states only, except for
 | `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`), refusing a tag older than the checkout; prints step and result lines only |
 | `rollback.sh --yes` | The commands above, from the update state or `last-good`; refuses unless the record is for the current checkout, and skips the tag it leaves |
 | `restore-latest-backup.sh --yes` | Restore the newest complete S3 set (Qdrant, then Postgres, then files); first keeps a fresh `pre-restore-*.dump` and a `pre-restore-qdrant-*.tar.gz` |
+| `rotate-keys.sh --yes [--only=NAME,...]` | Rotate the keys Memory generates (below); first keeps a fresh `pre-rotate-*.dump` |
 | `disk-cleanup.sh` | Prune old images, build cache and dumps beyond `KEEP_BACKUPS` |
 | `reboot.sh --yes` | `shutdown -r +1` |
 
@@ -227,8 +228,78 @@ All take `--dry-run`. `update.sh` and every script here but `status.sh` and
 `/run/lock/memory-nightly.lock`. On-box state is in `$STATE_DIR` (default
 `/var/lib/memory`): `update-failed` (written by `tools/update.sh`),
 `restore-failed` and `restore.log` (owner-only details of a failed restore or
-rollback), `skip-tags`, and `last-backup` (the nightly backup timer writes `ok`
-or `failed` as its first word). `status.sh` reports the markers.
+rollback), `rotate-keys` and `rotate-keys.log` (an unfinished or failed
+rotation, and its owner-only details), `skip-tags`, and `last-backup` (the
+nightly backup timer writes `ok` or `failed` as its first word). `status.sh`
+reports the markers.
+
+### Rotating keys
+
+`tools/ops/rotate-keys.sh --yes` replaces every key Memory generated at install:
+
+| Key | Kept in | Effect of rotating |
+|---|---|---|
+| `SECRETS_ENCRYPTION_KEY` | `secrets/secrets_encryption_key.txt` | Every stored secret is re-encrypted in one transaction. Transfer links, password reset links and OAuth sign-ins in flight stop working |
+| `POSTGRES_PASSWORD` | `secrets/postgres_password.txt` | `ALTER ROLE` first, over the container's socket |
+| `REDIS_PASSWORD` | `.env` | Redis is recreated with the new `--requirepass` |
+| `BACKUP_ENCRYPTION_KEY` | `.env`, the file `BACKUP_ENCRYPTION_KEY_FILE` names, or `ops.env` on EC2 | New backups use the new key |
+| `TRANSFER_TOKEN_SECRET` | `.env`, only if set there | In-flight transfer and reset links stop working. Unset, it is derived from `SECRETS_ENCRYPTION_KEY` and changes with it |
+
+`--only=REDIS_PASSWORD,POSTGRES_PASSWORD` limits it to those keys. Provider keys
+(Voyage, OpenAI, Anthropic) come from their providers: rotate them there and
+re-run `tools/install.sh`, or edit `secrets/` and `.env`.
+
+The script refuses unless `$BACKUP_DIR` has the database's size plus
+`MIN_FREE_GB` (default 5) free. It takes a fresh `pre-rotate-*.dump` (keeping
+the newest `KEEP_BACKUPS`) and stops the app services. It writes the new values
+to the files above, mode 600, and with `MEMORY_SSM_PREFIX` set (EC2) to the SSM
+parameters as well. It then changes the Postgres password, re-encrypts the
+secrets, recreates every container and waits for `/health`. The app is down
+for those few minutes. New values are generated on the box and never printed
+or logged.
+
+If any step fails, it puts the old values back everywhere and restarts. The
+exception is a change the database has already taken whose undo fails too: the
+new `SECRETS_ENCRYPTION_KEY` or `POSTGRES_PASSWORD` then stays in place, because
+the database is on it. The same goes for a change that reported failure but
+may have committed, when its undo fails: the old value goes back in the files,
+and the database may still be on the new one. The output and `status.sh`
+(`rotate_keys=failed kept_new=... unsettled=...`) name both kinds. Fix the
+cause in `rotate-keys.log`, then run `rotate-keys.sh --yes --only=<those names>`. A run that was killed shows as
+`rotate_keys=unfinished`; running it again is safe.
+
+Backups need the `BACKUP_ENCRYPTION_KEY` they were made with, and their
+databases hold secrets under the `SECRETS_ENCRYPTION_KEY` of the time. Each
+rotation keeps the old and the new value of those two in
+`secrets/previous/<name>/` and, on EC2, in SSM under `<prefix>/previous/<name>/`.
+It does so before anything depends on the new value. Kept values are never
+deleted automatically: the box can't tell which backups (in the bucket,
+noncurrent versions included, in `backups/`, or copied elsewhere) still need
+one, and they cost almost nothing. To drop them yourself, take the timestamp of
+the last rotation before your oldest backup (entries are named
+`<timestamp>-<pid>-<0|1>`) and, while `status.sh` says `rotate_keys=none`, run:
+
+```bash
+cutoff=20260101T000000Z   # the last rotation before your oldest backup
+for f in secrets/previous/*/*; do [[ ${f##*/} < $cutoff ]] && rm -- "$f"; done
+```
+
+On EC2 run it in `/opt/memory` as the app user, and delete the SSM copies with
+your own credentials (the instance can't):
+
+```bash
+aws ssm get-parameters-by-path --path /<name>/previous --recursive --query 'Parameters[].Name' --output text \
+  | tr '\t' '\n' | awk -F/ -v cutoff=20260101T000000Z '$NF < cutoff' | xargs -n 10 aws ssm delete-parameters --names
+```
+
+Without EC2 the kept values exist only on this machine, and the new ones are
+never printed: after rotating, copy `secrets/` (with `previous/`) and `.env` to
+wherever you keep them for disaster recovery, or neither old nor new backups
+can be decrypted once the machine is lost.
+`restore-latest-backup.sh` tries the current key, then the kept ones. A restore
+or rollback on an install that has rotated moves the restored secrets to the
+current key, from whichever kept key each one is under. `rollback.sh` does that
+with the release it rolls back to, unless that release predates rotation.
 
 ## 5. When a migration fails
 

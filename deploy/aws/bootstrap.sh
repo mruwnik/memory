@@ -161,13 +161,12 @@ else
         ADMIN_PASSWORD=$(param admin_password)
         VOYAGE_API_KEY=$(param voyage_api_key)
         POSTGRES_PASSWORD=$(param postgres_password)
-        JWT_SECRET=$(param jwt_secret)
         REDIS_PASSWORD=$(param redis_password)
         APP_VERSION=$(git -C "$ROOT" describe --tags --always)
         # Backups run on the host (memory-backup.timer): containers can't reach the
         # instance role.
         S3_BACKUP=off
-        export DOMAIN ADMIN_EMAIL ADMIN_PASSWORD VOYAGE_API_KEY POSTGRES_PASSWORD JWT_SECRET \
+        export DOMAIN ADMIN_EMAIL ADMIN_PASSWORD VOYAGE_API_KEY POSTGRES_PASSWORD \
             REDIS_PASSWORD APP_VERSION S3_BACKUP
         cd "$ROOT"
         usermod -aG docker "$app_user"
