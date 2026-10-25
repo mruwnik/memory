@@ -24,6 +24,7 @@ from memory.api.MCP.servers.core import (
 )
 from memory.api.search.types import SearchFilters
 from memory.common.access_control import AccessFilter
+from memory.common.db.models import Note
 from memory.common.db.models.source_item import SourceItem
 from tests.conftest import make_source_item, mcp_auth_context
 
@@ -829,19 +830,6 @@ def test_fetch_file_rejects_oversize(mock_settings, mock_paths, mock_extract):
         fetch_file.fn(filename="big.pdf")
 
 
-@patch("memory.api.MCP.servers.core.paths")
-@patch("memory.api.MCP.servers.core.settings")
-def test_fetch_file_not_found(mock_settings, mock_paths):
-    """Fetch file raises error for nonexistent file."""
-    mock_settings.FILE_STORAGE_DIR = Path("/storage")
-    mock_path = MagicMock(spec=Path)
-    mock_path.exists.return_value = False
-    mock_paths.validate_path_within_directory.return_value = mock_path
-
-    with pytest.raises(FileNotFoundError, match="File not found"):
-        fetch_file.fn(filename="nonexistent.txt")
-
-
 @pytest.mark.parametrize(
     "malicious_filename",
     [
@@ -948,6 +936,32 @@ def test_fetch_file_round_trip_for_note(db_session, admin_user, admin_session):
 
     assert result["content"][0]["data"] == "hello from a note"
     assert result["content"][0]["mime_type"] == "text/markdown"
+
+
+def test_fetch_file_note_missing_on_disk(db_session, admin_user, admin_session):
+    """A note row whose file never landed gets a clear error, not "Invalid path"."""
+    note = Note(
+        modality="text",
+        mime_type="text/markdown",
+        subject="orphan",
+        content="never written",
+        filename="notes/tests/orphan.md",
+        sha256=b"orphan-note-sha",
+        size=13,
+        creator_id=admin_user.id,
+    )
+    db_session.add(note)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(FileNotFoundError, match="missing from storage"):
+            fetch_file.fn(filename="/notes/tests/orphan.md")
+
+
+def test_fetch_file_unknown_file_not_found(db_session, admin_session):
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            fetch_file.fn(filename="/notes/nonexistent.md")
 
 
 # ====== filter_observation_source_ids tests ======

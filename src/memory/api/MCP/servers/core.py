@@ -651,14 +651,12 @@ def fetch_file(filename: str) -> dict:
     """
     try:
         path = paths.validate_path_within_directory(
-            settings.FILE_STORAGE_DIR, filename.strip(), require_exists=True
+            settings.FILE_STORAGE_DIR, filename.strip()
         )
     except ValueError as e:
         raise ValueError(f"Invalid path: {e}")
 
     logger.debug(f"Fetching file: {path}")
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {filename}")
 
     # Ownership check: look up the SourceItem that owns this file and verify access.
     # Without this, any SCOPE_READ user could read any file in FILE_STORAGE_DIR.
@@ -678,6 +676,12 @@ def fetch_file(filename: str) -> dict:
             raise FileNotFoundError(f"File not found: {filename}")
         except PermissionError:
             raise PermissionError(f"Access denied: {filename}")
+
+    # Checked after access so a missing file says nothing to callers who can't see the item.
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{filename} is indexed but its file is missing from storage"
+        )
 
     mime_type = extract.get_mime_type(path)
 

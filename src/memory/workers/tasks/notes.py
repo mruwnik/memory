@@ -2,6 +2,7 @@ import logging
 import pathlib
 import contextlib
 import subprocess
+import time
 from typing import cast
 
 from memory.common import paths, settings
@@ -27,27 +28,35 @@ logger = logging.getLogger(__name__)
 
 # Lock timeout for git notes operations (5 minutes)
 GIT_NOTES_LOCK_TIMEOUT = 5 * 60
+GIT_NOTES_LOCK_POLL_SECONDS = 0.5
 
 
 @contextlib.contextmanager
-def git_notes_lock(operation: str = "sync"):
+def git_notes_lock(operation: str = "sync", wait_seconds: float = GIT_NOTES_LOCK_TIMEOUT):
     """Acquire a distributed lock for git notes operations using Redis.
 
     Prevents concurrent git operations which could cause data loss due to
     git reset --hard and git clean -fd commands.
 
-    Raises RuntimeError if another git operation is already in progress.
+    Waits up to ``wait_seconds`` for the current holder, because sync_note has
+    already committed its row when it gets here: giving up would leave a note
+    listed with no file behind it. Raises RuntimeError once the wait runs out.
     Uses ownership-checked release (via the shared distributed_lock
     helper) so we never delete another process's lock.
     """
     lock_key = f"memory:lock:git_notes:{operation}"
-    with distributed_lock(lock_key, GIT_NOTES_LOCK_TIMEOUT) as lock:
-        if lock is None:
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        with distributed_lock(lock_key, GIT_NOTES_LOCK_TIMEOUT) as lock:
+            if lock is not None:
+                yield
+                return
+        if time.monotonic() >= deadline:
             raise RuntimeError(
                 f"Could not acquire git notes lock '{operation}' - "
                 "another git operation in progress"
             )
-        yield
+        time.sleep(GIT_NOTES_LOCK_POLL_SECONDS)
 
 
 def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):

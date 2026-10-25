@@ -1,7 +1,7 @@
 import uuid
 import pytest
 import pathlib
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import Note
@@ -1278,3 +1278,20 @@ def test_sync_note_create_only_refuses_existing_filename(mock_note_data, mock_ma
     assert result == {"status": "already_exists", "note_id": existing.id}
     mock_make_session.refresh(existing)
     assert existing.content == "original"  # type: ignore
+
+
+def test_git_notes_lock_waits_for_current_holder():
+    with ExitStack() as holder:
+        holder.enter_context(notes.distributed_lock("memory:lock:git_notes:tracking", 60))
+        with patch.object(notes.time, "sleep", side_effect=lambda _: holder.close()) as sleep:
+            with notes.git_notes_lock("tracking"):
+                pass
+
+    sleep.assert_called_once()
+
+
+def test_git_notes_lock_gives_up_after_wait():
+    with notes.git_notes_lock("tracking"):
+        with pytest.raises(RuntimeError, match="Could not acquire git notes lock"):
+            with notes.git_notes_lock("tracking", wait_seconds=0):
+                pass
