@@ -69,10 +69,6 @@ from memory.common.db.models.provider_keys import (
 )
 from memory.common.db.models.observations import (
     ObservationContradiction,
-    ReactionPattern,
-    ObservationPattern,
-    BeliefCluster,
-    ConversationMetrics,
 )
 from memory.common.db.models.people import (
     PersonPayload,
@@ -154,9 +150,7 @@ from memory.common.db.models.polls import (
     AvailabilityPoll,
     AvailabilityPollPayload,
     PollResponse,
-    PollResponsePayload,
     PollAvailability,
-    PollAvailabilityPayload,
     PollStatus,
     AvailabilityLevel,
     SlotAggregation,
@@ -249,10 +243,6 @@ __all__ = [
     "ReportPayload",
     # Observations
     "ObservationContradiction",
-    "ReactionPattern",
-    "ObservationPattern",
-    "BeliefCluster",
-    "ConversationMetrics",
     # People
     "Person",
     "PersonPayload",
@@ -332,9 +322,7 @@ __all__ = [
     "AvailabilityPoll",
     "AvailabilityPollPayload",
     "PollResponse",
-    "PollResponsePayload",
     "PollAvailability",
-    "PollAvailabilityPayload",
     "PollStatus",
     "AvailabilityLevel",
     "SlotAggregation",
@@ -345,7 +333,6 @@ __all__ = [
     "ClaudeEnvironment",
     "ClaudeEnvironmentPayload",
     "ClaudeGitHubToken",
-    # SSH key generation
     # Secrets
     "Secret",
     "extract",

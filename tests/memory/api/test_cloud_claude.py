@@ -572,51 +572,6 @@ def test_stats_orchestrator_down_returns_502(client, user):
     assert response.status_code == 502
 
 
-def test_container_stats_admin_can_view_others(client, user):
-    """Admin can fetch stats for any session including ones they don't own."""
-    payload = _STATS_SNAPSHOT["containers"][1]
-    with patch(
-        "memory.claude_containers.orchestrator_client.OrchestratorClient.container_stats",
-        new=AsyncMock(return_value=payload),
-    ):
-        response = client.get("/claude/u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222/stats")
-    assert response.status_code == 200
-    assert response.json() == payload
-
-
-def test_container_stats_regular_user_404_on_other_user(regular_client, user):
-    """Non-admin requesting another user's session gets 404 (not 403) —
-    same shape as kill_session and friends, so we don't disclose existence."""
-    response = regular_client.get("/claude/u9999-e2-bbbb2222bbbb2222bbbb2222bbbb2222/stats")
-    assert response.status_code == 404
-
-
-def test_container_stats_404_when_session_unknown(client, user):
-    """Orchestrator returning 404 (None from client) propagates as 404."""
-    with patch(
-        "memory.claude_containers.orchestrator_client.OrchestratorClient.container_stats",
-        new=AsyncMock(return_value=None),
-    ):
-        response = client.get("/claude/u1-x-deadbeefdeadbeefdeadbeefdeadbeef/stats")
-    assert response.status_code == 404
-
-
-def test_container_stats_orchestrator_status_propagates(client, user):
-    """If the orchestrator raises with a status_code, the API forwards it
-    unchanged rather than squashing to 502 — mirrors stats_history behavior."""
-    from memory.claude_containers.orchestrator_client import OrchestratorError
-
-    with patch(
-        "memory.claude_containers.orchestrator_client.OrchestratorClient.container_stats",
-        new=AsyncMock(
-            side_effect=OrchestratorError("orch unavailable", status_code=503)
-        ),
-    ):
-        response = client.get("/claude/u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111/stats")
-    assert response.status_code == 503
-    assert "orch unavailable" in response.json()["detail"]
-
-
 def test_stats_history_non_admin_without_session_id_400(regular_client, user):
     """Non-admin must specify `session_id` — calling without one would force
     the orchestrator to materialize every user's history just so the API
@@ -1038,7 +993,6 @@ def unscoped_client(app_client, db_session, user):
         ("GET", "/claude/status"),
         ("GET", "/claude/stats"),
         ("GET", f"/claude/stats/history?session_id={OWNED}"),
-        ("GET", f"/claude/{OWNED}/stats"),
         ("POST", "/claude/spawn"),
         ("GET", "/claude/list"),
         ("GET", f"/claude/{OWNED}"),

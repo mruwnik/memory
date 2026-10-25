@@ -20,7 +20,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func
-from sqlalchemy.orm import joinedload
 
 from sqlalchemy.orm import Session as DBSession
 
@@ -52,25 +51,6 @@ class SessionEvent(BaseModel):
     git_branch: str | None = None
 
 
-class SessionIngestRequest(BaseModel):
-    """Request to ingest a session event."""
-
-    session_id: str = Field(..., description="Session UUID")
-    cwd: str | None = Field(None, description="Working directory")
-    source: str | None = Field(None, description="Source identifier (hostname, IP)")
-    parent_session_id: str | None = Field(
-        None, description="Parent session UUID for subagents"
-    )
-    event: SessionEvent = Field(..., description="The session event to ingest")
-
-
-class SessionIngestResponse(BaseModel):
-    """Response from session ingest."""
-
-    status: str
-    session_id: str
-
-
 class BatchIngestRequest(BaseModel):
     """Request to ingest multiple session events."""
 
@@ -90,43 +70,6 @@ class BatchIngestResponse(BaseModel):
     session_id: str
     accepted: int
     duplicates: int
-
-
-class CodingProjectResponse(BaseModel):
-    """CodingProject information."""
-
-    id: int
-    directory: str
-    name: str | None
-    source: str | None
-    created_at: str | None
-    last_accessed_at: str | None
-    session_count: int
-
-
-class SessionResponse(BaseModel):
-    """Session information."""
-
-    session_id: str
-    project_id: int | None
-    project_directory: str | None
-    parent_session_id: str | None
-    git_branch: str | None
-    tool_version: str | None
-    source: str | None
-    started_at: str | None
-    ended_at: str | None
-    transcript_path: str | None
-
-
-class TranscriptResponse(BaseModel):
-    """Session transcript with pagination."""
-
-    session_id: str
-    total_events: int
-    offset: int
-    limit: int
-    events: list[dict[str, Any]]
 
 
 class ToolCallStats(BaseModel):
@@ -160,20 +103,6 @@ class ToolUsageResponse(BaseModel):
     to_time: str
     session_count: int
     tools: list[ToolUsageStats]
-
-
-class CodingProjectListResponse(BaseModel):
-    """List of projects."""
-
-    total: int
-    projects: list[CodingProjectResponse]
-
-
-class SessionListResponse(BaseModel):
-    """List of sessions."""
-
-    total: int
-    sessions: list[SessionResponse]
 
 
 def iter_transcript_events(
@@ -304,20 +233,6 @@ def extract_tool_calls_from_message(message: dict[str, Any]) -> list[ToolCall]:
         )
         for i, name in enumerate(tool_names)
     ]
-
-
-def count_transcript_events(transcript_path: str) -> int:
-    """Count total events in a transcript file."""
-    transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
-    if not transcript_file.exists():
-        return 0
-
-    count = 0
-    with open(transcript_file) as f:
-        for line in f:
-            if line.strip():
-                count += 1
-    return count
 
 
 def get_or_create_project(
@@ -546,33 +461,6 @@ def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
     return accepted
 
 
-@router.post("/ingest", response_model=SessionIngestResponse)
-async def ingest_session_event(
-    request: SessionIngestRequest,
-    user: User = Depends(get_current_user),
-) -> SessionIngestResponse:
-    """
-    Ingest a single session event.
-
-    This endpoint is idempotent - calling it multiple times with the same
-    event will not create duplicates (based on event UUID).
-
-    Called by tool hooks (e.g., Claude Code SessionEnd) to record session activity.
-    """
-    save_events(
-        user.id,
-        request.session_id,
-        request.parent_session_id,
-        request.cwd,
-        request.source,
-        [request.event],
-    )
-    return SessionIngestResponse(
-        status="accepted",
-        session_id=request.session_id,
-    )
-
-
 @router.post("/ingest/batch", response_model=BatchIngestResponse)
 async def ingest_session_events_batch(
     request: BatchIngestRequest,
@@ -599,138 +487,6 @@ async def ingest_session_events_batch(
         accepted=accepted,
         duplicates=len(request.events) - accepted,
     )
-
-
-@router.get("/projects", response_model=CodingProjectListResponse)
-def list_projects(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    user: User = Depends(get_current_user),
-) -> CodingProjectListResponse:
-    """List all projects for the current user."""
-    with make_session() as db_session:
-        query = (
-            db_session.query(CodingProject)
-            .filter(CodingProject.user_id == user.id)
-            .order_by(CodingProject.last_accessed_at.desc())
-        )
-
-        total = query.count()
-        projects = query.offset(offset).limit(limit).all()
-
-        return CodingProjectListResponse(
-            total=total,
-            projects=[
-                CodingProjectResponse(
-                    id=p.id,
-                    directory=p.directory,
-                    name=p.name,
-                    source=p.source,
-                    created_at=p.created_at.isoformat() if p.created_at else None,
-                    last_accessed_at=(
-                        p.last_accessed_at.isoformat() if p.last_accessed_at else None
-                    ),
-                    session_count=len(p.sessions) if p.sessions else 0,
-                )
-                for p in projects
-            ],
-        )
-
-
-@router.get("/", response_model=SessionListResponse)
-def list_sessions(
-    project_id: int | None = Query(None, description="Filter by project ID"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    user: User = Depends(get_current_user),
-) -> SessionListResponse:
-    """List sessions, optionally filtered by project."""
-    with make_session() as db_session:
-        query = (
-            db_session.query(Session)
-            .options(joinedload(Session.coding_project))
-            .filter(Session.user_id == user.id)
-        )
-
-        if project_id is not None:
-            query = query.filter(Session.coding_project_id == project_id)
-
-        query = query.order_by(Session.started_at.desc())
-
-        total = query.count()
-        sessions = query.offset(offset).limit(limit).all()
-
-        return SessionListResponse(
-            total=total,
-            sessions=[
-                SessionResponse(
-                    session_id=str(s.id),
-                    project_id=s.coding_project_id,
-                    project_directory=s.coding_project.directory if s.coding_project else None,
-                    parent_session_id=str(s.parent_session_id)
-                    if s.parent_session_id
-                    else None,
-                    git_branch=s.git_branch,
-                    tool_version=s.tool_version,
-                    source=s.source,
-                    started_at=s.started_at.isoformat() if s.started_at else None,
-                    ended_at=s.ended_at.isoformat() if s.ended_at else None,
-                    transcript_path=s.transcript_path,
-                )
-                for s in sessions
-            ],
-        )
-
-
-@router.get("/{session_id}", response_model=TranscriptResponse)
-def get_session_transcript(
-    session_id: str,
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    user: User = Depends(get_current_user),
-) -> TranscriptResponse:
-    """
-    Get session transcript with pagination.
-
-    Returns events ordered by their position in the transcript.
-    """
-    try:
-        session_uuid = UUID(session_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid session UUID")
-
-    with make_session() as db_session:
-        session = (
-            db_session.query(Session)
-            .filter(
-                Session.id == session_uuid,
-                Session.user_id == user.id,
-            )
-            .first()
-        )
-
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        if not session.transcript_path:
-            return TranscriptResponse(
-                session_id=str(session.id),
-                total_events=0,
-                offset=offset,
-                limit=limit,
-                events=[],
-            )
-
-        events = read_transcript(session.transcript_path, offset, limit)
-        total = count_transcript_events(session.transcript_path)
-
-        return TranscriptResponse(
-            session_id=str(session.id),
-            total_events=total,
-            offset=offset,
-            limit=limit,
-            events=events,
-        )
 
 
 def extract_tool_usage_from_transcript(

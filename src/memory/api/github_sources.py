@@ -565,18 +565,6 @@ def list_available_projects(
 # --- Repo Endpoints ---
 
 
-@router.get("/accounts/{account_id}/repos")
-def list_repos(
-    account_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> list[GithubRepoResponse]:
-    """List all repos for a GitHub account."""
-    account = get_user_account(db, GithubAccount, account_id, user)
-
-    return [repo_to_response(repo) for repo in account.repos]
-
-
 @router.post("/accounts/{account_id}/repos")
 def add_repo(
     account_id: int,
@@ -934,17 +922,6 @@ def get_owned_project(
     if project.account.user_id != user.id and not has_admin_scope(user):
         raise HTTPException(status_code=404, detail="Project not found")
     return project
-
-
-@router.get("/projects/{project_id}")
-def get_project(
-    project_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> GithubProjectResponse:
-    """Get a single GitHub project."""
-    project = get_owned_project(db, project_id, user)
-    return project_to_response(project)
 
 
 @router.post("/projects/sync")

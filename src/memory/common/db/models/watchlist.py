@@ -72,5 +72,3 @@ class WatchedMarket(Base):
             f"<WatchedMarket(id={self.id}, market_id={self.market_id}, "
             f"source={self.source}, user_id={self.user_id})>"
         )
-
-

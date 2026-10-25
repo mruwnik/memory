@@ -732,10 +732,6 @@ def test_should_delete_email():
     assert should_delete_email(mail_message) is True
 
 
-    # The function should complete without error
-    # (vectors are deleted from qdrant)
-
-
 def test_create_mail_message_with_account(db_session, test_user):
     """Test creating a mail message with account_id and imap_uid."""
     # Create a real email account for the foreign key

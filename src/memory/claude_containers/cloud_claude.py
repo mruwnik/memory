@@ -573,37 +573,6 @@ async def session_stats_history(
     return result
 
 
-@router.get("/{session_id}/stats")
-async def container_stats(
-    session_id: str,
-    user: User = require_scope(SCOPE_CLAUDE_SESSIONS),
-) -> dict[str, Any]:
-    """Live stats for a single container.
-
-    Returns 404 both for unknown sessions and for sessions the caller
-    doesn't own — same shape as kill_session and friends.
-    """
-    if has_admin_scope(user):
-        # Admins can fetch any session's stats, but the id still has to
-        # parse — orchestrator URL paths are derived from it.
-        if not _SESSION_ID_RE.match(session_id):
-            raise HTTPException(status_code=404, detail="Session not found")
-    else:
-        require_session_access(user, session_id)
-
-    client = get_orchestrator_client()
-    async with map_orchestrator_errors():
-        data = await client.container_stats(session_id)
-
-    if data is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if data.get("id") != session_id:
-        raise HTTPException(
-            status_code=502, detail="orchestrator returned mismatched session"
-        )
-    return data
-
-
 @router.post("/spawn")
 async def spawn_session(
     request: SpawnRequest,

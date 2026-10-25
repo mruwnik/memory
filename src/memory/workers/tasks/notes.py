@@ -284,22 +284,10 @@ def changed_notes(repo_root: pathlib.Path, before: str, after: str) -> list[str]
     return [f for f in diff.stdout.split("\0") if f.endswith(".md")]
 
 
-def note_files(folder: pathlib.Path) -> list[pathlib.Path]:
-    """The folder's notes, without profiles (synced separately)."""
-    return [
-        f
-        for f in folder.rglob("*.md")
-        if not f.relative_to(folder).as_posix().startswith(f"{settings.PROFILES_FOLDER}/")
-    ]
-
-
 def reindex_notes(repo_root: pathlib.Path, filenames: list[str]):
     # Not via to_db_filename(path): that resolves symlinks, which reindex_note must refuse.
     prefix = paths.to_db_filename(repo_root)
     for filename in filenames:
-        # Profiles are synced separately.
-        if filename.startswith(f"{settings.PROFILES_FOLDER}/"):
-            continue
         reindex_note.delay(f"{prefix}/{filename}")  # type: ignore[attr-defined]
 
 
@@ -410,7 +398,7 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note") -> 
         if base := indexed_commit(repo_root):
             sync.changed = changed_notes(repo_root, base, head_commit(repo_root))
         else:
-            sync.changed = [f.relative_to(repo_root).as_posix() for f in note_files(repo_root)]
+            sync.changed = [f.relative_to(repo_root).as_posix() for f in repo_root.rglob("*.md")]
 
         try:
             yield sync
@@ -686,7 +674,7 @@ def sync_notes(folder: str):
     all_files = list(path.rglob("*.md"))
 
     with make_session() as session:
-        for filename in note_files(path):
+        for filename in all_files:
             # Note.filename is FILE_STORAGE_DIR-relative (e.g. "notes/foo.md").
             db_filename = paths.to_db_filename(filename)
 

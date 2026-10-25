@@ -556,53 +556,6 @@ def test_create_repo_with_filters(mock_client_class, client, db_session, user):
 # ====== GET /github/accounts/{account_id}/repos tests ======
 
 
-def test_list_repos_returns_account_repos(client, db_session, user):
-    """List repos returns all repos for the account."""
-    account = GithubAccount(
-        user_id=user.id,
-        name="Test Account",
-        auth_type="pat",
-        access_token="token123",
-    )
-    db_session.add(account)
-    db_session.commit()
-
-    repo = GithubRepo(
-        account_id=account.id,
-        owner="octocat",
-        name="Hello-World",
-        track_issues=True,
-        track_prs=True,
-    )
-    db_session.add(repo)
-    db_session.commit()
-
-    response = client.get(f"/github/accounts/{account.id}/repos")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["owner"] == "octocat"
-    assert data[0]["name"] == "Hello-World"
-
-
-def test_list_repos_empty_when_no_repos(client, db_session, user):
-    """List repos returns empty list when account has no repos."""
-    account = GithubAccount(
-        user_id=user.id,
-        name="Test Account",
-        auth_type="pat",
-        access_token="token123",
-    )
-    db_session.add(account)
-    db_session.commit()
-
-    response = client.get(f"/github/accounts/{account.id}/repos")
-
-    assert response.status_code == 200
-    assert response.json() == []
-
-
 def test_list_all_repos_sorted_case_insensitively(client, db_session, user):
     account = GithubAccount(
         user_id=user.id, name="Test Account", auth_type="pat", access_token="token123"
@@ -709,27 +662,6 @@ def test_list_projects_admin_sees_all_users(
     assert response.status_code == 200
     titles = {p["title"] for p in response.json()}
     assert titles == {"Mine-Project", "Theirs-Project"}
-
-
-def test_get_project_404_when_not_owner(
-    regular_client, db_session, other_user
-):
-    """GET /github/projects/<id> for another user's project returns 404."""
-    theirs = GithubAccount(
-        user_id=other_user.id,
-        name="Theirs",
-        auth_type="pat",
-        access_token="t",
-    )
-    db_session.add(theirs)
-    db_session.commit()
-    project = _make_project(db_session, theirs, title="Theirs-Project")
-
-    response = regular_client.get(f"/github/projects/{project.id}")
-
-    assert response.status_code == 404
-    # Must not surface ownership info via the body either.
-    assert "Theirs-Project" not in response.text
 
 
 def test_delete_project_404_when_not_owner(

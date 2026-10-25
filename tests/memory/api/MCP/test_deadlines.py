@@ -57,11 +57,9 @@ def reset_db_cache():
     """Reset the cached database engine between tests."""
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
     yield
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
 
 
 @pytest.fixture

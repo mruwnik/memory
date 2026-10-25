@@ -5,10 +5,9 @@ import type { AuthUser } from '../../hooks/useAuth'
 interface UserMenuProps {
   user: AuthUser
   onLogout: () => void
-  hasScope: (scope: string) => boolean
 }
 
-const UserMenu = ({ user, onLogout, hasScope }: UserMenuProps) => {
+const UserMenu = ({ user, onLogout }: UserMenuProps) => {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)

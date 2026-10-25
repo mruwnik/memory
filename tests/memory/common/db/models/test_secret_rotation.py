@@ -1,5 +1,5 @@
 import pytest
-from cryptography.fernet import InvalidToken
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import LargeBinary, text
 
 from memory.common import settings
@@ -7,8 +7,6 @@ from memory.common.db import rekey
 from memory.common.db.models import Base, Secret
 from memory.common.db.models.secrets import (
     create_secret,
-    decrypt_value_with_key,
-    encrypt_value_with_key,
     derive_encryption_key,
     encrypted_columns,
     is_encrypted_column,
@@ -51,22 +49,22 @@ def test_rekey_reencrypts_secrets_and_user_keys(db_session, regular_user):
     salt = settings.SECRETS_ENCRYPTION_SALT
     old_key, new_key = derive_encryption_key(old, salt), derive_encryption_key(new, salt)
     secret = create_secret(db_session, regular_user.id, "tok", "x")
-    secret.encrypted_value = encrypt_value_with_key("s3cret", old_key)
-    regular_user.ssh_private_key_encrypted = encrypt_value_with_key("ssh-key", old_key)
+    secret.encrypted_value = Fernet(old_key).encrypt(b"s3cret")
+    regular_user.ssh_private_key_encrypted = Fernet(old_key).encrypt(b"ssh-key")
     db_session.flush()
 
     rotated = rekey_all_secrets(db_session, new, [old])
     db_session.expire_all()
 
     assert rotated == 2
-    assert decrypt_value_with_key(db_session.get(Secret, secret.id).encrypted_value, new_key) == "s3cret"
-    assert decrypt_value_with_key(regular_user.ssh_private_key_encrypted, new_key) == "ssh-key"
+    assert Fernet(new_key).decrypt(db_session.get(Secret, secret.id).encrypted_value).decode() == "s3cret"
+    assert Fernet(new_key).decrypt(regular_user.ssh_private_key_encrypted).decode() == "ssh-key"
 
 
 def stored_under(db_session, user, key_secret, name="tok"):
     key = derive_encryption_key(key_secret, settings.SECRETS_ENCRYPTION_SALT)
     secret = create_secret(db_session, user.id, name, "x")
-    secret.encrypted_value = encrypt_value_with_key("s3cret", key)
+    secret.encrypted_value = Fernet(key).encrypt(b"s3cret")
     db_session.flush()
     return secret
 
@@ -74,7 +72,7 @@ def stored_under(db_session, user, key_secret, name="tok"):
 def decrypted_with(db_session, secret, key_secret):
     db_session.expire_all()
     key = derive_encryption_key(key_secret, settings.SECRETS_ENCRYPTION_SALT)
-    return decrypt_value_with_key(db_session.get(Secret, secret.id).encrypted_value, key)
+    return Fernet(key).decrypt(db_session.get(Secret, secret.id).encrypted_value).decode()
 
 
 @pytest.mark.parametrize(
@@ -126,13 +124,13 @@ def test_rekey_follows_the_database_schema_not_the_models(db_session, regular_us
     db_session.execute(text("ALTER TABLE secrets ADD COLUMN legacy_encrypted bytea"))
     db_session.execute(
         text("UPDATE secrets SET legacy_encrypted = :v WHERE id = :id"),
-        {"v": encrypt_value_with_key("legacy", old_key), "id": secret.id},
+        {"v": Fernet(old_key).encrypt(b"legacy"), "id": secret.id},
     )
 
     assert rekey_all_secrets(db_session, "target", ["old"]) == 2
     legacy = db_session.execute(text("SELECT legacy_encrypted FROM secrets WHERE id = :id"), {"id": secret.id}).scalar()
     target_key = derive_encryption_key("target", settings.SECRETS_ENCRYPTION_SALT)
-    assert decrypt_value_with_key(bytes(legacy), target_key) == "legacy"
+    assert Fernet(target_key).decrypt(bytes(legacy)).decode() == "legacy"
 
 
 @pytest.mark.parametrize(

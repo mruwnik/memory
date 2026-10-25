@@ -58,14 +58,6 @@ def question_similarity(q1: str, q2: str) -> float:
 MarketSource = Literal["manifold", "polymarket", "kalshi"]
 
 
-class BinaryProbs(TypedDict):
-    prob: float
-
-
-class MultiProbs(TypedDict):
-    answerProbs: dict[str, float]
-
-
 OutcomeType = Literal["BINARY", "MULTIPLE_CHOICE"]
 
 
@@ -554,6 +546,41 @@ async def get_polymarket_resolved(
 # --- Kalshi API ---
 
 
+def format_kalshi_market(market: dict, min_volume: int) -> dict | None:
+    """A Kalshi market as a search result, or None below min_volume."""
+    volume = market.get("volume", 0) or 0
+    if volume < min_volume:
+        return None
+
+    # last_price is the actual trade price, so it beats yes_bid in illiquid markets.
+    # Kalshi prices are in cents.
+    yes_price = market.get("last_price") or market.get("yes_bid") or 0
+    probability = yes_price / 100 if yes_price else None
+
+    yes_bid = market.get("yes_bid", 0) or 0
+    yes_ask = market.get("yes_ask", 0) or 0
+    spread = None
+    if yes_bid > 0 and yes_ask > 0:
+        spread = (yes_ask - yes_bid) / 100
+
+    created_at = market.get("open_time")
+    liquidity_score = calculate_liquidity_score(volume, created_at, spread)
+
+    result = {
+        "source": "kalshi",
+        "id": market.get("ticker"),
+        "question": market.get("title", ""),
+        "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
+        "volume": volume,
+        "probability": round(probability, 3) if probability else None,
+        "createdAt": created_at,
+        "liquidity_score": round(liquidity_score, 3),
+    }
+    if spread is not None:
+        result["spread"] = round(spread, 3)
+    return result
+
+
 async def search_kalshi_events(
     session: aiohttp.ClientSession, term: str, min_volume: int
 ) -> list[dict]:
@@ -610,35 +637,9 @@ async def search_kalshi_events(
             markets = event_data.get("markets", [])
 
             for market in markets:
-                volume = market.get("volume", 0) or 0
-                if volume < min_volume:
-                    continue
-
-                yes_price = market.get("last_price") or market.get("yes_bid") or 0
-                probability = yes_price / 100 if yes_price else None
-
-                yes_bid = market.get("yes_bid", 0) or 0
-                yes_ask = market.get("yes_ask", 0) or 0
-                spread = None
-                if yes_bid > 0 and yes_ask > 0:
-                    spread = (yes_ask - yes_bid) / 100
-
-                created_at = market.get("open_time")
-                liquidity_score = calculate_liquidity_score(volume, created_at, spread)
-
-                result = {
-                    "source": "kalshi",
-                    "id": market.get("ticker"),
-                    "question": title,  # Use event title for cleaner question
-                    "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
-                    "volume": volume,
-                    "probability": round(probability, 3) if probability else None,
-                    "createdAt": created_at,
-                    "liquidity_score": round(liquidity_score, 3),
-                }
-                if spread is not None:
-                    result["spread"] = round(spread, 3)
-                results.append(result)
+                if formatted := format_kalshi_market(market, min_volume):
+                    # The event title reads better than the market's own.
+                    results.append({**formatted, "question": title})
 
         cursor = data.get("cursor")
         if not cursor:

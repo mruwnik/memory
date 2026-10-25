@@ -51,7 +51,6 @@ from memory.api.metrics import router as metrics_router
 from memory.api.telemetry import router as telemetry_router
 from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
-from memory.api.source_items import router as source_items_router
 from memory.api.sessions import router as sessions_router
 from memory.api.secrets import router as secrets_router
 from memory.api.instance_settings import router as instance_settings_router
@@ -114,7 +113,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 tags_metadata = [
     {"name": "auth", "description": "Authentication and authorization endpoints"},
     {"name": "users", "description": "User management"},
-    {"name": "source-items", "description": "Manage ingested content items"},
     {"name": "jobs", "description": "Background job monitoring and management"},
     {"name": "sessions", "description": "User session management"},
     {
@@ -512,7 +510,6 @@ app.include_router(metrics_router)
 app.include_router(telemetry_router)
 app.include_router(jobs_router)
 app.include_router(polls_router)
-app.include_router(source_items_router)
 app.include_router(sessions_router)
 if CLAUDE_CONTAINERS in enabled_modules():
     for claude_router in claude_containers.routers:

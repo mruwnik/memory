@@ -646,9 +646,21 @@ section has nothing in it:
   (`chunk.is_summary`): older items show and rank as before until they are
   reingested.
 - `DISCORD_COLLECT_DMS`, `DISCORD_COLLECT_BOTS`, `DISCORD_CONTEXT_WINDOW`,
+  `DISCORD_ACTIVITY_CHANNEL`, `DISCORD_DISCOVERY_CHANNEL`, `DISCORD_CHAT_CHANNEL`,
   `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` and `SLACK_REDIRECT_URI` are
   removed. Nothing read them; delete them from `.env` if set. Each Slack app
   keeps its own credentials, entered in the Slack app wizard.
+- `PROFILES_FOLDER` is removed, and notes under `profiles/` are now synced and
+  searchable like any other note.
+- These REST endpoints are removed; nothing in the app called them:
+  `GET /api/metrics/raw`, `GET /source-items/{id}`, `POST /source-items/{id}/reingest`,
+  `POST /sessions/ingest` (the hook uses `/sessions/ingest/batch`),
+  `GET /sessions/`, `GET /sessions/projects`, `GET /sessions/{id}`,
+  `GET /claude/{session_id}/stats`, `GET /secrets/by-name/{name}`,
+  `DELETE /users/{id}/api-keys/{key_id}` (and `/permanent`), `/discord/users`
+  (`GET` list, `GET`/`PATCH` one), `POST`/`DELETE /slack/apps/{id}/authorized-users`,
+  and the single-item `GET`s of `/email-accounts/{id}`, `/article-feeds/{id}`,
+  `/github/projects/{id}` and `/github/accounts/{id}/repos`.
 
 ### Migrations
 
@@ -719,6 +731,9 @@ section has nothing in it:
   to at most one Person). Fast. **It refuses to run if a user is already linked
   to several people** and lists them; see Manual steps for the check to run
   before updating and how to recover.
+- `20261105_drop_obs_tables`: drops the `reaction_pattern`, `observation_pattern`,
+  `belief_cluster` and `conversation_metrics` tables, which nothing wrote to. Fast.
+  Any rows in them are lost; downgrading restores the tables empty.
 
 ### Post-deploy commands
 

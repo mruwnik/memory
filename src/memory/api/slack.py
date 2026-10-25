@@ -171,12 +171,6 @@ class SlackAppUpdate(BaseModel):
     is_active: bool | None = None
 
 
-class SlackAppAuthorizedUserAdd(BaseModel):
-    """Body for POST /slack/apps/{id}/authorized-users."""
-
-    user_id: int
-
-
 class SlackAppAuthorizedUser(BaseModel):
     """Slim user shape returned in the authorized_users list. Email kept
     so the owner can identify who they have authorized."""
@@ -1013,62 +1007,6 @@ def delete_slack_app(
     app = get_slack_app_for_owner(db, app_id, user)
     db.delete(app)
     db.commit()
-
-
-@router.post(
-    "/apps/{app_id}/authorized-users",
-    response_model=SlackAppResponse,
-    status_code=201,
-)
-def add_authorized_user(
-    app_id: int,
-    body: SlackAppAuthorizedUserAdd,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> SlackAppResponse:
-    """Add a user to authorized_users. Owner only."""
-    app = get_slack_app_for_owner(db, app_id, user)
-
-    target = db.get(User, body.user_id)
-    if target is None:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if target not in app.authorized_users:
-        app.authorized_users.append(target)
-        db.commit()
-        db.refresh(app)
-
-    return slack_app_to_response(app, user)
-
-
-@router.delete(
-    "/apps/{app_id}/authorized-users/{user_id}",
-    response_model=SlackAppResponse,
-)
-def remove_authorized_user(
-    app_id: int,
-    user_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> SlackAppResponse:
-    """Remove a user from authorized_users. Owner only.
-
-    Removing the owner from authorized_users is a no-op (they're owner
-    by virtue of created_by_user_id, not the join table — `is_authorized`
-    checks both).
-    """
-    app = get_slack_app_for_owner(db, app_id, user)
-
-    target = db.get(User, user_id)
-    if target is None:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if target in app.authorized_users:
-        app.authorized_users.remove(target)
-        db.commit()
-        db.refresh(app)
-
-    return slack_app_to_response(app, user)
 
 
 # ---------------------------------------------------------------------------

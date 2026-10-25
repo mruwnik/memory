@@ -383,12 +383,6 @@ def test_build_access_filter_invalid_role_skipped():
     assert result.conditions[0].project_id == 2
 
 
-# --- get_allowed_project_ids Tests ---
-
-
-# --- get_max_sensitivity_for_project Tests ---
-
-
 # --- get_accessible_source_item_by_filename tests ---
 
 

@@ -213,5 +213,3 @@ def test_reprocess_meeting_job_fails_on_error(
     # Check job was marked as failed
     db_session.refresh(pending_job)
     assert pending_job.status == JobStatus.FAILED.value
-
-

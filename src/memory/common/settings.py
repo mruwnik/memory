@@ -138,7 +138,6 @@ WEBPAGE_STORAGE_DIR = pathlib.Path(
 NOTES_STORAGE_DIR = pathlib.Path(
     os.getenv("NOTES_STORAGE_DIR", FILE_STORAGE_DIR / "notes")
 )
-PROFILES_FOLDER = os.getenv("PROFILES_FOLDER", "profiles")
 DISCORD_STORAGE_DIR = pathlib.Path(
     os.getenv("DISCORD_STORAGE_DIR", FILE_STORAGE_DIR / "discord")
 )
@@ -497,11 +496,6 @@ STATIC_DIR = pathlib.Path(
 # Discord notification settings
 DISCORD_BOT_ID = int(os.getenv("DISCORD_BOT_ID", "0"))
 DISCORD_ERROR_CHANNEL = os.getenv("DISCORD_ERROR_CHANNEL", f"{APP_NAME}-errors")
-DISCORD_ACTIVITY_CHANNEL = os.getenv("DISCORD_ACTIVITY_CHANNEL", f"{APP_NAME}-activity")
-DISCORD_DISCOVERY_CHANNEL = os.getenv(
-    "DISCORD_DISCOVERY_CHANNEL", f"{APP_NAME}-discoveries"
-)
-DISCORD_CHAT_CHANNEL = os.getenv("DISCORD_CHAT_CHANNEL", f"{APP_NAME}-chat")
 
 
 # Enable Discord notifications if bot token is set

@@ -6,7 +6,6 @@ from memory.api.MCP.servers import HIDDEN_MCP_SERVERS
 from memory.common import instance_settings, settings
 from memory.common.celery_app import build_beat_schedule
 from memory.common.db.models import InstanceSetting
-from memory.common.db.models.secrets import encrypt_value_with_key
 from memory.common.instance_settings import (
     ENABLE_RERANKING,
     NOTES_SYNC_INTERVAL,
@@ -43,7 +42,7 @@ def test_env_wins_over_the_ui_value_which_wins_over_the_default(
     "key, value, value_encrypted",
     [
         # Encrypted under a SECRETS_ENCRYPTION_KEY this process doesn't have.
-        ("voyage_api_key", None, encrypt_value_with_key("pa-secret", Fernet.generate_key())),
+        ("voyage_api_key", None, Fernet(Fernet.generate_key()).encrypt(b"pa-secret")),
         ("disabled_mcp_servers", "slack", None),
         ("enable_reranking", "yes", None),
         ("notes_sync_interval", True, None),

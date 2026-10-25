@@ -72,7 +72,7 @@ export const AppShell = ({ user, onLogout, hasScope }: AppShellProps) => {
             </svg>
           </button>
           <Link to="/ui/dashboard" className="max-lg:py-2 text-lg font-semibold text-primary">Memory</Link>
-          <div className="ml-auto">{user && <UserMenu user={user} onLogout={onLogout} hasScope={hasScope} />}</div>
+          <div className="ml-auto">{user && <UserMenu user={user} onLogout={onLogout} />}</div>
         </div>
       </header>
       <div className="flex flex-1">

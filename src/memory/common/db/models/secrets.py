@@ -94,18 +94,6 @@ def decrypt_value(ciphertext: bytes) -> str:
     return f.decrypt(ciphertext).decode()
 
 
-def encrypt_value_with_key(plaintext: str, key: bytes) -> bytes:
-    """Encrypt a secret value with a specific key."""
-    f = Fernet(key)
-    return f.encrypt(plaintext.encode())
-
-
-def decrypt_value_with_key(ciphertext: bytes, key: bytes) -> str:
-    """Decrypt a secret value with a specific key."""
-    f = Fernet(key)
-    return f.decrypt(ciphertext).decode()
-
-
 class Secret(Base):
     """Encrypted secret storage.
 
@@ -293,5 +281,3 @@ def rekey_all_secrets(session: Session, target: str, candidates: Iterable[str]) 
             count += len(values)
 
     return count
-
-

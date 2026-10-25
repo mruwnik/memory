@@ -111,65 +111,6 @@ def test_list_my_api_keys_after_create(client: TestClient, admin_user, db_sessio
     assert created_key_id in key_ids
 
 
-def test_revoke_my_api_key(client: TestClient, admin_user, db_session):
-    """Test revoking (soft-delete) an API key."""
-    # Create a key first
-    create_response = client.post(
-        f"/users/{admin_user.id}/api-keys",
-        json={"name": "To Revoke"},
-    )
-    key_id = create_response.json()["id"]
-
-    # Revoke it
-    response = client.delete(f"/users/{admin_user.id}/api-keys/{key_id}")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "revoked"
-
-    # Verify it's revoked
-    list_response = client.get(f"/users/{admin_user.id}/api-keys")
-    keys = list_response.json()
-    revoked_key = next((k for k in keys if k["id"] == key_id), None)
-    assert revoked_key is not None
-    assert revoked_key["revoked"] is True
-
-
-def test_delete_my_api_key_permanent(client: TestClient, admin_user, db_session):
-    """Test permanently deleting an API key."""
-    # Create a key first
-    create_response = client.post(
-        f"/users/{admin_user.id}/api-keys",
-        json={"name": "To Delete"},
-    )
-    key_id = create_response.json()["id"]
-
-    # Delete it permanently
-    response = client.delete(f"/users/{admin_user.id}/api-keys/{key_id}/permanent")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "deleted"
-
-    # Verify it's gone
-    list_response = client.get(f"/users/{admin_user.id}/api-keys")
-    keys = list_response.json()
-    key_ids = [k["id"] for k in keys]
-    assert key_id not in key_ids
-
-
-def test_revoke_nonexistent_key(client: TestClient, admin_user):
-    """Test revoking a non-existent key returns 404."""
-    response = client.delete(f"/users/{admin_user.id}/api-keys/99999")
-
-    assert response.status_code == 404
-
-
-def test_delete_nonexistent_key(client: TestClient, admin_user):
-    """Test deleting a non-existent key returns 404."""
-    response = client.delete(f"/users/{admin_user.id}/api-keys/99999/permanent")
-
-    assert response.status_code == 404
-
-
 @pytest.mark.parametrize("key_type", [
     "internal",
     "discord",
@@ -260,29 +201,6 @@ def test_admin_create_user_api_key(client: TestClient, admin_user, db_session):
     data = response.json()
     assert data["name"] == "Admin Created Key"
     assert "key" in data
-
-
-def test_admin_revoke_user_api_key(client: TestClient, admin_user, db_session):
-    """Test admin can revoke another user's API key."""
-    # Create another user with a key
-    other_user = HumanUser.create_with_password(
-        email="other3@example.com",
-        name="Other User 3",
-        password="otherpass123",
-    )
-    db_session.add(other_user)
-    db_session.commit()
-
-    key = APIKey.create(user_id=other_user.id, name="To Revoke")
-    db_session.add(key)
-    db_session.commit()
-    key_id = key.id
-
-    # Admin revokes the key
-    response = client.delete(f"/users/{other_user.id}/api-keys/{key_id}")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "revoked"
 
 
 # --- User Response Tests ---

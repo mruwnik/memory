@@ -159,17 +159,6 @@ def create_feed(
     return feed_to_response(feed, db, user)
 
 
-@router.get("/{feed_id}")
-def get_feed(
-    feed_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> ArticleFeedResponse:
-    """Get a single article feed (owner or admin only)."""
-    feed = get_owned_feed(db, user, feed_id)
-    return feed_to_response(feed, db, user)
-
-
 @router.patch("/{feed_id}")
 def update_feed(
     feed_id: int,

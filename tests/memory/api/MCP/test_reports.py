@@ -15,11 +15,9 @@ def reset_db_cache():
     """Reset the cached database engine between tests."""
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
     yield
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
 
 
 def make_mock_user(user_id: int = 1, scopes: list[str] | None = None):

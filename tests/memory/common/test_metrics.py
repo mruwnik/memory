@@ -16,8 +16,6 @@ from memory.common.metrics import (
     profile,
     record_gauge,
     record_metric,
-    start_metrics_writer,
-    stop_metrics_writer,
     MAX_PARAM_VALUE_LENGTH,
 )
 
@@ -387,43 +385,3 @@ def test_profile_preserves_function_metadata():
 
 
 # ============== Background writer tests ==============
-
-
-def test_start_stop_metrics_writer():
-    """Test starting and stopping the background writer."""
-    # Make sure writer is stopped
-    stop_metrics_writer(timeout=1.0)
-
-    # Start it
-    start_metrics_writer()
-
-    # Import the module state
-    from memory.common import metrics
-
-    assert metrics._writer_started is True
-    assert metrics._writer_thread is not None
-    assert metrics._writer_thread.is_alive()
-
-    # Stop it
-    stop_metrics_writer(timeout=2.0)
-
-    assert metrics._writer_started is False
-
-
-def test_start_metrics_writer_idempotent():
-    """Test that calling start_metrics_writer multiple times is safe."""
-    stop_metrics_writer(timeout=1.0)
-
-    start_metrics_writer()
-    start_metrics_writer()  # Should be safe
-    start_metrics_writer()  # Should be safe
-
-    from memory.common import metrics
-
-    assert metrics._writer_started is True
-
-    # Stop the thread before returning — otherwise it keeps emitting rows
-    # into other tests on the same xdist worker (e.g. test_empty_metrics).
-    stop_metrics_writer(timeout=2.0)
-
-    stop_metrics_writer(timeout=2.0)

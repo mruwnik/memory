@@ -390,7 +390,6 @@ def test_db():
     # Reset the connection module's cached globals
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
 
     try:
         run_alembic_migrations(test_db_name)
@@ -399,7 +398,6 @@ def test_db():
     finally:
         db_connection._engine = None
         db_connection._session_factory = None
-        db_connection._scoped_session = None
         drop_test_database(test_db_name)
 
 
@@ -468,17 +466,14 @@ def db_session(request, db_engine):
 
     saved_factory = db_connection._session_factory
     saved_engine = db_connection._engine
-    saved_scoped = db_connection._scoped_session
     db_connection._session_factory = SessionLocal
     db_connection._engine = None
-    db_connection._scoped_session = None
 
     try:
         yield session
     finally:
         db_connection._session_factory = saved_factory
         db_connection._engine = saved_engine
-        db_connection._scoped_session = saved_scoped
         try:
             session.close()
         except Exception:

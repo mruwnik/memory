@@ -132,10 +132,16 @@ def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path, qdrant)
     assert book.author == "Test Author"
     assert set(book.tags) == {"source", "test"}
 
-    sections = (
-        db_session.query(BookSection).filter(BookSection.book_id == book.id).all()
-    )
-    assert len(sections) == 4
+    sections = {
+        s.section_title: s
+        for s in db_session.query(BookSection).filter(BookSection.book_id == book.id)
+    }
+    assert set(sections) == {"Chapter 1", "Section 1.1", "Section 1.2", "Chapter 2"}
+    chapter1 = sections["Chapter 1"]
+    assert chapter1.parent_section_id is None
+    assert sections["Section 1.1"].parent_section_id == chapter1.id
+    assert sections["Section 1.2"].parent_section_id == chapter1.id
+    assert sections["Chapter 2"].parent_section_id is None
 
 
 def add_existing_book(db_session, *creators):
@@ -274,5 +280,3 @@ def test_sync_book_file_not_found():
     """Test handling of missing files - should raise FileNotFoundError."""
     with pytest.raises(FileNotFoundError, match="Book file not found"):
         ebook.sync_book("/nonexistent/file.epub")
-
-

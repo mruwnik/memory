@@ -148,26 +148,6 @@ async def test_stats_calls_correct_url():
 
 
 @pytest.mark.asyncio
-async def test_container_stats_returns_dict():
-    payload = SAMPLE_SNAPSHOT["containers"][0]
-    captured, p = _capture_request(retval=(200, payload))
-    with p:
-        result = await OrchestratorClient().container_stats(SESSION_ID)
-    assert result == payload
-    assert captured["url"] == f"/containers/{SESSION_ID}/stats"
-
-
-@pytest.mark.asyncio
-async def test_container_stats_returns_none_on_404():
-    """404 from orchestrator means session isn't currently managed —
-    surfaced as None rather than raising, mirroring get_container."""
-    _, p = _capture_request(retval=(404, {"detail": "not found"}))
-    with p:
-        result = await OrchestratorClient().container_stats("u1-x-deadbeef")
-    assert result is None
-
-
-@pytest.mark.asyncio
 async def test_stats_history_passes_query_params():
     captured, p = _capture_request(
         retval=(200, {"points": [], "count": 0, "truncated": False})

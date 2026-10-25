@@ -34,11 +34,9 @@ def reset_db_cache():
     """Reset the cached database engine between tests."""
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
     yield
     db_connection._engine = None
     db_connection._session_factory = None
-    db_connection._scoped_session = None
 
 
 @pytest.fixture
@@ -1272,4 +1270,3 @@ def test_upsert_team_record_create_without_owner(db_session):
     )
     assert action == "created"
     assert new_team.owner_id is None
-

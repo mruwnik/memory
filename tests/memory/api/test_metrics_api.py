@@ -304,71 +304,6 @@ def test_get_system_metrics_by_name(client, sample_metrics, db_session):
 # ============== GET /api/metrics/raw tests ==============
 
 
-def test_get_raw_metrics(client, sample_metrics, db_session):
-    """Test getting raw metric events."""
-    with patch("memory.api.metrics.make_session", return_value=db_session):
-        response = client.get("/api/metrics/raw")
-
-    assert response.status_code == 200
-    data = response.json()
-
-    assert "total" in data
-    assert "offset" in data
-    assert "limit" in data
-    assert "events" in data
-
-
-def test_get_raw_metrics_filter_by_type(client, sample_metrics, db_session):
-    """Test filtering raw metrics by type."""
-    with patch("memory.api.metrics.make_session", return_value=db_session):
-        response = client.get("/api/metrics/raw?metric_type=mcp_call")
-
-    assert response.status_code == 200
-    data = response.json()
-
-    for event in data["events"]:
-        assert event["metric_type"] == "mcp_call"
-
-
-def test_get_raw_metrics_pagination(client, sample_metrics, db_session):
-    """Test pagination of raw metrics."""
-    with patch("memory.api.metrics.make_session", return_value=db_session):
-        # Get first page
-        response1 = client.get("/api/metrics/raw?limit=3&offset=0")
-        data1 = response1.json()
-
-        # Get second page
-        response2 = client.get("/api/metrics/raw?limit=3&offset=3")
-        data2 = response2.json()
-
-    assert response1.status_code == 200
-    assert response2.status_code == 200
-
-    # Pages should have different events
-    ids1 = {e["id"] for e in data1["events"]}
-    ids2 = {e["id"] for e in data2["events"]}
-    assert ids1.isdisjoint(ids2)
-
-
-def test_get_raw_metrics_includes_all_fields(client, sample_metrics, db_session):
-    """Test that raw metrics include all fields."""
-    with patch("memory.api.metrics.make_session", return_value=db_session):
-        response = client.get("/api/metrics/raw?limit=1")
-
-    assert response.status_code == 200
-    data = response.json()
-
-    event = data["events"][0]
-    assert "id" in event
-    assert "timestamp" in event
-    assert "metric_type" in event
-    assert "name" in event
-    assert "duration_ms" in event
-    assert "status" in event
-    assert "labels" in event
-    assert "value" in event
-
-
 # ============== Edge cases ==============
 
 
@@ -384,7 +319,6 @@ def test_empty_metrics(client, db_session):
         tasks_resp = client.get("/api/metrics/tasks")
         mcp_resp = client.get("/api/metrics/mcp")
         system_resp = client.get("/api/metrics/system")
-        raw_resp = client.get("/api/metrics/raw")
 
     assert summary_resp.status_code == 200
     assert summary_resp.json()["metrics"] == []
@@ -397,9 +331,6 @@ def test_empty_metrics(client, db_session):
 
     assert system_resp.status_code == 200
     assert system_resp.json()["latest"] == {}
-
-    assert raw_resp.status_code == 200
-    assert raw_resp.json()["events"] == []
 
 
 def test_hours_validation(client, db_session):
@@ -442,7 +373,6 @@ def regular_user_client():
         "/api/metrics/tasks",
         "/api/metrics/mcp",
         "/api/metrics/system",
-        "/api/metrics/raw",
     ],
 )
 def test_metrics_endpoints_forbidden_for_non_admin(regular_user_client, path):
@@ -463,7 +393,6 @@ def test_metrics_endpoints_forbidden_for_non_admin(regular_user_client, path):
         "/api/metrics/tasks",
         "/api/metrics/mcp",
         "/api/metrics/system",
-        "/api/metrics/raw",
     ],
 )
 def test_metrics_endpoints_allowed_for_admin(client, db_session, path):

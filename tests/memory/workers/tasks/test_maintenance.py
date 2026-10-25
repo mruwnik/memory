@@ -1240,7 +1240,7 @@ def reset_item_class_cache():
         # Polymorphic identity (snake_case) — what process_raw_items dispatches with.
         "mail_message",
         "blog_post",
-        # Class name (CapsCase) — what api/source_items.py:reingest_item dispatches with.
+        # Class name (CapsCase), which `run_celery_task.py reingest-item` accepts.
         "MailMessage",
         "BlogPost",
     ],
@@ -1248,10 +1248,8 @@ def reset_item_class_cache():
 def test_get_item_class_accepts_both_naming_conventions(key):
     """get_item_class must resolve both polymorphic identity and class name.
 
-    The codebase has two callers using different conventions
-    (api/source_items.py uses __class__.__name__; process_raw_items uses
-    SourceItem.type which is the polymorphic discriminator). Both must
-    work — otherwise one of the dispatch paths is silently broken.
+    process_raw_items passes SourceItem.type (the polymorphic discriminator);
+    the reingest-item CLI accepts a class name too.
     """
     cls = get_item_class(key)
     # Both naming conventions must resolve to a real SourceItem subclass.

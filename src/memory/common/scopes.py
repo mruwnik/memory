@@ -331,6 +331,7 @@ VALID_SCOPES: list[ScopeInfo] = [
 # Set of all valid scope values for fast lookup
 ALL_SCOPE_VALUES: frozenset[str] = frozenset(s["value"] for s in VALID_SCOPES)
 
+
 def validate_scopes(scopes: list[str]) -> list[str]:
     """Validate a list of scopes and return any invalid ones.
 
@@ -359,5 +360,3 @@ def has_scope(user_scopes: list[str], required: str) -> bool:
         True if user has the required scope or wildcard
     """
     return SCOPE_ADMIN in user_scopes or required in user_scopes
-
-

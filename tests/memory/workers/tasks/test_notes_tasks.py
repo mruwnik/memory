@@ -514,76 +514,6 @@ def test_sync_notes_propagates_file_read_errors(mock_sync_note, mock_make_sessio
         notes.sync_notes(settings.NOTES_STORAGE_DIR)
 
 
-# Profile handling tests
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_skips_profile_files(mock_sync_note, mock_make_session, tmp_path):
-    """Test that sync_notes skips profile files in the profiles folder."""
-
-    # Create notes dir with profile and regular notes
-    notes_dir = tmp_path / "notes"
-    notes_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create regular note
-    regular_note = notes_dir / "regular_note.md"
-    regular_note.write_text("Regular note content")
-
-    # Create profiles directory with profile file
-    profiles_dir = notes_dir / "profiles"
-    profiles_dir.mkdir(exist_ok=True)
-    profile_file = profiles_dir / "john_doe.md"
-    profile_file.write_text(
-        """---
-identifier: john_doe
-display_name: John Doe
----
-
-Profile notes."""
-    )
-
-    mock_sync_note.delay.return_value = Mock(id="task-note")
-
-    with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
-        with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
-            result = notes.sync_notes(str(notes_dir))
-
-    # Should have found 2 files total
-    assert result["notes_num"] == 2
-
-    # Only regular note should be synced (profile is skipped)
-    assert mock_sync_note.delay.call_count == 1
-    note_call_args = mock_sync_note.delay.call_args
-    assert note_call_args[1]["subject"] == "regular_note"
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_skips_all_profiles(mock_sync_note, mock_make_session, tmp_path):
-    """Test that sync_notes skips all profile files in the profiles folder."""
-    # Create notes dir with profile and regular note
-    notes_dir = tmp_path / "notes"
-    notes_dir.mkdir(parents=True, exist_ok=True)
-
-    regular_note = notes_dir / "regular.md"
-    regular_note.write_text("Regular content")
-
-    profiles_dir = notes_dir / "profiles"
-    profiles_dir.mkdir(parents=True, exist_ok=True)
-    profile_file = profiles_dir / "some_person.md"
-    profile_file.write_text("Profile content")
-
-    mock_sync_note.delay.return_value = Mock(id="task-note")
-
-    with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
-        with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
-            result = notes.sync_notes(str(notes_dir))
-
-    # Should find both files but only sync the regular note
-    assert result["notes_num"] == 2
-    assert result["new_notes"] == 1
-    assert mock_sync_note.delay.call_count == 1
-
-
 # ----- Path-traversal hardening for sync_note + Note.save_to_file -----
 #
 # `notes.upsert` (the MCP tool) already validates filenames, but
@@ -1396,12 +1326,11 @@ def test_track_git_changes_pulls_remote_notes(tmp_path, reindexed):
     commit_file(vault, "local-only.md", "unpushed")
     (vault / "draft.md").write_text("draft")
     push_from_other_clone(tmp_path, remote, "elsewhere.md", "pushed elsewhere")
-    push_from_other_clone(tmp_path, remote, "profiles/someone.md", "profile")
 
     result = notes.track_git_changes()
 
     assert result["status"] == "success"
-    assert result["changed_files"] == ["elsewhere.md", "local-only.md", "profiles/someone.md"]
+    assert result["changed_files"] == ["elsewhere.md", "local-only.md"]
     assert reindexed() == ["notes/elsewhere.md", "notes/local-only.md"]
     assert "local-only.md" in remote_files(remote, "main")
     assert (vault / "draft.md").read_text() == "draft"

@@ -462,18 +462,6 @@ class OrchestratorClient:
             raise OrchestratorError(detail, status_code=status)
         return data
 
-    async def container_stats(self, session_id: str) -> dict[str, Any] | None:
-        """Return current stats for a single container, or None if not managed."""
-        status, data = await self._request(
-            "GET", f"/containers/{session_id}/stats"
-        )
-        if status == 404:
-            return None
-        if status >= 400:
-            detail = data.get("detail", f"Container stats failed ({status})") if isinstance(data, dict) else f"Container stats failed ({status})"
-            raise OrchestratorError(detail, status_code=status)
-        return data
-
     async def stats_history(
         self,
         *,

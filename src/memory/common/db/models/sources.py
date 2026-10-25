@@ -1439,5 +1439,3 @@ class Team(Base):
         if self.owner:
             result["owner"] = self.owner.identifier
         return result
-
-

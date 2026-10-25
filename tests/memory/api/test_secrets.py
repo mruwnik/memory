@@ -183,19 +183,6 @@ def test_delete_secret_404_for_other_users_secret(
     assert db_session.get(Secret, secret.id) is not None
 
 
-def test_get_secret_by_name_404_for_other_users_secret(
-    regular_client, db_session, other_user
-):
-    """The by-name route filters by user_id; cross-user lookup must 404."""
-    _make_secret(
-        db_session, user_id=other_user.id, name="theirs-by-name", value="X"
-    )
-
-    response = regular_client.get("/secrets/by-name/theirs-by-name")
-
-    assert response.status_code == 404
-
-
 # --- input validation -----------------------------------------------------
 
 

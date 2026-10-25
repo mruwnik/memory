@@ -19,7 +19,6 @@ const renderMenu = (props: Partial<React.ComponentProps<typeof UserMenu>> = {}) 
     <UserMenu
       user={props.user ?? makeUser()}
       onLogout={props.onLogout ?? (() => {})}
-      hasScope={props.hasScope ?? (() => true)}
     />,
   )
 

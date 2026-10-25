@@ -180,16 +180,3 @@ def delete_secret_endpoint(
     db.commit()
 
     return {"status": "deleted"}
-
-
-@router.get("/by-name/{name}")
-def get_secret_by_name_endpoint(
-    name: str,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> SecretResponse:
-    """Get a secret by its symbolic name."""
-    secret = find_secret(db, cast(int, user.id), name)
-    if not secret:
-        raise HTTPException(status_code=404, detail="Secret not found")
-    return secret_to_response(secret)

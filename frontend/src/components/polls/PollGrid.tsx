@@ -98,7 +98,7 @@ function generateTimeSlots(
 }
 
 // Get heatmap color based on availability
-function getHeatmapColor(available: number, ifNeeded: number, total: number, maxResponses: number): string {
+function getHeatmapColor(available: number, ifNeeded: number, maxResponses: number): string {
   if (maxResponses === 0) return '#f1f5f9' // slate-100
 
   const ratio = available / maxResponses
@@ -431,7 +431,6 @@ export const PollGrid: React.FC<PollGridProps> = ({
                 cellStyle.background = getHeatmapColor(
                   aggregated.available_count,
                   aggregated.if_needed_count,
-                  aggregated.total_count,
                   totalResponses
                 )
                 colorClass = ''

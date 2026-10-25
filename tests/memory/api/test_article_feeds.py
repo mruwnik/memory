@@ -135,36 +135,6 @@ def test_create_feed_invalid_url_fails(client, db_session, user):
 # ====== GET /article-feeds/{feed_id} tests ======
 
 
-def test_get_feed_success(client, db_session, user):
-    """Get feed by ID returns feed details."""
-    feed = ArticleFeed(
-        url="https://example.com/feed.xml",
-        title="Test Feed",
-        description="A test",
-        tags=["tech"],
-        check_interval=1440,
-        active=True,
-    )
-    db_session.add(feed)
-    db_session.commit()
-
-    response = client.get(f"/article-feeds/{feed.id}")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == feed.id
-    assert data["url"] == "https://example.com/feed.xml"
-    assert data["title"] == "Test Feed"
-
-
-def test_get_feed_not_found(client, db_session, user):
-    """Get feed returns 404 when feed doesn't exist."""
-    response = client.get("/article-feeds/999999")
-
-    assert response.status_code == 404
-    assert "not found" in response.json()["detail"].lower()
-
-
 # ====== PATCH /article-feeds/{feed_id} tests ======
 
 
@@ -578,42 +548,6 @@ def test_list_feeds_admin_sees_all(client, db_session, user):
     response = client.get("/article-feeds")
     assert response.status_code == 200
     assert len(response.json()) == 3
-
-
-def test_get_feed_404_for_other_users_feed(regular_client, db_session, user):
-    """Cross-tenant get must 404 (not 200, not 403)."""
-    from memory.common.db.models import HumanUser
-
-    other = HumanUser(
-        name="Other",
-        email="other-feed-get@example.com",
-        password_hash="bcrypt_hash_placeholder",
-    )
-    db_session.add(other)
-    db_session.commit()
-
-    feed = ArticleFeed(
-        user_id=other.id,
-        url="https://victim.example.com/rss.xml",
-    )
-    db_session.add(feed)
-    db_session.commit()
-
-    response = regular_client.get(f"/article-feeds/{feed.id}")
-    assert response.status_code == 404
-
-
-def test_get_feed_404_for_legacy_null_owner_non_admin(regular_client, db_session, user):
-    """Legacy rows (user_id IS NULL) are admin-only."""
-    feed = ArticleFeed(
-        user_id=None,
-        url="https://legacy-get.example.com/rss.xml",
-    )
-    db_session.add(feed)
-    db_session.commit()
-
-    response = regular_client.get(f"/article-feeds/{feed.id}")
-    assert response.status_code == 404
 
 
 def test_update_feed_404_for_other_users_feed(regular_client, db_session, user):

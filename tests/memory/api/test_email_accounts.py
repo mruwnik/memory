@@ -359,63 +359,6 @@ def test_create_account_sets_defaults(client, user, db_session):
 # Test get_account
 
 
-def test_get_account_success(client, user, db_session):
-    """Getting an owned account should succeed."""
-    account = EmailAccount(
-        user_id=user.id,
-        name="Test",
-        email_address="test@example.com",
-        account_type="imap",
-        imap_server="imap.example.com",
-        username="user",
-        password="pass",
-    )
-    db_session.add(account)
-    db_session.commit()
-
-    response = client.get(f"/email-accounts/{account.id}")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == account.id
-    assert data["email_address"] == "test@example.com"
-
-
-def test_get_account_not_found(client, user, db_session):
-    """Getting non-existent account should return 404."""
-    response = client.get("/email-accounts/99999")
-
-    assert response.status_code == 404
-
-
-def test_get_account_not_owned(regular_client, user, db_session):
-    """Getting account owned by different user should return 404 for non-admin users."""
-    other_user = HumanUser(
-        id=999,
-        email="other@example.com",
-        name="Other User",
-        password_hash="bcrypt_hash_placeholder",
-    )
-    db_session.add(other_user)
-    db_session.flush()
-
-    other_account = EmailAccount(
-        user_id=other_user.id,
-        name="Other",
-        email_address="other_acc@example.com",
-        account_type="imap",
-        imap_server="imap.example.com",
-        username="user",
-        password="pass",
-    )
-    db_session.add(other_account)
-    db_session.commit()
-
-    response = regular_client.get(f"/email-accounts/{other_account.id}")
-
-    assert response.status_code == 404
-
-
 # Test update_account
 
 

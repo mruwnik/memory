@@ -122,5 +122,3 @@ def get_tasks(
 
     tasks = query.offset(offset).limit(limit).all()
     return [task_to_dict(t) for t in tasks]
-
-

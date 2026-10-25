@@ -6,7 +6,6 @@ from memory.api.auth import setup_warnings
 from memory.common import embedding, instance_settings, settings
 from memory.common.celery_app import REINGEST_ALL_EMPTY_SOURCE_ITEMS
 from memory.common.db.models import HumanUser, InstanceSetting, TelemetryEvent
-from memory.common.db.models.secrets import encrypt_value_with_key
 from memory.common.module_settings import RUNNING_MODULES_KEY
 
 
@@ -201,7 +200,7 @@ def test_a_row_that_cant_be_read_is_shown_as_unset_with_why(client, db_session, 
     db_session.add(
         InstanceSetting(
             key="voyage_api_key",
-            value_encrypted=encrypt_value_with_key("pa-secret", Fernet.generate_key()),
+            value_encrypted=Fernet(Fernet.generate_key()).encrypt(b"pa-secret"),
             key_hint="cret",
         )
     )

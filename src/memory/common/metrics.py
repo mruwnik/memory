@@ -45,7 +45,6 @@ _metric_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=10000)
 _writer_thread: threading.Thread | None = None
 _writer_started = False  # Fast flag to avoid is_alive() check on every metric
 _writer_lock = threading.Lock()  # Protects _writer_started and _writer_thread
-_shutdown_event = threading.Event()
 
 
 def truncate_value(value: Any, max_length: int = MAX_PARAM_VALUE_LENGTH) -> Any:
@@ -170,7 +169,7 @@ def _background_writer() -> None:
     # Get session factory once, reuse for all flushes
     session_factory = get_session_factory()
 
-    while not _shutdown_event.is_set():
+    while True:
         try:
             # Try to get a metric with timeout
             try:
@@ -200,38 +199,15 @@ def _background_writer() -> None:
         except Exception as e:
             logger.error("Error in metric writer thread: %s", e)
 
-    # Final flush on shutdown
-    if batch:
-        _flush_metrics_batch(batch, session_factory, MetricEvent)
-
 
 def _start_metrics_writer_locked() -> None:
     """Start the background metrics writer thread. Caller must hold _writer_lock."""
     global _writer_thread, _writer_started
     if _writer_thread is None or not _writer_thread.is_alive():
-        _shutdown_event.clear()
         _writer_thread = threading.Thread(target=_background_writer, daemon=True)
         _writer_thread.start()
         _writer_started = True
         logger.info("Started metrics background writer thread")
-
-
-def start_metrics_writer() -> None:
-    """Start the background metrics writer thread."""
-    with _writer_lock:
-        _start_metrics_writer_locked()
-
-
-def stop_metrics_writer(timeout: float = 5.0) -> None:
-    """Stop the background metrics writer thread."""
-    global _writer_thread, _writer_started
-    with _writer_lock:
-        if _writer_thread and _writer_thread.is_alive():
-            _shutdown_event.set()
-            _writer_thread.join(timeout=timeout)
-            _writer_thread = None
-            _writer_started = False
-            logger.info("Stopped metrics background writer thread")
 
 
 def record_metric(

@@ -258,30 +258,6 @@ class PollAvailability(Base):
 # Pydantic models for API responses
 
 
-class PollAvailabilityPayload(BaseModel):
-    """API response for a single availability slot."""
-
-    slot_start: datetime
-    slot_end: datetime
-    availability_level: int
-
-    model_config = {"from_attributes": True}
-
-
-class PollResponsePayload(BaseModel):
-    """API response for a poll response."""
-
-    id: int
-    respondent_name: str | None
-    respondent_email: str | None
-    person_id: int | None
-    availabilities: list[PollAvailabilityPayload]
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
 class AvailabilityPollPayload(BaseModel):
     """API response for an availability poll."""
 

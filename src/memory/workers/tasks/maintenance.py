@@ -186,9 +186,9 @@ def _build_item_class_map() -> dict[str, type[SourceItem]]:
     ``registry._class_registry`` (which is keyed only by class name and
     has shifted across SQLAlchemy minor versions). Accepts both
     polymorphic identities (e.g. ``"mail_message"``) and class names
-    (e.g. ``"MailMessage"``) because the codebase has historically passed
-    both — the API endpoint at api/source_items.py uses class name, the
-    Celery dispatch loop in process_raw_items uses polymorphic identity.
+    (e.g. ``"MailMessage"``): ``tools/run_celery_task.py reingest-item``
+    takes either, and the dispatch loop in process_raw_items uses polymorphic
+    identity.
     """
     mapper = sa_inspect(SourceItem)
     out: dict[str, type[SourceItem]] = {}

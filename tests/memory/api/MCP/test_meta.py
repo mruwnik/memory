@@ -29,6 +29,7 @@ from memory.common.markets import (
     search_kalshi_markets,
     search_markets,
     calculate_liquidity_score,
+    format_kalshi_market,
     _search_cache,
     _history_cache,
     _depth_cache,
@@ -839,6 +840,61 @@ async def test_search_polymarket_markets_filters_by_volume(mock_aiohttp_session)
 
     assert len(result) == 1
     assert result[0]["question"] == "High volume"
+
+
+# ====== format_kalshi_market tests ======
+
+
+@pytest.mark.parametrize("volume", [500, None])
+def test_format_kalshi_market_skips_low_volume(volume):
+    market = {"ticker": "LOW", "title": "Low", "volume": volume, "last_price": 50}
+
+    assert format_kalshi_market(market, min_volume=1000) is None
+
+
+def test_format_kalshi_market_treats_missing_volume_as_zero():
+    market = {"ticker": "T", "title": "T", "volume": None, "last_price": 50}
+
+    result = format_kalshi_market(market, min_volume=0)
+
+    assert result is not None
+    assert result["volume"] == 0
+
+
+@pytest.mark.parametrize(
+    "prices, expected",
+    [
+        ({"last_price": 75, "yes_bid": 50}, 0.75),
+        ({"yes_bid": 60}, 0.6),
+        ({}, None),
+    ],
+)
+def test_format_kalshi_market_probability(prices, expected):
+    market = {"ticker": "T", "title": "T", "volume": 5000, **prices}
+
+    result = format_kalshi_market(market, min_volume=1000)
+
+    assert result is not None
+    assert result["probability"] == expected
+
+
+def test_format_kalshi_market_spread_and_liquidity():
+    market = {
+        "ticker": "T",
+        "title": "Test market",
+        "volume": 50000,
+        "last_price": 50,
+        "yes_bid": 48,
+        "yes_ask": 52,
+        "open_time": None,
+    }
+
+    result = format_kalshi_market(market, min_volume=1000)
+
+    assert result is not None
+    assert result["spread"] == 0.04
+    assert result["liquidity_score"] > 0
+    assert result["url"] == "https://kalshi.com/markets/T"
 
 
 # ====== Kalshi search tests ======

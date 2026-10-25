@@ -342,17 +342,6 @@ def create_account(
     return account_to_response(account, db, user)
 
 
-@router.get("/{account_id}")
-def get_account(
-    account_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> EmailAccountResponse:
-    """Get a single email account."""
-    account = get_user_account(db, EmailAccount, account_id, user)
-    return account_to_response(account, db, user)
-
-
 @router.patch("/{account_id}")
 def update_account(
     account_id: int,
