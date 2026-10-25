@@ -10,6 +10,7 @@ const makeUser = (overrides: Partial<AuthUser> = {}): AuthUser => ({
   user_type: 'human',
   scopes: ['*'],
   timezone: 'UTC',
+  modules: [],
   ...overrides,
 })
 

@@ -20,7 +20,7 @@ describe('AccessSelects', () => {
     ['off', new Set<string>(), 0],
   ])('keeps sensitivity and gates the project select while projects is %s', (_state, modules, count) => {
     renderWithUser(
-      <AccessSelects projectId={undefined} sensitivity="basic" projects={projects} disabled={false} onProject={() => {}} onSensitivity={() => {}} />,
+      <AccessSelects projectId={undefined} sensitivity="basic" projects={projects} disabled={false} onChange={() => {}} />,
       { modules },
     )
     expect(screen.getByLabelText('Sensitivity')).toBeInTheDocument()

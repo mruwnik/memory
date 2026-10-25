@@ -854,6 +854,7 @@ def test_due_sessions_are_skipped_without_claude_containers(
     db_session.refresh(task)
     assert result["count"] == 0
     assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == 0
+    assert task.next_scheduled_time is not None
     assert task.next_scheduled_time > due
     mock_send.assert_not_called()
     assert "claude_containers" in caplog.text

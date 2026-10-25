@@ -95,7 +95,7 @@ describe('EmailPanel project field', () => {
     ['off', new Set<string>(), 0],
   ])('while projects is %s', async (_state, modules, count) => {
     const fetchMock = mockFetchRoutes(baseRoutes([]))
-    const { user } = renderWithUser(<EmailPanel />, { modules })
+    const { user } = renderWithRouter(<EmailPanel />, { modules })
     await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: 'Add account' }))
@@ -278,7 +278,7 @@ describe('EmailPanel edit flow', () => {
 describe('EmailPanel edit with projects off', () => {
   it('keeps the account project_id although the field is hidden', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([{ ...imapAccount, project_id: 7 }]))
-    const { user } = renderWithUser(<EmailPanel />, { modules: new Set() })
+    const { user } = renderWithRouter(<EmailPanel />, { modules: new Set() })
     await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save' }))

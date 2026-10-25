@@ -680,6 +680,13 @@ const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }
 
 // --- Main Page ---
 
+const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'notification', label: 'Notifications' },
+  { value: 'claude_session', label: 'Claude sessions' },
+  { value: 'agent_run', label: 'Agent runs' },
+]
+
 const EMPTY_MESSAGES: Record<TypeFilter, string> = {
   all: 'No scheduled tasks',
   notification: 'No notification tasks',
@@ -755,12 +762,7 @@ const ScheduledTasks = () => {
   const countOf = (status: TaskStatus) => shown.filter(t => getTaskStatus(t) === status).length
   const counts = [`${countOf('active')} active`, countOf('inactive') > 0 && `${countOf('inactive')} paused`, countOf('done') > 0 && `${countOf('done')} done`]
 
-  const FILTERS: { value: TypeFilter; label: string }[] = [
-    { value: 'all', label: 'All' },
-    { value: 'notification', label: 'Notifications' },
-    { value: 'claude_session', label: 'Claude sessions' },
-    { value: 'agent_run', label: 'Agent runs' },
-  ].filter(f => claudeOn || f.value !== 'claude_session')
+  const FILTERS = TYPE_FILTERS.filter(f => claudeOn || f.value !== 'claude_session')
 
   return (
     <Page
