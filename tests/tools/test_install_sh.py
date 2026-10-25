@@ -61,10 +61,10 @@ def project(tmp_path):
     return tmp_path
 
 
-def install(project, env, *args, cwd=None, interactive_input=None):
+def install(project, env, *args, cwd=None, interactive_input=None, root=None):
     flags = [] if interactive_input is not None else ["--non-interactive"]
     return subprocess.run(
-        ["bash", str(project / "tools" / "install.sh"), *flags, *args],
+        ["bash", str((root or project) / "tools" / "install.sh"), *flags, *args],
         cwd=cwd or project,
         env={
             "PATH": f"{project / 'bin'}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
@@ -305,6 +305,28 @@ def test_forces_loopback_api_port_over_existing_value(project):
     install(project, REQUIRED)
 
     assert read_env(project)["API_PORT"] == "127.0.0.1:8000"
+
+
+# Compose names the project after the directory it runs in; a symlinked
+# checkout must keep the name it was installed under, whatever path runs later.
+@pytest.mark.parametrize(
+    "link, existing, expected",
+    [
+        ("memory", "", "memory"),
+        ("My.Memory-2", "", "mymemory-2"),
+        ("memory", "COMPOSE_PROJECT_NAME=chris\n", "chris"),
+    ],
+)
+def test_pins_the_compose_project_to_the_directory_name_as_invoked(
+    project, tmp_path, link, existing, expected
+):
+    (tmp_path / link).symlink_to(project)
+    (project / ".env").write_text(existing)
+
+    result = install(project, REQUIRED, root=tmp_path / link)
+
+    assert result.returncode == 0, result.stderr
+    assert read_env(project)["COMPOSE_PROJECT_NAME"] == expected
 
 
 @pytest.mark.parametrize("earlier_runs", [[], [REQUIRED]])

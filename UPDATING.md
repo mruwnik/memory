@@ -37,6 +37,8 @@ the stack was started from.
 3. Make sure tracked files have no local edits (`git status`). `tools/update.sh`
    refuses to run otherwise. Keep local config in `.env`,
    `docker-compose.override.yml` and `secrets/`, which are gitignored.
+   `.env` pins `COMPOSE_PROJECT_NAME` (the script adds it from the running
+   stack when missing); changing it moves compose to new, empty volumes.
 4. Check free disk. The script refuses to start with less free space in
    `backups/` than the database size plus `MIN_FREE_GB` (default 5) GiB for
    new images:

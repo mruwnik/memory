@@ -25,6 +25,10 @@ def clone(tmp_path):
     git(tmp_path, "clone", "--quiet", "--no-tags", str(REPO_ROOT), str(clone))
     git(tmp_path, "init", "--quiet", "--bare", str(tmp_path / "origin.git"))
     git(clone, "remote", "set-url", "origin", str(tmp_path / "origin.git"))
+    # The repo's own release tags would outrank the test's.
+    real_tags = git(clone, "tag", "--list").split()
+    if real_tags:
+        git(clone, "tag", "-d", *real_tags)
     for script in ["update.sh", "select_release.sh"]:
         shutil.copy(REPO_ROOT / "tools" / script, clone / "tools" / script)
     (clone / "tools" / "ops").mkdir(exist_ok=True)
@@ -35,15 +39,23 @@ def clone(tmp_path):
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "next release")
     git(clone, "tag", "v0.0.10")
     git(clone, "checkout", "--quiet", "--detach", "v0.0.9")
+    # `docker ps` lists the "<project> <working dir>" lines of tmp_path/containers.
+    bin_dir = tmp_path / "docker-bin"
+    bin_dir.mkdir()
+    (bin_dir / "docker").write_text(
+        f'#!/bin/sh\n[ "$1" != ps ] || cat "{tmp_path}/containers" 2>/dev/null\n'
+    )
+    (bin_dir / "docker").chmod(0o755)
     return clone
 
 
-def update(clone, *args, cwd=None, path="", lock_file=None):
+def update(clone, *args, cwd=None, path="", lock_file=None, root=None):
+    root = root or clone
     result = subprocess.run(
-        ["bash", str(clone / "tools" / "update.sh"), *args],
-        cwd=cwd or clone,
+        ["bash", str(root / "tools" / "update.sh"), *args],
+        cwd=cwd or root,
         env={
-            "PATH": f"{path}/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "PATH": f"{path}{clone.parent / 'docker-bin'}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "COMPOSE": "echo compose",
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -229,3 +241,65 @@ def test_update_runs_without_flock_or_a_lock_directory(clone):
 
     assert "busy" not in output
     assert "No such file" not in output
+
+
+def read_project_name(clone):
+    lines = (clone / ".env").read_text().splitlines()
+    return [line.split("=", 1)[1] for line in lines if line.startswith("COMPOSE_PROJECT_NAME=")]
+
+
+# On EC2 /opt/memory is a symlink to the checkout: compose names the project
+# after whichever path it is run from, so a run from the resolved path must
+# keep the project the running stack was started under.
+@pytest.mark.parametrize(
+    "containers, via, expected",
+    [
+        (["memory {link}"], "{clone}", "memory"),
+        (["chris {clone}", "chris {clone}"], "{link}", "chris"),
+        (["memory {link}", "other /nonexistent", "other {clone}/tools"], "{clone}", "memory"),
+        ([], "{link}", "memory"),
+        ([], "{clone}", "clone"),
+    ],
+    ids=["running-via-link", "running-under-p", "ignores-other-stacks", "none-via-link", "none"],
+)
+def test_update_pins_the_running_project_name_in_env(clone, containers, via, expected):
+    link = clone.parent / "memory"
+    link.symlink_to(clone)
+    paths = {"clone": clone, "link": link}
+    (clone.parent / "containers").write_text("".join(f"{c.format(**paths)}\n" for c in containers))
+    (clone / ".env").write_text("DOMAIN=example.com")
+
+    update(clone, root=pathlib.Path(via.format(**paths)))
+
+    assert read_project_name(clone) == [expected]
+    assert "DOMAIN=example.com" in (clone / ".env").read_text().splitlines()
+
+
+def test_update_keeps_a_project_name_already_in_env(clone):
+    (clone.parent / "containers").write_text(f"memory {clone}\n")
+    (clone / ".env").write_text("COMPOSE_PROJECT_NAME=chris\n")
+
+    update(clone)
+
+    assert read_project_name(clone) == ["chris"]
+
+
+def test_update_refuses_when_two_projects_run_from_this_checkout(clone):
+    head_before = git(clone, "rev-parse", "HEAD")
+    (clone.parent / "containers").write_text(f"memory {clone}\napp {clone}\n")
+
+    code, output = update(clone)
+
+    assert code != 0
+    assert "COMPOSE_PROJECT_NAME" in output
+    assert not (clone / ".env").exists()
+    assert git(clone, "rev-parse", "HEAD") == head_before
+
+
+def test_dry_run_does_not_pin_the_project_name(clone):
+    (clone.parent / "containers").write_text(f"memory {clone}\n")
+
+    code, output = dry_run(clone)
+
+    assert code == 0, output
+    assert not (clone / ".env").exists()

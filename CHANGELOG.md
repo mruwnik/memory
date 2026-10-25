@@ -78,6 +78,14 @@ None.
 - A new EC2 instance no longer creates the first user. Create it at
   `/ui/setup` with the setup token, read over Session Manager
   ([deploy/aws/README.md](deploy/aws/README.md#first-login)).
+- `tools/install.sh` and `tools/update.sh` write `COMPOSE_PROJECT_NAME` to
+  `.env` when it is missing, so compose stays on the same project (and its
+  volumes) whichever path the checkout is reached by: on EC2, a run from
+  `/srv/memory/app` instead of `/opt/memory` built a second, empty stack.
+  `update.sh` takes the name from the compose containers already running from
+  the checkout, else the directory name, and refuses if containers of two
+  projects use it; then set `COMPOSE_PROJECT_NAME` in `.env` by hand. A `-p`
+  in `COMPOSE` still wins over `.env`.
 
 ### Migrations
 
