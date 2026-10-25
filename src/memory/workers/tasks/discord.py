@@ -12,6 +12,7 @@ import logging
 import pathlib
 from datetime import datetime
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlalchemy import or_
@@ -112,8 +113,11 @@ def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Pe
     )
     if named:
         return named
+    identifier = f"discord_{discord_user.id}"
+    if session.query(Person.id).filter(Person.identifier == identifier).first() is not None:
+        identifier = f"{identifier}_{uuid4().hex}"
     person = Person(
-        identifier=f"discord_{discord_user.id}",
+        identifier=identifier,
         display_name=discord_user.name,
         contact_info={"discord": str(discord_user.id)},
     )

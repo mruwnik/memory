@@ -477,3 +477,17 @@ def test_the_author_attaches_to_the_person_whose_contact_info_names_them(
 
     db_session.expire_all()
     assert db_session.get(DiscordUser, discord_user.id).person_id == person.id
+
+
+def test_discord_person_identifier_collision_does_not_claim_existing_person(db_session):
+    from memory.common.db.models import Person, DiscordUser
+    from memory.workers.tasks.discord import person_for_discord_user
+    claimed = Person(identifier="discord_123456789", display_name="Someone else")
+    db_session.add(claimed)
+    db_session.flush()
+    user = DiscordUser(id=123456789, username="real-user", display_name="Real User")
+    person = person_for_discord_user(db_session, user)
+    db_session.flush()
+    assert person.id != claimed.id
+    assert person.identifier.startswith("discord_123456789_")
+    assert person.contact_info["discord"] == "123456789"

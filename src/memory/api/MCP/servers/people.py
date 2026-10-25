@@ -330,9 +330,9 @@ async def upsert(
             have a person.
         clear_user_id: Admin only. Remove the person's link to a user.
 
-    Only admins can change display_name, aliases, or the email, slack, github and
-    discord contact info of an existing person, since those decide which content
-    is linked to them. Only admins' contact_info.discord attaches Discord users.
+    Only admins can set email, slack, github or discord contact info, including
+    on creation. Only admins can change existing display names and aliases,
+    since those decide which content is linked to a person. Only admins' contact_info.discord attaches Discord users.
     A person is linked to a user only through user_id.
 
     Returns:
@@ -346,6 +346,9 @@ async def upsert(
         raise PermissionError("Only an admin can set or clear a person's user link")
     if user_id is not None and clear_user_id:
         raise ValueError("Pass either user_id or clear_user_id, not both")
+
+    if IDENTITY_CONTACT_KEYS & set(contact_info or {}) and not caller_is_admin:
+        raise PermissionError("Only an admin can set a person's email, slack, github or discord")
 
     with make_session() as session:
         existing = session.query(Person).filter(Person.identifier == identifier).first()

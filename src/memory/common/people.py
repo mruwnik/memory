@@ -65,10 +65,8 @@ def make_identifier(name: str) -> str:
 def find_person_by_name(session: DBSession, name: str | None) -> Person | None:
     """Try to find a Person record by name, alias, or email.
 
-    Matching order:
-    1. Exact match on display_name (case-insensitive)
-    2. Match in aliases array (case-insensitive)
-    3. If input looks like an email, match in contact_info["email"]
+    Match names, aliases and email case-insensitively. Return None if
+    different people match, including across different identity fields.
 
     Args:
         session: Database session
@@ -82,39 +80,19 @@ def find_person_by_name(session: DBSession, name: str | None) -> Person | None:
 
     name_lower = name.lower().strip()
 
-    # Try exact match on display_name first
-    person = (
-        session.query(Person)
-        .filter(sql_func.lower(Person.display_name) == name_lower)
-        .first()
-    )
-    if person:
-        return person
-
-    # Try matching aliases
-    people_with_aliases = (
-        session.query(Person)
-        .filter(Person.aliases.isnot(None))
-        .filter(sql_func.array_length(Person.aliases, 1) > 0)
-        .all()
-    )
-    for person in people_with_aliases:
+    candidates = {
+        p.id: p for p in session.query(Person).filter(sql_func.lower(Person.display_name) == name_lower).all()
+    }
+    for person in session.query(Person).filter(Person.aliases.isnot(None)).all():
         if any(alias.lower() == name_lower for alias in (person.aliases or [])):
-            return person
-
-    # If the input looks like an email, do an exact (case-insensitive)
-    # match — NOT a substring match. The previous wildcards-on-both-sides
-    # ilike turned `bob@x.com` into a query that also matched
-    # `evilbob@x.com.attacker.tld`, and combined with the auto-link flow
-    # in users.link_person_to_user that lets a registering user
-    # accidentally inherit another Person's identity / team
-    # memberships. Delegate to find_person_by_email (exact-match path).
+            candidates[person.id] = person
     if "@" in name_lower:
-        person = find_person_by_email(session, name_lower)
-        if person:
-            return person
-
-    return None
+        stored_lower = sql_cast(sql_func.lower(sql_cast(Person.contact_info["email"], Text)), JSONB)
+        for person in session.query(Person).filter(stored_lower.contains(json_string(name_lower))).all():
+            candidates[person.id] = person
+    # Names and aliases are not unique identities. Never arbitrarily choose
+    # a recipient when multiple people match, including across match types.
+    return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
 def find_person_by_email(session: DBSession, email: str | None) -> Person | None:
@@ -133,7 +111,8 @@ def find_person_by_email(session: DBSession, email: str | None) -> Person | None
     # Lowercasing the JSON text keeps it valid JSON, and @> matches a scalar
     # string or any element of a list, so either shape of contact_info.email works.
     stored_lower = sql_cast(sql_func.lower(sql_cast(Person.contact_info["email"], Text)), JSONB)
-    return session.query(Person).filter(stored_lower.contains(json_string(email.lower().strip()))).first()
+    matches = session.query(Person).filter(stored_lower.contains(json_string(email.lower().strip()))).limit(2).all()
+    return matches[0] if len(matches) == 1 else None
 
 
 def find_person_by_slack_id(

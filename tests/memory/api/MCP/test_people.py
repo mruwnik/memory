@@ -1836,7 +1836,7 @@ async def test_upsert_user_link_keeps_one_person_per_user(db_session, admin_sess
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("viewer", ["admin", "regular"])
+@pytest.mark.parametrize("viewer", ["admin"])
 async def test_upsert_create_never_links_by_email(
     db_session, regular_user, admin_session, user_session, viewer
 ):
@@ -1880,6 +1880,12 @@ async def test_upsert_create_attaches_discord_users_for_admins_only(
     sessions = {"admin": admin_session, "regular": user_session}
 
     with mcp_auth_context(sessions[viewer].id):
+        if not attached:
+            with pytest.raises(PermissionError):
+                await upsert.fn(identifier="claim", display_name="Claim", contact_info={"discord": "123456789"})
+            assert db_session.get(DiscordUser, 123456789).person_id is None
+            assert db_session.query(Person).filter_by(identifier="claim").count() == 0
+            return
         result = await upsert.fn(
             identifier="claim", display_name="Claim", contact_info={"discord": "123456789"}
         )
@@ -1903,3 +1909,12 @@ async def test_upsert_attaches_discord_users_by_username_not_display_name(
 
     db_session.expire_all()
     assert (db_session.get(DiscordUser, 123456789).person_id == result["person_id"]) == attached
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["email", "discord", "github", "slack"])
+async def test_non_admin_cannot_precreate_identity_contacts(db_session, user_session, field):
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(PermissionError, match="Only an admin"):
+            await upsert.fn(identifier="preclaimed", display_name="Victim", contact_info={field: "victim"})
+    assert db_session.query(Person).filter_by(identifier="preclaimed").count() == 0

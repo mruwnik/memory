@@ -85,3 +85,22 @@ def test_find_person_by_email_scalar_or_list(db_session, email, query, found):
     db_session.commit()
 
     assert (find_person_by_email(db_session, query) is person) == found
+
+
+@pytest.mark.parametrize("identity", ["name", "alias", "email"])
+def test_name_lookup_refuses_ambiguous_people(db_session, identity):
+    name = "victim@example.com"
+    first = Person(identifier="real", display_name=name)
+    other = Person(identifier="other", display_name=name if identity == "name" else "Other",
+                   aliases=[name] if identity == "alias" else [],
+                   contact_info={"email": name} if identity == "email" else {})
+    db_session.add_all([first, other])
+    db_session.commit()
+    assert find_person_by_name(db_session, name) is None
+
+
+def test_email_lookup_refuses_ambiguous_people(db_session):
+    for identifier in ["one", "two"]:
+        db_session.add(Person(identifier=identifier, display_name=identifier, contact_info={"email": "same@example.com"}))
+    db_session.commit()
+    assert find_person_by_email(db_session, "same@example.com") is None
