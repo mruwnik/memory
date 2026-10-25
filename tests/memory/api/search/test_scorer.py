@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -113,6 +114,34 @@ async def test_scoring_runs_a_bounded_number_of_calls_at_once(db_session, llm_ke
 
     assert len(ranked) == chunk_count
     assert 1 < peak <= scorer.MAX_CONCURRENT_SCORES
+
+
+@pytest.mark.asyncio
+async def test_a_slow_provider_bounds_both_the_wait_and_the_calls_in_flight(
+    db_session, llm_key, scripted_llm
+):
+    active, peak = 0, 0
+
+    async def stalled():
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.5)
+        active -= 1
+        return submitted({"score": 0.5})
+
+    chunk_count = scorer.MAX_CONCURRENT_SCORES * 2
+    scripted_llm.script = [stalled] * chunk_count
+    chunks = [chunk_with_text(str(i), score=0.4) for i in range(chunk_count)]
+
+    started = time.monotonic()
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key), timeout=0.2)
+    elapsed = time.monotonic() - started
+    await asyncio.sleep(0.6)  # let the calls already sent finish and be charged
+
+    assert elapsed < 0.4
+    assert peak == scorer.MAX_CONCURRENT_SCORES
+    assert [c.relevance_score for c in ranked] == [0.4] * chunk_count
 
 
 @pytest.mark.asyncio

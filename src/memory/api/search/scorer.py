@@ -23,21 +23,24 @@ Here is the chunk:
 """
 
 
-async def score_chunk(query: str, chunk: Chunk, key: Credential, timeout: float = 5.0) -> float | None:
+async def score_chunk(query: str, chunk: Chunk, key: Credential) -> float | None:
     """The LLM's relevance score for `chunk`, or None for a chunk with no text to score."""
+    try:
+        data = chunk.data
+    except OSError as e:
+        # A chunk file missing on disk is the operator's to fix, unlike the LLM failures below.
+        logger.error(f"Can't read chunk {chunk.id}: {type(e).__name__}")
+        return None
     # Neutral messages carry text only, so image-only chunks keep the reranker's score.
-    chunk_text = "\n".join(text for text in chunk.data if isinstance(text, str))
+    chunk_text = "\n".join(text for text in data if isinstance(text, str))
     if not chunk_text:
         return None
-    result = await asyncio.wait_for(
-        run_agent(
-            CHUNK_SCORE.slug,
-            SCORE_CHUNK_PROMPT.format(query=query, chunk=chunk_text),
-            user=key.user_id,
-            key=key,
-            record=Record.COST,
-        ),
-        timeout=timeout,
+    result = await run_agent(
+        CHUNK_SCORE.slug,
+        SCORE_CHUNK_PROMPT.format(query=query, chunk=chunk_text),
+        user=key.user_id,
+        key=key,
+        record=Record.COST,
     )
     assert result.data is not None  # an agent with a result schema returns data or raises
     return float(result.data["score"])
@@ -57,12 +60,20 @@ async def rank_chunks(
 
     async def score(chunk: Chunk) -> float | None:
         async with slots:
-            return await score_chunk(query, chunk, key, timeout)
+            return await score_chunk(query, chunk, key)
 
-    scores = await asyncio.gather(*(score(chunk) for chunk in chunks), return_exceptions=True)
-    # Mostly the searcher's own key being spent or refused, or a timeout: not the
+    tasks = [asyncio.ensure_future(score(chunk)) for chunk in chunks]
+    # One deadline for the batch: cancelling everything at once frees no slot for a new
+    # call while the calls already sent finish (and are charged) in the background.
+    _, pending = await asyncio.wait(tasks, timeout=timeout)
+    for task in pending:
+        task.cancel()
+    scores = [None if t in pending else (t.exception() or t.result()) for t in tasks]
+    # Mostly the searcher's own key being spent or refused, or the deadline: not the
     # operator's to act on, and the errors can carry the key's label.
     failures = sorted({type(s).__name__ for s in scores if isinstance(s, BaseException)})
+    if pending:
+        failures.append(f"{len(pending)} timed out")
     if failures:
         logger.warning(f"Scoring failed for some of {len(chunks)} chunks: {', '.join(failures)}")
     for chunk, chunk_score in zip(chunks, scores):
