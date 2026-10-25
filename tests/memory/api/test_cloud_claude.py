@@ -29,7 +29,7 @@ from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeGitHubToken
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
-from memory.common.db.models.users import HumanUser, UserSession
+from memory.common.db.models.users import UserSession
 
 
 # Tests for session ID generation and parsing

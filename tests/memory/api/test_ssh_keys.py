@@ -109,6 +109,7 @@ def test_notes_binding_and_temporary_identity(client, db_session, instance_owned
     assert response.json()["git"]["ssh_public_key"] == instance["public_key"]
     assert client.delete(f"/ssh-keys/{instance['id']}").status_code == 409
     with ssh_command(remote) as command:
+        assert command is not None
         args = shlex.split(command)
         path = pathlib.Path(args[args.index("-i") + 1])
         assert path.stat().st_mode & 0o777 == 0o600

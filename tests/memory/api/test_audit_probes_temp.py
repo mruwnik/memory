@@ -1,4 +1,4 @@
-"""Temporary local security reproductions; assertions describe observed vulnerabilities."""
+"""Regression checks for restricted credentials and bounded snapshot parsing."""
 
 import pytest
 
@@ -22,29 +22,28 @@ def restricted_auth(client, app_client, user, db_session, monkeypatch):
         app.dependency_overrides[get_current_user] = override
 
 
-def test_reproduce_key_escalation(client, restricted_auth, user):
+def test_reject_key_escalation(client, restricted_auth, user):
     response = client.post(f"/users/{user.id}/api-keys", headers=restricted_auth,
                            json={"name": "audit-escalated", "scopes": ["*"]})
-    assert response.status_code == 200
-    assert response.json()["scopes"] == ["*"]
+    assert response.status_code == 403
 
 
-def test_reproduce_secret_disclosure(client, restricted_auth, user, db_session):
+def test_reject_secret_disclosure(client, restricted_auth, user, db_session):
     secret = create_secret(db_session, user.id, "audit-secret", "FAKE-AUDIT-VALUE")
     db_session.commit()
     response = client.get(f"/secrets/{secret.id}/value", headers=restricted_auth)
-    assert response.status_code == 200
-    assert response.json()["value"] == "FAKE-AUDIT-VALUE"
+    assert response.status_code == 403
+    assert "FAKE-AUDIT-VALUE" not in response.text
 
 
-def test_reproduce_account_mutation(client, restricted_auth, user):
+def test_reject_account_mutation(client, restricted_auth, user):
     response = client.patch(f"/users/{user.id}", headers=restricted_auth,
                             json={"email": "audit-replacement@example.invalid"})
-    assert response.status_code == 200
-    assert response.json()["email"] == "audit-replacement@example.invalid"
+    assert response.status_code == 403
+    assert user.email != "audit-replacement@example.invalid"
 
 
-def test_reproduce_ownerless_job_disclosure(client, restricted_auth, user, db_session):
+def test_reject_ownerless_job_disclosure(client, restricted_auth, user, db_session):
     from memory.common.db.models import PendingJob
 
     user.scopes = ["read"]
@@ -52,11 +51,11 @@ def test_reproduce_ownerless_job_disclosure(client, restricted_auth, user, db_se
     db_session.add(job)
     db_session.commit()
     response = client.get(f"/jobs/{job.id}", headers=restricted_auth)
-    assert response.status_code == 200
-    assert response.json()["params"]["private_text"] == "FAKE-PRIVATE-CONTENT"
+    assert response.status_code == 404
+    assert "FAKE-PRIVATE-CONTENT" not in response.text
 
 
-def test_reproduce_snapshot_member_limit_bypass(monkeypatch):
+def test_reject_snapshot_member_limit_bypass(monkeypatch):
     import io
     import tarfile
     from memory.claude_containers import claude_snapshots
@@ -67,5 +66,5 @@ def test_reproduce_snapshot_member_limit_bypass(monkeypatch):
             archive.addfile(tarfile.TarInfo(f".claude/skills/{index}"))
     monkeypatch.setattr(claude_snapshots, "MAX_TAR_MEMBERS", 2)
     with tarfile.open(fileobj=io.BytesIO(buffer.getvalue()), mode="r:gz") as archive:
-        claude_snapshots.extract_folders_from_tar(archive)
-        assert len(archive.members) == 5
+        with pytest.raises(ValueError):
+            claude_snapshots.extract_folders_from_tar(archive)

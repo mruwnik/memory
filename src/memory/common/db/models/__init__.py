@@ -1,4 +1,5 @@
 from memory.common.db.models.base import Base
+from memory.common.db.models.ssh_keys import SSHKey, NotesSSHConfig
 from memory.common.db.models.source_item import (
     Chunk,
     SourceItem,
@@ -198,6 +199,7 @@ Payload = (
     | DeadlinePayload
 )
 
+
 __all__ = [
     "ACCESS_CONTROLLED_SOURCE_MODELS",
     "AgentDefinition",
@@ -353,5 +355,3 @@ __all__ = [
     "DeadlinePayload",
     "deadline_attachments",
 ]
-
-from memory.common.db.models.ssh_keys import SSHKey, NotesSSHConfig

@@ -11,6 +11,7 @@ from sqlalchemy import text
 def test_existing_ciphertext_and_default_survive_upgrade(db_session):
     path = Path(__file__).parents[4] / "db/migrations/versions/20261108_ssh_keys.py"
     spec = importlib.util.spec_from_file_location("ssh_keys_migration", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     db = db_session.connection()
