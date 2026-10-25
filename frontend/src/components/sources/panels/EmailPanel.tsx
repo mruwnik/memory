@@ -206,10 +206,30 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden',
     llm_key: undefined as LLMKeyChoice | undefined,
   })
-  const { testEmailAccount } = useSources()
+  const { testEmailAccount, listGmailFolders } = useSources()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableFolders, setAvailableFolders] = useState<ImapFolder[]>([])
+
+  const [foldersLoading, setFoldersLoading] = useState(false)
+  const [foldersError, setFoldersError] = useState<string | null>(null)
+  const [folderReload, setFolderReload] = useState(0)
+
+  useEffect(() => {
+    if (formData.account_type !== 'gmail' || !formData.google_account_id) return
+    let cancelled = false
+    setAvailableFolders([])
+    setFoldersLoading(true)
+    setFoldersError(null)
+    listGmailFolders(formData.google_account_id).then(folders => {
+      if (!cancelled) setAvailableFolders(folders)
+    }).catch(e => {
+      if (!cancelled) setFoldersError(e instanceof Error ? e.message : 'Failed to load Gmail folders')
+    }).finally(() => {
+      if (!cancelled) setFoldersLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [formData.account_type, formData.google_account_id, listGmailFolders, folderReload])
 
   const handleTestResult = (result: EmailAccountTestResult) => {
     if (result.status !== 'success' || !result.folders) return
@@ -397,6 +417,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                     setFormData({
                       ...formData,
                       google_account_id: googleAccountId,
+                      folders: [],
                       email_address: googleAccount?.email || formData.email_address,
                     })
                   }}
@@ -409,6 +430,20 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                 </Select>
             </Field>
           )
+        )}
+
+        {formData.account_type === 'gmail' && formData.google_account_id && (
+          <>
+            <Button type="button" disabled={foldersLoading} onClick={() => setFolderReload(n => n + 1)}>
+              {foldersLoading ? 'Loading folders...' : 'Refresh folders'}
+            </Button>
+            {foldersError && <Notice tone="error">{foldersError}</Notice>}
+            {availableFolders.length > 0 && (
+              <FolderPicker folders={availableFolders} selected={formData.folders}
+                onChange={folders => setFormData({ ...formData, folders })} />
+            )}
+            <Hint>Gmail folders are labels. Messages in any selected label are synced once. Previously ingested messages outside the selection are removed from Memory on the next sync.</Hint>
+          </>
         )}
 
         <Field label="Tags">

@@ -1076,3 +1076,44 @@ def test_content_item_commits_with_hidden_sensitivity(db_session):
     db_session.commit()
     db_session.refresh(note)
     assert note.sensitivity == "hidden"
+
+
+def test_gmail_folders_list_and_failure(client, user, db_session):
+    account = GoogleAccount(user_id=user.id, name="Google", email="test@example.com",
+                            access_token="token", refresh_token="refresh",
+                            token_expires_at=datetime.now(timezone.utc), scopes=["mail"])
+    db_session.add(account)
+    db_session.flush()
+    with patch.object(email_accounts, "refresh_credentials"), patch.object(email_accounts, "build") as build:
+        execute = build.return_value.users().labels().list().execute
+        execute.return_value = {"labels": [{"id": "INBOX", "name": "INBOX"}, {"id": "Label_1", "name": "Projects"}]}
+        response = client.get(f"/email-accounts/gmail/{account.id}/folders")
+        assert response.status_code == 200
+        assert [folder["name"] for folder in response.json()] == ["INBOX", "Projects"]
+        execute.side_effect = RuntimeError("private detail")
+        response = client.get(f"/email-accounts/gmail/{account.id}/folders")
+        assert response.status_code == 502
+        assert "private detail" not in response.text
+
+
+def test_gmail_folders_missing_account(client):
+    with patch.object(email_accounts, "build") as build:
+        response = client.get("/email-accounts/gmail/9999999/folders")
+        assert response.status_code == 404
+        build.assert_not_called()
+
+
+def test_gmail_folders_reject_other_users_account(user, regular_user, db_session):
+    from fastapi import HTTPException
+
+    account = GoogleAccount(user_id=user.id, name="Private", email="owner@example.com",
+                            access_token="token", refresh_token="refresh",
+                            token_expires_at=datetime.now(timezone.utc), scopes=["mail"])
+    db_session.add(account)
+    db_session.flush()
+    assert user.id != regular_user.id
+    with patch.object(email_accounts, "build") as build:
+        with pytest.raises(HTTPException) as exc:
+            email_accounts.gmail_folders(account.id, regular_user, db_session)
+        assert exc.value.status_code == 404
+        build.assert_not_called()

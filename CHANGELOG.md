@@ -12,6 +12,34 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Google Calendar fetch and queue failures now appear on the calendar account
+  instead of being reported as successful empty syncs.
+
+Gmail source settings fetch available labels and allow selecting folders to sync.
+Multiple labels sync their combined messages without duplicates. Empty selections
+retain the existing INBOX default. Gmail listing failures now surface as sync
+errors and stop deletion tracking instead of treating failed listings as empty.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.2.4 (2026-10-25)
 
 ### Required env vars

@@ -852,14 +852,13 @@ def test_get_gmail_label_ids_custom_label(mock_gmail_service):
 
 
 def test_get_gmail_label_ids_unknown_label(mock_gmail_service):
-    """Test that unknown labels are skipped."""
+    """Unknown labels must not expand the sync to the entire mailbox."""
     mock_gmail_service.users().labels().list().execute.return_value = {
         "labels": [{"id": "Label_123", "name": "Other"}]
     }
 
-    labels = get_gmail_label_ids(mock_gmail_service, ["NonExistent"])
-
-    assert labels == []
+    with pytest.raises(ValueError, match="no longer exists"):
+        get_gmail_label_ids(mock_gmail_service, ["NonExistent"])
 
 
 def test_fetch_gmail_message(mock_gmail_service):
@@ -1170,3 +1169,24 @@ def test_imap_starttls_failure_never_sends_password(connect):
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
     connect.return_value.logout.assert_called_once()
+
+
+def test_gmail_selected_folders_are_unioned(db_session, gmail_account):
+    gmail_account.folders = ["INBOX", "SENT"]
+    service = MagicMock()
+    service.users().messages().list().execute.side_effect = [
+        {"messages": [{"id": "inbox"}, {"id": "both"}]},
+        {"messages": [{"id": "sent"}, {"id": "both"}]},
+    ]
+    service.users().messages().list_next.return_value = None
+    ids, _ = get_gmail_message_ids(gmail_account, db_session, service)
+    assert ids == {"inbox", "sent", "both"}
+    calls = service.users().messages().list.call_args_list
+    assert {tuple(call.kwargs["labelIds"]) for call in calls if call.kwargs} == {("INBOX",), ("SENT",)}
+
+
+def test_gmail_listing_failure_is_not_an_empty_mailbox(db_session, gmail_account):
+    service = MagicMock()
+    service.users().messages().list().execute.side_effect = RuntimeError("API unavailable")
+    with pytest.raises(RuntimeError, match="API unavailable"):
+        get_gmail_message_ids(gmail_account, db_session, service)

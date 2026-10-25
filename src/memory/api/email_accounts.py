@@ -27,6 +27,8 @@ from memory.common.db.models.sources import EmailAccount, GoogleAccount
 from memory.common.ssrf import UnsafeURLError, validate_public_hostname
 from memory.common.scopes import StorableSensitivityLiteral
 from memory.workers.email import imap_connection, list_imap_folders
+from memory.parsers.google_drive import refresh_credentials
+from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
@@ -426,6 +428,27 @@ def delete_account(
     db.commit()
 
     return {"status": "deleted"}
+
+
+@router.get("/gmail/{google_account_id}/folders")
+def gmail_folders(
+    google_account_id: int,
+    user: User = Depends(get_interactive_user),
+    db: Session = Depends(get_session),
+) -> list[dict]:
+    """List Gmail labels for an owned account, or any account for admins."""
+    account = get_user_account(db, GoogleAccount, google_account_id, user)
+    try:
+        credentials = refresh_credentials(account, db)
+        service = build("gmail", "v1", credentials=credentials)
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+    except Exception as exc:
+        logger.exception("Unable to list Gmail folders for account id=%s", google_account_id)
+        raise HTTPException(502, "Could not load Gmail folders. Check Gmail API access and reconnect the Google account if needed.") from exc
+    return [
+        {"name": label["name"], "selectable": True, "flags": []}
+        for label in sorted(labels, key=lambda label: label["name"].casefold())
+    ]
 
 
 @router.post("/{account_id}/sync")

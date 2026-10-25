@@ -697,20 +697,16 @@ def get_gmail_label_ids(service, folder_names: list[str]) -> list[str]:
     if not custom_folders:
         return list(label_ids)
 
-    # Fetch labels from API for custom folders
-    try:
-        labels_response = service.users().labels().list(userId="me").execute()
-        api_labels = {
-            label["name"].lower(): label["id"]
-            for label in labels_response.get("labels", [])
-        }
-        return list(label_ids) + [
-            label for folder in custom_folders if (label := api_labels.get(folder))
-        ]
-    except Exception as e:
-        logger.warning(f"Error fetching labels: {e}")
-
-    return list(label_ids)
+    # Fail closed: a missing label or API failure must never expand the sync
+    # to the entire mailbox or make deletion tracking use a partial result.
+    labels_response = service.users().labels().list(userId="me").execute()
+    api_labels = {
+        label["name"].lower(): label["id"]
+        for label in labels_response.get("labels", [])
+    }
+    if custom_folders - api_labels.keys():
+        raise ValueError("A selected Gmail folder no longer exists; refresh the folder selection")
+    return list(label_ids) + [api_labels[folder] for folder in custom_folders]
 
 
 def fetch_gmail_message(
@@ -764,38 +760,35 @@ def iterate_gmail_messages(
     Yields:
         Tuples of (message_id, raw_email_content or None)
     """
-    try:
-        request = (
-            service.users()
-            .messages()
-            .list(
-                userId="me",
-                q=query,
-                labelIds=label_ids if label_ids else None,
-                maxResults=500,
-            )
+    request = (
+        service.users()
+        .messages()
+        .list(
+            userId="me",
+            q=query,
+            labelIds=label_ids if label_ids else None,
+            maxResults=500,
+            includeSpamTrash=bool(set(label_ids or []) & {"SPAM", "TRASH"}),
         )
+    )
 
-        while request:
-            response = request.execute()
+    while request:
+        response = request.execute()
 
-            for msg_info in response.get("messages", []):
-                msg_id = msg_info["id"]
-                if fetch_content:
-                    try:
-                        raw_email = fetch_gmail_message(service, msg_id, format="raw")
-                        if raw_email and isinstance(raw_email, str):
-                            yield (msg_id, raw_email)
-                    except Exception as e:
-                        logger.error(f"Error fetching Gmail message {msg_id}: {e}")
-                else:
-                    yield (msg_id, None)
+        for msg_info in response.get("messages", []):
+            msg_id = msg_info["id"]
+            if fetch_content:
+                try:
+                    raw_email = fetch_gmail_message(service, msg_id, format="raw")
+                    if raw_email and isinstance(raw_email, str):
+                        yield (msg_id, raw_email)
+                except Exception as e:
+                    logger.error(f"Error fetching Gmail message {msg_id}: {e}")
+            else:
+                yield (msg_id, None)
 
-            # Handle pagination
-            request = service.users().messages().list_next(request, response)
-
-    except Exception as e:
-        logger.error(f"Error listing Gmail messages: {e}")
+        # Handle pagination
+        request = service.users().messages().list_next(request, response)
 
 
 def fetch_gmail_messages_by_ids(
@@ -845,8 +838,9 @@ def get_gmail_message_ids(
 
     message_ids = {
         msg_id
+        for label_id in label_ids
         for msg_id, _ in iterate_gmail_messages(
-            service, label_ids=label_ids, fetch_content=False
+            service, label_ids=[label_id], fetch_content=False
         )
     }
 

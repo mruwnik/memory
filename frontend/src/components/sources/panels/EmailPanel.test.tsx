@@ -327,3 +327,43 @@ describe('defaultSyncFolders', () => {
     expect(defaultSyncFolders([folder('logs'), folder('Archive', ['\\Archive'])])).toEqual([])
   })
 })
+
+
+describe('Gmail folders', () => {
+  const email = { ...imapAccount, account_type: 'gmail', google_account_id: 5, folders: ['INBOX'] }
+  const folders = ['INBOX', 'SENT', 'Projects'].map(name => ({ name, selectable: true, flags: [] }))
+
+  it('fetches labels, preserves selection, and saves selected and deselected folders', async () => {
+    const fetchMock = mockFetchRoutes({
+      '/email-accounts/gmail/5/folders': { json: folders },
+      ...baseRoutes([email]),
+    })
+    const { user } = renderWithRouter(<EmailPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    const inbox = await screen.findByRole('checkbox', { name: 'INBOX' })
+    expect(inbox).toBeChecked()
+    await user.click(inbox)
+    await user.click(screen.getByRole('checkbox', { name: 'Projects' }))
+    await user.click(screen.getByRole('button', { name: 'Refresh folders' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh folders' })).toBeEnabled())
+    expect(screen.getByRole('checkbox', { name: 'Projects' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'INBOX' })).not.toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/email-accounts/1') && (init as RequestInit)?.method === 'PATCH')
+      expect(patch).toBeTruthy()
+      expect(JSON.parse((patch![1] as RequestInit).body as string).folders).toEqual(['Projects'])
+    })
+  })
+
+  it('shows label-fetch failures with a retry control', async () => {
+    mockFetchRoutes({
+      '/email-accounts/gmail/5/folders': { status: 502, json: { detail: 'Could not load Gmail folders' } },
+      ...baseRoutes([email]),
+    })
+    const { user } = renderWithRouter(<EmailPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    expect(await screen.findByText('Could not load Gmail folders')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh folders' })).toBeEnabled()
+  })
+})

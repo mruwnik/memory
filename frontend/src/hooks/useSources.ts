@@ -572,6 +572,12 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  const listGmailFolders = useCallback(async (googleAccountId: number): Promise<ImapFolder[]> => {
+    const response = await apiCall(`/email-accounts/gmail/${googleAccountId}/folders`)
+    if (!response.ok) throw await apiError(response, 'Failed to load Gmail folders')
+    return response.json()
+  }, [apiCall])
+
   // === Article Feeds ===
 
   const listArticleFeeds = useCallback(async (userId?: number): Promise<ArticleFeed[]> => {
@@ -991,6 +997,7 @@ export const useSources = () => {
     deleteEmailAccount,
     syncEmailAccount,
     testEmailAccount,
+    listGmailFolders,
     // Article Feeds
     listArticleFeeds,
     createArticleFeed,
