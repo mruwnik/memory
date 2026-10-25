@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
+from functools import partial
 from typing import Any
 
 from memory.agents import caps
@@ -188,14 +189,15 @@ def record_run(
 _detached: set[asyncio.Task] = set()
 
 
-def log_unexpected_failure(call: asyncio.Task) -> None:
+def log_unexpected_failure(agent: str, key_id: int, call: asyncio.Task) -> None:
     """A detached call's failure has no one to raise to. Retrieving it stops asyncio
-    logging it, text and all, at ERROR; only failures nobody expects are kept."""
+    logging it with its text; only failures nobody expects (a lost charge, a bug)
+    are kept, as `logger.exception` would, with no exception active in a callback."""
     if call.cancelled():
         return
     e = call.exception()
     if e is not None and not isinstance(e, (LLMError, TimeoutError, *PROVIDER_ERRORS)):
-        logger.warning(f"LLM call failed after it was sent: {type(e).__name__}")
+        logger.error(f"{agent} call on key {key_id} failed after it was sent", exc_info=e)
 
 
 async def run_agent(
@@ -220,7 +222,7 @@ async def run_agent(
     )
     _detached.add(call)
     call.add_done_callback(_detached.discard)
-    call.add_done_callback(log_unexpected_failure)
+    call.add_done_callback(partial(log_unexpected_failure, found.slug, key.id))
     # A caller's timeout mustn't cancel a call the provider may already be billing.
     return await asyncio.shield(call)
 

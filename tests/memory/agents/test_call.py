@@ -104,8 +104,11 @@ async def test_a_detached_call_that_fails_unexpectedly_is_logged(
         )
     await asyncio.sleep(0.3)
 
-    records = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == call.__name__]
-    assert records == [(logging.WARNING, "LLM call failed after it was sent: RuntimeError")]
+    records = [r for r in caplog.records if r.name == call.__name__]
+    assert [(r.levelno, r.getMessage()) for r in records] == [
+        (logging.ERROR, f"{SUMMARISE.slug} call on key {llm_key.id} failed after it was sent")
+    ]
+    assert records[0].exc_info is not None
 
 
 @pytest.mark.asyncio
