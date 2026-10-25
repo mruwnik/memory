@@ -22,7 +22,7 @@ workers_requires = read_requirements("requirements-workers.txt")
 
 setup(
     name="memory",
-    version="0.1.0",
+    version="0.2.0",
     package_dir={"": "src"},
     packages=find_namespace_packages(where="src"),
     python_requires=">=3.12",
