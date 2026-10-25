@@ -82,8 +82,14 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
     return filtered
   }, [users, filterToUsers, onlyHumanUsers])
 
-  // Don't render for non-admins
-  if (!isAdmin) return null
+  const soleUser = !loading && displayUsers.length === 1 ? displayUsers[0] : null
+
+  // The hidden picker can't fix a selection restored from localStorage, so pin it to the only user.
+  useEffect(() => {
+    if (soleUser && value.id !== soleUser.id) onChange({ type: 'user', id: soleUser.id, name: soleUser.name })
+  }, [soleUser, value.id, onChange])
+
+  if (!isAdmin || soleUser) return null
 
   if (error) {
     return (

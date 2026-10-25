@@ -92,15 +92,24 @@ describe('UserSelector rendering', () => {
       <UserSelector
         value={selected}
         onChange={() => {}}
-        filterToUsers={[{ id: 2, name: 'Bob' }]}
+        filterToUsers={[{ id: 2, name: 'Bob' }, { id: 3, name: 'Bot' }]}
       />,
     )
     await waitFor(() =>
       expect(screen.getByLabelText('User')).toBeInTheDocument(),
     )
     const options = screen.getAllByRole('option') as HTMLOptionElement[]
-    expect(options).toHaveLength(1)
-    expect(options[0].textContent).toContain('Bob')
+    expect(options.map(o => o.textContent?.trim())).toEqual(['Bob', 'Bot'])
+  })
+
+  it('hides itself and selects the only user when there is just one', async () => {
+    listUsers.mockResolvedValue([{ id: 1, name: 'Admin', user_type: 'human' }])
+    const onChange = vi.fn()
+    render(<UserSelector value={{ type: 'user', id: 7, name: 'Gone' }} onChange={onChange} />)
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith({ type: 'user', id: 1, name: 'Admin' }),
+    )
+    expect(screen.queryByLabelText('User')).not.toBeInTheDocument()
   })
 
   it('renders All users and System options when requested', async () => {
