@@ -12,6 +12,29 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## v0.2.1 (2026-10-25)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- The api image now contains `tools/add_user.py`, so `tools/install.sh` and the
+  EC2 bootstrap can create the first admin. v0.2.0 failed at that step.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.2.0 (2026-10-25)
 
 ### Required env vars

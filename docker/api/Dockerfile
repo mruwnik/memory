@@ -52,6 +52,8 @@ RUN apt-get purge -y gcc g++ python3-dev && \
 COPY --from=frontend-builder /frontend/dist ./static/
 # Migration scripts let /health report the code's expected alembic head
 COPY db/migrations ./db/migrations
+# install.sh creates the first admin with it through `docker compose exec api`
+COPY tools/add_user.py ./tools/add_user.py
 
 # Create directories for app
 RUN mkdir -p /app/memory_files
