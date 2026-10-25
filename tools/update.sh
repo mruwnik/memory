@@ -72,35 +72,25 @@ if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
     exit 1
 fi
 
-# Compose names the project after the directory it runs in, and a symlinked
-# checkout has two names (EC2: /opt/memory -> /srv/memory/app). Pinning the
-# project in .env keeps every later run on the stack that holds the volumes.
-project_names() {
-    local here project dir o='{' c='}'
-    here=$(pwd -P)
-    $DOCKER ps -a --filter label=com.docker.compose.project \
-        --format "${o}${o}.Label \"com.docker.compose.project\"${c}${c} ${o}${o}.Label \"com.docker.compose.project.working_dir\"${c}${c}" \
-        | while read -r project dir; do
-            if [[ -d $dir && $(cd "$dir" && pwd -P) == "$here" ]]; then echo "$project"; fi
-        done | sort -u
-}
+# Pinning the compose project in .env keeps runs from any path to the checkout
+# (EC2: /opt/memory -> /srv/memory/app) on the stack that holds the volumes.
 pin_project_name() {
-    grep -q '^COMPOSE_PROJECT_NAME=' .env 2>/dev/null && return
+    grep -q '^COMPOSE_PROJECT_NAME=.' .env 2>/dev/null && return
     if [[ $DRY_RUN == 1 ]]; then
         log "COMPOSE_PROJECT_NAME is not in .env; a real run pins it"
         return
     fi
-    local names
-    names=$(project_names)
-    if (( $(grep -c . <<<"$names") > 1 )); then
-        echo "Containers of several compose projects use this checkout: $(tr '\n' ' ' <<<"$names")" >&2
-        echo "Set COMPOSE_PROJECT_NAME in .env to the one holding your data, then re-run." >&2
-        exit 1
+    local name
+    name=$(DOCKER=$DOCKER tools/compose_project.sh "$PWD") || exit 1
+    # Rewritten in place: on EC2 .env belongs to the app user, not root.
+    if grep -q '^COMPOSE_PROJECT_NAME=$' .env 2>/dev/null; then
+        local kept
+        kept=$(grep -v '^COMPOSE_PROJECT_NAME=$' .env || true)
+        printf '%s\n' "$kept" > .env
     fi
-    names=${names:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-' | sed 's/^[_-]*//')}
     [[ ! -s .env || -z $(tail -c1 .env) ]] || echo >> .env
-    echo "COMPOSE_PROJECT_NAME=$names" >> .env
-    log "Pinned COMPOSE_PROJECT_NAME=$names in .env"
+    echo "COMPOSE_PROJECT_NAME=$name" >> .env
+    log "Pinned COMPOSE_PROJECT_NAME=$name in .env"
 }
 pin_project_name
 

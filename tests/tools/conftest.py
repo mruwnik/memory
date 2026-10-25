@@ -93,6 +93,26 @@ def lock_bin(tmp_path):
 
 
 @pytest.fixture
+def docker_bin(tmp_path):
+    """tmp_path/docker-bin holding a docker whose `ps` prints the "<project>
+    <working dir>" lines of tmp_path/containers and `volume ls` the "<project>
+    <volume>" lines of tmp_path/volumes; both fail while tmp_path/docker.fails exists."""
+    bin_dir = tmp_path / "docker-bin"
+    bin_dir.mkdir()
+    (bin_dir / "docker").write_text(
+        "#!/bin/sh\n"
+        f'[ ! -f "{tmp_path}/docker.fails" ] || {{ echo "Cannot connect to the Docker daemon" >&2; exit 1; }}\n'
+        'case "$1" in\n'
+        f'  ps) cat "{tmp_path}/containers" 2>/dev/null ;;\n'
+        f'  volume) cat "{tmp_path}/volumes" 2>/dev/null ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    (bin_dir / "docker").chmod(0o755)
+    return bin_dir
+
+
+@pytest.fixture
 def held_lock(tmp_path):
     """The nightly lock, held as a systemd unit's flock(1) would hold it."""
     with open(tmp_path / "nightly.lock", "a") as f:

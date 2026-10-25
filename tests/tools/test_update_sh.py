@@ -19,7 +19,7 @@ def git(cwd, *args):
 
 
 @pytest.fixture
-def clone(tmp_path):
+def clone(tmp_path, docker_bin):
     """A clone at v0.0.9 with a newer v0.0.10, whose origin is an empty bare repo."""
     clone = tmp_path / "clone"
     git(tmp_path, "clone", "--quiet", "--no-tags", str(REPO_ROOT), str(clone))
@@ -29,7 +29,7 @@ def clone(tmp_path):
     real_tags = git(clone, "tag", "--list").split()
     if real_tags:
         git(clone, "tag", "-d", *real_tags)
-    for script in ["update.sh", "select_release.sh"]:
+    for script in ["update.sh", "select_release.sh", "compose_project.sh"]:
         shutil.copy(REPO_ROOT / "tools" / script, clone / "tools" / script)
     (clone / "tools" / "ops").mkdir(exist_ok=True)
     shutil.copy(REPO_ROOT / "tools" / "ops" / "lib.sh", clone / "tools" / "ops" / "lib.sh")
@@ -39,13 +39,6 @@ def clone(tmp_path):
     git(clone, "commit", "--quiet", "--allow-empty", "-m", "next release")
     git(clone, "tag", "v0.0.10")
     git(clone, "checkout", "--quiet", "--detach", "v0.0.9")
-    # `docker ps` lists the "<project> <working dir>" lines of tmp_path/containers.
-    bin_dir = tmp_path / "docker-bin"
-    bin_dir.mkdir()
-    (bin_dir / "docker").write_text(
-        f'#!/bin/sh\n[ "$1" != ps ] || cat "{tmp_path}/containers" 2>/dev/null\n'
-    )
-    (bin_dir / "docker").chmod(0o755)
     return clone
 
 
@@ -248,30 +241,17 @@ def read_project_name(clone):
     return [line.split("=", 1)[1] for line in lines if line.startswith("COMPOSE_PROJECT_NAME=")]
 
 
-# On EC2 /opt/memory is a symlink to the checkout: compose names the project
-# after whichever path it is run from, so a run from the resolved path must
-# keep the project the running stack was started under.
-@pytest.mark.parametrize(
-    "containers, via, expected",
-    [
-        (["memory {link}"], "{clone}", "memory"),
-        (["chris {clone}", "chris {clone}"], "{link}", "chris"),
-        (["memory {link}", "other /nonexistent", "other {clone}/tools"], "{clone}", "memory"),
-        ([], "{link}", "memory"),
-        ([], "{clone}", "clone"),
-    ],
-    ids=["running-via-link", "running-under-p", "ignores-other-stacks", "none-via-link", "none"],
-)
-def test_update_pins_the_running_project_name_in_env(clone, containers, via, expected):
-    link = clone.parent / "memory"
-    link.symlink_to(clone)
-    paths = {"clone": clone, "link": link}
-    (clone.parent / "containers").write_text("".join(f"{c.format(**paths)}\n" for c in containers))
-    (clone / ".env").write_text("DOMAIN=example.com")
+# On EC2 /opt/memory is a symlink to the checkout: a run from the resolved
+# path must keep the project the stack was started under via the link.
+@pytest.mark.parametrize("env", ["DOMAIN=example.com", "COMPOSE_PROJECT_NAME=\nDOMAIN=example.com\n"])
+def test_update_pins_the_running_project_name_in_env(clone, env):
+    (clone.parent / "memory").symlink_to(clone)
+    (clone.parent / "containers").write_text(f"memory {clone.parent / 'memory'}\n")
+    (clone / ".env").write_text(env)
 
-    update(clone, root=pathlib.Path(via.format(**paths)))
+    update(clone)
 
-    assert read_project_name(clone) == [expected]
+    assert read_project_name(clone) == ["memory"]
     assert "DOMAIN=example.com" in (clone / ".env").read_text().splitlines()
 
 
@@ -284,14 +264,23 @@ def test_update_keeps_a_project_name_already_in_env(clone):
     assert read_project_name(clone) == ["chris"]
 
 
-def test_update_refuses_when_two_projects_run_from_this_checkout(clone):
+@pytest.mark.parametrize(
+    "state, message",
+    [
+        ({"containers": "memory {clone}\napp {clone}\n"}, "Several compose projects"),
+        ({"docker.fails": ""}, "Cannot connect to the Docker daemon"),
+    ],
+)
+def test_update_refuses_when_the_project_is_unclear(clone, state, message):
     head_before = git(clone, "rev-parse", "HEAD")
-    (clone.parent / "containers").write_text(f"memory {clone}\napp {clone}\n")
+    for name, text in state.items():
+        (clone.parent / name).write_text(text.format(clone=clone))
 
     code, output = update(clone)
 
     assert code != 0
-    assert "COMPOSE_PROJECT_NAME" in output
+    assert message in output
+    assert "Set COMPOSE_PROJECT_NAME in .env" in output
     assert not (clone / ".env").exists()
     assert git(clone, "rev-parse", "HEAD") == head_before
 

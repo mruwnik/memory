@@ -38,17 +38,21 @@ def project(tmp_path):
     # tmp_path itself is shared with autouse fixtures that create directories in it
     tmp_path = tmp_path / "project"
     (tmp_path / "tools").mkdir(parents=True)
-    shutil.copy(REPO_ROOT / "tools" / "install.sh", tmp_path / "tools" / "install.sh")
+    for script in ["install.sh", "compose_project.sh"]:
+        shutil.copy(REPO_ROOT / "tools" / script, tmp_path / "tools" / script)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "docker"
     # Answers network inspect from docker.networks, /setup/status from
-    # setup_status and the api log from api.log.
+    # setup_status, the api log from api.log, and ps and volume ls from the
+    # containers and volumes files next to the project (see docker_bin).
     fake.write_text(
         f'#!/bin/sh\necho "$@" >> "{tmp_path}/docker.log"\n'
         f'[ "$1" != compose ] || echo "$PWD" >> "{tmp_path}/docker.cwd"\n'
         f'[ "$1" != compose ] || echo "$REDIS_PASSWORD$POSTGRES_PASSWORD" >> "{tmp_path}/docker.env"\n'
         'case "$*" in\n'
+        f'  "ps "*) cat "{tmp_path.parent}/containers" 2>/dev/null; exit 0 ;;\n'
+        f'  "volume ls"*) cat "{tmp_path.parent}/volumes" 2>/dev/null; exit 0 ;;\n'
         f'  "network inspect "*) grep -qx "$3" "{tmp_path}/docker.networks" 2>/dev/null ;;\n'
         f'  *setup/status*) cat "{tmp_path}/setup_status" 2>/dev/null ;;\n'
         f'  "compose logs"*) cat "{tmp_path}/api.log" 2>/dev/null ;;\n'
@@ -272,7 +276,7 @@ def test_creates_the_external_api_network_once_with_containers(project, existing
     result = install(project, env, interactive_input=stdin)
 
     assert result.returncode == 0, result.stderr
-    calls = (project / "docker.log").read_text().splitlines()
+    calls = [c for c in (project / "docker.log").read_text().splitlines() if c.startswith("network ")]
     assert ("network create memory-api-prod" in calls) == created
     assert calls[:1] == ["network inspect memory-api-prod"]
 
@@ -310,23 +314,38 @@ def test_forces_loopback_api_port_over_existing_value(project):
 # Compose names the project after the directory it runs in; a symlinked
 # checkout must keep the name it was installed under, whatever path runs later.
 @pytest.mark.parametrize(
-    "link, existing, expected",
+    "link, via, existing, containers, expected",
     [
-        ("memory", "", "memory"),
-        ("My.Memory-2", "", "mymemory-2"),
-        ("memory", "COMPOSE_PROJECT_NAME=chris\n", "chris"),
+        ("memory", "memory", "", "", "memory"),
+        ("My.Memory-2", "My.Memory-2", "", "", "mymemory-2"),
+        ("memory", "memory", "COMPOSE_PROJECT_NAME=chris\n", "", "chris"),
+        ("memory", "memory", "COMPOSE_PROJECT_NAME=\n", "", "memory"),
+        ("memory", "project", "DOMAIN=x\n", "memory {link}\n", "memory"),
     ],
+    ids=["fresh", "sanitised", "kept", "empty-is-missing", "rerun-via-resolved-path"],
 )
-def test_pins_the_compose_project_to_the_directory_name_as_invoked(
-    project, tmp_path, link, existing, expected
+def test_pins_the_compose_project_that_owns_the_checkout(
+    project, tmp_path, link, via, existing, containers, expected
 ):
     (tmp_path / link).symlink_to(project)
+    (tmp_path / "containers").write_text(containers.format(link=tmp_path / link))
     (project / ".env").write_text(existing)
 
-    result = install(project, REQUIRED, root=tmp_path / link)
+    result = install(project, REQUIRED, root=tmp_path / via)
 
     assert result.returncode == 0, result.stderr
     assert read_env(project)["COMPOSE_PROJECT_NAME"] == expected
+
+
+def test_refuses_to_guess_the_compose_project_over_existing_volumes(project, tmp_path):
+    (tmp_path / "volumes").write_text("memory db_data\nchris db_data\n")
+
+    result = install(project, REQUIRED)
+
+    assert result.returncode != 0
+    assert "Set COMPOSE_PROJECT_NAME in .env" in result.stderr
+    assert "COMPOSE_PROJECT_NAME" not in read_env(project)
+    assert "compose" not in (project / "docker.log").read_text().split()
 
 
 @pytest.mark.parametrize("earlier_runs", [[], [REQUIRED]])

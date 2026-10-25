@@ -290,12 +290,11 @@ if [ "$NON_INTERACTIVE" = true ]; then
     set_env_value "RATE_LIMIT_TRUSTED_PROXIES" "127.0.0.1,::1,$kbnet_gateway"
 fi
 
-# Compose names the project after the directory it runs in, and a symlinked
-# checkout has two names. Pinning the name as invoked keeps later runs from the
-# resolved path on this stack's volumes.
+# Pinning the compose project keeps runs from any path to a symlinked checkout
+# on the stack that holds the volumes.
 if [ -z "$(get_env_value 'COMPOSE_PROJECT_NAME')" ]; then
-    set_env_value "COMPOSE_PROJECT_NAME" \
-        "$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-' | sed 's/^[_-]*//')"
+    project_name=$("$SCRIPT_DIR/compose_project.sh" "$PROJECT_DIR") || exit 1
+    set_env_value "COMPOSE_PROJECT_NAME" "$project_name"
 fi
 
 success "Service defaults configured"
