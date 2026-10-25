@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { renderWithRouter, screen, waitFor, within, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import type { ScheduledTask, TaskExecution } from '@/hooks/useScheduledTasks'
 import { ScheduledTasks } from './index'
@@ -9,10 +9,11 @@ const toggleTask = vi.fn()
 const deleteTask = vi.fn()
 const updateTask = vi.fn()
 const getExecutions = vi.fn()
+const createTask = vi.fn()
 const listEnvironments = vi.fn()
 
 vi.mock('@/hooks/useScheduledTasks', () => ({
-  useScheduledTasks: () => ({ listTasks, toggleTask, deleteTask, updateTask, getExecutions }),
+  useScheduledTasks: () => ({ listTasks, toggleTask, deleteTask, updateTask, getExecutions, createTask }),
 }))
 vi.mock('@/hooks/useClaude', () => ({
   useClaude: () => ({ listEnvironments }),
@@ -451,5 +452,34 @@ describe('ScheduledTasks formatting branches', () => {
     expect(screen.getByText('partial output')).toBeInTheDocument()
     expect(screen.getByText((_t, el) => el?.textContent === 'session: sess-abcdefghijklmno...')).toBeInTheDocument()
     expect(screen.getByText('2.5s')).toBeInTheDocument()
+  })
+})
+
+describe('ScheduledTasks in the user timezone', () => {
+  beforeEach(() => {
+    setAuthCookies()
+    mockFetch(async input => String(input).includes('/auth/me')
+      ? mockResponse({ json: { user_id: 1, name: 'Ada', email: 'a@x.com', user_type: 'human', scopes: [], timezone: 'Asia/Kolkata' } })
+      : mockResponse({ json: {} }))
+  })
+  afterEach(clearCookies)
+
+  it('describes the cron and the next run on the user clock', async () => {
+    listTasks.mockResolvedValue([makeTask({ next_scheduled_time: '2999-01-01T03:30:00Z' })])
+    renderWithRouter(<ScheduledTasks />)
+    expect(await screen.findByText(/Daily at 09:00 Asia\/Kolkata/)).toBeInTheDocument()
+    expect(screen.getByText(/Next: Jan 1, 9:00 AM/)).toBeInTheDocument()
+  })
+
+  it('sends a one-time run as wall-clock time for the server to read in the user timezone', async () => {
+    createTask.mockReset().mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderWithRouter(<ScheduledTasks />)
+    await user.click(await screen.findByRole('button', { name: 'New task' }))
+    await user.click(screen.getByRole('button', { name: 'One-time' }))
+    const when = await screen.findByLabelText('Run at (Asia/Kolkata)')
+    await user.type(when, '2999-01-01T09:00')
+    await user.click(screen.getByRole('button', { name: 'Create task' }))
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ scheduled_time: '2999-01-01T09:00' })))
   })
 })

@@ -18,6 +18,7 @@ const me = (overrides = {}) => ({
   email: 'ada@x.com',
   user_type: 'human',
   scopes: ['read', 'teams'],
+  timezone: 'UTC',
   api_key_count: 0,
   ...overrides,
 })
@@ -134,6 +135,25 @@ describe('UserSettings save profile', () => {
     expect(await screen.findByText('Profile updated successfully')).toBeInTheDocument()
     await waitFor(() => expect(patched).toHaveLength(1))
     expect(patched[0]).toEqual({ name: 'Ada Lovelace' })
+  })
+
+  it('PATCHes a picked timezone', async () => {
+    const patched: any[] = []
+    install(me({ timezone: 'UTC' }), authMe(), {
+      '/users/1': (init) => {
+        if (init?.method !== 'PATCH') return undefined
+        patched.push(JSON.parse(init.body as string))
+        return mockResponse({ json: me({ timezone: 'Asia/Kolkata' }) })
+      },
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    const timezone = await screen.findByRole('combobox', { name: 'Timezone' })
+    await user.clear(timezone)
+    await user.type(timezone, 'Kolkata')
+    await user.click(await screen.findByRole('option', { name: /Asia\/Kolkata/ }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(patched).toEqual([{ timezone: 'Asia/Kolkata' }]))
   })
 
   it('shows an error message when the update fails', async () => {

@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
-from memory.common import settings, summarizer
+from memory.common import metrics, settings, summarizer
 from memory.common.db.models import LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
@@ -985,6 +985,16 @@ def mock_redis():
          patch.object(redis, "from_url", MockRedis.from_url):
         yield
     MockRedis.clear_all()  # Clear after each test
+
+
+@pytest.fixture(autouse=True)
+def no_metrics_writer(monkeypatch):
+    """record_metric would start the background writer, which outlives the test and
+    logs its flush failures (closed connections) into later tests' caplog."""
+    monkeypatch.setattr(metrics, "_writer_started", True)
+    yield
+    with metrics._metric_queue.mutex:
+        metrics._metric_queue.queue.clear()
 
 
 @pytest.fixture(autouse=True)

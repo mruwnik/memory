@@ -8,6 +8,7 @@ export interface User {
   email: string
   user_type: 'human' | 'bot'
   scopes: string[]
+  timezone: string
   api_key_count: number
   created_at?: string
 }
@@ -24,6 +25,7 @@ export interface UserUpdate {
   name?: string
   email?: string
   scopes?: string[]
+  timezone?: string
 }
 
 export interface PasswordChange {

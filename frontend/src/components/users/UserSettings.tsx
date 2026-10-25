@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useUsers, type User } from '../../hooks/useUsers'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useUsers, type User, type UserUpdate } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Badge, Button, Card, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
+import { Badge, Button, Card, Combobox, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
+import { COMMON_TIMEZONES, formatTimezone, getBrowserTimezone } from '../../utils/timezones'
 import { NewApiKey } from './NewApiKey'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
+
+const timezoneOptions = () =>
+  [...new Set([getBrowserTimezone(), ...COMMON_TIMEZONES])].map(tz => ({ value: tz, label: formatTimezone(tz) }))
 
 const UserSettings = () => {
   const { getCurrentUser, updateUser, changePassword, regenerateApiKey } = useUsers()
@@ -16,6 +20,8 @@ const UserSettings = () => {
   // Form states
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  const [timezone, setTimezone] = useState('UTC')
+  const timezones = useMemo(timezoneOptions, [])
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -40,6 +46,7 @@ const UserSettings = () => {
       setUser(userData)
       setName(userData.name)
       setEmail(userData.email)
+      setTimezone(userData.timezone)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load user')
@@ -52,7 +59,7 @@ const UserSettings = () => {
     loadUser()
   }, [loadUser])
 
-  const profileChanged = !!user && (name !== user.name || email !== user.email)
+  const profileChanged = !!user && (name !== user.name || email !== user.email || timezone !== user.timezone)
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -62,9 +69,10 @@ const UserSettings = () => {
     setSaveMessage(null)
 
     try {
-      const updates: { name?: string; email?: string } = {}
+      const updates: UserUpdate = {}
       if (name !== user.name) updates.name = name
       if (email !== user.email) updates.email = email
+      if (timezone !== user.timezone) updates.timezone = timezone
 
       const updated = await updateUser(user.id, updates)
       setUser(updated)
@@ -151,6 +159,9 @@ const UserSettings = () => {
             </Field>
             <Field label="Email">
               <Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </Field>
+            <Field label="Timezone" hint="Scheduled tasks and agent schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
+              <Combobox value={timezone} onChange={setTimezone} options={timezones} allowCustom />
             </Field>
             <FormActions>
               <Button variant="primary" type="submit" disabled={saving || !profileChanged}>{saving ? 'Saving...' : 'Save changes'}</Button>

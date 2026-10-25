@@ -23,7 +23,7 @@ from memory.api.search.types import MCPSearchFilters
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common import qdrant, settings
 from memory.common.collections import SESSION_COLLECTIONS
-from memory.common.dates import parse_iso_datetime
+from memory.common.dates import parse_wall_clock_utc
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
@@ -313,6 +313,7 @@ async def notify_user(
         details_url: Optional URL to full details (e.g., link to a note)
         channel: Override notification channel. If None, uses priority order above.
         scheduled_time: ISO datetime string (e.g., "2024-12-20T15:30:00Z").
+                       Without an offset it is read in your timezone (see get_user).
                        If None, sends immediately. If set, schedules for later.
 
     Returns:
@@ -348,11 +349,9 @@ async def notify_user(
         full_message = format_notification_message(subject, message, details_url)
 
         if scheduled_time:
-            scheduled_dt = parse_iso_datetime(scheduled_time)
+            scheduled_dt = parse_wall_clock_utc(scheduled_time, current_user["user"]["timezone"])
             if scheduled_dt is None:
                 raise ValueError("Invalid datetime format for scheduled_time")
-            if scheduled_dt.tzinfo is not None:
-                scheduled_dt = scheduled_dt.astimezone(timezone.utc).replace(tzinfo=None)
 
             current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
             if scheduled_dt <= current_time_naive:

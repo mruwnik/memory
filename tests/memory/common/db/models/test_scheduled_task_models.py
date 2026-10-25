@@ -1,6 +1,8 @@
 # tests/memory/common/db/models/test_scheduled_tasks.py
 from datetime import datetime, timezone
 
+import pytest
+
 from memory.common.db.models.scheduled_tasks import (
     ScheduledTask,
     TaskExecution,
@@ -78,16 +80,27 @@ def test_task_execution_relationship(db_session, sample_user):
     assert len(task.executions) == 2
 
 
-def test_compute_next_cron():
-    base = datetime(2026, 2, 4, 10, 0, 0)
-    next_time = compute_next_cron("0 9 * * *", base)
-    assert next_time == datetime(2026, 2, 5, 9, 0, 0)
-
-
-def test_compute_next_cron_same_day():
-    base = datetime(2026, 2, 4, 8, 0, 0)
-    next_time = compute_next_cron("0 9 * * *", base)
-    assert next_time == datetime(2026, 2, 4, 9, 0, 0)
+@pytest.mark.parametrize(
+    "cron, tz, base, expected",
+    [
+        ("0 9 * * *", "UTC", datetime(2026, 2, 4, 10), datetime(2026, 2, 5, 9)),
+        ("0 9 * * *", "UTC", datetime(2026, 2, 4, 8), datetime(2026, 2, 4, 9)),
+        ("0 9 * * *", "Asia/Kolkata", datetime(2026, 2, 4, 8), datetime(2026, 2, 5, 3, 30)),
+        # New York springs forward on 2026-03-08: 09:00 local is 14:00 UTC before, 13:00 after
+        ("0 9 * * *", "America/New_York", datetime(2026, 3, 6, 15), datetime(2026, 3, 7, 14)),
+        ("0 9 * * *", "America/New_York", datetime(2026, 3, 7, 15), datetime(2026, 3, 8, 13)),
+        # 02:30 doesn't exist that night, so it runs an hour later on the wall clock
+        ("30 2 * * *", "America/New_York", datetime(2026, 3, 8, 5), datetime(2026, 3, 8, 7, 30)),
+        # New York falls back on 2026-11-01: 09:00 local moves from 13:00 to 14:00 UTC
+        ("0 9 * * *", "America/New_York", datetime(2026, 10, 31, 14), datetime(2026, 11, 1, 14)),
+        # 01:30 happens twice that night; it runs on the first and not again on the second
+        ("30 1 * * *", "America/New_York", datetime(2026, 11, 1, 4), datetime(2026, 11, 1, 5, 30)),
+        ("30 1 * * *", "America/New_York", datetime(2026, 11, 1, 5, 31), datetime(2026, 11, 2, 6, 30)),
+        ("0 9 * * *", "Europe/London", datetime(2026, 10, 24, 9), datetime(2026, 10, 25, 9)),
+    ],
+)
+def test_compute_next_cron(cron, tz, base, expected):
+    assert compute_next_cron(cron, tz, base) == expected
 
 
 def test_cascade_delete(db_session, sample_user):
@@ -185,13 +198,6 @@ def test_task_execution_serialize(db_session, sample_user):
     assert serialized["data"] == {"attempt": 1}
 
 
-def test_compute_next_cron_no_base_time():
-    """Test that compute_next_cron uses current time when base_time is None."""
-    # Just verify it doesn't crash and returns a datetime
-    next_time = compute_next_cron("0 9 * * *")
-    assert isinstance(next_time, datetime)
-
-
 def test_scheduled_task_default_enabled(db_session, sample_user):
     """Without a next_scheduled_time, a task has no pending run and is disabled."""
     task = ScheduledTask(
@@ -282,14 +288,16 @@ def test_setting_enabled_false_clears_next_scheduled_time(db_session, sample_use
 
 
 def test_setting_enabled_true_recomputes_recurring(db_session, sample_user):
+    sample_user.timezone = "Asia/Kolkata"
     task = ScheduledTask(
-        user_id=sample_user.id,
+        user=sample_user,
         task_type="notification",
         cron_expression="0 9 * * *",
         next_scheduled_time=None,
     )
     task.enabled = True
     assert task.next_scheduled_time is not None
+    assert (task.next_scheduled_time.hour, task.next_scheduled_time.minute) == (3, 30)
     assert task.enabled is True
 
 

@@ -14,6 +14,11 @@ from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, key_rejected, mode
 SUMMARY = {"summary": "short", "tags": ["a"]}
 
 
+async def detached_calls_finish():
+    # The failure-logging done callback was added first, so it runs before gather wakes us.
+    await asyncio.gather(*call._detached, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_a_schema_agent_answers_through_submit_result(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [submitted(SUMMARY)]
@@ -77,7 +82,7 @@ async def test_a_call_its_caller_gave_up_on_is_still_charged(db_session, regular
             run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST),
             timeout=0.01,
         )
-    await asyncio.sleep(0.3)
+    await detached_calls_finish()
 
     db_session.expire_all()
     assert db_session.query(LLMSpend).one().calls == 1
@@ -102,7 +107,7 @@ async def test_a_detached_call_that_fails_unexpectedly_is_logged(
             run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST),
             timeout=0.01,
         )
-    await asyncio.sleep(0.3)
+    await detached_calls_finish()
 
     records = [r for r in caplog.records if r.name == call.__name__]
     assert [(r.levelno, r.getMessage()) for r in records] == [

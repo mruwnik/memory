@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAgents, type AgentSchedule } from '@/hooks/useAgents'
+import { useAuth } from '@/hooks/useAuth'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { Badge, Button, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Notice, Row, Section, Textarea, useActionNotice, useSubmit } from '@/components/shared/ui'
 
@@ -15,6 +16,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
   const adding = useSubmit()
+  const timezone = useAuth().user?.timezone ?? 'UTC'
 
   const reload = useCallback(() => {
     setLoadError(null)
@@ -67,7 +69,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
         </List>
       )}
       <FieldRow>
-        <Field label="Cron (UTC)" hint="For example, 0 9 * * * runs every day at 09:00 UTC." error={cronError}>
+        <Field label={`Cron (${timezone})`} hint={`For example, 0 9 * * * runs every day at 09:00 ${timezone}.`} error={cronError}>
           <Input className="font-mono" value={cron} onChange={e => setCron(e.target.value)} />
         </Field>
         <Field label="Run input">

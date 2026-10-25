@@ -50,6 +50,7 @@ async def test_cancel_clears_next_scheduled_time(
 async def test_upsert_enable_recurring_recomputes(
     db_session, regular_user, user_session
 ):
+    regular_user.timezone = "Asia/Kolkata"
     task = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=regular_user.id,
@@ -64,7 +65,7 @@ async def test_upsert_enable_recurring_recomputes(
         result = await scheduler.upsert.fn(task_id=task.id, enabled=True)
 
     assert result["enabled"] is True
-    assert result["next_scheduled_time"] is not None
+    assert result["next_scheduled_time"].endswith("T03:30:00Z")
 
 
 def test_validate_scheduled_secret_refs_rejects_unknown(db_session, regular_user):
@@ -82,6 +83,8 @@ def test_validate_scheduled_secret_refs_allows_no_tokens(db_session, regular_use
 
 @pytest.mark.asyncio
 async def test_create_notification_recurring(db_session, regular_user, user_session):
+    regular_user.timezone = "Asia/Kolkata"
+    db_session.commit()
     with mcp_auth_context(user_session.id):
         result = await scheduler.upsert.fn(
             task_type="notification",
@@ -93,23 +96,35 @@ async def test_create_notification_recurring(db_session, regular_user, user_sess
         )
     assert result["task_type"] == "notification"
     assert result["cron_expression"] == "0 9 * * *"
-    assert result["next_scheduled_time"] is not None
+    assert result["next_scheduled_time"].endswith("T03:30:00Z")
     assert result["enabled"] is True
 
 
 @pytest.mark.asyncio
-async def test_create_notification_one_time(db_session, regular_user, user_session):
+@pytest.mark.parametrize(
+    "scheduled_time, stored",
+    [
+        ("2999-01-01T09:00:00Z", "2999-01-01T09:00:00Z"),
+        ("2999-01-01T09:00:00+01:00", "2999-01-01T08:00:00Z"),
+        ("2999-01-01T09:00:00", "2999-01-01T03:30:00Z"),
+    ],
+)
+async def test_create_notification_one_time(
+    db_session, regular_user, user_session, scheduled_time, stored
+):
+    regular_user.timezone = "Asia/Kolkata"
+    db_session.commit()
     with mcp_auth_context(user_session.id):
         result = await scheduler.upsert.fn(
             task_type="notification",
             topic="Once",
             message="hi",
-            scheduled_time="2999-01-01T09:00:00Z",
+            scheduled_time=scheduled_time,
             notification_channel="email",
             notification_target="a@b.c",
         )
     assert result["cron_expression"] is None
-    assert result["next_scheduled_time"] == "2999-01-01T09:00:00Z"
+    assert result["next_scheduled_time"] == stored
 
 
 @pytest.mark.asyncio
@@ -255,7 +270,7 @@ async def test_create_validation_errors(
 
 def agent_run_task(db_session, user, enabled=True):
     task = ScheduledTask(
-        user_id=user.id,
+        user=user,
         task_type="agent_run",
         cron_expression="0 9 * * *",
         data={"definition_id": 1, "input": "go"},

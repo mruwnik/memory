@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from memory.common.dates import parse_iso_datetime, parse_iso_datetime_utc
+from memory.common.dates import parse_iso_datetime, parse_iso_datetime_utc, parse_wall_clock_utc
 
 
 @pytest.mark.parametrize(
@@ -82,3 +82,17 @@ def test_parse_iso_datetime_z_and_plus00_equivalent():
     assert parse_iso_datetime("2026-05-07T12:34:56Z") == parse_iso_datetime(
         "2026-05-07T12:34:56+00:00"
     )
+
+
+@pytest.mark.parametrize(
+    "raw, tz, expected",
+    [
+        ("2026-03-08T09:00:00", "America/New_York", datetime(2026, 3, 8, 13)),
+        ("2026-03-07T09:00:00", "America/New_York", datetime(2026, 3, 7, 14)),
+        ("2026-03-07T09:00:00Z", "America/New_York", datetime(2026, 3, 7, 9)),
+        ("2026-03-07T09:00:00+01:00", "Asia/Kolkata", datetime(2026, 3, 7, 8)),
+        ("garbage", "UTC", None),
+    ],
+)
+def test_parse_wall_clock_utc(raw, tz, expected):
+    assert parse_wall_clock_utc(raw, tz) == expected

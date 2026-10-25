@@ -169,7 +169,15 @@ def test_user_serialization_human(db_session):
     assert serialized["name"] == "Serialize User"
     assert serialized["email"] == "serialize@example.com"
     assert serialized["user_type"] == "human"
+    assert serialized["timezone"] == "UTC"
     assert "password_hash" not in serialized  # Should not expose password hash
+
+
+@pytest.mark.parametrize("name", ["Mars/Olympus_Mons", "", "../../etc/passwd", "utc "])
+def test_user_rejects_unknown_timezone(name):
+    user = HumanUser.create_with_password(email="tz@example.com", name="TZ", password="password123")
+    with pytest.raises(ValueError, match="timezone"):
+        user.timezone = name
 
 
 def test_user_serialization_discord_keys_are_str(db_session):

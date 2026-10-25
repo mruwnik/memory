@@ -9,6 +9,7 @@ const makeUser = (overrides: Partial<AuthUser> = {}): AuthUser => ({
   email: 'ada@example.com',
   user_type: 'human',
   scopes: ['*'],
+  timezone: 'UTC',
   ...overrides,
 })
 

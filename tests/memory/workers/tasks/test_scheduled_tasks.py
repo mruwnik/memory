@@ -797,8 +797,8 @@ def test_deliver_notification_routes_to_email(mock_send_email):
 def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     mock_delay, db_session, sample_user
 ):
-    """Test that recurring tasks get their next_scheduled_time updated."""
-    # Create a recurring task that's due
+    """Test that recurring tasks get their next_scheduled_time updated, in the owner's timezone."""
+    sample_user.timezone = "Asia/Kolkata"
     task = ScheduledTask(
         id=str(uuid.uuid4()),
         user_id=sample_user.id,
@@ -827,6 +827,7 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     db_session.refresh(task)
     assert task.next_scheduled_time is not None
     assert task.next_scheduled_time > old_next_time
+    assert (task.next_scheduled_time.hour, task.next_scheduled_time.minute) == (3, 30)
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")

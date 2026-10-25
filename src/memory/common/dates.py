@@ -15,6 +15,7 @@ This module is the single source of truth.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 
 def parse_iso_datetime(s: str | None) -> datetime | None:
@@ -45,3 +46,14 @@ def parse_iso_datetime_utc(s: str | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def parse_wall_clock_utc(s: str | None, tz: str) -> datetime | None:
+    """Parse an ISO-8601 datetime to naive UTC, reading one without an offset as
+    local time in the IANA zone ``tz``."""
+    dt = parse_iso_datetime(s)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(tz))
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)

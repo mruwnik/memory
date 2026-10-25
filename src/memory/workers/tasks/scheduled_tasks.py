@@ -652,7 +652,9 @@ def run_scheduled_tasks():
             session.add(execution)
 
             if task.cron_expression:
-                task.next_scheduled_time = compute_next_cron(task.cron_expression, now)
+                task.next_scheduled_time = compute_next_cron(
+                    task.cron_expression, task.user.timezone, now
+                )
             else:
                 task.next_scheduled_time = None
 

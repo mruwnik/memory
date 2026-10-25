@@ -770,8 +770,9 @@ async def schedule(
 ) -> dict:
     """Run one of your definitions on a schedule, with a fixed input.
 
-    Creating needs input and either a 5-field UTC cron_expression (recurring) or
-    an ISO scheduled_time (once). With task_id, updates that schedule; omitted
+    Creating needs input and either a 5-field cron_expression (recurring) or an
+    ISO scheduled_time (once), both read in your timezone (see meta_get_user)
+    unless the time carries an offset. With task_id, updates that schedule; omitted
     fields keep their values. Each create or update re-checks the definition's
     tools against your access now, and later runs act with these credentials
     (an API key's scopes, if you used one). Schedules count toward your
@@ -816,7 +817,7 @@ async def schedule(
         if cron_expression is not None:
             validate_cron_interval(cron_expression)
             task.cron_expression = cron_expression
-            task.next_scheduled_time = compute_next_cron(cron_expression)
+            task.next_scheduled_time = compute_next_cron(cron_expression, task.user.timezone)
         if enabled is not None:
             task.enabled = enabled
         if task.enabled and not was_active:

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import bcrypt
 from cryptography.hazmat.primitives import serialization
@@ -20,7 +21,7 @@ from sqlalchemy import (
     Numeric,
     String,
 )
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 
 from memory.common.db.models.agents import money
@@ -43,6 +44,15 @@ def hash_password(password: str) -> str:
     # Generate bcrypt hash (automatically includes salt)
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12))
     return f"{hashed.decode('utf-8')}"
+
+
+def check_timezone(name: str) -> str:
+    """Return ``name`` if it is an IANA timezone, else raise ValueError."""
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f"Unknown timezone: {name!r}") from None
+    return name
 
 
 def verify_password(password: str, password_hash: str) -> bool:
@@ -83,6 +93,10 @@ class User(Base):
     scopes: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=["read"]
     )
+    # IANA name; cron schedules owned by this user run on its wall clock
+    timezone: Mapped[str] = mapped_column(
+        String, nullable=False, default="UTC", server_default="UTC"
+    )
 
     # SSH keys for container Git operations
     # Public key stored as plaintext (safe to expose)
@@ -91,6 +105,10 @@ class User(Base):
     ssh_private_key_encrypted: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True
     )
+
+    @validates("timezone")
+    def validate_timezone(self, key: str, value: str) -> str:
+        return check_timezone(value)
 
     @property
     def ssh_private_key(self) -> str | None:
@@ -156,6 +174,7 @@ class User(Base):
             "email": self.email,
             "user_type": self.user_type,
             "scopes": self.scopes or [],
+            "timezone": self.timezone,
             "discord_accounts": {
                 # str keys: Discord ids are int snowflakes, but JSON object keys
                 # are always strings — coerce here so in-process consumers see the

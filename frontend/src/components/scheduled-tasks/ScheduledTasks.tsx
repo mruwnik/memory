@@ -5,6 +5,8 @@ import { useClaude, Environment } from '@/hooks/useClaude'
 import { useDiscord } from '@/hooks/useDiscord'
 import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
+import { useAuth } from '@/hooks/useAuth'
+import { formatDateTimeInTimezone } from '@/utils/timezones'
 import { PauseButton, StatusBadge, formatRelativeTime } from '@/components/sources/shared'
 import { Badge, Button, ButtonLink, Checkbox, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, Fieldset, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
 
@@ -24,7 +26,7 @@ const EXECUTION_STATUS_TONES: Record<string, Tone> = {
 
 const CHANNELS = ['discord', 'slack', 'email'] as const
 
-function describeCron(expr: string | null): string {
+function describeCron(expr: string | null, timezone: string): string {
   if (!expr) return 'No schedule'
   const parts = expr.trim().split(/\s+/)
   if (parts.length !== 5) return expr
@@ -33,9 +35,9 @@ function describeCron(expr: string | null): string {
 
   if (dom === '*' && month === '*') {
     const timeStr = hour !== '*' && minute !== '*'
-      ? `at ${hour.padStart(2, '0')}:${minute.padStart(2, '0')} UTC`
+      ? `at ${hour.padStart(2, '0')}:${minute.padStart(2, '0')} ${timezone}`
       : hour !== '*'
-        ? `at ${hour.padStart(2, '0')}:00 UTC`
+        ? `at ${hour.padStart(2, '0')}:00 ${timezone}`
         : minute !== '*'
           ? `at :${minute.padStart(2, '0')} every hour`
           : ''
@@ -58,7 +60,7 @@ function describeCron(expr: string | null): string {
   return expr
 }
 
-function formatFutureTime(dateStr: string | null): string {
+function formatFutureTime(dateStr: string | null, timezone: string): string {
   if (!dateStr) return 'Not scheduled'
   const date = new Date(dateStr)
   const now = new Date()
@@ -68,12 +70,13 @@ function formatFutureTime(dateStr: string | null): string {
   const diffMins = Math.floor(diffMs / 60000)
   const diffHours = Math.floor(diffMs / 3600000)
   const diffDays = Math.floor(diffMs / 86400000)
+  const at = formatDateTimeInTimezone(date, timezone, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
   if (diffMins < 1) return 'any moment'
   if (diffMins < 60) return `in ${diffMins}m`
-  if (diffHours < 24) return `in ${diffHours}h`
-  if (diffDays < 7) return `in ${diffDays}d`
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  if (diffHours < 24) return `in ${diffHours}h (${at})`
+  if (diffDays < 7) return `in ${diffDays}d (${at})`
+  return at
 }
 
 type TaskStatus = 'active' | 'inactive' | 'done'
@@ -137,6 +140,7 @@ const TaskDataBody = ({ task }: { task: ScheduledTask }) => {
 
 interface EditFormProps {
   task: ScheduledTask
+  timezone: string
   onSave: (updates: UpdateTaskBody) => Promise<void>
   onCancel: () => void
   saving: boolean
@@ -372,7 +376,7 @@ const spawnStateOf = (config: Record<string, unknown>): SpawnConfigState => ({
   customEnvText: envText(config.custom_env),
 })
 
-const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
+const EditForm = ({ task, timezone, onSave, onCancel, saving, error }: EditFormProps) => {
   const [topic, setTopic] = useState(task.topic || '')
   const [cronExpr, setCronExpr] = useState(task.cron_expression || '')
   const [channel, setChannel] = useState(task.notification_channel || '')
@@ -435,7 +439,7 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
       <Field label="Topic">
         <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
       </Field>
-      <Field label="Cron expression" hint={describeCron(cronExpr)}>
+      <Field label="Cron expression" hint={describeCron(cronExpr, timezone)}>
         <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
       </Field>
       <Field label={isClaude ? 'Initial prompt' : 'Message'}>
@@ -457,13 +461,14 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
 // --- Create Form ---
 
 interface CreateFormProps {
+  timezone: string
   onCreate: (body: CreateTaskBody) => Promise<void>
   onCancel: () => void
   saving: boolean
   error: string | null
 }
 
-const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
+const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormProps) => {
   const [taskType, setTaskType] = useState<'notification' | 'claude_session'>('notification')
   const [cadence, setCadence] = useState<'recurring' | 'one_time'>('recurring')
   const [topic, setTopic] = useState('')
@@ -491,8 +496,8 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
     if (cadence === 'recurring') {
       body.cron_expression = cronExpr
     } else {
-      // datetime-local is local time; convert to UTC ISO (with Z).
-      body.scheduled_time = whenLocal ? new Date(whenLocal).toISOString() : ''
+      // Sent without an offset, so the server reads it on the user's clock.
+      body.scheduled_time = whenLocal
     }
     if (taskType === 'notification') {
       body.notification_channel = channel
@@ -514,11 +519,11 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
         <ToggleGroup label="Cadence" value={cadence} onChange={setCadence}
           options={[{ value: 'recurring', label: 'Recurring' }, { value: 'one_time', label: 'One-time' }]} />
         {cadence === 'recurring' ? (
-          <Field label="Cron expression" hint={describeCron(cronExpr)}>
+          <Field label="Cron expression" hint={describeCron(cronExpr, timezone)}>
             <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
           </Field>
         ) : (
-          <Field label="Run at (local time)">
+          <Field label={`Run at (${timezone})`}>
             <Input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} />
           </Field>
         )}
@@ -593,13 +598,14 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
 
 interface TaskRowProps {
   task: ScheduledTask
+  timezone: string
   onToggle: (taskId: string, enabled: boolean) => void
   onDelete: (taskId: string) => Promise<unknown>
   onUpdate: (taskId: string, updates: UpdateTaskBody) => Promise<ScheduledTask>
   getExecutions: (taskId: string) => Promise<TaskExecution[]>
 }
 
-const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
+const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
@@ -631,8 +637,8 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
         )}
       </>}
       meta={[
-        describeCron(task.cron_expression),
-        `Next: ${formatFutureTime(task.next_scheduled_time)}`,
+        describeCron(task.cron_expression, timezone),
+        `Next: ${formatFutureTime(task.next_scheduled_time, timezone)}`,
         `Created: ${formatRelativeTime(task.created_at)}`,
         task.notification_channel && `${task.notification_channel}${task.notification_target ? `: ${task.notification_target}` : ''}`,
         ...dataFacts(task),
@@ -655,6 +661,7 @@ const TaskRow = ({ task, onToggle, onDelete, onUpdate, getExecutions }: TaskRowP
         <Modal title={`Edit ${typeLabel.toLowerCase()}`} onClose={() => { setEditing(false); setEditError(null) }} size="xl">
           <EditForm
             task={task}
+            timezone={timezone}
             onSave={handleSave}
             onCancel={() => { setEditing(false); setEditError(null) }}
             saving={saving}
@@ -682,6 +689,7 @@ const ScheduledTasks = () => {
   const [error, setError] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const { run, notice } = useActionNotice()
+  const timezone = useAuth().user?.timezone ?? 'UTC'
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -758,7 +766,7 @@ const ScheduledTasks = () => {
       error={tasks === null ? error : null}
       onRetry={loadTasks}
     >
-      {showCreate && <CreateForm onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />}
+      {showCreate && <CreateForm timezone={timezone} onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />}
 
       <Toolbar actions={<RefreshButton onClick={() => loadTasks()} label="Refresh task list" />}>
         <ToggleGroup label="Type" options={FILTERS} value={typeFilter} onChange={setTypeFilter} />
@@ -772,7 +780,7 @@ const ScheduledTasks = () => {
         : (
           <List>
             {shown.map(task => (
-              <TaskRow key={task.id} task={task} onToggle={handleToggle} onDelete={handleDelete} onUpdate={handleUpdate} getExecutions={getExecutions} />
+              <TaskRow key={task.id} task={task} timezone={timezone} onToggle={handleToggle} onDelete={handleDelete} onUpdate={handleUpdate} getExecutions={getExecutions} />
             ))}
           </List>
         )}

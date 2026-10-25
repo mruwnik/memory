@@ -19,10 +19,12 @@ from memory.common.db.models import (
     BotUser,
     HumanUser,
     OAuthRefreshToken,
+    ScheduledTask,
     User,
     UserSession,
+    compute_next_cron,
 )
-from memory.common.db.models.users import hash_password, verify_password
+from memory.common.db.models.users import check_timezone, hash_password, verify_password
 from memory.common.rate_limit import check_rate_limit_spec
 from memory.common.scopes import (
     SCOPE_ADMIN,
@@ -55,6 +57,12 @@ class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     email: str | None = None
     scopes: list[str] | None = None
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        return v if v is None else check_timezone(v)
 
 
 class PasswordChange(BaseModel):
@@ -84,6 +92,7 @@ class UserResponse(BaseModel):
     email: str
     user_type: str
     scopes: list[str]
+    timezone: str
     api_key_count: int = 0
     created_at: str | None = None
 
@@ -100,6 +109,7 @@ def user_to_response(user: User) -> UserResponse:
         email=cast(str, user.email),
         user_type=cast(str, user.user_type),
         scopes=known_scopes(user.scopes),
+        timezone=user.timezone,
         api_key_count=key_count,
     )
 
@@ -289,7 +299,7 @@ def update_user(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> UserResponse:
-    """Update a user. Admins can update any user, others can only update their own name/email."""
+    """Update a user. Admins can update any user, others can only update their own name/email/timezone."""
     is_admin = has_admin_scope(user)
 
     target_user = authorize_user_self_or_admin(db, user_id, user)
@@ -303,6 +313,18 @@ def update_user(
         if existing:
             raise HTTPException(status_code=400, detail="Email already in use")
         target_user.email = updates.email
+
+    if updates.timezone is not None and updates.timezone != target_user.timezone:
+        target_user.timezone = updates.timezone
+        pending_crons = db.query(ScheduledTask).filter(
+            ScheduledTask.user_id == target_user.id,
+            ScheduledTask.cron_expression.isnot(None),
+            ScheduledTask.next_scheduled_time.isnot(None),
+        )
+        for task in pending_crons:
+            task.next_scheduled_time = compute_next_cron(
+                cast(str, task.cron_expression), updates.timezone
+            )
 
     # Only admins can update scopes
     if updates.scopes is not None:

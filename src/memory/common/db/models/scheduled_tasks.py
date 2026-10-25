@@ -5,6 +5,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from sqlalchemy import ColumnElement, DateTime, ForeignKey, Index, Integer, JSON, String, Text, text
@@ -33,17 +34,24 @@ class ExecutionStatus(str, enum.Enum):
     FAILED = "failed"
 
 
-def compute_next_cron(cron_expression: str, base_time: datetime | None = None) -> datetime:
+def compute_next_cron(
+    cron_expression: str, tz: str, base_time: datetime | None = None
+) -> datetime:
     """
-    Compute the next occurrence of a cron expression.
+    Compute the next occurrence of a cron expression on the wall clock of ``tz``.
 
     Args:
         cron_expression: A cron expression (e.g., "0 9 * * *" for daily at 9am)
-        base_time: The time to compute the next occurrence from.
+        tz: The IANA timezone whose local time the expression is written in.
+        base_time: Naive UTC time to compute the next occurrence from.
                    If None, uses current UTC time.
 
     Returns:
-        The next scheduled datetime after base_time.
+        The next scheduled time after base_time, as naive UTC.
+
+    A local time skipped by a DST change runs at the same wall-clock time on the
+    other side of the gap (02:30 becomes 03:30); a local time that happens twice
+    runs on its first occurrence only.
 
     Note on catchup behavior:
         This function does NOT catch up on missed runs. If a task was scheduled
@@ -58,8 +66,16 @@ def compute_next_cron(cron_expression: str, base_time: datetime | None = None) -
     if base_time is None:
         base_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    cron = croniter(cron_expression, base_time)
-    return cron.get_next(datetime)
+    # croniter's own tz handling misplaces runs across DST changes, so it walks
+    # naive wall-clock times and zoneinfo maps each one to UTC.
+    zone = ZoneInfo(tz)
+    local_base = base_time.replace(tzinfo=timezone.utc).astimezone(zone)
+    cron = croniter(cron_expression, local_base.replace(tzinfo=None))
+    while True:
+        local = cron.get_next(datetime).replace(tzinfo=zone)
+        candidate = local.astimezone(timezone.utc).replace(tzinfo=None)
+        if candidate > base_time:
+            return candidate
 
 
 def iso_utc(dt: datetime | None) -> str | None:
@@ -139,7 +155,9 @@ class ScheduledTask(Base):
             self.next_scheduled_time = None
         elif self.next_scheduled_time is None and self.cron_expression:
             # Resuming a paused recurring task: schedule the next run from now.
-            self.next_scheduled_time = compute_next_cron(self.cron_expression)
+            self.next_scheduled_time = compute_next_cron(
+                self.cron_expression, self.user.timezone
+            )
         # value=True with a next already set, or a one-off with no cron: no-op.
 
     def serialize(self) -> dict[str, Any]:

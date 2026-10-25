@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import APIKey, HumanUser, UserSession
+from memory.common.db.models import APIKey, HumanUser, ScheduledTask, UserSession
 from memory.common.db.models.users import verify_password
 
 
@@ -515,3 +515,70 @@ def test_api_key_agent_caps_must_be_positive(
 
     assert response.status_code in (400, 422)
     assert expected in response.text
+
+
+# --- Timezone Tests ---
+
+
+@pytest.mark.parametrize("tz", ["Europe/London", "Asia/Kolkata", "UTC"])
+def test_user_sets_own_timezone(regular_client: TestClient, user, db_session, tz):
+    response = regular_client.patch(f"/users/{user.id}", json={"timezone": tz})
+
+    assert response.status_code == 200
+    assert response.json()["timezone"] == tz
+    db_session.refresh(user)
+    assert user.timezone == tz
+
+
+@pytest.mark.parametrize("tz", ["Mars/Olympus_Mons", "", "../../etc/passwd"])
+def test_update_user_rejects_unknown_timezone(client: TestClient, admin_user, db_session, tz):
+    response = client.patch(f"/users/{admin_user.id}", json={"timezone": tz})
+
+    assert response.status_code == 422
+    db_session.refresh(admin_user)
+    assert admin_user.timezone == "UTC"
+
+
+def test_admin_sets_another_users_timezone(client: TestClient, admin_user, db_session):
+    target = HumanUser.create_with_password(email="tz_target@example.com", name="TZ", password="pass12345")
+    db_session.add(target)
+    db_session.commit()
+
+    response = client.patch(f"/users/{target.id}", json={"timezone": "Asia/Tokyo"})
+
+    assert (response.status_code, response.json()["timezone"]) == (200, "Asia/Tokyo")
+    assert client.get(f"/users/{target.id}").json()["timezone"] == "Asia/Tokyo"
+
+
+def test_regular_user_cannot_set_another_users_timezone(regular_client: TestClient, user, db_session):
+    target = HumanUser.create_with_password(email="tz_other@example.com", name="Other", password="pass12345")
+    db_session.add(target)
+    db_session.commit()
+
+    response = regular_client.patch(f"/users/{target.id}", json={"timezone": "Asia/Tokyo"})
+
+    assert response.status_code == 403
+    db_session.refresh(target)
+    assert target.timezone == "UTC"
+
+
+def test_changing_timezone_moves_pending_cron_runs(client: TestClient, admin_user, db_session):
+    def task(cron):
+        return ScheduledTask(
+            user_id=admin_user.id, task_type="notification", cron_expression=cron,
+            next_scheduled_time=datetime(2999, 1, 1, 9),
+        )
+    recurring, paused, one_off = task("0 9 * * *"), task("0 9 * * *"), task(None)
+    paused.next_scheduled_time = None
+    db_session.add_all([recurring, paused, one_off])
+    db_session.commit()
+
+    client.patch(f"/users/{admin_user.id}", json={"timezone": "Asia/Kolkata"})
+
+    db_session.refresh(recurring)
+    db_session.refresh(paused)
+    db_session.refresh(one_off)
+    assert recurring.next_scheduled_time is not None
+    assert (recurring.next_scheduled_time.hour, recurring.next_scheduled_time.minute) == (3, 30)
+    assert paused.next_scheduled_time is None
+    assert one_off.next_scheduled_time == datetime(2999, 1, 1, 9)

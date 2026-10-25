@@ -75,3 +75,25 @@ async def test_notify_user_immediate_creates_no_rows(
         "Hi",
         {"discord_bot_id": 7},
     ]
+
+
+@pytest.mark.parametrize(
+    "scheduled_time, stored",
+    [
+        ("2999-01-01T09:00:00", "2999-01-01T03:30:00Z"),
+        ("2999-01-01T09:00:00Z", "2999-01-01T09:00:00Z"),
+    ],
+)
+@patch("memory.api.MCP.servers.meta.get_notification_channel")
+@pytest.mark.asyncio
+async def test_notify_user_reads_a_naive_time_in_the_users_timezone(
+    mock_channel, db_session, regular_user, user_session, scheduled_time, stored
+):
+    mock_channel.return_value = ("discord", "123456789", {"discord_bot_id": 7})
+    regular_user.timezone = "Asia/Kolkata"
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        result = await meta.notify_user.fn(subject="Hi", message="body", scheduled_time=scheduled_time)
+
+    assert result["scheduled_time"] == stored

@@ -108,6 +108,7 @@ export interface AuthUser {
   email: string
   user_type: 'human' | 'bot'
   scopes: string[]
+  timezone: string
 }
 
 export const useAuth = () => {
@@ -172,6 +173,7 @@ export const useAuth = () => {
       email: userData.email,
       user_type: userData.user_type,
       scopes: userData.scopes || [],
+      timezone: userData.timezone,
     })
     setIsAuthenticated(true)
     setIsLoading(false)

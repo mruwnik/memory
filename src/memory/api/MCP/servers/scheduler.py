@@ -15,9 +15,9 @@ from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
-from memory.common.dates import parse_iso_datetime
+from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledTask, TaskExecution
+from memory.common.db.models import ScheduledTask, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.db.models.secrets import find_secret
 from memory.common.scopes import (
@@ -212,15 +212,14 @@ def build_scheduled_task(
     if bool(cron_expression) == bool(scheduled_time):
         raise ValueError("Provide exactly one of cron_expression or scheduled_time")
 
+    owner_tz = session.get_one(User, user_id).timezone
     if cron_expression:
         validate_cron_interval(cron_expression)
-        next_time = compute_next_cron(cron_expression)
+        next_time = compute_next_cron(cron_expression, owner_tz)
     else:
-        parsed = parse_iso_datetime(scheduled_time)
+        parsed = parse_wall_clock_utc(scheduled_time, owner_tz)
         if parsed is None:
             raise ValueError("Invalid datetime format for scheduled_time")
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
         if parsed <= datetime.now(timezone.utc).replace(tzinfo=None):
             raise ValueError("scheduled_time must be in the future")
         next_time = parsed
@@ -320,8 +319,10 @@ async def upsert(
         task_type: "notification" or "claude_session" (create only; an existing
             task's type is immutable).
         enabled: Whether the task is enabled (disabling clears its next run time).
-        cron_expression: Cron schedule expression (5-field).
-        scheduled_time: ISO datetime for a one-time task (create only).
+        cron_expression: Cron schedule expression (5-field), in the user's
+            timezone (see meta_get_user).
+        scheduled_time: ISO datetime for a one-time task (create only). Without
+            an offset it is read in the user's timezone (see meta_get_user).
         topic: Topic/subject of the task.
         message: Notification body, or the Claude session's initial prompt.
         notification_channel: Notification channel (discord, slack, email).
@@ -410,7 +411,9 @@ async def upsert(
         if cron_expression is not None:
             validate_cron_interval(cron_expression)
             task.cron_expression = cron_expression
-            task.next_scheduled_time = compute_next_cron(cron_expression)
+            task.next_scheduled_time = compute_next_cron(
+                cron_expression, task.user.timezone
+            )
 
         if enabled is not None:
             task.enabled = enabled
