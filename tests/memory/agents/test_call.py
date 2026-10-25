@@ -1,9 +1,10 @@
 import asyncio
+import logging
 from decimal import Decimal
 
 import pytest
 
-from memory.agents import caps, provider_keys
+from memory.agents import call, caps, provider_keys
 from memory.agents.call import LLMError, Record, run_agent, run_agent_sync
 from memory.agents.provider_keys import Credential, credential
 from memory.agents.system import SUMMARISE
@@ -80,6 +81,31 @@ async def test_a_call_its_caller_gave_up_on_is_still_charged(db_session, regular
 
     db_session.expire_all()
     assert db_session.query(LLMSpend).one().calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_detached_call_that_fails_unexpectedly_is_logged(
+    db_session, regular_user, llm_key, scripted_llm, monkeypatch, caplog
+):
+    async def slow():
+        await asyncio.sleep(0.1)
+        return submitted(SUMMARY)
+
+    def broken_charge(*args):
+        raise RuntimeError("db down")
+
+    scripted_llm.script = [slow]
+    monkeypatch.setattr(call, "charge", broken_charge)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST),
+            timeout=0.01,
+        )
+    await asyncio.sleep(0.3)
+
+    records = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == call.__name__]
+    assert records == [(logging.WARNING, "LLM call failed after it was sent: RuntimeError")]
 
 
 @pytest.mark.asyncio

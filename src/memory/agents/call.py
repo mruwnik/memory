@@ -24,6 +24,7 @@ from memory.agents.system import SystemAgent, system_agent
 from memory.common.db.connection import make_session
 from memory.common.db.models import AgentRun, AgentRunStep, KeyStatus, LLMProviderKey
 from memory.common.db.models.agents import RunStatus
+from memory.common.llms import PROVIDER_ERRORS
 from memory.common.llms.neutral import Completion, NeutralMessage, Text, ToolCall
 from memory.common.llms.registry import get_provider
 from memory.common.llms.tools import ToolDefinition
@@ -187,6 +188,16 @@ def record_run(
 _detached: set[asyncio.Task] = set()
 
 
+def log_unexpected_failure(call: asyncio.Task) -> None:
+    """A detached call's failure has no one to raise to. Retrieving it stops asyncio
+    logging it, text and all, at ERROR; only failures nobody expects are kept."""
+    if call.cancelled():
+        return
+    e = call.exception()
+    if e is not None and not isinstance(e, (LLMError, TimeoutError, *PROVIDER_ERRORS)):
+        logger.warning(f"LLM call failed after it was sent: {type(e).__name__}")
+
+
 async def run_agent(
     agent: str, prompt: str, *, user: int, key: Credential, record: Record
 ) -> Result:
@@ -194,7 +205,8 @@ async def run_agent(
 
     Raises LLMError when the key can't pay (another provider, deleted, rejected,
     its daily pool spent) or the model gave no usable answer; a turn that was
-    billed is recorded either way, even when the caller gives up on it first.
+    billed is recorded either way, even when the caller gives up on it first (while
+    the event loop lives on: `run_agent_sync`'s loop cancels it on exit).
     Transient provider errors (rate limits, 5xx, connection errors, timeouts)
     propagate unchanged.
     """
@@ -208,8 +220,7 @@ async def run_agent(
     )
     _detached.add(call)
     call.add_done_callback(_detached.discard)
-    # A detached call's failure has no one to raise to; retrieving it keeps asyncio quiet.
-    call.add_done_callback(lambda t: t.cancelled() or t.exception())
+    call.add_done_callback(log_unexpected_failure)
     # A caller's timeout mustn't cancel a call the provider may already be billing.
     return await asyncio.shield(call)
 
