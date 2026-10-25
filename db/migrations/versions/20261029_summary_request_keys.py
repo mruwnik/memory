@@ -21,7 +21,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # A request inserted between the delete and the NOT NULL column would fail the migration.
+    # Fail rather than hang behind workers that were left running.
+    op.execute("SET LOCAL lock_timeout = '30s'")
     op.execute("LOCK TABLE summary_request IN ACCESS EXCLUSIVE MODE")
+    op.execute("SET LOCAL lock_timeout = 0")
     op.execute("DELETE FROM summary_request")
     op.add_column(
         "summary_request",
