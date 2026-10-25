@@ -397,39 +397,44 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
           </Select>
         </Field>
 
-        <Disclosure summary="Set up a personal access token">
-          <p>
-            Open{' '}
-            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline">
-              GitHub personal access token settings
-            </a>{' '}
-            and generate a token for the account and repositories you want to sync.
-          </p>
-          <ol className="list-decimal pl-5 mt-2 space-y-1">
-            <li>Choose an expiration date and grant permission to read the repository data you want to ingest.</li>
-            <li>Complete any organization approval or SSO authorization required for those repositories.</li>
-            <li>Copy the generated token and paste it into the Access token field. GitHub only shows the token once.</li>
-          </ol>
-          <p className="mt-2">No callback URL or webhook is needed. After saving, add the repositories you want to sync in Memory. Replace the token here when it expires.</p>
-        </Disclosure>
-
-        <Disclosure summary="Set up a GitHub App">
-          <p>
-            Open{' '}
-            <a href="https://github.com/settings/apps" target="_blank" rel="noopener noreferrer" className="underline">
-              GitHub Apps settings
-            </a>{' '}
-            and select your app, or choose “New GitHub App”.
-          </p>
-          <ol className="list-decimal pl-5 mt-2 space-y-1">
-            <li>Leave the callback URL blank and uncheck “Active” under Webhook. Memory uses installation credentials and polling, so neither an OAuth redirect nor a webhook is needed.</li>
-            <li>Copy the App ID from the app’s settings.</li>
-            <li>Choose “Install App”, install it on your account or organization, and grant access to the repositories you want to sync.</li>
-            <li>Open the installation’s configuration page and copy the number after /installations/ in its URL.</li>
-            <li>In the app’s settings, choose “Generate a private key” and paste the downloaded PEM file below.</li>
-          </ol>
-          <p className="mt-2">Memory polls GitHub for updates; no webhook setup is needed. After saving, add the repositories you want to sync in Memory.</p>
-        </Disclosure>
+        {formData.auth_type === 'pat' ? (
+          <Disclosure key="pat" summary="Instructions">
+            <p>
+              Open{' '}
+              <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline">
+                GitHub personal access token settings
+              </a>{' '}
+              and generate a token for the account and repositories you want to sync.
+            </p>
+            <ol className="list-decimal pl-5 mt-2 space-y-1">
+              <li>For a fine-grained token, choose the resource owner and repositories, then grant repository permissions: Issues → Read-only and Pull requests → Read-only. Metadata read access is automatic.</li>
+              <li>Choose an expiration date. For a classic token accessing private repositories, use the repo scope; it grants broader access than a fine-grained token. Complete any organization approval or SSO authorization required.</li>
+              <li>Copy the generated token and paste it into the Access token field. GitHub only shows the token once.</li>
+            </ol>
+            <p className="mt-2">No callback URL or webhook is needed. After saving, add the repositories you want to sync in Memory. Replace the token here when it expires.</p>
+          </Disclosure>
+        ) : (
+          <Disclosure key="app" summary="Instructions">
+            <p>
+              Open{' '}
+              <a href="https://github.com/settings/apps" target="_blank" rel="noopener noreferrer" className="underline">
+                GitHub Apps settings
+              </a>{' '}
+              and select your app, or choose “New GitHub App”.
+            </p>
+            <ol className="list-decimal pl-5 mt-2 space-y-1">
+              <li>Leave the callback URL blank and uncheck “Active” under Webhook. Memory uses installation credentials and polling, so neither an OAuth redirect nor a webhook is needed.</li>
+              <li>Under Permissions &amp; events → Repository permissions, set Issues → Read-only and Pull requests → Read-only. Metadata read access is automatic. No write permissions are needed for ingestion.</li>
+              <li>If syncing organization Projects or their fields, also grant Organization permissions → Projects → Read-only.</li>
+              <li>Save the permissions. For an existing installation, approve the updated permissions in its configuration page.</li>
+              <li>Copy the App ID from the app’s settings.</li>
+              <li>Choose “Install App”, install it on the account or organization that owns the repositories, and choose “All repositories” or “Only select repositories”. Select the repositories you want to sync.</li>
+              <li>Open the installation’s configuration page and copy the number after /installations/ in its URL.</li>
+              <li>In the app’s settings, choose “Generate a private key” and paste the downloaded PEM file below.</li>
+            </ol>
+            <p className="mt-2">If no repositories appear, check the installation’s repository selection, pending organization approval, and Installation ID. GitHub hides repository-selection controls when the app requests no repository permissions. After updating the installation, reopen Manage repos in Memory.</p>
+          </Disclosure>
+        )}
 
         {formData.auth_type === 'pat' ? (
           <Field label={<>

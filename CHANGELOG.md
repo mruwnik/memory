@@ -24,6 +24,9 @@ None.
 
 ### Other changes for operators
 
+GitHub account setup shows instructions only for the selected authentication
+method, with explicit read permissions and installation repository-access steps.
+
 - Google Calendar fetch and queue failures now appear on the calendar account
   instead of being reported as successful empty syncs.
 
