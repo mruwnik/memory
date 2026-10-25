@@ -109,7 +109,7 @@ describe('FeedsPanel create flow', () => {
 describe('FeedsPanel form labels', () => {
   it('labels the tags input, tag remove buttons and the interval fields', async () => {
     mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('No RSS feeds configured')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add feed' }))
     const dialog = await screen.findByRole('dialog')
@@ -130,7 +130,7 @@ describe('FeedsPanel mutate flows', () => {
       if (String(input).includes('/article-feeds') && method === 'GET' && ++gets > 1) return new Promise<Response>(() => {})
       return { ok: true, status: 200, json: async () => String(input).includes('/article-feeds') ? [feed] : {} } as unknown as Response
     })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(gets).toBe(2))
@@ -146,7 +146,7 @@ describe('FeedsPanel mutate flows', () => {
       }
       return { ok: true, status: 200, json: async () => String(input).includes('/article-feeds') ? [feed] : {} } as unknown as Response
     })
-    const { user } = renderWithUser(<FeedsPanel />)
+    const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))

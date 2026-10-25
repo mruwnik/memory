@@ -243,7 +243,7 @@ describe('AccountsPanel google connect', () => {
     const popup = { location: { href: '' }, closed: false, close: vi.fn() }
     vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window)
     const mock = mockFetchRoutes(googleRoutes)
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await user.click(await screen.findByRole('button', { name: open }))
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: confirm }))
 
@@ -265,7 +265,7 @@ describe('AccountsPanel google connect', () => {
     const popup = { location: { href: '' }, closed: false, close: vi.fn() }
     vi.spyOn(window, 'open').mockImplementation(() => popup as unknown as Window)
     mockFetchRoutes(googleRoutes)
-    const { user } = renderWithUser(<AccountsPanel />)
+    const { user } = renderWithRouter(<AccountsPanel />)
     await user.click(await screen.findByRole('button', { name: 'Connect account' }))
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Connect' }))
     await screen.findByText(/Waiting for Google/)
