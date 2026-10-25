@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useId } from 'react'
+import { useState, useEffect, useCallback, useId, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import {
   useUsers,
   type User,
@@ -7,6 +8,8 @@ import {
   type ScopeInfo,
 } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
+import { ApiError } from '@/hooks/apiError'
+import { useModule } from '@/hooks/useModule'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, Fieldset, FormActions, Hint, Input, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
@@ -51,7 +54,8 @@ interface UserFormData {
 const UserManagement = () => {
   const { listUsers, listScopes, createUser, updateUser, deleteUser, regenerateApiKey, resetPassword } =
     useUsers()
-  const { user: currentUser } = useAuth()
+  const { user: currentUser, hasScope } = useAuth()
+  const multiUser = useModule('multi_user')
 
   const [users, setUsers] = useState<User[]>([])
   const [availableScopes, setAvailableScopes] = useState<ScopeInfo[]>([])
@@ -71,6 +75,9 @@ const UserManagement = () => {
   })
   const [createLoading, setCreateLoading] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const emailRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (emailError) emailRef.current?.focus() }, [emailError])
 
   // Edit modal state
   const [editingUser, setEditingUser] = useState<User | null>(null)
@@ -111,20 +118,25 @@ const UserManagement = () => {
     loadData()
   }, [loadData])
 
+  // The server refuses a second human without multi_user; say so before the form is filled in.
+  const humanLocked = !multiUser && users.some(u => u.user_type === 'human')
+  const userType = humanLocked ? 'bot' : createForm.user_type
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
     setCreateLoading(true)
     setCreateError(null)
+    setEmailError(null)
 
     try {
       const data: UserCreate = {
         name: createForm.name,
         email: createForm.email,
-        user_type: createForm.user_type,
+        user_type: userType,
         scopes: createForm.scopes,
       }
 
-      if (createForm.user_type === 'human') {
+      if (userType === 'human') {
         if (!createForm.password) {
           setCreateError('Password is required for human users')
           setCreateLoading(false)
@@ -137,7 +149,9 @@ const UserManagement = () => {
       closeCreateModal()
       await loadUsers()
     } catch (e) {
-      setCreateError(e instanceof Error ? e.message : 'Failed to create user')
+      const onEmail = e instanceof ApiError ? e.fields.email : undefined
+      if (onEmail) setEmailError(onEmail)
+      else setCreateError(e instanceof Error ? e.message : 'Failed to create user')
     } finally {
       setCreateLoading(false)
     }
@@ -191,6 +205,7 @@ const UserManagement = () => {
     setShowCreateModal(false)
     setCreateForm({ name: '', email: '', password: '', user_type: 'human', scopes: ['read'] })
     setCreateError(null)
+    setEmailError(null)
   }
 
   const closeEditModal = () => {
@@ -267,14 +282,16 @@ const UserManagement = () => {
           <form onSubmit={handleCreate} className="space-y-4">
             {createError && <Notice tone="error">{createError}</Notice>}
 
-            <Field label="User type">
+            <Field label="User type" hint={humanLocked && <>
+              This server allows one human user. Turn on the <code>multi_user</code> module in {hasScope('admin') ? <Link className="underline" to="/ui/server-settings">Server settings</Link> : 'Server settings'} for more.
+            </>}>
               <Select
-                value={createForm.user_type}
+                value={userType}
                 onChange={(e) =>
                   setCreateForm({ ...createForm, user_type: e.target.value as 'human' | 'bot' })
                 }
               >
-                <option value="human">Human</option>
+                <option value="human" disabled={humanLocked}>Human</option>
                 <option value="bot">Bot</option>
               </Select>
             </Field>
@@ -288,16 +305,17 @@ const UserManagement = () => {
               />
             </Field>
 
-            <Field label="Email">
+            <Field label="Email" error={emailError}>
               <Input
+                ref={emailRef}
                 type="email"
                 autoComplete="off"
                 value={createForm.email}
-                onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
+                onChange={(e) => { setCreateForm({ ...createForm, email: e.target.value }); setEmailError(null) }}
               />
             </Field>
 
-            {createForm.user_type === 'human' && (
+            {userType === 'human' && (
               <Field label="Password" hint="At least 8 characters">
                 <Input
                   type="password"

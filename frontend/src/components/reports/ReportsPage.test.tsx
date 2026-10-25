@@ -138,7 +138,7 @@ describe('ReportsPage', () => {
     renderWithRouter(<ReportsPage />)
     await waitFor(() => expect(screen.getByText('PDF report')).toBeInTheDocument())
     await user.click(screen.getByText('PDF report'))
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Open PDF' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Open PDF (opens in a new tab)' })).toBeInTheDocument())
   })
 
   it('deletes a report after confirming', async () => {

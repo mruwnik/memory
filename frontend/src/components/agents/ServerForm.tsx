@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { ExternalServer, ServerAuth, ServerTransport, ServerUpsertResult } from '@/hooks/useAgents'
-import { Button, Field, FormActions, Hint, Input, Notice, Select, Textarea, useSubmit } from '@/components/shared/ui'
+import { Button, Field, FormActions, Hint, Input, Notice, Select, Textarea, useSubmit, NewTabLink } from '@/components/shared/ui'
 
 type AuthChoice = 'keep' | 'auto' | 'bearer' | 'headers' | 'none'
 
@@ -144,7 +144,7 @@ export function ServerForm({ server, onSubmit }: {
       {result?.error && <Notice tone="error">{result.error}</Notice>}
       {result?.authorize_url && (
         <Notice tone="info">
-          Finish connecting in the tab that just opened, or <a className="underline" href={result.authorize_url} target="_blank" rel="noopener noreferrer">open the authorization page</a>.
+          Finish connecting in the tab that just opened, or <NewTabLink className="underline" href={result.authorize_url}>open the authorization page</NewTabLink>.
         </Notice>
       )}
       {result?.secret_sent_to && (

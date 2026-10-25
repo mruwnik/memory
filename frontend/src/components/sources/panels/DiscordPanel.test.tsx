@@ -181,7 +181,7 @@ describe('DiscordPanel bot actions', () => {
     const { user } = renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add to server' }))
-    expect(await screen.findByRole('link', { name: 'Open the Discord invite' })).toHaveAttribute('href', 'https://discord.com/invite/xyz')
+    expect(await screen.findByRole('link', { name: 'Open the Discord invite (opens in a new tab)' })).toHaveAttribute('href', 'https://discord.com/invite/xyz')
   })
 })
 

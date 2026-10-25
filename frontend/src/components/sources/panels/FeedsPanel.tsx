@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, ArticleFeed, LLMKeyChoice } from '@/hooks/useSources'
 import { SourceRow, TagsInput, IntervalInput } from '../shared'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
+import { ApiError } from '@/hooks/apiError'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 export const FeedsPanel = () => {
@@ -133,15 +134,22 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [urlError, setUrlError] = useState<string | null>(null)
+  const urlRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { if (urlError) urlRef.current?.focus() }, [urlError])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmitting(true)
     setError(null)
+    setUrlError(null)
     try {
       await onSubmit(formData)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save')
+      const onUrl = e instanceof ApiError ? e.fields.url : undefined
+      if (onUrl) setUrlError(onUrl)
+      else setError(e instanceof Error ? e.message : 'Failed to save')
     } finally {
       setSubmitting(false)
     }
@@ -152,11 +160,12 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
-        <Field label="Feed URL">
+        <Field label="Feed URL" error={urlError}>
           <Input
+            ref={urlRef}
             type="url"
             value={formData.url}
-            onChange={e => setFormData({ ...formData, url: e.target.value })}
+            onChange={e => { setFormData({ ...formData, url: e.target.value }); setUrlError(null) }}
             required
             disabled={!!feed}
             placeholder="https://example.com/feed.xml"

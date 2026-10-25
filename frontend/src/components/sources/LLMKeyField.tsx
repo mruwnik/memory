@@ -1,8 +1,7 @@
 import { useEffect, useId, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { KEY_PROVIDERS, providerName, useAgents, type KeyList, type ProviderKey } from '@/hooks/useAgents'
 import type { LLMKeyChoice, LLMKeyView } from '@/hooks/useSources'
-import { Badge, ConfirmDialog, Field, Select } from '@/components/shared/ui'
+import { Badge, ConfirmDialog, Field, NewTabLink, Select } from '@/components/shared/ui'
 
 // The API never identifies another user's key, so it can't be re-selected; this value
 // only stands in for it while it is the current choice.
@@ -33,6 +32,8 @@ const noWayBack = (view: LLMKeyView | undefined): string | null => {
   return null
 }
 
+const REFRESH_MS = 30_000
+
 // A panel mounts one field per row at once; they share one request.
 let inflight: Promise<KeyList> | null = null
 const loadKeys = (listKeys: () => Promise<KeyList>) => (inflight ??= listKeys().finally(() => { inflight = null }))
@@ -58,10 +59,22 @@ export function LLMKeyField({ value, onChange, compact = false }: {
   const badgeId = useId()
   useEffect(() => setPending(undefined), [value])
   useEffect(() => {
-    loadKeys(listKeys)
-      .then(r => { setKeys(KEY_PROVIDERS.flatMap(p => r.providers[p] ?? [])); setKeysFailed(false) })
-      .catch(() => setKeysFailed(true))
-  }, [listKeys])
+    let loaded = false
+    let lastLoad = 0
+    // A failed refresh keeps the list already shown rather than replacing it with an error.
+    const load = () => loadKeys(listKeys)
+      .then(r => { setKeys(KEY_PROVIDERS.flatMap(p => r.providers[p] ?? [])); setKeysFailed(false); loaded = true; lastLoad = Date.now() })
+      .catch(() => { if (!loaded) setKeysFailed(true) })
+    load()
+    if (compact) return
+    // "Manage LLM keys" opens in another tab, so a key added there shows up on coming back.
+    const refresh = () => {
+      if (Date.now() - lastLoad < REFRESH_MS) return
+      load()
+    }
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [listKeys, compact])
 
   const handleChange = async (choice: LLMKeyChoice) => {
     setPending(choice)
@@ -110,7 +123,7 @@ export function LLMKeyField({ value, onChange, compact = false }: {
     {confirm}
     <Field label="LLM key" error={keysFailed ? "Couldn't load your keys." : null} hint={<>
       {stopped && "No LLM work runs on this source's new items: no usable key pays for it. "}
-      Pays for summaries and other LLM work on this source's items. <Link className="underline" to="/ui/keys">Manage LLM keys</Link>
+      Pays for summaries and other LLM work on this source's items. <NewTabLink className="underline" to="/ui/keys">Manage LLM keys</NewTabLink>
     </>}>
       {select}
     </Field>

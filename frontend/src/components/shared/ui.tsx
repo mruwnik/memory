@@ -69,28 +69,33 @@ export const Section = ({ title, description, actions, children, className }: Se
 
 interface CardProps extends Omit<ComponentProps<'div'>, 'title'> {
   title?: ReactNode
+  /** A landmark region named by its title, for a page of distinct cards a screen reader user jumps between. */
+  region?: boolean
   description?: ReactNode
   actions?: ReactNode
   /** No padding, for cards whose content (tables, tab strips) runs edge to edge. */
   flush?: boolean
 }
 
-export const Card = ({ title, description, actions, flush, className, children, ...props }: CardProps) => (
-  <div className={cx('bg-white rounded-xl border border-slate-200 shadow-sm', !flush && 'p-4 md:p-6', className)} {...props}>
-    {(title || actions) && (
-      <div className={cx('flex flex-wrap items-center justify-between gap-2', flush ? 'px-4 py-3' : 'mb-4')}>
-        {title && (
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-            {description && <div className="text-sm text-slate-600">{description}</div>}
-          </div>
-        )}
-        {actions && <div className="flex flex-wrap items-center gap-2 ml-auto">{actions}</div>}
-      </div>
-    )}
-    {children}
-  </div>
-)
+export const Card = ({ title, description, actions, flush, region, className, children, ...props }: CardProps) => {
+  const titleId = useId()
+  return (
+    <div role={region ? 'region' : undefined} aria-labelledby={region && title ? titleId : undefined} className={cx('bg-white rounded-xl border border-slate-200 shadow-sm', !flush && 'p-4 md:p-6', className)} {...props}>
+      {(title || actions) && (
+        <div className={cx('flex flex-wrap items-center justify-between gap-2', flush ? 'px-4 py-3' : 'mb-4')}>
+          {title && (
+            <div className="space-y-1">
+              <h2 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h2>
+              {description && <div className="text-sm text-slate-600">{description}</div>}
+            </div>
+          )}
+          {actions && <div className="flex flex-wrap items-center gap-2 ml-auto">{actions}</div>}
+        </div>
+      )}
+      {children}
+    </div>
+  )
+}
 
 // ---- Collections ----
 
@@ -144,8 +149,10 @@ interface RowProps {
   badges?: ReactNode
   /** Short facts (time, counts, owner) joined with a middle dot; falsy entries are dropped. */
   meta?: ReactNode[]
-  /** Trailing buttons; on phones they sit under the meta line. */
+  /** Trailing buttons; on phones they sit under the meta line, unless the row is `compact`. */
   actions?: ReactNode
+  /** One short line (a name, a badge, one button) that keeps its actions beside it on phones, for long lists of toggles. */
+  compact?: boolean
   /** Archived, inactive or closed items: the title is greyed; say why with a badge. */
   muted?: boolean
   /** Description, errors, or expanded detail, under the header. */
@@ -156,14 +163,14 @@ interface RowProps {
 const STRETCH = 'text-left focus-visible:outline-none after:absolute after:inset-0 after:rounded focus-visible:after:outline-2 focus-visible:after:outline-primary'
 
 /** One item in a `List`: title, badges, meta line, trailing actions, then optional body. */
-export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, meta, actions, muted, children, className }: RowProps) => {
+export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, meta, actions, compact, muted, children, className }: RowProps) => {
   const facts = meta?.filter(m => m !== null && m !== undefined && m !== false && m !== '')
   const titleClass = cx('font-medium break-words', muted ? 'text-slate-500' : 'text-slate-800', (to || onSelect) && STRETCH)
   return (
-    <li className={cx('flex gap-3 px-4 py-3 text-sm', selected ? 'bg-primary/10' : (to || onSelect) && 'hover:bg-slate-50', className)}>
+    <li className={cx('flex gap-3 px-4 text-sm', compact ? 'py-1.5' : 'py-3', selected ? 'bg-primary/10' : (to || onSelect) && 'hover:bg-slate-50', className)}>
       {leading && <div className="shrink-0 pt-0.5">{leading}</div>}
       <div className="flex-1 min-w-0 space-y-2">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-x-4 gap-y-2">
+        <div className={cx('flex justify-between gap-x-4 gap-y-2', compact ? 'items-center' : 'flex-col sm:flex-row sm:items-start')}>
           <div className={cx('relative flex-1 min-w-0 space-y-0.5', (to || onSelect) && 'max-sm:min-h-11')}>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {to ? <Link to={to} className={titleClass} aria-current={selected || undefined}>{title}</Link>
@@ -188,9 +195,12 @@ export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, 
   )
 }
 
-/** An item's error inside a Row: the failure reason of a job, sync or run. */
-export const RowError = ({ children }: { children: ReactNode }) => (
-  <p className="text-sm text-red-700 whitespace-pre-wrap break-words">{children}</p>
+/**
+ * An item's error inside a Row: the failure reason of a job, sync or run. `live` announces it, for an
+ * error that appears in response to an action in the row; stored errors stay quiet on page load.
+ */
+export const RowError = ({ children, live }: { children: ReactNode; live?: boolean }) => (
+  <p role={live ? 'alert' : undefined} className="text-sm text-red-700 whitespace-pre-wrap break-words">{children}</p>
 )
 
 /** Previous/next paging under a List, for collections fetched a page at a time. */
@@ -381,6 +391,25 @@ interface ButtonProps extends ComponentProps<'button'> {
 export const Button = ({ variant, size, className, type = 'button', ...props }: ButtonProps) => (
   <button type={type} className={buttonClass(variant, size, className)} {...props} />
 )
+
+/** Marks a link that opens a new tab: an arrow-out-of-box icon, and the same said to screen readers. Put it last inside the link. */
+export const NewTabMark = () => <>
+  <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+    className="inline-block w-3 h-3 ml-1 -mt-0.5 shrink-0">
+    <path d="M9 2h5v5M14 2 7 9M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5" />
+  </svg>
+  {' '}<span className="sr-only">(opens in a new tab)</span>
+</>
+
+type NewTabLinkProps = Omit<ComponentProps<'a'>, 'target' | 'rel'> & ({ href: string; to?: never } | { to: string; href?: never })
+
+/** A link that opens in a new tab, marked as one. `to` for an app route, `href` for anywhere else. */
+export const NewTabLink = ({ to, href, children, ...props }: NewTabLinkProps) => {
+  const content = <>{children}<NewTabMark /></>
+  return to
+    ? <Link to={to} target="_blank" rel="noopener noreferrer" {...props}>{content}</Link>
+    : <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{content}</a>
+}
 
 export const ButtonLink = ({ variant, size, className, ...props }: LinkProps & Pick<ButtonProps, 'variant' | 'size'>) => (
   <Link className={buttonClass(variant, size, className)} {...props} />

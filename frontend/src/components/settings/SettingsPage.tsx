@@ -195,7 +195,7 @@ const McpServers = ({ row, busy, save }: RowProps) => {
       {row.error && <Notice tone="warning">{row.error}</Notice>}
       <List flush>
         {row.choices.map(server => (
-          <Row key={server} title={server} badges={<Badge tone={disabled.has(server) ? 'neutral' : 'success'}>{disabled.has(server) ? 'disabled' : 'enabled'}</Badge>}
+          <Row key={server} compact title={server} badges={<Badge tone={disabled.has(server) ? 'neutral' : 'success'}>{disabled.has(server) ? 'disabled' : 'enabled'}</Badge>}
             actions={<Button size="sm" aria-label={`${disabled.has(server) ? 'Enable' : 'Disable'} ${server}`} disabled={busy} onClick={() => toggle(server)}>{disabled.has(server) ? 'Enable' : 'Disable'}</Button>} />
         ))}
       </List>
@@ -235,24 +235,25 @@ const SettingsPage = ({ onRestarted }: Props) => {
       {state?.restart_pending && <RestartBanner state={state} onRestart={restart} busy={restarting} />}
       {notice}
       {voyage && (
-        <Card title="Embeddings" description="Applies live.">
+        <Card region title="Embeddings" description="Applies live.">
           <VoyageKey row={voyage} busy={busy} save={save} />
         </Card>
       )}
       {modules.length > 0 && (
-        <Card title="Modules" description={MODULES_DESCRIPTION} flush>
+        <Card region title="Modules" description={MODULES_DESCRIPTION} flush>
           <ModuleToggles rows={modules} busy={busy} save={save} />
         </Card>
       )}
       {state && (
-        <Card title="MCP servers" description="A disabled server's tools disappear for every user and agent within about 30 seconds. A module's servers go with the module.">
+        <Card region title="MCP servers" description="A disabled server's tools disappear for every user and agent within about 30 seconds. A module's servers go with the module."
+          actions={mcp && <SourceBadge row={mcp} />}>
           {mcp
             ? <McpServers row={mcp} busy={busy} save={save} />
             : <Notice tone="warning">This api does not report the {MCP_SETTING_KEY} setting, so MCP servers can't be managed here.</Notice>}
         </Card>
       )}
       {ceilings.length > 0 && (
-        <Card title="Search" description="Ceilings: a feature turned off here is off for every search, whatever the request asks." flush>
+        <Card region title="Search" description="Ceilings: a feature turned off here is off for every search, whatever the request asks." flush>
           <List flush>{ceilings.map(row => <Toggle key={row.key} row={row} busy={busy} save={save} />)}</List>
         </Card>
       )}

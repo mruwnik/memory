@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderWithRouter, screen, waitFor, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, screen, waitFor, within, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import SettingsPage from './SettingsPage'
 import type { SettingRow, SettingsState } from '@/hooks/useSettings'
 
@@ -225,6 +225,17 @@ describe('SettingsPage toggles', () => {
     await user.click(screen.getByRole('button', { name: 'Disable github' }))
 
     await waitFor(() => expect(calls.find(c => c.method === 'PATCH')?.body).toEqual({ values: { disabled_mcp_servers: ['forecast', 'github'] } }))
+  })
+
+  it.each([
+    ['env', 'set by the operator'],
+    ['ui', 'set here'],
+    ['default', 'default'],
+  ] as const)('says where the MCP server list comes from (%s)', async (source, label) => {
+    install(state([row({ key: 'disabled_mcp_servers', kind: 'list', description: 'Disabled MCP servers', env_var: 'DISABLED_MCP_SERVERS', value: [], choices: ['core'], source, locked: source === 'env' })]))
+    renderWithRouter(<SettingsPage />)
+    const card = await screen.findByRole('region', { name: 'MCP servers' })
+    expect(within(card).getByText(label)).toBeInTheDocument()
   })
 
   it('files only the search ceilings under Search and warns when the MCP setting is missing', async () => {

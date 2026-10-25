@@ -472,6 +472,18 @@ def test_create_user_allows_one_human_without_multi_user(
     assert response.status_code == status
 
 
+def test_create_user_points_a_taken_email_at_the_email_field(client: TestClient, admin_user):
+    response = client.post(
+        "/users",
+        json={"name": "Bot", "email": admin_user.email, "user_type": "bot", "scopes": ["read"]},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == [
+        {"loc": ["body", "email"], "msg": "User with this email already exists", "type": "value_error"}
+    ]
+
+
 def add_humans(db_session, *scopes: list[str]):
     for i, user_scopes in enumerate(scopes):
         human = HumanUser.create_with_password(

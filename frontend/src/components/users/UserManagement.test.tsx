@@ -194,6 +194,22 @@ describe('UserManagement create flow', () => {
     expect(within(modal).queryByText('Password')).not.toBeInTheDocument()
   })
 
+  it.each([
+    ['without multi_user, once a human exists', new Set<string>(), [user()], true],
+    ['without multi_user, before any human exists', new Set<string>(), [user({ user_type: 'bot' })], false],
+    ['with multi_user', new Set(['multi_user']), [user()], false],
+  ])('offers a human user %s', async (_, modules, users, locked) => {
+    installFetch({ users })
+    const { user: ue } = renderWithRouter(<UserManagement />, { modules })
+    await screen.findByText(users[0].name)
+    await ue.click(screen.getByRole('button', { name: /New user/ }))
+    const type = screen.getByRole('combobox', { name: 'User type' }) as HTMLSelectElement
+    expect(type.value).toBe(locked ? 'bot' : 'human')
+    expect((within(type).getByRole('option', { name: 'Human' }) as HTMLOptionElement).disabled).toBe(locked)
+    expect(screen.queryAllByText(/This server allows one human user/)).toHaveLength(locked ? 1 : 0)
+    expect(screen.queryAllByRole('link', { name: 'Server settings' }).map(a => a.getAttribute('href'))).toEqual(locked ? ['/ui/server-settings'] : [])
+  })
+
   it('surfaces a server error inside the create modal', async () => {
     installFetch(
       { users: [] },
@@ -208,6 +224,26 @@ describe('UserManagement create flow', () => {
     await ue.type(fieldByLabel(modal, 'Password'), 'secretpw')
     await ue.click(screen.getByRole('button', { name: 'Create user' }))
     expect(await screen.findByText('email taken')).toBeInTheDocument()
+  })
+
+  it('shows a taken email on the email field', async () => {
+    installFetch(
+      { users: [] },
+      { 'POST /users': () => mockResponse({ status: 400, json: { detail: [{ loc: ['body', 'email'], msg: 'User with this email already exists' }] } }) },
+    )
+    const { user: ue } = renderWithRouter(<UserManagement />)
+    await screen.findByText(/No users found/)
+    await ue.click(screen.getByRole('button', { name: /New user/ }))
+    const modal = modalByHeading('New user')
+    await ue.type(fieldByLabel(modal, 'Name'), 'Carol')
+    await ue.type(fieldByLabel(modal, 'Email'), 'c@x.com')
+    await ue.type(fieldByLabel(modal, 'Password'), 'secretpw')
+    await ue.click(screen.getByRole('button', { name: 'Create user' }))
+    await waitFor(() => expect(fieldByLabel(modal, 'Email')).toHaveAccessibleDescription('User with this email already exists'))
+    expect(fieldByLabel(modal, 'Email')).toHaveFocus()
+    expect(within(modal).queryByRole('alert')).not.toBeInTheDocument()
+    await ue.type(fieldByLabel(modal, 'Email'), 'm')
+    expect(fieldByLabel(modal, 'Email')).not.toHaveAccessibleDescription('User with this email already exists')
   })
 
   it('toggles scopes via checkboxes', async () => {

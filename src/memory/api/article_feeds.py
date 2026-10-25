@@ -15,6 +15,7 @@ from memory.common.db.models.sources import ArticleFeed
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 from memory.parsers.feeds import get_feed_parser
 from memory.api.auth import get_current_user
+from memory.api.field_errors import field_error
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 
 router = APIRouter(prefix="/article-feeds", tags=["article-feeds"])
@@ -37,19 +38,20 @@ def get_owned_feed(db: Session, user: User, feed_id: int) -> ArticleFeed:
     return feed
 
 
-def reject_unsafe_url(url: str) -> None:
+def reject_unsafe_url(url: str, loc: tuple[str, ...] | None = None) -> None:
     """Map ``UnsafeURLError`` to HTTP 400 for the public API.
 
     Centralised so the message stays consistent across endpoints —
     creating, syncing, and discovery all share the same SSRF gate.
+    ``loc`` names the request field the URL came from, if it came from one.
     """
     try:
         validate_public_url(url)
     except UnsafeURLError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"URL is not allowed: {exc}",
-        ) from exc
+        msg = f"URL is not allowed: {exc}"
+        if loc:
+            raise field_error(loc, msg) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
 
 
 class ArticleFeedCreate(BaseModel):
@@ -132,13 +134,13 @@ def create_feed(
 ) -> ArticleFeedResponse:
     """Create a new article feed owned by the calling user."""
     url_str = str(data.url)
-    reject_unsafe_url(url_str)
+    reject_unsafe_url(url_str, ("body", "url"))
 
     # Check for duplicate URL — feeds are globally URL-unique today, so two
     # users can't both own the same feed. (Future: per-user uniqueness.)
     existing = db.query(ArticleFeed).filter(ArticleFeed.url == url_str).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Feed with this URL already exists")
+        raise field_error(("body", "url"), "Feed with this URL already exists")
 
     feed = ArticleFeed(
         user_id=user.id,
@@ -240,7 +242,7 @@ def discover_feed(
 ) -> FeedDiscoveryResponse:
     """Auto-discover feed metadata from a URL."""
     url_str = str(url)
-    reject_unsafe_url(url_str)
+    reject_unsafe_url(url_str, ("query", "url"))
     parser = get_feed_parser(url_str)
 
     if not parser:

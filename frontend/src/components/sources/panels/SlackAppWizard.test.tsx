@@ -178,7 +178,7 @@ describe('SlackAppWizard - oauth redirect', () => {
     await user.click(screen.getByRole('button', { name: 'Authorize workspace' }))
     await waitFor(() => expect(issueOAuthState).toHaveBeenCalledWith(5))
     expect(openSpy).toHaveBeenCalledTimes(1)
-    const url = (await screen.findByRole('link', { name: 'Open Slack authorization' })).getAttribute('href')!
+    const url = (await screen.findByRole('link', { name: 'Open Slack authorization (opens in a new tab)' })).getAttribute('href')!
     expect(url).toContain('https://slack.com/oauth/v2/authorize?')
     expect(url).toContain('client_id=cid-123')
     expect(url).toContain('state=signed-state')

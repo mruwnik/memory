@@ -86,13 +86,18 @@ describe('FeedsPanel create flow', () => {
     })
   })
 
-  it('shows a create failure inside the open form, keeping the input', async () => {
+  const urlError = (msg: string) => [{ loc: ['body', 'url'], msg, type: 'value_error' }]
+  it.each([
+    ['on the Feed URL field when the server names it', urlError('URL is not allowed: non-public IP'), 'URL is not allowed: non-public IP', true],
+    ['on the Feed URL field for a duplicate', urlError('Feed with this URL already exists'), 'Feed with this URL already exists', true],
+    ['in a banner when it names no field, even if it mentions the URL', 'Could not parse feed from URL', 'Could not parse feed from URL', false],
+  ])('shows a create failure inside the open form, %s', async (_, detail, message, onField) => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
     mock.mockImplementation(async (input, init) => {
       const url = String(input)
       const method = (init as RequestInit)?.method ?? 'GET'
       if (url.includes('/article-feeds') && method === 'POST') {
-        return { ok: false, status: 422, json: async () => ({ detail: 'bad feed url' }) } as unknown as Response
+        return { ok: false, status: 422, json: async () => ({ detail }) } as unknown as Response
       }
       return { ok: true, status: 200, json: async () => [] } as unknown as Response
     })
@@ -102,8 +107,12 @@ describe('FeedsPanel create flow', () => {
     const dialog = await screen.findByRole('dialog')
     await user.type(field(dialog, 'Feed URL'), 'https://bad')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
-    expect(await within(dialog).findByText('bad feed url')).toBeInTheDocument()
+    expect(await within(dialog).findByText(message)).toBeInTheDocument()
     expect(field(dialog, 'Feed URL')).toHaveValue('https://bad')
+    expect(field(dialog, 'Feed URL')).toHaveAccessibleDescription(onField ? message : '')
+    expect(within(dialog).queryAllByRole('alert').map(a => a.textContent)).toEqual(onField ? [] : [message])
+    // Focus moves to the field so a screen reader reads the error with it.
+    expect(field(dialog, 'Feed URL') === document.activeElement).toBe(onField)
   })
 })
 

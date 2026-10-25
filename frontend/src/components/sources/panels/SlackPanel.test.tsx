@@ -257,7 +257,7 @@ describe('SlackPanel - workspace actions', () => {
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { llm_key: 'none' }))
   })
 
-  it("shows in the workspace's row why its LLM key didn't change", async () => {
+  it("announces in the workspace's row why its LLM key didn't change", async () => {
     updateWorkspace.mockRejectedValueOnce(new Error('only the owner can do that'))
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
@@ -266,7 +266,7 @@ describe('SlackPanel - workspace actions', () => {
     await user.selectOptions(select, 'none')
 
     const row = screen.getByText('Acme').closest('li')!
-    expect(await within(row).findByText('only the owner can do that')).toBeInTheDocument()
+    expect(await within(row).findByRole('alert')).toHaveTextContent('only the owner can do that')
     expect(select).toHaveValue('default')
   })
 

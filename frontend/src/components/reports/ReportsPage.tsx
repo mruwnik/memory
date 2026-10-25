@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useReports, type Report } from '@/hooks/useReports'
 import { TagsInput } from '../sources/shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Page, PaneHeader, Row, SplitView, Textarea, ToggleGroup, buttonClass, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Page, PaneHeader, Row, SplitView, Textarea, ToggleGroup, buttonClass, useActionNotice, NewTabMark } from '@/components/shared/ui'
 import { formatRelativeTime } from '../sources/shared'
 
 type FormMode = 'html' | 'upload'
@@ -262,7 +262,7 @@ const ReportsPage = () => {
               ) : reportFormat(selectedReport) === 'pdf' ? (
                 <div className="flex flex-col items-center justify-center gap-4 h-full text-slate-600">
                   <p>PDF reports open in a new tab.</p>
-                  <a href={reportUrl(selectedReport)!} target="_blank" rel="noopener noreferrer" className={buttonClass('primary')}>Open PDF</a>
+                  <a href={reportUrl(selectedReport)!} target="_blank" rel="noopener noreferrer" className={buttonClass('primary')}>Open PDF<NewTabMark /></a>
                 </div>
               ) : (
                 <iframe

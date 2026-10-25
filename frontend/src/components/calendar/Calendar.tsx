@@ -4,7 +4,7 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
-import { Badge, Button, Card, Checkbox, DetailList, LoadingState, Modal, Notice, Page, buttonClass } from '@/components/shared/ui'
+import { Badge, Button, Card, Checkbox, DetailList, LoadingState, Modal, Notice, Page, buttonClass, NewTabLink } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -497,7 +497,7 @@ const Calendar = () => {
             ['Calendar', selectedEvent.calendar_name],
             ['Repeats', selectedEvent.recurrence_rule && <Badge tone="primary">Recurring event</Badge>],
             ['Meeting', selectedEvent.meeting_link && (
-              <a href={selectedEvent.meeting_link} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Join meeting</a>
+              <NewTabLink href={selectedEvent.meeting_link} className="text-primary hover:underline">Join meeting</NewTabLink>
             )],
             ['Attendees', selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
               <div className="flex flex-wrap gap-1">

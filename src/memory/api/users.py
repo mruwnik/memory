@@ -36,6 +36,7 @@ from memory.common.scopes import (
     validate_scopes,
 )
 from memory.api.auth import get_current_user, get_token, require_scope
+from memory.api.field_errors import field_error
 from memory.common.access_control import has_admin_scope
 from memory.common.people import find_or_create_person
 
@@ -225,7 +226,7 @@ def create_user(
     # Check for duplicate email
     existing = db.query(User).filter(User.email == data.email).first()
     if existing:
-        raise HTTPException(status_code=400, detail="User with this email already exists")
+        raise field_error(("body", "email"), "User with this email already exists")
 
     # Validate that all scopes are known
     invalid_scopes = validate_scopes(data.scopes)
@@ -274,9 +275,7 @@ def create_user(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=400, detail="User with this email already exists"
-        )
+        raise field_error(("body", "email"), "User with this email already exists")
     db.refresh(new_user)
 
     # Auto-link to Person record if one exists with matching email

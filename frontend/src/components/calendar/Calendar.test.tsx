@@ -227,7 +227,7 @@ describe('Calendar', () => {
     await user.click(screen.getByText('Holiday'))
     await waitFor(() => expect(screen.getByText('All day')).toBeInTheDocument())
     expect(screen.getByText('Recurring event')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Join meeting' })).toHaveAttribute('href', 'https://meet.example/x')
+    expect(screen.getByRole('link', { name: 'Join meeting (opens in a new tab)' })).toHaveAttribute('href', 'https://meet.example/x')
   })
 
   it('renders a timed event detail modal with end time', async () => {

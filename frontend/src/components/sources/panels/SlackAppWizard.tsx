@@ -12,7 +12,7 @@ import {
   type SlackAppResponse,
   useSlackWizard,
 } from '../../../hooks/useSlackWizard'
-import { Button, Field, FormActions, Hint, Input, Modal, Notice, CopyButton } from '@/components/shared/ui'
+import { Button, Field, FormActions, Hint, Input, Modal, Notice, CopyButton, NewTabLink } from '@/components/shared/ui'
 import { PopupBlockedNotice, openPopup } from '../shared'
 
 interface SlackAppWizardProps {
@@ -329,14 +329,9 @@ export const SlackAppWizard = ({
           <form onSubmit={submit(handleRegister)} className="space-y-4">
             <p className="text-sm text-slate-600">
               Create a new Slack app at{' '}
-              <a
-                className="text-primary hover:underline"
-                href="https://api.slack.com/apps"
-                target="_blank"
-                rel="noreferrer"
-              >
+              <NewTabLink className="text-primary hover:underline" href="https://api.slack.com/apps">
                 api.slack.com/apps
-              </a>
+              </NewTabLink>
               , then paste its Client ID below.
             </p>
             <Field label="Display name">

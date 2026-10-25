@@ -9,7 +9,7 @@ import { GitHubPanel } from '@/components/sources/panels/GitHubPanel'
 import { GoogleDrivePanel } from '@/components/sources/panels/GoogleDrivePanel'
 import { SlackPanel } from '@/components/sources/panels/SlackPanel'
 import { TranscriptsPanel } from '@/components/sources/panels/TranscriptsPanel'
-import { Badge, Button, ButtonLink, List, LoadingState, Modal, Notice, Row } from '@/components/shared/ui'
+import { Badge, Button, ButtonLink, List, LoadingState, Modal, Notice, Row, NewTabMark } from '@/components/shared/ui'
 
 interface Source {
   kind: SourceKind
@@ -61,7 +61,7 @@ export const SourcesStep = () => {
             meta={[source.description]}
             actions={source.panels
               ? <Button size="sm" aria-label={`Set up ${source.title}`} onClick={() => setOpen(source)}>Set up</Button>
-              : <ButtonLink size="sm" to="/ui/notes" target="_blank">Open notes</ButtonLink>} />
+              : <ButtonLink size="sm" to="/ui/notes" target="_blank" rel="noopener noreferrer">Open notes<NewTabMark /></ButtonLink>} />
         ))}
       </List>
       {open?.panels && (

@@ -236,7 +236,7 @@ describe('AccountsPanel google connect', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Connect' }))
     expect(openSpy).toHaveBeenCalledWith('', '_blank', expect.any(String))
-    expect(await screen.findByRole('link', { name: 'Open Google sign-in' })).toHaveAttribute('href', 'https://accounts.google.com/o/oauth2')
+    expect(await screen.findByRole('link', { name: 'Open Google sign-in (opens in a new tab)' })).toHaveAttribute('href', 'https://accounts.google.com/o/oauth2')
   })
 
   const googleRoutes = {

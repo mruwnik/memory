@@ -303,7 +303,7 @@ const WorkspaceRow = ({
         <ConfirmButton confirm={`Disconnect "${workspace.name}"? This will stop collecting messages from this workspace.`} onConfirm={onDisconnect}>Disconnect</ConfirmButton>
       </>}
     >
-      {update.error && <RowError>{update.error}</RowError>}
+      {update.error && <RowError live>{update.error}</RowError>}
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       <SyncFailure status={workspace} />
       <SubList

@@ -3,7 +3,7 @@ import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { createMemoryRouter, Link, MemoryRouter, RouterProvider, useSearchParams } from 'react-router-dom'
-import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, List, Modal, Row, SplitView, Tabs, useActionNotice, useUnsavedGuard } from './ui'
+import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, List, Modal, NewTabLink, Row, SplitView, Tabs, useActionNotice, useUnsavedGuard } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -264,5 +264,20 @@ describe('Row', () => {
     )
     const group = screen.getByRole('group', { name: 'Actions for Home mail' })
     expect(within(group).getByRole('button', { name: 'Pause' })).toBeInTheDocument()
+  })
+})
+
+describe('NewTabLink', () => {
+  it.each([
+    ['an external href', { href: 'https://example.com' }, 'https://example.com'],
+    ['an app route', { to: '/ui/keys' }, '/ui/keys'],
+  ])('opens %s in a new tab and says so, to eyes and to screen readers', (_, target, href) => {
+    render(<MemoryRouter><NewTabLink {...target}>Docs</NewTabLink></MemoryRouter>)
+    const link = screen.getByRole('link', { name: /^Docs/ })
+    expect(link).toHaveAttribute('href', href)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(link).toHaveAccessibleName('Docs (opens in a new tab)')
+    expect(link.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
   })
 })

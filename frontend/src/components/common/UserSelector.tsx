@@ -85,14 +85,6 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
   // Don't render for non-admins
   if (!isAdmin) return null
 
-  if (loading) {
-    return (
-      <div className={`flex items-center gap-2 ${className}`}>
-        <span className="text-sm text-slate-500">Loading users...</span>
-      </div>
-    )
-  }
-
   if (error) {
     return (
       <div className={`flex items-center gap-2 ${className}`}>
@@ -108,7 +100,9 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
       </label>
       <Select
         id={id}
-        value={value.id}
+        // The select renders while users load, so the content below doesn't shift when they arrive.
+        disabled={loading}
+        value={loading ? '' : value.id}
         onChange={(e) => {
           const userId = parseInt(e.target.value, 10)
           if (userId === ALL_USERS_ID) {
@@ -121,6 +115,7 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
           }
         }}
       >
+        {loading && <option value="">Loading users...</option>}
         {showAllOption && (
           <option value={ALL_USERS_ID}>All users</option>
         )}

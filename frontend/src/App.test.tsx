@@ -213,13 +213,33 @@ describe('App routing & auth', () => {
     ['/ui/projects', 'teams', 'PROJECTS'],
     ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
     ['/ui/claude', 'claude_containers', 'CLAUDE'],
-  ])('redirects %s home while %s is off', async (path, module, marker) => {
+  ])('explains that %s needs %s while it is off', (path, module, marker) => {
     authState.isAuthenticated = true
     authState.user.modules = [...ALL_MODULES].filter(m => m !== module)
     setPath(path)
     render(<App />)
-    await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
+    expect(screen.getByText(/module, which is off on this server/)).toHaveTextContent(`This page needs the ${module} module, which is off on this server. Turn it on in Server settings.`)
+    expect(screen.getByRole('link', { name: 'Open Server settings' })).toHaveAttribute('href', '/ui/server-settings')
     expect(screen.queryByText(marker)).not.toBeInTheDocument()
+  })
+
+  it('tells a non-admin to ask an admin when a module is off', () => {
+    authState.isAuthenticated = true
+    authState.hasScope = vi.fn(() => false)
+    authState.user.modules = []
+    setPath('/ui/teams')
+    render(<App />)
+    expect(screen.getByText(/Ask an admin to turn it on/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Server settings' })).not.toBeInTheDocument()
+  })
+
+  it('still redirects home when the scope is missing, whatever the module', async () => {
+    authState.isAuthenticated = true
+    authState.hasScope = vi.fn(() => false)
+    authState.user.modules = []
+    setPath('/ui/claude')
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
   })
 
   it.each([

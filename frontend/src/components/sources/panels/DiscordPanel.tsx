@@ -346,7 +346,7 @@ const ServerRow = ({
         <PauseButton active={server.collect_messages} onClick={handleToggle} disabled={toggling} />
       </>}
     >
-      {update.error && <RowError>{update.error}</RowError>}
+      {update.error && <RowError live>{update.error}</RowError>}
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels</ExpandToggle>}
         {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}

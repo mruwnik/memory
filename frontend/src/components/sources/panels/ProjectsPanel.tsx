@@ -4,7 +4,7 @@ import { useTeams, Team } from '@/hooks/useTeams'
 import { useJournal } from '@/hooks/useJournal'
 import { usePeople } from '@/hooks/usePeople'
 import { PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
-import { Badge, Button, ConfirmButton, cx, EmptyState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, MultiSelect, Notice, Page, Row, RowError, Select, SubList, Textarea, ToggleGroup, Toolbar, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, cx, EmptyState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, MultiSelect, Notice, Page, Row, RowError, Select, SubList, Textarea, ToggleGroup, Toolbar, useActionNotice, NewTabLink } from '@/components/shared/ui'
 import { formatUserDateTime } from '@/utils/timezones'
 
 
@@ -449,14 +449,14 @@ const JournalSection = ({ projectId, getProject, addJournalEntry }: JournalSecti
       </ExpandToggle>}
       empty={expanded && !loadError && (loading ? 'Loading entries...' : 'No journal entries yet')}
       scroll
-      footer={expanded && (loadError ? <RowError>{loadError}</RowError> : entries && (
+      footer={expanded && (loadError ? <RowError live>{loadError}</RowError> : entries && (
         <form onSubmit={handleSubmit} className="space-y-1 pt-1">
           <div className="flex gap-2">
             <Input type="text" value={newEntry} onChange={e => setNewEntry(e.target.value)} placeholder="Add a journal entry..."
               aria-label="New journal entry" className="flex-1" disabled={submitting} />
             <Button variant="primary" size="sm" type="submit" disabled={!newEntry.trim() || submitting}>{submitting ? '...' : 'Add'}</Button>
           </div>
-          {addError && <RowError>{addError}</RowError>}
+          {addError && <RowError live>{addError}</RowError>}
         </form>
       ))}
     >
@@ -508,18 +508,18 @@ const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, inheritedOwner, 
         project.due_on && `Due: ${formatDueDate(project.due_on)}`,
         project.children_count > 0 && `${project.children_count} child${project.children_count !== 1 ? 'ren' : ''}`,
         isGithubBacked && (
-          <a href={`https://github.com/${project.repo_path}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+          <NewTabLink href={`https://github.com/${project.repo_path}`} className="text-primary hover:underline">
             {project.repo_path}
-          </a>
+          </NewTabLink>
         ),
         isGithubBacked && project.number && (
-          <a href={`https://github.com/${project.repo_path}/milestone/${project.number}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+          <NewTabLink href={`https://github.com/${project.repo_path}/milestone/${project.number}`} className="text-primary hover:underline">
             Milestone #{project.number}
-          </a>
+          </NewTabLink>
         ),
         // Only http(s) doc links are rendered
         project.doc_url && /^https?:\/\//.test(project.doc_url) && (
-          <a href={project.doc_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" title={project.doc_url}>Doc</a>
+          <NewTabLink href={project.doc_url} className="text-primary hover:underline" title={project.doc_url}>Doc</NewTabLink>
         ),
       ]}
       actions={<>

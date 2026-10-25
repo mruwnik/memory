@@ -15,6 +15,7 @@ import { SetupWizard } from '@/components/setup/SetupWizard'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
 import { AppShell } from '@/components/shared/AppShell'
+import { ModuleOff } from '@/components/shared/ModuleOff'
 import { isVisible } from '@/components/shared/nav'
 import { LoadingState } from '@/components/shared/ui'
 
@@ -147,9 +148,11 @@ const AuthWrapper = () => {
         <Route path="/ui/setup" element={<SetupWizard isAuthenticated={isAuthenticated} user={user} checkAuth={checkAuth} />} />
 
         <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
-          {routes.map(({ path, element, ...gate }) => (
-            <Route key={path} path={path} element={isAuthenticated && isVisible(gate, hasScope, modules) ? element : home} />
-          ))}
+          {routes.map(({ path, element, scope, module }) => {
+            const allowed = isAuthenticated && isVisible({ scope }, hasScope, modules)
+            const page = module && !modules.has(module) ? <ModuleOff path={path} module={module} isAdmin={hasScope('admin')} /> : element
+            return <Route key={path} path={path} element={allowed ? page : home} />
+          })}
           {isAuthenticated && pollResults}
         </Route>
 

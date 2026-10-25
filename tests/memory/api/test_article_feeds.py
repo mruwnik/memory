@@ -115,7 +115,9 @@ def test_create_feed_duplicate_url_fails(client, db_session, user):
     response = client.post("/article-feeds", json=payload)
 
     assert response.status_code == 400
-    assert "already exists" in response.json()["detail"]
+    assert response.json()["detail"] == [
+        {"loc": ["body", "url"], "msg": "Feed with this URL already exists", "type": "value_error"}
+    ]
 
 
 def test_create_feed_invalid_url_fails(client, db_session, user):
@@ -463,7 +465,9 @@ def test_create_feed_rejects_ssrf_url(mock_validate, client, db_session, user):
     )
 
     assert response.status_code == 400
-    assert "not allowed" in response.json()["detail"].lower()
+    assert response.json()["detail"] == [
+        {"loc": ["body", "url"], "msg": "URL is not allowed: targets non-public IP", "type": "value_error"}
+    ]
     # Row must NOT have been written.
     assert db_session.query(ArticleFeed).count() == 0
 
@@ -482,6 +486,7 @@ def test_discover_feed_rejects_ssrf_url(
     )
 
     assert response.status_code == 400
+    assert response.json()["detail"][0]["loc"] == ["query", "url"]
     # Parser must NOT have been called — the SSRF gate fired first.
     mock_get_parser.assert_not_called()
 
@@ -505,6 +510,8 @@ def test_trigger_sync_rejects_ssrf_url(
     response = client.post(f"/article-feeds/{feed.id}/sync")
 
     assert response.status_code == 400
+    # The stored URL isn't a field of this request, so there's nothing to point at.
+    assert response.json()["detail"] == "URL is not allowed: hostname resolves to private IP"
     # Celery task must NOT have been dispatched.
     mock_app.send_task.assert_not_called()
 

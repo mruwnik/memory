@@ -3,7 +3,7 @@ import { useSources, GoogleAccount, GoogleFolder, DriveItem, LLMKeyChoice } from
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectField, IntervalInput, PauseButton, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit, NewTabLink } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField } from '../LLMKeyField'
 
@@ -136,10 +136,9 @@ export const GoogleDrivePanel = () => {
                       key={folder.id}
                       muted={!folder.active}
                       title={
-                        <a className="text-primary hover:underline" href={`https://drive.google.com/open?id=${folder.folder_id}`}
-                          target="_blank" rel="noopener noreferrer">
+                        <NewTabLink className="text-primary hover:underline" href={`https://drive.google.com/open?id=${folder.folder_id}`}>
                           {folder.folder_name}
-                        </a>
+                        </NewTabLink>
                       }
                       badges={<>
                         <StatusBadge active={folder.active} />
@@ -162,7 +161,7 @@ export const GoogleDrivePanel = () => {
                         </ConfirmButton>
                       </>}
                     >
-                      {llmFolderId === folder.id && folderLLM.error && <RowError>{folderLLM.error}</RowError>}
+                      {llmFolderId === folder.id && folderLLM.error && <RowError live>{folderLLM.error}</RowError>}
                       <SyncFailure status={folder} />
                     </Row>
                   ))}
@@ -344,18 +343,16 @@ const FolderBrowser = ({ accountId, projects, onSelect, onCancel }: FolderBrowse
                 {item.id === 'shared' ? (
                   <span className="flex-1 text-slate-700">{item.name}</span>
                 ) : (
-                  <a
+                  <NewTabLink
                     className="flex-1 text-slate-700 hover:text-primary"
                     href={item.is_folder
                       ? `https://drive.google.com/drive/folders/${item.id}`
                       : `https://drive.google.com/file/d/${item.id}`
                     }
-                    target="_blank"
-                    rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {item.name}
-                  </a>
+                  </NewTabLink>
                 )}
                 {item.is_folder && selected.has(item.id) && (
                   <Checkbox checked={selected.get(item.id)?.recursive ?? true} onChange={() => toggleRecursive(item.id)} label="Recursive" />
@@ -538,15 +535,13 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
                   onChange={() => toggleExclude(item)}
                 />
                 <span aria-hidden="true" className="text-lg">📁</span>
-                <a
+                <NewTabLink
                   className="flex-1 text-slate-700 hover:text-primary"
                   href={`https://drive.google.com/drive/folders/${item.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {item.name}
-                </a>
+                </NewTabLink>
                 {excluded.has(item.id) && (
                   <span className="px-2 py-0.5 bg-amber-200 text-amber-800 text-xs rounded">Excluded</span>
                 )}

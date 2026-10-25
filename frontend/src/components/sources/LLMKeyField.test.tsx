@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { renderWithRouter } from '@/test/utils'
 import { LLMKeyField, llmKeyLabel } from './LLMKeyField'
 import type { LLMKeyView } from '@/hooks/useSources'
@@ -15,6 +15,7 @@ const view = (overrides: Partial<LLMKeyView> = {}): LLMKeyView => ({
 })
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   listKeys.mockReset()
   listKeys.mockResolvedValue({
     providers: {
@@ -101,6 +102,52 @@ describe('LLMKeyField', () => {
     await user.selectOptions(select, 'default')
     expect(onChange).toHaveBeenCalledWith('default')
     expect(select).toHaveDisplayValue('LLM: No LLM')
+  })
+
+  it('opens key management in a new tab, keeping the form', () => {
+    renderWithRouter(<LLMKeyField value={view()} onChange={vi.fn()} />)
+    const link = screen.getByRole('link', { name: /Manage LLM keys/ })
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAccessibleName('Manage LLM keys (opens in a new tab)')
+  })
+
+  const fresh = { providers: { anthropic: [{ id: 8, label: 'fresh', key_hint: 'ef56', provider: 'anthropic' }] } }
+  const returnAfter = async (ms: number) => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + ms)
+    fireEvent.focus(window)
+    await Promise.resolve()
+  }
+
+  it('picks up new keys on returning to the tab, at most every 30s', async () => {
+    renderWithRouter(<LLMKeyField value={view()} onChange={vi.fn()} />)
+    await screen.findByRole('option', { name: /work/ })
+    listKeys.mockResolvedValue(fresh)
+    await returnAfter(10_000)
+    expect(listKeys).toHaveBeenCalledTimes(1)
+    await returnAfter(31_000)
+    expect(await screen.findByRole('option', { name: 'fresh (Anthropic ••••ef56)' })).toBeInTheDocument()
+    expect(listKeys).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries a failed first load on returning to the tab', async () => {
+    listKeys.mockRejectedValue(new Error('offline'))
+    renderWithRouter(<LLMKeyField value={view()} onChange={vi.fn()} />)
+    expect(await screen.findByText("Couldn't load your keys.")).toBeInTheDocument()
+    listKeys.mockResolvedValue(fresh)
+    await returnAfter(1_000)
+    expect(await screen.findByRole('option', { name: 'fresh (Anthropic ••••ef56)' })).toBeInTheDocument()
+    expect(screen.queryByText("Couldn't load your keys.")).not.toBeInTheDocument()
+  })
+
+  it('keeps the keys it has when a refetch fails, without an error', async () => {
+    renderWithRouter(<LLMKeyField value={view()} onChange={vi.fn()} />)
+    await screen.findByRole('option', { name: /work/ })
+    listKeys.mockRejectedValue(new Error('offline'))
+    await returnAfter(31_000)
+    await waitFor(() => expect(listKeys).toHaveBeenCalledTimes(2))
+    await Promise.resolve()
+    expect(screen.getByRole('option', { name: 'work (Anthropic ••••ab12)' })).toBeInTheDocument()
+    expect(screen.queryByText("Couldn't load your keys.")).not.toBeInTheDocument()
   })
 
   it('shares one key request between fields and says when it fails', async () => {

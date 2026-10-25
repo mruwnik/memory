@@ -571,7 +571,7 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
     <SubList
       title={<ExpandToggle expanded={expanded} onClick={() => setExpanded(e => !e)}>History</ExpandToggle>}
       empty={expanded && !error && (executions ? 'No execution history' : 'Loading history...')}
-      footer={expanded && error && <RowError>{error}</RowError>}
+      footer={expanded && error && <RowError live>{error}</RowError>}
     >
       {expanded && !error && executions?.map(ex => {
         const sessionId = (ex.data as Record<string, unknown> | null)?.session_id as string | undefined

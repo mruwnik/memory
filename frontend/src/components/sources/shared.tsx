@@ -2,7 +2,7 @@ import { useState, type ComponentProps, type RefObject } from 'react'
 import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { formatUserDate, formatUserDateTime } from '@/utils/timezones'
-import { Badge, Button, ConfirmButton, Field, Input, Notice, Row, RowError, Select, Fieldset } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Field, Input, Notice, Row, RowError, Select, Fieldset, NewTabLink } from '@/components/shared/ui'
 
 /** A number input's state: '' while cleared, so editing never snaps back to a default. */
 export const numberValue = (value: string): number | '' => value === '' ? '' : Number(value)
@@ -116,7 +116,7 @@ export const openPopup = async (getUrl: () => Promise<string>, features = 'width
 /** Offers a blocked popup's URL as a link. */
 export const PopupBlockedNotice = ({ url, label, onDismiss }: { url: string | null; label: string; onDismiss: () => void }) => url ? (
   <Notice tone="warning" onDismiss={onDismiss}>
-    Your browser blocked the popup. <a href={url} target="_blank" rel="noopener noreferrer" className="underline font-medium">{label}</a>
+    Your browser blocked the popup. <NewTabLink href={url} className="underline font-medium">{label}</NewTabLink>
   </Notice>
 ) : null
 

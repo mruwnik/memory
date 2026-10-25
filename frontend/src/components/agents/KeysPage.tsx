@@ -141,7 +141,7 @@ function KeyRow({ entry, onSave, onDelete }: {
           {entry.status_detail ?? `${PROVIDER_NAMES[entry.provider]} rejected this key.`} LLM work that uses it fails until you replace it.
         </RowError>
       )}
-      {makeDefault.error && <RowError>{makeDefault.error}</RowError>}
+      {makeDefault.error && <RowError live>{makeDefault.error}</RowError>}
       {edit && <EditKeyForm entry={entry} edit={edit} onSave={onSave} onDone={done} />}
     </Row>
   )
