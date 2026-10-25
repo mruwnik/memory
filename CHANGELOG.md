@@ -27,6 +27,9 @@ For Notes SSH sync using an operator-mounted key, import that key in System oper
 - Qdrant's open-file limit is raised to 65536. Under Docker's default of 1024,
   ingestion exhausted it and qdrant stopped accepting connections. Takes effect when
   `docker compose up -d` recreates the qdrant container.
+- Ingestion overview now also has a dedicated page at `/ui/ingestion`, linked
+  from the sidebar and dashboard.
+
 - SSH keys has a dedicated page under System operations (`/ui/ssh-keys`).
   Existing Sources links redirect to it.
 

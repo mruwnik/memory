@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { apiError } from '@/hooks/apiError'
-import { ButtonLink, Card, EmptyState, ErrorState, LoadingState, RefreshButton, Section, Stat, StatGrid } from '@/components/shared/ui'
+import { ButtonLink, Card, EmptyState, ErrorState, LoadingState, Page, RefreshButton, Section, Stat, StatGrid } from '@/components/shared/ui'
 import { formatUserDateTime } from '@/utils/timezones'
 
 interface Counts {
@@ -18,7 +18,7 @@ interface Overview extends Counts {
 }
 const typeLabel = (name: string) => name.replaceAll('_', ' ').replace(/^./, char => char.toUpperCase())
 
-export default function IngestionOverview() {
+export default function IngestionOverview({ standalone = false }: { standalone?: boolean }) {
   const { apiCall } = useAuth()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -34,8 +34,9 @@ export default function IngestionOverview() {
     finally { setBusy(false) }
   }, [apiCall])
   useEffect(() => { void load() }, [load])
-  return <Section title="Ingestion overview" description="Stored items you can access, including imported content and items created in Memory. Messages and book sections count individually; search chunks do not."
-    actions={<RefreshButton onClick={load} disabled={busy} />}>
+  const Container = standalone ? Page : Section
+  return <Container title="Ingestion overview" description="Stored items you can access, including imported content and items created in Memory. Messages and book sections count individually; search chunks do not."
+    actions={<>{!standalone && <ButtonLink to="/ui/ingestion">View ingestion overview</ButtonLink>}<RefreshButton onClick={load} disabled={busy} /></>}>
     {error && <ErrorState message={error} onRetry={load} />}
     {!data && !error && <LoadingState message="Loading ingestion counts..." />}
     {data && <>
@@ -57,5 +58,5 @@ export default function IngestionOverview() {
           </dl>
         </Card>}
     </>}
-  </Section>
+  </Container>
 }

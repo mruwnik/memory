@@ -9,6 +9,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Knowledge & content',
     items: [
       { to: '/ui/search', title: 'Search', description: 'Search through your knowledge base' },
+      { to: '/ui/ingestion', title: 'Ingestion overview', description: 'Item totals, recent additions, indexing status and content types' },
       { to: '/ui/sources', title: 'Sources', description: 'Connect email, chat, code, feeds, files and other sources' },
       { to: '/ui/notes', title: 'Notes', description: 'Browse and view your notes' },
       { to: '/ui/reports', title: 'Reports', description: 'View and create rich HTML and PDF reports' },
