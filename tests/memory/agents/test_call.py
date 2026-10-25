@@ -9,7 +9,7 @@ from memory.agents.call import LLMError, Record, run_agent, run_agent_sync
 from memory.agents.provider_keys import Credential, credential
 from memory.agents.system import SUMMARISE
 from memory.common.db.models import AgentRun, AgentRunStep, LLMProviderKey, LLMSpend
-from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, key_rejected, reply, submitted
+from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, key_rejected, model_unavailable, reply, submitted
 
 SUMMARY = {"summary": "short", "tags": ["a"]}
 
@@ -179,3 +179,32 @@ def test_sync_callers_get_the_same_call(db_session, regular_user, llm_key, scrip
     result = run_agent_sync(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
 
     assert result.data == SUMMARY
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_model_is_reported_once_per_key_at_error_without_the_prompt(
+    db_session, regular_user, llm_key, scripted_llm, caplog, monkeypatch
+):
+    monkeypatch.setattr(call, "reported_unavailable", {})
+    scripted_llm.script = [model_unavailable, model_unavailable]
+
+    for _ in range(2):
+        with pytest.raises(LLMError, match="unavailable to this"):
+            await run_agent(SUMMARISE.slug, "secret item text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+
+    (record,) = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert f"key {llm_key.id}" in record.getMessage()
+    assert "claude-haiku-5-5" in record.getMessage()
+    assert "anthropic/" not in record.getMessage()
+    assert "secret item text" not in caplog.text
+    assert db_session.query(LLMSpend).count() == 0
+
+
+def test_the_two_call_sites_share_one_report_per_key(db_session, llm_key, caplog, monkeypatch):
+    monkeypatch.setattr(call, "reported_unavailable", {})
+    key = credential(llm_key)
+
+    call.report_model_unavailable(key, "claude-haiku-5-5", SUMMARISE.slug)
+    call.report_model_unavailable(key, "claude-haiku-5-5")
+
+    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1

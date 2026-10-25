@@ -9,6 +9,7 @@ import anthropic
 import httpx2
 import pytest
 
+from memory.agents import call
 from memory.agents.system import SUMMARISE
 from memory.common import embedding, extract, qdrant as qdrant_tools, settings
 from memory.common import summary_batch
@@ -127,6 +128,7 @@ def batch_result(
     type_: str = "succeeded",
     blocks: list[dict[str, Any]] | None = None,
     stop_reason: str = "tool_use",
+    error_type: str = "api_error",
 ):
     message = SimpleNamespace(
         content=[sdk_block(b) for b in blocks or [submit_block(SUMMARY)]],
@@ -140,7 +142,9 @@ def batch_result(
         ),
     )
     return SimpleNamespace(
-        custom_id=str(custom_id), result=SimpleNamespace(type=type_, message=message)
+        custom_id=str(custom_id), result=SimpleNamespace(
+            type=type_, message=message, error=SimpleNamespace(error=SimpleNamespace(type=error_type))
+        ),
     )
 
 
@@ -326,6 +330,45 @@ def test_a_refused_batch_counts_an_attempt_and_logs_why(
     assert sent.status == "submitted"
     assert "max_tokens: too large" in caplog.text
     assert "sk-test-default" not in caplog.text
+
+
+def test_not_found_results_are_reported_once_per_key_at_error_with_the_backlog(
+    db_session, llm_key, batches, caplog, monkeypatch
+):
+    monkeypatch.setattr(call, "reported_unavailable", {})
+    requests = [
+        add_request(
+            db_session,
+            make_item(db_session, LONG_TEXT + str(n)),
+            llm_key,
+            status="submitted",
+            batch_id="batch_1",
+        )
+        for n in range(2)
+    ]
+    add_request(db_session, make_item(db_session, LONG_TEXT + "pending"), llm_key)
+    batches.results["batch_1"] = [
+        batch_result(r.id, "errored", error_type="not_found_error") for r in requests
+    ]
+
+    summary_batch.collect_finished(db_session)
+
+    (record,) = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert f"key {llm_key.id}" in record.getMessage()
+    assert "1 pending" in record.getMessage()
+    assert "sk-test-default" not in caplog.text
+
+
+def test_other_errored_results_are_not_reported(db_session, llm_key, batches, caplog, monkeypatch):
+    monkeypatch.setattr(call, "reported_unavailable", {})
+    request = add_request(
+        db_session, make_item(db_session), llm_key, status="submitted", batch_id="batch_1"
+    )
+    batches.results["batch_1"] = [batch_result(request.id, "errored", error_type="api_error")]
+
+    summary_batch.collect_finished(db_session)
+
+    assert [r for r in caplog.records if r.levelname == "ERROR"] == []
 
 
 def test_submit_pending_returns_requests_on_an_unexpected_error(db_session, llm_key, batches):

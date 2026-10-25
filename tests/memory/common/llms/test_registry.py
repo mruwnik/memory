@@ -35,6 +35,14 @@ def test_only_a_401_rejects_the_key_and_a_403_only_fails_the_request(cls, sdk):
     assert cls.KEY_FORBIDDEN == (sdk.PermissionDeniedError,)
 
 
+@pytest.mark.parametrize(
+    "cls,sdk",
+    [(AnthropicProvider, anthropic), (OpenAIProvider, openai)],
+)
+def test_a_404_means_the_model_is_gone(cls, sdk):
+    assert cls.MODEL_UNAVAILABLE == (sdk.NotFoundError,)
+
+
 @pytest.mark.parametrize("model", sorted(all_models()))
 def test_every_catalog_model_takes_a_default_spec(model):
     assert spec_errors(AgentSpec(system_prompt="s", model=model)) == []

@@ -145,6 +145,7 @@ class AnthropicProvider(BaseLLMProvider):
     MODELS = ANTHROPIC_MODELS
     KEY_REJECTED = (anthropic.AuthenticationError,)
     KEY_FORBIDDEN = (anthropic.PermissionDeniedError,)
+    MODEL_UNAVAILABLE = (anthropic.NotFoundError,)
 
     def agent_client(self) -> anthropic.AsyncAnthropic:
         # Agent turns can think for minutes; the 60s default for short calls is too low.

@@ -71,6 +71,14 @@ async def key_rejected() -> Completion:
     raise FakeKeyRejected("401 invalid x-api-key")
 
 
+class FakeModelUnavailable(Exception):
+    """What a fake provider raises when it has no such model."""
+
+
+async def model_unavailable() -> Completion:
+    raise FakeModelUnavailable("404 model: claude-haiku-5-5")
+
+
 async def key_forbidden() -> Completion:
     raise FakeKeyForbidden("403 model not allowed for this key")
 
@@ -80,6 +88,7 @@ class ScriptedProvider(BaseLLMProvider):
 
     KEY_REJECTED = (FakeKeyRejected,)
     KEY_FORBIDDEN = (FakeKeyForbidden,)
+    MODEL_UNAVAILABLE = (FakeModelUnavailable,)
     script: list[ScriptItem] = []
     requests: list[dict] = []
     keys: dict = {}

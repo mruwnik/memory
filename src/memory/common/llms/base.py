@@ -29,6 +29,8 @@ class BaseLLMProvider(ABC):
     # What acomplete raises when a working key may not make this request (a model,
     # workspace, region or beta it can't use); the key stays usable for others.
     KEY_FORBIDDEN: ClassVar[tuple[type[Exception], ...]] = ()
+    # What acomplete raises when the provider has no such model (unknown or retired).
+    MODEL_UNAVAILABLE: ClassVar[tuple[type[Exception], ...]] = ()
     Extras: ClassVar[type[BaseModel]] = NoExtras
 
     @classmethod

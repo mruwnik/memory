@@ -27,7 +27,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from memory.agents import caps
-from memory.agents.call import parse_result, request_args
+from memory.agents.call import parse_result, report_model_unavailable, request_args
 from memory.agents.provider_keys import Credential, credential, notify_key_rejected, reject_key
 from memory.agents.system import SUMMARISE
 from memory.common import embedding, extract, qdrant, settings, summarizer
@@ -241,6 +241,8 @@ def collect_batch(
 
         if result.result.type != "succeeded":
             stats[result.result.type] += 1
+            if result.result.type == "errored" and result.result.error.error.type == "not_found_error":
+                report_model_unavailable(key, provider.model, SUMMARISE.slug)
             retry_or_fail(request)
             session.commit()
             continue

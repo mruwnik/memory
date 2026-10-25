@@ -7,6 +7,7 @@ tool use holds to the schema. Worker-safe: no API imports.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -23,11 +24,17 @@ from memory.agents.provider_keys import (
 )
 from memory.agents.system import SystemAgent, system_agent
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentRun, AgentRunStep, KeyStatus, LLMProviderKey
+from memory.common.db.models import (
+    AgentRun,
+    AgentRunStep,
+    KeyStatus,
+    LLMProviderKey,
+    SummaryRequest,
+)
 from memory.common.db.models.agents import RunStatus
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.llms.neutral import Completion, NeutralMessage, Text, ToolCall
-from memory.common.llms.registry import get_provider
+from memory.common.llms.registry import get_provider, split_model
 from memory.common.llms.tools import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -185,6 +192,39 @@ def record_run(
         return run.id
 
 
+# When each (provider, model, key) was last logged. The log reaches the operator,
+# so a run of items against an unavailable model must not log once per item.
+reported_unavailable: dict[tuple[str, str, int], float] = {}
+REPORT_INTERVAL_SEC = 3600
+
+
+def report_model_unavailable(key: Credential, model: str, agent_slug: str | None = None) -> None:
+    """Log at ERROR, at most hourly per (provider, model, key), that a key can't reach a model.
+
+    A 404 is a retired model or a key that can't use it; every key failing is the
+    first, one key failing is the second. `model` is the provider's bare name.
+    """
+    now = time.monotonic()
+    dedupe = (key.provider, model, key.id)
+    if now - reported_unavailable.get(dedupe, -REPORT_INTERVAL_SEC) < REPORT_INTERVAL_SEC:
+        return
+    reported_unavailable[dedupe] = now
+    with make_session() as db:
+        pending = (
+            db.query(SummaryRequest)
+            .filter(SummaryRequest.provider_key_id == key.id, SummaryRequest.status == "pending")
+            .count()
+        )
+    logger.error(
+        "model %s unavailable to %s key %s (agent %s, %s pending summaries)",
+        model,
+        key.provider,
+        key.id,
+        agent_slug,
+        pending,
+    )
+
+
 # Calls whose caller stopped waiting, kept alive until they are charged.
 _detached: set[asyncio.Task] = set()
 
@@ -244,6 +284,9 @@ async def complete(
     except provider.KEY_REJECTED as e:
         await asyncio.to_thread(refuse, key)
         raise LLMError(rejected_message(key)) from e
+    except provider.MODEL_UNAVAILABLE as e:
+        await asyncio.to_thread(report_model_unavailable, key, split_model(model)[1], found.slug)
+        raise LLMError(f"{model} is unavailable to this {key.provider} key") from e
     except provider.KEY_FORBIDDEN as e:
         logger.warning("%s: %s refused the request: %s", found.slug, model, e)
         raise LLMError(

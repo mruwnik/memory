@@ -92,6 +92,7 @@ class OpenAIProvider(BaseLLMProvider):
     MODELS = OPENAI_MODELS
     KEY_REJECTED = (openai.AuthenticationError,)
     KEY_FORBIDDEN = (openai.PermissionDeniedError,)
+    MODEL_UNAVAILABLE = (openai.NotFoundError,)
 
     def agent_client(self) -> openai.AsyncOpenAI:
         return openai.AsyncOpenAI(
