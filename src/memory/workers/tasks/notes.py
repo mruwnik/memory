@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, NamedTuple, cast
 
 import redis
+from sqlalchemy.exc import IntegrityError
 
 from memory.common import paths, settings
 from memory.common.db.connection import make_session
@@ -67,6 +68,7 @@ GIT_OPERATION_MARKERS = (
     "CHERRY_PICK_HEAD",
     "REVERT_HEAD",
 )
+NOTE_FILENAME_KEY = "source_note_filename_key"
 GIT_SYNC_STATUS_KEY = "memory:notes:git_sync_status"
 GIT_INDEXED_COMMIT_KEY = "memory:notes:git_indexed_commit"
 PENDING_WRITE_KEY = "memory:notes:pending_write:{filename}"
@@ -422,6 +424,11 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note") -> 
         redis.from_url(settings.REDIS_URL).set(GIT_INDEXED_COMMIT_KEY, head_commit(repo_root))
 
 
+def violates(error: IntegrityError, constraint: str) -> bool:
+    diag = getattr(error.orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == constraint
+
+
 def note_file_missing(note: Note) -> bool:
     return bool(note.filename) and not (settings.FILE_STORAGE_DIR / str(note.filename)).exists()
 
@@ -541,8 +548,13 @@ def upsert_note(
     tags: list[str] | None = None,
     save_to_file: bool = True,
     creator_id: int | None = None,
+    admin: bool = False,
     create_only: bool = False,
+    retried: bool = False,
 ):
+    """Save a note. ``creator_id`` is the writing user, who may only overwrite their own notes
+    unless ``admin``; None means the vault itself (sync and reindex), which may overwrite any.
+    """
     confidences = confidences or {}
     tags = tags or []
     logger.info(f"Syncing note {subject}")
@@ -550,25 +562,10 @@ def upsert_note(
     sha256 = create_content_hash(text)
 
     # Set before the row is saved: two rows without a filename would match each other.
-    filename = filename or Note.default_filename(subject)
-    filename = filename.lstrip("/")
-    if not filename.endswith(".md"):
-        filename = f"{filename}.md"
-    # Note.filename is FILE_STORAGE_DIR-relative (matches every other
-    # SourceItem subtype). Defense in depth: the MCP `notes.upsert` tool
-    # already validates this, but `sync_notes` and `track_git_changes`
-    # re-fan-out into this task with paths pulled from the filesystem /
-    # git remote (which we don't trust). Reject anything that resolves
-    # outside the notes tree before we persist a Note row pointing
-    # somewhere it shouldn't.
+    # Defense in depth: sync_notes and track_git_changes pass paths from the
+    # vault and its remote, which we don't trust.
     try:
-        resolved = paths.validate_path_within_directory(
-            settings.FILE_STORAGE_DIR, filename
-        )
-        if not resolved.is_relative_to(settings.NOTES_STORAGE_DIR.resolve()):
-            raise ValueError(
-                f"Note filename must be inside notes/: {filename!r}"
-            )
+        filename = Note.db_filename(filename, subject)
     except ValueError:
         logger.error(
             "Refusing to sync note %s of creator %s: unsafe filename",
@@ -588,13 +585,21 @@ def upsert_note(
         return result
 
     with make_session() as session:
-        note = session.query(Note).filter(Note.filename == filename).one_or_none()
+        # The row lock orders this save against a concurrent reindex's write_pending check.
+        note = (
+            session.query(Note).filter(Note.filename == filename).with_for_update().one_or_none()
+        )
+
+        if note and creator_id is not None and not admin and note.creator_id != creator_id:
+            logger.warning("Refusing user %s's write over note %s they don't own", creator_id, note.id)
+            return {"status": "forbidden"}
 
         if note and create_only:
             # Closes the race between the MCP tool's check and this task running.
             logger.warning("Refusing to overwrite existing note %s", filename)
             return {"status": "already_exists", "note_id": note.id}
 
+        created = note is None
         if not note:
             note = Note(
                 modality="text",
@@ -630,10 +635,33 @@ def upsert_note(
         # Process the content item first (commits transaction)
         try:
             result = process_content_item(note, session)
+        except IntegrityError as e:
+            if save_to_file:
+                clear_pending_write(filename, sha256)
+            if retried or not (created and violates(e, NOTE_FILENAME_KEY)):
+                raise
+            session.rollback()
+            result = None
         except Exception:
             if save_to_file:
                 clear_pending_write(filename, sha256)
             raise
+
+    if result is None:
+        # A concurrent save created this filename first: go again, against its row.
+        return upsert_note(
+            subject,
+            content,
+            filename=filename,
+            note_type=note_type,
+            confidences=confidences,
+            tags=tags,
+            save_to_file=save_to_file,
+            creator_id=creator_id,
+            admin=admin,
+            create_only=create_only,
+            retried=True,
+        )
 
     # Git operations MUST be outside the database transaction to avoid
     # holding the connection during slow network I/O

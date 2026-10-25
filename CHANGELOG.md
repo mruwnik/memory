@@ -674,6 +674,14 @@ section has nothing in it:
   `llm_provider_keys.summary_batch_limit` and `summary_request.submitted_at`. Fast.
 - `20261104_chunk_is_summary`: adds `chunk.is_summary` (default false). Fast: a
   constant default doesn't rewrite the table.
+- `20261105_unique_note_filename`: one note per filename. Where several notes
+  share a filename, all but the newest lose their filename and get a new content
+  hash. Their content stays in the database and stays searchable, and the new
+  hash stops them from swallowing a later save of the same text. Downgrading
+  can't restore the cleared filenames. Then builds a partial unique index on
+  `source_item.filename` for notes, concurrently, so writes keep flowing, but the
+  build reads the whole `source_item` table and can take a while on large
+  instances. If the index build fails, re-run the migration.
 
 ### Post-deploy commands
 

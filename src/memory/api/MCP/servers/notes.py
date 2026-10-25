@@ -5,16 +5,21 @@ MCP subserver for notes management.
 import logging
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.access import (
+    UserProxy,
     get_mcp_current_user,
     get_project_roles_by_user_id,
 )
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import paths, settings
 from memory.common.access_control import (
+    UserLike,
     apply_access_filter_to_query,
     build_access_filter,
+    has_admin_scope,
+    user_can_edit,
 )
 from memory.common.celery_app import SYNC_NOTE
 from memory.common.celery_app import app as celery_app
@@ -25,6 +30,26 @@ from memory.common.scopes import SCOPE_NOTES, SCOPE_NOTES_WRITE
 logger = logging.getLogger(__name__)
 
 notes_mcp = FastMCP("memory-notes")
+
+
+def token_caller() -> UserProxy:
+    """The caller with its access token's scopes, so a narrowed key on an admin account isn't admin."""
+    user = get_mcp_current_user()
+    token = get_access_token()
+    if user is None or token is None:
+        raise PermissionError("Not authenticated")
+    return UserProxy({"id": user.id, "scopes": list(token.scopes or [])})
+
+
+def visible_notes(session, user: UserLike):
+    # Notes are private artefacts: no public bypass even if a Note ever ends up
+    # with sensitivity="public". Same central filter as search.
+    access_filter = build_access_filter(
+        user,
+        get_project_roles_by_user_id(user.id, session),
+        include_public=False,
+    )
+    return apply_access_filter_to_query(session.query(Note), access_filter)
 
 
 @notes_mcp.tool()
@@ -41,7 +66,7 @@ async def upsert(
     """
     Create or update a note when user asks to save or record something.
     Use when user explicitly requests noting information for future reference.
-    If a note with the same filename exists, it will be updated.
+    If a note with the same filename exists, it will be updated; only its creator or an admin can update it.
 
     Args:
         subject: What the note is about (used for organization)
@@ -55,19 +80,25 @@ async def upsert(
     confidences = confidences or {}
     tags = tags or []
     logger.info("MCP: upserting note: %s", subject)
-    if filename:
-        try:
+    try:
+        if filename:
             filename = paths.to_db_filename(filename, base_dir=settings.NOTES_STORAGE_DIR)
-        except ValueError as e:
-            raise ValueError(f"Invalid filename: {e}")
-        if create_only:
-            with make_session() as session:
-                taken = session.query(Note.id).filter(Note.filename == filename).first()
-            if taken:
-                raise ValueError(f"A note already exists at {filename}")
+        filename = Note.db_filename(filename, subject)
+    except ValueError as e:
+        raise ValueError(f"Invalid filename: {e}")
 
-    user = get_mcp_current_user()
-    creator_id = user.id if user else None
+    user = token_caller()
+
+    # A note the caller can't see answers as if the path were free, so its
+    # existence doesn't leak; the task then refuses to overwrite it.
+    with make_session() as session:
+        existing = visible_notes(session, user).filter(Note.filename == filename).first()
+        taken = existing is not None
+        editable = taken and user_can_edit(user, existing)
+    if taken and create_only:
+        raise ValueError(f"A note already exists at {filename}")
+    if taken and not editable:
+        raise PermissionError(f"Only the note's creator or an admin can edit {filename}")
 
     try:
         task = celery_app.send_task(
@@ -80,7 +111,8 @@ async def upsert(
                 "note_type": note_type,
                 "confidences": confidences,
                 "tags": tags,
-                "creator_id": creator_id,
+                "creator_id": user.id,
+                "admin": has_admin_scope(user),
                 "create_only": create_only,
             },
         )
@@ -130,18 +162,7 @@ async def note_files(path: str = "/"):
         return []
 
     with make_session() as session:
-        query = session.query(Note.filename).filter(Note.filename.isnot(None))
-
-        # Notes are private artefacts — no public-bypass even if a Note ever
-        # ends up with sensitivity="public". Project access + creator override
-        # + person override all still apply, via the central access filter so
-        # this stays in lock-step with search.
-        access_filter = build_access_filter(
-            user,
-            get_project_roles_by_user_id(user.id, session),
-            include_public=False,
-        )
-        query = apply_access_filter_to_query(query, access_filter)
+        query = visible_notes(session, user).filter(Note.filename.isnot(None))
 
         # Restrict to filenames inside the requested notes subtree.
         # autoescape=True is required: without it, SQLAlchemy's startswith()
@@ -152,6 +173,6 @@ async def note_files(path: str = "/"):
             Note.filename.startswith(db_prefix, autoescape=True)
         )
 
-        rows = query.all()
+        filenames = [row.filename for row in query.with_entities(Note.filename)]
 
-    return [f"/{row.filename}" for row in rows]
+    return [f"/{filename}" for filename in filenames]

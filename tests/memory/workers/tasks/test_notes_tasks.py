@@ -12,6 +12,7 @@ from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
 from memory.common.content_processing import create_content_hash
 from memory.common import settings
+from sqlalchemy.exc import IntegrityError
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:
@@ -745,25 +746,105 @@ def test_note_save_to_file_empty_subject_uses_untitled_fallback(subject, tmp_pat
     assert (notes_dir / "untitled.md").read_text() == "content"
 
 
-def test_sync_note_create_only_refuses_existing_filename(mock_note_data, mock_make_session):
-    existing = Note(
+def add_existing_note(
+    session, filename: str, creator_id: int | None = None, content: str = "original"
+) -> Note:
+    note = Note(
         subject="Existing",
-        content="original",
-        sha256=create_content_hash("original"),
+        content=content,
+        sha256=create_content_hash(content),
         modality="text",
         mime_type="text/markdown",
-        size=8,
+        size=len(content),
         embed_status="RAW",
-        filename=mock_note_data["filename"],
+        filename=filename,
+        creator_id=creator_id,
     )
-    mock_make_session.add(existing)
-    mock_make_session.commit()
+    session.add(note)
+    session.commit()
+    return note
+
+
+def test_sync_note_create_only_refuses_existing_filename(mock_note_data, mock_make_session):
+    existing = add_existing_note(mock_make_session, mock_note_data["filename"])
 
     result = notes.sync_note(**mock_note_data, create_only=True)
 
     assert result == {"status": "already_exists", "note_id": existing.id}
     mock_make_session.refresh(existing)
     assert existing.content == "original"  # type: ignore
+
+
+@pytest.mark.parametrize(
+    "writer, admin, expected",
+    [
+        ("regular_user", False, "rewritten"),
+        ("admin_user", True, "rewritten"),
+        ("admin_user", False, "original"),
+    ],
+)
+def test_sync_note_only_lets_the_owner_or_an_admin_overwrite(
+    writer, admin, expected, request, mock_note_data, mock_make_session, regular_user, qdrant
+):
+    existing = add_existing_note(mock_make_session, mock_note_data["filename"], regular_user.id)
+
+    notes.sync_note(
+        **{**mock_note_data, "content": "rewritten"},
+        creator_id=request.getfixturevalue(writer).id,
+        admin=admin,
+    )
+
+    mock_make_session.refresh(existing)
+    assert existing.content == expected  # type: ignore
+    assert existing.creator_id == regular_user.id  # type: ignore
+
+
+def test_notes_cannot_share_a_filename(mock_note_data, db_session):
+    add_existing_note(db_session, mock_note_data["filename"])
+
+    with pytest.raises(IntegrityError, match="source_note_filename_key"):
+        add_existing_note(db_session, mock_note_data["filename"], content="other")
+
+
+def test_sync_note_retries_against_a_concurrently_created_note(
+    mock_note_data, mock_make_session, regular_user, admin_user, qdrant
+):
+    real_process = notes.process_content_item
+    competitor: list[Note] = []
+
+    def lose_the_race(note, session):
+        # Another worker commits the same filename between our lookup and our insert.
+        session.rollback()
+        competitor.append(add_existing_note(session, mock_note_data["filename"], admin_user.id))
+        return real_process(note, session)
+
+    calls = iter([lose_the_race, real_process])
+    with patch.object(notes, "process_content_item", side_effect=lambda n, s: next(calls)(n, s)):
+        result = notes.sync_note(**mock_note_data, creator_id=regular_user.id)
+
+    assert result == {"status": "forbidden"}
+    rows = mock_make_session.query(Note).filter(Note.filename == mock_note_data["filename"]).all()
+    assert [(r.id, r.content) for r in rows] == [(competitor[0].id, "original")]
+
+
+def test_sync_note_gives_up_on_a_second_filename_race(mock_note_data, mock_make_session):
+    orig = Mock(diag=Mock(constraint_name=notes.NOTE_FILENAME_KEY))
+    race = IntegrityError("INSERT", {}, orig)
+
+    with patch.object(notes, "process_content_item", side_effect=race) as process:
+        with pytest.raises(IntegrityError):
+            notes.sync_note(**mock_note_data)
+
+    assert process.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "filename", ["notes/sub/../canon.md", "notes//canon.md", "/notes/canon", "notes/./canon.md"]
+)
+def test_sync_note_stores_the_canonical_filename(filename, mock_note_data, mock_make_session, qdrant):
+    notes.sync_note(**{**mock_note_data, "filename": filename})
+
+    assert [n.filename for n in mock_make_session.query(Note)] == ["notes/canon.md"]
 
 
 def test_git_notes_lock_waits_for_current_holder():

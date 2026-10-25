@@ -29,6 +29,7 @@ from sqlalchemy import (
     Text,
     event,
     func,
+    text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -577,6 +578,12 @@ class SourceItem(AccessControlMixin, Base):
         Index("source_status_idx", "embed_status"),
         Index("source_tags_idx", "tags", postgresql_using="gin"),
         Index("source_filename_idx", "filename"),
+        Index(
+            "source_note_filename_key",
+            "filename",
+            unique=True,
+            postgresql_where=text("type = 'note'"),
+        ),
         Index("source_verified_at_idx", "type", "last_verified_at"),
         Index("source_project_idx", "project_id"),
         Index("source_sensitivity_idx", "sensitivity"),

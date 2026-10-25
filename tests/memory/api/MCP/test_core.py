@@ -4,6 +4,12 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+from memory.api.MCP.servers.notes import note_files, upsert
+from memory.common import settings
+from memory.common.db.models import Note, Person, Team
+from memory.common.db.models.sources import Project, project_teams, team_members
+from tests.conftest import mcp_auth_context
+
 
 @pytest.fixture
 def mock_notes_dir(tmp_path):
@@ -16,11 +22,12 @@ def mock_notes_dir(tmp_path):
 @pytest.fixture
 def mock_settings(mock_notes_dir, tmp_path):
     """Mock settings with temporary notes directory."""
-    with patch("memory.api.MCP.servers.notes.settings") as mock:
-        mock.FILE_STORAGE_DIR = tmp_path
-        mock.NOTES_STORAGE_DIR = mock_notes_dir
-        mock.CELERY_QUEUE_PREFIX = "test"
-        yield mock
+    with (
+        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
+        patch.object(settings, "NOTES_STORAGE_DIR", mock_notes_dir),
+        patch.object(settings, "CELERY_QUEUE_PREFIX", "test"),
+    ):
+        yield settings
 
 
 @pytest.fixture
@@ -31,6 +38,12 @@ def mock_celery():
         task.id = "test-task-id"
         mock.send_task.return_value = task
         yield mock
+
+
+@pytest.fixture
+def as_user(user_session):
+    with mcp_auth_context(user_session.id):
+        yield
 
 
 @pytest.mark.asyncio
@@ -46,7 +59,6 @@ async def test_create_note_blocks_path_traversal(
     mock_settings, mock_celery, malicious_filename
 ):
     """Blocks path traversal attempts in create_note."""
-    from memory.api.MCP.servers.notes import upsert
 
     # Access underlying function via .fn since create_note is a FunctionTool
     with pytest.raises(ValueError, match="Invalid filename"):
@@ -61,9 +73,8 @@ async def test_create_note_blocks_path_traversal(
 
 
 @pytest.mark.asyncio
-async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, mock_notes_dir):
+async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, as_user):
     """Absolute paths are converted to relative paths within notes dir."""
-    from memory.api.MCP.servers.notes import upsert
 
     # /etc/passwd becomes etc/passwd inside notes dir - this is correct behavior
     # The path validator strips leading slashes
@@ -78,42 +89,65 @@ async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, mo
 
 
 @pytest.mark.asyncio
-async def test_create_note_create_only_rejects_existing_filename(
-    mock_settings, mock_celery, mock_notes_dir, db_session
+@pytest.mark.parametrize(
+    "subject, filename",
+    [("s", "taken.md"), ("s", "/taken.md"), ("s", "taken"), ("s", "sub/../taken.md"), ("taken", None)],
+)
+async def test_create_note_create_only_rejects_own_existing_filename(
+    subject, filename, mock_settings, mock_celery, as_user, db_session, regular_user
 ):
-    from memory.api.MCP.servers.notes import upsert
-    from memory.common.db.models import Note
-
-    db_session.add(
-        Note(
-            subject="Taken",
-            content="x",
-            sha256=b"1" * 32,
-            modality="text",
-            mime_type="text/markdown",
-            size=1,
-            filename="notes/taken.md",
-        )
-    )
-    db_session.commit()
+    make_note(db_session, regular_user.id, "notes/taken.md")
 
     with pytest.raises(ValueError, match="already exists"):
-        await upsert.fn(
-            subject="s", content="c", filename="taken.md", create_only=True
-        )
+        await upsert.fn(subject=subject, content="c", filename=filename, create_only=True)
     mock_celery.send_task.assert_not_called()
 
-    result = await upsert.fn(
-        subject="s", content="c", filename="fresh.md", create_only=True
-    )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename", ["fresh.md", "theirs.md"])
+async def test_create_note_create_only_hides_other_users_notes(
+    filename, mock_settings, mock_celery, as_user, db_session, admin_user
+):
+    make_note(db_session, admin_user.id, "notes/theirs.md")
+
+    result = await upsert.fn(subject="s", content="c", filename=filename, create_only=True)
+
     assert result["status"] == "queued"
     assert mock_celery.send_task.call_args.kwargs["kwargs"]["create_only"] is True
 
 
 @pytest.mark.asyncio
-async def test_create_note_allows_valid_filename(mock_settings, mock_celery, mock_notes_dir):
+@pytest.mark.parametrize(
+    "session_fixture, scopes, admin",
+    [
+        ("user_session", None, False),
+        ("admin_session", None, True),
+        # An admin's key narrowed to notes can only write as the user.
+        ("admin_session", ["notes", "notes:write"], False),
+    ],
+)
+async def test_create_note_passes_the_writer_to_the_task(
+    session_fixture, scopes, admin, request, mock_settings, mock_celery
+):
+    user_session = request.getfixturevalue(session_fixture)
+
+    with mcp_auth_context(user_session.id, scopes=scopes):
+        await upsert.fn(subject="s", content="c", filename="n.md")
+
+    kwargs = mock_celery.send_task.call_args.kwargs["kwargs"]
+    assert (kwargs["creator_id"], kwargs["admin"]) == (user_session.user_id, admin)
+
+
+@pytest.mark.asyncio
+async def test_create_note_requires_a_user(mock_settings, mock_celery, db_session):
+    with pytest.raises(PermissionError):
+        await upsert.fn(subject="s", content="c", filename="n.md")
+    mock_celery.send_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_note_allows_valid_filename(mock_settings, mock_celery, as_user):
     """Allows valid filenames in create_note."""
-    from memory.api.MCP.servers.notes import upsert
 
     # No file creation needed - create_note validates path containment
     # but doesn't require the file to exist (it's creating a new file)
@@ -129,11 +163,8 @@ async def test_create_note_allows_valid_filename(mock_settings, mock_celery, moc
 
 
 @pytest.mark.asyncio
-async def test_create_note_allows_nested_valid_filename(
-    mock_settings, mock_celery, mock_notes_dir
-):
+async def test_create_note_allows_nested_valid_filename(mock_settings, mock_celery, as_user):
     """Allows nested valid filenames in create_note."""
-    from memory.api.MCP.servers.notes import upsert
 
     # No file/directory creation needed - create_note validates path containment
     # but doesn't require the file to exist (it's creating a new file)
@@ -148,9 +179,8 @@ async def test_create_note_allows_nested_valid_filename(
 
 
 @pytest.mark.asyncio
-async def test_create_note_without_filename(mock_settings, mock_celery):
+async def test_create_note_without_filename(mock_settings, mock_celery, as_user):
     """Allows create_note without filename (filename is optional)."""
-    from memory.api.MCP.servers.notes import upsert
 
     result = await upsert.fn(
         subject="Test Note",
@@ -171,16 +201,13 @@ async def test_create_note_without_filename(mock_settings, mock_celery):
 )
 async def test_note_files_blocks_path_traversal(mock_settings, malicious_path):
     """Blocks path traversal attempts in note_files."""
-    from memory.api.MCP.servers.notes import note_files
 
     # Access underlying function via .fn since note_files is a FunctionTool
     with pytest.raises(ValueError, match="Invalid path"):
         await note_files.fn(path=malicious_path)
 
 
-def _make_note(db_session, user_id: int, filename: str, content: str = "x"):
-    from memory.common.db.models.source_items import Note
-
+def make_note(db_session, user_id: int, filename: str, content: str = "x"):
     note = Note(
         sha256=filename.encode() + b"\x00" + content.encode(),
         content=content,
@@ -200,10 +227,9 @@ async def test_note_files_handles_absolute_paths(
     mock_settings, db_session, admin_user, admin_session
 ):
     """Absolute paths are normalized to relative when filtering DB notes."""
-    from memory.api.MCP.servers.notes import note_files
     from tests.conftest import mcp_auth_context
 
-    _make_note(db_session, admin_user.id, "notes/note.md")
+    make_note(db_session, admin_user.id, "notes/note.md")
 
     with mcp_auth_context(admin_session.id):
         result = await note_files.fn(path="/")
@@ -216,12 +242,11 @@ async def test_note_files_lists_markdown_files(
     mock_settings, db_session, admin_user, admin_session
 ):
     """Lists markdown notes for the current user."""
-    from memory.api.MCP.servers.notes import note_files
     from tests.conftest import mcp_auth_context
 
-    _make_note(db_session, admin_user.id, "notes/note1.md", "content1")
-    _make_note(db_session, admin_user.id, "notes/note2.md", "content2")
-    _make_note(db_session, admin_user.id, "notes/subdir/nested.md", "nested")
+    make_note(db_session, admin_user.id, "notes/note1.md", "content1")
+    make_note(db_session, admin_user.id, "notes/note2.md", "content2")
+    make_note(db_session, admin_user.id, "notes/subdir/nested.md", "nested")
 
     with mcp_auth_context(admin_session.id):
         result = await note_files.fn(path="/")
@@ -233,28 +258,9 @@ async def test_note_files_lists_markdown_files(
     assert not any("not_a_note.txt" in f for f in result)
 
 
-@pytest.mark.asyncio
-async def test_note_files_visible_via_team_project_access(
-    mock_settings, db_session, regular_user, user_session
-):
-    """A non-admin who's a member of a Team assigned to a Project should see
-    notes in that project via team-project membership.
-
-    Regression guard for the round-1 BLOCKING bug — `note_files` previously
-    called `get_user_project_roles(session, user)` with a UserProxy that
-    has no `.person`, crashing the query. The fix routes via
-    `get_project_roles_by_user_id(user.id, session)`, mirroring deadlines.
-    """
-    from memory.api.MCP.servers.notes import note_files
-    from memory.common.db.models import Person, Team
-    from memory.common.db.models.source_items import Note
-    from memory.common.db.models.sources import (
-        Project,
-        project_teams,
-        team_members,
-    )
-    from tests.conftest import mcp_auth_context
-
+@pytest.fixture
+def team_visible_note(db_session, regular_user):
+    """A note regular_user sees through a team's project, but didn't create."""
     person = Person(identifier="notes_person", display_name="Notes Person")
     db_session.add(person)
     db_session.flush()
@@ -286,13 +292,27 @@ async def test_note_files_visible_via_team_project_access(
         mime_type="text/markdown",
         size=7,
         filename="notes/team_visible.md",
-        creator_id=None,  # Not the regular_user — visibility comes via team
+        creator_id=None,
         project_id=project.id,
         sensitivity="basic",
     )
     db_session.add(note)
     db_session.commit()
+    return note
 
+
+@pytest.mark.asyncio
+async def test_note_files_visible_via_team_project_access(
+    mock_settings, team_visible_note, user_session
+):
+    """A non-admin who's a member of a Team assigned to a Project should see
+    notes in that project via team-project membership.
+
+    Regression guard for the round-1 BLOCKING bug — `note_files` previously
+    called `get_user_project_roles(session, user)` with a UserProxy that
+    has no `.person`, crashing the query. The fix routes via
+    `get_project_roles_by_user_id(user.id, session)`, mirroring deadlines.
+    """
     with mcp_auth_context(user_session.id):
         result = await note_files.fn(path="/")
 
@@ -300,3 +320,17 @@ async def test_note_files_visible_via_team_project_access(
     # the team-project AC path was reached without the UserProxy.person
     # crash. (Notes have include_public=False so this isn't a public bypass.)
     assert any("team_visible.md" in f for f in result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "create_only, error", [(False, PermissionError), (True, ValueError)]
+)
+async def test_create_note_refuses_a_visible_note_the_caller_cannot_edit(
+    create_only, error, mock_settings, mock_celery, team_visible_note, as_user
+):
+    with pytest.raises(error):
+        await upsert.fn(
+            subject="s", content="c", filename="team_visible.md", create_only=create_only
+        )
+    mock_celery.send_task.assert_not_called()
