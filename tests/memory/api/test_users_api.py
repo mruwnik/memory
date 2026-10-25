@@ -409,6 +409,42 @@ def test_update_user_with_invalid_scope(client: TestClient, admin_user, db_sessi
     assert "Invalid scopes" in response.json()["detail"]
 
 
+def test_stored_unknown_user_scope_is_hidden_and_resave_succeeds(
+    client: TestClient, admin_user, db_session
+):
+    created = client.post(
+        "/users",
+        json={
+            "name": "Stale Scope",
+            "email": "stale_scope@example.com",
+            "password": "testpass123",
+            "scopes": ["read"],
+        },
+    ).json()
+    user = db_session.get(HumanUser, created["id"])
+    user.scopes = ["read", "discord-admin"]
+    db_session.commit()
+
+    listed = client.get(f"/users/{created['id']}").json()
+    assert listed["scopes"] == ["read"]
+
+    response = client.patch(f"/users/{created['id']}", json={"scopes": listed["scopes"]})
+    assert response.status_code == 200
+
+
+def test_stored_unknown_api_key_scope_is_hidden(client: TestClient, admin_user, db_session):
+    created = client.post(
+        f"/users/{admin_user.id}/api-keys",
+        json={"name": "Stale Key", "scopes": ["read"]},
+    ).json()
+    key = db_session.get(APIKey, created["id"])
+    key.scopes = ["read", "discord-admin:write"]
+    db_session.commit()
+
+    keys = client.get(f"/users/{admin_user.id}/api-keys").json()
+    assert [k["scopes"] for k in keys if k["id"] == created["id"]] == [["read"]]
+
+
 def test_update_user_refuses_removing_own_admin_scope(client: TestClient, admin_user, db_session):
     response = client.patch(f"/users/{admin_user.id}", json={"scopes": ["read"]})
 

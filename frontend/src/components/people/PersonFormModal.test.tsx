@@ -172,6 +172,36 @@ describe('PersonFormModal edit mode', () => {
     expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({ phone: null, github: 'octo' })
   })
 
+  describe('with a merged person whose email is a list', () => {
+    const renderMerged = () => {
+      const person = makePerson({ contact_info: { email: ['a@x.com', 'b@x.com'], phone: '555' } })
+      render(<PersonFormModal {...baseProps} submitLabel="Save changes" isEdit initialData={person} />)
+    }
+
+    it('shows each entry as its own removable chip', () => {
+      renderMerged()
+      expect(screen.getByRole('button', { name: 'Remove a@x.com' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Remove b@x.com' })).toBeInTheDocument()
+      expect(screen.queryByDisplayValue(/a@x.com,b@x.com/)).not.toBeInTheDocument()
+    })
+
+    it('sends nothing for an untouched list', async () => {
+      const user = userEvent.setup()
+      renderMerged()
+      await user.click(screen.getByRole('button', { name: 'Save changes' }))
+      expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({})
+    })
+
+    it('sends a removed entry as null and an added one as true', async () => {
+      const user = userEvent.setup()
+      renderMerged()
+      await user.click(screen.getByRole('button', { name: 'Remove b@x.com' }))
+      await user.type(screen.getByLabelText('Email'), 'c@x.com{Enter}')
+      await user.click(screen.getByRole('button', { name: 'Save changes' }))
+      expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({ email: { 'b@x.com': null, 'c@x.com': true } })
+    })
+  })
+
   it('asks for an identifier when the name has no ASCII letters to build one from', async () => {
     const user = userEvent.setup()
     render(<PersonFormModal {...baseProps} />)

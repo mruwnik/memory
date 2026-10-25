@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Person, PersonCreate, PersonUpdate } from '../../hooks/usePeople'
-import { Button, Input, Modal, Notice, Textarea, Field, FieldRow, Fieldset, FormActions, requiredLabel } from '@/components/shared/ui'
+import { Button, Input, Modal, MultiSelect, Notice, Textarea, Field, FieldRow, Fieldset, FormActions, requiredLabel } from '@/components/shared/ui'
 
 interface PersonFormModalProps {
   title: string
@@ -19,13 +19,15 @@ interface FormData {
   aliases: string
   tags: string
   notes: string
-  // Contact info fields
-  email: string
-  phone: string
-  github: string
-  twitter: string
-  website: string
+  // Contact info fields; merged people can hold several values for one field
+  email: ContactValue
+  phone: ContactValue
+  github: ContactValue
+  twitter: ContactValue
+  website: ContactValue
 }
+
+type ContactValue = string | string[]
 
 const CONTACT_FIELDS = [
   { key: 'email', label: 'Email', type: 'email', placeholder: 'alice@example.com' },
@@ -92,7 +94,18 @@ const PersonFormModal = ({
       // The server only removes what is sent as null, so cleared fields and dropped aliases go as null.
       // Unchanged fields aren't sent: a merged person's list value would come back as one joined string.
       const contact_info = Object.fromEntries(
-        CONTACT_FIELDS.filter(({ key }) => form[key] !== initialForm[key]).map(({ key }) => [key, form[key] || null]),
+        CONTACT_FIELDS.flatMap(({ key }): [string, NonNullable<PersonUpdate['contact_info']>[string]][] => {
+          const [before, after] = [initialForm[key], form[key]]
+          if (Array.isArray(before) && Array.isArray(after)) {
+            // Lists are additive on the server: an entry is added with true and removed with null.
+            const changes = [
+              ...after.filter(v => !before.includes(v)).map(v => [v, true] as const),
+              ...before.filter(v => !after.includes(v)).map(v => [v, null] as const),
+            ]
+            return changes.length ? [[key, Object.fromEntries(changes)]] : []
+          }
+          return before === after ? [] : [[key, (after as string) || null]]
+        }),
       )
       const aliases = parseCommaSeparated(form.aliases)
       const data: PersonUpdate = {
@@ -107,7 +120,7 @@ const PersonFormModal = ({
       }
       await onSubmit(data)
     } else {
-      const contact_info = Object.fromEntries(CONTACT_FIELDS.filter(({ key }) => form[key]).map(({ key }) => [key, form[key]]))
+      const contact_info = Object.fromEntries(CONTACT_FIELDS.filter(({ key }) => form[key]).map(({ key }) => [key, form[key] as string]))
       const data: PersonCreate = {
         identifier: form.identifier,
         display_name: form.display_name,
@@ -181,17 +194,31 @@ const PersonFormModal = ({
 
           <Fieldset legend="Contact information" className="pt-2 space-y-3">
             <FieldRow>
-              {CONTACT_FIELDS.map(({ key, label, type, placeholder }) => (
-                <Field key={key} label={label}>
-                  <Input
-                    id={`person-${key}`}
-                    type={type}
-                    value={form[key]}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                    placeholder={placeholder}
-                  />
-                </Field>
-              ))}
+              {CONTACT_FIELDS.map(({ key, label, type, placeholder }) => {
+                const value = form[key]
+                return (
+                  <Field key={key} label={label}>
+                    {Array.isArray(value) ? (
+                      <MultiSelect
+                        id={`person-${key}`}
+                        options={initialForm[key] as string[]}
+                        value={value}
+                        onChange={(entries) => setForm({ ...form, [key]: entries })}
+                        placeholder={placeholder}
+                        creatable
+                      />
+                    ) : (
+                      <Input
+                        id={`person-${key}`}
+                        type={type}
+                        value={value}
+                        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                        placeholder={placeholder}
+                      />
+                    )}
+                  </Field>
+                )
+              })}
             </FieldRow>
           </Fieldset>
 

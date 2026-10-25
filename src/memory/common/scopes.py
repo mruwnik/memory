@@ -79,8 +79,6 @@ SCOPE_EMAIL = "email"
 SCOPE_EMAIL_WRITE = "email:write"
 SCOPE_DISCORD = "discord"
 SCOPE_DISCORD_WRITE = "discord:write"
-SCOPE_DISCORD_ADMIN = "discord-admin"
-SCOPE_DISCORD_ADMIN_WRITE = "discord-admin:write"
 SCOPE_SLACK = "slack"
 SCOPE_SLACK_WRITE = "slack:write"
 
@@ -213,18 +211,6 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_DISCORD_WRITE,
         "label": "Discord (write)",
         "description": "Send messages to Discord channels",
-        "category": "integrations",
-    },
-    {
-        "value": SCOPE_DISCORD_ADMIN,
-        "label": "Discord Admin",
-        "description": "View Discord channel permissions and categories",
-        "category": "integrations",
-    },
-    {
-        "value": SCOPE_DISCORD_ADMIN_WRITE,
-        "label": "Discord Admin (write)",
-        "description": "Manage Discord channel permissions and channels",
         "category": "integrations",
     },
     {
@@ -376,6 +362,11 @@ def validate_scopes(scopes: list[str]) -> list[str]:
         List of invalid scope names (empty if all valid)
     """
     return [s for s in scopes if s not in ALL_SCOPE_VALUES]
+
+
+def known_scopes(scopes: list[str] | None) -> list[str]:
+    """Drop scopes that no longer exist, so clients never see (or resubmit) stale ones."""
+    return [s for s in scopes or [] if s in ALL_SCOPE_VALUES]
 
 
 def has_scope(user_scopes: list[str], required: str) -> bool:

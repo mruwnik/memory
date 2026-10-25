@@ -64,6 +64,11 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- The Discord collector no longer serves its channel, category and permission
+  endpoints (the collector API keeps only health, DMs, channel messages,
+  typing, reactions and metadata refresh). The `discord-admin` and
+  `discord-admin:write` scopes are removed; tokens and users still carrying
+  them keep working, the values are ignored and no longer shown in the users API.
 - Teams no longer link to Discord roles or GitHub teams. `teams_upsert` drops
   `guild`, `discord_role`, `auto_sync_discord`, `github_org`,
   `github_team_slug`, `auto_sync_github` and `force_empty`; adding or removing a

@@ -29,6 +29,7 @@ from memory.common.rate_limit import check_rate_limit_spec
 from memory.common.scopes import (
     SCOPE_ADMIN,
     VALID_SCOPES,
+    known_scopes,
     validate_scopes,
 )
 from memory.api.auth import get_current_user, get_token, require_scope
@@ -100,7 +101,7 @@ def user_to_response(user: User) -> UserResponse:
         name=cast(str, user.name),
         email=cast(str, user.email),
         user_type=cast(str, user.user_type),
-        scopes=list(user.scopes or []),
+        scopes=known_scopes(user.scopes),
         api_key_count=key_count,
     )
 
@@ -526,7 +527,7 @@ class APIKeyCreateResponse(APIKeyResponse):
 def api_key_to_response(key: APIKey) -> APIKeyResponse:
     """Convert an APIKey model to a response model."""
     data = key.serialize()
-    return APIKeyResponse(**data)
+    return APIKeyResponse(**{**data, "scopes": None if key.scopes is None else known_scopes(key.scopes)})
 
 
 # API Key Management Endpoints

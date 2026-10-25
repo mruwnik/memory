@@ -366,6 +366,7 @@ async def test_upsert_aliases_only_removed_by_null(
         ({"email": ["f"]}, {"discord": ["a", "b"], "email": ["e", "f"]}),
         ({"discord": {"a": None}}, {"discord": ["b"], "email": "e"}),
         ({"discord": {"a": None, "c": True}}, {"discord": ["b", "c"], "email": "e"}),
+        ({"discord": {"a": None, "b": None}}, {"email": "e"}),
         ({"discord": None}, {"email": "e"}),
         ({"email": "f"}, {"discord": ["a", "b"], "email": "f"}),
         ({"matrix": {"x": True}}, {"discord": ["a", "b"], "email": "e", "matrix": ["x"]}),

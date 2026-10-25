@@ -152,9 +152,13 @@ def _deep_merge(base: dict, updates: dict, path: str = "") -> dict:
         if value is None:
             result.pop(key, None)
         elif isinstance(existing, list) or (existing is None and is_entry_changes(value)):
-            result[key] = merge_entries(
+            merged = merge_entries(
                 existing or [], value if isinstance(value, (list, dict)) else [value], f"contact_info.{path}{key}"
             )
+            if merged:
+                result[key] = merged
+            else:
+                result.pop(key, None)
         elif isinstance(existing, dict) and not isinstance(value, dict):
             raise conflict
         elif isinstance(value, list):

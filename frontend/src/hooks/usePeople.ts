@@ -19,7 +19,8 @@ export interface Person {
   identifier: string
   display_name: string
   aliases: string[]
-  contact_info: Record<string, string>
+  /** A person merged from several records can hold a list of values for one field. */
+  contact_info: Record<string, string | string[]>
   tags: string[]
   created_at: string | null
   tidbits?: Tidbit[]
@@ -41,8 +42,8 @@ export interface PersonUpdate {
   display_name?: string
   /** A list adds aliases; in the map form true adds an alias and null removes it. */
   aliases?: string[] | Record<string, true | null>
-  /** Merged into the stored contact info; null removes a key. */
-  contact_info?: Record<string, string | null>
+  /** Merged into the stored contact info; null removes a key. For a list field, {entry: true} adds an entry and {entry: null} removes it. */
+  contact_info?: Record<string, string | null | Record<string, true | null>>
   content?: string  // Add a tidbit
   tidbit_type?: string
   tags?: string[]
