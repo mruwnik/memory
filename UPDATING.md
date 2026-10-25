@@ -19,8 +19,10 @@ the stack was started from.
      `ENABLE_MODULES=claude_containers,multi_user,teams` (only the ones you
      use). Several human users with `multi_user` off stops the api at boot, by
      design, rather than hiding users. For Claude containers also add
-     `COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml` to `.env`,
-     or pass `-f docker-compose.claude.yaml` after the base file if you use
+     `COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml` to `.env`
+     (if `.env` already has `COMPOSE_FILE`, as `install.sh --non-interactive`
+     installs do, append `:docker-compose.claude.yaml` to it rather than
+     replacing it, or the proxy overlay is lost), or pass `-f docker-compose.claude.yaml` after the base file if you use
      explicit `-f` flags: the socket mount, `DOCKER_GID` group and
      `memory-api-<stack>` network moved out of `docker-compose.yaml`. MCP clients
      that call `claude_session_list`, `_list_dir`, `_pull_url` or `_push_url`

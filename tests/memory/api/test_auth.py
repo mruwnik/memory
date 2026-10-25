@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from memory.api import auth
 from memory.api.auth import is_whitelisted_path
 from memory.common import settings
+from memory.common.modules import MODULES
 from memory.common.db.models import APIKey, HumanUser, User, UserSession
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
@@ -937,4 +938,4 @@ def test_me_lists_the_enabled_modules(client):
     response = client.get("/auth/me")
 
     assert response.status_code == 200
-    assert response.json()["modules"] == ["claude_containers", "multi_user", "teams"]
+    assert response.json()["modules"] == sorted(MODULES)

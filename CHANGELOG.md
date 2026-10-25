@@ -25,7 +25,7 @@ section has nothing in it:
   |---|---|
   | `claude_containers` | Claude Code containers: the `/claude` routes, their MCP tools, the `claude_session` scheduled-task type, the `claude_sessions` scope, the Claude sessions and configurations pages. Needs the compose overlay below |
   | `multi_user` | More than one human user. Off, there is one human, `tools/add_user.py` creates them with `*`, and `POST /users` refuses a second human (bot users and API keys are unaffected). The api logs a warning at startup if the only human lacks `*` |
-  | `teams` | Teams, their members, and projects: the routes, the `teams` and `projects` MCP servers, the four `teams`/`projects` scopes, and the team and project pickers |
+  | `teams` | Teams, their members, and projects: the `teams` and `projects` MCP servers, the four `teams`/`projects` scopes, and the team and project pickers |
 
   To keep what you had, add to `.env` (drop the names you don't use, and the
   `COMPOSE_FILE` line if you don't run Claude containers):
@@ -35,7 +35,15 @@ section has nothing in it:
   COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
   ```
 
-  then `docker compose up -d`. What stops a process from starting:
+  If `.env` already has a `COMPOSE_FILE` line (`tools/install.sh
+  --non-interactive` writes
+  `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml`), append
+  `:docker-compose.claude.yaml` to it instead of adding a second one, e.g.
+  `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml`.
+  Replacing it drops the proxy overlay silently: the api stops trusting the
+  proxy's forwarded headers and rate limits key on the proxy's address.
+
+  Then `docker compose up -d`. What stops a process from starting:
   - The api refuses to start while `multi_user` is off and several human users
     exist ("N human users exist; set ENABLE_MODULES=multi_user or remove users").
   - A misspelled module name, or one listed in both `ENABLE_MODULES` and
@@ -74,8 +82,9 @@ section has nothing in it:
   Update MCP clients, skills and agent allowlists that name the old ones.
 
   **Leftovers when `claude_containers` is off.** Due `claude_session`
-  scheduled tasks are skipped (no execution row, the next run advances, one log
-  line) and the scheduler MCP refuses to create new ones. Executions already
+  scheduled tasks are skipped (no execution row, the next run of a cron task
+  advances, a one-off task is dropped and won't run when the module returns; one
+  log line) and the scheduler MCP refuses to create new ones. Executions already
   pending or running when the module goes off are not cancelled: pending ones
   fail on their next attempt, running ones wait for the stale-execution timeout
   (2 hours). Running containers are not killed, because the orchestrator is

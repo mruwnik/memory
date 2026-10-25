@@ -199,8 +199,8 @@ def check_single_user(db: Session, enabled: frozenset[str]) -> None:
     human = db.query(HumanUser).one()
     if SCOPE_ADMIN not in (human.scopes or []):
         logger.warning(
-            "The only human user, %s, lacks the * scope, so parts of this single-user install are out of reach",
-            human.email,
+            "The only human user, user_id=%s, lacks the * scope, so parts of this single-user install are out of reach",
+            human.id,
         )
 
 

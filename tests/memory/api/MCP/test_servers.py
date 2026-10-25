@@ -134,7 +134,8 @@ def test_only_the_env_and_modules_unmount_servers():
         "ENABLE_MODULES": "",
         "DISABLE_MODULES": "",
     }
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env)
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr
 
     assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"slack", "teams", "projects", "containers"}))
 

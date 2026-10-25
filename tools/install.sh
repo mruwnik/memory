@@ -448,7 +448,7 @@ else
     fi
 fi
 
-# compose declares this network external, so `docker compose up` fails without it
+# docker-compose.claude.yaml declares this network external, so compose fails without it there
 stack="${MEMORY_STACK:-$(get_env_value 'MEMORY_STACK')}"
 api_network="memory-api-${stack:-prod}"
 if ! command -v docker >/dev/null 2>&1; then

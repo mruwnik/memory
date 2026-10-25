@@ -734,7 +734,11 @@ def require_settings(values: Any, role: str) -> None:
         raise SystemExit(1)
     # Only the api reaches the orchestrator; workers spawn sessions through the api.
     if role == "api" and CLAUDE_CONTAINERS in values.ENABLED_MODULES and not values.ORCHESTRATOR_SOCKET:
-        print("Refusing to start: the claude_containers module needs ORCHESTRATOR_SOCKET.", file=sys.stderr)
+        print(
+            "Refusing to start: the claude_containers module needs ORCHESTRATOR_SOCKET; "
+            "add docker-compose.claude.yaml to COMPOSE_FILE (or -f), which sets it.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     # docker/workers/entry.sh and agents-worker listen on "memory" when QUEUE_PREFIX is unset.
     listens = values.QUEUE_PREFIX or "memory"

@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter
+from sqlalchemy.exc import SQLAlchemyError
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from memory.common import extract, paths, settings
@@ -94,8 +95,12 @@ mcp_http_app = mcp.http_app(stateless_http=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    with make_session() as db:
-        check_single_user(db, settings.ENABLED_MODULES)
+    try:
+        with make_session() as db:
+            check_single_user(db, settings.ENABLED_MODULES)
+    except SQLAlchemyError:
+        # The database may not be up or migrated yet; POST /users and add_user.py still allow one human.
+        logger.warning("Could not check human users at startup")
     announce_setup_token()
     containers_on = CLAUDE_CONTAINERS in settings.ENABLED_MODULES
     maintenance = claude_containers.maintenance_running() if containers_on else nullcontext()

@@ -3,8 +3,11 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from memory.api import app as app_module
 from memory.api.MCP.base import mcp
@@ -104,9 +107,8 @@ def test_default_install_has_no_module_tools_scopes_routes_or_loops():
         "DISABLE_MODULES": "",
         "PYTHONPATH": os.pathsep.join(sys.path),
     }
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env
-    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr
     found = json.loads(out.stdout.strip().splitlines()[-1])
 
     assert {"core_search", "claude_session_search", "claude_session_fetch"} <= set(found["tools"])
@@ -131,6 +133,22 @@ async def test_api_boot_refuses_when_single_user_check_fails(monkeypatch):
     with pytest.raises(SystemExit):
         async with app_module.lifespan(app_module.app):
             pass
+
+
+@pytest.mark.asyncio
+async def test_api_boots_when_the_database_is_not_ready(monkeypatch, caplog):
+    def unreachable(db, enabled):
+        raise OperationalError("SELECT", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(app_module, "check_single_user", unreachable)
+    monkeypatch.setattr(app_module, "announce_setup_token", lambda: None)
+    monkeypatch.setattr(app_module.settings, "ENABLED_MODULES", frozenset())
+    # The MCP session manager runs once per process, and other tests start it.
+    monkeypatch.setattr(app_module, "mcp_http_app", SimpleNamespace(lifespan=lambda app: nullcontext()))
+
+    async with app_module.lifespan(app_module.app):
+        pass
+    assert "Could not check human users at startup" in caplog.text
 
 
 @pytest.mark.parametrize(

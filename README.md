@@ -95,7 +95,7 @@ Three optional features are off by default and switched on in `.env` with `ENABL
 |---|---|
 | `claude_containers` | Claude Code containers: the `/claude` routes, the `containers_*` MCP tools, the `claude_session` scheduled-task type, the `claude_sessions` scope, and the Claude sessions and configurations pages |
 | `multi_user` | More than one human user. Off, `tools/add_user.py` and `POST /users` allow one human, who gets `*` |
-| `teams` | Teams, their members and projects: routes, MCP servers, scopes, and the team and project pickers |
+| `teams` | Teams, their members and projects: MCP servers, scopes, and the team and project pickers |
 
 Everything else (search, ingest, people, notes, reports, journal, tasks, polls, agents, keys, transcript search) is always on. Modules never change who can see what. Off means 404 routes, unmounted MCP servers (their tools disappear from `tools/list` and from agent tool catalogs) and hidden scopes; data and existing scope grants stay, so turning a module back on restores it.
 
@@ -105,6 +105,8 @@ Everything else (search, ingest, people, notes, reports, journal, tasks, polls, 
 ENABLE_MODULES=claude_containers
 COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
 ```
+
+If `.env` already has a `COMPOSE_FILE` line (`tools/install.sh --non-interactive` writes `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml`), append `:docker-compose.claude.yaml` to it instead, e.g. `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml`; replacing it drops the proxy overlay without any error.
 
 The overlay mounts the orchestrator socket, adds the Docker group (`DOCKER_GID`, default 992; `tools/install.sh` detects it) and attaches the api to the external `memory-api-<MEMORY_STACK>` network. Without it the api refuses to start with the module on.
 
