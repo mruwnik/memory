@@ -1,3 +1,4 @@
+import asyncio
 from decimal import Decimal
 
 import pytest
@@ -59,6 +60,25 @@ async def test_a_schema_agent_that_does_not_submit_fails_but_is_still_charged(db
     with pytest.raises(LLMError, match="answered without submitting a result"):
         await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
 
+    assert db_session.query(LLMSpend).one().calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_call_its_caller_gave_up_on_is_still_charged(db_session, regular_user, llm_key, scripted_llm):
+    async def slow():
+        await asyncio.sleep(0.1)
+        return submitted(SUMMARY)
+
+    scripted_llm.script = [slow]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST),
+            timeout=0.01,
+        )
+    await asyncio.sleep(0.3)
+
+    db_session.expire_all()
     assert db_session.query(LLMSpend).one().calls == 1
 
 

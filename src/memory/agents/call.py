@@ -183,6 +183,10 @@ def record_run(
         return run.id
 
 
+# Calls whose caller stopped waiting, kept alive until they are charged.
+_detached: set[asyncio.Task] = set()
+
+
 async def run_agent(
     agent: str, prompt: str, *, user: int, key: Credential, record: Record
 ) -> Result:
@@ -190,14 +194,36 @@ async def run_agent(
 
     Raises LLMError when the key can't pay (another provider, deleted, rejected,
     its daily pool spent) or the model gave no usable answer; a turn that was
-    billed is recorded either way. Transient provider errors (rate limits, 5xx,
-    connection errors, timeouts) propagate unchanged.
+    billed is recorded either way, even when the caller gives up on it first.
+    Transient provider errors (rate limits, 5xx, connection errors, timeouts)
+    propagate unchanged.
     """
     found = system_agent(agent)
     model = found.model_for(key.provider)
     if model is None:
         raise LLMError(f"{found.slug} needs an {' or '.join(found.providers)} key")
     max_cost = await asyncio.to_thread(allowance, key)
+    call = asyncio.ensure_future(
+        complete(found, model, prompt, user=user, key=key, record=record, max_cost=max_cost)
+    )
+    _detached.add(call)
+    call.add_done_callback(_detached.discard)
+    # A detached call's failure has no one to raise to; retrieving it keeps asyncio quiet.
+    call.add_done_callback(lambda t: t.cancelled() or t.exception())
+    # A caller's timeout mustn't cancel a call the provider may already be billing.
+    return await asyncio.shield(call)
+
+
+async def complete(
+    found: SystemAgent,
+    model: str,
+    prompt: str,
+    *,
+    user: int,
+    key: Credential,
+    record: Record,
+    max_cost: Decimal,
+) -> Result:
     provider = get_provider(model, api_key=key.key)
     started = datetime.now(timezone.utc)
     try:
