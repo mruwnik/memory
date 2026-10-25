@@ -147,7 +147,7 @@ export const CalendarPanel = () => {
                 onSync={() => handleSync(account.id)}
               >
                 {accountEvents.length === 0 ? (
-                  <Hint>No events synced yet</Hint>
+                  <Hint>No events found in the last 30 or next 90 days</Hint>
                 ) : accountEvents.map(([calendarName, calEvents]) => (
                   <Disclosure key={calendarName} summary={<>{calendarName} <span className="font-normal text-slate-500">· {calEvents.length} events</span></>}>
                     <List flush>

@@ -897,3 +897,33 @@ def test_update_event_clears_all_person_associations(
     db_session.expire_all()
     event = db_session.query(CalendarEvent).filter_by(external_id="event-123").first()
     assert event.people == []
+
+
+@pytest.mark.parametrize("failure_stage", ["calendar_list", "events", "queue"])
+def test_google_sync_records_failures(failure_stage, google_calendar_account, db_session):
+    service = Mock()
+    service.calendarList.return_value.list.return_value.execute.return_value = {"items": [{"id": "primary"}]}
+    service.calendars.return_value.get.return_value.execute.return_value = {"summary": "Calendar"}
+    service.events.return_value.list.return_value.execute.return_value = {"items": [{
+        "id": "event-1", "summary": "Event", "start": {"dateTime": "2026-10-26T10:00:00Z"},
+        "end": {"dateTime": "2026-10-26T11:00:00Z"},
+    }]}
+    google_calendar_account.calendar_ids = []
+    db_session.commit()
+    with (
+        patch("memory.workers.tasks.calendar.refresh_credentials"),
+        patch("memory.workers.tasks.calendar.build", return_value=service),
+        patch("memory.workers.tasks.calendar.sync_calendar_event.delay") as queue,
+    ):
+        if failure_stage == "calendar_list":
+            service.calendarList.return_value.list.return_value.execute.side_effect = RuntimeError("Google access denied")
+        elif failure_stage == "events":
+            service.events.return_value.list.return_value.execute.side_effect = RuntimeError("Google access denied")
+        else:
+            queue.side_effect = RuntimeError("Queue unavailable")
+        with pytest.raises(RuntimeError):
+            calendar.sync_calendar_account(google_calendar_account.id, force_full=True)
+    db_session.refresh(google_calendar_account)
+    assert google_calendar_account.sync_error
+    assert google_calendar_account.sync_failing_since is not None
+    assert google_calendar_account.last_sync_at is None

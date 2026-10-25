@@ -351,9 +351,9 @@ def _fetch_google_calendar_events(
         try:
             calendar_list = service.calendarList().list().execute()
             calendars_to_sync = [cal["id"] for cal in calendar_list.get("items", [])]
-        except Exception as e:
-            logger.error(f"Error fetching calendar list, falling back to primary: {e}")
-            calendars_to_sync = ["primary"]
+        except Exception:
+            logger.exception("Unable to list calendars for account %s", account.id)
+            raise
 
     for calendar_id in calendars_to_sync:
         try:
@@ -384,15 +384,17 @@ def _fetch_google_calendar_events(
                 for event in events_result.get("items", []):
                     try:
                         events.append(_parse_google_event(event, calendar_name))
-                    except Exception as e:
-                        logger.error(f"Error parsing Google event: {e}")
+                    except Exception:
+                        logger.exception("Unable to parse a Google event for account %s", account.id)
+                        raise
 
                 page_token = events_result.get("nextPageToken")
                 if not page_token:
                     break
 
-        except Exception as e:
-            logger.error(f"Error fetching events from calendar {calendar_id}: {e}")
+        except Exception:
+            logger.exception("Unable to fetch Google events for account %s", account.id)
+            raise
 
     return events
 
@@ -518,8 +520,9 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                     serialized = _serialize_event_data(event_data)
                     task = sync_calendar_event.delay(account.id, serialized)  # type: ignore[attr-defined]
                     task_ids.append(task.id)
-                except Exception as e:
-                    logger.error(f"Error queuing event {event_data.get('external_id')}: {e}")
+                except Exception:
+                    logger.exception("Unable to queue a calendar event for account %s", account.id)
+                    raise
 
             account.last_sync_at = now
             account.record_sync(None)

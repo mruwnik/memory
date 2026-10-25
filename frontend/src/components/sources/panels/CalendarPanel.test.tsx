@@ -70,7 +70,7 @@ describe('CalendarPanel load states', () => {
     renderWithRouter(<CalendarPanel />)
     await waitFor(() => expect(screen.getByText('My CalDAV')).toBeInTheDocument())
     expect(screen.getByText('CalDAV: https://dav.example.com/cal/')).toBeInTheDocument()
-    expect(screen.getByText('No events synced yet')).toBeInTheDocument()
+    expect(screen.getByText('No events found in the last 30 or next 90 days')).toBeInTheDocument()
   })
 
   it('renders an error state when the list fetch fails', async () => {
