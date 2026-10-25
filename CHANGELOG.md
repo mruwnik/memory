@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.2.6 (2026-10-26)
 
 ### Required env vars
 
@@ -30,6 +30,10 @@ reconciliation; the update does not rewrite either history.
   reported so setup can be retried after reconciliation.
 - Notes sync distinguishes unrelated histories, rejected write access, branch
   rules, and concurrent remote changes in its failure messages.
+- GitHub account setup shows instructions for the selected authentication
+  method, including read permissions and installation repository access.
+- Manage repos offers Refresh from GitHub to bypass cached discovery after
+  installation permissions or repository access change.
 
 ### Migrations
 
@@ -50,11 +54,6 @@ None.
 None.
 
 ### Other changes for operators
-
-GitHub account setup shows instructions only for the selected authentication
-method, with explicit read permissions and installation repository-access steps.
-Manage repos has a Refresh from GitHub action to bypass cached results after
-installation permissions or repository access change.
 
 - Google Calendar fetch and queue failures now appear on the calendar account
   instead of being reported as successful empty syncs.
