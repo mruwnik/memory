@@ -100,13 +100,14 @@ See **[UPDATING.md](UPDATING.md)** for verification, rollback and post-update ta
 
 The MCP server uses OAuth (Dynamic Client Registration per RFC 7591), so any compliant MCP client can enroll itself the first time it connects. Point your client at `http://<host>:8000/mcp` and it will walk you through the login flow on first use.
 
-Example for Claude Desktop / Cursor (`mcpServers` config):
+- Claude Code: `claude mcp add --transport http memory http://localhost:8000/mcp`
+- Claude Desktop and claude.ai: in Settings, under Connectors, add a custom connector with the URL.
+- Cursor (`~/.cursor/mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "memory": {
-      "type": "streamable-http",
       "url": "http://localhost:8000/mcp"
     }
   }

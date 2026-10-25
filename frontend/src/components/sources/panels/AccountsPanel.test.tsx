@@ -91,6 +91,16 @@ describe('AccountsPanel load states', () => {
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument()
   })
 
+  it.each([
+    ['github', 'GitHub accounts', 'Google accounts'],
+    ['google', 'Google accounts', 'GitHub accounts'],
+  ] as const)('shows only %s accounts when given that provider', async (provider, shown, hidden) => {
+    mockFetchRoutes(routes({ config: oauthConfig }))
+    renderWithRouter(<AccountsPanel provider={provider} />)
+    expect(await screen.findByRole('heading', { name: shown })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: hidden })).not.toBeInTheDocument()
+  })
+
   it('shows an error state when github list fails', async () => {
     mockFetchRoutes({ ...routes({}), '/github/accounts': { status: 500, json: {} } })
     renderWithRouter(<AccountsPanel />)

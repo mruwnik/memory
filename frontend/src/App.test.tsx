@@ -19,6 +19,9 @@ const oauthState = {
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => authState }))
 vi.mock('@/hooks/useOAuth', () => ({ useOAuth: () => oauthState }))
+const getNeedsAccount = vi.fn(async () => false)
+vi.mock('@/hooks/useSetup', () => ({ getNeedsAccount: () => getNeedsAccount() }))
+vi.mock('@/components/setup/SetupWizard', () => ({ SetupWizard: () => <div>SETUP_WIZARD</div> }))
 
 // Stub the heavy / unrelated screens so we only assert routing.
 vi.mock('@/components', () => ({
@@ -78,6 +81,7 @@ beforeEach(() => {
   oauthState.startOAuth = vi.fn()
   oauthState.handleCallback = vi.fn(async () => true)
   oauthState.clearError = vi.fn()
+  getNeedsAccount.mockResolvedValue(false)
   setPath('/ui/login')
 })
 
@@ -107,6 +111,13 @@ describe('App routing & auth', () => {
     setPath('/ui/login')
     render(<App />)
     expect(screen.getByText('LOGIN_PROMPT')).toBeInTheDocument()
+  })
+
+  it('sends visitors of a server with no account yet to setup', async () => {
+    getNeedsAccount.mockResolvedValue(true)
+    setPath('/ui/dashboard')
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('SETUP_WIZARD')).toBeInTheDocument())
   })
 
   it('redirects unauthenticated users from a protected route to login', async () => {

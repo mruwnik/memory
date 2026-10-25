@@ -2,12 +2,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useUsers, type User, type UserUpdate } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
 import { Badge, Button, Card, Combobox, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
-import { COMMON_TIMEZONES, formatTimezone, getBrowserTimezone } from '../../utils/timezones'
+import { timezoneOptions } from '../../utils/timezones'
 import { NewApiKey } from './NewApiKey'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
-
-const timezoneOptions = () =>
-  [...new Set([getBrowserTimezone(), ...COMMON_TIMEZONES])].map(tz => ({ value: tz, label: formatTimezone(tz) }))
 
 const UserSettings = () => {
   const { getCurrentUser, updateUser, changePassword, regenerateApiKey } = useUsers()

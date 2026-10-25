@@ -109,7 +109,7 @@ export const GoogleDrivePanel = () => {
     <Section title="Google Drive folders">
       {notice}
       {accounts.length === 0 ? (
-        <EmptyState message="No Google accounts connected. Add a Google account in the Accounts tab first." />
+        <EmptyState message="No Google accounts connected. Connect a Google account first." />
       ) : (
         <List>
           {accounts.map(account => (

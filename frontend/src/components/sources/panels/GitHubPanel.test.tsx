@@ -58,12 +58,12 @@ beforeEach(() => {
 })
 
 describe('GitHubPanel load states', () => {
-  it('prompts to add an account in the Accounts tab when none exist', async () => {
+  it('prompts to add an account first when none exist', async () => {
     mockFetchRoutes(routes([]))
     renderWithUser(<GitHubPanel />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     await waitFor(() =>
-      expect(screen.getByText(/No GitHub accounts configured. Add a GitHub account in the Accounts tab first./)).toBeInTheDocument(),
+      expect(screen.getByText(/No GitHub accounts yet. Add a GitHub account first./)).toBeInTheDocument(),
     )
   })
 

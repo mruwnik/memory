@@ -3,12 +3,14 @@ import { createBrowserRouter, RouterProvider, Routes, Route, Navigate, useNaviga
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
+import { getNeedsAccount } from '@/hooks/useSetup'
 import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { SettingsPage } from '@/components/settings'
 import { PeopleManagement } from '@/components/people'
+import { SetupWizard } from '@/components/setup/SetupWizard'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
 import { AppShell } from '@/components/shared/AppShell'
@@ -57,6 +59,7 @@ const AuthWrapper = () => {
         // Allow public poll routes without auth
         const isPublicRoute =
           location.pathname === '/ui/login' ||
+          location.pathname === '/ui/setup' ||
           location.pathname === '/ui/forgot-password' ||
           location.pathname === '/ui/reset-password' ||
           location.pathname.startsWith('/ui/polls/respond/') ||
@@ -66,6 +69,14 @@ const AuthWrapper = () => {
         }
       }
     }
+  }, [isAuthenticated, isLoading, location.pathname, navigate])
+
+  // A server with no account yet has nobody to log in as, so its first visitor goes to setup.
+  useEffect(() => {
+    if (isLoading || isAuthenticated || location.pathname !== '/ui/login') return
+    getNeedsAccount()
+      .then(needed => needed && navigate('/ui/setup', { replace: true }))
+      .catch(() => undefined) // The login page is already the fallback.
   }, [isAuthenticated, isLoading, location.pathname, navigate])
 
   // Loading state
@@ -129,6 +140,7 @@ const AuthWrapper = () => {
       <Route path="/ui/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
       <Route path="/ui/forgot-password" element={<ForgotPassword />} />
       <Route path="/ui/reset-password" element={<ResetPassword />} />
+      <Route path="/ui/setup" element={<SetupWizard isAuthenticated={isAuthenticated} user={user} checkAuth={checkAuth} />} />
 
       <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
         {routes.map(({ path, element, scope }) => (

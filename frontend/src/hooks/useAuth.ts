@@ -24,6 +24,12 @@ const deleteCookie = (name: string) => {
   document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:01 GMT;path=/`
 }
 
+/** Signs this browser in with a session token, the way an OAuth code exchange does. */
+export const storeSession = (accessToken: string) => {
+  setCookie('access_token', accessToken, 30)
+  setCookie(SESSION_COOKIE_NAME, accessToken, 30)
+}
+
 const getClientId = () => localStorage.getItem('oauth_client_id')
 
 // Every useAuth instance listens for this, so whichever call notices first
@@ -65,8 +71,7 @@ const requestRefresh = async (): Promise<string | null> => {
   if (!response.ok) return null
 
   const tokens = await response.json()
-  setCookie('access_token', tokens.access_token, 30)
-  setCookie(SESSION_COOKIE_NAME, tokens.access_token, 30)
+  storeSession(tokens.access_token)
   if (tokens.refresh_token) {
     setCookie('refresh_token', tokens.refresh_token, 30)
   }

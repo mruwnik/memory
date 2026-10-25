@@ -13,7 +13,7 @@ type Save = (body: KeyUpsert) => Promise<void>
 
 const CAP_HINT = `Optional. Without one, ${formatCost(DEFAULT_KEY_DAILY_CAP_USD)}/day applies unless the agent sets a daily cap.`
 
-function AddKeyForm({ initialProvider, onSave }: { initialProvider: KeyProvider; onSave: Save }) {
+export function AddKeyForm({ initialProvider, onSave }: { initialProvider: KeyProvider; onSave: Save }) {
   const [provider, setProvider] = useState<KeyProvider>(initialProvider)
   const [label, setLabel] = useState('')
   const [key, setKey] = useState('')

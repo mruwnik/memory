@@ -54,6 +54,7 @@ from memory.api.secrets import router as secrets_router
 from memory.api.instance_settings import router as instance_settings_router
 from memory.api.users import router as users_router
 from memory.api.password_reset import router as password_reset_router
+from memory.api.setup import announce_setup_token, router as setup_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.sync_status import router as sync_status_router
@@ -91,6 +92,7 @@ mcp_http_app = mcp.http_app(stateless_http=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    announce_setup_token()
     async with mcp_http_app.lifespan(app), claude_containers.maintenance_running():
         yield
 
@@ -504,6 +506,7 @@ app.include_router(secrets_router)
 app.include_router(instance_settings_router)
 app.include_router(users_router)
 app.include_router(password_reset_router)
+app.include_router(setup_router)
 app.include_router(discord_router)
 app.include_router(slack_router)
 app.include_router(sync_status_router)

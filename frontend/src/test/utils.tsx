@@ -1,6 +1,6 @@
 import { createContext, ReactElement, ReactNode, useContext, useState } from 'react'
 import { render, RenderOptions } from '@testing-library/react'
-import { createMemoryRouter, RouterProvider } from 'react-router-dom'
+import { createMemoryRouter, RouterProvider, type InitialEntry } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 
@@ -16,7 +16,7 @@ export function renderWithRouter(
   {
     initialEntries = ['/'],
     ...options
-  }: { initialEntries?: string[] } & Omit<RenderOptions, 'wrapper'> = {},
+  }: { initialEntries?: InitialEntry[] } & Omit<RenderOptions, 'wrapper'> = {},
 ) {
   // A data router, like the app's, so components may use useBlocker. The route reads the UI from
   // context so that rerender() with new props still reaches it.

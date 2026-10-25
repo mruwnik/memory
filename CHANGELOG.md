@@ -80,6 +80,15 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- First-run setup wizard. While no human account exists, the web UI sends
+  visitors to `/ui/setup`, where the first account is created as an admin.
+  Creating it needs a setup token that the api writes to its log at startup
+  (`docker compose logs api | grep "setup token"`); a new token is made on each
+  restart until the account exists. The wizard then walks the new admin through
+  LLM keys, a first source, connecting an AI client, and their timezone. It runs
+  once: an instance that already has an account never shows it.
+  `POST /setup/account` returns 404 once any human account exists.
+
 - One-time API keys are removed: the `meta_create_one_time_key` MCP tool, the
   `one_time` key type, the `ONE_TIME_KEY_RATE_LIMIT` and `ONE_TIME_KEY_TTL_SECONDS`
   settings (delete them from `.env`) and the `cleanup-used-one-time-keys` beat

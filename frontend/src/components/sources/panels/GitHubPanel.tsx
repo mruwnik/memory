@@ -98,7 +98,7 @@ export const GitHubPanel = () => {
     <Section title="GitHub">
       {notice}
       {accounts.length === 0 ? (
-        <EmptyState message="No GitHub accounts configured. Add a GitHub account in the Accounts tab first." />
+        <EmptyState message="No GitHub accounts yet. Add a GitHub account first." />
       ) : (
         <List>
           {accounts.map(account => {

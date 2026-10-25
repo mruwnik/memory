@@ -314,7 +314,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
         ) : (
           googleAccounts.length === 0 ? (
             <Hint>
-              No Google accounts connected. Add a Google account in the Accounts tab first.
+              No Google accounts connected. Connect a Google account first.
             </Hint>
           ) : (
             <Field label="Google account">

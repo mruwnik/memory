@@ -325,3 +325,7 @@ export function formatShortDate(dateStr: string): string {
     year: 'numeric',
   })
 }
+
+// Picker options: the browser's zone first, then one per UTC offset
+export const timezoneOptions = () =>
+  [...new Set([getBrowserTimezone(), ...COMMON_TIMEZONES])].map(tz => ({ value: tz, label: formatTimezone(tz) }))

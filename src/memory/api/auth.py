@@ -99,6 +99,9 @@ WHITELIST = {
     # Forgotten-password request and confirm: the caller is by definition
     # logged out; confirm is authorized by the signed reset token.
     "/auth/password-reset",
+    # First-run setup: status is what a logged-out browser checks before
+    # login, and claiming is authorized by the setup token from the log.
+    "/setup",
 }
 
 
@@ -644,7 +647,9 @@ def resolve_user_filter(
     return user_id
 
 
-def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUser:
+def create_user(
+    email: str, password: str, name: str, db: DBSession, scopes: list[str] | None = None
+) -> HumanUser:
     """Create a new human user.
 
     The select-then-insert is a TOCTOU race: two concurrent registrations
@@ -662,6 +667,8 @@ def create_user(email: str, password: str, name: str, db: DBSession) -> HumanUse
         raise HTTPException(status_code=400, detail="User already exists")
 
     user = HumanUser.create_with_password(email, name, password)
+    if scopes is not None:
+        user.scopes = scopes
     db.add(user)
     try:
         db.commit()
