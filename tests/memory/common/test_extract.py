@@ -8,7 +8,7 @@ from PIL import Image
 import io
 import shutil
 from unittest.mock import patch
-from memory.common import settings
+from memory.common import settings, summarizer
 from memory.common.extract import (
     HAS_PANDOC,
     as_file,
@@ -76,6 +76,15 @@ def test_extract_text_with_path(tmp_path):
 
     assert extract_text(test_file) == [
         DataChunk(data=["file text content"], metadata={}, modality="text")
+    ]
+
+
+def test_content_already_within_a_chunk_gets_tags_but_no_summary_chunk():
+    content = "word " * 300
+    with summarizer.summarising(lambda prompt: {"summary": None, "tags": ["t"]}):
+        chunks = extract_text(content)
+    assert [(c.data, c.metadata) for c in chunks] == [
+        (c.data, {"tags": {"t"}}) for c in extract_text(content, skip_summary=True)
     ]
 
 

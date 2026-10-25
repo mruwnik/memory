@@ -701,10 +701,20 @@ def test_a_summary_collected_without_a_voyage_key_logs_no_error(
     assert [r for r in caplog.records if r.name == "memory.common.summary_batch" and r.levelname == "ERROR"] == []
 
 
-def test_collect_tags_only_request_adds_no_chunk(db_session, llm_key, batches, qdrant):
+@pytest.mark.parametrize(
+    "chunk_metadata, result",
+    [(None, SUMMARY), ({"type": "summary"}, {"summary": None, "tags": ["t1"]})],
+    ids=["tags_wanted_only", "content_needs_no_summary"],
+)
+def test_collect_tags_only_request_adds_no_chunk(
+    db_session, llm_key, batches, qdrant, chunk_metadata, result
+):
     item = make_item(db_session)
-    request = add_request(db_session, item, llm_key, status="submitted", batch_id="batch_1")
-    batches.results["batch_1"] = [batch_result(request.id)]
+    request = add_request(
+        db_session, item, llm_key, status="submitted", batch_id="batch_1",
+        chunk_metadata=chunk_metadata,
+    )
+    batches.results["batch_1"] = [batch_result(request.id, blocks=[submit_block(result)])]
 
     summary_batch.collect_finished(db_session)
 

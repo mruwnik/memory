@@ -11,12 +11,10 @@ logger = logging.getLogger(__name__)
 
 MAX_TOKENS = 200000
 TAGS_PROMPT = """
-The following text is already concise. Please identify 3-5 relevant tags that capture the main topics or themes.
+The following text is already concise, so it needs no summary: set the summary to null.
+Please identify 3-5 relevant tags that capture the main topics or themes.
 
 Tags should be lowercase and use hyphens instead of spaces, e.g. "machine-learning" instead of "Machine Learning".
-
-Use this as the summary, verbatim:
-{summary}
 
 Text:
 {content}
@@ -93,7 +91,7 @@ def deferring(enabled: bool) -> Iterator[list[DeferredSummary]]:
 def build_prompt(content: str, target_tokens: int) -> str:
     # Already short enough content only needs tags
     if tokens.approx_token_count(content) <= target_tokens:
-        prompt = TAGS_PROMPT.format(content=content, summary=content[:1000])
+        prompt = TAGS_PROMPT.format(content=content)
     else:
         prompt = SUMMARY_PROMPT.format(
             target_tokens=target_tokens,
@@ -124,8 +122,9 @@ def summarize_or_defer(
 
 
 def parse_summary(data: dict[str, Any]) -> tuple[str, list[str]]:
-    """(summary, tags) from a SUMMARY_SCHEMA result, capping overlong summaries."""
-    summary = data["summary"]
+    """(summary, tags) from a SUMMARY_SCHEMA result, capping overlong summaries.
+    The summary is "" for content short enough to need none."""
+    summary = data["summary"] or ""
     target_tokens = settings.DEFAULT_CHUNK_TOKENS
     if tokens.approx_token_count(summary) > target_tokens * 1.5:
         summary = truncate(summary, target_tokens)

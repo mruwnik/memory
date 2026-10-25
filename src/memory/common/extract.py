@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import io
 import logging
 import mimetypes
@@ -348,6 +348,8 @@ def extract_text(
     summary_meta = merge_metadata(metadata, summary_metadata)
     if result := summarizer.summarize_or_defer(content, summary_meta, modality):
         summary, tags = result
+        if not summary:
+            return [replace(c, metadata=merge_metadata(c.metadata, {"tags": tags})) for c in chunks]
         chunks.append(
             DataChunk(
                 data=[summary],

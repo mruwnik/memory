@@ -55,10 +55,12 @@ class SystemAgent:
         }
 
 
+NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+# Content already short enough is only tagged; its summary is null
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
+        "summary": NULLABLE_STRING,
         "tags": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["summary", "tags"],
@@ -70,12 +72,15 @@ SUMMARISE = SystemAgent(
     title="Summaries and tags",
     description="Summarises long items and tags them when they are ingested.",
     use="ingest",
-    system_prompt="You are a helpful assistant that creates concise summaries and identifies key topics.",
+    system_prompt=(
+        "You summarise and tag items ingested into a personal knowledge base: emails, documents, "
+        "notes, web pages, chat. Summaries are embedded for search, so keep the names, dates, "
+        "decisions and specific terms someone would later search for."
+    ),
     max_output_tokens=2048,
     result_schema=SUMMARY_SCHEMA,
 )
 
-NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 EXTRACTION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -155,8 +160,8 @@ QUERY_ANALYSIS_PROMPT = """Analyze this search query and extract structured info
 The user is searching a personal knowledge base; the content types it holds are listed with the query.
 
 Guidelines:
-- Only restrict modalities when VERY confident about content type
-- When unsure, return empty modalities to search all
+- Restrict modalities only when the query names a content type ("that email
+  from...", "the book about..."); otherwise return empty modalities to search all
 - Remove meta-language like "there was something about", "I remember reading"
 - For recalled_content: if you recognize the topic, suggest specific titles/essays
   that might be relevant (e.g., "predetermined conclusions" -> "The Bottom Line")
@@ -230,9 +235,9 @@ QUERY_ANALYSIS = SystemAgent(
 )
 
 SCORE_CHUNK_SYSTEM_PROMPT = """
-You are a helpful assistant that scores how relevant a chunk of text and/or image is to a query.
+You are a helpful assistant that scores how relevant a chunk of text is to a query.
 
-You are given a query and a chunk of text and/or an image. The chunk should be relevant to the query, but often won't be. Score the chunk based on how relevant it is to the query and assign a score on a gradient between 0 and 1, which is the probability that the chunk is relevant to the query.
+You are given a query and a chunk of text. The chunk should be relevant to the query, but often won't be. Score the chunk based on how relevant it is to the query and assign a score on a gradient between 0 and 1, which is the probability that the chunk is relevant to the query.
 """
 
 SCORE_SCHEMA = {
@@ -267,7 +272,7 @@ SESSION_SUMMARY = SystemAgent(
         "Write a concise 1-2 sentence summary of what was accomplished in this session.\n"
         "Focus on the main task or goal, not the individual steps.\n"
         "Be specific about what was built, fixed, or discussed.\n"
-        'Do not start with "The user" or "In this session" - just describe what was done.'
+        "Start with what was done, as if completing \"This session...\"."
     ),
     max_output_tokens=1024,
 )

@@ -3,10 +3,12 @@ import pytest
 from memory.common import settings, summarizer, tokens
 
 LONG = "word " * 5000
+SHORT = "a short note about gardening"
 
 
-def test_parse_summary_returns_summary_and_tags():
-    assert summarizer.parse_summary({"summary": "s", "tags": ["a"]}) == ("s", ["a"])
+@pytest.mark.parametrize("summary,expected", [("s", "s"), (None, "")])
+def test_parse_summary_returns_summary_and_tags(summary, expected):
+    assert summarizer.parse_summary({"summary": summary, "tags": ["a"]}) == (expected, ["a"])
 
 
 def test_parse_summary_caps_overlong_summaries():
@@ -29,6 +31,18 @@ def test_summaries_come_from_the_summariser_in_scope():
         assert summarizer.summarize(LONG) == ("s", ["t"])
     assert summarizer.summarize(LONG) is None
     assert "Text to summarize" in prompts[0]
+
+
+def test_short_content_is_only_tagged():
+    prompts = []
+
+    def fn(prompt):
+        prompts.append(prompt)
+        return {"summary": None, "tags": ["t"]}
+
+    with summarizer.summarising(fn):
+        assert summarizer.summarize(SHORT) == ("", ["t"])
+    assert prompts[0].count(SHORT) == 1
 
 
 def test_a_failed_summariser_leaves_no_summary():
