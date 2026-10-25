@@ -52,7 +52,6 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     RECONCILE_ACCESS_CONTROL,
-    SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
     BACKUP_PATH,
     BACKUP_ALL,
@@ -102,7 +101,6 @@ TASK_MAPPINGS = {
         "sync_lesswrong_post": SYNC_LESSWRONG_POST,
     },
     "notes": {
-        "setup_git_notes": SETUP_GIT_NOTES,
         "track_git_changes": TRACK_GIT_CHANGES,
     },
     "backup": {
@@ -286,16 +284,6 @@ def ebook_sync_book(ctx, file_path, tags):
 def notes(ctx):
     """Notes-related tasks."""
     pass
-
-
-@notes.command("setup-git-notes")
-@click.option("--origin", required=True, help="Git origin")
-@click.option("--email", required=True, help="Git email")
-@click.option("--name", required=True, help="Git name")
-@click.pass_context
-def notes_setup_git_notes(ctx, origin, email, name):
-    """Setup git notes."""
-    execute_task(ctx, "notes", "setup_git_notes", origin=origin, email=email, name=name)
 
 
 @notes.command("track-git-changes")

@@ -13,7 +13,7 @@ from typing import Any, NamedTuple, cast
 import redis
 from sqlalchemy.exc import IntegrityError
 
-from memory.common import paths, settings
+from memory.common import instance_settings, paths, settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import Note
 from memory.common.celery_app import (
@@ -24,6 +24,7 @@ from memory.common.celery_app import (
     WRITE_NOTE_FILE,
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
+    SYNC_NOTES_WHEN_DUE,
 )
 from memory.common.content_processing import (
     check_content_exists,
@@ -33,6 +34,15 @@ from memory.common.content_processing import (
     safe_task_execution,
 )
 from memory.common.jobs import tracked_task
+from memory.common.notes_git import (
+    GIT_SYNC_STATUS_KEY,
+    TOKEN_ENV,
+    credential_args,
+    https_host,
+    last_sync,
+    read_vault_git,
+    sync_remote,
+)
 from memory.common.redis_lock import distributed_lock
 
 logger = logging.getLogger(__name__)
@@ -69,8 +79,10 @@ GIT_OPERATION_MARKERS = (
     "REVERT_HEAD",
 )
 NOTE_FILENAME_KEY = "source_note_filename_key"
-GIT_SYNC_STATUS_KEY = "memory:notes:git_sync_status"
 GIT_INDEXED_COMMIT_KEY = "memory:notes:git_indexed_commit"
+SYNC_QUEUED_KEY = "memory:notes:sync_queued"
+# Long enough for a queued sync to run and record its status, so the minutely check doesn't queue another.
+SYNC_QUEUED_TTL = 10 * 60
 PENDING_WRITE_KEY = "memory:notes:pending_write:{filename}"
 # Outlives a deferred write's retries, so a lost worker can't block reindexing forever.
 PENDING_WRITE_TTL = 2 * 24 * 60 * 60
@@ -118,30 +130,20 @@ def run_git(
     cmd = ["git", "-C", repo_root.as_posix(), "-c", "core.quotePath=false"]
     env, timeout = None, None
     if network:
-        cmd += ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"]
+        # No redirects: a remote could bounce the request to an internal address.
+        cmd += ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "-c", "http.followRedirects=false"]
         ssh = os.environ.get("GIT_SSH_COMMAND", "ssh")
         env = {**os.environ, "GIT_SSH_COMMAND": f"{ssh} {SSH_TIMEOUT_OPTIONS}"}
         timeout = GIT_NETWORK_TIMEOUT
+        host = https_host(read_vault_git(repo_root).remote_url)
+        if host and (token := instance_settings.value(instance_settings.NOTES_GIT_TOKEN)):
+            cmd += credential_args(host)
+            env[TOKEN_ENV] = token
     cmd += args
     try:
         return subprocess.run(cmd, text=True, capture_output=True, env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="timed out")
-
-
-def git_command(repo_root: pathlib.Path, *args: str, force: bool = False):
-    if not (repo_root / ".git").exists() and not force:
-        return
-
-    res = run_git(repo_root, *args)
-    if res.returncode != 0:
-        logger.error(f"git {args[0] if args else ''} failed with exit {res.returncode}")
-        # Git's output names notes and quotes commit messages, which carry
-        # subjects; error records are shown to the appliance operator.
-        logger.warning(f"git stderr: {res.stderr}")
-        if res.stdout:
-            logger.warning(f"git stdout: {res.stdout}")
-    return res
 
 
 class Upstream(NamedTuple):
@@ -155,7 +157,7 @@ class Upstream(NamedTuple):
 
 
 def find_upstream(repo_root: pathlib.Path) -> Upstream | None:
-    """The current branch's upstream, else the same-named branch on origin."""
+    """The current branch's upstream, else the same-named branch on origin (or on the only remote)."""
     branch = run_git(repo_root, "symbolic-ref", "--short", "HEAD").stdout.strip()
     if not branch:
         return None
@@ -168,8 +170,8 @@ def find_upstream(repo_root: pathlib.Path) -> Upstream | None:
     if len(configured) == 2:
         remote, ref = configured
         return Upstream(remote, ref.removeprefix("refs/heads/"), configured=True)
-    if run_git(repo_root, "remote", "get-url", "origin").returncode == 0:
-        return Upstream("origin", branch, configured=False)
+    if remote := sync_remote(None, tuple(run_git(repo_root, "remote").stdout.split())):
+        return Upstream(remote, branch, configured=False)
     return None
 
 
@@ -702,22 +704,40 @@ def sync_notes(folder: str):
     }
 
 
+def setup_step(repo_root: pathlib.Path, step: str, *args: str):
+    if git_step_failed(step, run_git(repo_root, *args)):
+        raise RuntimeError(f"Notes git setup failed at {step}")
+
+
 @app.task(name=SETUP_GIT_NOTES)
 @tracked_task
-def setup_git_notes(origin: str, email: str, name: str):
-    logger.info(f"Setting up git notes in {origin}")
-    if (settings.NOTES_STORAGE_DIR / ".git").exists():
-        logger.info("Git notes already setup")
-        return {"status": "already_setup"}
+def setup_git_notes(origin: str | None, email: str, name: str):
+    """Make the vault a repo committing as this author, with ``origin`` as its remote, then sync it.
 
-    git_command(settings.NOTES_STORAGE_DIR, "init", "-b", "main", force=True)
-    git_command(settings.NOTES_STORAGE_DIR, "config", "user.email", email)
-    git_command(settings.NOTES_STORAGE_DIR, "config", "user.name", name)
-    git_command(settings.NOTES_STORAGE_DIR, "remote", "add", "origin", origin)
-    git_command(settings.NOTES_STORAGE_DIR, "add", ".")
-    git_command(settings.NOTES_STORAGE_DIR, "commit", "-m", "Initial commit")
-    git_command(settings.NOTES_STORAGE_DIR, "push", "-u", "origin", "main")
-    return {"status": "success"}
+    An existing repo keeps its history and any remote it has: only its author
+    changes, and ``origin`` is added only when it has no remote at all.
+    """
+    repo_root = settings.NOTES_STORAGE_DIR
+    with git_notes_lock("tracking"):
+        created = not (repo_root / ".git").exists()
+        if created:
+            repo_root.mkdir(parents=True, exist_ok=True)
+            setup_step(repo_root, "init", "init", "--quiet", "-b", "main")
+        setup_step(repo_root, "config", "config", "--", "user.email", email)
+        setup_step(repo_root, "config", "config", "--", "user.name", name)
+        if origin and not run_git(repo_root, "remote").stdout.strip():
+            setup_step(repo_root, "remote", "remote", "add", "origin", "--", origin)
+        # Not `created`: a first run that failed after init leaves a repo with no commit.
+        if not head_commit(repo_root):
+            setup_step(repo_root, "add", "add", "--all")
+            setup_step(repo_root, "commit", "commit", "--quiet", "--allow-empty", "-m", "Initial commit")
+
+    try:
+        with git_tracking(repo_root):
+            pass
+    except VaultBusy as e:
+        return {"status": "sync_failed", "failed_step": e.step}
+    return {"status": "created" if created else "updated"}
 
 
 @app.task(name=TRACK_GIT_CHANGES)
@@ -751,3 +771,24 @@ def track_git_changes():
         "latest_commit": latest_commit,
         "changed_files": sync.changed,
     }
+
+
+def sync_due(last_at: datetime | None, interval: int, now: datetime) -> bool:
+    return last_at is None or (now - last_at).total_seconds() >= interval
+
+
+@app.task(name=SYNC_NOTES_WHEN_DUE)
+def sync_notes_when_due():
+    """Queue a vault sync once the interval (a server setting) has passed since the last one."""
+    if not (settings.NOTES_STORAGE_DIR / ".git").exists():
+        return {"status": "no_git_repo"}
+    interval = instance_settings.value(instance_settings.NOTES_SYNC_INTERVAL)
+    status = last_sync()
+    last_at = datetime.fromisoformat(status["at"]) if status else None
+    if not sync_due(last_at, interval, datetime.now(timezone.utc)):
+        return {"status": "not_due"}
+    client = redis.from_url(settings.REDIS_URL)
+    if not client.set(SYNC_QUEUED_KEY, "1", nx=True, ex=min(interval, SYNC_QUEUED_TTL)):
+        return {"status": "already_queued"}
+    track_git_changes.delay()  # type: ignore[attr-defined]
+    return {"status": "queued"}

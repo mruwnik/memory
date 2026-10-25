@@ -263,7 +263,7 @@ services:
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
       LATEST_RELEASE_URL: ${LATEST_RELEASE_URL:-}
     secrets:
-      [postgres_password, voyage_key, secrets_encryption_key]
+      [postgres_password, voyage_key, secrets_encryption_key, ssh_public_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
     healthcheck:

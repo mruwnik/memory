@@ -26,7 +26,7 @@ from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
 
-Kind = Literal["bool", "secret", "list"]
+Kind = Literal["bool", "secret", "list", "int"]
 Applies = Literal["live", "restart"]
 Source = Literal["env", "ui", "default"]
 
@@ -36,6 +36,14 @@ UNDEFINED_TABLE = "42P01"
 
 def accept(_value: Any) -> None:
     return None
+
+
+def within(low: int, high: int) -> Callable[[Any], None]:
+    def check(value: Any) -> None:
+        if not low <= value <= high:
+            raise ValueError(f"must be between {low} and {high}")
+
+    return check
 
 
 @dataclass(frozen=True)
@@ -59,7 +67,7 @@ class Setting:
         if self.env_var is None:
             return None
         value = getattr(settings, self.env_var)
-        if self.kind == "bool":
+        if self.kind in ("bool", "int"):
             return value
         # An empty secret file counts as unset.
         return value or None
@@ -74,6 +82,10 @@ class Setting:
             if not isinstance(raw, str) or not raw.strip():
                 raise ValueError("must be a non-empty string")
             return raw.strip()
+        if self.kind == "int":
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                raise ValueError("must be a whole number")
+            return raw
         if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
             raise ValueError("must be a list of names")
         value = frozenset(v.strip().lower() for v in raw)
@@ -121,6 +133,26 @@ ENABLE_RERANKING = search_ceiling(
     "enable_reranking", True, "Voyage reranking of the fused results"
 )
 
+NOTES_GIT_TOKEN = register(
+    Setting(
+        key="notes_git_token",
+        kind="secret",
+        applies="live",
+        default="",
+        description="Access token for the notes vault's https git remote",
+    )
+)
+NOTES_SYNC_INTERVAL = register(
+    Setting(
+        key="notes_sync_interval",
+        kind="int",
+        applies="live",
+        default=15 * 60,
+        description="Seconds between syncs of the notes vault with its git remote",
+        validate=within(*settings.NOTES_SYNC_INTERVAL_RANGE),
+    )
+)
+
 UNREADABLE = "can't be read; set it again"
 
 
@@ -132,6 +164,10 @@ def decode(setting: Setting, row: InstanceSetting) -> Any:
         if not isinstance(row.value, list):
             raise ValueError("not a list")
         value = frozenset(row.value)
+    elif setting.kind == "int":
+        if isinstance(row.value, bool) or not isinstance(row.value, int):
+            raise ValueError("not an int")
+        value = row.value
     elif not isinstance(row.value, bool):
         raise ValueError("not a bool")
     else:

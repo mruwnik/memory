@@ -30,6 +30,11 @@ def optional_boolean_env(key: str) -> bool | None:
     return boolean_env(key) if key in os.environ else None
 
 
+def optional_int_env(key: str) -> int | None:
+    """None when the env leaves `key` unset, so an instance setting can supply it."""
+    return int(os.environ[key]) if key in os.environ else None
+
+
 def secret_env(key: str, default: str = "") -> str:
     """Read a secret from a file (KEY_FILE) or env var (KEY), with file taking priority."""
     if file_path := os.getenv(f"{key}_FILE"):
@@ -230,7 +235,11 @@ COMIC_SYNC_INTERVAL = int(os.getenv("COMIC_SYNC_INTERVAL", 60 * 60 * 24))
 ARTICLE_FEED_SYNC_INTERVAL = int(os.getenv("ARTICLE_FEED_SYNC_INTERVAL", 30 * 60))
 CLEAN_COLLECTION_INTERVAL = int(os.getenv("CLEAN_COLLECTION_INTERVAL", 24 * 60 * 60))
 CHUNK_REINGEST_INTERVAL = int(os.getenv("CHUNK_REINGEST_INTERVAL", 60 * 60))
-NOTES_SYNC_INTERVAL = int(os.getenv("NOTES_SYNC_INTERVAL", 15 * 60))
+NOTES_SYNC_INTERVAL = optional_int_env("NOTES_SYNC_INTERVAL")
+NOTES_SYNC_INTERVAL_RANGE = (60, 24 * 60 * 60)
+# An access token for an https notes remote; else an admin saves one in the Notes tab.
+NOTES_GIT_TOKEN = secret_env("NOTES_GIT_TOKEN")
+SSH_PUBLIC_KEY_FILE = pathlib.Path(os.getenv("SSH_PUBLIC_KEY_FILE", "/run/secrets/ssh_public_key"))
 # How often the "recent" access-control reconciliation sweep runs (the
 # frequent backstop for the event-driven dispatch). The full sweep is daily.
 ACCESS_CONTROL_RECONCILE_INTERVAL = int(
@@ -726,6 +735,13 @@ def require_settings(values: Any, role: str) -> None:
         print(
             f"Refusing to start: missing required settings: {', '.join(missing)}. "
             f"Set them in .env, or for secrets as NAME_FILE pointing at a file.{why}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    low, high = NOTES_SYNC_INTERVAL_RANGE
+    if values.NOTES_SYNC_INTERVAL is not None and not low <= values.NOTES_SYNC_INTERVAL <= high:
+        print(
+            f"Refusing to start: NOTES_SYNC_INTERVAL must be between {low} and {high} seconds.",
             file=sys.stderr,
         )
         raise SystemExit(1)

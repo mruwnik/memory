@@ -6,7 +6,7 @@ export type SettingSource = 'env' | 'ui' | 'default'
 
 export interface SettingRow {
   key: string
-  kind: 'bool' | 'secret' | 'list'
+  kind: 'bool' | 'secret' | 'list' | 'int'
   applies: 'live' | 'restart'
   description: string
   /** Null for a setting no env var can set. */
@@ -15,7 +15,7 @@ export interface SettingRow {
   locked: boolean
   set: boolean
   /** Never present for secrets. */
-  value: boolean | string[] | null
+  value: boolean | string[] | number | null
   key_hint: string | null
   choices: string[]
   pending_restart: boolean

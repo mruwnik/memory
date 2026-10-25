@@ -58,6 +58,7 @@ WRITE_NOTE_FILE = f"{NOTES_ROOT}.write_note_file_when_free"
 REINDEX_NOTE = f"{NOTES_ROOT}.reindex_note"
 SETUP_GIT_NOTES = f"{NOTES_ROOT}.setup_git_notes"
 TRACK_GIT_CHANGES = f"{NOTES_ROOT}.track_git_changes"
+SYNC_NOTES_WHEN_DUE = f"{NOTES_ROOT}.sync_notes_when_due"
 SYNC_OBSERVATION = f"{OBSERVATIONS_ROOT}.sync_observation"
 SYNC_ALL_COMICS = f"{COMIC_ROOT}.sync_all_comics"
 SYNC_SMBC = f"{COMIC_ROOT}.sync_smbc"
@@ -419,10 +420,8 @@ def build_beat_schedule() -> dict:
             "task": SYNC_ALL_ARTICLE_FEEDS,
             "schedule": settings.ARTICLE_FEED_SYNC_INTERVAL,
         },
-        "sync-notes-changes": {
-            "task": TRACK_GIT_CHANGES,
-            "schedule": settings.NOTES_SYNC_INTERVAL,
-        },
+        # The interval is a server setting, so the task checks it: beat's own intervals are fixed.
+        "sync-notes-when-due": {"task": SYNC_NOTES_WHEN_DUE, "schedule": 60},
         "run-scheduled-tasks": {
             "task": RUN_SCHEDULED_TASKS,
             "schedule": settings.SCHEDULED_CALL_RUN_INTERVAL,

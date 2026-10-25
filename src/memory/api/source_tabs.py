@@ -4,6 +4,7 @@ from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
 from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.notes_source import sync_failing, visible_notes
 from memory.common.access_control import (
     AccessFilter,
     apply_access_filter_to_query,
@@ -53,6 +54,7 @@ class SourceTabs(BaseModel):
     transcripts: TabCounts
     books: TabCounts
     photos: TabCounts
+    notes: TabCounts
     discord: TabCounts
     slack: TabCounts
     secrets: TabCounts
@@ -133,6 +135,7 @@ def source_tabs(
         transcripts=with_failures(db, TranscriptAccount, *owned(TranscriptAccount.user_id)),
         books=TabCounts(count=visible_books(db, access)),
         photos=TabCounts(count=visible_photos(db, access)),
+        notes=TabCounts(count=visible_notes(db, access), failing=int(sync_failing(user))),
         discord=TabCounts(count=discord_bots),
         slack=with_failures(db, SlackWorkspace, *slack_filter),
         secrets=TabCounts(count=count_rows(db, Secret, Secret.user_id == user.id)),

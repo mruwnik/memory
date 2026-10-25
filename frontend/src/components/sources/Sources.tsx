@@ -14,6 +14,7 @@ import { TranscriptsPanel } from './panels/TranscriptsPanel'
 import { BooksPanel } from './panels/BooksPanel'
 import { ForumsPanel } from './panels/ForumsPanel'
 import { PhotosPanel } from './panels/PhotosPanel'
+import { NotesPanel } from './panels/NotesPanel'
 import { SecretsPanel } from './panels/SecretsPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
@@ -30,6 +31,7 @@ const TABS = [
   { value: 'books', label: 'Books', panel: BooksPanel },
   { value: 'forums', label: 'Forums', panel: ForumsPanel },
   { value: 'photos', label: 'Photos', panel: PhotosPanel },
+  { value: 'notes', label: 'Notes', panel: NotesPanel },
   { value: 'discord', label: 'Discord', panel: DiscordPanel },
   { value: 'slack', label: 'Slack', panel: SlackPanel },
   { value: 'secrets', label: 'Secrets', panel: SecretsPanel },

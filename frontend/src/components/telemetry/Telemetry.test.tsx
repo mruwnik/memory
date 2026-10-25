@@ -128,17 +128,12 @@ const laptopKey = { id: 4, name: 'laptop', key_type: 'internal', user_id: 2, rev
 // share the "/telemetry/" substring and the first include() match wins.
 const baseRoutes = (me: typeof adminUser, apiKeys: unknown[] = []) => json({
   '/auth/me': { json: me },
-  '/telemetry/users': { json: [{ id: 1, name: 'Admin', email: 'admin@example.com' }] },
+  '/telemetry/users': { json: [{ id: 1, name: 'Admin', email: 'admin@example.com' }, { id: 2, name: 'Other', email: 'other@example.com' }] },
+  // Two users: the picker hides itself when there is only one.
   '/users': {
     json: [
-      {
-        id: 1,
-        name: 'Admin',
-        email: 'admin@example.com',
-        user_type: 'human',
-        scopes: ['*'],
-        api_key_count: 0,
-      },
+      { id: 1, name: 'Admin', email: 'admin@example.com', user_type: 'human', scopes: ['*'], api_key_count: 0 },
+      { id: 2, name: 'Other', email: 'other@example.com', user_type: 'human', scopes: [], api_key_count: 0 },
     ],
   },
   '/telemetry/api-keys': { json: apiKeys },

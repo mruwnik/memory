@@ -21,6 +21,7 @@ vi.mock('./panels/TranscriptsPanel', () => ({ TranscriptsPanel: () => <div data-
 vi.mock('./panels/BooksPanel', () => ({ BooksPanel: () => <div data-testid="panel-books" /> }))
 vi.mock('./panels/ForumsPanel', () => ({ ForumsPanel: () => <div data-testid="panel-forums" /> }))
 vi.mock('./panels/PhotosPanel', () => ({ PhotosPanel: () => <div data-testid="panel-photos" /> }))
+vi.mock('./panels/NotesPanel', () => ({ NotesPanel: () => <div data-testid="panel-notes" /> }))
 vi.mock('./panels/SecretsPanel', () => ({ SecretsPanel: () => <div data-testid="panel-secrets" /> }))
 vi.mock('./panels/DiscordPanel', () => ({ DiscordPanel: () => <div data-testid="panel-discord" /> }))
 vi.mock('./panels/SlackPanel', () => ({ SlackPanel: () => <div data-testid="panel-slack" /> }))

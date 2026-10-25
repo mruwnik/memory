@@ -219,16 +219,9 @@ On macOS, run host-side workers with `--pool=solo` (one per concurrent task): fo
 
 ### Notes synchronisation
 
-You can have notes pushed to a git repository whenever they're modified:
+Notes can be pushed to a git repository whenever they're modified, and pulled back on an interval. An admin sets this up in **Sources → Notes**: the remote, the commit author, and for an https remote an access token (write-only, like LLM keys; `NOTES_GIT_TOKEN` in the env wins). A vault that is already a git repository keeps its history and its remote. The sync interval is on **Server settings** (`NOTES_SYNC_INTERVAL` in the env wins).
 
-```bash
-python tools/run_celery_task.py notes setup-git-notes \
-  --origin ssh://git@github.com/some/repo.git \
-  --email bla@ble.com \
-  --name 'commit author'
-```
-
-This requires SSH keys in `secrets/` — `tools/install.sh` can generate them (option in the SSH section). To create them by hand: generate an ed25519 keypair into `secrets/ssh_private_key` / `secrets/ssh_public_key` and populate `secrets/ssh_known_hosts` (e.g. `ssh-keyscan github.com`). Add the public key to your git provider before the first push.
+An ssh remote uses the SSH keys in `secrets/` — `tools/install.sh` can generate them (option in the SSH section). To create them by hand: generate an ed25519 keypair into `secrets/ssh_private_key` / `secrets/ssh_public_key` and populate `secrets/ssh_known_hosts` (e.g. `ssh-keyscan github.com`). The Notes tab shows the public key to add as a deploy key with write access.
 
 ### Discord integration
 

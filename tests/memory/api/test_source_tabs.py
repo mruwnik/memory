@@ -1,10 +1,13 @@
 """Tests for the per-tab counts and failing-sync counts behind the Sources tab labels."""
 
+import json
 from datetime import datetime, timezone
 
 import pytest
+import redis
 
-from memory.common.db.models import Book, BookSection, HumanUser, Person, Team
+from memory.common import settings
+from memory.common.db.models import Book, BookSection, HumanUser, Note, Person, Team
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.secrets import Secret
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
@@ -22,6 +25,7 @@ from memory.common.db.models.sources import (
     project_teams,
     team_members,
 )
+from memory.common.notes_git import GIT_SYNC_STATUS_KEY
 
 FAILING = {
     "sync_error": "boom",
@@ -38,6 +42,7 @@ TABS = [
     "transcripts",
     "books",
     "photos",
+    "notes",
     "discord",
     "slack",
     "secrets",
@@ -248,3 +253,32 @@ def test_admin_sees_every_bot_and_workspace_without_a_user_filter(
 
     assert tabs_seen["discord"] == {"count": discord, "failing": 0}
     assert tabs_seen["slack"] == {"count": slack[0], "failing": slack[1]}
+
+
+def note(n: int, **access) -> Note:
+    return Note(sha256=f"note-{n}".encode(), modality="text", filename=f"notes/{n}.md", **access)
+
+
+def record_sync(ok: bool):
+    status = {"ok": ok, "failed_step": None if ok else "push", "hint": None, "at": "2026-10-25T10:00:00+00:00"}
+    redis.from_url(settings.REDIS_URL).set(GIT_SYNC_STATUS_KEY, json.dumps(status))
+
+
+def test_notes_count_only_those_the_viewer_can_see(member_client, user, other, db_session):
+    db_session.add_all([note(1, creator_id=user.id), note(2, creator_id=other.id)])
+    db_session.commit()
+
+    assert member_client.get("/source-tabs").json()["notes"] == {"count": 1, "failing": 0}
+
+
+@pytest.mark.parametrize("ok, failing", [(True, 0), (False, 1)])
+def test_a_failed_notes_sync_flags_the_tab_for_admins(client, ok, failing):
+    record_sync(ok)
+
+    assert client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": failing}
+
+
+def test_members_cant_fix_the_vault_so_its_failure_isnt_flagged_for_them(member_client):
+    record_sync(False)
+
+    assert member_client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": 0}

@@ -5,13 +5,14 @@ import pytest
 import pathlib
 import redis
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import Note
 from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
 from memory.common.content_processing import create_content_hash
-from memory.common import settings
+from memory.common import notes_git, settings
 from sqlalchemy.exc import IntegrityError
 
 
@@ -511,34 +512,6 @@ def test_sync_notes_propagates_file_read_errors(mock_sync_note, mock_make_sessio
 
     with pytest.raises(Exception, match="File read error"):
         notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-
-@pytest.mark.parametrize(
-    "stdout,warnings",
-    [
-        (
-            "[master 1a2b] Sync note secret.md: Private subject",
-            [
-                "git stderr: fatal: 'notes/secret.md' did not match",
-                "git stdout: [master 1a2b] Sync note secret.md: Private subject",
-            ],
-        ),
-        ("", ["git stderr: fatal: 'notes/secret.md' did not match"]),
-    ],
-)
-def test_git_command_keeps_git_output_out_of_error_records(caplog, stdout, warnings):
-    """Error records reach the appliance operator; git's output names notes."""
-    failing = Mock(returncode=128, stdout=stdout, stderr="fatal: 'notes/secret.md' did not match")
-
-    with patch("memory.workers.tasks.notes.subprocess.run", return_value=failing):
-        with patch.object(pathlib.Path, "exists", return_value=True):
-            with caplog.at_level("WARNING", logger="memory.workers.tasks.notes"):
-                notes.git_command(pathlib.Path("/test/repo"), "commit", "-m", "Sync note secret.md")
-
-    assert [r.getMessage() for r in caplog.records if r.levelname == "ERROR"] == [
-        "git commit failed with exit 128"
-    ]
-    assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == warnings
 
 
 # Profile handling tests
@@ -1319,6 +1292,101 @@ def test_setup_git_notes_pushes_and_later_syncs_follow(tmp_path):
     assert remote_files(remote, "main") == {"existing.md", "new.md"}
 
 
+@pytest.mark.parametrize("remote_name", ["origin", "upstream"])
+def test_setup_git_notes_never_rewrites_an_existing_vault(tmp_path, remote_name):
+    vault, remote = make_vault(tmp_path, "master")
+    if remote_name != "origin":
+        git(vault, "remote", "rename", "origin", remote_name)
+    history = git(vault, "rev-parse", "HEAD")
+    (vault / "draft.md").write_text("draft")
+
+    result = notes.setup_git_notes(str(tmp_path / "elsewhere.git"), "new@example.com", "New Name")
+
+    assert result["status"] == "updated"
+    assert git(vault, "remote") == remote_name
+    assert git(vault, "remote", "get-url", remote_name) == str(remote)
+    assert git(vault, "rev-parse", "HEAD") == history
+    assert git(vault, "status", "--porcelain") == "?? draft.md"
+    assert (git(vault, "config", "user.name"), git(vault, "config", "user.email")) == (
+        "New Name",
+        "new@example.com",
+    )
+
+
+def test_setup_git_notes_retried_after_a_failed_first_run_commits_the_notes(tmp_path):
+    vault = settings.NOTES_STORAGE_DIR
+    (vault / "existing.md").write_text("existing")
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    real_run_git = notes.run_git
+
+    def remote_add_fails(repo_root, *args, **kwargs):
+        if args[:2] == ("remote", "add"):
+            return subprocess.CompletedProcess(args, 1, "", "")
+        return real_run_git(repo_root, *args, **kwargs)
+
+    with patch.object(notes, "run_git", remote_add_fails), pytest.raises(RuntimeError):
+        notes.setup_git_notes(str(remote), "test@example.com", "Test")
+    notes.setup_git_notes(str(remote), "test@example.com", "Test")
+
+    assert remote_files(remote, "main") == {"existing.md"}
+    assert last_status()["ok"] is True
+
+
+def test_setup_git_notes_takes_an_author_name_that_looks_like_an_option(tmp_path):
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+
+    notes.setup_git_notes(str(remote), "test@example.com", "--unset")
+
+    assert git(settings.NOTES_STORAGE_DIR, "config", "user.name") == "--unset"
+
+
+def test_a_sole_remote_not_named_origin_is_the_vaults_upstream(tmp_path):
+    vault, remote = make_vault(tmp_path, "main")
+    git(vault, "remote", "rename", "origin", "backup")
+    git(vault, "branch", "--unset-upstream")
+
+    result = notes.setup_git_notes(None, "test@example.com", "Test")
+    save_note(vault, "new.md", "new")
+
+    assert result["status"] == "updated"
+    assert last_status()["ok"] is True
+    assert "new.md" in remote_files(remote, "main")
+
+
+def test_setup_git_notes_adds_a_remote_to_a_vault_without_one(tmp_path):
+    vault = settings.NOTES_STORAGE_DIR
+    git(vault, "init", "-q", "-b", "main")
+    configure_identity(vault)
+    commit_file(vault, "kept.md", "kept")
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+
+    notes.setup_git_notes(str(remote), "test@example.com", "Test")
+
+    assert remote_files(remote, "main") == {"kept.md"}
+    assert git(vault, "log", "--format=%s") == "add kept.md"
+    assert last_status()["ok"] is True
+
+
+def test_a_push_with_the_token_set_never_stores_it(tmp_path, monkeypatch):
+    vault, remote = make_vault(tmp_path, "main")
+    https_url = "https://git.example.com/me/notes.git"
+    # The vault shows an https remote, which git rewrites to the local bare repo.
+    git(vault, "remote", "set-url", "origin", https_url)
+    git(vault, "config", f"url.{remote}.insteadOf", https_url)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(settings, "NOTES_GIT_TOKEN", "ghp_secret1234")
+
+    save_note(vault, "new.md", "new")
+
+    assert "new.md" in remote_files(remote, "main")
+    assert "ghp_secret1234" not in (vault / ".git" / "config").read_text()
+    assert not (tmp_path / "home" / ".git-credentials").exists()
+    assert not (tmp_path / "home" / ".config" / "git" / "credentials").exists()
+
+
 def test_track_git_changes_without_repo():
     assert notes.track_git_changes() == {"status": "no_git_repo"}
 
@@ -1527,3 +1595,46 @@ def test_superseded_write_leaves_the_newer_edits_mark(
     assert notes.write_note_file_when_free(*write_b)["status"] == "written"
     assert not notes.write_pending("notes/n.md")
     assert (vault / "n.md").read_text() == "B"
+
+
+NOW = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "last_at, interval, due",
+    [
+        (None, 900, True),
+        (NOW - timedelta(seconds=899), 900, False),
+        (NOW - timedelta(seconds=900), 900, True),
+        (NOW - timedelta(seconds=120), 60, True),
+        (NOW - timedelta(hours=2), 24 * 60 * 60, False),
+    ],
+)
+def test_a_sync_is_due_once_the_interval_has_passed_since_the_last(last_at, interval, due):
+    assert notes.sync_due(last_at, interval, NOW) is due
+
+
+@pytest.fixture
+def queued_syncs():
+    with patch.object(notes.track_git_changes, "delay") as delay:
+        yield delay
+
+
+def test_the_due_check_skips_a_vault_without_git(queued_syncs):
+    notes.sync_notes_when_due()
+
+    queued_syncs.assert_not_called()
+
+
+def test_the_due_check_queues_one_sync_until_that_sync_records_its_status(tmp_path, queued_syncs, monkeypatch):
+    make_vault(tmp_path, "main")
+    monkeypatch.setattr(settings, "NOTES_SYNC_INTERVAL", 900)
+    redis.from_url(settings.REDIS_URL).delete(notes_git.GIT_SYNC_STATUS_KEY)
+
+    notes.sync_notes_when_due()
+    notes.sync_notes_when_due()
+    assert queued_syncs.call_count == 1
+
+    notes.record_git_sync(None)
+    notes.sync_notes_when_due()
+    assert queued_syncs.call_count == 1

@@ -202,6 +202,17 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- Notes are a Sources tab. Admins set up the vault's git sync there (remote,
+  commit author, and an access token for an https remote) and can sync it now;
+  the `notes setup-git-notes` command of `tools/run_celery_task.py` is gone. A
+  vault that is already a repository keeps its history and remote. New optional
+  settings: `NOTES_GIT_TOKEN` (or `NOTES_GIT_TOKEN_FILE`) locks the token, and
+  `NOTES_SYNC_INTERVAL` now locks the interval, which is otherwise set on the
+  Server settings page and applies without a restart. It must be 60 to 86400
+  seconds, or the api and workers refuse to start. Beat's `sync-notes-changes`
+  entry is replaced by a minutely `sync-notes-when-due` check. `SSH_PUBLIC_KEY_FILE`
+  (default `/run/secrets/ssh_public_key`) is the key the tab shows for an ssh
+  remote.
 - First-run setup wizard. While no human account exists, the web UI sends
   visitors to `/ui/setup`, where the first account is created as an admin.
   Creating it needs a setup token that the api writes to its log at startup

@@ -1,12 +1,15 @@
 import pytest
+from celery.schedules import crontab
 from cryptography.fernet import Fernet
 
 from memory.api.MCP.servers import HIDDEN_MCP_SERVERS
 from memory.common import instance_settings, settings
+from memory.common.celery_app import build_beat_schedule
 from memory.common.db.models import InstanceSetting
 from memory.common.db.models.secrets import encrypt_value_with_key
 from memory.common.instance_settings import (
     ENABLE_RERANKING,
+    NOTES_SYNC_INTERVAL,
     VOYAGE_API_KEY,
     decode_rows,
     resolve,
@@ -24,6 +27,9 @@ from memory.common.instance_settings import (
         (ENABLE_RERANKING, False, {"enable_reranking": True}, (False, "env")),
         (ENABLE_RERANKING, None, {"enable_reranking": False}, (False, "ui")),
         (ENABLE_RERANKING, None, {}, (True, "default")),
+        (NOTES_SYNC_INTERVAL, 120, {"notes_sync_interval": 600}, (120, "env")),
+        (NOTES_SYNC_INTERVAL, None, {"notes_sync_interval": 600}, (600, "ui")),
+        (NOTES_SYNC_INTERVAL, None, {}, (900, "default")),
     ],
 )
 def test_env_wins_over_the_ui_value_which_wins_over_the_default(
@@ -40,8 +46,11 @@ def test_env_wins_over_the_ui_value_which_wins_over_the_default(
         ("voyage_api_key", None, encrypt_value_with_key("pa-secret", Fernet.generate_key())),
         ("disabled_mcp_servers", "slack", None),
         ("enable_reranking", "yes", None),
+        ("notes_sync_interval", True, None),
+        ("notes_sync_interval", 5, None),
+        ("notes_sync_interval", 24 * 60 * 60 + 1, None),
     ],
-    ids=["foreign_key", "not_a_list", "not_a_bool"],
+    ids=["foreign_key", "not_a_list", "not_a_bool", "not_an_int", "too_short", "too_long"],
 )
 def test_a_row_that_cant_be_read_counts_as_unset_and_is_logged_by_name_only(
     db_session, monkeypatch, caplog, key, value, value_encrypted
@@ -82,6 +91,9 @@ def test_live_reads_survive_a_secret_encrypted_under_another_key(
         (VOYAGE_API_KEY, 12),
         (HIDDEN_MCP_SERVERS, "slack"),
         (HIDDEN_MCP_SERVERS, ["slack", "nope"]),
+        (NOTES_SYNC_INTERVAL, "600"),
+        (NOTES_SYNC_INTERVAL, True),
+        (NOTES_SYNC_INTERVAL, 1.5),
     ],
 )
 def test_parse_rejects_values_of_the_wrong_shape(setting, raw):
@@ -110,3 +122,9 @@ def test_a_saved_value_is_live_once_the_cache_is_invalidated(db_session, admin_u
 
     instance_settings.invalidate_cache()
     assert instance_settings.value(ENABLE_RERANKING) is False
+
+
+def test_the_beat_schedule_has_only_fixed_intervals():
+    """Beat orders its heap by due times computed once, so an interval that changes under it starves every other entry."""
+    schedules = [entry["schedule"] for entry in build_beat_schedule().values()]
+    assert all(type(s) in (int, float, crontab) for s in schedules)

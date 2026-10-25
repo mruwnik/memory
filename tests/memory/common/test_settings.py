@@ -96,6 +96,7 @@ COMPLETE_SETTINGS = dict(
     ENABLE_MODULES=frozenset(),
     DISABLE_MODULES=frozenset(),
     ORCHESTRATOR_SOCKET="",
+    NOTES_SYNC_INTERVAL=None,
 )
 
 CONTAINERS_ON = frozenset({"claude_containers"})
@@ -240,3 +241,17 @@ def test_claude_containers_with_a_socket_or_on_a_worker_starts(role, overrides):
     )
 
     require_settings(values, role)
+
+
+@pytest.mark.parametrize("interval", [0, 59, 24 * 60 * 60 + 1, 10**9])
+def test_an_out_of_range_notes_sync_interval_refuses_to_start(capsys, interval):
+    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "NOTES_SYNC_INTERVAL": interval})
+    with pytest.raises(SystemExit) as exc:
+        require_settings(values, "worker")
+    assert exc.value.code == 1
+    assert "NOTES_SYNC_INTERVAL" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("interval", [None, 60, 24 * 60 * 60])
+def test_an_in_range_notes_sync_interval_starts(interval):
+    require_settings(SimpleNamespace(**{**COMPLETE_SETTINGS, "NOTES_SYNC_INTERVAL": interval}), "worker")
