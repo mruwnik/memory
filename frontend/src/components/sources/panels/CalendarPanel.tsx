@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, CalendarAccount, GoogleAccount, LLMKeyChoice } from '@/hooks/useSources'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
-import { IntervalInput, ProjectSelect, SensitivitySelect, SourceRow, TagsInput, numberValue } from '../shared'
+import { ProjectField, IntervalInput, SensitivitySelect, SourceRow, TagsInput, numberValue } from '../shared'
 import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
@@ -18,6 +19,7 @@ export const CalendarPanel = () => {
     deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts
   } = useSources()
   const { listProjects } = useProjects()
+  const projectsOn = useModule('projects')
   const { userId } = useSourcesContext()
   const { getUpcomingEvents } = useCalendar()
   const [accounts, setAccounts] = useState<CalendarAccount[]>([])
@@ -41,7 +43,7 @@ export const CalendarPanel = () => {
       const [calendarData, googleData, projectData, eventsData] = await Promise.all([
         listCalendarAccounts(userId),
         listGoogleAccounts(userId),
-        listProjects(),
+        (projectsOn ? listProjects() : Promise.resolve<Project[]>([])),
         getUpcomingEvents({
           startDate: startDate.toISOString(),
           endDate: endDate.toISOString(),
@@ -59,7 +61,7 @@ export const CalendarPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listCalendarAccounts, listGoogleAccounts, listProjects, getUpcomingEvents, userId])
+  }, [listCalendarAccounts, listGoogleAccounts, listProjects, projectsOn, getUpcomingEvents, userId])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -369,10 +371,8 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
         </Field>
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control">
-            <ProjectSelect value={formData.project_id} projects={projects}
-              onChange={project_id => setFormData({ ...formData, project_id })} />
-          </Field>
+          <ProjectField hint="Project for access control" value={formData.project_id} projects={projects}
+            onChange={project_id => setFormData({ ...formData, project_id })} />
           <Field label="Sensitivity" hint="Visibility level for calendar events">
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>

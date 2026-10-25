@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@/test/utils'
+import { renderWithUser as render, screen, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import PersonCard from './PersonCard'
 import type { Person, Tidbit } from '../../hooks/usePeople'
@@ -105,6 +105,12 @@ describe('PersonCard expand affordance', () => {
     render(<PersonCard {...baseProps} person={makePerson()} />)
     await user.click(screen.getByRole('button', { name: 'Alice Chen' }))
     expect(baseProps.onToggleExpand).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the Teams row while teams is off', () => {
+    render(<PersonCard {...baseProps} expanded person={makePerson({ aliases: ['ali'] })} teams={[makeTeam()]} />, { modules: new Set() })
+    expect(screen.getByText('Also known as')).toBeInTheDocument()
+    expect(screen.queryByText('Teams')).not.toBeInTheDocument()
   })
 
   it('does not toggle when clicking the Edit button', async () => {

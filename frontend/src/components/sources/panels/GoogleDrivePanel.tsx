@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem, LLMKeyChoice } from '@/hooks/useSources'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { IntervalInput, PauseButton, ProjectSelect, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
+import { ProjectField, IntervalInput, PauseButton, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField } from '../LLMKeyField'
@@ -12,6 +13,7 @@ export const GoogleDrivePanel = () => {
     addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder
   } = useSources()
   const { listProjects } = useProjects()
+  const projectsOn = useModule('projects')
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -27,7 +29,7 @@ export const GoogleDrivePanel = () => {
     try {
       const [accountsData, projectsData] = await Promise.all([
         listGoogleAccounts(userId),
-        listProjects()
+        (projectsOn ? listProjects() : Promise.resolve<Project[]>([]))
       ])
       setAccounts(accountsData)
       setProjects(projectsData)
@@ -37,7 +39,7 @@ export const GoogleDrivePanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listGoogleAccounts, listProjects, userId])
+  }, [listGoogleAccounts, listProjects, projectsOn, userId])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -371,10 +373,8 @@ const FolderBrowser = ({ accountId, projects, onSelect, onCancel }: FolderBrowse
         )}
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control">
-            <ProjectSelect value={access.project_id} projects={projects}
-              onChange={project_id => setAccess({ ...access, project_id })} />
-          </Field>
+          <ProjectField hint="Project for access control" value={access.project_id} projects={projects}
+            onChange={project_id => setAccess({ ...access, project_id })} />
           <Field label="Sensitivity" hint="Visibility level for files from the added folders">
             <SensitivitySelect value={access.sensitivity} onChange={sensitivity => setAccess({ ...access, sensitivity })} />
           </Field>
@@ -676,10 +676,8 @@ const GoogleFolderForm = ({ folder, projects, onSubmit, onCancel }: GoogleFolder
         </Field>
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control">
-            <ProjectSelect value={formData.project_id} projects={projects}
-              onChange={project_id => setFormData({ ...formData, project_id })} />
-          </Field>
+          <ProjectField hint="Project for access control" value={formData.project_id} projects={projects}
+            onChange={project_id => setFormData({ ...formData, project_id })} />
           <Field label="Sensitivity" hint="Visibility level for files from this folder">
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>

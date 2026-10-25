@@ -231,6 +231,15 @@ describe('SlackPanel - workspace actions', () => {
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { project_id: 9 }))
   })
 
+  it('hides the project picker and skips the project list while projects is off', async () => {
+    renderWithUser(<SlackPanel />, { modules: new Set() })
+    await screen.findByText('Acme')
+
+    expect(screen.queryByTitle('Project')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Sensitivity')).toBeInTheDocument()
+    expect(listProjects).not.toHaveBeenCalled()
+  })
+
   it('updates the sensitivity', async () => {
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')

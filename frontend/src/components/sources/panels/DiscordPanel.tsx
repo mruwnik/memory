@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useUsers, User } from '@/hooks/useUsers'
 import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
@@ -26,6 +27,7 @@ export const DiscordPanel = () => {
   } = useDiscord()
   const { listUsers } = useUsers()
   const { listProjects } = useProjects()
+  const projectsOn = useModule('projects')
 
   const [bots, setBots] = useState<DiscordBot[]>([])
   const [servers, setServers] = useState<DiscordServer[]>([])
@@ -46,7 +48,7 @@ export const DiscordPanel = () => {
     try {
       const [botsData, projectsData] = await Promise.all([
         listBots(userId),
-        listProjects()
+        (projectsOn ? listProjects() : Promise.resolve<Project[]>([]))
       ])
       setBots(botsData)
       setProjects(projectsData)
@@ -62,7 +64,7 @@ export const DiscordPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listBots, listServers, listProjects, userId])
+  }, [listBots, listServers, listProjects, projectsOn, userId])
 
   useEffect(() => {
     loadData()

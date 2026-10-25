@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, TranscriptAccount, LLMKeyChoice } from '@/hooks/useSources'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { ProjectSelect, SensitivitySelect, SourceRow, TagsInput } from '../shared'
+import { ProjectField, SensitivitySelect, SourceRow, TagsInput } from '../shared'
 import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
@@ -17,6 +18,7 @@ export const TranscriptsPanel = () => {
     listTranscriptProviders,
   } = useSources()
   const { listProjects } = useProjects()
+  const projectsOn = useModule('projects')
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<TranscriptAccount[]>([])
   const [providers, setProviders] = useState<string[]>([])
@@ -34,7 +36,7 @@ export const TranscriptsPanel = () => {
       const [accountData, providerData, projectData] = await Promise.all([
         listTranscriptAccounts(userId),
         listTranscriptProviders(),
-        listProjects(),
+        (projectsOn ? listProjects() : Promise.resolve<Project[]>([])),
       ])
       setAccounts(accountData)
       setProviders(providerData.providers)
@@ -46,7 +48,7 @@ export const TranscriptsPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listTranscriptAccounts, listTranscriptProviders, listProjects, userId])
+  }, [listTranscriptAccounts, listTranscriptProviders, listProjects, projectsOn, userId])
 
   useEffect(() => { loadAccounts() }, [loadAccounts])
 
@@ -283,10 +285,8 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
         </Field>
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control">
-            <ProjectSelect value={formData.project_id} projects={projects}
-              onChange={project_id => setFormData({ ...formData, project_id })} />
-          </Field>
+          <ProjectField hint="Project for access control" value={formData.project_id} projects={projects}
+            onChange={project_id => setFormData({ ...formData, project_id })} />
           <Field label="Sensitivity" hint="Visibility of meetings from this account.">
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })} />
           </Field>

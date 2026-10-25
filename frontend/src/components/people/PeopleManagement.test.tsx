@@ -85,6 +85,21 @@ describe('PeopleManagement list states', () => {
   })
 })
 
+describe('PeopleManagement with teams off', () => {
+  it('does not load teams or offer the team filter', async () => {
+    const fetchMock = mockFetchRoutes({
+      '/auth/me': authMe,
+      people_list_all: mcpResult([person()]),
+      teams_list_all: mcpResult({ teams: [{ id: 1, name: 'Core', slug: 'core' }], count: 1 }),
+    })
+    renderWithRouter(<PeopleManagement />, { modules: new Set() })
+
+    await screen.findByText('Alice')
+    expect(screen.queryByLabelText('Team')).not.toBeInTheDocument()
+    expect(mcpCallsTo(fetchMock, 'teams_list_all')).toHaveLength(0)
+  })
+})
+
 describe('PeopleManagement create flow', () => {
   it('opens the create modal, submits, and closes on success', async () => {
     const fetchMock = mockFetchRoutes({

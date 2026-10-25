@@ -6,6 +6,8 @@ import uuid
 
 import pytest
 
+from memory.common import settings
+from memory.common.modules import TEAMS
 from memory.common.db.models import Person, Team, HumanUser, UserSession
 from memory.common.db.models.sources import GithubRepo, Project, team_members, project_teams
 from memory.common.db import connection as db_connection
@@ -356,10 +358,16 @@ async def test_project_get_children_count(db_session, user_session, teams_and_pr
 
 
 @pytest.mark.asyncio
-async def test_project_create_requires_non_empty_team_ids(db_session, user_session, teams_and_projects):
-    """project_create should require a non-empty team_ids list."""
+@pytest.mark.parametrize(
+    "modules, accepted",
+    [(frozenset({TEAMS}), False), (frozenset(), True)],
+)
+async def test_project_create_team_ids_required_only_with_teams_module(
+    db_session, user_session, teams_and_projects, monkeypatch, modules, accepted
+):
     from memory.api.MCP.servers.projects import upsert
 
+    monkeypatch.setattr(settings, "ENABLED_MODULES", modules)
     mock_token = make_mock_access_token(user_session.id)
 
     with (
@@ -369,8 +377,8 @@ async def test_project_create_requires_non_empty_team_ids(db_session, user_sessi
         mock_make_session.return_value.__enter__.return_value = db_session
         result = await get_fn(upsert)("New Project", team_ids=[])
 
-    assert "error" in result
-    assert "non-empty" in result["error"].lower()
+    assert (result.get("success") is True) == accepted
+    assert ("error" not in result) == accepted
 
 
 @pytest.mark.asyncio

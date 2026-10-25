@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannelUpdate, SlackWorkspaceUpdate } from '@/hooks/useSlack'
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
@@ -19,6 +20,7 @@ export const SlackPanel = () => {
     updateChannel,
   } = useSlack()
   const { listProjects } = useProjects()
+  const projectsOn = useModule('projects')
   const { getApp, listApps, deleteApp } = useSlackWizard()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
@@ -39,7 +41,7 @@ export const SlackPanel = () => {
     try {
       const [workspacesData, projectsData, appsData] = await Promise.all([
         listWorkspaces(userId),
-        listProjects(),
+        (projectsOn ? listProjects() : Promise.resolve<Project[]>([])),
         listApps(),
       ])
       setWorkspaces(workspacesData)
@@ -51,7 +53,7 @@ export const SlackPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listWorkspaces, listProjects, listApps, userId])
+  }, [listWorkspaces, listProjects, projectsOn, listApps, userId])
 
   useEffect(() => {
     loadData()

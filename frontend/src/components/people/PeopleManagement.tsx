@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { usePeople, type Person, type PersonCreate, type PersonUpdate, type Tidbit, type TidbitInput } from '../../hooks/usePeople'
+import { useModule } from '../../hooks/useModule'
 import { useTeams, type Team } from '../../hooks/useTeams'
 import { useDebounce } from '../../hooks/useDebounce'
 import PersonCard from './PersonCard'
@@ -14,6 +15,7 @@ const PeopleManagement = () => {
   const { listPeople, addPerson, updatePerson, deletePerson, getPerson, mergePeople, addTidbit, updateTidbit, deleteTidbit } = usePeople()
   const { getPersonTeams, listTeams, listMembers } = useTeams()
   const { user, hasScope } = useAuth()
+  const teamsOn = useModule('teams')
 
   const [people, setPeople] = useState<Person[]>([])
   const [capped, setCapped] = useState(false)
@@ -109,6 +111,7 @@ const PeopleManagement = () => {
 
   // Load teams for filter dropdown
   useEffect(() => {
+    if (!teamsOn) return
     const loadAllTeams = async () => {
       try {
         const teams = await listTeams({ include_inactive: false })
@@ -118,7 +121,7 @@ const PeopleManagement = () => {
       }
     }
     loadAllTeams()
-  }, [listTeams])
+  }, [listTeams, teamsOn])
 
   const handleCreate = async (data: PersonCreate) => {
     setCreateLoading(true)
@@ -262,7 +265,7 @@ const PeopleManagement = () => {
     if (!isExpanding) return
 
     // Fetch teams when expanding, if not already loaded
-    if (!personTeams[identifier] && !teamsLoading[identifier]) {
+    if (teamsOn && !personTeams[identifier] && !teamsLoading[identifier]) {
       setTeamsLoading(prev => ({ ...prev, [identifier]: true }))
       try {
         const teams = await getPersonTeams(identifier)
@@ -321,7 +324,7 @@ const PeopleManagement = () => {
         >
           <Input type="search" placeholder="Search by name, alias, or notes..." aria-label="Search people" value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)} className="sm:w-72" />
-          {allTeams.length > 0 && (
+          {teamsOn && allTeams.length > 0 && (
             <Select className="w-auto" aria-label="Team" value={teamFilter ?? ''}
               onChange={e => setTeamFilter(e.target.value ? Number(e.target.value) : null)}>
               <option value="">All teams</option>

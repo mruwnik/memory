@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { EmailPanel, defaultSyncFolders } from './EmailPanel'
+import { mcpCallsTo } from '@/hooks/mcpEnvelope.testhelper'
 import type { ImapFolder } from '@/hooks/useSources'
 
 const imapAccount = {
@@ -85,6 +86,24 @@ describe('EmailPanel load states', () => {
     mockFetchRoutes(baseRoutes([{ ...imapAccount, sync_error: 'auth failed' }]))
     renderWithRouter(<EmailPanel />)
     await waitFor(() => expect(screen.getByText('Sync failing: auth failed')).toBeInTheDocument())
+  })
+})
+
+describe('EmailPanel project field', () => {
+  it.each([
+    ['on', new Set(['projects']), 1],
+    ['off', new Set<string>(), 0],
+  ])('while projects is %s', async (_state, modules, count) => {
+    const fetchMock = mockFetchRoutes(baseRoutes([]))
+    const { user } = renderWithUser(<EmailPanel />, { modules })
+    await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
+    const dialog = await screen.findByRole('dialog')
+
+    expect(within(dialog).queryAllByText('Project', { selector: 'label' })).toHaveLength(count)
+    expect(within(dialog).getByText('Sensitivity', { selector: 'label' })).toBeInTheDocument()
+    expect(mcpCallsTo(fetchMock, 'projects_list_all')).toHaveLength(count)
   })
 })
 
@@ -254,6 +273,22 @@ describe('EmailPanel edit flow', () => {
     })
   })
 
+})
+
+describe('EmailPanel edit with projects off', () => {
+  it('keeps the account project_id although the field is hidden', async () => {
+    const fetchMock = mockFetchRoutes(baseRoutes([{ ...imapAccount, project_id: 7 }]))
+    const { user } = renderWithUser(<EmailPanel />, { modules: new Set() })
+    await waitFor(() => expect(screen.getByText('Work IMAP')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        ([url, init]) => String(url).includes('/email-accounts/1') && (init as RequestInit)?.method === 'PATCH',
+      )
+      expect(JSON.parse((patch![1] as RequestInit).body as string)).toHaveProperty('project_id', 7)
+    })
+  })
 })
 
 describe('defaultSyncFolders', () => {

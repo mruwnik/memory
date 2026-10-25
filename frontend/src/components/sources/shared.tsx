@@ -1,7 +1,8 @@
 import { useState, type ComponentProps, type RefObject } from 'react'
 import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
+import { useModule } from '@/hooks/useModule'
 import { formatUserDate, formatUserDateTime } from '@/utils/timezones'
-import { Badge, Button, ConfirmButton, Input, Notice, Row, RowError, Select, Fieldset } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Field, Input, Notice, Row, RowError, Select, Fieldset } from '@/components/shared/ui'
 
 /** A number input's state: '' while cleared, so editing never snaps back to a default. */
 export const numberValue = (value: string): number | '' => value === '' ? '' : Number(value)
@@ -395,14 +396,19 @@ export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onCh
   projects: AccessProject[]
   disabled: boolean
   onChange: (updates: { project_id?: number | null; sensitivity?: Sensitivity }) => void
-}) => (
+}) => {
+  const projectsOn = useModule('projects')
+  return (
   <>
-    <ProjectSelect className="w-auto py-1 text-xs" value={projectId} projects={projects} disabled={disabled} title="Project" aria-label="Project"
-      onChange={id => onChange({ project_id: id ?? null })} />
+    {projectsOn && (
+      <ProjectSelect className="w-auto py-1 text-xs" value={projectId} projects={projects} disabled={disabled} title="Project" aria-label="Project"
+        onChange={id => onChange({ project_id: id ?? null })} />
+    )}
     <SensitivitySelect className="w-auto py-1 text-xs" value={sensitivity as Sensitivity} disabled={disabled} title="Sensitivity" aria-label="Sensitivity"
       onChange={s => onChange({ sensitivity: s })} />
   </>
-)
+  )
+}
 
 interface FileButtonProps extends Pick<ComponentProps<typeof Button>, 'variant' | 'size'> {
   inputRef: RefObject<HTMLInputElement | null>
@@ -422,3 +428,7 @@ export const FileButton = ({ inputRef, label, busy, accept, multiple, onChange, 
     <input ref={inputRef} type="file" accept={accept} multiple={multiple} onChange={onChange} className="hidden" tabIndex={-1} />
   </>
 )
+
+/** Project picker for an account form; absent while the projects module is off. */
+export const ProjectField = ({ hint, ...props }: ComponentProps<typeof ProjectSelect> & { hint: string }) =>
+  useModule('projects') ? <Field label="Project" hint={hint}><ProjectSelect {...props} /></Field> : null

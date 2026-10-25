@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, LLMKeyChoice, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { ProjectSelect, SensitivitySelect, SourceRow, TagsInput, TestConnectionButton, numberValue } from '../shared'
+import { ProjectField, SensitivitySelect, SourceRow, TagsInput, TestConnectionButton, numberValue } from '../shared'
 import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, Fieldset } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
@@ -9,6 +10,7 @@ import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 export const EmailPanel = () => {
   const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount, listGoogleAccounts } = useSources()
   const { listProjects } = useProjects()
+  const projectsOn = useModule('projects')
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
@@ -24,7 +26,7 @@ export const EmailPanel = () => {
       const [emailData, googleData, projectData] = await Promise.all([
         listEmailAccounts(userId),
         listGoogleAccounts(userId),
-        listProjects()
+        (projectsOn ? listProjects() : Promise.resolve<Project[]>([]))
       ])
       setAccounts(emailData)
       setGoogleAccounts(googleData)
@@ -35,7 +37,7 @@ export const EmailPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listEmailAccounts, listGoogleAccounts, listProjects, userId])
+  }, [listEmailAccounts, listGoogleAccounts, listProjects, projectsOn, userId])
 
   // Reload when userId changes (admin switching user view)
   useEffect(() => { loadAccounts() }, [loadAccounts])
@@ -416,10 +418,8 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
         </Field>
 
         <FieldRow>
-          <Field label="Project" hint="Project for access control">
-            <ProjectSelect value={formData.project_id} projects={projects}
-              onChange={project_id => setFormData({ ...formData, project_id })} />
-          </Field>
+          <ProjectField hint="Project for access control" value={formData.project_id} projects={projects}
+            onChange={project_id => setFormData({ ...formData, project_id })} />
           <Field label="Sensitivity" hint="Visibility level for emails from this account">
             <SensitivitySelect value={formData.sensitivity} onChange={sensitivity => setFormData({ ...formData, sensitivity })}>
               <option value="hidden">Hidden (excluded from search)</option>

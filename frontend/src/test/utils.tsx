@@ -10,6 +10,10 @@ export const ALL_MODULES: ReadonlySet<string> = new Set(['claude_containers', 'm
 const UiContext = createContext<ReactNode>(null)
 const UiSlot = () => <>{useContext(UiContext)}</>
 
+/** `renderHook` wrapper that provides the enabled modules. */
+export const modulesWrapper = (modules: ReadonlySet<string> = ALL_MODULES) =>
+  ({ children }: { children: ReactNode }) => <ModulesContext.Provider value={modules}>{children}</ModulesContext.Provider>
+
 /**
  * Render a component inside a memory data router and return a userEvent instance
  * alongside the usual RTL result. Use `initialEntries` to control the route.
@@ -39,11 +43,17 @@ export function renderWithRouter(
   }
 }
 
-/** Plain render plus a userEvent instance (no router). */
-export function renderWithUser(ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) {
+/** Plain render plus a userEvent instance (no router). Every module is on unless `modules` says otherwise. */
+export function renderWithUser(
+  ui: ReactElement,
+  { modules = ALL_MODULES, ...options }: { modules?: ReadonlySet<string> } & Omit<RenderOptions, 'wrapper'> = {},
+) {
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <ModulesContext.Provider value={modules}>{children}</ModulesContext.Provider>
+  )
   return {
     user: userEvent.setup(),
-    ...render(ui, options),
+    ...render(ui, { wrapper: Wrapper, ...options }),
   }
 }
 

@@ -1,5 +1,6 @@
 import type { Person, Tidbit } from '../../hooks/usePeople'
 import type { Team } from '../../hooks/useTeams'
+import { useModule } from '@/hooks/useModule'
 import { Badge, Button, ConfirmButton, DetailList, Row, SubList, type Tone } from '@/components/shared/ui'
 import { formatUserDate } from '@/utils/timezones'
 
@@ -30,6 +31,7 @@ const contactLink = (key: string, value: string) =>
     : value
 
 const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams, teamsLoading, tidbits, tidbitsLoading, onAddTidbit, canEditTidbit, onEditTidbit, onDeleteTidbit, select }: PersonCardProps) => {
+  const teamsOn = useModule('teams')
   // Nested objects (e.g. Slack workspace data) aren't contact details
   const contacts = Object.entries(person.contact_info ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string')
 
@@ -58,9 +60,9 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
               <span className="flex flex-wrap gap-1">{person.aliases.map((alias, i) => <Badge key={i}>{alias}</Badge>)}</span>
             )],
             ...contacts.map(([key, value]): [string, React.ReactNode] => [key.charAt(0).toUpperCase() + key.slice(1), contactLink(key, value)]),
-            ['Teams', teamsLoading ? 'Loading teams...' : !!teams?.length && (
+            ['Teams', teamsOn && (teamsLoading ? 'Loading teams...' : !!teams?.length && (
               <span className="flex flex-wrap gap-1">{teams.map(team => <Badge key={team.id} tone="primary">{team.name}</Badge>)}</span>
-            )],
+            ))],
             ['Added', person.created_at && formatUserDate(person.created_at)],
           ]} />
           <SubList title={tidbits?.length ? `Tidbits (${tidbits.length})` : 'Tidbits'}

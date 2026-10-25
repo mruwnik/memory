@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useModule } from '@/hooks/useModule'
 import { useProjects, Project, ProjectTreeNode, ProjectCreate, ProjectUpdate, JournalEntry } from '@/hooks/useProjects'
 import { useTeams, Team } from '@/hooks/useTeams'
 import { useJournal } from '@/hooks/useJournal'
@@ -25,6 +26,7 @@ export const ProjectsPanel = () => {
     unassignTeamFromProject,
   } = useTeams()
   const { listPeople } = usePeople()
+  const teamsOn = useModule('teams')
 
   const { addJournalEntry } = useJournal()
   const { run, notice } = useActionNotice()
@@ -81,9 +83,9 @@ export const ProjectsPanel = () => {
     try {
       const state = stateFilter === 'all' ? undefined : stateFilter
       const [projectsList, treeData, teamsList] = await Promise.all([
-        listProjects({ state, include_teams: true, limit: 500 }),
+        listProjects({ state, include_teams: teamsOn, limit: 500 }),
         getProjectTree({ state }),
-        listTeams(),
+        teamsOn ? listTeams() : Promise.resolve<Team[]>([]),
       ])
       setProjects(projectsList)
       setTree(treeData)
@@ -93,7 +95,7 @@ export const ProjectsPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listProjects, getProjectTree, listTeams, stateFilter])
+  }, [listProjects, getProjectTree, listTeams, teamsOn, stateFilter])
 
   useEffect(() => {
     loadData()
@@ -488,6 +490,7 @@ interface ProjectRowProps {
 }
 
 const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, inheritedOwner, compact, getProject, addJournalEntry, leading, children }: ProjectRowProps) => {
+  const teamsOn = useModule('teams')
   const isGithubBacked = project.repo_path !== null
   const isOpen = project.state === 'open'
   const owner = project.owner || inheritedOwner
@@ -523,7 +526,7 @@ const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, inheritedOwner, 
         ),
       ]}
       actions={<>
-        <Button size="sm" onClick={onManageTeams}>Teams</Button>
+        {teamsOn && <Button size="sm" onClick={onManageTeams}>Teams</Button>}
         <Button size="sm" onClick={onEdit}>Edit</Button>
         <ConfirmButton onConfirm={onDelete} disabled={isGithubBacked}
           title={isGithubBacked ? 'GitHub-backed projects cannot be deleted; close them in GitHub instead' : undefined}
@@ -531,7 +534,7 @@ const ProjectRow = ({ project, onEdit, onDelete, onManageTeams, inheritedOwner, 
       </>}
     >
       {project.description && !compact && <p className="text-slate-600 line-clamp-2">{project.description}</p>}
-      {!!project.teams?.length && (
+      {teamsOn && !!project.teams?.length && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-slate-500">Teams:</span>
           {project.teams.slice(0, teamLimit).map(team => <Badge key={team.id} tone="success">{team.name}</Badge>)}
@@ -569,6 +572,7 @@ const ProjectFormModal = ({
   availableTeams = [],
   listPeople,
 }: ProjectFormModalProps) => {
+  const teamsOn = useModule('teams')
   const isEditing = !!project
   const isGithubBacked = project?.repo_path !== null
 
@@ -612,7 +616,7 @@ const ProjectFormModal = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!isEditing && formData.team_ids.length === 0) {
+    if (teamsOn && !isEditing && formData.team_ids.length === 0) {
       setTeamsError('Select at least one team')
       return
     }
@@ -748,7 +752,7 @@ const ProjectFormModal = ({
           />
         </Field>
 
-        {!isEditing && (availableTeams.length === 0 ? (
+        {teamsOn && !isEditing && (availableTeams.length === 0 ? (
           <Notice tone="warning">
             No teams available. Create a team first before creating a project.
           </Notice>
@@ -769,7 +773,7 @@ const ProjectFormModal = ({
           </Button>
           <Button variant="primary"
             type="submit"
-            disabled={submitting || (!isEditing && availableTeams.length === 0)}
+            disabled={submitting || (teamsOn && !isEditing && availableTeams.length === 0)}
           >
             {submitting ? 'Saving...' : isEditing ? 'Save changes' : 'Create project'}
           </Button>
