@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { KEY_PROVIDERS, providerName, useAgents, type KeyList, type ProviderKey } from '@/hooks/useAgents'
 import type { LLMKeyChoice, LLMKeyView } from '@/hooks/useSources'
@@ -55,6 +55,7 @@ export function LLMKeyField({ value, onChange, compact = false }: {
   // row save drops it so the server's choice shows again.
   const [pending, setPending] = useState<LLMKeyChoice>()
   const [confirming, setConfirming] = useState<LLMKeyChoice>()
+  const badgeId = useId()
   useEffect(() => setPending(undefined), [value])
   useEffect(() => {
     loadKeys(listKeys)
@@ -75,18 +76,21 @@ export function LLMKeyField({ value, onChange, compact = false }: {
   const warning = current === saved ? noWayBack(value) : null
   const pick = (choice: LLMKeyChoice) => (warning ? setConfirming(choice) : handleChange(choice))
   const prefix = compact ? 'LLM: ' : ''
+  // A compact row says "No LLM work runs" in a badge, and its narrow select would cut the suffix off anyway.
+  const label = compact ? baseLabel : llmKeyLabel
   const defaultLocked = value !== undefined && value.choice !== 'default' && !value.can_choose_default
   const defaultLabel = value?.choice === 'default'
-    ? llmKeyLabel(value)
+    ? label(value)
     : defaultLocked ? 'Default (owner or admin only)' : 'Default'
+  const stopped = value !== undefined && value.choice !== 'none' && !value.runs
   const select = (
-    <Select aria-label="LLM key" className={compact ? 'w-auto max-w-48 py-1 text-xs' : undefined}
+    <Select aria-label="LLM key" aria-describedby={compact && stopped ? badgeId : undefined} className={compact ? 'w-auto max-w-48 py-1 text-xs' : undefined}
       value={current} disabled={saving} onChange={e => pick(toChoice(e.target.value))}>
       <option value="default" disabled={defaultLocked}>{prefix}{defaultLabel}</option>
       <option value="none">{prefix}No LLM</option>
       {keys.map(k => <option key={k.id} value={String(k.id)}>{prefix}{k.label} ({providerName(k.provider)} ••••{k.key_hint})</option>)}
       {value?.choice === 'key' && !keys.some(k => String(k.id) === saved) && (
-        <option value={saved} disabled={saved === OTHER_USERS_KEY}>{prefix}{llmKeyLabel(value)}</option>
+        <option value={saved} disabled={saved === OTHER_USERS_KEY}>{prefix}{label(value)}</option>
       )}
       {compact && keysFailed && <option disabled>Couldn't load your keys</option>}
     </Select>
@@ -95,11 +99,10 @@ export function LLMKeyField({ value, onChange, compact = false }: {
     <ConfirmDialog message={warning} confirmLabel="Switch" onCancel={() => setConfirming(undefined)}
       onConfirm={() => { setConfirming(undefined); handleChange(confirming) }} />
   )
-  const stopped = value !== undefined && value.choice !== 'none' && !value.runs
   if (compact) {
     return <>
       {select}
-      {stopped && <Badge tone="warning">No LLM work runs</Badge>}
+      {stopped && <Badge id={badgeId} tone="warning">No LLM work runs</Badge>}
       {confirm}
     </>
   }

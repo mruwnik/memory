@@ -164,7 +164,7 @@ export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, 
       {leading && <div className="shrink-0 pt-0.5">{leading}</div>}
       <div className="flex-1 min-w-0 space-y-2">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-x-4 gap-y-2">
-          <div className={cx('relative flex-1 min-w-0 space-y-0.5', (to || onSelect) && 'max-sm:min-h-10')}>
+          <div className={cx('relative flex-1 min-w-0 space-y-0.5', (to || onSelect) && 'max-sm:min-h-11')}>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {to ? <Link to={to} className={titleClass} aria-current={selected || undefined}>{title}</Link>
                 : onSelect ? <button type="button" onClick={onSelect} className={titleClass} aria-current={selected || undefined} aria-expanded={expanded}>{title}</button>
@@ -281,7 +281,7 @@ export const SubList = ({ title, actions, empty, children, footer, scroll }: Sub
 /** Shows or hides a nested collection under a Row (servers of a bot, journal of a project). */
 export const ExpandToggle = ({ expanded, onClick, children }: { expanded: boolean; onClick: () => void; children: ReactNode }) => (
   <button type="button" aria-expanded={expanded} onClick={onClick}
-    className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-primary rounded">
+    className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-slate-900 max-sm:min-h-11 focus-visible:outline-2 focus-visible:outline-primary rounded">
     <span aria-hidden="true" className={cx('text-slate-500 transition-transform motion-reduce:transition-none', expanded && 'rotate-90')}>▸</span>
     {children}
   </button>
@@ -359,10 +359,11 @@ const BUTTON_VARIANTS = {
   danger: 'bg-white border border-red-200 text-red-700 hover:bg-red-50',
   dangerSolid: 'bg-red-600 text-white font-medium hover:bg-red-700',
   ghost: 'text-slate-600 hover:bg-slate-100',
-  link: 'text-primary hover:underline p-0!',
+  // Links sit inside sentences, so they keep the line's height.
+  link: 'text-primary hover:underline p-0! min-h-0!',
 }
-// Small buttons are in-row actions; on phones they grow to a tappable height.
-const BUTTON_SIZES = { md: 'py-2 px-4 text-sm', sm: 'py-1 px-2.5 text-xs max-sm:min-h-10 max-sm:px-3', icon: 'w-9 h-9 text-lg' }
+// On phones every button grows to a 44px tap target; small ones stay compact on desktop as in-row actions.
+const BUTTON_SIZES = { md: 'py-2 px-4 text-sm max-sm:min-h-11', sm: 'py-1 px-2.5 text-xs max-sm:min-h-11 max-sm:px-3', icon: 'w-9 h-9 text-lg max-sm:w-11 max-sm:h-11' }
 export type ButtonVariant = keyof typeof BUTTON_VARIANTS
 
 export const buttonClass = (variant: ButtonVariant = 'secondary', size: keyof typeof BUTTON_SIZES = 'md', className?: string) => cx(
@@ -387,7 +388,7 @@ export const ButtonLink = ({ variant, size, className, ...props }: LinkProps & P
 
 // ---- Forms ----
 
-const CONTROL = 'block py-2 px-3 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-500'
+const CONTROL = 'block py-2 px-3 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-500 max-sm:min-h-11'
 // Controls are full width unless the caller sizes them.
 const controlClass = (className?: string) => cx(CONTROL, !/(^|\s)(w|flex)-/.test(className ?? '') && 'w-full', className)
 
@@ -493,7 +494,7 @@ export const FormActions = ({ className, ...props }: ComponentProps<'div'>) => (
 
 // The whole label is the hit area, padded to a tappable height on phones.
 export const Checkbox = ({ label, className, ...props }: ComponentProps<'input'> & { label: ReactNode }) => (
-  <label className={cx('inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-sm:min-h-10', className)}>
+  <label className={cx('inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-sm:min-h-11', className)}>
     <input type="checkbox" {...props} />
     {label}
   </label>
@@ -755,8 +756,8 @@ export const Notice = ({ tone, onRetry, onDismiss, className, children, ...props
   <div role={tone === 'error' || tone === 'warning' ? 'alert' : 'status'}
     className={cx('p-3 border rounded-lg text-sm whitespace-pre-wrap flex items-start justify-between gap-3', NOTICE_TONES[tone], className)} {...props}>
     <div className="min-w-0">{children}</div>
-    {onRetry && <button type="button" className="shrink-0 underline hover:no-underline" onClick={onRetry}>Retry</button>}
-    {onDismiss && <button type="button" className="shrink-0 underline hover:no-underline" onClick={onDismiss}>Dismiss</button>}
+    {onRetry && <button type="button" className="shrink-0 underline hover:no-underline max-sm:min-h-11 max-sm:px-2" onClick={onRetry}>Retry</button>}
+    {onDismiss && <button type="button" className="shrink-0 underline hover:no-underline max-sm:min-h-11 max-sm:px-2" onClick={onDismiss}>Dismiss</button>}
   </div>
 )
 
@@ -870,7 +871,7 @@ export function Tabs<T extends string>({ options, value, onChange, label, childr
           <button key={o.value} id={tabId(o.value)} ref={o.value === value ? selectedRef : undefined} type="button" role="tab"
             aria-selected={o.value === value} aria-controls={o.value === value ? panelId : undefined} tabIndex={o.value === value ? 0 : -1}
             onClick={() => onChange(o.value)}
-            className={cx('shrink-0 whitespace-nowrap py-2 px-4 sm:-mb-px text-sm font-medium border-b-2 transition-colors',
+            className={cx('shrink-0 whitespace-nowrap py-2 px-4 max-sm:min-h-11 sm:-mb-px text-sm font-medium border-b-2 transition-colors',
               o.value === value ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-800 hover:border-slate-300')}>
             {o.label}
           </button>
@@ -887,7 +888,7 @@ export function ToggleGroup<T extends string>({ options, value, onChange, label 
     <div role="group" aria-label={label} className="flex flex-wrap gap-1">
       {options.map(o => (
         <button key={o.value} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)}
-          className={cx('px-3 py-1 rounded-full text-xs font-medium border transition-colors max-sm:min-h-10',
+          className={cx('px-3 py-1 rounded-full text-xs font-medium border transition-colors max-sm:min-h-11',
             o.value === value ? 'bg-primary border-primary text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50')}>
           {o.label}
         </button>
@@ -978,7 +979,7 @@ export const Modal = ({ title, onClose, children, size = 'lg', className }: Moda
         className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto', MODAL_SIZES[size], className)}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h2>
-          {onClose && <button type="button" aria-label="Close" className="-mr-2 w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 text-2xl leading-none" onClick={onClose}>&times;</button>}
+          {onClose && <button type="button" aria-label="Close" className="-mr-2 w-10 h-10 max-sm:w-11 max-sm:h-11 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 text-2xl leading-none" onClick={onClose}>&times;</button>}
         </div>
         <div ref={bodyRef} className="p-4">{children}</div>
       </div>

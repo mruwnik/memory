@@ -86,6 +86,13 @@ describe('LLMKeyField', () => {
     expect(screen.getByText(/No LLM work runs on this source's new items/)).toBeInTheDocument()
   })
 
+  it('says once, in a badge that describes the select, when no LLM work runs on a compact row', () => {
+    renderWithRouter(<LLMKeyField compact value={view({ label: null, paid_by_you: false, runs: false })} onChange={vi.fn()} />)
+    expect(screen.getByLabelText('LLM key')).toHaveDisplayValue('LLM: Default')
+    expect(screen.getAllByText(/no LLM work runs/i)).toHaveLength(1)
+    expect(screen.getByLabelText('LLM key')).toHaveAccessibleDescription('No LLM work runs')
+  })
+
   it('labels compact options and shows the saved choice again when saving fails', async () => {
     const onChange = vi.fn().mockResolvedValue(false)
     const { user } = renderWithRouter(<LLMKeyField compact value={view({ choice: 'none', label: null, paid_by_you: false, runs: false })} onChange={onChange} />)

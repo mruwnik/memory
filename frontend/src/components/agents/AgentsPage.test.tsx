@@ -46,11 +46,11 @@ describe('AgentsPage', () => {
   it('lists system agents and flags those you cannot pay for', async () => {
     listDefinitions.mockResolvedValue([])
     listSystemAgents.mockResolvedValue([
-      { slug: 'system:hyde', title: 'Search: hypothetical passages', description: 'd', use: 'search', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: false, problem: 'add a default anthropic key to run this; until then it is skipped' },
+      { slug: 'system:hyde', title: 'Search: hypothetical passages', description: 'd', use: 'search', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: false, problem: 'Skipped until you add a default Anthropic key.' },
     ])
     renderWithRouter(<AgentsPage />)
     expect(await screen.findByText('Search: hypothetical passages')).toBeInTheDocument()
-    expect(screen.getByText(/add a default anthropic key/)).toBeInTheDocument()
+    expect(screen.getByText(/add a default Anthropic key/)).toBeInTheDocument()
     expect(screen.getByText("Can't run")).toBeInTheDocument()
   })
 

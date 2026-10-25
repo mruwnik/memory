@@ -374,7 +374,6 @@ export const SensitivitySelect = <T extends string = Sensitivity>({ value, onCha
   </Select>
 )
 
-/** Project and sensitivity pickers for a chat workspace, server or channel row. */
 /** Wraps an async action with a flag that is true while it runs, to disable the controls that started it. */
 export const useBusy = <A extends unknown[]>(action: (...args: A) => Promise<unknown>) => {
   const [busy, setBusy] = useState(false)

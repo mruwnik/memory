@@ -10,9 +10,12 @@ interface Props {
 
 export const SystemAgents = ({ agents, error, onRetry, description }: Props) => {
   if (!error && !agents?.length) return null
+  // With no key at all every agent has the same problem; saying it once beats a wall of identical errors.
+  const shared = agents && agents.length > 1 && agents.every(a => a.problem === agents[0].problem) ? agents[0].problem : null
   return (
     <Section title="System agents" description={description}>
       {error && <Notice tone="error" onRetry={onRetry}>{error}</Notice>}
+      {shared && <Notice tone="warning">None of these can run. {shared}</Notice>}
       {!!agents?.length && (
         <List>
           {agents.map(a => (
@@ -26,7 +29,7 @@ export const SystemAgents = ({ agents, error, onRetry, description }: Props) => 
               meta={[<span className="font-mono">{a.model}</span>, a.use]}
             >
               <p className="text-slate-600">{a.description}</p>
-              {a.problem && <RowError>{a.problem}</RowError>}
+              {a.problem && !shared && <RowError>{a.problem}</RowError>}
             </Row>
           ))}
         </List>

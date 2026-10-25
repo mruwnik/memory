@@ -338,6 +338,9 @@ async def list_all() -> dict:
     return {"definitions": result}
 
 
+PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI"}
+
+
 @agent_mcp.tool()
 # The keys page lists these for everyone whose keys pay for them, not only agent users.
 @visible_when(require_scopes(SCOPE_AGENTS, SCOPE_WRITE))
@@ -364,7 +367,7 @@ async def system_list() -> dict:
             "has_key": provider is not None,
             "problem": None
             if provider
-            else f"add a default {' or '.join(a.providers)} key to run this; until then it is skipped",
+            else f"Skipped until you add a default {' or '.join(PROVIDER_NAMES.get(p, p) for p in a.providers)} key.",
         }
 
     return {"agents": [entry(a) for a in SYSTEM_AGENTS.values()]}

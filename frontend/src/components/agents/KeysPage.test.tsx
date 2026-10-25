@@ -33,13 +33,28 @@ describe('KeysPage', () => {
     listKeys.mockResolvedValue(listed([providerKey()]))
     listSystemAgents.mockResolvedValue([
       { slug: 'system:summarise', title: 'Summaries', description: 'd', use: 'ingest', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: true, problem: null },
-      { slug: 'system:hyde', title: 'Search: hypothetical passages', description: 'd', use: 'search', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: false, problem: 'add a default anthropic or openai key to run this; until then it is skipped' },
+      { slug: 'system:hyde', title: 'Search: hypothetical passages', description: 'd', use: 'search', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: false, problem: 'Skipped until you add a default Anthropic or OpenAI key.' },
     ])
     renderWithRouter(<KeysPage />)
     const section = (await screen.findByText('Summaries')).closest('section')!
     expect(within(section).getByText('Search: hypothetical passages')).toBeInTheDocument()
     expect(within(section).getAllByText("Can't run")).toHaveLength(1)
-    expect(within(section).getByText(/until then it is skipped/)).toBeInTheDocument()
+    expect(within(section).getByText(/Skipped until/)).toBeInTheDocument()
+  })
+
+  it.each([
+    ['the same problem once, above the list', ['Skipped until you add a default Anthropic or OpenAI key.', 'Skipped until you add a default Anthropic or OpenAI key.'], 1, true],
+    ['different problems on their own rows', ['Skipped until you add a default Anthropic key.', 'Skipped until you add a default OpenAI key.'], 2, false],
+  ])('says %s', async (_, problems, shown, summary) => {
+    listKeys.mockResolvedValue(listed([]))
+    listSystemAgents.mockResolvedValue(problems.map((problem, i) => (
+      { slug: `system:${i}`, title: `agent ${i}`, description: 'd', use: 'search', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: false, problem }
+    )))
+    renderWithRouter(<KeysPage />)
+    const section = (await screen.findByText('agent 1')).closest('section')!
+    expect(within(section).getAllByText("Can't run")).toHaveLength(2)
+    expect(within(section).getAllByText(/Skipped until/)).toHaveLength(shown)
+    expect(within(section).queryByText(/None of these can run/) !== null).toBe(summary)
   })
 
   it('groups keys by provider with their hint, default, status and cap', async () => {
@@ -61,7 +76,7 @@ describe('KeysPage', () => {
     listKeys.mockResolvedValue(listed([]))
     upsertKey.mockRejectedValue(new Error('anthropic rejected this key'))
     const { user } = renderWithRouter(<KeysPage />)
-    await user.click(await screen.findByRole('button', { name: 'New key' }))
+    await user.click(await screen.findByRole('button', { name: 'Add key' }))
     await user.type(screen.getByLabelText('Label'), 'personal')
     await user.type(screen.getByLabelText('API key'), 'sk-ant-secret')
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add key' }))

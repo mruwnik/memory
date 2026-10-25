@@ -25,7 +25,7 @@ const SectionNav = ({ hasScope }: { hasScope: (scope: string) => boolean }) => {
             {section.items.map(item => (
               <li key={item.to}>
                 <Link to={item.to} aria-current={item === current ? 'page' : undefined}
-                  className={cx('block mx-2 px-2 py-1.5 rounded-md text-sm transition-colors',
+                  className={cx('block mx-2 px-2 py-1.5 max-lg:py-3 rounded-md text-sm transition-colors',
                     item === current ? 'bg-primary/10 text-primary-dark font-medium' : 'text-slate-700 hover:bg-slate-100')}>
                   {item.title}
                 </Link>
@@ -65,13 +65,13 @@ export const AppShell = ({ user, onLogout, hasScope }: AppShellProps) => {
       </a>
       <header className="sticky top-0 z-30 h-14 bg-white border-b border-slate-200">
         <div className="h-full px-4 md:px-6 flex items-center gap-3">
-          <button type="button" className="lg:hidden -ml-2 w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
+          <button type="button" className="lg:hidden -ml-2 w-11 h-11 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
             aria-label="Sections" aria-expanded={navOpen} aria-controls="section-nav" onClick={() => setNavOpen(o => !o)}>
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeWidth={2} d={navOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 6h16M4 12h16M4 18h16'} />
             </svg>
           </button>
-          <Link to="/ui/dashboard" className="text-lg font-semibold text-primary">Memory</Link>
+          <Link to="/ui/dashboard" className="max-lg:py-2 text-lg font-semibold text-primary">Memory</Link>
           <div className="ml-auto">{user && <UserMenu user={user} onLogout={onLogout} hasScope={hasScope} />}</div>
         </div>
       </header>

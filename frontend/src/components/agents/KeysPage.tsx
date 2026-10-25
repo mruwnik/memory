@@ -6,7 +6,7 @@ import {
 import { SystemAgents } from './SystemAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { formatCost } from '@/utils/format'
-import { Badge, Button, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select, useSubmit } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select, useSubmit } from '@/components/shared/ui'
 
 type Keys = Record<KeyProvider, ProviderKey[]>
 type Save = (body: KeyUpsert) => Promise<void>
@@ -132,7 +132,8 @@ function KeyRow({ entry, onSave, onDelete }: {
             {makeDefault.busy ? 'Saving...' : 'Make default'}
           </Button>
         )}
-        <Button size="sm" variant="danger" onClick={onDelete}>Delete</Button>
+        <ConfirmButton onConfirm={onDelete}
+          confirm={`Delete the ${PROVIDER_NAMES[entry.provider]} key '${entry.label}'? Agents that pin it stop working until you pick another key, and sources that use it go back to their default key.`} />
       </>}
     >
       {entry.status === 'invalid' && (
@@ -160,7 +161,6 @@ export default function KeysPage() {
   const { listKeys, upsertKey, deleteKey, listSystemAgents } = useAgents()
   const [keys, setKeys] = useState<Keys | null>(null)
   const [adding, setAdding] = useState<KeyProvider | null>(null)
-  const [deleting, setDeleting] = useState<ProviderKey | null>(null)
   const [outcome, setOutcome] = useState<{ tone: 'success' | 'warning'; message: string } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -187,7 +187,6 @@ export default function KeysPage() {
     work().catch(e => setActionError(e.message))
   }
   const confirmDelete = (entry: ProviderKey) => act(async () => {
-    setDeleting(null)
     const result = await deleteKey(entry.id)
     setOutcome({ tone: result.pinned_by.length ? 'warning' : 'success', message: deleteOutcome(entry, result, keys!) })
     load()
@@ -197,7 +196,7 @@ export default function KeysPage() {
     <Page
       title="LLM keys"
       description="Your default Anthropic key, else your default OpenAI key, pays for summaries and other LLM work on items you own, and for the LLM steps of your searches. Each provider's keys pay for agents on its models. Nothing LLM-backed runs without one. Tools refer to keys by name or id."
-      actions={<Button variant="primary" onClick={() => setAdding('anthropic')}>New key</Button>}
+      actions={<Button variant="primary" onClick={() => setAdding('anthropic')}>Add key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}
       onRetry={load}
@@ -220,7 +219,7 @@ export default function KeysPage() {
             : (
               <List>
                 {keys[provider].map(entry => (
-                  <KeyRow key={entry.id} entry={entry} onSave={save} onDelete={() => setDeleting(entry)} />
+                  <KeyRow key={entry.id} entry={entry} onSave={save} onDelete={() => confirmDelete(entry)} />
                 ))}
               </List>
             )}
@@ -229,11 +228,6 @@ export default function KeysPage() {
       {keys && (
         <SystemAgents agents={systemAgents} error={systemError} onRetry={load}
           description="What memory runs for you, and the model your default keys run each on." />
-      )}
-      {deleting && (
-        <ConfirmDialog title="Delete key" confirmLabel="Delete"
-          message={`Delete the ${PROVIDER_NAMES[deleting.provider]} key '${deleting.label}'? Agents that pin it stop working until you pick another key, and sources that use it go back to their default key.`}
-          onConfirm={() => confirmDelete(deleting)} onCancel={() => setDeleting(null)} />
       )}
     </Page>
   )

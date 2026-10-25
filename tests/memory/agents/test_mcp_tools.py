@@ -473,7 +473,7 @@ async def test_system_agents_without_a_default_key_show_the_fix(
         listed = (await agent.system_list.fn())["agents"]
 
     assert {a["problem"] for a in listed} == {
-        "add a default anthropic or openai key to run this; until then it is skipped"
+        "Skipped until you add a default Anthropic or OpenAI key."
     }
 
 
