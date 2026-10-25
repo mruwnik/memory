@@ -61,7 +61,7 @@ class GitSetup(BaseModel):
     has_repo: bool
     branch: str | None
     remote_url: str | None
-    # A vault that already has a remote keeps it: repointing could push its history somewhere new.
+    # Existing destinations require confirmation before they are changed.
     remote_locked: bool
     author_name: str | None
     author_email: str | None
@@ -82,6 +82,8 @@ class GitSetupIn(BaseModel):
     author_name: str
     author_email: str
     token: str | None = None
+    branch: str | None = None
+    confirm_destination_change: bool = False
 
 
 class Queued(NotesSource):
@@ -162,15 +164,16 @@ def one_line(field: str, value: str) -> str:
 
 
 def checked_origin(body: GitSetupIn, vault: VaultGit) -> str | None:
-    """The remote to add, or None to keep the vault's own."""
+    """The validated new destination, or None to keep the vault's own."""
     if vault.remotes or not vault.config_readable:
-        if body.remote_url and body.remote_url.strip() != vault.remote_url:
+        if body.remote_url and body.remote_url.strip() != vault.remote_url and not body.confirm_destination_change:
             raise field_error(
                 ("body", "remote_url"),
-                "The vault already has a remote; Memory won't repoint it",
+                "Confirm the new sync destination before changing the remote",
                 status_code=409,
             )
-        return None
+        if not body.remote_url or body.remote_url.strip() == vault.remote_url:
+            return None
     try:
         return check_remote_url(body.remote_url or "")
     except ValueError as e:
@@ -188,8 +191,22 @@ def get_notes_source(
 def set_up_git(
     body: GitSetupIn, user: User = require_scope(SCOPE_ADMIN), db: Session = Depends(get_session)
 ) -> Queued:
-    """Set the vault's remote (unless it has one), commit author and token, then sync it."""
-    origin = checked_origin(body, read_vault_git(settings.NOTES_STORAGE_DIR))
+    """Save the author and credentials, and queue confirmed destination changes and sync."""
+    vault = read_vault_git(settings.NOTES_STORAGE_DIR)
+    origin = checked_origin(body, vault)
+    branch = body.branch.strip() if body.branch is not None else None
+    if branch is not None:
+        from memory.common.notes_git import check_branch
+        try:
+            branch = check_branch(branch)
+        except ValueError as e:
+            raise field_error(("body", "branch"), str(e))
+        if vault.has_repo and branch != vault.branch and not body.confirm_destination_change:
+            raise field_error(("body", "branch"), "Confirm the new sync destination", status_code=409)
+    if origin and vault.remotes and TOKEN.env_value():
+        raise field_error(("body", "remote_url"), "Clear the operator-set NOTES_GIT_TOKEN before changing the remote", status_code=409)
+    if branch == vault.branch:
+        branch = None
     name = one_line("author_name", body.author_name)
     email = one_line("author_email", body.author_email)
     if "@" not in email:
@@ -213,12 +230,18 @@ def set_up_git(
         db.commit()
         instance_settings.invalidate_cache()
 
+    if origin and vault.remotes and not (body.token and body.token.strip()):
+        instance_settings.clear(db, TOKEN)
+        db.commit()
+        instance_settings.invalidate_cache()
     logger.info("User %s set up the notes git sync", user.id)
     job = dispatch_job(
         db,
         job_type="notes_git_setup",
         task_name=SETUP_GIT_NOTES,
-        task_kwargs={"origin": origin, "email": email, "name": name},
+        task_kwargs={"origin": origin, "email": email, "name": name, **(
+            {"branch": branch, "change_destination": True} if body.confirm_destination_change or branch else {}
+        )},
         user_id=user.id,
     ).job
     return Queued(**notes_source(db, user).model_dump(), job_id=job.id)

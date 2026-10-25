@@ -253,3 +253,36 @@ def test_sync_now_refuses_while_a_sync_is_queued(client, sent):
 def test_a_redis_outage_hides_the_last_sync_rather_than_failing(client, path):
     with patch("memory.api.notes_source.last_sync", side_effect=redis.ConnectionError):
         assert client.get(path).status_code == 200
+
+
+def test_confirmed_destination_change_is_queued(client, sent):
+    existing_vault("git@github.com:me/notes.git")
+    response = client.put("/notes-source/git", json=SETUP | {
+        "branch": "notes", "confirm_destination_change": True,
+    })
+    assert response.status_code == 200
+    assert sent()[0][1]["origin"] == SETUP["remote_url"]
+    assert sent()[0][1]["branch"] == "notes"
+    assert sent()[0][1]["change_destination"] is True
+
+
+@pytest.mark.parametrize("branch", ["-bad", "a..b", "bad name", "a.lock", "a//b", "@{1}", "a\\b"])
+def test_invalid_branch_is_rejected(client, sent, branch):
+    response = client.put("/notes-source/git", json=SETUP | {"branch": branch})
+    assert response.status_code == 400
+    assert sent() == []
+
+
+def test_destination_change_clears_the_old_saved_token(client, db_session, sent):
+    client.put("/notes-source/git", json=SETUP | {"token": "old-secret"})
+    existing_vault("git@github.com:me/notes.git")
+    response = client.put("/notes-source/git", json=SETUP | {"confirm_destination_change": True, "token": " "})
+    assert response.status_code == 200
+    assert response.json()["git"]["token"]["set"] is False
+
+
+def test_branch_change_requires_confirmation(client, sent):
+    existing_vault("git@github.com:me/notes.git")
+    response = client.put("/notes-source/git", json=SETUP | {"remote_url": None, "branch": "new-destination"})
+    assert response.status_code == 409
+    assert sent() == []

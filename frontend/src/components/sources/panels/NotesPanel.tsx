@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { ApiError } from '@/hooks/apiError'
 import { useNotesSource, type NotesGitSetup, type NotesSource } from '@/hooks/useNotesSource'
-import { Badge, Button, Card, ConfirmButton, CopyButton, DetailList, ErrorState, Field, FormActions, Hint, Input, LoadingState, Notice, RefreshButton, Section, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, Card, ConfirmButton, ConfirmDialog, CopyButton, DetailList, ErrorState, Field, FormActions, Input, LoadingState, Notice, RefreshButton, Section, useActionNotice } from '@/components/shared/ui'
 import { formatUserDateTime } from '@/utils/timezones'
 import { useSourcesContext } from '../context'
 import { formatRelativeTime } from '../shared'
@@ -26,6 +26,8 @@ interface GitFormProps {
 const GitForm = ({ git, onSaved }: GitFormProps) => {
   const { setUpNotesGit, clearNotesGitToken } = useNotesSource()
   const [remote, setRemote] = useState(git.remote_url ?? '')
+  const [branch, setBranch] = useState(git.branch ?? 'main')
+  const [confirming, setConfirming] = useState(false)
   const [name, setName] = useState(git.author_name ?? '')
   const [email, setEmail] = useState(git.author_email ?? '')
   const [token, setToken] = useState('')
@@ -35,14 +37,17 @@ const GitForm = ({ git, onSaved }: GitFormProps) => {
 
   const https = remote.trim().startsWith('https://')
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const destinationChanged = git.has_repo && (remote.trim() !== (git.remote_url ?? '') || branch.trim() !== git.branch)
+  const save = async (confirmed = false) => {
+    setConfirming(false)
     setBusy(true)
     setError(null)
     const ok = await run(async () => {
       try {
         onSaved(await setUpNotesGit({
-          remote_url: git.remote_locked ? null : remote.trim(),
+          remote_url: remote.trim(),
+          branch: branch.trim(),
+          confirm_destination_change: confirmed,
           author_name: name,
           author_email: email,
           token: https && token.trim() ? token.trim() : null,
@@ -60,23 +65,17 @@ const GitForm = ({ git, onSaved }: GitFormProps) => {
 
   return (
     <Card region title="Git sync" description="Notes are committed to the vault's git repository and pushed to its remote. Only admins can change this.">
-      <form onSubmit={submit} className="space-y-4">
+      {confirming && <ConfirmDialog title="Change notes sync destination?"
+        message={`Sync this vault to ${remote.trim()} on branch ${branch.trim()}? This can upload the entire vault history to that destination. The saved access token is cleared when changing the remote unless you enter a new token.`}
+        confirmLabel="Change destination" onCancel={() => setConfirming(false)} onConfirm={() => save(true)} />}
+      <form onSubmit={e => { e.preventDefault(); if (destinationChanged) setConfirming(true); else void save() }} className="space-y-4">
         {notice}
-        {git.remote_locked ? (
-          <>
-            {git.remote_url
-              ? <DetailList items={[['Remote', <code>{git.remote_url}</code>], ['Branch', git.branch]]} />
-              : <Notice tone="warning">The vault has remotes, but none Memory can sync with: none is the branch's upstream or named origin. Set the branch's upstream in the vault.</Notice>}
-            <Hint>The vault already syncs with this remote. Memory keeps an existing repository's remote and history as they are.</Hint>
-          </>
-        ) : (
-          <>
-            {git.has_repo && <Notice tone="info">The vault is already a git repository with no remote. Its history is kept; the remote is added to it.</Notice>}
-            <Field label="Remote URL" hint="https://host/owner/repo.git, or git@host:owner/repo.git for ssh." error={error?.fields.remote_url}>
-              <Input value={remote} onChange={e => setRemote(e.target.value)} spellCheck={false} autoComplete="off" required />
-            </Field>
-          </>
-        )}
+        <Field label="Remote URL" hint="https://host/owner/repo.git, or git@host:owner/repo.git for ssh." error={error?.fields.remote_url}>
+          <Input value={remote} onChange={e => setRemote(e.target.value)} spellCheck={false} autoComplete="off" required />
+        </Field>
+        <Field label="Branch" hint="The current vault branch is renamed; its history and uncommitted files are preserved." error={error?.fields.branch}>
+          <Input value={branch} onChange={e => setBranch(e.target.value)} required />
+        </Field>
         <Field label="Commit author name" error={error?.fields.author_name}>
           <Input value={name} onChange={e => setName(e.target.value)} required />
         </Field>

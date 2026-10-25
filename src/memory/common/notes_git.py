@@ -156,3 +156,12 @@ def last_sync() -> dict | None:
     """The last sync's {ok, failed_step, hint, at}, or None before the first one."""
     raw = redis.from_url(settings.REDIS_URL).get(GIT_SYNC_STATUS_KEY)
     return json.loads(cast(bytes, raw)) if raw else None
+
+
+def check_branch(branch: str) -> str:
+    """Validate a literal branch name without git (the API image has no git)."""
+    if (not branch or branch.startswith("-") or branch == "@" or branch.endswith(".")
+        or ".." in branch or "@{" in branch or re.search(r"[\s\x00-\x1f\x7f~^:?*\[\\]", branch)
+        or any(not part or part.startswith(".") or part.endswith(".lock") for part in branch.split("/"))):
+        raise ValueError("Enter a valid git branch name")
+    return branch

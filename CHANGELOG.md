@@ -41,6 +41,13 @@ None.
 
 ### Other changes for operators
 
+- Admins can change the Notes vault's remote and branch from Sources, with
+  explicit confirmation before uploading history to a new destination. Remote
+  changes clear the saved token unless a replacement is supplied; an
+  operator-configured token must be removed before changing the remote.
+- Creating People with email, Slack, GitHub or Discord identity fields now
+  requires admin rights, matching the restriction on editing those fields.
+  Ambiguous name and email matches no longer select an arbitrary Person.
 - Identical agent observations from different users now retain separate copies.
   Repeated submissions still reuse the same user's existing observation, including
   observations stored before this fix. Previously discarded submissions must be

@@ -13,7 +13,7 @@ export interface NotesGitSetup {
   has_repo: boolean
   branch: string | null
   remote_url: string | null
-  /** The vault already has a remote, which Memory won't repoint. */
+  /** The vault already has a remote; changing it requires confirmation. */
   remote_locked: boolean
   author_name: string | null
   author_email: string | null
@@ -30,6 +30,8 @@ export interface NotesSource {
 }
 
 export interface NotesGitSetupInput {
+  branch: string
+  confirm_destination_change: boolean
   remote_url: string | null
   author_name: string
   author_email: string

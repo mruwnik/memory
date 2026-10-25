@@ -66,6 +66,8 @@ describe('NotesPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Save and sync' }))
 
     expect(setUpNotesGit).toHaveBeenCalledWith({
+      branch: 'main',
+      confirm_destination_change: false,
       remote_url: 'https://git.example.com/me/notes.git',
       author_name: 'Me',
       author_email: 'me@example.com',
@@ -88,30 +90,28 @@ describe('NotesPanel', () => {
     expect(await screen.findByLabelText('Remote URL')).toHaveAccessibleDescription(expect.stringContaining('Use an https:// or ssh:// URL'))
   })
 
-  it('keeps an existing remote read-only and only sends the author', async () => {
+  it('keeps the destination when only changing the author', async () => {
     scopes = ['*']
     getNotesSource.mockResolvedValue(source({
       git: git({ has_repo: true, branch: 'master', remote_url: 'https://git.example.com/me/notes.git', remote_locked: true, author_name: 'Old', author_email: 'old@example.com', token: { set: true, hint: '1234', locked: false } }),
     }))
     const { user } = renderWithUser(<NotesPanel />)
 
-    expect(await screen.findByText('https://git.example.com/me/notes.git')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Remote URL')).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('Remote URL')).toHaveValue('https://git.example.com/me/notes.git')
     expect(screen.getByLabelText('Access token')).toHaveAccessibleDescription(expect.stringContaining('ends in 1234'))
     await user.clear(screen.getByLabelText('Commit author name'))
     await user.type(screen.getByLabelText('Commit author name'), 'New')
     await user.click(screen.getByRole('button', { name: 'Save and sync' }))
 
-    expect(setUpNotesGit).toHaveBeenCalledWith({ remote_url: null, author_name: 'New', author_email: 'old@example.com', token: null })
+    expect(setUpNotesGit).toHaveBeenCalledWith({ remote_url: 'https://git.example.com/me/notes.git', branch: 'master', confirm_destination_change: false, author_name: 'New', author_email: 'old@example.com', token: null })
   })
 
-  it('explains a vault whose remotes Memory can\'t pick from', async () => {
+  it('allows choosing a destination when the vault has no selected remote', async () => {
     scopes = ['*']
     getNotesSource.mockResolvedValue(source({ git: git({ has_repo: true, remote_locked: true }) }))
     renderWithUser(<NotesPanel />)
 
-    expect(await screen.findByText(/none Memory can sync with/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('Remote URL')).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('Remote URL')).toHaveValue('')
   })
 
   it('queues a sync now', async () => {
@@ -124,4 +124,21 @@ describe('NotesPanel', () => {
     expect(syncNotes).toHaveBeenCalledOnce()
     expect(await screen.findByText(/Sync queued/)).toBeInTheDocument()
   })
+})
+
+
+it('requires confirmation before changing the remote and branch', async () => {
+  scopes = ['*']
+  getNotesSource.mockResolvedValue(source({ git: git({ has_repo: true, branch: 'main', remote_url: 'https://old.example/repo.git', author_name: 'Me', author_email: 'me@example.com' }) }))
+  const { user } = renderWithUser(<NotesPanel />)
+  const remote = await screen.findByLabelText('Remote URL')
+  await user.clear(remote)
+  await user.type(remote, 'https://new.example/repo.git')
+  await user.clear(screen.getByLabelText('Branch'))
+  await user.type(screen.getByLabelText('Branch'), 'notes')
+  await user.click(screen.getByRole('button', { name: 'Save and sync' }))
+  expect(setUpNotesGit).not.toHaveBeenCalled()
+  expect(screen.getByRole('dialog')).toHaveTextContent('entire vault history')
+  await user.click(screen.getByRole('button', { name: 'Change destination' }))
+  expect(setUpNotesGit).toHaveBeenCalledWith(expect.objectContaining({ remote_url: 'https://new.example/repo.git', branch: 'notes', confirm_destination_change: true }))
 })

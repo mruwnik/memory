@@ -37,6 +37,7 @@ from memory.common.notes_git import (
     GIT_SYNC_STATUS_KEY,
     TOKEN_ENV,
     credential_args,
+    check_branch,
     https_host,
     last_sync,
     read_vault_git,
@@ -674,30 +675,51 @@ def setup_step(repo_root: pathlib.Path, step: str, *args: str):
 
 @app.task(name=SETUP_GIT_NOTES)
 @tracked_task
-def setup_git_notes(origin: str | None, email: str, name: str):
+def setup_git_notes(origin: str | None, email: str, name: str, branch: str | None = None, change_destination: bool = False):
     """Make the vault a repo committing as this author, with ``origin`` as its remote, then sync it.
 
-    An existing repo keeps its history and any remote it has: only its author
-    changes, and ``origin`` is added only when it has no remote at all.
+    Existing history is preserved. Explicitly confirmed destination changes
+    rename the current branch and update its upstream without force-pushing.
     """
     repo_root = settings.NOTES_STORAGE_DIR
+    if branch is not None:
+        branch = check_branch(branch)
     with git_notes_lock("tracking"):
         created = not (repo_root / ".git").exists()
         if created:
             repo_root.mkdir(parents=True, exist_ok=True)
             setup_step(repo_root, "init", "init", "--quiet", "-b", "main")
+        if change_destination and (blocked := repo_blocked(repo_root)):
+            raise RuntimeError(f"Notes git setup blocked: {blocked}")
+        if branch and change_destination:
+            setup_step(repo_root, "branch", "branch", "-m", branch)
+        if change_destination and origin:
+            vault = read_vault_git(repo_root)
+            remote = vault.remote_name or "origin"
+            if remote in vault.remotes:
+                # Remove stale tracking refs and push URLs belonging to the old destination.
+                setup_step(repo_root, "remote", "remote", "remove", remote)
+            setup_step(repo_root, "remote", "remote", "add", remote, "--", origin)
         setup_step(repo_root, "config", "config", "--", "user.email", email)
         setup_step(repo_root, "config", "config", "--", "user.name", name)
         if origin and not run_git(repo_root, "remote").stdout.strip():
             setup_step(repo_root, "remote", "remote", "add", "origin", "--", origin)
+        if change_destination:
+            vault = read_vault_git(repo_root)
+            remote = vault.remote_name or ("origin" if "origin" in vault.remotes else None)
+            if remote and vault.branch:
+                setup_step(repo_root, "upstream", "config", f"branch.{vault.branch}.remote", remote)
+                setup_step(repo_root, "upstream", "config", f"branch.{vault.branch}.merge", f"refs/heads/{vault.branch}")
         # Not `created`: a first run that failed after init leaves a repo with no commit.
         if not head_commit(repo_root):
             setup_step(repo_root, "add", "add", "--all")
             setup_step(repo_root, "commit", "commit", "--quiet", "--allow-empty", "-m", "Initial commit")
 
     try:
-        with git_tracking(repo_root):
+        with git_tracking(repo_root) as sync:
             pass
+        if sync.failed_step:
+            return {"status": "sync_failed", "failed_step": sync.failed_step}
     except VaultBusy as e:
         return {"status": "sync_failed", "failed_step": e.step}
     return {"status": "created" if created else "updated"}

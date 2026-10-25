@@ -538,7 +538,7 @@ def test_duplicate_note_does_not_expose_or_rewrite_another_users_note(
     existing = add_existing_note(mock_make_session, mock_note_data["filename"], regular_user.id)
     existing.subject = mock_note_data["subject"]
     existing.content = mock_note_data["content"]
-    existing.sha256 = create_content_hash(Note.as_text(existing.content, existing.subject))
+    existing.sha256 = create_content_hash(Note.as_text(mock_note_data["content"], mock_note_data["subject"]))
     mock_make_session.commit()
 
     with patch.object(notes, "write_note_file_or_defer") as write:
@@ -1419,3 +1419,36 @@ def test_the_due_check_queues_one_sync_until_that_sync_records_its_status(tmp_pa
     notes.record_git_sync(None)
     notes.sync_notes_when_due()
     assert queued_syncs.call_count == 1
+
+
+def test_confirmed_setup_changes_destination_without_losing_history(tmp_path):
+    vault, old_remote = make_vault(tmp_path, "master")
+    history = git(vault, "rev-parse", "HEAD")
+    new_remote = tmp_path / "new.git"
+    git(tmp_path, "init", "-q", "--bare", str(new_remote))
+    (vault / "draft.md").write_text("draft")
+    result = notes.setup_git_notes(str(new_remote), "new@example.com", "New", branch="notes", change_destination=True)
+    assert result["status"] == "updated"
+    assert git(vault, "rev-parse", "HEAD") == history
+    assert git(vault, "symbolic-ref", "--short", "HEAD") == "notes"
+    assert git(vault, "remote", "get-url", "origin") == str(new_remote)
+    assert git(new_remote, "rev-parse", "refs/heads/notes") == history
+    assert (vault / "draft.md").read_text() == "draft"
+    assert git(old_remote, "rev-parse", "refs/heads/master") == history
+
+
+def test_changed_destination_never_overwrites_unrelated_remote_history(tmp_path):
+    vault, _ = make_vault(tmp_path, "main")
+    original = git(vault, "rev-parse", "HEAD")
+    other = tmp_path / "other-vault"
+    other.mkdir()
+    git(other, "init", "-q", "-b", "main")
+    configure_identity(other)
+    commit_file(other, "unrelated.md", "other repository")
+    remote = tmp_path / "unrelated.git"
+    git(tmp_path, "clone", "-q", "--bare", str(other), str(remote))
+    remote_head = git(remote, "rev-parse", "HEAD")
+    result = notes.setup_git_notes(str(remote), "me@example.com", "Me", change_destination=True)
+    assert result["status"] == "sync_failed"
+    assert git(vault, "rev-parse", "HEAD") == original
+    assert git(remote, "rev-parse", "HEAD") == remote_head
