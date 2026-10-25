@@ -205,8 +205,6 @@ else
     fi
     (
         DOMAIN=$domain
-        ADMIN_EMAIL=$(param admin_email)
-        ADMIN_PASSWORD=$(param admin_password)
         # Terraform leaves it out when the owner will enter it in the web UI.
         VOYAGE_API_KEY=$(optional_param voyage_api_key)
         POSTGRES_PASSWORD=$(param postgres_password)
@@ -215,8 +213,7 @@ else
         # Backups run on the host (memory-backup.timer): containers can't reach the
         # instance role.
         S3_BACKUP=off
-        export DOMAIN ADMIN_EMAIL ADMIN_PASSWORD VOYAGE_API_KEY POSTGRES_PASSWORD \
-            REDIS_PASSWORD APP_VERSION S3_BACKUP
+        export DOMAIN VOYAGE_API_KEY POSTGRES_PASSWORD REDIS_PASSWORD APP_VERSION S3_BACKUP
         cd "$ROOT"
         usermod -aG docker "$app_user"
         runuser -u "$app_user" -- bash tools/install.sh --non-interactive || { drop_groups docker lxd; exit 1; }

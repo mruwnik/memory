@@ -24,15 +24,6 @@ variable "route53_zone_id" {
   default     = null
 }
 
-variable "admin_email" {
-  description = "Email of the first user. Their generated password is the admin_password output."
-  type        = string
-  validation {
-    condition     = can(regex("^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$", var.admin_email))
-    error_message = "admin_email must be a plain email address."
-  }
-}
-
 variable "voyage_api_key" {
   description = "Voyage AI API key for embeddings. Leave empty to enter it in the web UI's setup."
   type        = string

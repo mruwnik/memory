@@ -127,8 +127,7 @@ resource "aws_iam_role_policy" "instance" {
         Resource = aws_kms_key.this.arn
       },
       # rotate-keys.sh replaces the generated secrets and keeps the values
-      # backups need under previous/; config, admin_password and voyage_api_key
-      # stay the owner's.
+      # backups need under previous/; config and voyage_api_key stay the owner's.
       {
         Sid    = "RotateOwnKeys"
         Effect = "Allow"

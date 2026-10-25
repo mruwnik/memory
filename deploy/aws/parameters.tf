@@ -4,7 +4,6 @@
 # install.sh only accepts A-Za-z0-9._@:/+- in these.
 resource "random_password" "secret" {
   for_each = toset([
-    "admin_password",
     "postgres_password",
     "redis_password",
     "secrets_encryption_key",
@@ -20,7 +19,6 @@ locals {
 
   config = {
     domain             = var.domain
-    admin_email        = var.admin_email
     repo_url           = var.repo_url
     auto_update        = tostring(var.auto_update)
     update_delay_hours = tostring(var.update_delay_hours)

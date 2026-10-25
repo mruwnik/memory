@@ -7,16 +7,6 @@ output "url" {
   value = "https://${var.domain}"
 }
 
-output "admin_email" {
-  value = var.admin_email
-}
-
-output "admin_password" {
-  description = "First user's password: terraform output -raw admin_password"
-  value       = random_password.secret["admin_password"].result
-  sensitive   = true
-}
-
 output "instance_id" {
   value = aws_instance.this.id
 }

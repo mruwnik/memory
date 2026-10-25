@@ -18,7 +18,6 @@ mock_provider "random" {}
 
 variables {
   domain          = "memory.example.com"
-  admin_email     = "owner@example.com"
   voyage_api_key  = "pa-test"
   release_signers = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample signer@example.com"]
 }
@@ -263,7 +262,7 @@ run "instance_writes_only_the_secrets_it_rotates" {
       [for k in ["secrets_encryption_key", "postgres_password", "redis_password", "backup_encryption_key"] : "arn:aws:ssm:eu-central-1:111111111111:parameter/memory/${k}"],
       ["arn:aws:ssm:eu-central-1:111111111111:parameter/memory/previous/*"],
     ))
-    error_message = "the instance may write only the generated secrets and their superseded copies, never config or admin_password"
+    error_message = "the instance may write only the generated secrets and their superseded copies, never config"
   }
   assert {
     condition     = one([for s in jsondecode(aws_iam_role_policy.instance.policy).Statement : s.Action if s.Sid == "RotateOwnKeys"]) == "ssm:PutParameter"

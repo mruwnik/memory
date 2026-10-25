@@ -92,7 +92,7 @@ expect allow "$instance_role" ssm:PutParameter "$prefix_arn/previous/backup_encr
 expect allow "$instance_role" kms:Encrypt "$kms"
 expect refuse "$instance_role" ssm:DeleteParameter "$prefix_arn/previous/backup_encryption_key/20260101T000000Z-1"
 expect refuse "$instance_role" ssm:DeleteParameter "$param"
-for other in release_signers domain admin_password voyage_api_key; do
+for other in release_signers domain voyage_api_key; do
     expect refuse "$instance_role" ssm:PutParameter "$prefix_arn/$other"
 done
 expect refuse "$instance_role" ssm:PutParameter "arn:$partition:ssm:$region:$account:parameter/other-stack/postgres_password"

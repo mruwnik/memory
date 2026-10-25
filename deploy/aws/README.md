@@ -31,7 +31,6 @@ When an operator sets up an account for someone else, the owner has to end up as
 7. The owner runs `terraform apply` with their own credentials, setting `operator_account_id` to the operator's account and turning on the roles they want (see below). The owner keeps the Terraform state: it holds the generated secrets.
 8. If the operator could have seen the secrets before the hand-over (they ran an apply, or held the state), the owner:
    - moves the Terraform state to a backend only they can read, since a refresh writes the current values into it;
-   - changes the admin password in the app (`admin_password` is the web login, and rotation doesn't touch it);
    - replaces the Voyage key at Voyage, and enters the new one on the settings page. If the key came from `voyage_api_key`, they instead put the new one there (re-apply) and in `/opt/memory/secrets/voyage_key.txt` on the box, and run `restart`;
    - runs `sudo /opt/memory/tools/ops/rotate-keys.sh --yes` on the box once data matters ([Rotating keys](#rotating-keys)).
 
@@ -55,7 +54,6 @@ Two limits:
 ```hcl
 # terraform.tfvars: this file holds a key, so keep it out of git
 domain          = "memory.example.com"
-admin_email     = "you@example.com"
 voyage_api_key  = "pa-..." # optional: or enter it on the settings page
 release_signers = ["ssh-ed25519 AAAA... releases@example.com"]
 ```
@@ -65,10 +63,21 @@ cd deploy/aws
 terraform init
 terraform apply
 terraform output public_ip                 # point the domain's A record here
-terraform output -raw admin_password       # first login, as admin_email
 ```
 
 Set `route53_zone_id` to have the A record created for you. Caddy gets the certificate once DNS resolves.
+
+### First login
+
+Once bootstrap finishes, create the first account (an admin) at `https://<domain>/ui/setup`. It asks for the setup token the api logs while no account exists. Read it over Session Manager (needs the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)):
+
+```bash
+aws ssm start-session --region <region> --target "$(terraform output -raw instance_id)"
+# in the session:
+cd /opt/memory && sudo docker compose logs api | grep 'setup token' | tail -n 1
+```
+
+The api makes a new token each time it restarts, so take the last line. Once the account exists the token is gone, and older lines are useless. Neither `status` nor `logs` shows the token: the operator can run both, and their output stays in the ops-output bucket. Anyone holding the token can claim the instance, so create the account soon after the stack comes up.
 
 The Terraform state holds every generated secret. Use a remote backend with encryption and restricted access (for example S3 with SSE-KMS), not a local file you might share.
 
@@ -78,7 +87,6 @@ The Terraform state holds every generated secret. Use a remote backend with encr
 |---|---|---|
 | `domain` | required | Hostname to serve |
 | `name` | `memory` | Prefix for every account-wide name. Up to 20 lowercase letters, digits and dashes |
-| `admin_email` | required | First user |
 | `voyage_api_key` | `""` | Embeddings key, stored as a SecureString. Leave it out to enter it on the settings page after install. Blanking it on an existing stack deletes the SSM parameter; the box keeps its key file |
 | `release_signers` | required | SSH public keys whose signed `v*` tags auto-install |
 | `region` | `eu-central-1` | |
@@ -99,7 +107,7 @@ The instance reads its config from SSM. Changes to `release_signers`, `auto_upda
 
 ## Outputs
 
-`public_ip`, `url`, `admin_email`, `admin_password` (sensitive), `instance_id`, `instance_arn`, `instance_role_arn`, `kms_key_arn`, `backup_bucket`, `ops_output_bucket`, `ssm_prefix`, `documents` and `document_arns` (per action), `operator_role_arns` and `operator_actions` (per enabled role).
+`public_ip`, `url`, `instance_id`, `instance_arn`, `instance_role_arn`, `kms_key_arn`, `backup_bucket`, `ops_output_bucket`, `ssm_prefix`, `documents` and `document_arns` (per action), `operator_role_arns` and `operator_actions` (per enabled role).
 
 ## On the instance
 
@@ -183,7 +191,7 @@ You can run any of these yourself on the box, for example `sudo systemd-run --wa
 
 ### Rotating keys
 
-`rotate-keys` makes new values on the box. It writes them to the files the stack reads and to the SSM parameters, and never prints them. The instance role may overwrite only those generated parameters (not the config, `admin_password` or `voyage_api_key`), and write parameters under `/<name>/previous/`. Those hold the backup and secrets keys that backups need, and the box never deletes them: a bucket version can outlive `backup_retention_days` by as much again. [UPDATING.md](../../UPDATING.md#rotating-keys) lists what each key affects, and has the command to delete the kept keys older than your oldest backup.
+`rotate-keys` makes new values on the box. It writes them to the files the stack reads and to the SSM parameters, and never prints them. The instance role may overwrite only those generated parameters (not the config or `voyage_api_key`), and write parameters under `/<name>/previous/`. Those hold the backup and secrets keys that backups need, and the box never deletes them: a bucket version can outlive `backup_retention_days` by as much again. [UPDATING.md](../../UPDATING.md#rotating-keys) lists what each key affects, and has the command to delete the kept keys older than your oldest backup.
 
 `ssm:PutParameter` can also attach a parameter policy (an expiration deletes the parameter and its history) or move it to another KMS key, and IAM can't limit that. So a compromised box could destroy these copies, as it could the backups' keys on its own disk. SSM keeps the last 100 values of each parameter (`aws ssm get-parameter-history --with-decryption`, owner only), which is the way back from a value overwritten by mistake.
 

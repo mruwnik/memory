@@ -23,6 +23,10 @@ None.
 - Re-save any Notes Git token previously stored through the UI. Stored tokens
   now require an explicit repository binding; unbound legacy tokens are not
   sent. Operator-provided `NOTES_GIT_TOKEN` is unchanged.
+- `deploy/aws`: the `admin_email` variable is gone. Remove it from your
+  tfvars (Terraform warns about an undeclared variable). The apply deletes the `admin_email` and
+  `admin_password` SSM parameters and outputs; the existing admin account and
+  its password are unaffected.
 - EC2: re-apply Terraform so the SSM documents run their scripts through
   `systemd-run`. Run through the SSM agent, the snap AWS CLI's output to a
   file comes out empty, which broke bootstrap re-runs and the repair actions.
@@ -71,6 +75,9 @@ None.
   re-run on a newer checkout no longer starts the old ones. It now ends with the
   whole stack up; before, a first install (and so the EC2 bootstrap) started
   only the api, leaving the workers and ingest-hub down.
+- A new EC2 instance no longer creates the first user. Create it at
+  `/ui/setup` with the setup token, read over Session Manager
+  ([deploy/aws/README.md](deploy/aws/README.md#first-login)).
 
 ### Migrations
 
