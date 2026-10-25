@@ -3,7 +3,7 @@ import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProje
 import { TagsInput, IntervalInput, PauseButton, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { llmKeyLabel } from '../LLMKeyField'
 
 export const GitHubPanel = () => {
@@ -12,7 +12,7 @@ export const GitHubPanel = () => {
     addGithubRepo, updateGithubRepo, deleteGithubRepo, syncGithubRepo,
     listAccountProjects, addGithubProject, deleteGithubProject
   } = useSources()
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const [accounts, setAccounts] = useState<GithubAccount[]>([])
   const [accountProjects, setAccountProjects] = useState<Record<number, GithubProject[]>>({})
   const [loading, setLoading] = useState(true)
@@ -43,8 +43,9 @@ export const GitHubPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listGithubAccounts, listAccountProjects, userId])
+  }, [listGithubAccounts, listAccountProjects, userId, refreshCounts])
 
   useEffect(() => { loadData() }, [loadData])
 

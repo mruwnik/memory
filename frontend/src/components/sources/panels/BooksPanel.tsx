@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useBooks, Book } from '@/hooks/useBooks'
 import { Badge, EmptyState, ErrorState, List, LoadingState, Notice, Row, Section } from '@/components/shared/ui'
+import { useSourcesContext } from '../context'
 import { FileButton } from '../shared'
 
 export const BooksPanel = () => {
@@ -13,6 +14,7 @@ export const BooksPanel = () => {
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const { refreshCounts } = useSourcesContext()
   const loadBooks = useCallback(async () => {
     try {
       const data = await listBooks()
@@ -22,8 +24,9 @@ export const BooksPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load books')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listBooks])
+  }, [listBooks, refreshCounts])
 
   useEffect(() => { loadBooks() }, [loadBooks])
 

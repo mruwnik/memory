@@ -1375,10 +1375,10 @@ def test_authorized_user_endpoints_reject_non_owner(
     assert rm_resp.status_code == 403
 
 
-def test_sync_failures_counts_connected_failing_workspaces(
+def test_source_tabs_count_connected_workspaces_and_failures(
     client, db_session, slack_credentials, slack_workspace
 ):
     slack_workspace.record_sync("boom")
     db_session.commit()
 
-    assert client.get("/sync-failures").json()["slack"] == 1
+    assert client.get("/source-tabs").json()["slack"] == {"count": 1, "failing": 1}

@@ -187,6 +187,19 @@ describe('Tabs', () => {
     expect(scroll.mock.contexts.at(-1)).toBe(screen.getByRole('tab', { name: 'A' }))
     scroll.mockRestore()
   })
+
+  it.each([
+    [{}, 'A', [], null],
+    [{ count: 0 }, 'A', [], null],
+    [{ count: 3 }, 'A (3)', ['3'], null],
+    [{ problem: '1 failing' }, 'A has problems', ['!'], '1 failing'],
+    [{ count: 3, problem: '1 failing' }, 'A (3), has problems', ['3', '!'], '1 failing'],
+  ])('badges a tab with %o', (extra, name, badges, description) => {
+    render(<Tabs label="T" options={[{ value: 'a', label: 'A', ...extra }]} value="a" onChange={vi.fn()} />)
+    const tab = screen.getByRole('tab', { name })
+    expect(tab.getAttribute('title')).toBe(description)
+    expect(['3', '!'].filter(text => within(tab).queryByText(text))).toEqual(badges)
+  })
 })
 
 describe('useUnsavedGuard', () => {

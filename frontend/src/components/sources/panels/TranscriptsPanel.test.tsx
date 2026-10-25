@@ -30,9 +30,10 @@ vi.mock('@/hooks/useProjects', () => ({
   useProjects: () => ({ listProjects }),
 }))
 
-vi.mock('../Sources', () => ({
-  useSourcesContext: () => ({ userId: 7, selectedUser: { type: 'user', id: 7, name: 'X' } }),
-}))
+vi.mock('../context', () => {
+  const refreshCounts = () => {}
+  return { useSourcesContext: () => ({ userId: 7, selectedUser: { type: 'user', id: 7, name: 'X' }, refreshCounts }) }
+})
 
 import { TranscriptsPanel } from './TranscriptsPanel'
 

@@ -4,14 +4,14 @@ import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectField, SensitivitySelect, SourceRow, TagsInput, TestConnectionButton, numberValue } from '../shared'
 import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, Fieldset } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 export const EmailPanel = () => {
   const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount, listGoogleAccounts } = useSources()
   const { listProjects } = useProjects()
   const teamsOn = useModule('teams')
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -36,8 +36,9 @@ export const EmailPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listEmailAccounts, listGoogleAccounts, listProjects, teamsOn, userId])
+  }, [listEmailAccounts, listGoogleAccounts, listProjects, teamsOn, userId, refreshCounts])
 
   // Reload when userId changes (admin switching user view)
   useEffect(() => { loadAccounts() }, [loadAccounts])

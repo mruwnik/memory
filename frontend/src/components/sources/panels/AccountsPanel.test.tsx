@@ -3,9 +3,10 @@ import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { AccountsPanel } from './AccountsPanel'
 
-vi.mock('../Sources', () => ({
-  useSourcesContext: () => ({ userId: 3, selectedUser: { type: 'user', id: 3, name: 'Other' } }),
-}))
+vi.mock('../context', () => {
+  const refreshCounts = () => {}
+  return { useSourcesContext: () => ({ userId: 3, selectedUser: { type: 'user', id: 3, name: 'Other' }, refreshCounts }) }
+})
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 

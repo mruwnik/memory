@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useSources } from '@/hooks/useSources'
 import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, Section, useActionNotice } from '@/components/shared/ui'
+import { useSourcesContext } from '../context'
 import { FileButton } from '../shared'
 import { formatUserDate } from '@/utils/timezones'
 
@@ -29,6 +30,7 @@ export const PhotosPanel = () => {
   const { run, notice } = useActionNotice()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const { refreshCounts } = useSourcesContext()
   const loadPhotos = useCallback(async () => {
     try {
       const response = await apiCall('/photos')
@@ -40,8 +42,9 @@ export const PhotosPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load photos')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [apiCall])
+  }, [apiCall, refreshCounts])
 
   useEffect(() => { loadPhotos() }, [loadPhotos])
 

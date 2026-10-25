@@ -32,9 +32,10 @@ vi.mock('@/hooks/useProjects', () => ({
   useProjects: () => ({ listProjects }),
 }))
 
-vi.mock('../Sources', () => ({
-  useSourcesContext: () => ({ userId: 8, selectedUser: { type: 'user', id: 8, name: 'X' } }),
-}))
+vi.mock('../context', () => {
+  const refreshCounts = () => {}
+  return { useSourcesContext: () => ({ userId: 8, selectedUser: { type: 'user', id: 8, name: 'X' }, refreshCounts }) }
+})
 
 // The panel renders SlackAppWizard, which depends on these hooks; stub them.
 vi.mock('./SlackAppWizard', () => ({

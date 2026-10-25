@@ -5,7 +5,7 @@ import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { ProjectField, IntervalInput, SensitivitySelect, SourceRow, TagsInput, numberValue } from '../shared'
 import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 import { formatUserDate, formatUserTime } from '@/utils/timezones'
 
@@ -20,7 +20,7 @@ export const CalendarPanel = () => {
   } = useSources()
   const { listProjects } = useProjects()
   const teamsOn = useModule('teams')
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const { getUpcomingEvents } = useCalendar()
   const [accounts, setAccounts] = useState<CalendarAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
@@ -60,8 +60,9 @@ export const CalendarPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listCalendarAccounts, listGoogleAccounts, listProjects, teamsOn, getUpcomingEvents, userId])
+  }, [listCalendarAccounts, listGoogleAccounts, listProjects, teamsOn, getUpcomingEvents, userId, refreshCounts])
 
   useEffect(() => { loadData() }, [loadData])
 

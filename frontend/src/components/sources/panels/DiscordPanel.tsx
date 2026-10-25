@@ -6,10 +6,10 @@ import { useUsers, User } from '@/hooks/useUsers'
 import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 
 export const DiscordPanel = () => {
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const {
     listBots,
     createBot,
@@ -63,8 +63,9 @@ export const DiscordPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listBots, listServers, listProjects, teamsOn, userId])
+  }, [listBots, listServers, listProjects, teamsOn, userId, refreshCounts])
 
   useEffect(() => {
     loadData()

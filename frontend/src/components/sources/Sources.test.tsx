@@ -1,14 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import { Link, useNavigate } from 'react-router-dom'
-import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithRouter, mockFetch, mockFetchRoutes, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 
 // Stub every child panel so the container test exercises only tab/URL/context
 // logic, not the panels' own fetching (those are covered in their own files).
 // vi.mock factories are hoisted, so each must be fully self-contained.
 vi.mock('./panels/AccountsPanel', () => ({ AccountsPanel: () => <div data-testid="panel-accounts" /> }))
 vi.mock('./panels/EmailPanel', () => ({ EmailPanel: () => <div data-testid="panel-email" /> }))
-vi.mock('./panels/FeedsPanel', () => ({ FeedsPanel: () => <div data-testid="panel-feeds" /> }))
+vi.mock('./panels/FeedsPanel', async () => {
+  const { useSourcesContext } = await import('./context')
+  return {
+    FeedsPanel: () => <div data-testid="panel-feeds"><button onClick={useSourcesContext().refreshCounts}>reload feeds</button></div>,
+  }
+})
 vi.mock('./panels/GitHubPanel', () => ({ GitHubPanel: () => <div data-testid="panel-github" /> }))
 vi.mock('./panels/GoogleDrivePanel', () => ({ GoogleDrivePanel: () => <div data-testid="panel-drive" /> }))
 vi.mock('./panels/CalendarPanel', () => ({ CalendarPanel: () => <div data-testid="panel-calendar" /> }))
@@ -101,10 +106,52 @@ describe('Sources container', () => {
     expect(screen.getByTestId('panel-secrets')).toBeInTheDocument()
   })
 
-  it('puts each tab\'s failing-sync count in its accessible name', async () => {
-    mockFetchRoutes({ '/auth/me': meWith(['teams']), '/sync-failures': { json: { drive: 2, email: 0 } }, __default: { json: {} } })
+  it('badges each tab with its count and flags failing ones', async () => {
+    mockFetchRoutes({
+      '/auth/me': meWith(['teams']),
+      '/source-tabs': { json: { drive: { count: 4, failing: 2 }, email: { count: 0, failing: 0 }, books: { count: 7, failing: 0 } } },
+      __default: { json: {} },
+    })
     renderWithRouter(<Sources />)
-    expect(await screen.findByRole('tab', { name: 'Drive (2 failing)' })).toBeInTheDocument()
+    const drive = await screen.findByRole('tab', { name: 'Drive (4), has problems' })
+    expect(drive).toHaveAttribute('title', '2 failing to sync')
+    expect(screen.getByRole('tab', { name: 'Books (7)' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Email' })).toBeInTheDocument()
+  })
+
+  it('updates the badges when the open panel reloads after a change', async () => {
+    let failing = 1
+    mockFetch(async input => {
+      const url = String(input)
+      if (url.includes('/auth/me')) return mockResponse(meWith(['teams']))
+      if (url.includes('/source-tabs')) return mockResponse({ json: { feeds: { count: failing, failing } } })
+      return mockResponse({ json: {} })
+    })
+    const { user } = renderWithRouter(<Sources />, { initialEntries: ['/?tab=feeds'] })
+    await screen.findByRole('tab', { name: 'RSS feeds (1), has problems' })
+    failing = 0
+    await user.click(screen.getByRole('button', { name: 'reload feeds' }))
+    expect(await screen.findByRole('tab', { name: 'RSS feeds' })).toBeInTheDocument()
+  })
+
+  it('keeps the badges up when a refresh fails', async () => {
+    let status = 200
+    let failed = 0
+    mockFetch(async input => {
+      const url = String(input)
+      if (url.includes('/auth/me')) return mockResponse(meWith(['teams']))
+      if (url.includes('/source-tabs')) {
+        if (status === 500) failed++
+        return mockResponse({ status, json: { feeds: { count: 1, failing: 1 } } })
+      }
+      return mockResponse({ json: {} })
+    })
+    const { user } = renderWithRouter(<Sources />, { initialEntries: ['/?tab=feeds'] })
+    await screen.findByRole('tab', { name: 'RSS feeds (1), has problems' })
+    status = 500
+    await user.click(screen.getByRole('button', { name: 'reload feeds' }))
+    await waitFor(() => expect(failed).toBeGreaterThan(0))
+    await act(async () => {})
+    expect(screen.getByRole('tab', { name: 'RSS feeds (1), has problems' })).toBeInTheDocument()
   })
 })

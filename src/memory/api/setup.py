@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from memory.api.password_reset import require_rate_limit
 from memory.api.users import link_person_to_user, validate_password_strength
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
+from memory.common.db.counts import count_rows
 from memory.common.db.models import (
     ArticleFeed,
     CalendarAccount,
@@ -94,19 +95,16 @@ def announce_setup_token() -> None:
 
 
 def source_counts(db: Session, user_id: int) -> dict[str, int]:
-    def count(model, *criteria) -> int:
-        return db.query(func.count()).select_from(model).filter(*criteria).scalar() or 0
-
     return {
-        "email": count(EmailAccount, EmailAccount.user_id == user_id),
-        "google": count(GoogleAccount, GoogleAccount.user_id == user_id)
-        + count(CalendarAccount, CalendarAccount.user_id == user_id),
-        "github": count(GithubAccount, GithubAccount.user_id == user_id),
-        "slack": count(SlackUserCredentials, SlackUserCredentials.user_id == user_id),
-        "discord": count(discord_bot_users, discord_bot_users.c.user_id == user_id),
-        "feeds": count(ArticleFeed, ArticleFeed.user_id == user_id),
-        "notes": count(Note, Note.creator_id == user_id),
-        "transcripts": count(TranscriptAccount, TranscriptAccount.user_id == user_id),
+        "email": count_rows(db, EmailAccount, EmailAccount.user_id == user_id),
+        "google": count_rows(db, GoogleAccount, GoogleAccount.user_id == user_id)
+        + count_rows(db, CalendarAccount, CalendarAccount.user_id == user_id),
+        "github": count_rows(db, GithubAccount, GithubAccount.user_id == user_id),
+        "slack": count_rows(db, SlackUserCredentials, SlackUserCredentials.user_id == user_id),
+        "discord": count_rows(db, discord_bot_users, discord_bot_users.c.user_id == user_id),
+        "feeds": count_rows(db, ArticleFeed, ArticleFeed.user_id == user_id),
+        "notes": count_rows(db, Note, Note.creator_id == user_id),
+        "transcripts": count_rows(db, TranscriptAccount, TranscriptAccount.user_id == user_id),
     }
 
 

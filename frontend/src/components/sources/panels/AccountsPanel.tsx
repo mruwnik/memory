@@ -3,7 +3,7 @@ import { useSources, GithubAccount, LLMKeyChoice, GoogleAccount, GoogleOAuthConf
 import { FileButton, PopupBlockedNotice, SourceRow, StatusBadge, SyncFailingBadge, SyncFailure, formatRelativeTime, openPopup } from '../shared'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, Section, Select, Textarea, useActionNotice } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { useAuth } from '@/hooks/useAuth'
 
 /** Both providers' accounts, or only one's where a page is about that provider. */
@@ -13,7 +13,7 @@ export const AccountsPanel = ({ provider }: { provider?: 'github' | 'google' }) 
     listGoogleAccounts, getGoogleAvailableScopes, getGoogleAuthUrl, deleteGoogleAccount, reauthorizeGoogleAccount,
     getGoogleOAuthConfig, uploadGoogleOAuthConfig, deleteGoogleOAuthConfig
   } = useSources()
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const { user: authUser } = useAuth()
 
   const [githubAccounts, setGithubAccounts] = useState<GithubAccount[]>([])
@@ -60,8 +60,9 @@ export const AccountsPanel = ({ provider }: { provider?: 'github' | 'google' }) 
       setError(e instanceof Error ? e.message : 'Failed to load accounts')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listGithubAccounts, listGoogleAccounts, getGoogleOAuthConfig, userId])
+  }, [listGithubAccounts, listGoogleAccounts, getGoogleOAuthConfig, userId, refreshCounts])
 
   useEffect(() => { loadData() }, [loadData])
 

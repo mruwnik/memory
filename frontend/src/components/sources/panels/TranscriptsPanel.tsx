@@ -4,7 +4,7 @@ import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectField, SensitivitySelect, SourceRow, TagsInput } from '../shared'
 import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 export const TranscriptsPanel = () => {
@@ -19,7 +19,7 @@ export const TranscriptsPanel = () => {
   } = useSources()
   const { listProjects } = useProjects()
   const teamsOn = useModule('teams')
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const [accounts, setAccounts] = useState<TranscriptAccount[]>([])
   const [providers, setProviders] = useState<string[]>([])
   const [pushOnly, setPushOnly] = useState<string[]>([])
@@ -47,8 +47,9 @@ export const TranscriptsPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load transcript accounts')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listTranscriptAccounts, listTranscriptProviders, listProjects, teamsOn, userId])
+  }, [listTranscriptAccounts, listTranscriptProviders, listProjects, teamsOn, userId, refreshCounts])
 
   useEffect(() => { loadAccounts() }, [loadAccounts])
 

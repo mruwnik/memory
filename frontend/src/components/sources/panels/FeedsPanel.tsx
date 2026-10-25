@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, ArticleFeed, LLMKeyChoice } from '@/hooks/useSources'
 import { SourceRow, TagsInput, IntervalInput } from '../shared'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea, useActionNotice } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
 export const FeedsPanel = () => {
   const { listArticleFeeds, createArticleFeed, updateArticleFeed, deleteArticleFeed, syncArticleFeed } = useSources()
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const [feeds, setFeeds] = useState<ArticleFeed[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -23,8 +23,9 @@ export const FeedsPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load feeds')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listArticleFeeds, userId])
+  }, [listArticleFeeds, userId, refreshCounts])
 
   useEffect(() => { loadFeeds() }, [loadFeeds])
 

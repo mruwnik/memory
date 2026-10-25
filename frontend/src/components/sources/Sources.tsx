@@ -1,23 +1,9 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import UserSelector, { SelectedUser, useUserSelection } from '../common/UserSelector'
+import UserSelector, { useUserSelection } from '../common/UserSelector'
 import { useAuth } from '../../hooks/useAuth'
-import { SyncFailureCounts, useSources } from '../../hooks/useSources'
-
-// Context to provide selected user to all panels
-interface SourcesContextType {
-  selectedUser: SelectedUser
-  userId: number | undefined
-}
-
-const SourcesContext = createContext<SourcesContextType>({
-  selectedUser: { type: 'user', id: 0, name: '' },
-  userId: undefined,
-})
-
-export const useSourcesContext = () => useContext(SourcesContext)
-
-// Import all panels
+import { SourceTabCounts, useSources } from '../../hooks/useSources'
+import { SourcesContext } from './context'
 import { AccountsPanel } from './panels/AccountsPanel'
 import { EmailPanel } from './panels/EmailPanel'
 import { FeedsPanel } from './panels/FeedsPanel'
@@ -59,13 +45,26 @@ const Sources = () => {
   const [selectedUser, setSelectedUser] = useUserSelection('sourcesSelectedUser')
   const { hasScope } = useAuth()
 
-  const { getSyncFailureCounts } = useSources()
-  const [failing, setFailing] = useState<SyncFailureCounts>({})
+  const { getSourceTabCounts } = useSources()
+  const [counts, setCounts] = useState<SourceTabCounts>({})
+  const latestRequest = useRef(0)
 
-  // Refetched on tab change so a count drops once the failing source is fixed on its tab.
-  useEffect(() => {
-    getSyncFailureCounts(selectedUser.id || undefined).then(setFailing).catch(() => setFailing({}))
-  }, [getSyncFailureCounts, selectedUser.id, activeTab])
+  // Stable per selected user, or panels that load with it would reload in a loop.
+  const refreshCounts = useCallback(() => {
+    const request = ++latestRequest.current
+    // Panels call this too, so a counter rather than an effect-cleanup flag drops every superseded response.
+    // On a failed fetch the previous badges stay up rather than all vanishing.
+    getSourceTabCounts(selectedUser.id || undefined)
+      .then(next => { if (request === latestRequest.current) setCounts(next) })
+      .catch(() => {})
+  }, [getSourceTabCounts, selectedUser.id])
+
+  useEffect(refreshCounts, [refreshCounts])
+
+  const tabOptions = TABS.map(({ value, label }) => {
+    const failing = counts[value]?.failing
+    return { value, label, count: counts[value]?.count, problem: failing ? `${failing} failing to sync` : undefined }
+  })
 
   // Check if user is admin
   const isAdmin = hasScope('admin') || hasScope('*')
@@ -74,13 +73,13 @@ const Sources = () => {
   const userId = selectedUser.id || undefined
 
   return (
-    <SourcesContext.Provider value={{ selectedUser, userId }}>
+    <SourcesContext.Provider value={{ selectedUser, userId, refreshCounts }}>
       <Page
         title={activeTab === 'secrets' ? 'Secrets' : 'Sources'}
         actions={isAdmin && <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />}
         width="wide"
       >
-        <Tabs label="Source types" options={TABS.map(t => ({ ...t, label: failing[t.value] ? `${t.label} (${failing[t.value]} failing)` : t.label }))} value={activeTab} onChange={setActiveTab}>
+        <Tabs label="Source types" options={tabOptions} value={activeTab} onChange={setActiveTab}>
           <ActivePanel />
         </Tabs>
       </Page>

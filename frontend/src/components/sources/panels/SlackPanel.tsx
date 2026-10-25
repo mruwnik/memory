@@ -6,11 +6,11 @@ import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { SlackAppWizard } from './SlackAppWizard'
 
 export const SlackPanel = () => {
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const {
     listWorkspaces,
     updateWorkspace,
@@ -52,8 +52,9 @@ export const SlackPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load workspaces')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listWorkspaces, listProjects, teamsOn, listApps, userId])
+  }, [listWorkspaces, listProjects, teamsOn, listApps, userId, refreshCounts])
 
   useEffect(() => {
     loadData()

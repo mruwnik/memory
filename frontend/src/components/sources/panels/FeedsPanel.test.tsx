@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithRouter, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { FeedsPanel } from './FeedsPanel'
+import { SourcesContext } from '../context'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
@@ -162,10 +163,16 @@ describe('FeedsPanel mutate flows', () => {
     await waitFor(() => expect(postBody(mock, '/article-feeds/7', 'PATCH')).toEqual({ active: false }))
   })
 
-  it('deletes after confirmation', async () => {
+  it('deletes after confirmation and refreshes the tab badges', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [feed] }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithRouter(<FeedsPanel />)
+    const refreshCounts = vi.fn()
+    const { user } = renderWithRouter(
+      <SourcesContext.Provider value={{ selectedUser: { type: 'user', id: 0, name: '' }, userId: undefined, refreshCounts }}>
+        <FeedsPanel />
+      </SourcesContext.Provider>,
+    )
     await waitFor(() => expect(screen.getByText('Example Blog')).toBeInTheDocument())
+    expect(refreshCounts).toHaveBeenCalledTimes(1)
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
     await waitFor(() => {
@@ -174,6 +181,7 @@ describe('FeedsPanel mutate flows', () => {
       )
       expect(del).toBeTruthy()
     })
+    await waitFor(() => expect(refreshCounts).toHaveBeenCalledTimes(2))
   })
 
   it('disables the feed url field when editing', async () => {

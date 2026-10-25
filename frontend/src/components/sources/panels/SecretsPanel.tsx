@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSecrets, Secret, SecretWithValue } from '@/hooks/useSecrets'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, Textarea, ConfirmButton, List, Row, Section, useActionNotice } from '@/components/shared/ui'
+import { useSourcesContext } from '../context'
 import { formatUserDate } from '@/utils/timezones'
 
 export const SecretsPanel = () => {
@@ -13,6 +14,7 @@ export const SecretsPanel = () => {
   const [revealedSecrets, setRevealedSecrets] = useState<Record<number, string>>({})
   const [loadingReveal, setLoadingReveal] = useState<Record<number, boolean>>({})
 
+  const { refreshCounts } = useSourcesContext()
   const loadSecrets = useCallback(async () => {
     try {
       const data = await listSecrets()
@@ -22,8 +24,9 @@ export const SecretsPanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load secrets')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listSecrets])
+  }, [listSecrets, refreshCounts])
 
   useEffect(() => { loadSecrets() }, [loadSecrets])
 

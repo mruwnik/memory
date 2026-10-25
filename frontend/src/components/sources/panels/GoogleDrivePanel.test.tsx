@@ -24,9 +24,10 @@ vi.mock('@/hooks/useProjects', () => ({
   useProjects: () => ({ listProjects }),
 }))
 
-vi.mock('../Sources', () => ({
-  useSourcesContext: () => ({ userId: 3, selectedUser: { type: 'user', id: 3, name: 'X' } }),
-}))
+vi.mock('../context', () => {
+  const refreshCounts = () => {}
+  return { useSourcesContext: () => ({ userId: 3, selectedUser: { type: 'user', id: 3, name: 'X' }, refreshCounts }) }
+})
 
 import { GoogleDrivePanel } from './GoogleDrivePanel'
 

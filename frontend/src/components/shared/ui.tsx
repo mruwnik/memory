@@ -844,8 +844,28 @@ const TAB_KEYS: Record<string, (i: number, n: number) => number> = {
   End: (_, n) => n - 1,
 }
 
+interface TabOption<T extends string> extends Option<T> {
+  /** How many things the tab holds, badged after the label unless zero. */
+  count?: number
+  /** What is wrong in the tab: flags it with a red "!" and becomes its tooltip. */
+  problem?: string
+}
+
+const TabBadges = ({ count, problem }: { count?: number; problem?: string }) => {
+  if (!count && !problem) return null
+  // The badges are terse, so screen readers get the same facts as words instead.
+  const spoken = [count && `(${count})`, problem && 'has problems'].filter(Boolean).join(', ')
+  return (
+    <>
+      {!!count && <Badge aria-hidden className="ml-1.5">{count}</Badge>}
+      {problem && <span aria-hidden className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-600 text-white text-[11px] font-bold leading-none">!</span>}
+      {' '}<span className="sr-only">{spoken}</span>
+    </>
+  )
+}
+
 /** Underlined tabs that switch the view below them; `children` is the selected view, wired up as its tabpanel. */
-export function Tabs<T extends string>({ options, value, onChange, label, children }: { options: Option<T>[]; value: T; onChange: (v: T) => void; label: string; children?: ReactNode }) {
+export function Tabs<T extends string>({ options, value, onChange, label, children }: { options: TabOption<T>[]; value: T; onChange: (v: T) => void; label: string; children?: ReactNode }) {
   const id = useId()
   const tabId = (v: T) => `${id}-tab-${v}`
   const panelId = children === undefined ? undefined : `${id}-panel`
@@ -870,10 +890,10 @@ export function Tabs<T extends string>({ options, value, onChange, label, childr
         {options.map(o => (
           <button key={o.value} id={tabId(o.value)} ref={o.value === value ? selectedRef : undefined} type="button" role="tab"
             aria-selected={o.value === value} aria-controls={o.value === value ? panelId : undefined} tabIndex={o.value === value ? 0 : -1}
-            onClick={() => onChange(o.value)}
+            onClick={() => onChange(o.value)} title={o.problem}
             className={cx('shrink-0 whitespace-nowrap py-2 px-4 max-sm:min-h-11 sm:-mb-px text-sm font-medium border-b-2 transition-colors',
               o.value === value ? 'border-primary text-primary' : 'border-transparent text-slate-600 hover:text-slate-800 hover:border-slate-300')}>
-            {o.label}
+            {o.label}<TabBadges count={o.count} problem={o.problem} />
           </button>
         ))}
       </div>

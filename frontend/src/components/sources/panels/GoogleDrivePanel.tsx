@@ -4,7 +4,7 @@ import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectField, IntervalInput, PauseButton, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
-import { useSourcesContext } from '../Sources'
+import { useSourcesContext } from '../context'
 import { LLMKeyField } from '../LLMKeyField'
 
 export const GoogleDrivePanel = () => {
@@ -14,7 +14,7 @@ export const GoogleDrivePanel = () => {
   } = useSources()
   const { listProjects } = useProjects()
   const teamsOn = useModule('teams')
-  const { userId } = useSourcesContext()
+  const { userId, refreshCounts } = useSourcesContext()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,8 +38,9 @@ export const GoogleDrivePanel = () => {
       setError(e instanceof Error ? e.message : 'Failed to load data')
     } finally {
       setLoading(false)
+      refreshCounts()
     }
-  }, [listGoogleAccounts, listProjects, teamsOn, userId])
+  }, [listGoogleAccounts, listProjects, teamsOn, userId, refreshCounts])
 
   useEffect(() => { loadData() }, [loadData])
 
