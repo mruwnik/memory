@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import subprocess
@@ -6,11 +7,14 @@ import sys
 import pytest
 
 from memory.api import app as app_module
+from memory.api.MCP.base import mcp
+from memory.api.MCP.servers import tool_server
 from memory.common.modules import (
     MODULES,
     module_config_errors,
     resolve_modules,
     scopes_hidden,
+    server_module,
     servers_disabled,
 )
 
@@ -127,3 +131,45 @@ async def test_api_boot_refuses_when_single_user_check_fails(monkeypatch):
     with pytest.raises(SystemExit):
         async with app_module.lifespan(app_module.app):
             pass
+
+
+@pytest.mark.parametrize(
+    "tool, server",
+    [
+        ("teams_upsert", "teams"),
+        ("containers_list_sessions", "containers"),
+        ("claude_session_search", "claude"),
+        ("notes_upsert", "notes"),
+        ("web_search", None),
+        ("mcp_3_teams_x", None),
+    ],
+)
+def test_tool_server_is_the_longest_server_prefix(tool, server):
+    assert tool_server(tool) == server
+
+
+@pytest.mark.parametrize(
+    "server, module",
+    [
+        ("teams", "teams"),
+        ("projects", "teams"),
+        ("containers", "claude_containers"),
+        ("claude", None),
+        ("notes", None),
+    ],
+)
+def test_server_module(server, module):
+    assert server_module(server) == module
+
+
+def test_every_mounted_tool_resolves_to_a_server():
+    tools = asyncio.run(mcp.get_tools())
+
+    owners = {name: tool_server(name) for name in tools}
+    assert None not in owners.values()
+    assert {"claude", "containers", "teams", "projects"} <= set(owners.values())
+    modules = {name: server_module(owner or "") for name, owner in owners.items()}
+    assert {m for n, m in modules.items() if n.startswith("claude_session_")} == {None}
+    assert {m for n, m in modules.items() if n.startswith("containers_")} == {
+        "claude_containers"
+    }

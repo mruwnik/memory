@@ -14,6 +14,7 @@ from memory.agents.spec import (
     resolve_max_output_tokens,
     spec_errors,
 )
+from memory.common import settings
 from memory.common.celery_app import RUN_AGENT, app
 from memory.common.db.connection import DBSession
 from memory.api.auth import TokenLookup, system_scopes
@@ -27,6 +28,7 @@ from memory.common.db.models import (
     User,
 )
 from memory.common.mcp_oauth import unusable_message
+from memory.common.modules import server_module
 
 
 class SpecInvalid(ValueError):
@@ -54,6 +56,30 @@ def server_errors(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
     return errors
 
 
+def disabled_server_errors(spec: AgentSpec) -> list[str]:
+    """Only `spec.tools` is checked: external MCP tools are `mcp_<id>_...` and never match a server."""
+    # memory.api.MCP mounts the agent server, which imports this module
+    from memory.api.MCP.servers import effective_disabled_servers, tool_server
+
+    disabled = effective_disabled_servers()
+    off: dict[str, list[str]] = {}
+    for tool in spec.tools:
+        server = tool_server(tool)
+        if server is not None and server in disabled:
+            off.setdefault(server, []).append(tool)
+    return [
+        f"tools unavailable, {cause(server)}: {', '.join(tools)}"
+        for server, tools in off.items()
+    ]
+
+
+def cause(server: str) -> str:
+    module = server_module(server)
+    if module is not None and module not in settings.ENABLED_MODULES:
+        return f"module {module} is off"
+    return f"server {server} is disabled"
+
+
 def missing_tools(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
     problems = []
     for external in spec.mcp_servers:
@@ -79,7 +105,12 @@ def start_problems(
         key, key_problems = choose_key(db, user_id, spec.model, spec.provider_key), []
     except KeyUnavailable as e:
         key, key_problems = None, [str(e)]
-    return key, spec_errors(spec) + key_problems + server_errors(db, user_id, spec)
+    return key, (
+        spec_errors(spec)
+        + disabled_server_errors(spec)
+        + key_problems
+        + server_errors(db, user_id, spec)
+    )
 
 
 def run_problems(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:

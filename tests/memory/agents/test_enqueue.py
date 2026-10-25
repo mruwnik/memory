@@ -14,6 +14,7 @@ from memory.agents.spec import AgentSpec
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey
+from memory.common.modules import TEAMS
 from tests.memory.agents.test_provider_keys import MODEL, add_key
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
@@ -549,6 +550,54 @@ def test_enqueue_refuses_what_stops_an_agent(db_session, regular_user, fake_prov
             db_session,
             user_id=regular_user.id,
             spec=spec(provider_key=99999),
+            input="hi",
+            trigger=MANUAL,
+        )
+
+    assert db_session.query(AgentRun).count() == 0
+
+
+@pytest.mark.parametrize(
+    "modules, disabled, expected",
+    [
+        (
+            frozenset(),
+            frozenset(),
+            [
+                "tools unavailable, module teams is off: teams_upsert",
+                "tools unavailable, module teams is off: projects_fetch",
+            ],
+        ),
+        (frozenset({TEAMS}), frozenset(), []),
+        (
+            frozenset({TEAMS}),
+            frozenset({"notes"}),
+            ["tools unavailable, server notes is disabled: notes_upsert"],
+        ),
+        (frozenset({TEAMS}), frozenset({"people"}), []),
+    ],
+)
+def test_tools_of_a_disabled_server_are_a_problem(
+    db_session, regular_user, fake_providers, monkeypatch, modules, disabled, expected
+):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", modules)
+    monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", disabled)
+    stored = SPEC | {"tools": ["notes_upsert", "teams_upsert", "projects_fetch"]}
+    problems = stored_spec_problems(db_session, regular_user.id, stored)
+
+    assert sorted(problems) == sorted(expected)
+
+
+def test_enqueue_refuses_tools_of_a_disabled_module(
+    db_session, regular_user, fake_providers, monkeypatch
+):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+
+    with pytest.raises(SpecInvalid, match="module teams is off"):
+        enqueue_run(
+            db_session,
+            user_id=regular_user.id,
+            spec=spec(tools=["teams_upsert"]),
             input="hi",
             trigger=MANUAL,
         )

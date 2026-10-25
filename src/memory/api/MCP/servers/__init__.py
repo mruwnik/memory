@@ -187,5 +187,6 @@ __all__ = [
     "effective_disabled_servers",
     "get_enabled_servers",
     "tool_server",
+    "unmounted_servers",
     "get_server_instance",
 ]

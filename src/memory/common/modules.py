@@ -67,6 +67,13 @@ def servers_disabled(enabled: frozenset[str]) -> set[str]:
     }
 
 
+def server_module(server: str) -> str | None:
+    return next(
+        (name for name, servers in MODULE_MCP_SERVERS.items() if server in servers),
+        None,
+    )
+
+
 def scopes_hidden(enabled: frozenset[str]) -> set[str]:
     return {
         scope for name, scopes in MODULE_SCOPES.items() if name not in enabled for scope in scopes
