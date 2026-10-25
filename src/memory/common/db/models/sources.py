@@ -4,12 +4,9 @@ Database models for the knowledge base system.
 
 from __future__ import annotations
 
-import re
-from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import yaml
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -35,7 +32,6 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.sync_status import SyncStatusMixin
-from memory.common import settings
 from memory.common.scopes import STORABLE_SENSITIVITY_CHECK_SQL
 
 if TYPE_CHECKING:
@@ -709,11 +705,6 @@ class GithubProject(Base):
         Index("github_projects_title_idx", "title"),
     )
 
-    @property
-    def project_path(self) -> str:
-        """Return the project path in the format 'owner/number'."""
-        return f"{self.owner_login}/{self.number}"
-
     def as_payload(self) -> dict:
         """Serialize for API response."""
         return {
@@ -1331,90 +1322,6 @@ class Person(Base):
                 result["user_name"] = self.user.name
         return result
 
-    def to_profile_markdown(
-        self, tidbits: Sequence["PersonTidbit"] | None = None
-    ) -> str:
-        """Serialize Person to markdown with YAML frontmatter.
-
-        Args:
-            tidbits: Pre-filtered list of tidbits to include. If None, uses
-                self.tidbits (all tidbits without access control filtering).
-                For user-facing output, always pass filtered tidbits.
-
-        Returns:
-            Markdown string with YAML frontmatter and tidbit sections.
-        """
-        frontmatter: dict[str, Any] = {
-            "identifier": self.identifier,
-            "display_name": self.display_name,
-        }
-        if self.aliases:
-            frontmatter["aliases"] = list(self.aliases)
-        if self.contact_info:
-            frontmatter["contact_info"] = dict(self.contact_info)
-
-        yaml_str = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True)
-        parts = ["---", yaml_str.strip(), "---"]
-
-        # Use provided tidbits or fall back to all tidbits (for admin/internal use)
-        tidbit_list = tidbits if tidbits is not None else self.tidbits
-
-        # Collect content from tidbits
-        if tidbit_list:
-            for tidbit in tidbit_list:
-                if tidbit.content:
-                    parts.append("")
-                    parts.append(f"## {tidbit.tidbit_type.title()}")
-                    parts.append(tidbit.content)
-
-        return "\n".join(parts)
-
-    @classmethod
-    def from_profile_markdown(cls, content: str) -> dict:
-        """Parse profile markdown with YAML frontmatter into Person fields."""
-        # Match YAML frontmatter between --- delimiters
-        frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n?"
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if not match:
-            # No frontmatter, return empty dict
-            return {"notes": content.strip() if content.strip() else None}
-
-        yaml_content = match.group(1)
-        body = content[match.end() :].strip()
-
-        try:
-            data = yaml.safe_load(yaml_content) or {}
-        except yaml.YAMLError:
-            return {"notes": content.strip() if content.strip() else None}
-
-        result = {}
-        if "identifier" in data:
-            result["identifier"] = data["identifier"]
-        if "display_name" in data:
-            result["display_name"] = data["display_name"]
-        if "aliases" in data:
-            result["aliases"] = data["aliases"]
-        if "contact_info" in data:
-            result["contact_info"] = data["contact_info"]
-        if "tags" in data:
-            result["tags"] = data["tags"]
-        if body:
-            result["notes"] = body
-
-        return result
-
-    def get_profile_path(self) -> str:
-        """Get the relative path for this person's profile note."""
-        return f"{settings.PROFILES_FOLDER}/{self.identifier}.md"
-
-    def save_profile_note(self) -> None:
-        """Save this person's data to a profile note file."""
-        path = settings.NOTES_STORAGE_DIR / self.get_profile_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_profile_markdown())
-
-
 # ============== Team Model ==============
 
 
@@ -1534,11 +1441,3 @@ class Team(Base):
         return result
 
 
-def can_access_project(person: "Person", project: "Project") -> bool:
-    """Check if a person can access a project via team membership.
-
-    A person can access a project if they are in ANY of the project's assigned teams.
-    """
-    person_team_ids = {t.id for t in person.teams}
-    project_team_ids = {t.id for t in project.teams}
-    return bool(person_team_ids & project_team_ids)

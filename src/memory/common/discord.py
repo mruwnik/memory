@@ -43,23 +43,6 @@ def send_dm(bot_id: int, user_identifier: str, message: str) -> bool:
         return False
 
 
-def trigger_typing_dm(bot_id: int, user_identifier: int | str) -> bool:
-    """Trigger typing indicator for a DM via the Discord collector API"""
-    try:
-        response = requests.post(
-            f"{get_api_url()}/typing/dm",
-            json={"bot_id": bot_id, "user": user_identifier},
-            timeout=10,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("success", False)
-
-    except requests.RequestException as e:
-        logger.error(f"Failed to trigger DM typing for {user_identifier}: {e}")
-        return False
-
-
 def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
     """Send message to a channel by name or ID (ID supports threads)"""
     try:
@@ -78,23 +61,6 @@ def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
 
     except requests.RequestException as e:
         logger.error(f"Failed to send to channel {channel}: {e}")
-        return False
-
-
-def trigger_typing_channel(bot_id: int, channel: int | str) -> bool:
-    """Trigger typing indicator for a channel by name or ID (ID supports threads)"""
-    try:
-        response = requests.post(
-            f"{get_api_url()}/typing/channel",
-            json={"bot_id": bot_id, "channel": channel},
-            timeout=10,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("success", False)
-
-    except requests.RequestException as e:
-        logger.error(f"Failed to trigger typing for channel {channel}: {e}")
         return False
 
 
@@ -212,21 +178,6 @@ def resolve_guild(guild: int | str | None, session: "Session | scoped_session[Se
 def send_error_message(bot_id: int, message: str) -> bool:
     """Send an error message to the error channel"""
     return broadcast_message(bot_id, settings.DISCORD_ERROR_CHANNEL, message)
-
-
-def send_activity_message(bot_id: int, message: str) -> bool:
-    """Send an activity message to the activity channel"""
-    return broadcast_message(bot_id, settings.DISCORD_ACTIVITY_CHANNEL, message)
-
-
-def send_discovery_message(bot_id: int, message: str) -> bool:
-    """Send a discovery message to the discovery channel"""
-    return broadcast_message(bot_id, settings.DISCORD_DISCOVERY_CHANNEL, message)
-
-
-def send_chat_message(bot_id: int, message: str) -> bool:
-    """Send a chat message to the chat channel"""
-    return broadcast_message(bot_id, settings.DISCORD_CHAT_CHANNEL, message)
 
 
 def notify_task_failure(

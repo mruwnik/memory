@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { useAuth, SERVER_URL } from './useAuth'
+import { useAuth } from './useAuth'
 import { apiError } from './apiError'
 
 /** Outcome of a source's latest sync; a failing streak keeps its start time until a sync succeeds. */

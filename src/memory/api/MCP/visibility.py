@@ -44,34 +44,11 @@ Usage:
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Protocol, runtime_checkable
 
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_ADMIN
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class VisibilityChecker(Protocol):
-    """Protocol for tool visibility checker functions.
-
-    Checkers receive user information and a database session, and return
-    True if the tool should be visible/callable, False otherwise.
-
-    Args:
-        user_info: Dict containing:
-            - 'authenticated': bool
-            - 'scopes': list[str] - user's access scopes
-            - 'user': dict with 'user_id', 'email', etc.
-            - 'client_id': OAuth client ID
-        session: SQLAlchemy database session for queries
-
-    Returns:
-        True if the tool should be visible/callable, False otherwise
-    """
-
-    async def __call__(self, user_info: dict, session: DBSession | None) -> bool: ...
 
 
 # Type alias for checker functions

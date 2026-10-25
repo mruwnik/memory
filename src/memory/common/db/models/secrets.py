@@ -227,43 +227,6 @@ def create_secret(
     return secret
 
 
-def update_secret(session: Session, user_id: int, name: str, value: str) -> Secret | None:
-    """Update an existing secret's value.
-
-    Args:
-        session: Database session
-        user_id: Owner user ID
-        name: Secret name
-        value: New value (will be encrypted)
-
-    Returns:
-        The updated Secret, or None if not found
-    """
-    secret = find_secret(session, user_id, name)
-    if secret is None:
-        return None
-    secret.value = value
-    return secret
-
-
-def delete_secret(session: Session, user_id: int, name: str) -> bool:
-    """Delete a secret by name for a specific user.
-
-    Args:
-        session: Database session
-        user_id: Owner user ID
-        name: Secret name
-
-    Returns:
-        True if deleted, False if not found
-    """
-    secret = find_secret(session, user_id, name)
-    if secret is None:
-        return False
-    session.delete(secret)
-    return True
-
-
 def is_encrypted_column(column: Column) -> bool:
     """Whether a column holds Fernet ciphertext produced by encrypt_value."""
     return isinstance(column.type, LargeBinary) and (
@@ -332,7 +295,3 @@ def rekey_all_secrets(session: Session, target: str, candidates: Iterable[str]) 
     return count
 
 
-def list_secrets(session: Session, user_id: int) -> list[dict]:
-    """List all secrets for a user (metadata only, no values)."""
-    secrets = session.query(Secret).filter(Secret.user_id == user_id).order_by(Secret.name).all()
-    return [s.serialize() for s in secrets]

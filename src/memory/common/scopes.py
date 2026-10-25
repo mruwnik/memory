@@ -331,10 +331,6 @@ VALID_SCOPES: list[ScopeInfo] = [
 # Set of all valid scope values for fast lookup
 ALL_SCOPE_VALUES: frozenset[str] = frozenset(s["value"] for s in VALID_SCOPES)
 
-# Default scope for new users
-DEFAULT_SCOPES: list[str] = [SCOPE_READ]
-
-
 def validate_scopes(scopes: list[str]) -> list[str]:
     """Validate a list of scopes and return any invalid ones.
 
@@ -365,31 +361,3 @@ def has_scope(user_scopes: list[str], required: str) -> bool:
     return SCOPE_ADMIN in user_scopes or required in user_scopes
 
 
-def has_any_scope(user_scopes: list[str], required: list[str]) -> bool:
-    """Check if a user has any of the required scopes.
-
-    Args:
-        user_scopes: List of scopes the user has
-        required: List of scopes to check for (any match is sufficient)
-
-    Returns:
-        True if user has any of the required scopes or wildcard
-    """
-    if SCOPE_ADMIN in user_scopes:
-        return True
-    return any(s in user_scopes for s in required)
-
-
-def get_scopes_by_category() -> dict[str, list[ScopeInfo]]:
-    """Group scopes by category for UI display.
-
-    Returns:
-        Dict mapping category names to lists of scopes
-    """
-    result: dict[str, list[ScopeInfo]] = {}
-    for scope in VALID_SCOPES:
-        category = scope["category"]
-        if category not in result:
-            result[category] = []
-        result[category].append(scope)
-    return result

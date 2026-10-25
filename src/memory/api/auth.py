@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import cache
-from typing import TypeVar, cast
+from typing import TypeVar
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -17,7 +17,6 @@ from memory.common.module_settings import enabled_modules
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     APIKey,
-    BotUser,
     HumanUser,
     OAuthRefreshToken,
     User,
@@ -267,24 +266,6 @@ def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
         The matching APIKey record, or None if not found.
     """
     return db.query(APIKey).filter(APIKey.key == api_key).first()
-
-
-def authenticate_bot(api_key: str, db: DBSession) -> BotUser | None:
-    """Authenticate a bot by API key.
-
-    This is a convenience wrapper around authenticate_by_api_key() for bot-only auth.
-
-    Args:
-        api_key: The API key to authenticate.
-        db: Database session.
-
-    Returns:
-        The BotUser if authenticated and is a bot, None otherwise.
-    """
-    user, _ = authenticate_by_api_key(api_key, db)
-    if user is not None and user.user_type == "bot":
-        return cast(BotUser, user)
-    return None
 
 
 def authenticate_by_api_key(

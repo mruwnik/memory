@@ -510,11 +510,8 @@ DISCORD_NOTIFICATIONS_ENABLED = boolean_env("DISCORD_NOTIFICATIONS_ENABLED", Tru
 
 # Discord collector settings
 DISCORD_COLLECTOR_ENABLED = boolean_env("DISCORD_COLLECTOR_ENABLED", True)
-DISCORD_COLLECT_DMS = boolean_env("DISCORD_COLLECT_DMS", True)
-DISCORD_COLLECT_BOTS = boolean_env("DISCORD_COLLECT_BOTS", True)
 DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
 DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
-DISCORD_CONTEXT_WINDOW = int(os.getenv("DISCORD_CONTEXT_WINDOW", 10))
 
 # Discord history backfill
 DISCORD_BACKFILL_INTERVAL = int(
@@ -551,13 +548,6 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google"
 )
-GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-]
 
 # Google Drive sync interval is configured at GOOGLE_DRIVE_SYNC_INTERVAL
 # (see "Source-syncing intervals" near the top of the file). The

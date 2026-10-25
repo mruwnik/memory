@@ -9,7 +9,6 @@ from memory.parsers.archives import (
     HTMLArchiveFetcher,
     SubstackArchiveFetcher,
     ACOUPArchiveFetcher,
-    HTMLNextUrlArchiveFetcher,
     html_parser,
     get_archive_fetcher,
     FETCHER_REGISTRY,
@@ -358,50 +357,6 @@ def test_acoup_archive_fetcher_find_next_page_no_content():
     result = fetcher._find_next_page(parser)
 
     assert result is None
-
-
-@pytest.mark.parametrize(
-    "start_url, next_url, expected_next_url",
-    [
-        (
-            "https://example.com",
-            "",
-            "https://example.com",
-        ),  # Empty next_url defaults to start_url
-        (
-            "https://example.com",
-            "https://other.com/archive",
-            "https://other.com/archive",  # Full URL is preserved
-        ),
-        (
-            "https://example.com",
-            "/archive",
-            "/archive",
-        ),  # Absolute path is preserved
-        (
-            "https://example.com",
-            "archive",
-            "https://example.com/archive",
-        ),  # Relative path gets prepended
-    ],
-)
-def test_html_next_url_archive_fetcher_post_init(
-    start_url, next_url, expected_next_url
-):
-    fetcher = HTMLNextUrlArchiveFetcher(MockParser, start_url, next_url=next_url)
-
-    assert fetcher.next_url == expected_next_url
-
-
-def test_html_next_url_archive_fetcher_find_next_page():
-    fetcher = HTMLNextUrlArchiveFetcher(
-        MockParser, "https://example.com", next_url="https://example.com/archive"
-    )
-    parser = MockParser("https://example.com")
-
-    result = fetcher._find_next_page(parser, 2)
-
-    assert result == "https://example.com/archive/3"
 
 
 @pytest.mark.parametrize(

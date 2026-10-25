@@ -407,22 +407,6 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     }
 
 
-def reextract_meeting(session: DBSession, meeting: Meeting) -> dict:
-    """
-    Re-run LLM extraction on a meeting transcript.
-
-    Detaches existing action item tasks and re-extracts summary, notes, and action items.
-    Does NOT commit - caller controls the transaction.
-    """
-    logger.info(f"Re-extracting meeting {meeting.id}")
-
-    # Detach existing action item tasks (leave them in DB but unlinked)
-    detached_tasks = detach_meeting_tasks(session, meeting)
-    logger.info(f"Detached {detached_tasks} existing tasks for meeting {meeting.id}")
-
-    return extract_and_update_meeting(session, meeting)
-
-
 def create_meeting_record(
     session: DBSession,
     transcript: str,

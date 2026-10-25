@@ -1,7 +1,5 @@
-import base64
 import functools
 import hashlib
-import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -53,33 +51,6 @@ def token_id(token: str) -> str:
     Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
     """
     return hashlib.sha256(token.encode()).hexdigest()[:8]
-
-
-def compute_pkce_challenge(code_verifier: str) -> str:
-    """Compute the S256 PKCE code_challenge from a code_verifier.
-
-    Per RFC 7636 §4.2, the S256 transformation is::
-
-        code_challenge = BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))
-
-    where the base64url encoding has trailing ``=`` padding stripped.
-    """
-    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-
-def verify_pkce(code_verifier: str, expected_challenge: str) -> bool:
-    """Constant-time PKCE S256 verification.
-
-    Returns True iff ``compute_pkce_challenge(code_verifier) == expected_challenge``
-    using ``hmac.compare_digest`` to avoid timing oracles. Both sides being
-    fixed-length base64url SHA256 outputs makes the timing-channel risk small,
-    but compare_digest is the cheap right answer.
-    """
-    if not expected_challenge or not code_verifier:
-        return False
-    actual = compute_pkce_challenge(code_verifier)
-    return hmac.compare_digest(actual, expected_challenge)
 
 
 def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
@@ -186,17 +157,6 @@ def create_expiration(lifetime_seconds: int) -> datetime:
 def generate_refresh_token() -> str:
     """Generate a new refresh token."""
     return f"rt_{secrets.token_hex(32)}"
-
-
-def create_access_token_session(
-    user_id: int, oauth_state_id: str | None = None
-) -> UserSession:
-    """Create a new access token session."""
-    return UserSession(
-        user_id=user_id,
-        oauth_state_id=oauth_state_id,
-        expires_at=create_expiration(ACCESS_TOKEN_LIFETIME),
-    )
 
 
 def resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:

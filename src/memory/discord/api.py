@@ -35,12 +35,6 @@ class SendChannelRequest(BaseModel):
     message: str
 
 
-class TypingRequest(BaseModel):
-    bot_id: int
-    user: str | int | None = None
-    channel: str | int | None = None
-
-
 class ReactionRequest(BaseModel):
     bot_id: int
     channel: str | int
@@ -79,14 +73,6 @@ def get_manager() -> CollectorManager:
 # =============================================================================
 # Lookup Helpers
 # =============================================================================
-
-
-def get_collector_or_404(mgr: CollectorManager, bot_id: int):
-    """Get collector for bot_id or raise 404."""
-    collector = mgr.get_collector(bot_id)
-    if not collector:
-        raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
-    return collector
 
 
 async def resolve_channel_id(channel: str | int) -> int:
@@ -185,57 +171,6 @@ async def send_channel(request: SendChannelRequest) -> dict[str, Any]:
     channel_id = await resolve_channel_id(request.channel)
     success = await mgr.send_message(request.bot_id, channel_id, request.message)
     return {"success": success}
-
-
-@app.post("/typing/dm")
-async def typing_dm(request: TypingRequest) -> dict[str, Any]:
-    """Trigger typing indicator in a DM."""
-    mgr = get_manager()
-    if request.user is None:
-        raise HTTPException(status_code=400, detail="user is required")
-
-    user_id = await resolve_user_id(request.user, mgr)
-    collector = mgr.get_collector(request.bot_id)
-    if not collector:
-        return {"success": False}
-
-    try:
-        user = collector.get_user(user_id)
-        if user is None:
-            user = await collector.fetch_user(user_id)
-        if user:
-            dm_channel = user.dm_channel or await user.create_dm()
-            await dm_channel.typing()
-            return {"success": True}
-    except Exception:
-        logger.exception(f"Failed to trigger typing for user {user_id}")
-
-    return {"success": False}
-
-
-@app.post("/typing/channel")
-async def typing_channel(request: TypingRequest) -> dict[str, Any]:
-    """Trigger typing indicator in a channel."""
-    mgr = get_manager()
-    if request.channel is None:
-        raise HTTPException(status_code=400, detail="channel is required")
-
-    channel_id = await resolve_channel_id(request.channel)
-    collector = mgr.get_collector(request.bot_id)
-    if not collector:
-        return {"success": False}
-
-    try:
-        channel = collector.get_channel(channel_id)
-        if channel is None:
-            channel = await collector.fetch_channel(channel_id)
-        if channel and hasattr(channel, "typing"):
-            await channel.typing()  # type: ignore[union-attr]
-            return {"success": True}
-    except Exception:
-        logger.exception(f"Failed to trigger typing for channel {channel_id}")
-
-    return {"success": False}
 
 
 @app.post("/add_reaction")

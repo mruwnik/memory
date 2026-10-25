@@ -19,11 +19,8 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import (
     AvailabilityPoll,
     AvailabilityPollPayload,
-    AvailabilityPollDetailPayload,
     PollResponse,
-    PollResponsePayload,
     PollAvailability,
-    PollAvailabilityPayload,
     AvailabilityLevel,
     SlotAggregation,
 )
@@ -129,35 +126,6 @@ def poll_to_payload(poll: AvailabilityPoll) -> AvailabilityPollPayload:
         closes_at=poll.closes_at,
         finalized_at=poll.finalized_at,
         finalized_time=poll.finalized_time,
-    )
-
-
-def response_to_payload(response: PollResponse) -> PollResponsePayload:
-    """Convert response model to API payload."""
-    return PollResponsePayload(
-        id=response.id,
-        respondent_name=response.respondent_name,
-        respondent_email=response.respondent_email,
-        person_id=response.person_id,
-        availabilities=[
-            PollAvailabilityPayload(
-                slot_start=a.slot_start,
-                slot_end=a.slot_end,
-                availability_level=a.availability_level,
-            )
-            for a in response.availabilities
-        ],
-        created_at=response.created_at,
-        updated_at=response.updated_at,
-    )
-
-
-def poll_to_detail_payload(poll: AvailabilityPoll) -> AvailabilityPollDetailPayload:
-    """Convert poll model to detailed API payload including responses."""
-    base = poll_to_payload(poll)
-    return AvailabilityPollDetailPayload(
-        **base.model_dump(),
-        responses=[response_to_payload(r) for r in poll.responses],
     )
 
 

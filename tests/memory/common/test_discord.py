@@ -212,46 +212,6 @@ def test_send_error_message(mock_broadcast):
     mock_broadcast.assert_called_once_with(BOT_ID, "errors", "Something broke")
 
 
-@patch("memory.common.discord.broadcast_message")
-@patch("memory.common.settings.DISCORD_ACTIVITY_CHANNEL", "activity")
-def test_send_activity_message(mock_broadcast):
-    """Test sending activity message to activity channel"""
-    mock_broadcast.return_value = True
-
-    result = discord.send_activity_message(BOT_ID, "User logged in")
-
-    assert result is True
-    mock_broadcast.assert_called_once_with(
-        BOT_ID, "activity", "User logged in"
-    )
-
-
-@patch("memory.common.discord.broadcast_message")
-@patch("memory.common.settings.DISCORD_DISCOVERY_CHANNEL", "discoveries")
-def test_send_discovery_message(mock_broadcast):
-    """Test sending discovery message to discovery channel"""
-    mock_broadcast.return_value = True
-
-    result = discord.send_discovery_message(BOT_ID, "Found interesting pattern")
-
-    assert result is True
-    mock_broadcast.assert_called_once_with(
-        BOT_ID, "discoveries", "Found interesting pattern"
-    )
-
-
-@patch("memory.common.discord.broadcast_message")
-@patch("memory.common.settings.DISCORD_CHAT_CHANNEL", "chat")
-def test_send_chat_message(mock_broadcast):
-    """Test sending chat message to chat channel"""
-    mock_broadcast.return_value = True
-
-    result = discord.send_chat_message(BOT_ID, "Hello from bot")
-
-    assert result is True
-    mock_broadcast.assert_called_once_with(BOT_ID, "chat", "Hello from bot")
-
-
 @patch("memory.common.discord.send_error_message")
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
 def test_notify_task_failure_basic(mock_send_error):
@@ -391,25 +351,6 @@ def test_notify_task_failure_send_error_exception(mock_send_error):
     discord.notify_task_failure("test_task", "Error occurred", bot_id=BOT_ID)
 
     mock_send_error.assert_called_once()
-
-
-@pytest.mark.parametrize(
-    "function,channel_setting,message",
-    [
-        (discord.send_error_message, "DISCORD_ERROR_CHANNEL", "Error!"),
-        (discord.send_activity_message, "DISCORD_ACTIVITY_CHANNEL", "Activity!"),
-        (discord.send_discovery_message, "DISCORD_DISCOVERY_CHANNEL", "Discovery!"),
-        (discord.send_chat_message, "DISCORD_CHAT_CHANNEL", "Chat!"),
-    ],
-)
-@patch("memory.common.discord.broadcast_message")
-def test_convenience_functions_use_correct_channels(
-    mock_broadcast, function, channel_setting, message
-):
-    """Test that convenience functions use the correct channel settings"""
-    with patch(f"memory.common.settings.{channel_setting}", "test-channel"):
-        function(BOT_ID, message)
-        mock_broadcast.assert_called_once_with(BOT_ID, "test-channel", message)
 
 
 @patch("requests.post")

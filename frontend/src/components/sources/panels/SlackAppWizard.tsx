@@ -114,7 +114,7 @@ export const SlackAppWizard = ({
   const [signingSecret, setSigningSecret] = useState('')
 
   const [nonceData, setNonceData] = useState<SlackAppNonceResponse | null>(null)
-  const [testToken, setTestToken] = useState<string>(() => generateRandomToken())
+  const [testToken] = useState<string>(() => generateRandomToken())
   const [testStatus, setTestStatus] = useState<string | null>(null)
 
   const callbackUrl = nonceData?.callback_url

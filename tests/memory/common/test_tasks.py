@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from memory.common.tasks import (
     task_to_dict,
     get_tasks,
-    complete_task,
 )
 from memory.common.db.models import Task
 
@@ -201,52 +200,3 @@ def test_get_tasks_empty_database(db_session):
     tasks = get_tasks(db_session)
 
     assert tasks == []
-
-
-# =============================================================================
-# Tests for complete_task
-# =============================================================================
-
-
-def test_complete_task_marks_done(db_session):
-    """Test completing a task sets status and completed_at."""
-    task = Task(
-        task_title="To Complete",
-        status="pending",
-        sha256=b"c" * 32,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    result = complete_task(db_session, task.id)
-
-    assert result is not None
-    assert result.status == "done"
-    assert result.completed_at is not None
-
-
-def test_complete_task_not_found(db_session):
-    """Test completing a non-existent task returns None."""
-    result = complete_task(db_session, 99999)
-
-    assert result is None
-
-
-def test_complete_task_already_done(db_session):
-    """Test completing an already-done task is idempotent."""
-    original_time = datetime(2024, 1, 10, tzinfo=timezone.utc)
-    task = Task(
-        task_title="Already Done",
-        status="done",
-        completed_at=original_time,
-        sha256=b"a" * 32,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    result = complete_task(db_session, task.id)
-
-    # Should update to new completion time
-    assert result is not None
-    assert result.status == "done"
-    assert result.completed_at != original_time

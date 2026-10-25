@@ -503,15 +503,6 @@ class OrchestratorClient:
     # Volumes
     # -------------------------------------------------------------------------
 
-    async def list_volumes(self) -> list[dict[str, str]]:
-        """List all Docker volumes."""
-        status, data = await self._request("GET", "/volumes")
-        if status != 200:
-            raise OrchestratorError(
-                data.get("detail", "Failed to list volumes")
-            )
-        return data
-
     async def create_volume(self, name: str) -> dict[str, str]:
         """Create a Docker volume."""
         status, data = await self._request("POST", "/volumes", {"name": name})

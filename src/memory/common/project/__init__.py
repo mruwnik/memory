@@ -15,7 +15,6 @@ from memory.common.project.attach import (
 from memory.common.project.client import (
     ensure_github_repo,
     get_github_client,
-    get_github_client_for_org,
 )
 from memory.common.project.creation import (
     ProjectCreationResult,
@@ -59,7 +58,6 @@ __all__ = [
     # client
     "ensure_github_repo",
     "get_github_client",
-    "get_github_client_for_org",
     # creation
     "ProjectCreationResult",
     "create_milestone_project",

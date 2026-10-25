@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { useAuth, SERVER_URL } from './useAuth'
+import { SERVER_URL } from './useAuth'
 import { useMCP } from './useMCP'
 import { apiError } from './apiError'
 
@@ -10,16 +10,6 @@ export interface AvailabilitySlot {
   slot_start: string
   slot_end: string
   availability_level: AvailabilityLevel
-}
-
-export interface PollResponse {
-  id: number
-  respondent_name: string | null
-  respondent_email: string | null
-  person_id: number | null
-  availabilities: AvailabilitySlot[]
-  created_at: string
-  updated_at: string
 }
 
 export interface Poll {
@@ -38,10 +28,6 @@ export interface Poll {
   finalized_time: string | null
   share_url?: string
   results_url?: string
-}
-
-export interface PollDetail extends Poll {
-  responses: PollResponse[]
 }
 
 export interface SlotAggregation {

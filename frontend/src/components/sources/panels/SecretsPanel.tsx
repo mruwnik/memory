@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSecrets, Secret, SecretWithValue } from '@/hooks/useSecrets'
+import { useSecrets, Secret } from '@/hooks/useSecrets'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, Textarea, ConfirmButton, List, Row, Section, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { formatUserDate } from '@/utils/timezones'

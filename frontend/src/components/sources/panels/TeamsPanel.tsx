@@ -3,7 +3,7 @@ import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject, TeamSa
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { PersonSearch, PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
-import { Badge, Button, Checkbox, ConfirmButton, DetailList, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FormActions, Input, Modal, Notice, Select, Textarea, useActionNotice } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FormActions, Input, Modal, Notice, Textarea, useActionNotice } from '@/components/shared/ui'
 import { formatUserDate } from '@/utils/timezones'
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e)

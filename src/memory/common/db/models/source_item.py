@@ -64,11 +64,6 @@ if TYPE_CHECKING:
     from memory.common.db.models.sources import Person
 
 
-class MetadataSchema(TypedDict):
-    type: str
-    description: str
-
-
 class SourceItemPayload(TypedDict):
     source_id: Annotated[int, "Unique identifier of the source item"]
     tags: Annotated[list[str], "List of tags for categorization"]

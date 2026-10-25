@@ -80,30 +80,6 @@ _SLACK_TEAM_ID_PATTERN = re.compile(r"^T[A-Z0-9]{8,12}$")
 # workspaces while still rejecting obvious garbage / injection payloads.
 _SLACK_CHANNEL_ID_PATTERN = re.compile(r"^[CDG][A-Z0-9]{8,20}$")
 
-# OAuth scopes for Slack user tokens
-SLACK_SCOPES = [
-    # Read messages from channels
-    "channels:history",
-    "groups:history",
-    "mpim:history",
-    "im:history",
-    # List and read channel info
-    "channels:read",
-    "groups:read",
-    "mpim:read",
-    "im:read",
-    # Read user info for mention resolution
-    "users:read",
-    "users:read.email",
-    # Read reactions and files
-    "reactions:read",
-    "files:read",
-    # Send messages and reactions (for MCP tools)
-    "chat:write",
-    "reactions:write",
-]
-
-
 # A collecting workspace with no successful sync for this many polling
 # intervals is reported as stale.
 SLACK_STALE_SYNC_INTERVALS = 3

@@ -14,8 +14,6 @@ from memory.common.access_control import (
     user_can_access,
     user_can_create_in_project,
     build_access_filter,
-    get_allowed_project_ids,
-    get_max_sensitivity_for_project,
     get_accessible_source_item_by_filename,
 )
 from memory.common.db.models import HumanUser, SourceItem
@@ -388,59 +386,7 @@ def test_build_access_filter_invalid_role_skipped():
 # --- get_allowed_project_ids Tests ---
 
 
-def test_get_allowed_project_ids_empty():
-    """No project roles returns empty set."""
-    assert get_allowed_project_ids({}) == set()
-
-
-def test_get_allowed_project_ids_single():
-    """Single project role returns that project ID."""
-    project_roles = {1: "contributor"}
-    assert get_allowed_project_ids(project_roles) == {1}
-
-
-def test_get_allowed_project_ids_multiple():
-    """Multiple project roles returns all project IDs."""
-    project_roles = {1: "contributor", 2: "admin", 3: "manager"}
-    assert get_allowed_project_ids(project_roles) == {1, 2, 3}
-
-
 # --- get_max_sensitivity_for_project Tests ---
-
-
-def test_get_max_sensitivity_not_in_project():
-    """Returns None if user not in project."""
-    project_roles = {1: "admin"}
-    result = get_max_sensitivity_for_project(project_roles, project_id=2)
-    assert result is None
-
-
-def test_get_max_sensitivity_contributor():
-    """Contributor max sensitivity is basic."""
-    project_roles = {1: "contributor"}
-    result = get_max_sensitivity_for_project(project_roles, project_id=1)
-    assert result == SensitivityLevel.BASIC
-
-
-def test_get_max_sensitivity_manager():
-    """Manager max sensitivity is internal."""
-    project_roles = {1: "manager"}
-    result = get_max_sensitivity_for_project(project_roles, project_id=1)
-    assert result == SensitivityLevel.INTERNAL
-
-
-def test_get_max_sensitivity_admin():
-    """Admin max sensitivity is confidential."""
-    project_roles = {1: "admin"}
-    result = get_max_sensitivity_for_project(project_roles, project_id=1)
-    assert result == SensitivityLevel.CONFIDENTIAL
-
-
-def test_get_max_sensitivity_invalid_role():
-    """Invalid role returns None."""
-    project_roles = {1: "invalid"}
-    result = get_max_sensitivity_for_project(project_roles, project_id=1)
-    assert result is None
 
 
 # --- get_accessible_source_item_by_filename tests ---

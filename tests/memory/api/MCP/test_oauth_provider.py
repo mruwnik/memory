@@ -1302,35 +1302,6 @@ async def test_exchange_authorization_code_atomic_single_use(db_session):
 # ====== PKCE enforcement (RFC 7636) ======
 
 
-def test_compute_pkce_challenge_matches_rfc7636_test_vector():
-    """RFC 7636 Appendix B test vector for S256."""
-    from memory.api.MCP.oauth_provider import compute_pkce_challenge
-
-    # From RFC 7636 §4.2 / Appendix B
-    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-    expected = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-
-    assert compute_pkce_challenge(verifier) == expected
-
-
-def test_verify_pkce_constant_time_compare():
-    """verify_pkce returns True for matching pair, False otherwise."""
-    from memory.api.MCP.oauth_provider import (
-        compute_pkce_challenge,
-        verify_pkce,
-    )
-
-    verifier = "a" * 64
-    challenge = compute_pkce_challenge(verifier)
-
-    assert verify_pkce(verifier, challenge) is True
-    assert verify_pkce(verifier, challenge + "x") is False
-    assert verify_pkce(verifier + "x", challenge) is False
-    # Empty inputs always fail closed
-    assert verify_pkce("", challenge) is False
-    assert verify_pkce(verifier, "") is False
-
-
 @pytest.mark.asyncio
 async def test_authorize_rejects_empty_code_challenge():
     """RFC 7636 / OAuth 2.1: authorize() must require non-empty PKCE challenge."""

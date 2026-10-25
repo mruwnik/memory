@@ -142,34 +142,6 @@ def validate_and_parse_book(file_path: str) -> Ebook:
         raise
 
 
-def create_book_and_sections(
-    ebook, session, tags: Iterable[str] | None = None
-) -> tuple[Book, list[BookSection]]:
-    """Create book and all its sections with proper relationships."""
-    tags = tags or []
-    # Create book
-    book = create_book_from_ebook(ebook, tags)
-    session.add(book)
-    session.flush()  # Get the book ID
-
-    # Create all sections
-    all_sections, section_map = create_all_sections(ebook.sections, book)
-    session.add_all(all_sections)
-    session.flush()
-
-    for book_section, parent_key in section_map.values():
-        if parent_key and parent_key in section_map:
-            parent_section = section_map[parent_key][0]
-            book_section.parent_section_id = cast(int, parent_section.id)
-
-    return book, all_sections
-
-
-def embed_sections(all_sections: list[BookSection]) -> int:
-    """Embed all sections and return count of successfully embedded sections."""
-    return sum(embed_source_item(section) for section in all_sections)
-
-
 def prepare_book_for_reingest(session: DBSession, item_id: int) -> Book | None:
     """
     Fetch an existing book and clear its sections/chunks for reprocessing.

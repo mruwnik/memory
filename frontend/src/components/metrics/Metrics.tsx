@@ -91,7 +91,6 @@ const Metrics: React.FC = () => {
   // Calculate summary stats
   const totalEvents = summary?.metrics.reduce((sum, m) => sum + m.count, 0) ?? 0
   const successCount = summary?.metrics.reduce((sum, m) => sum + m.success_count, 0) ?? 0
-  const failureCount = summary?.metrics.reduce((sum, m) => sum + m.failure_count, 0) ?? 0
   const successRate = totalEvents > 0 ? Math.round((successCount / totalEvents) * 100) : null
 
   // Weighted by count so a rare slow task doesn't outweigh thousands of fast calls

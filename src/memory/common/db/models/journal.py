@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 
 # Valid target types for journal entries
 TargetType = Literal["source_item", "project", "team", "poll"]
-VALID_TARGET_TYPES: set[str] = {"source_item", "project", "team", "poll"}
 
 
 class JournalEntry(Base):
@@ -78,17 +77,6 @@ class JournalEntry(Base):
             "private": self.private,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
-
-
-def user_can_access_journal_entry(user: Any, entry: JournalEntry) -> bool:
-    """Check if user can access a journal entry."""
-    from memory.common.access_control import has_admin_scope
-
-    if has_admin_scope(user):
-        return True
-    if entry.private:
-        return entry.creator_id is not None and entry.creator_id == getattr(user, "id", None)
-    return True  # Shared entries - caller verifies target access
 
 
 def build_journal_access_filter(user: Any, user_id: int | None):

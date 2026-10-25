@@ -645,6 +645,10 @@ section has nothing in it:
   the text. Only summaries made after this update are marked as summaries
   (`chunk.is_summary`): older items show and rank as before until they are
   reingested.
+- `DISCORD_COLLECT_DMS`, `DISCORD_COLLECT_BOTS`, `DISCORD_CONTEXT_WINDOW`,
+  `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` and `SLACK_REDIRECT_URI` are
+  removed. Nothing read them; delete them from `.env` if set. Each Slack app
+  keeps its own credentials, entered in the Slack app wizard.
 
 ### Migrations
 

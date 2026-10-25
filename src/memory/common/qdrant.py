@@ -277,23 +277,6 @@ def delete_points(
         raise IOError(f"Error deleting points from {collection_name}: {e}")
 
 
-def get_collection_info(
-    client: qdrant_client.QdrantClient, collection_name: str
-) -> dict:
-    """
-    Get information about a collection.
-
-    Args:
-        client: Qdrant client
-        collection_name: Name of the collection
-
-    Returns:
-        Dictionary with collection information
-    """
-    info = client.get_collection(collection_name)
-    return info.model_dump()
-
-
 def get_collection_sizes(client: qdrant_client.QdrantClient) -> dict[str, int]:
     """Get the size of each collection."""
     collections = [i.name for i in client.get_collections().collections]

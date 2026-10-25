@@ -154,20 +154,6 @@ class ACOUPArchiveFetcher(HTMLArchiveFetcher):
                 return next(urls, None)
 
 
-@dataclass
-class HTMLNextUrlArchiveFetcher(HTMLArchiveFetcher):
-    next_url: str = ""
-
-    def __post_init__(self):
-        if not self.next_url:
-            self.next_url = self.start_url
-        if not self.next_url.startswith("http") and not self.next_url.startswith("/"):
-            self.next_url = f"{self.start_url}/{self.next_url}"
-
-    def _find_next_page(self, parser: FeedParser, current_page: int = 0) -> str | None:
-        return f"{self.next_url}/{current_page + 1}"
-
-
 FETCHER_REGISTRY = {
     r"https://putanumonit.com": (
         "https://putanumonit.com/full-archive",

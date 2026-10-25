@@ -609,11 +609,6 @@ def build_access_filter(
     )
 
 
-def get_allowed_project_ids(project_roles: dict[int, str]) -> set[int]:
-    """Get the set of project IDs the user has any access to."""
-    return set(project_roles.keys())
-
-
 def user_can_edit(user: UserLike, item: SourceItemLike) -> bool:
     """
     Check if user can edit a content item.
@@ -648,33 +643,6 @@ def user_can_delete(user: UserLike, item: SourceItemLike) -> bool:
         True if user can delete the item, False otherwise
     """
     return user_can_edit(user, item)
-
-
-def get_max_sensitivity_for_project(
-    project_roles: dict[int, str],
-    project_id: int,
-) -> SensitivityLevel | None:
-    """Get the maximum sensitivity level a user can access in a project."""
-    role_str = project_roles.get(project_id)
-    if role_str is None:
-        return None
-
-    allowed = get_allowed_sensitivities(role_str)
-    if allowed is None:
-        return None
-
-    # Return highest sensitivity in the set
-    # Order: confidential > internal > basic > public
-    if "confidential" in allowed:
-        return SensitivityLevel.CONFIDENTIAL
-    elif "internal" in allowed:
-        return SensitivityLevel.INTERNAL
-    elif "basic" in allowed:
-        return SensitivityLevel.BASIC
-    elif "public" in allowed:
-        return SensitivityLevel.PUBLIC
-
-    return None
 
 
 # ==============================================================================

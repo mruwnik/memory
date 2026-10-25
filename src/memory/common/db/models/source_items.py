@@ -1589,11 +1589,6 @@ class AgentObservation(SourceItem):
         )
 
     @property
-    def all_contradictions(self) -> list[ObservationContradiction]:
-        """Get all contradictions involving this observation."""
-        return self.contradictions_as_first + self.contradictions_as_second
-
-    @property
     def display_contents(self) -> dict:
         return {
             "subject": self.subject,

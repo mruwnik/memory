@@ -728,19 +728,3 @@ def find_project_with_access(session: Session | scoped_session[Session], user: U
 
     # Try exact title match as fallback
     return query.filter(Project.title == project).first()
-
-
-def find_team_with_access(session: Session, user: UserLike, team: str | int) -> Team | None:
-    """Find a team by ID or slug, with access control filtering."""
-    query = session.query(Team).options(selectinload(Team.members))
-
-    # Apply access control filtering
-    query = filter_teams_query(session, user, query)
-
-    if isinstance(team, int):
-        return query.filter(Team.id == team).first()
-
-    if team.isdigit():
-        return query.filter(Team.id == int(team)).first()
-
-    return query.filter(Team.slug == team).first()

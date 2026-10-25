@@ -22,7 +22,6 @@ IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000
 # Cached engine and session factory for connection pooling
 _engine = None
 _session_factory = None
-_scoped_session = None
 
 
 def get_engine():
@@ -62,14 +61,6 @@ def get_session_factory():
         engine = get_engine()
         _session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     return _session_factory
-
-
-def get_scoped_session():
-    """Get or create a thread-local scoped session factory."""
-    global _scoped_session
-    if _scoped_session is None:
-        _scoped_session = scoped_session(get_session_factory())
-    return _scoped_session
 
 
 def get_session() -> Generator[Session, None, None]:

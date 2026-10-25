@@ -29,7 +29,6 @@ class ServerStatus(StrEnum):
 
 
 TRANSPORTS = ("http", "sse")
-AUTH_TYPES = ("oauth", "headers", "none")
 
 
 def encrypted(column: str) -> property:

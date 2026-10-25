@@ -81,13 +81,6 @@ TEXT_EXTENSIONS = {
     ".cfg",
     ".conf",
 }
-IMAGE_EXTENSIONS = {
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".bmp",
-}
 CUSTOM_EXTENSIONS = {
     ".epub": "application/epub+zip",
     ".pdf": "application/pdf",
@@ -122,11 +115,6 @@ def is_text_file(path: pathlib.Path) -> bool:
         or mime_type in text_mimes
         or path.suffix.lower() in TEXT_EXTENSIONS
     )
-
-
-def is_image_file(path: pathlib.Path) -> bool:
-    mime_type = get_mime_type(path)
-    return mime_type.startswith("image/") or path.suffix.lower() in IMAGE_EXTENSIONS
 
 
 def merge_metadata(*metadata: dict[str, Any]) -> dict[str, Any]:

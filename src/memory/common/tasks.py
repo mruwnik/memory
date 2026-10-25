@@ -2,7 +2,7 @@
 Common task utilities for task querying and management.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING, TypedDict
 
 from sqlalchemy import or_
@@ -124,27 +124,3 @@ def get_tasks(
     return [task_to_dict(t) for t in tasks]
 
 
-def complete_task(session: DBSession, task_id: int) -> Task | None:
-    """Mark a task as complete.
-
-    Note: this helper does NOT enforce access control — callers are
-    responsible for verifying the caller may edit this task before calling
-    (typically via ``user_can_edit``). Treating the helper as access-blind
-    keeps it usable from worker code that runs without a user context
-    (e.g. recurring-task auto-completion); MCP-tool callers must check
-    permission first.
-
-    Args:
-        session: Database session
-        task_id: ID of the task to complete
-
-    Returns:
-        The updated task, or None if not found
-    """
-    task = session.get(Task, task_id)
-    if task:
-        task.status = "done"
-        task.completed_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(task)
-    return task

@@ -6,7 +6,7 @@ import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import GithubTokens from './GithubTokens'
 import ClaudeFleetStats, { SessionStatsPanel, Usage, formatMb, sessionDisplay } from './ClaudeFleetStats'
-import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Fieldset, Hint, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Fieldset, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 import { formatUserDateTime } from '@/utils/timezones'
 
 const COMMON_TOOLS = [

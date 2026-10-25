@@ -96,7 +96,6 @@ from memory.common.db.models.sources import (
     Team,
     team_members,
     project_teams,
-    can_access_project,
 )
 from memory.common.db.models.agents import (
     AgentDefinition,
@@ -116,7 +115,6 @@ from memory.common.db.models.users import (
     OAuthState,
     OAuthClientState,
     OAuthRefreshToken,
-    generate_ssh_keypair,
     APIKey,
     APIKeyType,
 )
@@ -125,9 +123,6 @@ from memory.common.db.models.secrets import (
     extract,
     find_secret,
     create_secret,
-    update_secret,
-    delete_secret,
-    list_secrets,
     rekey_all_secrets,
     encrypt_value,
     decrypt_value,
@@ -158,7 +153,6 @@ from memory.common.db.models.jobs import (
 from memory.common.db.models.polls import (
     AvailabilityPoll,
     AvailabilityPollPayload,
-    AvailabilityPollDetailPayload,
     PollResponse,
     PollResponsePayload,
     PollAvailability,
@@ -176,11 +170,9 @@ from memory.common.db.models.claude_config import (
 )
 from memory.common.db.models.watchlist import (
     WatchedMarket,
-    WatchedMarketPayload,
 )
 from memory.common.db.models.journal import (
     JournalEntry,
-    user_can_access_journal_entry,
     build_journal_access_filter,
 )
 from memory.common.db.models.deadlines import (
@@ -270,7 +262,6 @@ __all__ = [
     "Team",
     "team_members",
     "project_teams",
-    "can_access_project",
     # Calendar
     "CalendarAccount",
     "CalendarEvent",
@@ -340,7 +331,6 @@ __all__ = [
     # Polls
     "AvailabilityPoll",
     "AvailabilityPollPayload",
-    "AvailabilityPollDetailPayload",
     "PollResponse",
     "PollResponsePayload",
     "PollAvailability",
@@ -356,15 +346,11 @@ __all__ = [
     "ClaudeEnvironmentPayload",
     "ClaudeGitHubToken",
     # SSH key generation
-    "generate_ssh_keypair",
     # Secrets
     "Secret",
     "extract",
     "find_secret",
     "create_secret",
-    "update_secret",
-    "delete_secret",
-    "list_secrets",
     "rekey_all_secrets",
     "encrypt_value",
     "decrypt_value",
@@ -372,10 +358,8 @@ __all__ = [
     "Payload",
     # Watchlist
     "WatchedMarket",
-    "WatchedMarketPayload",
     # Journal
     "JournalEntry",
-    "user_can_access_journal_entry",
     "build_journal_access_filter",
     # Deadlines
     "Deadline",

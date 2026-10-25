@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { externalToolName, type AgentSpec, type Catalog, type ExternalServer, type ModelEntry, type Reasoning } from '@/hooks/useAgents'
 import { ServerStatusBadge } from './ServerStatusBadge'
-import { KeyPicker, payer, providerOf } from './KeyPicker'
+import { KeyPicker, providerOf } from './KeyPicker'
 import { Link } from 'react-router-dom'
 import { Checkbox, Field, Fieldset, Input, MultiSelect, Notice, Select, Textarea } from '@/components/shared/ui'
 

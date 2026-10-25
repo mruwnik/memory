@@ -17,7 +17,7 @@ import { ToolBreakdownChart } from './ToolBreakdownChart'
 import { SessionBreakdownChart } from './SessionBreakdownChart'
 import { TimeRange } from '@/hooks/useMetrics'
 import { TimeRangeSelector } from '@/components/metrics/TimeRangeSelector'
-import UserSelector, { useUserSelection, SelectedUser } from '@/components/common/UserSelector'
+import UserSelector, { useUserSelection } from '@/components/common/UserSelector'
 import { Card, CardGrid, LoadingState, Notice, Page, RefreshButton, Select, Toolbar } from '@/components/shared/ui'
 
 const timeRangeToParams = (range: TimeRange): { from: Date; granularity: number } => {

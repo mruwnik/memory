@@ -19,7 +19,6 @@ from memory.workers.email import (
     ImapFolder,
     create_mail_message,
     decode_imap_utf7,
-    delete_email_vectors,
     delete_emails,
     delete_removed_emails,
     extract_email_uid,
@@ -732,34 +731,6 @@ def test_should_delete_email():
     # Currently always returns True
     assert should_delete_email(mail_message) is True
 
-
-def test_delete_email_vectors(db_session, qdrant, mock_uuid4):
-    """Test deleting vectors for an email."""
-    mail_message = MailMessage(
-        sha256=b"test_hash" + bytes(24),
-        tags=["test"],
-        size=100,
-        mime_type="message/rfc822",
-        embed_status="RAW",
-        message_id="<test-delete@example.com>",
-        subject="Test Delete",
-        sender="sender@example.com",
-        recipients=["recipient@example.com"],
-        content="This is a test email for deletion",
-        folder="INBOX",
-        modality="mail",
-    )
-    db_session.add(mail_message)
-    db_session.flush()
-
-    # First vectorize the email
-    with patch.object(embedding, "embed_text", return_value=[[0.1] * 1024]):
-        vectorize_email(mail_message)
-
-    assert len(mail_message.chunks) == 1
-
-    # Now delete the vectors
-    delete_email_vectors(mail_message)
 
     # The function should complete without error
     # (vectors are deleted from qdrant)

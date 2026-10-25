@@ -498,10 +498,6 @@ class BaseHTMLParser:
             metadata=metadata,
         )
 
-    def _get_base_url(self, url: str) -> str:
-        """Extract base URL from full URL."""
-        return get_base_url(url)
-
     def _remove_unwanted_elements(self, soup: BeautifulSoup) -> None:
         """Remove unwanted elements from the soup."""
         return remove_unwanted_elements(soup, self.remove_selectors)

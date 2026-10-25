@@ -243,9 +243,6 @@ services:
       # POST /settings/restart exits the api, and restart: unless-stopped brings it back.
       API_SELF_RESTART: 1
       SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
-      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
-      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
-      SLACK_REDIRECT_URI: ${SLACK_REDIRECT_URI:-https://memory.equistamp.io/slack/callback}
       # Discord collector API (running in ingest-hub)
       DISCORD_COLLECTOR_SERVER_URL: ingest-hub
       DISCORD_COLLECTOR_PORT: 8003

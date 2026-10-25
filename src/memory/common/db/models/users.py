@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import bcrypt
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
 from sqlalchemy import (
     ARRAY,
     Boolean,
@@ -21,7 +19,7 @@ from sqlalchemy import (
     Numeric,
     String,
 )
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 
 from memory.common.db.models.agents import money
@@ -535,34 +533,3 @@ class OAuthClientState(Base):
     )
 
 
-def purge_oauth(session: Session) -> None:
-    for token in session.query(OAuthRefreshToken).all():
-        session.delete(token)
-    for user_session in session.query(UserSession).all():
-        session.delete(user_session)
-
-    for oauth_state in session.query(OAuthState).all():
-        session.delete(oauth_state)
-    for oauth_client in session.query(OAuthClientInformation).all():
-        session.delete(oauth_client)
-
-
-def generate_ssh_keypair(user: User) -> None:
-    """Generate ED25519 keypair for user.
-
-    The user can add their public key to GitHub/GitLab for git access from containers.
-    Note: Caller is responsible for committing the session.
-    """
-    private_key = ed25519.Ed25519PrivateKey.generate()
-    public_key = private_key.public_key()
-
-    user.ssh_private_key = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.OpenSSH,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode()
-
-    user.ssh_public_key = public_key.public_bytes(
-        encoding=serialization.Encoding.OpenSSH,
-        format=serialization.PublicFormat.OpenSSH,
-    ).decode()

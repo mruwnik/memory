@@ -414,64 +414,6 @@ def _mock_oauth_make_session():
 
 
 @patch("memory.api.auth.lookup_api_key")
-def test_authenticate_bot_finds_matching_bot_via_api_key_table(mock_lookup):
-    """Test authenticate_bot finds bot via new api_keys table."""
-    db = MagicMock()
-
-    # Mock API key record
-    api_key_record = MagicMock()
-    api_key_record.key = "bot_test123"
-    api_key_record.is_valid.return_value = True
-
-    # Mock user
-    bot = MagicMock()
-    bot.user_type = "bot"
-    api_key_record.user = bot
-
-    mock_lookup.return_value = api_key_record
-
-    result = auth.authenticate_bot("bot_test123", db)
-
-    assert result is bot
-    mock_lookup.assert_called_once_with("bot_test123", db)
-
-
-@patch("memory.api.auth.lookup_api_key")
-def test_authenticate_bot_returns_none_for_invalid_key(mock_lookup):
-    """Test authenticate_bot returns None for invalid API key."""
-    db = MagicMock()
-
-    mock_lookup.return_value = None  # No matching key
-
-    result = auth.authenticate_bot("nonexistent_key", db)
-
-    assert result is None
-    mock_lookup.assert_called_once_with("nonexistent_key", db)
-
-
-@patch("memory.api.auth.lookup_api_key")
-def test_authenticate_bot_rejects_non_bot_user_from_api_key_table(mock_lookup):
-    """Test authenticate_bot rejects keys belonging to non-bot users."""
-    db = MagicMock()
-
-    # Mock API key belonging to a human user
-    api_key_record = MagicMock()
-    api_key_record.key = "human_key123"
-    api_key_record.is_valid.return_value = True
-
-    human_user = MagicMock()
-    human_user.user_type = "human"
-    api_key_record.user = human_user
-
-    mock_lookup.return_value = api_key_record
-
-    result = auth.authenticate_bot("human_key123", db)
-
-    assert result is None
-    mock_lookup.assert_called_once_with("human_key123", db)
-
-
-@patch("memory.api.auth.lookup_api_key")
 def test_authenticate_by_api_key_returns_user_and_key_record(mock_lookup):
     """Test authenticate_by_api_key returns both user and key record."""
     db = MagicMock()

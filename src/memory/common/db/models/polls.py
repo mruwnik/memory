@@ -302,12 +302,6 @@ class AvailabilityPollPayload(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class AvailabilityPollDetailPayload(AvailabilityPollPayload):
-    """API response for poll details including responses."""
-
-    responses: list[PollResponsePayload]
-
-
 class SlotAggregation(BaseModel):
     """Aggregated availability data for a time slot."""
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
 from sqlalchemy import (
     DateTime,
     Float,
@@ -75,19 +74,3 @@ class WatchedMarket(Base):
         )
 
 
-class WatchedMarketPayload(BaseModel):
-    """Pydantic model for API responses."""
-
-    id: int
-    market_id: str
-    source: str
-    question: str | None
-    url: str | None
-    added_at: datetime
-    last_updated: datetime | None
-    price_when_added: float | None
-    last_price: float | None
-    alert_threshold: float | None
-    price_change: float | None = None  # Computed field
-
-    model_config = {"from_attributes": True}

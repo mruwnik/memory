@@ -66,7 +66,6 @@ class MultiProbs(TypedDict):
     answerProbs: dict[str, float]
 
 
-Probs = dict[str, BinaryProbs | MultiProbs]
 OutcomeType = Literal["BINARY", "MULTIPLE_CHOICE"]
 
 
@@ -553,66 +552,6 @@ async def get_polymarket_resolved(
 
 
 # --- Kalshi API ---
-
-
-def filter_kalshi_market(market: dict, term: str, min_volume: int) -> dict | None:
-    """Filter and format a Kalshi market if it matches the search criteria.
-
-    Args:
-        market: Raw market data from Kalshi API.
-        term: Search term (case-insensitive).
-        min_volume: Minimum volume threshold.
-
-    Returns:
-        Formatted market dict if it matches criteria, None otherwise.
-    """
-    title = market.get("title", "")
-    subtitle = market.get("subtitle", "")
-    event_title = market.get("event_title", "")
-
-    # Check if term matches title, subtitle, or event title
-    searchable = f"{title} {subtitle} {event_title}".lower()
-    if term.lower() not in searchable:
-        return None
-
-    volume = market.get("volume", 0) or 0
-    if volume < min_volume:
-        return None
-
-    # Kalshi markets are binary (yes/no)
-    # Prefer last_price (actual trade price) over yes_bid (current bid)
-    # for more accurate probability in illiquid markets
-    yes_price = market.get("last_price") or market.get("yes_bid") or 0
-    # Kalshi prices are in cents (0-100)
-    probability = yes_price / 100 if yes_price else None
-
-    # Calculate spread from yes_bid and yes_ask (or no_bid and no_ask)
-    yes_bid = market.get("yes_bid", 0) or 0
-    yes_ask = market.get("yes_ask", 0) or 0
-    spread = None
-    if yes_bid > 0 and yes_ask > 0:
-        spread = (yes_ask - yes_bid) / 100  # Convert cents to fraction
-
-    # Calculate liquidity score
-    created_at = market.get("open_time")
-    liquidity_score = calculate_liquidity_score(volume, created_at, spread)
-
-    result = {
-        "source": "kalshi",
-        "id": market.get("ticker"),
-        "question": title,
-        "url": f"https://kalshi.com/markets/{market.get('ticker', '')}",
-        "volume": volume,
-        "probability": round(probability, 3) if probability else None,
-        "createdAt": created_at,
-        "liquidity_score": round(liquidity_score, 3),
-    }
-
-    # Include spread for Kalshi (since they have order book data)
-    if spread is not None:
-        result["spread"] = round(spread, 3)
-
-    return result
 
 
 async def search_kalshi_events(

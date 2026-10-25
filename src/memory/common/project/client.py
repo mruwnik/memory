@@ -91,45 +91,6 @@ def get_github_client(
     return GithubClient(credentials), repo
 
 
-def get_github_client_for_org(
-    session: Any, org: str, user_id: int
-) -> GithubClient | None:
-    """Get authenticated GithubClient for an organization.
-
-    Returns the first active GitHub account belonging to the user. The ``org``
-    is accepted for interface symmetry with other lookups but does not narrow
-    the choice — account-to-org affinity is not tracked.
-
-    Args:
-        session: Database session
-        org: Organization login name
-        user_id: ID of the authenticated user
-
-    Returns:
-        GithubClient or None if no suitable account found
-    """
-    account = (
-        session.query(GithubAccount)
-        .filter(
-            GithubAccount.user_id == user_id,
-            GithubAccount.active == True,  # noqa: E712
-        )
-        .first()
-    )
-
-    if not account:
-        return None
-
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    return GithubClient(credentials)
-
-
 def ensure_github_repo(
     session: Any,
     client: GithubClient,

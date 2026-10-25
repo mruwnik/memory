@@ -16,7 +16,6 @@ from memory.common.db.models import (
 )
 from memory.workers.tasks.meetings import (
     reprocess_meeting,
-    reextract_meeting,
     prepare_meeting_for_reingest,
 )
 from tests.memory.agents.fakes import key_rejected, submitted
@@ -216,66 +215,3 @@ def test_reprocess_meeting_job_fails_on_error(
     assert pending_job.status == JobStatus.FAILED.value
 
 
-def test_reextract_meeting_success(db_session, meeting_with_tasks, llm_key, scripted_llm):
-    """Test re-extracting meeting information."""
-    meeting, original_tasks = meeting_with_tasks
-    original_task_ids = [t.id for t in original_tasks]
-    scripted_llm.script = [
-        submitted(
-            {
-                "summary": "New extracted summary",
-                "notes": "New extracted notes",
-                "action_items": [
-                    {"description": "New task 1", "assignee": None, "due_date": None, "priority": "high"},
-                    {"description": "New task 2", "assignee": None, "due_date": None, "priority": "low"},
-                ],
-            }
-        )
-    ]
-
-    result = reextract_meeting(db_session, meeting)
-
-    assert result["status"] == "success"
-    assert result["summary_length"] > 0
-    assert result["notes_length"] > 0
-    assert result["tasks_created"] == 2
-
-    # reextract_meeting() updates attributes on the session but doesn't commit
-    # ("caller controls the transaction"). Commit so the changes are visible
-    # to subsequent reads.
-    db_session.commit()
-    db_session.refresh(meeting)
-    assert meeting.summary == "New extracted summary"
-    assert meeting.notes == "New extracted notes"
-    # extraction_status is set to "extracted" by reextract; it advances to
-    # "complete" only at the end of execute_meeting_processing.
-    assert meeting.extraction_status == "extracted"
-
-    # Check original tasks were detached (still exist but not linked)
-    remaining_tasks = (
-        db_session.query(Task).filter(Task.id.in_(original_task_ids)).all()
-    )
-    assert len(remaining_tasks) == 3  # Still exist
-    for task in remaining_tasks:
-        assert task.source_item_id is None  # But detached
-
-    # Check new tasks were created and linked
-    new_tasks = (
-        db_session.query(Task).filter(Task.source_item_id == meeting.id).all()
-    )
-    assert len(new_tasks) == 2
-
-
-def test_reextract_meeting_llm_failure(db_session, meeting, llm_key, scripted_llm):
-    """Test handling LLM failure during re-extraction."""
-    scripted_llm.script = [key_rejected]
-
-    result = reextract_meeting(db_session, meeting)
-
-    assert result["status"] == "error"
-
-    # reextract_meeting() doesn't commit on the failure path; commit so the
-    # status update is visible after refresh.
-    db_session.commit()
-    db_session.refresh(meeting)
-    assert meeting.extraction_status == "failed"

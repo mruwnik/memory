@@ -14,11 +14,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SearchResponse(BaseModel):
-    collection: str
-    results: list[dict]
-
-
 def elide_content(content: str, max_length: int = 100) -> str:
     if content and len(content) > max_length:
         return content[:max_length] + "..."

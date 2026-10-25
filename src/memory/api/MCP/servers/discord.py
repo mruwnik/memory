@@ -72,27 +72,6 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
     return bots[0]
 
 
-def resolve_bot_id(bot_id: str | None, session: DBSession | None = None) -> int:
-    """Resolve and authorise bot_id, using the caller's default bot if None.
-
-    Always verifies that the authenticated user owns (or has access to) the
-    specified bot.  Uses ``resolve_bot`` internally so the ownership check
-    cannot be bypassed by passing an explicit ID.
-
-    Args:
-        bot_id: Explicit bot snowflake (as string), or None to use default bot.
-                Snowflakes must cross MCP boundaries as strings to avoid JS
-                Number precision loss.
-        session: Optional session to use. If not provided, creates a new session.
-                 Pass an existing session to avoid nested make_session() calls
-                 which can cause DetachedInstanceError.
-    """
-    if session is not None:
-        return resolve_bot(session, bot_id)
-    with make_session() as new_session:
-        return resolve_bot(new_session, bot_id)
-
-
 def _to_snowflake(value: int | str) -> int:
     """Convert a snowflake ID (int or string) to int."""
     if isinstance(value, int):
@@ -101,32 +80,6 @@ def _to_snowflake(value: int | str) -> int:
         return int(value)
     except ValueError:
         raise ValueError(f"Invalid snowflake ID: '{value}' is not a valid integer")
-
-
-def resolve_guild_id(
-    session: DBSession,
-    guild: str | None,
-) -> int:
-    """
-    Resolve a guild ID from either numeric ID or server name.
-
-    Args:
-        session: Database session
-        guild: Discord guild ID (snowflake) or server name
-
-    Returns:
-        The resolved guild ID as int
-
-    Raises:
-        ValueError: If guild is None or name not found
-    """
-    if guild is None:
-        raise ValueError("Must specify guild")
-
-    resolved = discord_client.resolve_guild(guild, session)
-    if resolved is None:
-        raise ValueError(f"Server '{guild}' not found")
-    return resolved
 
 
 def resolve_bot(session: DBSession, bot_id: str | None) -> int:

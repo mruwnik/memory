@@ -817,7 +817,7 @@ def test_verify_github_items_comment_skipped():
 
     assert results[1].exists is True
     # No API call made for comments
-    mock_client.item_exists.assert_not_called()
+    mock_client.items_exist.assert_not_called()
 
 
 # =============================================================================

@@ -227,14 +227,6 @@ def get_current_user() -> dict:
     }
 
 
-def get_user_scopes() -> list[str]:
-    """Get the current user's MCP tool scopes."""
-    user_info = get_current_user()
-    if not user_info.get("authenticated"):
-        return []
-    return user_info.get("user", {}).get("scopes", ["read"])
-
-
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request):
     """Dependency health plus version info.

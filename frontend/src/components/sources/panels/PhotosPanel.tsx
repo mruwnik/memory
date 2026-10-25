@@ -26,7 +26,6 @@ export const PhotosPanel = () => {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
   const [photoToDelete, setPhotoToDelete] = useState<Photo | null>(null)
-  const [deleting, setDeleting] = useState(false)
   const { run, notice } = useActionNotice()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -92,13 +91,11 @@ export const PhotosPanel = () => {
 
   const handleDelete = async () => {
     if (!photoToDelete) return
-    setDeleting(true)
     await run(async () => {
       await deletePhoto(photoToDelete.id)
       setPhotos(photos.filter(p => p.id !== photoToDelete.id))
     })
     setPhotoToDelete(null)
-    setDeleting(false)
   }
 
   if (loading) return <LoadingState />

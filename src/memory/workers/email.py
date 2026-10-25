@@ -589,21 +589,6 @@ def delete_email_vectors_from_info(info: dict) -> None:
             logger.warning(f"Error deleting attachment vectors: {e}")
 
 
-def delete_email_vectors(email: MailMessage) -> None:
-    """
-    Delete vectors for an email and its attachments from Qdrant.
-
-    Args:
-        email: The MailMessage whose vectors should be deleted
-
-    Note: This requires the email to still be attached to a session.
-    For post-commit deletion, use extract_vector_deletion_info() before commit
-    and delete_email_vectors_from_info() after.
-    """
-    info = extract_vector_deletion_info(email)
-    delete_email_vectors_from_info(info)
-
-
 def delete_removed_emails(
     conn: imaplib.IMAP4,
     db_session: Session | scoped_session,
