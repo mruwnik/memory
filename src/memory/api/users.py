@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Literal, TYPE_CHECKING, cast
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +20,7 @@ from memory.common.db.models import (
     BotUser,
     HumanUser,
     OAuthRefreshToken,
+    Person,
     ScheduledTask,
     User,
     UserSession,
@@ -38,12 +39,9 @@ from memory.common.scopes import (
 from memory.api.auth import get_current_user, get_token, require_scope
 from memory.api.field_errors import field_error
 from memory.common.access_control import has_admin_scope
-from memory.common.people import find_or_create_person
+from memory.common.people import find_person_by_email, make_identifier
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from memory.common.db.models import Person
 
 # Valid API key types for validation (derived from APIKeyType constants)
 VALID_KEY_TYPES = frozenset(APIKeyType.ALL_TYPES)
@@ -151,40 +149,33 @@ def authorize_user_self_or_admin(
 
 
 def link_person_to_user(db: Session, user: User) -> Person | None:
-    """Auto-link a Person to this User based on matching email or name.
+    """Link this User to the unlinked Person with their email, else to a new Person,
+    so every user has an identity for team/project membership.
 
-    Uses find_or_create_person which checks email, name/alias, and identifier.
-    Only links Person records not already linked to another user.
+    Only email matches: a Person's names and aliases are free text chosen by
+    whoever created it.
 
-    When no existing Person matches, a new Person record is created so that
-    every user has a corresponding identity for team/project membership.
-    This is intentional -- see add_user.py for the CLI path which uses
-    create_if_missing=False (find-only, no auto-creation).
-
-    Returns the linked Person if found/created, else None.
+    Returns the linked Person, or None when the email's Person belongs to
+    another user.
     """
-    if not user.email and not user.name:
+    person = find_person_by_email(db, user.email)
+    if person is None:
+        name = user.name or user.email.split("@")[0]
+        identifier = make_identifier(name)
+        if db.query(Person).filter(Person.identifier == identifier).first():
+            identifier = f"{identifier}_{user.id}"
+        person = Person(
+            identifier=identifier,
+            display_name=name,
+            aliases=[name],
+            contact_info={"email": user.email},
+        )
+        db.add(person)
+    if person.user_id is not None:
         return None
-
-    # Use email as the name fallback so make_identifier produces something
-    # meaningful (e.g. "alice_example_com") rather than an empty string.
-    name = user.name or (user.email.split("@")[0] if user.email else "")
-    if not name:
-        return None
-
-    person, _ = find_or_create_person(
-        db,
-        name=name,
-        email=user.email,
-        create_if_missing=True,
-    )
-
-    if person and person.user_id is None:
-        person.user_id = user.id
-        db.commit()
-        return person
-
-    return None
+    person.user_id = user.id
+    db.commit()
+    return person
 
 
 def check_single_user(db: Session, enabled: frozenset[str]) -> None:

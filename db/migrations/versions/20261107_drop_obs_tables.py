@@ -1,7 +1,7 @@
 """Drop the observation tables nothing reads or writes.
 
 Revision ID: 20261107_drop_obs_tables
-Revises: 20261106_unique_person_user
+Revises: 20261107_drop_discord_user_link
 Create Date: 2026-11-07
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "20261107_drop_obs_tables"
-down_revision: Union[str, None] = "20261106_unique_person_user"
+down_revision: Union[str, None] = "20261107_drop_discord_user_link"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

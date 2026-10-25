@@ -1886,3 +1886,20 @@ async def test_upsert_create_attaches_discord_users_for_admins_only(
 
     db_session.expire_all()
     assert (db_session.get(DiscordUser, 123456789).person_id == result["person_id"]) == attached
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named_as, attached", [("ceo", True), ("The CEO", False)])
+async def test_upsert_attaches_discord_users_by_username_not_display_name(
+    db_session, admin_session, named_as, attached
+):
+    db_session.add(DiscordUser(id=123456789, username="ceo", display_name="The CEO"))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await upsert.fn(
+            identifier="claim", display_name="Claim", contact_info={"discord": named_as}
+        )
+
+    db_session.expire_all()
+    assert (db_session.get(DiscordUser, 123456789).person_id == result["person_id"]) == attached

@@ -5,7 +5,7 @@ This module provides models for:
 - DiscordBot: Discord bots we control (with many-to-many user authorization)
 - DiscordServer: Discord servers (guilds)
 - DiscordChannel: Discord channels (text, voice, DM, thread)
-- DiscordUser: Discord user accounts (may link to Memory users)
+- DiscordUser: Discord user accounts (may link to a Person)
 """
 
 from __future__ import annotations
@@ -223,8 +223,8 @@ class DiscordChannel(Base):
 class DiscordUser(Base):
     """Discord user account metadata.
 
-    May optionally be linked to a Memory system user and/or a Person contact.
-    A Memory user can have multiple Discord accounts.
+    May be linked to a Person, and through it to that Person's user.
+    A Person can have multiple Discord accounts.
     """
 
     __tablename__ = "discord_users"
@@ -232,11 +232,6 @@ class DiscordUser(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord user snowflake ID
     username: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Optional link to Memory system user
-    system_user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
 
     # Optional link to a Person contact
     person_id: Mapped[int | None] = mapped_column(
@@ -250,14 +245,10 @@ class DiscordUser(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationship to Memory user
-    system_user: Mapped[User | None] = relationship("User", back_populates="discord_accounts")
-
     # Relationship to Person contact
     person: Mapped[Person | None] = relationship("Person", back_populates="discord_accounts")
 
     __table_args__ = (
-        Index("discord_users_system_user_idx", "system_user_id"),
         Index("discord_users_person_idx", "person_id"),
     )
 

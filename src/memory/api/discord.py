@@ -129,9 +129,6 @@ class AddUserRequest(BaseModel):
     user_id: int
 
 
-# --- Discord User Models ---
-
-
 # --- Helper Functions ---
 
 
@@ -554,6 +551,3 @@ def update_channel(
         enqueue_access_control_propagation("discord_channel", channel)
 
     return channel_to_response(channel)
-
-
-# --- Discord User Endpoints ---

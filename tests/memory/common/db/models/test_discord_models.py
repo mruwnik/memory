@@ -155,7 +155,6 @@ def test_create_discord_user(db_session):
     assert user.id == 555666777
     assert user.username == "testuser"
     assert user.display_name == "Test User"
-    assert user.system_user_id is None
 
 
 def test_discord_user_name_property(db_session):
@@ -175,27 +174,6 @@ def test_discord_user_name_property(db_session):
 
     assert user_with_display.name == "Test User"
     assert user_without_display.name == "another_user"
-
-
-def test_discord_user_with_system_user(db_session):
-    """Test Discord user linked to a system user."""
-    system_user = HumanUser.create_with_password(
-        email="user@example.com", name="System User", password="password123"
-    )
-    db_session.add(system_user)
-    db_session.commit()
-
-    discord_user = DiscordUser(
-        id=555666777,
-        username="testuser",
-        system_user_id=system_user.id,
-    )
-    db_session.add(discord_user)
-    db_session.commit()
-
-    assert discord_user.system_user_id == system_user.id
-    assert discord_user.system_user is not None
-    assert discord_user.system_user.email == "user@example.com"
 
 
 def test_discord_server_channel_relationship(db_session):

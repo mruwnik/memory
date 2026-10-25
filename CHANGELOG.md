@@ -199,6 +199,19 @@ section has nothing in it:
   If an update already failed on this migration, run the rollback commands
   `tools/update.sh` printed, clear the duplicates as above, then run
   `tools/update.sh` again.
+- **Optional, before updating: note Discord accounts linked straight to a
+  user.** `20261107_drop_discord_user_link` drops that link; a Discord
+  account now reaches a user only through its Person. Non-admin bot owners
+  could set the old link on any account their bot had seen, so it is not
+  copied over automatically. To list the accounts that would lose their only
+  link, on the running old version:
+
+  ```
+  docker compose exec postgres psql -U kb kb -c "SELECT d.id, d.username, d.system_user_id, p.identifier AS users_person FROM discord_users d LEFT JOIN people p ON p.user_id = d.system_user_id WHERE d.system_user_id IS NOT NULL AND d.person_id IS NULL"
+  ```
+
+  After updating, an admin can link the ones you trust to the user's Person
+  with `people_upsert`'s `contact_info.discord`.
 
 ### Other changes for operators
 
@@ -281,7 +294,7 @@ section has nothing in it:
   `check:*` Redis keys expire on their own within 14 days. No migration.
 - The Discord collector no longer serves its channel, category and permission
   endpoints (the collector API keeps only health, DMs, channel messages,
-  typing, reactions and metadata refresh). The `discord-admin` and
+  reactions and metadata refresh). The `discord-admin` and
   `discord-admin:write` scopes are removed; tokens and users still carrying
   them keep working, the values are ignored and no longer shown in the users API.
 - Teams no longer link to Discord roles or GitHub teams. `teams_upsert` drops
@@ -741,6 +754,8 @@ section has nothing in it:
   to at most one Person). Fast. **It refuses to run if a user is already linked
   to several people** and lists them; see Manual steps for the check to run
   before updating and how to recover.
+- `20261107_drop_discord_user_link`: drops `discord_users.system_user_id`.
+  Fast. See Manual steps for the accounts it unlinks.
 - `20261107_drop_obs_tables`: drops the `reaction_pattern`, `observation_pattern`,
   `belief_cluster` and `conversation_metrics` tables, which nothing wrote to. Fast.
   Any rows in them are lost; downgrading restores the tables empty.
