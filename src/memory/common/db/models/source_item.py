@@ -37,7 +37,7 @@ from sqlalchemy import orm
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from sqlalchemy.types import Numeric
 
-from memory.common import settings, tokens
+from memory.common import settings
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -179,7 +179,7 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
 
     images = [Image.open(settings.FILE_STORAGE_DIR / image) for image in image_paths]
 
-    is_long = tokens.approx_token_count(content) > chunker.DEFAULT_CHUNK_TOKENS * 2
+    is_long = summarizer.needs_summary(content)
     result = summarizer.summarize_or_defer(content, {} if is_long else None)
     summary, tags = result or ("", [])
     full_text: extract.DataChunk = extract.DataChunk(

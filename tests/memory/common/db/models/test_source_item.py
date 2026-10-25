@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from typing import cast
 import pytest
 from PIL import Image
-from memory.common import settings, chunker, extract, tokens
+from memory.common import settings, chunker, extract, summarizer
 from memory.common.content_processing import process_content_item
 from memory.common.db.models.source_item import (
     Chunk,
@@ -618,28 +618,34 @@ def test_chunk_mixed_with_images(tmp_path):
     assert len([d for d in result[0].data if isinstance(d, Image.Image)]) == 2
 
 
-def test_chunk_mixed_long_content(tmp_path):
-    """Test chunk_mixed function with long content that gets chunked"""
-    # Create long content
-    long_content = "Lorem ipsum dolor sit amet, " * 50  # About 150 words
+@pytest.mark.parametrize("words", [10, 600, 819])
+def test_chunk_mixed_content_within_two_chunks_is_only_tagged(words):
+    content = "word " * words
+    prompts = []
 
-    # Mock the chunker functions to force chunking behavior
-    with (
-        patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
-        patch.object(chunker, "DEFAULT_CHUNK_TOKENS", 10),
-        patch.object(tokens, "approx_token_count", return_value=100),
-    ):  # Force it to be > 2 * 10
-        result = chunk_mixed(long_content, [])
+    def fn(prompt):
+        prompts.append(prompt)
+        return {"summary": None, "tags": ["t"]}
 
-    # Should have multiple chunks: full_text + chunked pieces + summary
-    assert len(result) > 1
+    with summarizer.summarising(fn):
+        result = chunk_mixed(content, [])
 
-    # First chunk should be full text
-    assert long_content.strip() in result[0].data
+    assert [(c.data, c.metadata) for c in result] == [([content.strip()], {"tags": ["t"]})]
+    assert "Text to summarize" not in prompts[0]
 
-    # Last chunk should be summary
-    # (we can't easily test the exact summary without mocking summarizer)
-    assert result[-1].data  # Should have some data
+
+@pytest.mark.parametrize("words", [821, 3000])
+def test_chunk_mixed_long_content_is_chunked_and_summarised(words):
+    content = "word " * words
+    with summarizer.summarising(lambda prompt: {"summary": "s", "tags": ["t"]}):
+        result = chunk_mixed(content, [])
+
+    assert [c.data for c in result] == [
+        [content.strip()],
+        *[[c] for c in chunker.chunk_text(content)],
+        ["s"],
+    ]
+    assert {frozenset(c.metadata["tags"]) for c in result} == {frozenset({"t"})}
 
 
 @pytest.mark.parametrize(

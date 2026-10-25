@@ -500,7 +500,7 @@ def test_blog_post_chunk_contents(content, expected, default_chunk_size, stub_su
         images=[],
     )
 
-    with patch.object(chunker, "DEFAULT_CHUNK_TOKENS", 10):
+    with patch.object(settings, "DEFAULT_CHUNK_TOKENS", 10):
         assert blog_post._chunk_contents() == expected
 
 
@@ -549,7 +549,7 @@ def test_blog_post_chunk_contents_with_image_long_content(
         images=[str(img1_path), str(img2_path)],
     )
 
-    with patch.object(chunker, "DEFAULT_CHUNK_TOKENS", 10):
+    with patch.object(settings, "DEFAULT_CHUNK_TOKENS", 10):
         result = blog_post._chunk_contents()
 
     result = [
@@ -862,7 +862,7 @@ def test_note_data_chunks_long_content(stub_summaries):
     """Test Note.data_chunks() with long content that gets split into multiple chunks."""
     note = Note(
         sha256=b"test_obs_long",
-        content=SAMPLE_MARKDOWN,
+        content=SAMPLE_MARKDOWN * 2,
         subject=None,
         note_type="quicky",
         size=123,

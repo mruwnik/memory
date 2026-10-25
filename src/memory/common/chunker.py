@@ -31,7 +31,7 @@ def yield_word_chunks(
     current = ""
     for word in words:
         new_chunk = f"{current} {word}".strip()
-        if current and tokens.approx_token_count(new_chunk) > max_tokens:
+        if current and not tokens.fits(new_chunk, max_tokens):
             yield current
             current = word
         else:
@@ -66,7 +66,7 @@ def yield_spans(
         if not paragraph.strip():
             continue
 
-        if tokens.approx_token_count(paragraph) <= max_tokens:
+        if tokens.fits(paragraph, max_tokens):
             yield paragraph, True
             continue
 
@@ -75,7 +75,7 @@ def yield_spans(
             if not sentence.strip():
                 continue
 
-            if tokens.approx_token_count(sentence) <= max_tokens:
+            if tokens.fits(sentence, max_tokens):
                 yield sentence, is_first
                 is_first = False
                 continue
@@ -103,7 +103,7 @@ def chunk_text(
     if not text:
         return
 
-    if tokens.approx_token_count(text) <= max_tokens:
+    if tokens.fits(text, max_tokens):
         yield text
         return
 
@@ -114,7 +114,7 @@ def chunk_text(
         # Use \n\n between paragraphs, space within a paragraph
         sep = "\n\n" if is_para_start else " "
         new_chunk = f"{current}{sep}{span}".strip() if current else span
-        if tokens.approx_token_count(new_chunk) <= max_tokens:
+        if tokens.fits(new_chunk, max_tokens):
             current = new_chunk
             continue
 

@@ -33,7 +33,8 @@ def test_summaries_come_from_the_summariser_in_scope():
     assert "Text to summarize" in prompts[0]
 
 
-def test_short_content_is_only_tagged():
+@pytest.mark.parametrize("content", [SHORT, "word " * 600], ids=["short", "within-two-chunks"])
+def test_content_not_needing_a_summary_is_only_tagged(content):
     prompts = []
 
     def fn(prompt):
@@ -41,8 +42,18 @@ def test_short_content_is_only_tagged():
         return {"summary": None, "tags": ["t"]}
 
     with summarizer.summarising(fn):
-        assert summarizer.summarize(SHORT) == ("", ["t"])
-    assert prompts[0].count(SHORT) == 1
+        assert summarizer.summarize(content) == ("", ["t"])
+    assert prompts[0].count(content) == 1
+    assert "Text to summarize" not in prompts[0]
+
+
+@pytest.mark.parametrize(
+    "chunks, expected",
+    [(0, False), (1, False), (2, False), (2.01, True), (10, True)],
+)
+def test_needs_summary_beyond_two_chunks(chunks, expected):
+    length = int(chunks * settings.DEFAULT_CHUNK_TOKENS * tokens.CHARS_PER_TOKEN)
+    assert summarizer.needs_summary("a" * length) is expected
 
 
 def test_a_failed_summariser_leaves_no_summary():

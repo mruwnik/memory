@@ -1,5 +1,5 @@
 import pytest
-from memory.common.tokens import CHARS_PER_TOKEN, approx_token_count
+from memory.common.tokens import CHARS_PER_TOKEN, approx_token_count, fits
 
 
 @pytest.mark.parametrize(
@@ -14,3 +14,16 @@ from memory.common.tokens import CHARS_PER_TOKEN, approx_token_count
 )
 def test_approx_token_count(string, expected_count):
     assert approx_token_count(string) == expected_count
+
+
+@pytest.mark.parametrize(
+    "length, max_tokens, expected",
+    [
+        (0, 0, True),
+        (CHARS_PER_TOKEN * 10, 10, True),
+        (CHARS_PER_TOKEN * 11 - 1, 10, True),
+        (CHARS_PER_TOKEN * 11, 10, False),
+    ],
+)
+def test_fits(length, max_tokens, expected):
+    assert fits("a" * length, max_tokens) is expected

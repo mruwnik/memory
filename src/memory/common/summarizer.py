@@ -88,18 +88,22 @@ def deferring(enabled: bool) -> Iterator[list[DeferredSummary]]:
         _deferred.reset(token)
 
 
-def build_prompt(content: str, target_tokens: int) -> str:
-    # Already short enough content only needs tags
-    if tokens.approx_token_count(content) <= target_tokens:
-        prompt = TAGS_PROMPT.format(content=content)
-    else:
+def needs_summary(content: str) -> bool:
+    return not tokens.fits(content, settings.DEFAULT_CHUNK_TOKENS * 2)
+
+
+def build_prompt(content: str) -> str:
+    if needs_summary(content):
+        target_tokens = settings.DEFAULT_CHUNK_TOKENS
         prompt = SUMMARY_PROMPT.format(
             target_tokens=target_tokens,
             target_chars=target_tokens * tokens.CHARS_PER_TOKEN,
             content=content,
         )
+    else:
+        prompt = TAGS_PROMPT.format(content=content)
 
-    if tokens.approx_token_count(prompt) > MAX_TOKENS:
+    if not tokens.fits(prompt, MAX_TOKENS):
         logger.warning(
             f"Prompt too long ({tokens.approx_token_count(prompt)} tokens), truncating"
         )
@@ -116,7 +120,7 @@ def summarize_or_defer(
         return summarize(content)
 
     if content.strip():
-        prompt = build_prompt(content, settings.DEFAULT_CHUNK_TOKENS)
+        prompt = build_prompt(content)
         collected.append(DeferredSummary(prompt, chunk_metadata, modality))
     return None
 
@@ -126,17 +130,15 @@ def parse_summary(data: dict[str, Any]) -> tuple[str, list[str]]:
     The summary is "" for content short enough to need none."""
     summary = data["summary"] or ""
     target_tokens = settings.DEFAULT_CHUNK_TOKENS
-    if tokens.approx_token_count(summary) > target_tokens * 1.5:
+    if not tokens.fits(summary, int(target_tokens * 1.5)):
         summary = truncate(summary, target_tokens)
     return summary, data["tags"]
 
 
-def summarize(
-    content: str, target_tokens: int | None = None
-) -> tuple[str, list[str]] | None:
+def summarize(content: str) -> tuple[str, list[str]] | None:
     """(summary, tags) for `content`, or None when no summariser is in scope or it failed."""
     fn = _summarise.get()
     if fn is None or not content.strip():
         return None
-    data = fn(build_prompt(content, target_tokens or settings.DEFAULT_CHUNK_TOKENS))
+    data = fn(build_prompt(content))
     return parse_summary(data) if data is not None else None

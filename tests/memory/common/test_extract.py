@@ -79,8 +79,24 @@ def test_extract_text_with_path(tmp_path):
     ]
 
 
-def test_content_already_within_a_chunk_gets_tags_but_no_summary_chunk():
-    content = "word " * 300
+@pytest.mark.parametrize("length", [1500, 3000, 4096])
+def test_content_within_two_chunks_is_not_summarised(length):
+    content = "a" * length
+    with summarizer.summarising(lambda prompt: pytest.fail("summarised")):
+        assert extract_text(content) == extract_text(content, skip_summary=True)
+
+
+@pytest.mark.parametrize("length", [4100, 20000])
+def test_longer_content_gets_a_summary_chunk(length):
+    content = "word " * (length // 5)
+    with summarizer.summarising(lambda prompt: {"summary": "s", "tags": ["t"]}):
+        chunks = extract_text(content)
+    assert (chunks[-1].data, chunks[-1].metadata) == (["s"], {"tags": {"t"}})
+    assert chunks[:-1] == extract_text(content, skip_summary=True)
+
+
+def test_null_summary_puts_tags_on_the_content_chunks():
+    content = "word " * 1000
     with summarizer.summarising(lambda prompt: {"summary": None, "tags": ["t"]}):
         chunks = extract_text(content)
     assert [(c.data, c.metadata) for c in chunks] == [

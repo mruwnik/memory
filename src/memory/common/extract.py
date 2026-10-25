@@ -342,7 +342,7 @@ def extract_text(
         DataChunk(data=[c], modality=modality, metadata=metadata)
         for c in chunker.chunk_text(content, chunk_size or chunker.DEFAULT_CHUNK_TOKENS)
     ]
-    if skip_summary or not content or len(content) <= chunker.DEFAULT_CHUNK_TOKENS * 2:
+    if skip_summary or not summarizer.needs_summary(content):
         return chunks
 
     summary_meta = merge_metadata(metadata, summary_metadata)
