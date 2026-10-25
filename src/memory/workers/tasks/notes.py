@@ -19,7 +19,6 @@ from memory.common.db.models import Note
 from memory.common.celery_app import (
     app,
     SYNC_NOTE,
-    SYNC_NOTES,
     REINDEX_NOTE,
     WRITE_NOTE_FILE,
     SETUP_GIT_NOTES,
@@ -552,7 +551,7 @@ def upsert_note(
     sha256 = create_content_hash(text)
 
     # Set before the row is saved: two rows without a filename would match each other.
-    # Defense in depth: sync_notes and track_git_changes pass paths from the
+    # Defense in depth: track_git_changes passes paths from the
     # vault and its remote, which we don't trust.
     try:
         filename = Note.db_filename(filename, subject)
@@ -662,34 +661,6 @@ def upsert_note(
         logger.error(f"No note_id in result, cannot save to file: status={result.get('status')}")
 
     return result
-
-
-@app.task(name=SYNC_NOTES)
-@tracked_task
-def sync_notes(folder: str):
-    path = pathlib.Path(folder)
-    logger.info(f"Syncing notes from {folder}")
-
-    new_notes = 0
-    all_files = list(path.rglob("*.md"))
-
-    with make_session() as session:
-        for filename in all_files:
-            # Note.filename is FILE_STORAGE_DIR-relative (e.g. "notes/foo.md").
-            db_filename = paths.to_db_filename(filename)
-
-            if not check_content_exists(session, Note, filename=db_filename):
-                new_notes += 1
-                sync_note.delay(  # type: ignore[attr-defined]
-                    subject=filename.stem,
-                    content=filename.read_text(),
-                    filename=db_filename,
-                )
-
-    return {
-        "notes_num": len(all_files),
-        "new_notes": new_notes,
-    }
 
 
 def setup_step(repo_root: pathlib.Path, step: str, *args: str):

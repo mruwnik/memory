@@ -645,19 +645,28 @@ section has nothing in it:
   the text. Only summaries made after this update are marked as summaries
   (`chunk.is_summary`): older items show and rank as before until they are
   reingested.
-- `DISCORD_COLLECT_DMS`, `DISCORD_COLLECT_BOTS`, `DISCORD_CONTEXT_WINDOW`,
+- `DISCORD_COLLECTOR_ENABLED`, `DISCORD_COLLECT_DMS`, `DISCORD_COLLECT_BOTS`, `DISCORD_CONTEXT_WINDOW`,
   `DISCORD_ACTIVITY_CHANNEL`, `DISCORD_DISCOVERY_CHANNEL`, `DISCORD_CHAT_CHANNEL`,
   `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` and `SLACK_REDIRECT_URI` are
   removed. Nothing read them; delete them from `.env` if set. Each Slack app
   keeps its own credentials, entered in the Slack app wizard.
-- `PROFILES_FOLDER` is removed, and notes under `profiles/` are now synced and
-  searchable like any other note.
+- `PROFILES_FOLDER` is removed, and notes under `profiles/` are now indexed and
+  searchable like any other note (git sync already carried them). Notes vaults
+  from before Feb 2026 may hold a stale `profiles/` folder of People exports;
+  delete it if you don't want it indexed.
+- "Regenerate API key" now revokes the user's other API keys once the new one
+  is made, as its confirmation always said. Revoke a single key with
+  `DELETE /users/{id}/api-keys/{key_id}`.
+- Slack apps are owner-only: the list of extra authorized users per app is gone
+  (see `20261105_drop_slack_app_users`). Only an app's creator can see it, run
+  its wizard or connect workspaces through it. Workspaces other users already
+  connected keep syncing, but those users can't reconnect or see the app.
 - These REST endpoints are removed; nothing in the app called them:
   `GET /api/metrics/raw`, `GET /source-items/{id}`, `POST /source-items/{id}/reingest`,
   `POST /sessions/ingest` (the hook uses `/sessions/ingest/batch`),
   `GET /sessions/`, `GET /sessions/projects`, `GET /sessions/{id}`,
   `GET /claude/{session_id}/stats`, `GET /secrets/by-name/{name}`,
-  `DELETE /users/{id}/api-keys/{key_id}` (and `/permanent`), `/discord/users`
+  `DELETE /users/{id}/api-keys/{key_id}/permanent`, `/discord/users`
   (`GET` list, `GET`/`PATCH` one), `POST`/`DELETE /slack/apps/{id}/authorized-users`,
   and the single-item `GET`s of `/email-accounts/{id}`, `/article-feeds/{id}`,
   `/github/projects/{id}` and `/github/accounts/{id}/repos`.
@@ -734,6 +743,9 @@ section has nothing in it:
 - `20261105_drop_obs_tables`: drops the `reaction_pattern`, `observation_pattern`,
   `belief_cluster` and `conversation_metrics` tables, which nothing wrote to. Fast.
   Any rows in them are lost; downgrading restores the tables empty.
+- `20261105_drop_slack_app_users`: drops `slack_app_users`, the extra users
+  authorized per Slack app. Fast. The grants are lost; downgrading restores the
+  table empty.
 
 ### Post-deploy commands
 

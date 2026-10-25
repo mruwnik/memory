@@ -57,7 +57,6 @@ from memory.common.db.models.slack import (
     SlackWorkspace,
     SlackChannel,
     SlackUserCredentials,
-    slack_app_users,
 )
 from memory.common.db.models.mcp import ExternalMCPServer, ServerStatus
 from memory.common.db.models.instance_settings import InstanceSetting
@@ -281,7 +280,6 @@ __all__ = [
     "SlackChannel",
     "SlackUserCredentials",
     "SlackMessage",
-    "slack_app_users",
     "ExternalMCPServer",
     "KeyStatus",
     "LLMKeyChoice",

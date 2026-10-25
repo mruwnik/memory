@@ -657,8 +657,8 @@ def test_callback_inactive_slack_app_returns_404(client, db_session, user):
 def test_callback_unauthorized_user_returns_403(
     client, db_session, user, other_user
 ):
-    """A user who is neither the owner nor in authorized_users gets 403 —
-    they must not be able to OAuth into another tenant's SlackApp."""
+    """A user who doesn't own the app gets 403: they must not be able to
+    OAuth into another tenant's SlackApp."""
     app = SlackApp(
         client_id="test.client.id",
         name="Other-tenant App",
@@ -1027,7 +1027,6 @@ def test_create_slack_app_returns_draft(client, db_session, user):
     assert body["setup_state"] == "draft"
     assert body["is_active"] is True
     assert body["is_owner"] is True
-    assert body["is_authorized"] is True  # owner is implicitly authorized
     assert body["created_by_user_id"] == user.id
     # Secrets must NOT be exposed.
     assert body["client_secret_configured"] is False
@@ -1036,8 +1035,6 @@ def test_create_slack_app_returns_draft(client, db_session, user):
     assert "signing_secret" not in body
     assert "client_secret_encrypted" not in body
     assert "signing_secret_encrypted" not in body
-    assert body["authorized_users"] == []
-    assert body["authorized_user_ids"] == []
 
 
 def test_slack_app_response_contract():
@@ -1058,14 +1055,11 @@ def test_slack_app_response_contract():
         "setup_state",
         "is_active",
         "is_owner",
-        "is_authorized",
         "created_by_user_id",
         "created_at",
         "updated_at",
         "client_secret_configured",
         "signing_secret_configured",
-        "authorized_users",
-        "authorized_user_ids",
     }
     assert set(SlackAppResponse.model_fields.keys()) == expected
 
@@ -1116,31 +1110,18 @@ def test_create_slack_app_secret_blob_never_leaks_via_get(
     assert "client_secret" not in body or body.get("client_secret") is None
 
 
-def test_list_slack_apps_includes_owned_and_authorized(
+def test_list_slack_apps_returns_only_owned_apps(
     client, db_session, user, other_user
 ):
-    """GET /slack/apps returns apps the user owns OR is authorized for —
-    deduplicated and not leaking apps owned by unrelated users."""
-    # Owned by current user.
-    owned = SlackApp(
-        client_id="owned.app", name="Owned", created_by_user_id=user.id
-    )
-    # Owned by other_user but current user is in authorized_users.
-    auth_for_me = SlackApp(
-        client_id="auth.app", name="Auth", created_by_user_id=other_user.id
-    )
-    auth_for_me.authorized_users.append(user)
-    # Owned by other_user, current user NOT authorized — should NOT appear.
-    invisible = SlackApp(
-        client_id="hidden.app", name="Hidden", created_by_user_id=other_user.id
-    )
-    db_session.add_all([owned, auth_for_me, invisible])
+    owned = SlackApp(client_id="owned.app", name="Owned", created_by_user_id=user.id)
+    theirs = SlackApp(client_id="hidden.app", name="Hidden", created_by_user_id=other_user.id)
+    db_session.add_all([owned, theirs])
     db_session.commit()
 
     response = client.get("/slack/apps")
+
     assert response.status_code == 200
-    ids_seen = sorted(a["client_id"] for a in response.json())
-    assert ids_seen == ["auth.app", "owned.app"]
+    assert [a["client_id"] for a in response.json()] == ["owned.app"]
 
 
 def test_get_slack_app_returns_404_for_unauthorized(
@@ -1156,24 +1137,6 @@ def test_get_slack_app_returns_404_for_unauthorized(
 
     response = client.get(f"/slack/apps/{invisible.id}")
     assert response.status_code == 404
-
-
-def test_get_slack_app_authorized_user_can_read(
-    client, db_session, user, other_user
-):
-    """Authorized non-owner can read the app (but not its secrets)."""
-    app = SlackApp(
-        client_id="auth.read.app",
-        name="Auth Read",
-        created_by_user_id=other_user.id,
-    )
-    app.authorized_users.append(user)
-    db_session.add(app)
-    db_session.commit()
-
-    response = client.get(f"/slack/apps/{app.id}")
-    assert response.status_code == 200
-    assert response.json()["is_owner"] is False
 
 
 def test_patch_slack_app_owner_can_update_name_and_active(
@@ -1193,22 +1156,6 @@ def test_patch_slack_app_owner_can_update_name_and_active(
     body = response.json()
     assert body["name"] == "Renamed"
     assert body["is_active"] is False
-
-
-def test_patch_slack_app_authorized_user_gets_403(
-    client, db_session, user, other_user
-):
-    """Authorized but not owner → 403 (existence is signaled, action is not
-    allowed). Distinct from the unauthorized 404 case."""
-    app = SlackApp(
-        client_id="patch.denied", name="Denied", created_by_user_id=other_user.id
-    )
-    app.authorized_users.append(user)
-    db_session.add(app)
-    db_session.commit()
-
-    response = client.patch(f"/slack/apps/{app.id}", json={"name": "Hijacked"})
-    assert response.status_code == 403
 
 
 def test_patch_slack_app_cannot_mutate_setup_state(client, db_session, user):
@@ -1266,22 +1213,6 @@ def test_delete_slack_app_owner_only_and_cascades(
     assert db_session.get(SlackUserCredentials, cred_id) is None
 
 
-def test_delete_slack_app_authorized_user_gets_403(
-    client, db_session, user, other_user
-):
-    app = SlackApp(
-        client_id="del.denied", name="X", created_by_user_id=other_user.id
-    )
-    app.authorized_users.append(user)
-    db_session.add(app)
-    db_session.commit()
-
-    response = client.delete(f"/slack/apps/{app.id}")
-    assert response.status_code == 403
-    # Row still exists.
-    assert db_session.get(SlackApp, app.id) is not None
-
-
 def test_source_tabs_count_connected_workspaces_and_failures(
     client, db_session, slack_credentials, slack_workspace
 ):
@@ -1289,3 +1220,20 @@ def test_source_tabs_count_connected_workspaces_and_failures(
     db_session.commit()
 
     assert client.get("/source-tabs").json()["slack"] == {"count": 1, "failing": 1}
+
+
+@pytest.mark.parametrize(
+    "method, body", [("patch", {"name": "Hijacked"}), ("delete", None)]
+)
+def test_non_owner_cannot_change_a_slack_app(
+    client, db_session, user, other_user, method, body
+):
+    app = SlackApp(client_id="not.mine", name="X", created_by_user_id=other_user.id)
+    db_session.add(app)
+    db_session.commit()
+
+    response = client.request(method.upper(), f"/slack/apps/{app.id}", json=body)
+
+    assert response.status_code == 404
+    db_session.refresh(app)
+    assert app.name == "X"

@@ -1,9 +1,15 @@
 """Tests for sessions API endpoints."""
 
 import json
+import logging
 from unittest.mock import patch
+from uuid import UUID, uuid4
 
 import pytest
+
+from memory.api.sessions import iter_transcript_events
+from memory.common import settings
+from memory.common.db.models.sessions import CodingProject, Session
 
 
 # ====== extract_tool_calls_from_message — hermetic ======
@@ -163,55 +169,124 @@ def test_parse_iso_datetime_returns_none_on_invalid(raw):
     assert parse_iso_datetime(raw) is None
 
 
-# ====== iter_transcript_events streaming ======
+# ====== iter_transcript_events ======
 
 
-def test_iter_transcript_events_does_not_load_whole_file(tmp_path):
-    """Regression: a paginated transcript read of an offset deep into a
-    large file must not load the whole file into memory before slicing.
-    The previous implementation called ``Path.read_text().splitlines()``
-    — O(file_size) RAM. The streaming generator is O(start) and can
-    short-circuit at ``end``.
-
-    We can't directly assert "didn't load the whole file" via memory
-    instrumentation in a test, but we CAN assert: when we ask for
-    events 5–10 with end=11 (exclusive), the generator stops reading
-    before line 11 and never touches lines beyond that. We test by
-    making the late portion of the file invalid JSON; with the bug,
-    the generator would have read those lines and emitted a warning.
-    With the fix, it short-circuits before reaching them.
-    """
-    from memory.api.sessions import iter_transcript_events
-
-    transcript = tmp_path / "huge.jsonl"
-    lines = [json.dumps({"i": i, "type": "x"}) for i in range(15)]
-    # Append corrupt lines beyond the requested window. Streaming
-    # version must never see them.
-    lines.extend(["this is not json", "neither is this"])
-    transcript.write_text("\n".join(lines) + "\n")
-
-    import logging
-
-    with patch.object(
-        logging.getLogger("memory.api.sessions"), "warning"
-    ) as mock_warn:
-        events = list(iter_transcript_events(transcript, start=5, end=11))
-
-    assert [e["i"] for e in events] == [5, 6, 7, 8, 9, 10]
-    # Streaming must short-circuit before reaching the corrupt tail —
-    # so no JSONDecodeError-warning should fire.
-    mock_warn.assert_not_called()
-
-
-def test_safe_loads_still_returns_a_list(tmp_path):
-    """The list-returning wrapper kept for read_transcript still works."""
-    from memory.api.sessions import safe_loads
-
-    transcript = tmp_path / "small.jsonl"
+def test_iter_transcript_events_skips_blank_and_warns_on_malformed_lines(tmp_path, caplog):
+    transcript = tmp_path / "t.jsonl"
     transcript.write_text(
-        "\n".join(json.dumps({"i": i}) for i in range(3)) + "\n"
+        "\n".join([json.dumps({"i": 0}), "", "not json", json.dumps({"i": 1}), "nope"]) + "\n"
     )
 
-    items = safe_loads(transcript)
-    assert isinstance(items, list)
-    assert [e["i"] for e in items] == [0, 1, 2]
+    with caplog.at_level(logging.WARNING, logger="memory.api.sessions"):
+        events = list(iter_transcript_events(transcript))
+
+    assert [e["i"] for e in events] == [0, 1]
+    assert [r.getMessage() for r in caplog.records] == [
+        f"transcript {transcript}: 2 unparseable JSON line(s) skipped"
+    ]
+
+
+# ====== POST /sessions/ingest/batch ======
+
+
+@pytest.fixture
+def sessions_storage_dir(tmp_path):
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    with patch.object(settings, "SESSIONS_STORAGE_DIR", sessions_dir):
+        yield sessions_dir
+
+
+def event(**extra):
+    return {"uuid": str(uuid4()), "timestamp": "2024-01-15T10:00:00Z", "type": "user", **extra}
+
+
+def ingest(client, session_id, events, **fields):
+    return client.post(
+        "/sessions/ingest/batch",
+        json={"session_id": session_id, "events": events, **fields},
+    )
+
+
+def test_ingest_batch_creates_session(client, db_session, user, sessions_storage_dir):
+    session_id = str(uuid4())
+
+    response = ingest(client, session_id, [event(message={"content": "Hello"})])
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "accepted",
+        "session_id": session_id,
+        "accepted": 1,
+        "duplicates": 0,
+    }
+    row = db_session.get(Session, UUID(session_id))
+    assert row is not None
+    assert row.user_id == user.id
+
+
+def test_ingest_batch_appends_to_transcript_and_skips_duplicates(
+    client, db_session, user, sessions_storage_dir
+):
+    session_id = str(uuid4())
+    first, second = event(), event(type="assistant")
+
+    ingest(client, session_id, [first])
+    response = ingest(client, session_id, [first, second])
+
+    assert response.json()["accepted"] == 1
+    assert response.json()["duplicates"] == 1
+    row = db_session.get(Session, UUID(session_id))
+    lines = (sessions_storage_dir / row.transcript_path).read_text().strip().split("\n")
+    assert [json.loads(line)["uuid"] for line in lines] == [first["uuid"], second["uuid"]]
+
+
+def test_ingest_batch_creates_project_from_cwd(client, db_session, user, sessions_storage_dir):
+    cwd = "/home/user/new-project"
+
+    response = ingest(client, str(uuid4()), [event()], cwd=cwd, source="test-host")
+
+    assert response.status_code == 200
+    project = (
+        db_session.query(CodingProject)
+        .filter(CodingProject.user_id == user.id, CodingProject.directory == cwd)  # type: ignore[attr-defined]
+        .one()
+    )
+    assert project.source == "test-host"
+
+
+def test_ingest_batch_rejects_invalid_session_uuid(client, user, sessions_storage_dir):
+    response = ingest(client, "not-a-valid-uuid", [event()])
+
+    assert response.status_code == 400
+    assert "Invalid session UUID" in response.json()["detail"]
+
+
+def test_ingest_batch_links_a_subagent_to_its_parent(
+    client, db_session, user, sessions_storage_dir
+):
+    parent_id, child_id = str(uuid4()), str(uuid4())
+    ingest(client, parent_id, [event()])
+
+    response = ingest(client, child_id, [event(type="assistant")], parent_session_id=parent_id)
+
+    assert response.status_code == 200
+    assert db_session.get(Session, UUID(child_id)).parent_session_id == UUID(parent_id)
+
+
+def test_ingest_batch_records_git_branch_and_version(
+    client, db_session, user, sessions_storage_dir
+):
+    session_id = str(uuid4())
+
+    response = ingest(
+        client,
+        session_id,
+        [event(git_branch="feature/new-feature", version="1.2.3")],
+        cwd="/home/user/project",
+    )
+
+    assert response.status_code == 200
+    row = db_session.get(Session, UUID(session_id))
+    assert (row.git_branch, row.tool_version) == ("feature/new-feature", "1.2.3")

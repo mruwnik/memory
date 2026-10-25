@@ -23,7 +23,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -171,15 +171,6 @@ class SlackAppUpdate(BaseModel):
     is_active: bool | None = None
 
 
-class SlackAppAuthorizedUser(BaseModel):
-    """Slim user shape returned in the authorized_users list. Email kept
-    so the owner can identify who they have authorized."""
-
-    id: int
-    email: str
-    name: str | None
-
-
 class SlackAppResponse(BaseModel):
     """Public-facing SlackApp serialization.
 
@@ -195,14 +186,11 @@ class SlackAppResponse(BaseModel):
     setup_state: str
     is_active: bool
     is_owner: bool
-    is_authorized: bool
     created_by_user_id: int | None
     created_at: str | None
     updated_at: str | None
     client_secret_configured: bool
     signing_secret_configured: bool
-    authorized_users: list[SlackAppAuthorizedUser]
-    authorized_user_ids: list[int]
 
 
 # --- Helper Functions ---
@@ -366,13 +354,13 @@ def _resolve_callback_app(db: Session, slack_app_id: int, user: User) -> SlackAp
     """Look up the SlackApp and verify the caller is allowed to OAuth into it.
 
     Raises 404 (missing/inactive — same status to avoid existence probing),
-    403 (caller not owner or in authorized_users), or 503 (the app exists
+    403 (caller not the owner), or 503 (the app exists
     but its wizard hasn't finished — no client credentials to exchange with).
     """
     slack_app = db.get(SlackApp, slack_app_id)
     if slack_app is None or not slack_app.is_active:
         raise HTTPException(status_code=404, detail="Slack app not found")
-    if not slack_app.is_authorized(user):
+    if not slack_app.is_owner(user):
         raise HTTPException(status_code=403, detail="Not authorized for this Slack app")
     if not slack_app.client_id or not slack_app.client_secret:
         raise HTTPException(
@@ -829,13 +817,8 @@ def update_channel(
 # PATCH is intentionally not allowed — verification is a sequence of real
 # Slack API checks, not a flag a privileged user can flip.
 #
-# Owner vs authorized rule (§4 S4):
-# * Owner = `created_by_user_id` of the row.
-# * Authorized = users in the `slack_app_users` join table.
-# * Owner-only:    PATCH, DELETE, authorized-users add/remove,
-#                  client-secret + signing-secret rotation (wizard).
-# * Authorized:    OAuth flow (insert SlackUserCredentials), GET /apps,
-#                  GET /apps/{id}.
+# Only the owner (`created_by_user_id`) can see or use an app; anyone else
+# gets a 404, so app existence doesn't leak (§4 S11).
 # * Secrets are NEVER returned in any response — only the `*_configured`
 #   booleans. The encrypted bytes never leave the server.
 
@@ -854,61 +837,24 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
         setup_state=app.setup_state,
         is_active=app.is_active,
         is_owner=app.is_owner(current_user),
-        is_authorized=app.is_authorized(current_user),
         created_by_user_id=app.created_by_user_id,
         created_at=app.created_at.isoformat() if app.created_at else None,
         updated_at=app.updated_at.isoformat() if app.updated_at else None,
         client_secret_configured=app.client_secret_encrypted is not None,
         signing_secret_configured=app.signing_secret_encrypted is not None,
-        authorized_users=[
-            SlackAppAuthorizedUser(id=u.id, email=u.email, name=u.name)
-            for u in app.authorized_users
-        ],
-        authorized_user_ids=[u.id for u in app.authorized_users],
     )
 
 
-def get_slack_app_for_authorized_user(db: Session, app_id: int, user: User) -> SlackApp:
-    """Fetch a SlackApp the user is authorized to see.
-
-    Authorized = owner OR in the authorized_users list. Anyone else gets
-    a 404 (don't leak app existence — same response whether the row
-    doesn't exist OR the user isn't authorized; §4 S11).
-    """
-    app = db.get(SlackApp, app_id)
-    if app is None or not app.is_authorized(user):
-        raise HTTPException(status_code=404, detail="Slack app not found")
-    return app
-
-
 def get_slack_app_for_owner(db: Session, app_id: int, user: User) -> SlackApp:
-    """Fetch a SlackApp owned by the user.
-
-    Authorized-but-not-owner gets 403 (we DO want to signal that the row
-    exists and they're authorized, just not for this action). Non-authorized
-    users continue to get 404 to avoid existence leakage.
-    """
+    """Fetch a SlackApp owned by the user; 404 otherwise, whether or not it exists."""
     app = db.get(SlackApp, app_id)
-    if app is None or not app.is_authorized(user):
+    if app is None or not app.is_owner(user):
         raise HTTPException(status_code=404, detail="Slack app not found")
-    if not app.is_owner(user):
-        raise HTTPException(
-            status_code=403, detail="Only the app's owner can perform this action"
-        )
     return app
 
 
 def list_slack_apps_for_user(db: Session, user: User) -> list[SlackApp]:
-    """All SlackApps the user owns or has been authorized for.
-
-    Implemented as a single union query rather than two queries + dedup
-    so callers always get a stable, deduplicated result set.
-    """
-    owned = SlackApp.created_by_user_id == user.id
-    authorized = SlackApp.id.in_(
-        db.query(SlackApp.id).join(SlackApp.authorized_users).filter(User.id == user.id)
-    )
-    return db.query(SlackApp).filter(or_(owned, authorized)).all()
+    return db.query(SlackApp).filter(SlackApp.created_by_user_id == user.id).all()
 
 
 @router.post("/apps", response_model=SlackAppResponse, status_code=201)
@@ -956,7 +902,7 @@ def list_slack_apps(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> list[SlackAppResponse]:
-    """List apps the current user owns or has been authorized for."""
+    """List the apps the current user owns."""
     apps = list_slack_apps_for_user(db, user)
     return [slack_app_to_response(a, user) for a in apps]
 
@@ -967,8 +913,8 @@ def get_slack_app(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
-    """Get a single SlackApp by id (owner or authorized user only)."""
-    app = get_slack_app_for_authorized_user(db, app_id, user)
+    """Get a single SlackApp by id (owner only)."""
+    app = get_slack_app_for_owner(db, app_id, user)
     return slack_app_to_response(app, user)
 
 
@@ -1543,12 +1489,8 @@ def wizard_status(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> SlackWizardStatus:
-    """Return wizard progress for the frontend's polling loop.
-
-    Available to any authorized user (not just the owner) — they need
-    progress visibility when the owner ran the wizard.
-    """
-    app = get_slack_app_for_authorized_user(db, app_id, user)
+    """Return wizard progress for the frontend's polling loop."""
+    app = get_slack_app_for_owner(db, app_id, user)
     has_credentials = (
         db.query(SlackUserCredentials)
         .filter(SlackUserCredentials.slack_app_id == app.id)
@@ -1604,7 +1546,7 @@ def poll_test_message(
     The events handler clears the Redis token and advances setup_state on
     match. The frontend polls this endpoint to know when to advance UI.
     """
-    app = get_slack_app_for_authorized_user(db, app_id, user)
+    app = get_slack_app_for_owner(db, app_id, user)
     if app.setup_state == "live":
         return SlackTestMessageStatus(status="matched")
     if _get_test_message_token(app.id) is not None:

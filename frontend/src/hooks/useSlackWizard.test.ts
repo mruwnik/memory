@@ -28,12 +28,9 @@ const APP: Record<string, unknown> = {
   setup_state: 'draft',
   is_active: true,
   is_owner: true,
-  is_authorized: true,
   client_secret_configured: false,
   signing_secret_configured: false,
   created_by_user_id: 1,
-  authorized_users: [],
-  authorized_user_ids: [],
   created_at: null,
   updated_at: null,
 }

@@ -377,7 +377,8 @@ describe('UserManagement API key flow', () => {
       const method = init?.method || 'GET'
       if (url.includes('/auth/me')) return mockResponse({ json: authMe })
       if (url.endsWith('/users/scopes')) return mockResponse({ json: scopes })
-      if (url.includes('/api-keys') && method === 'POST') return mockResponse({ json: { key: 'mcp_secret123' } })
+      if (url.includes('/api-keys') && method === 'POST') return mockResponse({ json: { id: 7, revoked: false, key: 'mcp_secret123' } })
+      if (url.includes('/api-keys')) return mockResponse({ json: [] })
       if (url.endsWith('/users')) return mockResponse({ json: [user({ id: 2, name: 'Botty', user_type: 'bot', api_key_count: 1 })] })
       return mockResponse({ json: {} })
     })

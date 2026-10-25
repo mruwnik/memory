@@ -76,41 +76,6 @@ def mock_empty_note():
     }
 
 
-@pytest.fixture
-def markdown_files_in_storage():
-    """Create real markdown files in the notes storage directory."""
-    notes_dir = pathlib.Path(settings.NOTES_STORAGE_DIR)
-    notes_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create test markdown files
-    files = []
-
-    file1 = notes_dir / "note1.md"
-    file1.write_text("Content of note 1")
-    files.append(file1)
-
-    file2 = notes_dir / "note2.md"
-    file2.write_text("Content of note 2")
-    files.append(file2)
-
-    file3 = notes_dir / "note3.md"
-    file3.write_text("Content of note 3")
-    files.append(file3)
-
-    # Create a subdirectory with a file
-    subdir = notes_dir / "subdir"
-    subdir.mkdir(exist_ok=True)
-    file4 = subdir / "note4.md"
-    file4.write_text("Content of note 4 in subdirectory")
-    files.append(file4)
-
-    # Create a non-markdown file that should be ignored
-    txt_file = notes_dir / "not_markdown.txt"
-    txt_file.write_text("This should be ignored")
-
-    return files
-
-
 def test_sync_note_success(mock_note_data, mock_make_session, qdrant):
     """Test successful note synchronization."""
     result = notes.sync_note(**mock_note_data)
@@ -331,108 +296,6 @@ def test_sync_note_content_hash_consistency(mock_make_session):
     assert len(notes_in_db) == 1
 
 
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_success(mock_sync_note, markdown_files_in_storage, mock_make_session):
-    """Test successful notes folder synchronization."""
-    mock_sync_note.delay.return_value = Mock(id="task-123")
-
-    result = notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-    assert result["notes_num"] == 4  # 4 markdown files created by fixture
-    assert result["new_notes"] == 4  # All are new
-
-    # Verify sync_note.delay was called for each file
-    assert mock_sync_note.delay.call_count == 4
-
-    # Check some of the calls were made with correct parameters
-    call_args_list = mock_sync_note.delay.call_args_list
-    subjects = [call[1]["subject"] for call in call_args_list]
-    contents = [call[1]["content"] for call in call_args_list]
-
-    assert subjects == ["note1", "note2", "note3", "note4"]
-    assert contents == [
-        "Content of note 1",
-        "Content of note 2",
-        "Content of note 3",
-        "Content of note 4 in subdirectory",
-    ]
-
-
-def test_sync_notes_empty_folder(mock_make_session):
-    """Test sync when folder contains no markdown files."""
-    # Create an empty directory
-    empty_dir = pathlib.Path(settings.NOTES_STORAGE_DIR) / "empty"
-    empty_dir.mkdir(parents=True, exist_ok=True)
-
-    result = notes.sync_notes(str(empty_dir))
-
-    assert result["notes_num"] == 0
-    assert result["new_notes"] == 0
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_with_existing_notes(
-    mock_sync_note, markdown_files_in_storage, mock_make_session
-):
-    """Test sync when some notes already exist."""
-    # Create one existing note in the database
-    existing_file = markdown_files_in_storage[0]  # note1.md
-    # Note.filename is FILE_STORAGE_DIR-relative (e.g. "notes/note1.md").
-    existing_filename = existing_file.resolve().relative_to(
-        settings.FILE_STORAGE_DIR.resolve()
-    ).as_posix()
-    existing_note = Note(
-        subject="note1",
-        content="Content of note 1",
-        sha256=b"existing_hash" + bytes(24),
-        modality="text",
-        tags=["existing"],
-        mime_type="text/markdown",
-        size=100,
-        filename=existing_filename,
-        embed_status="RAW",
-    )
-    mock_make_session.add(existing_note)
-    mock_make_session.commit()
-
-    mock_sync_note.delay.return_value = Mock(id="task-456")
-
-    result = notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-    assert result["notes_num"] == 4
-    assert result["new_notes"] == 3  # Only 3 new notes (one already exists)
-
-    # Verify sync_note.delay was called only for new notes
-    assert mock_sync_note.delay.call_count == 3
-
-
-def test_sync_notes_nonexistent_folder(mock_make_session):
-    """Test sync_notes with a folder that doesn't exist."""
-    nonexistent_path = "/nonexistent/folder/path"
-
-    result = notes.sync_notes(nonexistent_path)
-
-    # sync_notes should return successfully with 0 notes when folder doesn't exist
-    # This is the actual behavior - it gracefully handles the case
-    assert result["notes_num"] == 0
-    assert result["new_notes"] == 0
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_only_processes_md_files(
-    mock_sync_note, markdown_files_in_storage, mock_make_session
-):
-    """Test that sync_notes only processes markdown files."""
-    mock_sync_note.delay.return_value = Mock(id="task-123")
-
-    # The fixture creates a .txt file that should be ignored
-    result = notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-    # Should only process the 4 .md files, not the .txt file
-    assert result["notes_num"] == 4
-    assert result["new_notes"] == 4
-
-
 def test_note_as_text_method():
     """Test the Note.as_text static method used in sync_note."""
     content = "This is the note content"
@@ -475,49 +338,10 @@ def test_sync_note_unicode_content(mock_make_session, qdrant):
     assert result["status"] == "processed"
 
 
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_recursive_discovery(mock_sync_note, mock_make_session):
-    """Test that sync_notes discovers files recursively in subdirectories."""
-    mock_sync_note.delay.return_value = Mock(id="task-123")
-
-    # Create nested directory structure
-    notes_dir = pathlib.Path(settings.NOTES_STORAGE_DIR)
-    deep_dir = notes_dir / "level1" / "level2" / "level3"
-    deep_dir.mkdir(parents=True, exist_ok=True)
-
-    deep_file = deep_dir / "deep_note.md"
-    deep_file.write_text("This is a note in a deep subdirectory")
-
-    result = notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-    # Should find the deep file
-    assert result["new_notes"] >= 1
-
-    # Verify the file was processed
-    processed_files = list(pathlib.Path(settings.NOTES_STORAGE_DIR).rglob("*.md"))
-    assert any("deep_note.md" in str(f) for f in processed_files)
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-def test_sync_notes_propagates_file_read_errors(mock_sync_note, mock_make_session):
-    """sync_notes does not swallow per-file errors — they propagate so the
-    Celery wrapper can record the failure and retry."""
-    notes_dir = pathlib.Path(settings.NOTES_STORAGE_DIR)
-    notes_dir.mkdir(parents=True, exist_ok=True)
-
-    test_file = notes_dir / "test.md"
-    test_file.write_text("Test content")
-
-    mock_sync_note.delay.side_effect = Exception("File read error")
-
-    with pytest.raises(Exception, match="File read error"):
-        notes.sync_notes(settings.NOTES_STORAGE_DIR)
-
-
 # ----- Path-traversal hardening for sync_note + Note.save_to_file -----
 #
 # `notes.upsert` (the MCP tool) already validates filenames, but
-# `sync_notes` and `track_git_changes` re-fan-out into `sync_note` with
+# `track_git_changes` re-fans-out into `sync_note` with
 # paths pulled from the filesystem / git remote. A `.md` file named
 # `../../etc/cron.d/poc.md` would otherwise be written outside
 # NOTES_STORAGE_DIR — arbitrary host file write at worker process privs.

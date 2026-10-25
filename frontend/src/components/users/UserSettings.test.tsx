@@ -247,7 +247,9 @@ describe('UserSettings API key', () => {
   it('generates a key and reveals it, then copies to clipboard', async () => {
     install(me({ api_key_count: 0 }), authMe(), {
       '/api-keys': (init) =>
-        init?.method === 'POST' ? mockResponse({ json: { key: 'mcp_newkey' } }) : undefined,
+        init?.method === 'POST'
+          ? mockResponse({ json: { id: 7, revoked: false, key: 'mcp_newkey' } })
+          : mockResponse({ json: [] }),
     })
     const { user } = renderWithRouter(<UserSettings />)
     await screen.findByText('No API key configured')

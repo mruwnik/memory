@@ -574,3 +574,74 @@ def test_changing_timezone_moves_pending_cron_runs(client: TestClient, admin_use
     assert (recurring.next_scheduled_time.hour, recurring.next_scheduled_time.minute) == (3, 30)
     assert paused.next_scheduled_time is None
     assert one_off.next_scheduled_time == datetime(2999, 1, 1, 9)
+
+
+def test_revoke_my_api_key(client: TestClient, admin_user, db_session):
+    key_id = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "To Revoke"}).json()["id"]
+
+    response = client.delete(f"/users/{admin_user.id}/api-keys/{key_id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "revoked"
+    keys = client.get(f"/users/{admin_user.id}/api-keys").json()
+    assert [k["revoked"] for k in keys if k["id"] == key_id] == [True]
+
+
+def test_revoke_nonexistent_key(client: TestClient, admin_user):
+    response = client.delete(f"/users/{admin_user.id}/api-keys/99999")
+
+    assert response.status_code == 404
+
+
+def test_admin_revoke_user_api_key(client: TestClient, admin_user, db_session):
+    other_user = HumanUser.create_with_password(
+        email="other3@example.com", name="Other User 3", password="otherpass123"
+    )
+    db_session.add(other_user)
+    db_session.commit()
+    key = APIKey.create(user_id=other_user.id, name="To Revoke")
+    db_session.add(key)
+    db_session.commit()
+
+    response = client.delete(f"/users/{other_user.id}/api-keys/{key.id}")
+
+    assert response.status_code == 200
+    db_session.refresh(key)
+    assert key.revoked is True
+
+
+@pytest.fixture
+def someone_elses_key(db_session):
+    owner = HumanUser.create_with_password(
+        email="owner@example.com", name="Owner", password="ownerpass123"
+    )
+    db_session.add(owner)
+    db_session.commit()
+    key = APIKey.create(user_id=owner.id, name="Owner key")
+    db_session.add(key)
+    db_session.commit()
+    return key
+
+
+def test_regular_user_cannot_revoke_another_users_key(
+    regular_client: TestClient, someone_elses_key, db_session
+):
+    key = someone_elses_key
+
+    response = regular_client.delete(f"/users/{key.user_id}/api-keys/{key.id}")
+
+    assert response.status_code == 403
+    db_session.refresh(key)
+    assert key.revoked is False
+
+
+def test_revoke_rejects_a_key_of_another_user_under_own_id(
+    regular_client: TestClient, user, someone_elses_key, db_session
+):
+    key = someone_elses_key
+
+    response = regular_client.delete(f"/users/{user.id}/api-keys/{key.id}")
+
+    assert response.status_code == 404
+    db_session.refresh(key)
+    assert key.revoked is False

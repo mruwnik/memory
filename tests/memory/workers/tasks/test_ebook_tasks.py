@@ -132,10 +132,9 @@ def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path, qdrant)
     assert book.author == "Test Author"
     assert set(book.tags) == {"source", "test"}
 
-    sections = {
-        s.section_title: s
-        for s in db_session.query(BookSection).filter(BookSection.book_id == book.id)
-    }
+    rows = db_session.query(BookSection).filter(BookSection.book_id == book.id).all()
+    assert len(rows) == 4
+    sections = {s.section_title: s for s in rows}
     assert set(sections) == {"Chapter 1", "Section 1.1", "Section 1.2", "Chapter 2"}
     chapter1 = sections["Chapter 1"]
     assert chapter1.parent_section_id is None

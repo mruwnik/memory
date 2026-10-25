@@ -167,22 +167,44 @@ describe('useUsers.deleteUser', () => {
 })
 
 describe('useUsers.regenerateApiKey', () => {
-  it('POSTs to /users/:id/api-keys and returns the key', async () => {
-    const fetchMock = routeByPath({ '/users/4/api-keys': () => mockResponse({ json: { key: 'mcp_abc' } }) })
+  const keysRoute = (keys: { id: number; revoked: boolean }[]) =>
+    mockFetch(async (input, init) => {
+      const path = String(input).replace(/^.*?(\/[^?]*).*$/, '$1')
+      if (path === '/users/4/api-keys' && init?.method === 'POST') return mockResponse({ json: { id: 9, revoked: false, key: 'mcp_abc' } })
+      if (path === '/users/4/api-keys') return mockResponse({ json: keys })
+      if (init?.method === 'DELETE') return mockResponse({ json: { status: 'revoked' } })
+      return mockResponse({ status: 404, json: { detail: 'not found' }, ok: false })
+    })
+
+  it('creates a key, then revokes every other live key', async () => {
+    const fetchMock = keysRoute([
+      { id: 2, revoked: false },
+      { id: 3, revoked: true },
+      { id: 9, revoked: false },
+    ])
     const { regenerateApiKey } = setup()
 
     const out = await regenerateApiKey(4)
 
-    expect(out).toEqual({ key: 'mcp_abc' })
-    const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/users/4/api-keys'))
-    expect(call?.[1]?.method).toBe('POST')
-    expect(JSON.parse(call?.[1]?.body as string)).toEqual({ name: 'Default API Key' })
+    expect(out.key).toBe('mcp_abc')
+    const calls = fetchMock.mock.calls
+      .map((c) => [c[1]?.method ?? 'GET', String(c[0]).replace(/^.*?(\/[^?]*).*$/, '$1')])
+      .filter(([, path]) => path.startsWith('/users/'))
+    expect(calls).toEqual([
+      ['POST', '/users/4/api-keys'],
+      ['GET', '/users/4/api-keys'],
+      ['DELETE', '/users/4/api-keys/2'],
+    ])
+    const post = fetchMock.mock.calls.find((c) => c[1]?.method === 'POST')
+    expect(JSON.parse(post?.[1]?.body as string)).toEqual({ name: 'Default API Key' })
   })
 
-  it('throws the server detail on failure', async () => {
-    routeByPath({ '/users/4/api-keys': () => mockResponse({ status: 500, json: { detail: 'boom' }, ok: false }) })
+  it('throws the server detail when creating fails, revoking nothing', async () => {
+    const fetchMock = routeByPath({ '/users/4/api-keys': () => mockResponse({ status: 500, json: { detail: 'boom' }, ok: false }) })
     const { regenerateApiKey } = setup()
+
     await expect(regenerateApiKey(4)).rejects.toThrow('boom')
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/users/4/api-keys'))).toHaveLength(1)
   })
 })
 

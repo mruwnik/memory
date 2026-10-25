@@ -30,6 +30,7 @@ from memory.common.markets import (
     search_markets,
     calculate_liquidity_score,
     format_kalshi_market,
+    search_kalshi_events,
     _search_cache,
     _history_cache,
     _depth_cache,
@@ -895,6 +896,48 @@ def test_format_kalshi_market_spread_and_liquidity():
     assert result["spread"] == 0.04
     assert result["liquidity_score"] > 0
     assert result["url"] == "https://kalshi.com/markets/T"
+
+
+def test_format_kalshi_market_omits_spread_without_both_sides():
+    market = {"ticker": "T", "title": "T", "volume": 5000, "yes_bid": 48, "yes_ask": 0}
+
+    result = format_kalshi_market(market, min_volume=1000)
+
+    assert result is not None
+    assert "spread" not in result
+
+
+def kalshi_session(responses: dict[str, dict]):
+    """A fake aiohttp session answering GETs by URL suffix."""
+
+    def get(url, params=None):
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value=responses[url.rsplit("/v2/", 1)[1]])
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=response)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return cm
+
+    return MagicMock(get=get)
+
+
+@pytest.mark.asyncio
+async def test_search_kalshi_events_titles_markets_by_their_event():
+    session = kalshi_session(
+        {
+            "events": {"events": [{"title": "Who wins the election?", "event_ticker": "EV"}]},
+            "events/EV": {
+                "markets": [
+                    {"ticker": "EV-A", "title": "Candidate A", "volume": 5000, "last_price": 60},
+                    {"ticker": "EV-B", "title": "Candidate B", "volume": 10, "last_price": 40},
+                ]
+            },
+        }
+    )
+
+    results = await search_kalshi_events(session, "election", min_volume=1000)
+
+    assert [(r["id"], r["question"]) for r in results] == [("EV-A", "Who wins the election?")]
 
 
 # ====== Kalshi search tests ======

@@ -345,7 +345,6 @@ services:
     environment:
       <<: *worker-env
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
-      DISCORD_COLLECTOR_ENABLED: true
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
     volumes:
       - ./memory_files:/app/memory_files:rw

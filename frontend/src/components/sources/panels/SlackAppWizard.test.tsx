@@ -37,12 +37,9 @@ const app = (over: Partial<SlackAppResponse> = {}): SlackAppResponse => ({
   setup_state: 'draft',
   is_active: true,
   is_owner: true,
-  is_authorized: false,
   client_secret_configured: false,
   signing_secret_configured: false,
   created_by_user_id: 42,
-  authorized_users: [],
-  authorized_user_ids: [],
   created_at: null,
   updated_at: null,
   ...over,
@@ -217,14 +214,14 @@ const advanceToSigningSecret = async (user: ReturnType<typeof renderWithUser>['u
 
 describe('SlackAppWizard - signing-secret -> events-url', () => {
   it('advances to the signing-secret step after OAuth completes', async () => {
-    getApp.mockResolvedValue(app({ client_secret_configured: true, is_authorized: true }))
+    getApp.mockResolvedValue(app({ client_secret_configured: true }))
     const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
     await advanceToSigningSecret(user)
     expect(screen.getByText('Step 4 of 7')).toBeInTheDocument()
   })
 
   it('requires a non-empty signing secret', async () => {
-    getApp.mockResolvedValue(app({ client_secret_configured: true, is_authorized: true }))
+    getApp.mockResolvedValue(app({ client_secret_configured: true }))
     const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
     await advanceToSigningSecret(user)
 
@@ -234,7 +231,7 @@ describe('SlackAppWizard - signing-secret -> events-url', () => {
   })
 
   it('stores the signing secret, re-issues a nonce, and advances to events-url', async () => {
-    getApp.mockResolvedValue(app({ client_secret_configured: true, is_authorized: true }))
+    getApp.mockResolvedValue(app({ client_secret_configured: true }))
     const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
     await advanceToSigningSecret(user)
 
@@ -285,7 +282,7 @@ describe('SlackAppWizard - test message', () => {
 
 describe('SlackAppWizard - polling transitions', () => {
   it('advances events-url -> test-message when status becomes signing_verified', async () => {
-    getApp.mockResolvedValue(app({ client_secret_configured: true, is_authorized: true }))
+    getApp.mockResolvedValue(app({ client_secret_configured: true }))
     getWizardStatus.mockResolvedValue({ setup_state: 'signing_verified', has_credentials: true, test_message_pending: false })
 
     const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)

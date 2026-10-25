@@ -87,7 +87,7 @@ def test_slack_app_setup_state_rejects_invalid(db_session):
         db_session.commit()
 
 
-def test_slack_app_owner_is_authorized(db_session):
+def test_slack_app_is_owner(db_session):
     owner = HumanUser.create_with_password(
         email="owner@example.com", name="Owner", password="password123"
     )
@@ -103,29 +103,6 @@ def test_slack_app_owner_is_authorized(db_session):
 
     assert app.is_owner(owner) is True
     assert app.is_owner(other) is False
-    assert app.is_authorized(owner) is True
-    assert app.is_authorized(other) is False
-
-
-def test_slack_app_authorized_users_extends_owner(db_session):
-    owner = HumanUser.create_with_password(
-        email="owner@example.com", name="Owner", password="password123"
-    )
-    member = HumanUser.create_with_password(
-        email="member@example.com", name="Member", password="password123"
-    )
-    db_session.add_all([owner, member])
-    db_session.commit()
-
-    app = make_app(created_by_user_id=owner.id)
-    app.authorized_users.append(member)
-    db_session.add(app)
-    db_session.commit()
-
-    assert app.is_authorized(owner) is True
-    assert app.is_authorized(member) is True
-    assert app.is_owner(member) is False
-    assert app in member.slack_apps
 
 
 def test_slack_app_owner_set_null_on_user_delete(db_session):
@@ -151,16 +128,10 @@ def test_slack_app_owner_set_null_on_user_delete(db_session):
     [None, 999_999],
     ids=["unsaved_user_id_none", "real_but_unrelated_user"],
 )
-def test_slack_app_with_null_owner_is_not_authorized(db_session, user_id_value):
+def test_slack_app_with_null_owner_has_no_owner(db_session, user_id_value):
     """Regression: an app with `created_by_user_id IS NULL` (state proven
     reachable by `test_slack_app_owner_set_null_on_user_delete`) must not
-    incidentally authorize a user just because their id is also None or
-    happens to match no row.
-
-    The current `is_authorized` comparison is correct only because of
-    Python's `None == int` semantics; a flipped operand order would
-    silently match user-with-id-None to app-with-NULL-owner. This test
-    pins the contract.
+    count a user as owner just because their id is also None.
     """
     other = HumanUser.create_with_password(
         email="other@example.com", name="Other", password="password123"
@@ -172,16 +143,11 @@ def test_slack_app_with_null_owner_is_not_authorized(db_session, user_id_value):
     db_session.add(app)
     db_session.commit()
 
-    # Build a user-shaped probe with the parametrized id value (we don't
-    # need a persisted user here — `is_authorized` only inspects user.id
-    # and self.authorized_users membership).
+    # `is_owner` only inspects user.id, so the probe needn't be persisted.
     probe = HumanUser(email="probe@example.com", name="Probe", password_hash="x")
     probe.id = user_id_value  # type: ignore[assignment]
 
-    assert app.is_authorized(probe) is False
     assert app.is_owner(probe) is False
-    # Other real user (definitely not the owner of this NULL-owner app):
-    assert app.is_authorized(other) is False
     assert app.is_owner(other) is False
 
 
@@ -273,22 +239,3 @@ def test_slack_app_cascades_to_credentials(db_session):
     assert db_session.get(SlackUserCredentials, cred_id) is None
 
 
-def test_slack_app_user_relationship_cascade_on_user_delete(db_session):
-    user = HumanUser.create_with_password(
-        email="u@example.com", name="U", password="password123"
-    )
-    db_session.add(user)
-    db_session.commit()
-
-    app = make_app()
-    app.authorized_users.append(user)
-    db_session.add(app)
-    db_session.commit()
-    app_id = app.id
-
-    db_session.delete(user)
-    db_session.commit()
-
-    refreshed = db_session.get(SlackApp, app_id)
-    assert refreshed is not None
-    assert refreshed.authorized_users == []

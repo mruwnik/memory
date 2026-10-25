@@ -105,64 +105,28 @@ class ToolUsageResponse(BaseModel):
     tools: list[ToolUsageStats]
 
 
-def iter_transcript_events(
-    file: Path,
-    start: int = 0,
-    end: int | None = None,
-) -> Iterator[dict[str, Any]]:
-    """Stream parsed JSONL events from a transcript file.
+def iter_transcript_events(file: Path) -> Iterator[dict[str, Any]]:
+    """Stream parsed JSONL events from a transcript file, skipping blank lines.
 
-    Streaming line-by-line avoids loading the whole transcript into
-    memory: a long-lived Claude Code session can have hundreds of
-    megabytes of JSONL, and ``Path.read_text().splitlines()`` (the
-    previous implementation) was O(file_size) RAM and triggered
-    OOM-class memory pressure on paginated reads. With this
-    generator the read is O(start) — we still have to scan past
-    ``start`` lines to skip them, but each skipped line is
-    immediately discarded.
-
-    ``start`` and ``end`` are 0-indexed line numbers; ``end`` is
-    exclusive (``read_transcript`` passes ``offset + limit``, so
-    using ``>`` here was off-by-one and returned one extra row per
-    request). Blank lines do not advance the index (preserving prior
-    ``safe_loads`` behaviour).
-
-    Malformed JSON lines are counted and surfaced via a single
-    warning at the end (avoids silently dropping rows).
+    Streaming keeps memory flat: a long Claude Code session can have hundreds
+    of megabytes of JSONL. Malformed lines are skipped and counted in one
+    warning at the end, so corruption doesn't silently shorten the result.
     """
     bad_lines = 0
     with open(file) as fh:
-        for i, line in enumerate(fh):
+        for line in fh:
             if not line.strip():
                 continue
-            if i < start:
-                continue
-            if end is not None and i >= end:
-                break
             try:
                 yield json.loads(line)
             except json.JSONDecodeError:
                 bad_lines += 1
     if bad_lines:
-        # Surface corruption rather than silently dropping rows — a
-        # transcript with N malformed JSONL lines used to come back
-        # short, hiding ingest bugs.
         logger.warning(
             "transcript %s: %d unparseable JSON line(s) skipped",
             file,
             bad_lines,
         )
-
-
-def safe_loads(file: Path, start: int = 0, end: int | None = None) -> list[dict[str, Any]]:
-    """Materialise the streamed events into a list.
-
-    Kept for callers that genuinely need random access to all events
-    (currently just ``read_transcript`` for the API response). New
-    callers should prefer ``iter_transcript_events`` directly so they
-    don't materialise the whole transcript at once.
-    """
-    return list(iter_transcript_events(file, start, end))
 
 
 @dataclass
@@ -372,17 +336,6 @@ def append_events_to_transcript(session: Session, events: list[SessionEvent]) ->
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
-def read_transcript(
-    transcript_path: str, offset: int = 0, limit: int = 100
-) -> list[dict[str, Any]]:
-    """Read events from a transcript file with pagination."""
-    transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
-    if not transcript_file.exists():
-        return []
-
-    return safe_loads(transcript_file, offset, offset + limit)
-
-
 def extract_tool_usage_telemetry(
     event: SessionEvent,
     user_id: int,
@@ -470,7 +423,6 @@ async def ingest_session_events_batch(
     Ingest multiple session events in a single request.
 
     Idempotent - duplicate events (by UUID) are skipped.
-    More efficient than calling /ingest for each event.
     """
     accepted = save_events(
         user.id,

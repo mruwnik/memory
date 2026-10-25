@@ -37,6 +37,11 @@ export interface ApiKeyResponse {
   key: string
 }
 
+interface ApiKeyInfo {
+  id: number
+  revoked: boolean
+}
+
 export interface ScopeInfo {
   value: string
   label: string
@@ -104,13 +109,23 @@ export const useUsers = () => {
     if (!response.ok) throw await apiError(response, 'Failed to delete user')
   }, [apiCall])
 
+  // Creates the new key before revoking the old ones, so a failure never leaves the user keyless.
   const regenerateApiKey = useCallback(async (id: number): Promise<ApiKeyResponse> => {
     const response = await apiCall(`/users/${id}/api-keys`, {
       method: 'POST',
       body: JSON.stringify({ name: 'Default API Key' }),
     })
     if (!response.ok) throw await apiError(response, 'Failed to regenerate API key')
-    return response.json()
+    const created: ApiKeyResponse & ApiKeyInfo = await response.json()
+
+    const listed = await apiCall(`/users/${id}/api-keys`)
+    if (!listed.ok) throw await apiError(listed, 'Failed to revoke the old API keys')
+    const old = ((await listed.json()) as ApiKeyInfo[]).filter(k => !k.revoked && k.id !== created.id)
+    for (const key of old) {
+      const revoked = await apiCall(`/users/${id}/api-keys/${key.id}`, { method: 'DELETE' })
+      if (!revoked.ok) throw await apiError(revoked, 'Failed to revoke the old API keys')
+    }
+    return created
   }, [apiCall])
 
   const changePassword = useCallback(async (data: PasswordChange): Promise<void> => {

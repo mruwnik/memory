@@ -4,6 +4,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
+from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import ArticleFeed
 from memory.common.ssrf import UnsafeURLError
 
@@ -550,69 +551,6 @@ def test_list_feeds_admin_sees_all(client, db_session, user):
     assert len(response.json()) == 3
 
 
-def test_update_feed_404_for_other_users_feed(regular_client, db_session, user):
-    """Cross-tenant patch must 404 — and must NOT mutate the feed."""
-    from memory.common.db.models import HumanUser
-
-    other = HumanUser(
-        name="Other",
-        email="other-feed-patch@example.com",
-        password_hash="bcrypt_hash_placeholder",
-    )
-    db_session.add(other)
-    db_session.commit()
-
-    feed = ArticleFeed(
-        user_id=other.id,
-        url="https://target.example.com/rss.xml",
-        title="Original",
-        active=True,
-    )
-    db_session.add(feed)
-    db_session.commit()
-    original_id = feed.id
-
-    response = regular_client.patch(
-        f"/article-feeds/{original_id}",
-        json={"title": "Hijacked", "active": False},
-    )
-
-    assert response.status_code == 404
-    db_session.expire_all()
-    refreshed = db_session.get(ArticleFeed, original_id)
-    assert refreshed is not None
-    assert refreshed.title == "Original"
-    assert refreshed.active is True
-
-
-def test_delete_feed_404_for_other_users_feed(regular_client, db_session, user):
-    """Cross-tenant delete must 404 — and the feed must survive."""
-    from memory.common.db.models import HumanUser
-
-    other = HumanUser(
-        name="Other",
-        email="other-feed-delete@example.com",
-        password_hash="bcrypt_hash_placeholder",
-    )
-    db_session.add(other)
-    db_session.commit()
-
-    feed = ArticleFeed(
-        user_id=other.id,
-        url="https://victim-delete.example.com/rss.xml",
-    )
-    db_session.add(feed)
-    db_session.commit()
-    feed_id = feed.id
-
-    response = regular_client.delete(f"/article-feeds/{feed_id}")
-    assert response.status_code == 404
-
-    # Row must still exist.
-    db_session.expire_all()
-    assert db_session.get(ArticleFeed, feed_id) is not None
-
-
 def test_create_feed_attributes_to_caller(client, db_session, user):
     """Creating a feed sets user_id to the caller's id."""
     response = client.post(
@@ -654,3 +592,37 @@ def test_trigger_sync_404_for_other_users_feed(
     response = regular_client.post(f"/article-feeds/{feed.id}/sync")
     assert response.status_code == 404
     mock_app.send_task.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "owner_id", [lambda other: other.id, lambda other: None], ids=["other_user", "no_owner"]
+)
+@pytest.mark.parametrize(
+    "method, body", [("PATCH", {"title": "Hijacked", "active": False}), ("DELETE", None)]
+)
+def test_non_admin_cannot_change_a_feed_they_dont_own(
+    regular_client, db_session, user, owner_id, method, body
+):
+    """Another user's feed, and a legacy feed with no owner (admin-only), both 404."""
+    owner = HumanUser(
+        name="Other", email="other-feed@example.com", password_hash="bcrypt_hash_placeholder"
+    )
+    db_session.add(owner)
+    db_session.commit()
+    feed = ArticleFeed(
+        user_id=owner_id(owner),
+        url="https://victim.example.com/rss.xml",
+        title="Original",
+        active=True,
+    )
+    db_session.add(feed)
+    db_session.commit()
+    feed_id = feed.id
+
+    response = regular_client.request(method, f"/article-feeds/{feed_id}", json=body)
+
+    assert response.status_code == 404
+    db_session.expire_all()
+    refreshed = db_session.get(ArticleFeed, feed_id)
+    assert refreshed is not None
+    assert (refreshed.title, refreshed.active) == ("Original", True)

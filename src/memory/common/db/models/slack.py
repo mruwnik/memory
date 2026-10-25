@@ -19,14 +19,12 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
     String,
-    Table,
     Text,
     UniqueConstraint,
     func,
@@ -43,22 +41,12 @@ if TYPE_CHECKING:
     from memory.common.db.models.users import User
 
 
-slack_app_users = Table(
-    "slack_app_users",
-    Base.metadata,
-    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-    Column("slack_app_id", BigInteger, ForeignKey("slack_apps.id", ondelete="CASCADE"), primary_key=True),
-)
-
-
 class SlackApp(Base):
     """A Slack app registered at api.slack.com.
 
-    One row per Slack app. Multiple Memory users can be authorized to use the
-    same app (each connecting their own workspaces via OAuth). The app's
-    client_secret and signing_secret are stored encrypted; only the
-    created_by_user_id has the right to read or rotate them — authorized
-    users can install workspaces but cannot view or rotate secrets.
+    One row per Slack app, used only by its owner (created_by_user_id), who
+    connects workspaces through it via OAuth. The app's client_secret and
+    signing_secret are stored encrypted.
 
     URL routing uses the surrogate id (not client_id), so the URL schema is
     decoupled from Slack's client_id format.
@@ -90,11 +78,6 @@ class SlackApp(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    authorized_users: Mapped[list[User]] = relationship(
-        "User",
-        secondary=slack_app_users,
-        back_populates="slack_apps",
-    )
     user_credentials: Mapped[list[SlackUserCredentials]] = relationship(
         "SlackUserCredentials", back_populates="slack_app", cascade="all, delete-orphan"
     )
@@ -133,31 +116,6 @@ class SlackApp(Base):
             self.signing_secret_encrypted = None
         else:
             self.signing_secret_encrypted = encrypt_value(value)
-
-    def is_authorized(self, user: User) -> bool:
-        """Owner counts as authorized; explicit authorized_users list extends that.
-
-        Short-circuit on `user.id is None` first — without this guard, a User
-        with `id=None` (e.g., transient/unsaved) would slip past the owner
-        check via `None == None`. The current `created_by_user_id == user.id`
-        comparison only behaves correctly because `None == int` is False; a
-        future contributor flipping the order to `user.id == self.created_by_user_id`
-        would silently match a user-with-id-None scenario to an app with
-        `created_by_user_id=None` (which `test_slack_app_owner_set_null_on_user_delete`
-        proves is a real state).
-
-        Note: `user in self.authorized_users` will trigger a lazy SELECT if
-        the relationship isn't already loaded. Webhook hot paths should
-        `selectinload(SlackApp.authorized_users)` to avoid a per-call query.
-        """
-        if user.id is None:
-            return False
-        if self.created_by_user_id == user.id:
-            return True
-        # Match by id so the check still works when `user` and entries in
-        # `authorized_users` come from different sessions (or, in tests,
-        # one is a mock).
-        return any(u.id == user.id for u in self.authorized_users)
 
     def is_owner(self, user: User) -> bool:
         return user.id is not None and self.created_by_user_id == user.id
