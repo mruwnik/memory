@@ -286,3 +286,60 @@ def test_branch_change_requires_confirmation(client, sent):
     response = client.put("/notes-source/git", json=SETUP | {"remote_url": None, "branch": "new-destination"})
     assert response.status_code == 409
     assert sent() == []
+
+
+def test_restricted_admin_key_cannot_read_admin_notes_configuration(client, user, db_session):
+    from memory.common.db.models import APIKey
+    key = APIKey.create(user_id=user.id, name="restricted", scopes=["read"])
+    db_session.add_all([key, Note(sha256=b"private-audit", modality="text", filename="notes/private.md")])
+    db_session.commit()
+    response = client.get("/notes-source", headers={"Authorization": f"Bearer {key.key}"})
+    assert response.status_code == 200
+    assert response.json()["git"] is None
+    assert response.json()["count"] == 0
+
+
+def test_replacement_token_is_never_available_to_the_old_remote(client, db_session, sent):
+    from memory.common.notes_git import token_for_remote
+    old = "https://old.example/notes.git"
+    existing_vault(old)
+    response = client.put("/notes-source/git", json=SETUP | {
+        "token": "audit-replacement", "confirm_destination_change": True,
+    })
+    assert response.status_code == 200
+    # The setup task is still queued: the vault still points at the old host.
+    assert token_for_remote(old) == ""
+    assert token_for_remote(SETUP["remote_url"]) == "audit-replacement"
+
+
+def test_remote_credentials_do_not_use_a_stale_worker_cache(client, db_session, sent):
+    from memory.common.notes_git import token_for_remote
+    assert client.put("/notes-source/git", json=SETUP | {"token": "audit-old-token"}).status_code == 200
+    existing_vault(SETUP["remote_url"])
+    old_cache = {instance_settings.NOTES_GIT_TOKEN.key: "audit-old-token"}
+    assert client.delete("/notes-source/git/token").status_code == 200
+    with patch.object(instance_settings, "cached_stored_values", return_value=old_cache):
+        assert token_for_remote(SETUP["remote_url"]) == ""
+        assert token_for_remote("https://new.example/notes.git") == ""
+
+
+def test_unbound_legacy_token_is_not_sent(client, user, db_session):
+    from memory.common.notes_git import token_for_remote
+    instance_settings.save(db_session, instance_settings.NOTES_GIT_TOKEN, "audit-legacy", user.id)
+    db_session.commit()
+    assert token_for_remote(SETUP["remote_url"]) == ""
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("put", "/notes-source/git", SETUP),
+    ("delete", "/notes-source/git/token", None),
+    ("post", "/notes-source/sync", None),
+])
+def test_restricted_admin_key_cannot_mutate_notes_configuration(client, user, db_session, sent, method, path, body):
+    from memory.common.db.models import APIKey
+    key = APIKey.create(user_id=user.id, name="restricted", scopes=["read"])
+    db_session.add(key)
+    db_session.commit()
+    response = client.request(method, path, json=body, headers={"Authorization": f"Bearer {key.key}"})
+    assert response.status_code == 403
+    assert sent() == []

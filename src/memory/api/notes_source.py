@@ -4,16 +4,17 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, require_scope
+from memory.api.auth import get_current_user, require_scope, request_api_key, system_scopes, TokenLookup
 from memory.api.field_errors import field_error
 from memory.common import instance_settings, settings
 from memory.common.access_control import (
     AccessFilter,
+    UserProxy,
     apply_access_filter_to_query,
     build_access_filter,
     get_user_project_roles,
@@ -147,7 +148,7 @@ def git_setup(db: Session) -> GitSetup:
     )
 
 
-def notes_source(db: Session, user: User) -> NotesSource:
+def notes_source(db: Session, user: User | UserProxy) -> NotesSource:
     status = readable_last_sync()
     return NotesSource(
         count=visible_notes(db, build_access_filter(user, get_user_project_roles(db, user))),
@@ -182,9 +183,10 @@ def checked_origin(body: GitSetupIn, vault: VaultGit) -> str | None:
 
 @router.get("")
 def get_notes_source(
-    user: User = Depends(get_current_user), db: Session = Depends(get_session)
+    request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_session)
 ) -> NotesSource:
-    return notes_source(db, user)
+    scopes = system_scopes(TokenLookup(user=user, api_key_record=request_api_key(request, db)))
+    return notes_source(db, UserProxy.from_user(user, scopes=scopes))
 
 
 @router.put("/git")
@@ -227,6 +229,9 @@ def set_up_git(
                 ("body", "token"), "SECRETS_ENCRYPTION_KEY must be set to store a token", status_code=409
             )
         instance_settings.save(db, TOKEN, token, user.id)
+        db.execute(update(InstanceSetting).where(InstanceSetting.key == TOKEN.key).values(
+            value={"remote_url": origin or vault.remote_url}
+        ))
         db.commit()
         instance_settings.invalidate_cache()
 

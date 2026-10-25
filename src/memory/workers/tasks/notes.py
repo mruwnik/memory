@@ -42,6 +42,7 @@ from memory.common.notes_git import (
     last_sync,
     read_vault_git,
     sync_remote,
+    token_for_remote,
 )
 from memory.common.redis_lock import distributed_lock
 
@@ -135,8 +136,9 @@ def run_git(
         ssh = os.environ.get("GIT_SSH_COMMAND", "ssh")
         env = {**os.environ, "GIT_SSH_COMMAND": f"{ssh} {SSH_TIMEOUT_OPTIONS}"}
         timeout = GIT_NETWORK_TIMEOUT
-        host = https_host(read_vault_git(repo_root).remote_url)
-        if host and (token := instance_settings.value(instance_settings.NOTES_GIT_TOKEN)):
+        remote_url = read_vault_git(repo_root).remote_url
+        host = https_host(remote_url)
+        if host and (token := token_for_remote(remote_url)):
             cmd += credential_args(host)
             env[TOKEN_ENV] = token
     cmd += args

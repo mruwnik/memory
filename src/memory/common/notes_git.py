@@ -165,3 +165,19 @@ def check_branch(branch: str) -> str:
         or any(not part or part.startswith(".") or part.endswith(".lock") for part in branch.split("/"))):
         raise ValueError("Enter a valid git branch name")
     return branch
+
+
+def token_for_remote(remote_url: str | None) -> str:
+    """Read a fresh token bound to this destination; never use a worker's cached secret."""
+    from memory.common import instance_settings
+    from memory.common.db.connection import make_session
+    from memory.common.db.models import InstanceSetting
+
+    setting = instance_settings.NOTES_GIT_TOKEN
+    if token := setting.env_value():
+        return token
+    with make_session() as db:
+        row = db.get(InstanceSetting, setting.key)
+        if row is None or not isinstance(row.value, dict) or row.value.get("remote_url") != remote_url:
+            return ""
+        return instance_settings.decode(setting, row)

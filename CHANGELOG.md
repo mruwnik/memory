@@ -20,6 +20,9 @@ None.
 
 ### Manual steps
 
+- Re-save any Notes Git token previously stored through the UI. Stored tokens
+  now require an explicit repository binding; unbound legacy tokens are not
+  sent. Operator-provided `NOTES_GIT_TOKEN` is unchanged.
 - EC2: re-apply Terraform so the SSM documents run their scripts through
   `systemd-run`. Run through the SSM agent, the snap AWS CLI's output to a
   file comes out empty, which broke bootstrap re-runs and the repair actions.
@@ -41,6 +44,10 @@ None.
 
 ### Other changes for operators
 
+- Notes Git credentials are read fresh and bound to the selected repository,
+  preventing token leakage while queued remote changes and worker caches differ.
+  Restricted API keys no longer inherit their owner's admin access when reading
+  the Notes source configuration or note count.
 - Admins can change the Notes vault's remote and branch from Sources, with
   explicit confirmation before uploading history to a new destination. Remote
   changes clear the saved token unless a replacement is supplied; an
