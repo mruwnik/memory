@@ -85,6 +85,32 @@ def test_build_redirect_allowlist_strips_whitespace_and_blanks():
     ]
 
 
+@pytest.mark.parametrize(
+    "env_value, server_url, expected_extra",
+    [
+        ("", "https://kb.example.com", ["https://kb.example.com"]),
+        ("", "https://kb.example.com/", ["https://kb.example.com"]),
+        ("", "https://kb.example.com:8443/base", ["https://kb.example.com:8443"]),
+        (
+            "https://app.example.com",
+            "https://kb.example.com",
+            ["https://app.example.com", "https://kb.example.com"],
+        ),
+        ("https://kb.example.com", "https://kb.example.com", ["https://kb.example.com"]),
+        ("", "", []),
+        ("", "http://localhost:8000", ["http://localhost:8000"]),
+        ("*", "https://kb.example.com", None),
+    ],
+)
+def test_build_redirect_allowlist_always_allows_server_origin(
+    env_value, server_url, expected_extra
+):
+    expected = (
+        ["*"] if expected_extra is None else [*OAUTH_LOOPBACK_DEFAULTS, *expected_extra]
+    )
+    assert build_redirect_allowlist(env_value, server_url) == expected
+
+
 # --- required settings startup check -----------------------------------------
 
 COMPLETE_SETTINGS = dict(

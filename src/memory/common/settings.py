@@ -4,7 +4,7 @@ import pathlib
 import sys
 from decimal import Decimal
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from dotenv import load_dotenv
 
@@ -50,7 +50,7 @@ def secret_env(key: str, default: str = "") -> str:
 OAUTH_LOOPBACK_DEFAULTS = ["http://localhost", "http://127.0.0.1"]
 
 
-def build_redirect_allowlist(env_value: str) -> list[str]:
+def build_redirect_allowlist(env_value: str, server_url: str = "") -> list[str]:
     """Layer operator-configured redirect origins on top of the loopback defaults.
 
     Configured entries are *added* to the defaults, never replace them — this
@@ -60,12 +60,15 @@ def build_redirect_allowlist(env_value: str) -> list[str]:
     other entries, so loopback can only be forbidden via ``*``, never by an
     innocent web-origin config that would otherwise lock out every native-app
     client. Order is preserved and duplicates collapsed so an operator who also
-    lists localhost doesn't get a repeated entry.
+    lists localhost doesn't get a repeated entry. The server's own origin is
+    always allowed too, since the web UI registers its own client there.
     """
     configured = [p.strip() for p in env_value.split(",") if p.strip()]
     if "*" in configured:
         return ["*"]
-    return list(dict.fromkeys(OAUTH_LOOPBACK_DEFAULTS + configured))
+    parts = urlsplit(server_url)
+    own_origin = [f"{parts.scheme}://{parts.netloc}"] if parts.netloc else []
+    return list(dict.fromkeys(OAUTH_LOOPBACK_DEFAULTS + configured + own_origin))
 
 
 # Database settings
@@ -344,6 +347,8 @@ QUERY_EMBEDDING_TIMEOUT = float(os.getenv("QUERY_EMBEDDING_TIMEOUT", "5.0"))
 MAX_PREVIEW_LENGTH = int(os.getenv("MAX_PREVIEW_LENGTH", DEFAULT_CHUNK_TOKENS * 16))
 MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
+
 # OAuth settings
 # Comma-separated list of redirect-URI origins permitted in dynamic client
 # registration, ADDED to the always-present loopback defaults (see
@@ -351,11 +356,10 @@ MAX_NON_PREVIEW_LENGTH = int(os.getenv("MAX_NON_PREVIEW_LENGTH", 2000))
 # clients. Set to "*" to allow any redirect_uri (not recommended for production).
 # Example: "https://app.example.com"
 OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = build_redirect_allowlist(
-    os.getenv("OAUTH_REDIRECT_URI_ALLOWLIST", "")
+    os.getenv("OAUTH_REDIRECT_URI_ALLOWLIST", ""), SERVER_URL
 )
 
 # API settings
-SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 # Address of a send-enabled email account that mails password-reset links.
 # Unset hides "Forgot password?".
 PASSWORD_RESET_FROM_EMAIL = os.getenv("PASSWORD_RESET_FROM_EMAIL", "")

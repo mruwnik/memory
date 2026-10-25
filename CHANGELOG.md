@@ -24,6 +24,8 @@ None.
 
 ### Other changes for operators
 
+- The server's own `SERVER_URL` origin is now always allowed as an OAuth redirect
+  target, so `OAUTH_REDIRECT_URI_ALLOWLIST` is only needed for other origins.
 - REST account/key recovery, secret management/export, and source credential
   management now require an interactive login session. API keys use their own
   scopes for access checks; general content/job reads require `read` and
