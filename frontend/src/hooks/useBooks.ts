@@ -16,14 +16,6 @@ export interface Book {
   file_path: string | null
 }
 
-export interface BookSection {
-  id: number
-  title: string
-  content: string
-  order: number
-  parent_section_id: number | null
-}
-
 export interface BookFilters {
   title?: string
   author?: string
@@ -50,15 +42,6 @@ export const useBooks = () => {
     return result?.[0] || []
   }, [mcpCall])
 
-  const readBook = useCallback(async (bookId: number, sectionIds?: number[]): Promise<BookSection[]> => {
-    const result = await mcpCall<BookSection[][]>('books_read_book', {
-      book_id: bookId,
-      sections: sectionIds ?? [],
-    })
-    // mcpCall returns array from .map(), unwrap the first element
-    return result?.[0] || []
-  }, [mcpCall])
-
   // Upload remains as API call since file uploads aren't MCP operations
   const uploadBook = useCallback(async (file: File): Promise<{ task_id: string; status: string }> => {
     const formData = new FormData()
@@ -76,7 +59,6 @@ export const useBooks = () => {
 
   return {
     listBooks,
-    readBook,
     uploadBook,
   }
 }

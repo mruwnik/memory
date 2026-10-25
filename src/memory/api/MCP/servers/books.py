@@ -6,10 +6,11 @@ from fastmcp import FastMCP
 from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import joinedload
 
 from memory.api.MCP.access import get_mcp_current_user
+from memory.api.MCP.servers.core import get_current_user_access_filter
 from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.scopes import SCOPE_READ
 from memory.common.db.models import Book, BookSection, BookSectionPayload
@@ -24,6 +25,14 @@ def escape_like(s: str) -> str:
 
 
 books_mcp = FastMCP("memory-books")
+
+
+def accessible_sections(session):
+    """Sections the caller may read. A Book has no access columns of its own, so
+    it is visible exactly when at least one of its sections is."""
+    return apply_access_filter_to_query(
+        session.query(BookSection), get_current_user_access_filter()
+    )
 
 
 @books_mcp.tool()
@@ -51,12 +60,12 @@ async def list_books(
         List of books matching the filters.
     """
     limit = min(limit, 200)
-    options = []
-    if sections:
-        options = [joinedload(Book.sections)]
 
     with make_session() as session:
-        query = session.query(Book).options(*options)
+        visible = accessible_sections(session)
+        query = session.query(Book).filter(
+            Book.id.in_(visible.with_entities(BookSection.book_id))
+        )
 
         if title:
             query = query.filter(Book.title.ilike(f"%{escape_like(title)}%"))
@@ -69,7 +78,17 @@ async def list_books(
 
         query = query.order_by(Book.title).offset(offset).limit(limit)
         books = query.all()
-        return [book.as_payload(sections=sections) for book in books]
+        payloads = [book.as_payload() for book in books]
+        if not sections:
+            return payloads
+
+        by_book = {book.id: [] for book in books}
+        ordered = visible.filter(BookSection.book_id.in_(by_book)).order_by(
+            BookSection.section_level, BookSection.section_number, BookSection.id
+        )
+        for section in ordered:
+            by_book[section.book_id].append(section.as_payload())
+        return [p | {"sections": by_book[p["id"]]} for p in payloads]
 
 
 @books_mcp.tool()
@@ -94,7 +113,7 @@ def fetch(
         If include_journal is True, returns a dict with "sections" and "journal_entries".
     """
     with make_session() as session:
-        book_sections = session.query(BookSection).filter(
+        book_sections = accessible_sections(session).filter(
             BookSection.book_id == book_id
         )
         if sections:

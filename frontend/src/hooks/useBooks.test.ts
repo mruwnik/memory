@@ -86,29 +86,6 @@ describe('useBooks.listBooks', () => {
   })
 })
 
-describe('useBooks.readBook', () => {
-  it('passes book_id and defaults sections to empty array', async () => {
-    const fetchMock = routeMcp(mcpResult([{ id: 1, title: 'S', content: 'c', order: 0, parent_section_id: null }]))
-    const { result } = renderHook(() => useBooks())
-    const sections = await result.current.readBook(3)
-    expect(sections).toHaveLength(1)
-    expect(mcpArgs(fetchMock, 'books_read_book')).toEqual({ book_id: 3, sections: [] })
-  })
-
-  it('forwards explicit section ids', async () => {
-    const fetchMock = routeMcp(mcpResult([]))
-    const { result } = renderHook(() => useBooks())
-    await result.current.readBook(3, [1, 2])
-    expect(mcpArgs(fetchMock, 'books_read_book')).toEqual({ book_id: 3, sections: [1, 2] })
-  })
-
-  it('returns an empty array when result missing', async () => {
-    routeMcp(mcpResult(undefined))
-    const { result } = renderHook(() => useBooks())
-    await expect(result.current.readBook(3)).resolves.toEqual([])
-  })
-})
-
 describe('useBooks.uploadBook', () => {
   it('POSTs FormData to /books/upload and returns the json', async () => {
     const fetchMock = mockFetch(async (input) => {

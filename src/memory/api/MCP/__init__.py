@@ -2,7 +2,7 @@
 MCP server with composed subservers.
 
 Subservers are mounted with prefixes. Tool names after mounting:
-- books: books_list_books, books_read_book
+- books: books_list_books, books_fetch
 - core: core_search, core_observe, core_search_observations, core_create_note, core_note_files, core_fetch_file, core_get_item, core_list_items, core_count_items
 - discord: discord_send_message, discord_channel_history, discord_list_channels
 - email: email_send
