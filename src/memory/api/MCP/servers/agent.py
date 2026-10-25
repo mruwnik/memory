@@ -38,6 +38,7 @@ from memory.agents.enqueue import (
     stored_spec_problems,
 )
 from memory.agents.mcp_client import memory_tools
+from memory.agents.prebuilt import PREBUILT_AGENTS
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
@@ -379,14 +380,32 @@ async def fetch(definition_id: int) -> dict:
         return definition.serialize() | {"changed_tools": changed_tools(db, definition)}
 
 
+def prebuilt_spec(db: DBSession, user_id: int, slug: str) -> AgentSpec:
+    """The prebuilt agent on the first of its models the caller has a usable default
+    key for; else on one they have any default key for, so a refusal names that key."""
+    prebuilt = PREBUILT_AGENTS.get(slug)
+    if prebuilt is None:
+        raise ValueError(f"unknown agent {slug!r}")
+    keys = {m: default_key(db, user_id, split_model(m)[0]) for m in prebuilt.models}
+    model = next(
+        (m for m in prebuilt.models if usable(keys[m]) is not None),
+        next((m for m in prebuilt.models if keys[m] is not None), prebuilt.models[0]),
+    )
+    return prebuilt.spec(model)
+
+
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def run(
-    input: str, definition_id: int | None = None, spec: dict | None = None
+    input: str,
+    definition_id: int | None = None,
+    spec: dict | None = None,
+    agent: str | None = None,
 ) -> dict:
-    """Start a run of one of your definitions, or of an ad-hoc spec. Returns at once; use agent_wait."""
-    if (definition_id is None) == (spec is None):
-        raise ValueError("pass exactly one of definition_id or spec")
+    """Start a run of one of your definitions, an ad-hoc spec, or a prebuilt agent
+    by slug (listed by agent_catalog), paid with your key. Returns at once; use agent_wait."""
+    if [definition_id, spec, agent].count(None) != 2:
+        raise ValueError("pass exactly one of definition_id, spec or agent")
     user_id, _ = caller()
     token, _ = caller_token()
     with make_session() as db:
@@ -395,13 +414,15 @@ async def run(
             if definition_id is not None
             else None
         )
-        parsed = parse_spec(definition.spec if definition else spec or {})
+        if agent is not None:
+            parsed, ref = prebuilt_spec(db, user_id, agent), {"agent": agent}
+        elif definition is not None:
+            parsed, ref = parse_spec(definition.spec), {"definition_id": definition.id}
+        else:
+            parsed, ref = parse_spec(spec or {}), {}
         await check_spec(parsed)
         api_key = lookup_api_key(token, db)
-        trigger = TriggerInfo(
-            kind="mcp" if api_key else "manual",
-            ref={"definition_id": definition_id} if definition_id is not None else {},
-        )
+        trigger = TriggerInfo(kind="mcp" if api_key else "manual", ref=ref)
         try:
             started = enqueue_run(
                 db,
@@ -453,17 +474,20 @@ async def wait(
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def list_runs(
     definition_id: int | None = None,
+    agent: str | None = None,
     status: str | None = None,
     limit: int = 50,
     before: str | None = None,
     before_id: str | None = None,
 ) -> dict:
-    """Your runs, newest first. To page, pass the last run's `created_at` as `before` and its `id` as `before_id`."""
+    """Your runs, newest first, optionally only a definition's or a prebuilt agent's. To page, pass the last run's `created_at` as `before` and its `id` as `before_id`."""
     user_id, _ = caller()
     with make_session() as db:
         query = db.query(AgentRun).filter(AgentRun.user_id == user_id)
         if definition_id is not None:
             query = query.filter(AgentRun.definition_id == definition_id)
+        if agent is not None:
+            query = query.filter(AgentRun.trigger_ref["agent"].astext == agent)
         if status is not None:
             query = query.filter(AgentRun.status == status)
         if before is not None:
@@ -524,12 +548,17 @@ def capabilities_json(caps: Capabilities) -> dict:
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def catalog() -> dict:
     """What a definition can use: your visible tools, builtins, models, limits,
-    your external MCP servers with their cached tools, and your provider keys."""
+    your external MCP servers with their cached tools, and your provider keys;
+    plus the prebuilt agents agent_run takes by slug."""
     token, scopes = caller_token()
     async with memory_tools(token, scopes) as tools:
         listed = await tools.list()
     return {
         "builtins": sorted(BUILTIN_TOOLS),
+        "agents": [
+            {"slug": a.slug, "title": a.title, "description": a.description}
+            for a in PREBUILT_AGENTS.values()
+        ],
         "tools": [
             {"name": t.name, "description": t.description, "read_only": t.read_only}
             for t in listed

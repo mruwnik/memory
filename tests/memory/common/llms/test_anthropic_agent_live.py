@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from memory.agents.prebuilt import FACT_CHECK
 from memory.agents.runner import execute_run
 from memory.common import settings
 from memory.common.db.models import AgentRun, AgentRunStep, LLMProviderKey
@@ -301,6 +302,47 @@ async def test_a_run_survives_trimming_on_a_live_model(
     steps = db_session.query(AgentRunStep).filter(AgentRunStep.run_id == run.id).all()
     assert finished.status == "done", finished.error
     assert "notice" in [s.kind for s in steps]
+
+
+@pytest.mark.asyncio
+async def test_the_fact_check_agent_answers_with_a_cited_verdict(db_session, regular_user):
+    key = LLMProviderKey(
+        user_id=regular_user.id, provider="anthropic", label="live", is_default=True
+    )
+    key.key = LIVE_KEY
+    db_session.add(key)
+    db_session.commit()
+    spec = FACT_CHECK.spec("anthropic/claude-sonnet-5-5")
+    run = AgentRun(
+        user_id=regular_user.id,
+        provider_key_id=key.id,
+        scopes=["read"],
+        spec=spec.model_copy(update={"max_output_tokens": 4000}).model_dump(mode="json"),
+        input="Verify: the Eiffel Tower is in Berlin.",
+        max_cost_usd=Decimal("0.15"),
+        trigger_kind="manual",
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    await execute_run(run.id, FakeHub({}, native=FACT_CHECK.tools).factory())
+
+    db_session.expire_all()
+    finished = db_session.get(AgentRun, run.id)
+    assert finished is not None
+    SPENT.append(finished.cost_usd)
+    steps = db_session.query(AgentRunStep).filter(AgentRunStep.run_id == run.id).all()
+    searches = [
+        c
+        for s in steps
+        for c in s.content
+        if c.get("type") == "tool_call" and c.get("name") == "web_search"
+    ]
+    assert finished.status == "done", finished.error
+    assert searches
+    assert finished.result is not None
+    envelope = finished.result["data"]
+    assert (envelope["verdict"], bool(envelope["sources"])) == ("refuted", True)
 
 
 @pytest.mark.asyncio

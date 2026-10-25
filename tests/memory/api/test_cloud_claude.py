@@ -1018,7 +1018,7 @@ OWNED = "u1-e1-aaaa1111aaaa1111aaaa1111aaaa1111"
 def unscoped_client(app_client, db_session, user):
     """Authenticated as a real user holding everything except claude_sessions."""
     test_client, app = app_client
-    user.scopes = ["read", "write", "agents", "check"]
+    user.scopes = ["read", "write", "agents"]
     db_session.commit()
 
     def get_test_session():

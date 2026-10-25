@@ -37,7 +37,7 @@ class SpecInvalid(ValueError):
 
 @dataclass(frozen=True)
 class TriggerInfo:
-    kind: str  # manual | mcp | cron | ingest | relative | webhook | discord | chain | check
+    kind: str  # manual | mcp | cron | ingest | relative | webhook | discord | chain
     ref: dict[str, Any] = field(default_factory=dict)
     dedupe_key: str | None = None
 

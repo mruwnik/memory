@@ -3,7 +3,7 @@ import { createBrowserRouter, RouterProvider, Routes, Route, Navigate, useNaviga
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
-import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, Check, ReportsPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -103,7 +103,6 @@ const AuthWrapper = () => {
     { path: '/ui/telemetry', element: <Suspense fallback={<LoadingState />}><Telemetry /></Suspense> },
     { path: '/ui/jobs', element: <Jobs /> },
     { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
-    { path: '/ui/check', element: <Check />, scope: 'check' },
     { path: '/ui/agents', element: <AgentsPage />, scope: 'agents' },
     { path: '/ui/keys', element: <KeysPage /> },
     { path: '/ui/agents/servers', element: <ServersPage />, scope: 'agents' },

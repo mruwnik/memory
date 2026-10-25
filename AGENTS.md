@@ -56,6 +56,5 @@ Every LLM call goes through `memory.agents.call.run_agent(agent, prompt, *, user
 - Claude container reconcile and cleanup run in the API process (`claude_containers/claude_maintenance.py`), because only it holds the orchestrator socket.
 - User LLM provider keys are write-only: only `key_hint` is ever returned.
 - ERROR and CRITICAL log records of the api and workers reach the appliance operator, filtered, through `tools/ops/logs.sh`. Keep item text, titles, filenames, queries and secrets out of them: log ids, and leave exception text to `logger.exception`, whose traceback the filter cuts to the exception type.
-- The check job queue (`common/check/`) is pure Redis: no Celery, no Postgres. Non-owners get 404 "unknown job", checked before any wait.
 
 Search pipeline detail: [docs/SEARCH_INVESTIGATION.md](docs/SEARCH_INVESTIGATION.md).

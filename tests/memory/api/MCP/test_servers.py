@@ -28,7 +28,6 @@ def test_all_servers_in_enum():
     expected = {
         "agent",
         "books",
-        "check",
         "claude",
         "core",
         "deadlines",

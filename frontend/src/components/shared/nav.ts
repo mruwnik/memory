@@ -21,7 +21,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/calendar', title: 'Calendar', description: 'View upcoming events from your calendars' },
       { to: '/ui/tasks', title: 'Tasks', description: 'Manage your todos and tasks' },
       { to: '/ui/polls', title: 'Polls', description: 'Schedule meetings with availability polls' },
-      { to: '/ui/check', title: 'Check questions', description: 'Submit questions to verify, research, or link, and see answers', scope: 'check' },
       { to: '/ui/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
     ],
   },

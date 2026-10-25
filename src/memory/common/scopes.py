@@ -105,9 +105,6 @@ SCOPE_CLAUDE_AI = "claudeai"
 SCOPE_AGENTS = "agents"  # define and run your own agents
 SCOPE_CLAUDE_SESSIONS = "claude_sessions"  # spawn and manage Claude Code containers
 
-# Check (async verify/research/link/deep-dive/investigation-team job queue)
-SCOPE_CHECK = "check"        # submit, read, and work check jobs
-
 # ---------------------------------------------------------------------------
 # Metadata for UI display — grouped by category.
 # ---------------------------------------------------------------------------
@@ -328,13 +325,6 @@ VALID_SCOPES: list[ScopeInfo] = [
         "label": "Claude sessions",
         "description": "Spawn, attach to and manage Claude Code containers, which carry your SSH key and GitHub tokens",
         "category": "ai",
-    },
-    # Research (check job queue)
-    {
-        "value": SCOPE_CHECK,
-        "label": "Check",
-        "description": "Submit, read, and resolve async check (verify/research/link/deep-dive/investigation-team) jobs",
-        "category": "research",
     },
 ]
 

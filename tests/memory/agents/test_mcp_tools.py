@@ -142,13 +142,81 @@ async def test_run_a_definition_and_an_ad_hoc_spec(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kwargs", [{}, {"definition_id": 1, "spec": SPEC}])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"definition_id": 1, "spec": SPEC},
+        {"spec": SPEC, "agent": "fact-check"},
+    ],
+)
 async def test_run_needs_exactly_one_source(
     db_session, user_session, fake_providers, kwargs
 ):
     with mcp_auth_context(user_session.id):
-        with pytest.raises(ValueError, match="exactly one of definition_id or spec"):
+        with pytest.raises(
+            ValueError, match="exactly one of definition_id, spec or agent"
+        ):
             await agent.run.fn(input="hi", **kwargs)
+
+
+def provider_keys(db, user, statuses: dict[str, str]) -> dict[str, LLMProviderKey]:
+    keys = {}
+    for provider, status in statuses.items():
+        key = LLMProviderKey(
+            user_id=user.id, provider=provider, label=provider, is_default=True, status=status
+        )
+        key.key = "sk-x"
+        db.add(key)
+        keys[provider] = key
+    db.commit()
+    return keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "statuses,payer,model",
+    [
+        ({"anthropic": "ok"}, "anthropic", "anthropic/claude-sonnet-5-5"),
+        ({"openai": "ok"}, "openai", "openai/gpt-6.1-sol"),
+        ({"anthropic": "ok", "openai": "ok"}, "anthropic", "anthropic/claude-sonnet-5-5"),
+        ({"anthropic": "invalid", "openai": "ok"}, "openai", "openai/gpt-6.1-sol"),
+    ],
+)
+async def test_run_a_prebuilt_agent_on_the_callers_key(
+    db_session, regular_user, user_session, scripted_llm, no_celery_dispatch, statuses, payer, model
+):
+    keys = provider_keys(db_session, regular_user, statuses)
+
+    with mcp_auth_context(user_session.id, scopes=["agents"]):
+        started = await agent.run.fn(input="Is the sky green?", agent="fact-check")
+
+    run = db_session.get(AgentRun, started["run_id"])
+    assert run is not None
+    assert (run.definition_id, run.provider_key_id, run.trigger_ref) == (
+        None,
+        keys[payer].id,
+        {"agent": "fact-check"},
+    )
+    assert (run.spec["model"], run.spec["tools"]) == (model, ["web_search", "web_fetch"])
+
+
+@pytest.mark.asyncio
+async def test_a_prebuilt_agent_blames_the_key_the_caller_has(
+    db_session, regular_user, user_session, scripted_llm
+):
+    provider_keys(db_session, regular_user, {"openai": "invalid"})
+
+    with mcp_auth_context(user_session.id, scopes=["agents"]):
+        with pytest.raises(ValueError, match="openai"):
+            await agent.run.fn(input="Is the sky green?", agent="fact-check")
+
+
+@pytest.mark.asyncio
+async def test_unknown_prebuilt_agents_are_refused(db_session, user_session, fake_providers):
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="unknown agent 'nope'"):
+            await agent.run.fn(input="hi", agent="nope")
 
 
 @pytest.mark.asyncio
@@ -308,6 +376,19 @@ async def test_list_runs_shows_only_your_own(
 
 
 @pytest.mark.asyncio
+async def test_list_runs_filters_by_prebuilt_agent(db_session, regular_user, user_session):
+    seeded_run(db_session, regular_user)
+    fact_check = seeded_run(db_session, regular_user)
+    fact_check.trigger_ref = {"agent": "fact-check"}
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        result = await agent.list_runs.fn(agent="fact-check")
+
+    assert [r["id"] for r in result["runs"]] == [fact_check.id]
+
+
+@pytest.mark.asyncio
 async def test_list_runs_pages_through_runs_sharing_a_created_at(
     db_session, regular_user, user_session
 ):
@@ -342,6 +423,7 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
     assert "meta_get_user" in names
     assert not any(n.startswith("agent_") for n in names)
     assert catalog["builtins"] == ["web_fetch", "web_search"]
+    assert [a["slug"] for a in catalog["agents"]] == ["fact-check"]
     sonnet = next(
         m for m in catalog["models"] if m["model"] == "anthropic/claude-sonnet-5-5"
     )

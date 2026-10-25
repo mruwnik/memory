@@ -110,6 +110,15 @@ section has nothing in it:
   `restart: unless-stopped` brings it back). The compose
   file no longer sets `ENABLE_BM25_SEARCH` (it was the default), so it can be
   changed in the UI. `/health` reports a `boot_id`.
+- The Check queue is removed: the `check_*` MCP tools, the `/check` HTTP
+  endpoints, the `check` scope and the Check page. Fact-checking runs on the
+  prebuilt fact-check agent instead: `agent_run(input=..., agent="fact-check")`
+  then `agent_wait`, paid with the caller's own provider key (it needs the
+  `agents` scope). The external `checker` Firefox extension and laptop worker
+  stop working. Tokens and users still carrying `check` keep working and the
+  value is ignored; asking for it in a new grant or key is rejected as an
+  invalid scope. The `CHECK_*` variables can be dropped from `.env`. Leftover
+  `check:*` Redis keys expire on their own within 14 days. No migration.
 - The Discord collector no longer serves its channel, category and permission
   endpoints (the collector API keeps only health, DMs, channel messages,
   typing, reactions and metadata refresh). The `discord-admin` and
@@ -466,10 +475,6 @@ section has nothing in it:
   `CLAUDE_MAINTENANCE_INTERVAL_SEC=0`, or an api without the orchestrator
   socket (logged at startup), nothing settles executions early, so each run of
   a repeating schedule waits up to that timeout.
-- Check-queue callbacks now go through the same dial-time-checked client as
-  external MCP servers. `CHECK_ALLOW_PRIVATE_CALLBACKS=true` still opens private
-  and LAN ranges, but loopback is now always refused, so a localhost callback
-  receiver must listen on a LAN address instead.
 - The LLM API keys page moved to `/ui/keys` and is open to every user; key names are
   now unique per user (tools accept a key's name or id).
 - HyDE, query analysis and result scoring run on the searcher's default key for
