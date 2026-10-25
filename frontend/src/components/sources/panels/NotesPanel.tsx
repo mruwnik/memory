@@ -56,7 +56,7 @@ const SSHConfig = ({ git, remote, onSaved, onDirty }: GitFormProps & { remote: s
     <Field label="SSH key" hint="Select one of your personal or instance keys. Notes will use it for shared vault sync.">
       <Select value={keyId} onChange={e => setKeyId(e.target.value)}><option value="">No SSH key selected</option>{keys.map(key => <option key={key.id} value={key.id}>{key.name}</option>)}</Select>
     </Field>
-    <a href="/ui/sources?tab=ssh-keys">Import or manage SSH keys</a>
+    <a href="/ui/ssh-keys">Import or manage SSH keys</a>
     <Button onClick={load}>Refresh keys</Button>
     {publicKey && <Field label="Public key" hint="Register this key with your Git account or repository, with push access."><div className="flex items-start gap-2"><code className="min-w-0 flex-1 break-all text-xs">{publicKey}</code><CopyButton text={publicKey} /></div></Field>}
     {keyId ? <>

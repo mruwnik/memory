@@ -7,7 +7,7 @@ const remove = vi.fn()
 const setDefault = vi.fn()
 vi.mock('@/hooks/useSSHKeys', () => ({ useSSHKeys: () => ({ list, save, remove, setDefault }) }))
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ hasScope: () => true }) }))
-import { SSHKeysPanel } from './SSHKeysPanel'
+import { SSHKeysPage } from './SSHKeysPage'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -16,7 +16,7 @@ beforeEach(() => {
 })
 
 it('imports an instance key and passphrase without offering private-key export', async () => {
-  const { user } = renderWithUser(<SSHKeysPanel />)
+  const { user } = renderWithUser(<SSHKeysPage />)
   await user.click(await screen.findByRole('button', { name: 'Add SSH key' }))
   await user.type(screen.getByLabelText('Name'), 'Git account')
   await user.selectOptions(screen.getByLabelText('Ownership'), 'instance')
@@ -28,7 +28,7 @@ it('imports an instance key and passphrase without offering private-key export',
 })
 
 it('can generate a personal key and choose an existing container default', async () => {
-  const { user } = renderWithUser(<SSHKeysPanel />)
+  const { user } = renderWithUser(<SSHKeysPage />)
   await user.click(await screen.findByRole('button', { name: 'Add SSH key' }))
   await user.type(screen.getByLabelText('Name'), 'Generated')
   await user.selectOptions(screen.getByLabelText('Method'), 'generate')

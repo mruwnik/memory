@@ -15,7 +15,6 @@ import { BooksPanel } from './panels/BooksPanel'
 import { ForumsPanel } from './panels/ForumsPanel'
 import { PhotosPanel } from './panels/PhotosPanel'
 import { NotesPanel } from './panels/NotesPanel'
-import { SSHKeysPanel } from './panels/SSHKeysPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
 import { Page, Tabs } from '@/components/shared/ui'
@@ -34,7 +33,6 @@ const TABS = [
   { value: 'notes', label: 'Notes', panel: NotesPanel },
   { value: 'discord', label: 'Discord', panel: DiscordPanel },
   { value: 'slack', label: 'Slack', panel: SlackPanel },
-  { value: 'ssh-keys', label: 'SSH keys', panel: SSHKeysPanel },
 ] as const
 type TabType = typeof TABS[number]['value']
 
@@ -74,6 +72,7 @@ const Sources = () => {
   // Compute userId for API calls
   const userId = selectedUser.id || undefined
 
+  if (tabParam === 'ssh-keys') return <Navigate to="/ui/ssh-keys" replace />
   if (tabParam === 'secrets') return <Navigate to="/ui/secrets" replace />
 
   return (

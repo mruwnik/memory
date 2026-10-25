@@ -20,9 +20,12 @@ None.
 
 ### Manual steps
 
-For Notes SSH sync using an operator-mounted key, import that key in Sources → SSH keys, then select it in Sources → Notes and configure trusted host keys. Notes SSH sync now requires a database key.
+For Notes SSH sync using an operator-mounted key, import that key in System operations → SSH keys, then select it in Sources → Notes and configure trusted host keys. Notes SSH sync now requires a database key.
 
 ### Other changes for operators
+
+- SSH keys has a dedicated page under System operations (`/ui/ssh-keys`).
+  Existing Sources links redirect to it.
 
 - The dashboard shows access-scoped ingested item totals, indexing status,
   additions in the last 24 hours, and counts by content type.
@@ -39,7 +42,7 @@ For Notes SSH sync using an operator-mounted key, import that key in Sources →
 - GitHub App authentication now encodes the JWT issuer as a string, fixing
   “Issuer (iss) must be a string” errors when managing or syncing repositories.
 
-- Sources → SSH keys manages encrypted personal and instance SSH identities:
+- System operations → SSH keys manages encrypted personal and instance SSH identities:
   import a private key (including passphrase-protected files), generate, replace,
   delete, or choose a container default. Notes selects an accessible personal or instance key and stores
   remote-bound host trust separately. Claude sessions and MCP public-key discovery

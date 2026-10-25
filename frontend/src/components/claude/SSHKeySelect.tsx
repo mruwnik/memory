@@ -13,7 +13,7 @@ export default function SSHKeySelect({ value, onChange }: { value: string; onCha
   }, [list])
   return <>
     {error && <Notice tone="error">{error}</Notice>}
-    <Field label="SSH key" hint={<>Manage keys in <a href="/ui/sources?tab=ssh-keys">Sources → SSH keys</a>. Changes apply to new containers.</>}>
+    <Field label="SSH key" hint={<>Manage keys in <a href="/ui/ssh-keys">System operations → SSH keys</a>. Changes apply to new containers.</>}>
       <Select value={value} onChange={e => onChange(e.target.value)}>
         <option value="">Use my default{keys.find(key => key.is_default) ? ` (${keys.find(key => key.is_default)?.name})` : ''}</option>
         <option value="none">No SSH key</option>

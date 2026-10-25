@@ -155,5 +155,3 @@ describe('Sources container', () => {
     expect(screen.getByRole('tab', { name: 'RSS feeds (1), has problems' })).toBeInTheDocument()
   })
 })
-
-vi.mock('./panels/SSHKeysPanel', () => ({ SSHKeysPanel: () => <div data-testid="panel-ssh-keys" /> }))

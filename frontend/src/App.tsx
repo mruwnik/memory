@@ -12,6 +12,7 @@ import { UserSettings, UserManagement } from '@/components/users'
 import { SettingsPage } from '@/components/settings'
 import { PeopleManagement } from '@/components/people'
 import { SetupWizard } from '@/components/setup/SetupWizard'
+import { SSHKeysPage } from '@/components/SSHKeysPage'
 import SecretsPage from '@/components/secrets/SecretsPage'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
@@ -109,6 +110,7 @@ const AuthWrapper = () => {
     { path: '/ui/search', element: <Search /> },
     { path: '/ui/sources', element: <Sources /> },
     { path: '/ui/secrets', element: <SecretsPage /> },
+    { path: '/ui/ssh-keys', element: <SSHKeysPage /> },
     { path: '/ui/calendar', element: <Calendar /> },
     { path: '/ui/tasks', element: <Tasks /> },
     { path: '/ui/metrics', element: <Suspense fallback={<LoadingState />}><Metrics /></Suspense> },

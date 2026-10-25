@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSSHKeys, type SSHKey } from '@/hooks/useSSHKeys'
 import { useAuth } from '@/hooks/useAuth'
-import { Button, Card, ConfirmButton, CopyButton, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Section, Select, Textarea, useActionNotice } from '@/components/shared/ui'
+import { Button, Card, ConfirmButton, CopyButton, EmptyState, Field, FormActions, Input, Modal, Page, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 
-export const SSHKeysPanel = () => {
+export const SSHKeysPage = () => {
   const { list, save, remove, setDefault } = useSSHKeys()
   const { hasScope } = useAuth()
   const [keys, setKeys] = useState<SSHKey[] | null>(null)
@@ -15,13 +15,11 @@ export const SSHKeysPanel = () => {
     catch (e) { setError(e instanceof Error ? e.message : 'Unable to load SSH keys') }
   }, [list])
   useEffect(() => { void load() }, [load])
-  if (error) return <ErrorState message={error} onRetry={load} />
-  if (!keys) return <LoadingState />
-  return <Section description="Import or generate SSH keys for Git access. Personal keys belong to you; instance keys are managed by admins. Notes and containers use these database keys.">
+  return <Page title="SSH keys" loading={keys === null && !error && "Loading SSH keys…"} error={error} onRetry={load}
+    actions={<Button onClick={() => setEditing('new')}>Add SSH key</Button>} description="Import or generate SSH keys for Git access. Personal keys belong to you; instance keys are managed by admins. Notes and containers use these database keys.">
     {notice}
-    <Button onClick={() => setEditing('new')}>Add SSH key</Button>
-    {!keys.length && <EmptyState message="No SSH keys configured" />}
-    {keys.map(key => <Card key={key.id} title={key.name} description={`${key.user_id === null ? 'Instance' : 'Personal'}${key.is_default ? ' · Your container default' : ''}`}>
+    {keys?.length === 0 && <EmptyState message="No SSH keys configured" />}
+    {keys?.map(key => <Card key={key.id} title={key.name} description={`${key.user_id === null ? 'Instance' : 'Personal'}${key.is_default ? ' · Your container default' : ''}`}>
       <p className="break-all font-mono text-sm">{key.fingerprint ?? 'Fingerprint unavailable for migrated key'}</p>
       <Field label="Public key"><div className="flex items-start gap-2"><code className="break-all text-xs">{key.public_key}</code><CopyButton text={key.public_key} /></div></Field>
       <FormActions>
@@ -32,7 +30,7 @@ export const SSHKeysPanel = () => {
     </Card>)}
     {editing && <KeyForm existing={editing === 'new' ? undefined : editing} admin={hasScope('*') || hasScope('admin')}
       onClose={() => setEditing(null)} onSave={async (input) => { await save(input, editing === 'new' ? undefined : editing.id); setEditing(null); await load() }} />}
-  </Section>
+  </Page>
 }
 
 function KeyForm({ existing, admin, onClose, onSave }: { existing?: SSHKey; admin: boolean; onClose: () => void; onSave: (input: import('@/hooks/useSSHKeys').SSHKeyInput) => Promise<void> }) {
