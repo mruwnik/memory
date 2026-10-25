@@ -20,6 +20,41 @@ None.
 
 ### Manual steps
 
+None.
+
+### Other changes for operators
+
+- REST account/key recovery, secret management/export, and source credential
+  management now require an interactive login session. API keys use their own
+  scopes for access checks; general content/job reads require `read` and
+  mutations require `write`. Ownerless jobs are visible only to admins.
+- IMAP verifies TLS certificates and hostnames. Accounts with `use_ssl=false`
+  must support STARTTLS; plaintext login is no longer supported. For private
+  certificate authorities, install the CA in the worker's trust store or set
+  Python's `SSL_CERT_FILE` to a PEM trust bundle containing the required roots.
+- Ingestion downloads validate the address actually dialed, ignore proxy
+  environment variables, and refuse non-public destinations. Servers must honor
+  `Accept-Encoding: identity`; individual responses are capped at 100 MiB,
+  with smaller existing caller limits still enforced.
+- Snapshot uploads reject archives above 100 MiB compressed, 512 MiB expanded,
+  or 10,000 members. Archive parsing runs outside the API event loop.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
+## v0.2.2 (2026-10-25)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
 - Re-save any Notes Git token previously stored through the UI. Stored tokens
   now require an explicit repository binding; unbound legacy tokens are not
   sent. Operator-provided `NOTES_GIT_TOKEN` is unchanged.
@@ -47,21 +82,6 @@ None.
   rebuild. New instances get this from bootstrap.
 
 ### Other changes for operators
-
-- REST account/key recovery, secret management/export, and source credential
-  management now require an interactive login session. API keys use their own
-  scopes for access checks; general content/job reads require `read` and
-  mutations require `write`. Ownerless jobs are visible only to admins.
-- IMAP verifies TLS certificates and hostnames. Accounts with `use_ssl=false`
-  must support STARTTLS; plaintext login is no longer supported. For private
-  certificate authorities, install the CA in the worker's trust store or set
-  Python's `SSL_CERT_FILE` to a PEM trust bundle containing the required roots.
-- Ingestion downloads validate the address actually dialed, ignore proxy
-  environment variables, and refuse non-public destinations. Servers must honor
-  `Accept-Encoding: identity`; individual responses are capped at 100 MiB,
-  with smaller existing caller limits still enforced.
-- Snapshot uploads reject archives above 100 MiB compressed, 512 MiB expanded,
-  or 10,000 members. Archive parsing runs outside the API event loop.
 
 - Notes Git credentials are read fresh and bound to the selected repository,
   preventing token leakage while queued remote changes and worker caches differ.
