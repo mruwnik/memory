@@ -24,6 +24,9 @@ For Notes SSH sync using an operator-mounted key, import that key in System oper
 
 ### Other changes for operators
 
+- Qdrant's open-file limit is raised to 65536. Under Docker's default of 1024,
+  ingestion exhausted it and qdrant stopped accepting connections. Takes effect when
+  `docker compose up -d` recreates the qdrant container.
 - SSH keys has a dedicated page under System operations (`/ui/ssh-keys`).
   Existing Sources links redirect to it.
 
