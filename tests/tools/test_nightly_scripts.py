@@ -106,6 +106,10 @@ def host(tmp_path):
         "compose": FAKE_COMPOSE,
         "chown": FAKE_CHOWN,
         "systemctl": FAKE_SYSTEMCTL,
+        "systemd-tmpfiles": (
+            '#!/usr/bin/env bash\necho "systemd-tmpfiles $*" >> "$FAKE_LOG"\n'
+            'exit "${FAKE_TMPFILES_EXIT:-0}"\n'
+        ),
         "docker": FAKE_DOCKER,
     }.items():
         write_exe(tmp_path / "bin" / name, body)
@@ -147,6 +151,7 @@ def nightly(host, name, **env):
             "ALLOWED_SIGNERS": str(tmp / "allowed_signers"),
             "CADDYFILE": str(tmp / "Caddyfile"),
             "UNIT_DIR": str(tmp / "units"),
+            "TMPFILES_DIR": str(tmp / "tmpfiles.d"),
             "MEMORY_SSM_PREFIX": "/memory",
             "AWS_DEFAULT_REGION": "eu-west-1",
             "STATE_DIR": str(tmp / "state"),
@@ -240,12 +245,25 @@ def test_configure_renders_ssm_config_units_and_caddy(host):
     ).read_text()
     # update.sh would otherwise refuse the lock its unit holds.
     assert "Environment=MEMORY_LOCK_HELD=1" in (tmp / "units" / "memory-update.service").read_text()
+    lock_config = tmp / "tmpfiles.d" / "memory-lock.conf"
+    assert "f /run/lock/memory-nightly.lock 0600 root root -" in lock_config.read_text()
+    tmpfiles_call = f"systemd-tmpfiles --create {lock_config}"
+    assert call_lines(host, "systemd-tmpfiles") == [tmpfiles_call]
+    assert calls(host).index(tmpfiles_call) < calls(host).index("systemctl enable --now")
     timers = " ".join(u for u in units if u.endswith(".timer"))
     assert call_lines(host, "systemctl") == [
         "systemctl reload-or-restart caddy",
         "systemctl daemon-reload",
         f"systemctl enable --now {timers}",
     ]
+
+
+def test_configure_does_not_start_timers_when_lock_setup_fails(host):
+    code, output = nightly(host, "configure", FAKE_TMPFILES_EXIT="1")
+
+    assert code == 1, output
+    assert call_lines(host, "systemd-tmpfiles")
+    assert not any("enable --now" in line for line in call_lines(host, "systemctl"))
 
 
 def test_configure_removes_units_the_release_no_longer_ships(host):

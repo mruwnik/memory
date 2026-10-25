@@ -101,6 +101,12 @@ take_lock() {
     [[ $DRY_RUN == 1 || ${MEMORY_LOCK_HELD:-} == 1 ]] && return
     # Hosts without flock(1) or /run/lock (macOS) run no timers to contend with.
     command -v flock > /dev/null && [[ -d ${LOCK_FILE%/*} ]] || return 0
+    # Only root may create the shared system lock. A user-owned file in the
+    # sticky /run/lock directory can block root's O_CREAT under protected_regular.
+    if [[ $LOCK_FILE == /run/lock/memory-nightly.lock && $EUID != 0 ]]; then
+        echo "system maintenance requires root; run this command with sudo" >&2
+        exit 1
+    fi
     exec 9>>"$LOCK_FILE"
     flock -n 9 || { echo "busy: an update, backup, restore or reboot is running; try again later" >&2; exit 1; }
     export MEMORY_LOCK_HELD=1

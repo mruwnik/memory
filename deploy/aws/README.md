@@ -148,6 +148,12 @@ Everything that must outlive the root disk is on the data volume, mounted at `/s
 | `/var/lib/memory` → `/srv/memory/state` | Update, restore and backup markers, first sightings of tags |
 | `/srv/memory/docker` | Docker's data root: images, build cache and the Postgres, Qdrant and Redis volumes. Bootstrap turns off the containerd image store, which would keep image layers in `/var/lib/containerd` on the root disk. The nightly update prunes build cache older than a week. |
 
+Maintenance commands using the shared system lock must run as root (use `sudo`).
+Host configuration installs `/etc/tmpfiles.d/memory-lock.conf`, which creates
+`/run/lock/memory-nightly.lock` with root ownership and mode 600 on every boot.
+It also repairs ownership in place when configuration is reapplied, preserving
+any lock already held by a running job.
+
 `/etc/memory/` holds `allowed_signers` and `ops.env` (the backup key and bucket, read by the ops scripts and the nightly jobs), mode 600. `deploy/aws/host/configure.sh` renders them from SSM, along with the Caddyfile and the systemd units and timers from the checkout. Bootstrap runs it, and so does every nightly update, before and after updating. A re-apply or a new release therefore reaches the box without a new instance. Containers run as uid 1000, the instance's first user, which owns `.env`, `secrets/` and `memory_files/`. The code itself belongs to root. Bootstrap removes cloud-init's passwordless sudo for that user and, after the install, its docker and lxd groups (both root-equivalent). Admins get in through Session Manager's own `ssm-user`.
 
 The first install takes the newest signed release, however young. After that, a release has to be `update_delay_hours` old. A replacement instance on the same data volume starts the stack it finds.

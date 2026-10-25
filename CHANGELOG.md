@@ -12,6 +12,38 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None for new AWS instances. If an existing instance cannot update because
+`/run/lock/memory-nightly.lock` is user-owned, run
+`sudo chown root:root /run/lock/memory-nightly.lock` and `sudo chmod 600 /run/lock/memory-nightly.lock`,
+then retry with sudo. Do not delete the lock file.
+
+### Other changes for operators
+
+Release sources include the Secrets page and its tests. Release validation now
+builds the frontend from a Git archive, so ignored local files cannot hide
+missing source files. This fixes the v0.2.3 frontend image build failure.
+
+AWS host configuration creates the maintenance lock as root and restores it on
+every boot. Configuration also repairs existing ownership without replacing the
+lock inode. Maintenance scripts reject unprivileged use of the default system
+lock before creating it, with an instruction to use sudo.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None. AWS bootstrap and nightly updates apply the host configuration automatically.
+
 ## v0.2.3 (2026-10-25)
 
 ### Required env vars

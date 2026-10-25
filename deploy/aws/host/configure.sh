@@ -6,7 +6,7 @@
 # each update, so a re-apply or a new release reaches the box. Idempotent.
 #
 # Env: MEMORY_SSM_PREFIX, AWS_DEFAULT_REGION; ALLOWED_SIGNERS, OPS_ENV,
-#      CADDYFILE, UNIT_DIR (defaults under /etc).
+#      CADDYFILE, UNIT_DIR, TMPFILES_DIR (defaults under /etc).
 set -Eeuo pipefail
 umask 077
 
@@ -15,6 +15,7 @@ ALLOWED_SIGNERS=${ALLOWED_SIGNERS:-/etc/memory/allowed_signers}
 OPS_ENV=${OPS_ENV:-/etc/memory/ops.env}
 CADDYFILE=${CADDYFILE:-/etc/caddy/Caddyfile}
 UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
+TMPFILES_DIR=${TMPFILES_DIR:-/etc/tmpfiles.d}
 
 param() {
     aws ssm get-parameter --name "${MEMORY_SSM_PREFIX:?}/$1" --with-decryption \
@@ -63,6 +64,12 @@ if [[ $caddy != "$(cat "$CADDYFILE" 2>/dev/null)" ]]; then
     chmod 644 "$CADDYFILE"
     systemctl reload-or-restart caddy
 fi
+
+# Recreate the root-owned lock at boot and repair existing ownership in place.
+# Never unlink it: running jobs must continue sharing the same lock inode.
+mkdir -p "$TMPFILES_DIR"
+install -m 0644 "$here/nightly-lock.conf" "$TMPFILES_DIR/memory-lock.conf"
+systemd-tmpfiles --create "$TMPFILES_DIR/memory-lock.conf"
 
 timers=()
 for unit in "$here"/memory-*.service "$here"/memory-*.timer; do

@@ -39,6 +39,18 @@ grep -qE "^## ${VERSION}( |$)" CHANGELOG.md || die "CHANGELOG.md has no '## $VER
 echo "==> Running tests"
 $RELEASE_TEST_CMD || die "tests failed; no tag created."
 
+# Build an archive so ignored or untracked local files cannot mask missing
+# release sources. Dependencies are installed independently of the working tree.
+echo "==> Building the committed frontend"
+release_check_dir=$(mktemp -d)
+trap 'rm -rf "$release_check_dir"' EXIT
+git archive HEAD frontend | tar -x -C "$release_check_dir"
+(
+    cd "$release_check_dir/frontend" &&
+        npm ci --no-audit --no-fund &&
+        npm run build
+) || die "committed frontend build failed; no tag created."
+
 echo "==> Tagging $VERSION"
 git -c gpg.format=ssh ${SIGNING_KEY:+-c "user.signingkey=$SIGNING_KEY"} \
     tag -s -m "Release $VERSION" "$VERSION"
