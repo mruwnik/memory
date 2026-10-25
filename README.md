@@ -44,12 +44,12 @@ The installer will:
 - Generate `secrets/postgres_password.txt` and a Redis password
 - Ask for the Voyage API key (optional: leave it blank to set it on the settings page) and write it to `secrets/voyage_key.txt`
 - Set DB / Redis / Qdrant defaults in `.env` (Postgres on `localhost:15432`, etc.)
-- Detect your Docker group GID (needed for Claude session orchestration)
 - Optionally generate an SSH keypair for git-based notes sync
+- Ask which [modules](#modules) to turn on (Claude containers, more than one user, teams; each defaults to no) and write `ENABLE_MODULES`. With Claude containers it also detects your Docker group GID, appends `docker-compose.claude.yaml` to `COMPOSE_FILE` and creates the `memory-api-<stack>` Docker network
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are required (it exits before writing anything if one is missing), `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that the `docker-compose.claude.yaml` overlay uses, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN` is required (it exits before writing anything without it), `ADMIN_EMAIL` and `ADMIN_PASSWORD` are optional but go together, `ENABLE_MODULES` is copied to `.env` as given (default: none; an existing line is kept, and an unknown module name exits before writing anything), `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, runs the migrations, starts the api, and creates the admin user (full access) from `ADMIN_EMAIL` and `ADMIN_PASSWORD` if it doesn't exist. Without them it prints the setup token to claim the instance with at `https://$DOMAIN/ui/setup` (or, if the token can't be read from the api log, the command that shows it). To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 
@@ -68,7 +68,13 @@ curl http://localhost:8000/health
 
 ### 3. Create a user
 
-The simplest path is to run `add_user.py` inside the API container, which already has all dependencies and DB credentials wired up:
+Open <http://localhost:8000/ui/setup> to create the first account as an admin. It asks for the setup token the api logs at startup while no account exists:
+
+```bash
+docker compose logs api | grep "setup token"
+```
+
+Or run `add_user.py` inside the API container, which already has all dependencies and DB credentials wired up. Run `docker compose run --rm migrate` first if the stack has only just started, so the tables exist:
 
 ```bash
 docker compose exec api python tools/add_user.py \

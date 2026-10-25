@@ -60,7 +60,8 @@ section has nothing in it:
   Stacks that start compose with explicit `-f` flags add
   `-f docker-compose.claude.yaml` after the base file. Without the overlay, a
   fresh `docker compose up` no longer needs the `memory-api-<stack>` network;
-  `tools/install.sh` and `deploy/aws/bootstrap.sh` still create it.
+  `tools/install.sh` and `deploy/aws/bootstrap.sh` create it only when
+  `ENABLE_MODULES` lists `claude_containers`.
 
   **What off means.** The routes return 404 and leave OpenAPI, the MCP servers
   are not mounted (their tools leave `tools/list`, agent catalogs and
@@ -172,6 +173,17 @@ section has nothing in it:
   LLM keys, a first source, connecting an AI client, and their timezone. It runs
   once: an instance that already has an account never shows it.
   `POST /setup/account` returns 404 once any human account exists.
+- `tools/install.sh` asks which modules to turn on (each defaults to no) and
+  writes `ENABLE_MODULES`; `--non-interactive` copies `ENABLE_MODULES` from its
+  environment. Only with `claude_containers` does it detect `DOCKER_GID`,
+  append `docker-compose.claude.yaml` to `COMPOSE_FILE` and create the
+  `memory-api-<stack>` network. A re-run keeps an existing `ENABLE_MODULES` line.
+- `tools/install.sh --non-interactive` no longer requires `ADMIN_EMAIL` and
+  `ADMIN_PASSWORD` (set both or neither). Without them it creates no user and
+  prints the setup token for `/ui/setup`. It now runs `docker compose run --rm
+  migrate` before starting the api, so creating the admin no longer meets an
+  empty schema on a first install. The interactive installer's next steps say
+  the same.
 
 - One-time API keys are removed: the `meta_create_one_time_key` MCP tool, the
   `one_time` key type, the `ONE_TIME_KEY_RATE_LIMIT` and `ONE_TIME_KEY_TTL_SECONDS`

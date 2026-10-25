@@ -6,13 +6,16 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SECRETS_DIR="$PROJECT_DIR/secrets"
 ENV_FILE="$PROJECT_DIR/.env"
 
-# --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD.
-# Optional: VOYAGE_API_KEY (else an admin sets it on the settings page), and, used
-# instead of generating, POSTGRES_PASSWORD, REDIS_PASSWORD, APP_NAME,
+# --non-interactive never prompts. Required: DOMAIN. Optional: ADMIN_EMAIL with
+# ADMIN_PASSWORD (else the first account is claimed with the setup token),
+# ENABLE_MODULES, VOYAGE_API_KEY (else an admin sets it on the settings page), and,
+# used instead of generating, POSTGRES_PASSWORD, REDIS_PASSWORD, APP_NAME,
 # BACKUP_ENCRYPTION_KEY. Anything already installed is
 # kept. S3 backups need an explicit choice: S3_BACKUP_BUCKET (with optional
 # S3_BACKUP_PREFIX and S3_BACKUP_REGION) to enable them, or S3_BACKUP=off.
 NON_INTERACTIVE=false
+# Kept equal to MODULES in src/memory/common/modules.py by tests/tools/test_install_sh.py
+KNOWN_MODULES="claude_containers multi_user teams"
 for arg in "$@"; do
     case "$arg" in
         --non-interactive) NON_INTERACTIVE=true ;;
@@ -21,12 +24,14 @@ for arg in "$@"; do
 done
 
 if [ "$NON_INTERACTIVE" = true ]; then
-    for var in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD; do
-        if [ -z "${!var:-}" ]; then
-            echo "✗ $var is required with --non-interactive" >&2
-            exit 1
-        fi
-    done
+    if [ -z "${DOMAIN:-}" ]; then
+        echo "✗ DOMAIN is required with --non-interactive" >&2
+        exit 1
+    fi
+    if [[ -n "${ADMIN_EMAIL:-}${ADMIN_PASSWORD:-}" && ( -z "${ADMIN_EMAIL:-}" || -z "${ADMIN_PASSWORD:-}" ) ]]; then
+        echo "✗ Set both ADMIN_EMAIL and ADMIN_PASSWORD, or neither" >&2
+        exit 1
+    fi
 
     # Values land unquoted in .env and in sed expressions; ADMIN_PASSWORD only
     # travels through the environment, so it is unrestricted.
@@ -36,6 +41,14 @@ if [ "$NON_INTERACTIVE" = true ]; then
         KBNET_GATEWAY; do
         if [[ ! "${!var:-}" =~ ^[A-Za-z0-9._@:/+-]*$ ]]; then
             echo "✗ $var contains characters outside A-Za-z0-9._@:/+-" >&2
+            exit 1
+        fi
+    done
+    # Settings refuse an unknown name only once the api starts, after .env keeps it
+    IFS=, read -r -a requested <<< "${ENABLE_MODULES:-}"
+    for module in "${requested[@]}"; do
+        if [[ " $KNOWN_MODULES " != *" $module "* ]]; then
+            echo "✗ ENABLE_MODULES may only list: ${KNOWN_MODULES// /,}" >&2
             exit 1
         fi
     done
@@ -244,19 +257,6 @@ info "Setting service defaults..."
 [ -z "$(get_env_value 'REDIS_HOST')" ] && set_env_value "REDIS_HOST" "localhost"
 [ -z "$(get_env_value 'FILE_STORAGE_DIR')" ] && set_env_value "FILE_STORAGE_DIR" "$PROJECT_DIR/memory_files"
 
-# Docker group GID - needed for orchestrator socket access
-if [ -z "$(get_env_value 'DOCKER_GID')" ]; then
-    docker_gid=$(getent group docker 2>/dev/null | cut -d: -f3)
-    if [ -n "$docker_gid" ]; then
-        set_env_value "DOCKER_GID" "$docker_gid"
-        success "DOCKER_GID set to $docker_gid"
-    else
-        warn "Docker group not found - DOCKER_GID not set (needed for Claude sessions)"
-    fi
-else
-    success "DOCKER_GID already configured: $(get_env_value 'DOCKER_GID')"
-fi
-
 # API port - only write to .env if user wants non-default
 if [ -n "$(get_env_value 'API_PORT')" ]; then
     success "API_PORT already configured: $(get_env_value 'API_PORT')"
@@ -448,16 +448,80 @@ else
     fi
 fi
 
-# docker-compose.claude.yaml declares this network external, so compose fails without it there
-stack="${MEMORY_STACK:-$(get_env_value 'MEMORY_STACK')}"
-api_network="memory-api-${stack:-prod}"
-if ! command -v docker >/dev/null 2>&1; then
-    warn "docker not found - create network $api_network before starting the stack"
-elif docker network inspect "$api_network" >/dev/null 2>&1; then
-    success "Docker network $api_network exists"
+# ─────────────────────────────────────────────────────────────────────
+# Modules
+# ─────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "─────────────────────────────────────────────────────────────────"
+echo "                           Modules                               "
+echo "─────────────────────────────────────────────────────────────────"
+echo ""
+
+# Yes only to y/yes; blank is no
+ask_yes() {
+    local answer
+    read -r -p "$1 [y/N]: " answer
+    [[ "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]
+}
+
+# An empty ENABLE_MODULES line still records that the questions were answered
+if grep -q '^ENABLE_MODULES=' "$ENV_FILE"; then
+    success "ENABLE_MODULES already configured: $(get_env_value 'ENABLE_MODULES')"
 else
-    docker network create "$api_network" >/dev/null
-    success "Created Docker network $api_network"
+    if [ "$NON_INTERACTIVE" = true ]; then
+        modules="${ENABLE_MODULES:-}"
+    else
+        chosen=()
+        if ask_yes "Run Claude Code containers (needs the orchestrator on this host)?"; then
+            chosen+=(claude_containers)
+        fi
+        if ask_yes "Will more than one person log in?"; then
+            chosen+=(multi_user)
+            if ask_yes "Organise access with teams and projects?"; then
+                chosen+=(teams)
+            fi
+        fi
+        modules=$(IFS=,; echo "${chosen[*]}")
+    fi
+    set_env_value "ENABLE_MODULES" "$modules"
+    success "ENABLE_MODULES set to ${modules:-(none)}"
+fi
+
+if [[ ",$(get_env_value 'ENABLE_MODULES' | tr -d ' ')," == *,claude_containers,* ]]; then
+    # Docker group GID - needed for orchestrator socket access
+    if [ -z "$(get_env_value 'DOCKER_GID')" ]; then
+        docker_gid=$(getent group docker 2>/dev/null | cut -d: -f3)
+        if [ -n "$docker_gid" ]; then
+            set_env_value "DOCKER_GID" "$docker_gid"
+            success "DOCKER_GID set to $docker_gid"
+        else
+            warn "Docker group not found - DOCKER_GID not set (needed for Claude sessions)"
+        fi
+    else
+        success "DOCKER_GID already configured: $(get_env_value 'DOCKER_GID')"
+    fi
+
+    # Appended, so an overlay already listed (the proxy one) stays in effect
+    compose_file="$(get_env_value 'COMPOSE_FILE')"
+    if [ -z "$compose_file" ]; then
+        set_env_value "COMPOSE_FILE" "docker-compose.yaml:docker-compose.claude.yaml"
+    elif [[ ":$compose_file:" != *:docker-compose.claude.yaml:* ]]; then
+        set_env_value "COMPOSE_FILE" "$compose_file:docker-compose.claude.yaml"
+    fi
+    success "COMPOSE_FILE includes docker-compose.claude.yaml"
+
+    # docker-compose.claude.yaml declares this network external, so compose fails without it there
+    stack="${MEMORY_STACK:-$(get_env_value 'MEMORY_STACK')}"
+    api_network="memory-api-${stack:-prod}"
+    if ! command -v docker >/dev/null 2>&1; then
+        warn "docker not found - create network $api_network before starting the stack"
+    elif docker network inspect "$api_network" >/dev/null 2>&1; then
+        success "Docker network $api_network exists"
+    else
+        docker network create "$api_network" >/dev/null
+        success "Created Docker network $api_network"
+    fi
 fi
 
 # Files written by earlier versions of this script may be looser; secrets/previous
@@ -483,8 +547,10 @@ if [ "$NON_INTERACTIVE" != true ]; then
     echo ""
     info "Next steps:"
     echo "  1. Review configuration: $ENV_FILE"
-    echo "  2. Start services: docker compose up -d"
-    echo "  3. Create an admin: ADD_USER_PASSWORD=yourpass docker compose exec -e ADD_USER_PASSWORD api \\"
+    echo "  2. Migrate, then start services: docker compose run --rm migrate && docker compose up -d"
+    echo "  3. Create the first account at http://localhost:8000/ui/setup with the setup token"
+    echo "     from: docker compose logs api | grep 'setup token'"
+    echo "     or create an admin: ADD_USER_PASSWORD=yourpass docker compose exec -e ADD_USER_PASSWORD api \\"
     echo "       python tools/add_user.py --email you@example.com --name 'Your Name' --admin"
     echo "  4. Access the app: http://localhost:8000"
     echo ""
@@ -494,14 +560,34 @@ if [ "$NON_INTERACTIVE" = true ]; then
     # Supplied values already live in .env and secrets/; compose interpolates the
     # shell environment ahead of .env, so a stale one would override what is stored.
     unset POSTGRES_PASSWORD REDIS_PASSWORD SERVER_URL API_PORT \
-        FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES
+        FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES ENABLE_MODULES
     cd "$PROJECT_DIR"
-    # --wait blocks on the api healthcheck, which needs migrations to have run
+    # The api's healthcheck passes on an empty schema, so migrate first, as update.sh does
+    docker compose run --rm migrate
     docker compose up -d --wait api
-    # The password travels through the environment and no API key is made, so
-    # neither ends up in argv, logs or output.
-    ADD_USER_PASSWORD="$ADMIN_PASSWORD" docker compose exec -T -e ADD_USER_PASSWORD api \
-        python tools/add_user.py --email "$ADMIN_EMAIL" --name "$ADMIN_EMAIL" \
-        --admin --no-api-key --if-missing > /dev/null
-    success "First user ready: $ADMIN_EMAIL"
+    if [ -n "${ADMIN_EMAIL:-}" ]; then
+        # The password travels through the environment and no API key is made, so
+        # neither ends up in argv, logs or output.
+        ADD_USER_PASSWORD="$ADMIN_PASSWORD" docker compose exec -T -e ADD_USER_PASSWORD api \
+            python tools/add_user.py --email "$ADMIN_EMAIL" --name "$ADMIN_EMAIL" \
+            --admin --no-api-key --if-missing > /dev/null
+        success "First user ready: $ADMIN_EMAIL"
+        exit 0
+    fi
+    setup_status=$(docker compose exec -T api curl -fsS http://localhost:8000/setup/status) || setup_status=unknown
+    if [[ "$setup_status" == *'"needs_account":false'* ]]; then
+        exit 0
+    fi
+    token=""
+    # Token lines outlive the account in the container's log, so only an unclaimed
+    # instance's is live; and only a terminal shows it, as a captured log would keep it.
+    if [ -t 1 ] && [[ "$setup_status" == *'"needs_account":true'* ]]; then
+        token=$(docker compose logs api | grep -o 'setup token: [A-Za-z0-9_-]*' | tail -n 1 | cut -d' ' -f3)
+    fi
+    if [ -n "$token" ]; then
+        info "Create the first account at https://$DOMAIN/ui/setup with setup token: $token"
+    else
+        info "Create the first account at https://$DOMAIN/ui/setup with the setup token from: docker compose logs api | grep 'setup token'"
+    fi
+    info "The api makes a new token each time it restarts, until the account exists."
 fi
