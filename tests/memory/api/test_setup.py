@@ -5,6 +5,7 @@ import pytest
 
 from memory.api import setup
 from memory.api.auth import create_user_session
+from memory.api.users import check_single_user
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import (
@@ -62,6 +63,23 @@ def test_claiming_creates_a_signed_in_admin(setup_client, db_session):
     assert db_session.query(Person).filter_by(user_id=user.id).count() == 1
     session = db_session.get(UserSession, response.json()["session_id"])
     assert session is not None and session.user_id == user.id
+
+
+def test_claiming_makes_the_one_human_a_single_user_install_allows(
+    setup_client, db_session, monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+    session_id = claim(setup_client).json()["session_id"]
+
+    with caplog.at_level(logging.WARNING, logger="memory.api.users"):
+        check_single_user(db_session, frozenset())
+    assert not [r for r in caplog.records if r.name == "memory.api.users"]
+    second = setup_client.post(
+        "/users",
+        json={"name": "Two", "email": "two@example.com", "password": "longenough2", "user_type": "human"},
+        headers=bearer(session_id),
+    )
+    assert second.status_code == 403
 
 
 @pytest.mark.parametrize("token", ["wrong", "x" * 32])

@@ -31,7 +31,7 @@ vi.mock('@/hooks/useAgents', async (orig) => ({
 vi.mock('@/hooks/useUsers', () => ({ useUsers: () => ({ updateUser }) }))
 vi.mock('@/components/sources/panels/EmailPanel', () => ({ EmailPanel: () => <div>EMAIL_PANEL</div> }))
 
-const ADA: AuthUser = { id: 7, name: 'Ada', email: 'ada@example.com', user_type: 'human', scopes: ['*'], timezone: 'UTC' }
+const ADA: AuthUser = { id: 7, name: 'Ada', email: 'ada@example.com', user_type: 'human', scopes: ['*'], timezone: 'UTC', modules: [] }
 
 const status = (overrides: Partial<SetupStatus> = {}): SetupStatus => ({
   needs_account: false,

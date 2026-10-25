@@ -16,6 +16,72 @@ section has nothing in it:
 
 ### Required env vars
 
+- **Modules: Claude containers, multiple users and teams are now off by
+  default. Read this before updating.** Three optional modules are chosen with
+  `ENABLE_MODULES` and `DISABLE_MODULES` (comma-separated names, in `.env`; a
+  change needs a restart):
+
+  | Module | Turns on |
+  |---|---|
+  | `claude_containers` | Claude Code containers: the `/claude` routes, their MCP tools, the `claude_session` scheduled-task type, the `claude_sessions` scope, the Claude sessions and configurations pages. Needs the compose overlay below |
+  | `multi_user` | More than one human user. Off, there is one human, `tools/add_user.py` creates them with `*`, and `POST /users` refuses a second human (bot users and API keys are unaffected). The api logs a warning at startup if the only human lacks `*` |
+  | `teams` | Teams, their members, and projects: the routes, the `teams` and `projects` MCP servers, the four `teams`/`projects` scopes, and the team and project pickers |
+
+  To keep what you had, add to `.env` (drop the names you don't use, and the
+  `COMPOSE_FILE` line if you don't run Claude containers):
+
+  ```
+  ENABLE_MODULES=claude_containers,multi_user,teams
+  COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
+  ```
+
+  then `docker compose up -d`. What stops a process from starting:
+  - The api refuses to start while `multi_user` is off and several human users
+    exist ("N human users exist; set ENABLE_MODULES=multi_user or remove users").
+  - A misspelled module name, or one listed in both `ENABLE_MODULES` and
+    `DISABLE_MODULES`, stops every process, with the offending names in the message.
+  - With `claude_containers` on, the api refuses to start without
+    `ORCHESTRATOR_SOCKET`, which the overlay sets.
+
+  **Compose overlay.** The Claude container wiring (the orchestrator socket
+  mount, `group_add` with `DOCKER_GID`, the external `memory-api-<MEMORY_STACK>`
+  network and its alias, and `ORCHESTRATOR_SOCKET`) left `docker-compose.yaml`
+  for `docker-compose.claude.yaml`, enabled by the `COMPOSE_FILE` line above.
+  Stacks that start compose with explicit `-f` flags add
+  `-f docker-compose.claude.yaml` after the base file. Without the overlay, a
+  fresh `docker compose up` no longer needs the `memory-api-<stack>` network;
+  `tools/install.sh` and `deploy/aws/bootstrap.sh` still create it.
+
+  **What off means.** The routes return 404 and leave OpenAPI, the MCP servers
+  are not mounted (their tools leave `tools/list`, agent catalogs and
+  in-process agent runs, and an agent definition that allowlists one is
+  reported as unavailable), and the scopes leave the pickers and
+  `/users/scopes`. Nothing is migrated or deleted: rows, scope grants and
+  `project_id`s stay, and turning a module back on restores the surfaces.
+  Access control is unchanged by modules, and core features (search, ingest,
+  people, notes, reports, journal, tasks, polls, agents, keys, transcript
+  search) never depend on them. The enabled set is returned to logged-in users
+  with the user payload (`/auth/me`), not in `/health`. Only
+  `DISABLED_MCP_SERVERS` in the env and the module flags unmount a server; a
+  server disabled on the settings page is hidden and refused live, as before.
+
+  **MCP tool renames.** The `claude` MCP server is split. Transcript search
+  (`claude_session_search`, `claude_session_fetch`) stays core. The file
+  transfer tools moved to the `claude_containers` module under new names:
+  `claude_session_list` is now `containers_list_sessions`,
+  `claude_session_list_dir` is `containers_list_dir`, `claude_session_pull_url`
+  is `containers_pull_url` and `claude_session_push_url` is `containers_push_url`.
+  Update MCP clients, skills and agent allowlists that name the old ones.
+
+  **Leftovers when `claude_containers` is off.** Due `claude_session`
+  scheduled tasks are skipped (no execution row, the next run advances, one log
+  line) and the scheduler MCP refuses to create new ones. Executions already
+  pending or running when the module goes off are not cancelled: pending ones
+  fail on their next attempt, running ones wait for the stale-execution timeout
+  (2 hours). Running containers are not killed, because the orchestrator is
+  external. In the agents worker (which has no `ORCHESTRATOR_SOCKET`)
+  `containers_list_sessions` and `containers_list_dir` fail as before.
+
 - **Required action if you relied on the old backup defaults.** S3 backups no
   longer default to a bucket: they run only when `S3_BACKUP_BUCKET` is set, and
   `S3_BACKUP_ENABLED` is gone. An instance that had `BACKUP_ENCRYPTION_KEY` set
@@ -43,17 +109,6 @@ section has nothing in it:
 - The api and workers now check settings at startup and refuse to start,
   listing everything that's missing. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`
   are no longer read.
-
-- **Modules (instances with more than one human user).** Multiple human
-  users are now a module, off by default, and the api refuses to start while it
-  is off and several human users exist ("N human users exist; set
-  ENABLE_MODULES=multi_user or remove users"). Before updating, add
-  `ENABLE_MODULES=multi_user` to `.env` (and `teams` and `claude_containers`
-  as described under Other changes). A misspelled module name, or one listed in
-  both `ENABLE_MODULES` and `DISABLE_MODULES`, also stops every process from
-  starting, with the offending names in the message. With `claude_containers`
-  on, the api refuses to start unless `ORCHESTRATOR_SOCKET` is set, which
-  `docker-compose.claude.yaml` does.
 
 ### Manual steps
 
@@ -95,24 +150,6 @@ section has nothing in it:
 - The OAuth redirect URI for external MCP servers is now
   `{SERVER_URL}/auth/mcp/callback`; `/auth/callback/discord` is gone. Update any
   OAuth app you registered by hand with the old URI.
-
-- **Modules (Claude containers).** The Claude container wiring left
-  `docker-compose.yaml` (the orchestrator socket mount, `group_add` with
-  `DOCKER_GID`, the external `memory-api-<MEMORY_STACK>` network and its alias,
-  and `ORCHESTRATOR_SOCKET`) and is now in `docker-compose.claude.yaml`.
-  Instances that run Claude containers add to `.env`:
-
-  ```
-  ENABLE_MODULES=claude_containers
-  COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
-  ```
-
-  then `docker compose up -d`. Without the overlay, the module's api refuses to
-  start for lack of `ORCHESTRATOR_SOCKET`. Instances that don't use containers
-  need nothing, and a fresh `docker compose up` no longer needs the
-  `memory-api-<stack>` network. Stacks that start compose with explicit `-f`
-  flags (rather than `COMPOSE_FILE`) add `-f docker-compose.claude.yaml` after
-  the base file.
 
 ### Other changes for operators
 
@@ -525,49 +562,6 @@ section has nothing in it:
 - HyDE, query analysis and result scoring run on the searcher's default key for
   their provider and are skipped for users without one; search still works.
   `RANKER_MODEL` is removed; delete it from `.env` if set.
-
-- **Modules: Claude containers, multiple users and teams are now off by
-  default.** Three optional modules are chosen with `ENABLE_MODULES` and
-  `DISABLE_MODULES` (comma-separated names, in `.env`; a change needs a
-  restart):
-
-  | Module | Turns on |
-  |---|---|
-  | `claude_containers` | Claude Code containers: the `/claude` routes, their MCP tools, the `claude_session` scheduled-task type, the `claude_sessions` scope, the Claude sessions and configurations pages. Needs the compose overlay (Manual steps) |
-  | `multi_user` | More than one human user. Off, there is one human, `tools/add_user.py` creates them with `*`, and `POST /users` refuses a second human (bot users and API keys are unaffected). The api logs a warning at startup if the only human lacks `*` |
-  | `teams` | Teams, their members, and projects: the routes, the `teams` and `projects` MCP servers, the four `teams`/`projects` scopes, and the team and project pickers |
-
-  To keep what you had, set `ENABLE_MODULES=claude_containers,multi_user,teams`
-  (drop the names you don't use). Off means the routes return 404 and leave
-  OpenAPI, the MCP servers are not mounted (their tools leave `tools/list`,
-  agent catalogs and in-process agent runs, and an agent definition that
-  allowlists one is reported as unavailable), and the scopes leave the pickers
-  and `/users/scopes`. Nothing is migrated or deleted: rows, scope grants and
-  `project_id`s stay, and turning a module back on restores the surfaces.
-  Access control is unchanged by modules, and core features (search, ingest,
-  people, notes, reports, journal, tasks, polls, agents, keys, the check queue,
-  transcript search) never depend on them. The enabled set is returned to
-  logged-in users with the user payload (`/auth/me`), not in `/health`.
-  `DISABLED_MCP_SERVERS` still works for single servers.
-  The local stack's `.env` needs the line above if it uses any of them.
-- **MCP tool renames.** The `claude` MCP server is split. Transcript search
-  (`claude_session_search`, `claude_session_fetch`) stays core. The file
-  transfer tools moved to the `claude_containers` module under new names:
-  `claude_session_list` is now `containers_list_sessions`,
-  `claude_session_list_dir` is `containers_list_dir`, `claude_session_pull_url`
-  is `containers_pull_url` and `claude_session_push_url` is `containers_push_url`.
-  Update MCP clients, skills and agent allowlists that name the old ones.
-- **Leftovers when `claude_containers` is off.** Due `claude_session`
-  scheduled tasks are skipped (no execution row, the next run advances, one log
-  line) and the scheduler MCP refuses to create new ones. Executions already
-  pending or running when the module goes off are not cancelled: pending ones
-  fail on their next attempt, running ones wait for the stale-execution timeout
-  (2 hours). Running containers are not killed, because
-  the orchestrator is external. In the agents worker (which has no
-  `ORCHESTRATOR_SOCKET`) `containers_list_sessions` and `containers_list_dir`
-  fail as before.
-- `tools/install.sh` and `deploy/aws/bootstrap.sh` still create the
-  `memory-api-<stack>` network; it is only used with the overlay.
 
 ### Migrations
 

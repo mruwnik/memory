@@ -97,7 +97,7 @@ Three optional features are off by default and switched on in `.env` with `ENABL
 | `multi_user` | More than one human user. Off, `tools/add_user.py` and `POST /users` allow one human, who gets `*` |
 | `teams` | Teams, their members and projects: routes, MCP servers, scopes, and the team and project pickers |
 
-Everything else (search, ingest, people, notes, reports, journal, tasks, polls, agents, keys, the check queue, transcript search) is always on. Modules never change who can see what. Off means 404 routes, unmounted MCP servers (their tools disappear from `tools/list` and from agent tool catalogs) and hidden scopes; data and existing scope grants stay, so turning a module back on restores it.
+Everything else (search, ingest, people, notes, reports, journal, tasks, polls, agents, keys, transcript search) is always on. Modules never change who can see what. Off means 404 routes, unmounted MCP servers (their tools disappear from `tools/list` and from agent tool catalogs) and hidden scopes; data and existing scope grants stay, so turning a module back on restores it.
 
 `claude_containers` also needs the compose overlay and a running orchestrator. Add both to `.env`:
 
