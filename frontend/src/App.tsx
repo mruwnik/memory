@@ -1,5 +1,5 @@
-import { useEffect, lazy, Suspense, type ReactNode } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react'
+import { createBrowserRouter, RouterProvider, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 
 import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
@@ -145,13 +145,15 @@ const AuthWrapper = () => {
   )
 }
 
+const appRoutes = [{ path: '*', element: <AuthWrapper /> }]
+
 function App() {
+  // Created per mount, not at import, so it reads the location current at render time.
+  const [router] = useState(() => createBrowserRouter(appRoutes))
   return (
-    <Router>
-      <div className="min-h-screen flex flex-col">
-        <AuthWrapper />
-      </div>
-    </Router>
+    <div className="min-h-screen flex flex-col">
+      <RouterProvider router={router} />
+    </div>
   )
 }
 

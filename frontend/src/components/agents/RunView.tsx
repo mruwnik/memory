@@ -3,14 +3,15 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { TERMINAL_STATUSES, useAgents, type AgentRun, type Block, type RunStep } from '@/hooks/useAgents'
 import { StatusBadge, TRIGGER_LABELS } from './StatusBadge'
 import { Badge, Button, ConfirmButton, DetailList, Disclosure, List, Notice, Page, Row, Section, useActionNotice, type Tone } from '@/components/shared/ui'
+import { isForbiddenOrMissing } from '@/hooks/useMCP'
 import { formatCost } from '@/utils/format'
 
 const POLL_MS = 2000
 const PAGE_SIZE = 100
 const MAX_RETRY_MS = 30_000
 const LONG_INPUT = 200
-// agent_wait reports a run you can't see as unknown; useMCP turns access denials into a permission message.
-const NOT_FOUND = /unknown run|permission|failed \(40[34]\)/i
+// agent_wait reports a run you can't see as unknown, with no status code; access denials and HTTP 403/404 arrive typed.
+const UNKNOWN_RUN = /unknown run/i
 
 const formatDuration = (start: string, end: string) => {
   const seconds = Math.round((Date.parse(end) - Date.parse(start)) / 1000)
@@ -105,7 +106,7 @@ function RunView({ runId }: { runId: string }) {
         const message = (e as Error).message
         setError(message)
         // A missing or forbidden run won't appear by waiting; anything else may be transient, so back off and retry.
-        if (NOT_FOUND.test(message)) return
+        if (isForbiddenOrMissing(e) || UNKNOWN_RUN.test(message)) return
         failures += 1
         delay = Math.min(POLL_MS * 2 ** failures, MAX_RETRY_MS)
       }

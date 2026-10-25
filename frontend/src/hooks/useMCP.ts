@@ -97,6 +97,18 @@ const parseJsonRpcResponse = async (response: Response): Promise<any> => {
   }
 }
 
+/** `status` is the HTTP status of a failed request; `denied` marks a tool-level access denial. */
+export class MCPError extends Error {
+  constructor(message: string, readonly status?: number, readonly denied = false) {
+    super(message)
+    this.name = 'MCPError'
+  }
+}
+
+/** The caller can't see the thing: waiting or retrying won't change that. */
+export const isForbiddenOrMissing = (e: unknown) =>
+  e instanceof MCPError && (e.denied || e.status === 403 || e.status === 404)
+
 export const useMCP = () => {
   const { apiCall, checkAuth } = useAuth()
 
@@ -127,7 +139,7 @@ export const useMCP = () => {
       } catch {
         // body already consumed or unreadable — fall back to statusText
       }
-      throw new Error(`MCP call ${method} failed (${response.status}) ${detail}`)
+      throw new MCPError(`MCP call ${method} failed (${response.status}) ${detail}`, response.status)
     }
 
     const resp = await parseJsonRpcResponse(response)
@@ -146,9 +158,10 @@ export const useMCP = () => {
     if (resp.result.isError) {
       const text: string = content[0]?.text ?? `${method} failed`
       // The visibility middleware denies with "Access denied: <tool name>", which means nothing to a user.
-      throw new Error(/^Access denied: [a-z_]+$/.test(text)
-        ? "You don't have permission for this. Ask an admin to grant you access."
-        : text)
+      if (/^Access denied: [a-z_]+$/.test(text)) {
+        throw new MCPError("You don't have permission for this. Ask an admin to grant you access.", undefined, true)
+      }
+      throw new MCPError(text)
     }
 
     return content.map((item: any) => {

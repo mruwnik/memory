@@ -1,4 +1,5 @@
 # pyright: reportFunctionMemberAccess=false
+from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -320,6 +321,30 @@ async def test_list_runs_shows_only_your_own(
         result = await agent.list_runs.fn()
 
     assert [r["id"] for r in result["runs"]] == [mine.id]
+
+
+@pytest.mark.asyncio
+async def test_list_runs_pages_through_runs_sharing_a_created_at(
+    db_session, regular_user, user_session
+):
+    runs = [seeded_run(db_session, regular_user) for _ in range(5)]
+    stamp = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    for r in runs:
+        r.created_at = stamp
+    db_session.commit()
+
+    seen: list[str] = []
+    cursor: dict = {}
+    with mcp_auth_context(user_session.id):
+        for _ in range(5):
+            page = (await agent.list_runs.fn(limit=2, **cursor))["runs"]
+            if not page:
+                break
+            seen += [r["id"] for r in page]
+            cursor = {"before": page[-1]["created_at"], "before_id": page[-1]["id"]}
+
+    assert sorted(seen) == sorted(r.id for r in runs)
+    assert len(seen) == len(set(seen))
 
 
 @pytest.mark.asyncio

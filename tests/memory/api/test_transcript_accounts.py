@@ -72,7 +72,7 @@ def test_list_providers_returns_sorted_list(client, user, db_session, monkeypatc
     response = client.get("/transcript-accounts/providers")
 
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["providers"]
     assert data == ["fireflies", "granola", "otter"]
     assert data == sorted(data)
 
@@ -81,7 +81,9 @@ def test_list_providers_includes_polling_and_push_providers(client, user, db_ses
     response = client.get("/transcript-accounts/providers")
 
     assert response.status_code == 200
-    assert {"fireflies", "generic"} <= set(response.json())
+    body = response.json()
+    assert {"fireflies", "generic"} <= set(body["providers"])
+    assert body["push_only"] == ["generic"]
 
 
 # Test list_accounts

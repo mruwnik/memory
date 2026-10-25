@@ -6,9 +6,6 @@ import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Fi
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
-// Mirrors PUSH_ONLY_PROVIDERS in memory/common/transcripts.py: these take no API key and are never polled.
-const PUSH_ONLY_PROVIDERS = ['generic']
-
 export const TranscriptsPanel = () => {
   const {
     listTranscriptAccounts,
@@ -23,6 +20,7 @@ export const TranscriptsPanel = () => {
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<TranscriptAccount[]>([])
   const [providers, setProviders] = useState<string[]>([])
+  const [pushOnly, setPushOnly] = useState<string[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -39,7 +37,8 @@ export const TranscriptsPanel = () => {
         listProjects(),
       ])
       setAccounts(accountData)
-      setProviders(providerData)
+      setProviders(providerData.providers)
+      setPushOnly(providerData.push_only)
       setProjects(projectData)
       setError(null)
     } catch (e) {
@@ -141,6 +140,7 @@ export const TranscriptsPanel = () => {
       {showForm && (
         <TranscriptForm
           providers={providers}
+          pushOnly={pushOnly}
           projects={projects}
           onSubmit={handleCreate}
           onCancel={() => setShowForm(false)}
@@ -151,6 +151,7 @@ export const TranscriptsPanel = () => {
         <TranscriptForm
           account={editingAccount}
           providers={providers}
+          pushOnly={pushOnly}
           projects={projects}
           onSubmit={handleUpdate}
           onCancel={() => setEditingAccount(null)}
@@ -167,12 +168,14 @@ export const TranscriptsPanel = () => {
 interface TranscriptFormProps {
   account?: TranscriptAccount
   providers: string[]
+  /** Providers that take no API key and are never polled. */
+  pushOnly: string[]
   projects: Project[]
   onSubmit: (data: any) => Promise<void>
   onCancel: () => void
 }
 
-const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: TranscriptFormProps) => {
+const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCancel }: TranscriptFormProps) => {
   const [formData, setFormData] = useState({
     name: account?.name || '',
     provider: account?.provider || providers[0] || 'fireflies',
@@ -184,7 +187,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const polls = account ? account.polls : !PUSH_ONLY_PROVIDERS.includes(formData.provider)
+  const polls = account ? account.polls : !pushOnly.includes(formData.provider)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -246,7 +249,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
 
         <Field label="Provider" hint={account
           ? 'Provider cannot be changed after creation.'
-          : 'Generic accounts are push-only: transcripts arrive at the account\'s ingest URL.'}>
+          : 'Push-only providers are never polled: transcripts arrive at the account\'s ingest URL.'}>
           <Select
             value={formData.provider}
             onChange={e => setFormData({ ...formData, provider: e.target.value })}
@@ -254,7 +257,7 @@ const TranscriptForm = ({ account, providers, projects, onSubmit, onCancel }: Tr
             required
           >
             {providers.map(p => (
-              <option key={p} value={p}>{PUSH_ONLY_PROVIDERS.includes(p) ? `${p} (push only)` : p}</option>
+              <option key={p} value={p}>{pushOnly.includes(p) ? `${p} (push only)` : p}</option>
             ))}
           </Select>
         </Field>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMCP } from '@/hooks/useMCP'
-import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Page, PaneHeader, SplitView, Textarea, ToggleGroup, useActionNotice } from '@/components/shared/ui'
+import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Page, PaneHeader, SplitView, Textarea, ToggleGroup, useActionNotice, useUnsavedGuard } from '@/components/shared/ui'
 import { Markdown } from '@/components/shared/Markdown'
 import { NewNoteModal } from './NewNoteModal'
 
@@ -148,12 +148,8 @@ export const NotesPage = () => {
   const hasChanges = editedContent !== null && editedContent !== fileContent
   const leaveFile = useCallback((go: () => void) => hasChanges ? setPendingLeave(() => go) : go(), [hasChanges])
 
-  useEffect(() => {
-    if (!hasChanges) return
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [hasChanges])
+  const discardMessage = `Discard unsaved changes to ${selectedFile}?`
+  const { dialog: leaveDialog } = useUnsavedGuard(hasChanges, discardMessage)
 
   // Get file path from URL
   const fileFromUrl = searchParams.get('file')
@@ -360,8 +356,9 @@ export const NotesPage = () => {
         <NewNoteModal fetchFiles={fetchFileList} folder={selectedFile?.split('/').slice(0, -1).join('/') ?? ''}
           onCreate={handleCreateNote} onCancel={() => setCreating(false)} />
       )}
+      {leaveDialog}
       {pendingLeave && (
-        <ConfirmDialog message={`Discard unsaved changes to ${selectedFile}?`} confirmLabel="Discard"
+        <ConfirmDialog message={discardMessage} confirmLabel="Discard"
           onCancel={() => { setPendingLeave(null); setUrlFile(selectedFile, true) }}
           onConfirm={() => { setPendingLeave(null); pendingLeave() }} />
       )}

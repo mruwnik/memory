@@ -326,11 +326,12 @@ export const useAgents = () => {
     [call],
   )
   const listRuns = useCallback(
-    async (filters: { definitionId?: number; status?: RunStatus; limit?: number } = {}) =>
+    async (filters: { definitionId?: number; status?: RunStatus; limit?: number; before?: { createdAt: string; id: string } } = {}) =>
       (
         await call<{ runs: AgentRun[] }>('agent_list_runs', {
           ...(filters.definitionId !== undefined ? { definition_id: filters.definitionId } : {}),
           ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.before ? { before: filters.before.createdAt, before_id: filters.before.id } : {}),
           limit: filters.limit ?? 50,
         })
       ).runs,

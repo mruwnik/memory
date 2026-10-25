@@ -27,7 +27,11 @@ from memory.common.data_source_access import (
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.sources import TranscriptAccount
-from memory.common.transcripts import POLLING_PROVIDERS, SUPPORTED_PROVIDERS
+from memory.common.transcripts import (
+    POLLING_PROVIDERS,
+    PUSH_ONLY_PROVIDERS,
+    SUPPORTED_PROVIDERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +117,9 @@ def account_to_response(
 
 
 @router.get("/providers")
-def list_providers() -> list[str]:
-    """List supported transcript providers."""
-    return SUPPORTED_PROVIDERS
+def list_providers() -> dict[str, list[str]]:
+    """Supported transcript providers, and which of them are push-only (never polled)."""
+    return {"providers": SUPPORTED_PROVIDERS, "push_only": PUSH_ONLY_PROVIDERS}
 
 
 @router.get("")

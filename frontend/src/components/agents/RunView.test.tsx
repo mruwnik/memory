@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { StrictMode } from 'react'
 import { Routes, Route } from 'react-router-dom'
+import { MCPError } from '@/hooks/useMCP'
 import { RunView } from './index'
 
 const waitRun = vi.fn()
@@ -173,8 +174,13 @@ describe('RunView', () => {
     expect(await screen.findByRole('button', { name: 'Star' })).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('stops polling a run that does not exist, and offers a retry', async () => {
-    waitRun.mockRejectedValue(new Error('Error calling tool agent_wait: unknown run r1'))
+  it.each([
+    ['an unknown run', new Error('Error calling tool agent_wait: unknown run r1')],
+    ['an access denial', new MCPError('You may not see this', undefined, true)],
+    ['an HTTP 404', new MCPError('MCP call agent_wait failed (404) Not Found', 404)],
+    ['an HTTP 403', new MCPError('MCP call agent_wait failed (403) Forbidden', 403)],
+  ])('stops polling after %s, and offers a retry', async (_, error) => {
+    waitRun.mockRejectedValue(error)
     const { user } = view()
     await user.click(await screen.findByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(waitRun).toHaveBeenCalledTimes(2))

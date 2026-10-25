@@ -16,7 +16,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from pydantic import ValidationError
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.caps import CapExceeded
@@ -463,8 +463,9 @@ async def list_runs(
     status: str | None = None,
     limit: int = 50,
     before: str | None = None,
+    before_id: str | None = None,
 ) -> dict:
-    """Your runs, newest first. `before` is a created_at ISO timestamp for paging."""
+    """Your runs, newest first. To page, pass the last run's `created_at` as `before` and its `id` as `before_id`."""
     user_id, _ = caller()
     with make_session() as db:
         query = db.query(AgentRun).filter(AgentRun.user_id == user_id)
@@ -473,9 +474,16 @@ async def list_runs(
         if status is not None:
             query = query.filter(AgentRun.status == status)
         if before is not None:
-            query = query.filter(AgentRun.created_at < datetime.fromisoformat(before))
+            cutoff = datetime.fromisoformat(before)
+            # Runs created in one transaction share a created_at; the id breaks the tie.
+            older = AgentRun.created_at < cutoff
+            if before_id is not None:
+                older = or_(
+                    older, and_(AgentRun.created_at == cutoff, AgentRun.id < before_id)
+                )
+            query = query.filter(older)
         runs = (
-            query.order_by(AgentRun.created_at.desc())
+            query.order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
             .limit(min(max(limit, 1), 200))
             .all()
         )

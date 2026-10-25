@@ -337,13 +337,13 @@ describe('calendar and transcript verbs', () => {
   })
 
   it('listTranscriptProviders returns the provider list', async () => {
-    mockFetch(okJson(['fireflies', 'otter']))
+    mockFetch(okJson({ providers: ['fireflies', 'otter'], push_only: ['otter'] }))
     const { result } = renderHook(() => useSources())
     let out!: unknown
     await act(async () => {
       out = await result.current.listTranscriptProviders()
     })
-    expect(out).toEqual(['fireflies', 'otter'])
+    expect(out).toEqual({ providers: ['fireflies', 'otter'], push_only: ['otter'] })
   })
 
   it('rescanTranscriptAccount POSTs to the rescan subpath', async () => {

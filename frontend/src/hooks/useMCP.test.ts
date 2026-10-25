@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useMCP } from './useMCP'
+import { isForbiddenOrMissing, MCPError, useMCP } from './useMCP'
 import { mockFetch, mockResponse, clearCookies } from '@/test/utils'
 
 beforeEach(() => {
@@ -145,6 +145,22 @@ describe('mcpCall', () => {
     await expect(result.current.mcpCall('organizer_list_tasks')).rejects.toThrow(
       "You don't have permission for this. Ask an admin to grant you access.",
     )
+  })
+
+  it('types failures so callers need not match message text', async () => {
+    mockFetch(async () => mockResponse({ status: 404, text: 'nope' }))
+    const { result } = renderHook(() => useMCP())
+    const http = await result.current.mcpCall('t').catch(e => e)
+    expect(http).toBeInstanceOf(MCPError)
+    expect(http.status).toBe(404)
+    expect(isForbiddenOrMissing(http)).toBe(true)
+
+    mockFetch(async () => jsonRpcResult([{ text: 'Access denied: t' }], true))
+    expect(isForbiddenOrMissing(await result.current.mcpCall('t').catch(e => e))).toBe(true)
+
+    mockFetch(async () => mockResponse({ status: 500, text: 'boom' }))
+    expect(isForbiddenOrMissing(await result.current.mcpCall('t').catch(e => e))).toBe(false)
+    expect(isForbiddenOrMissing(new Error('failed (404)'))).toBe(false)
   })
 
   it('keeps the specifics of other access errors', async () => {

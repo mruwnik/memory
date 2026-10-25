@@ -1,6 +1,6 @@
 // The app's page template and UI primitives. See frontend/STYLE.md for when to use which.
 import { Children, Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
-import { Link, type LinkProps } from 'react-router-dom'
+import { Link, useBlocker, type LinkProps } from 'react-router-dom'
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ')
 
@@ -177,7 +177,10 @@ export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, 
               </div>
             )}
           </div>
-          {actions && <div className="relative flex flex-wrap items-center gap-2">{actions}</div>}
+          {actions && (
+            // Repeated "Pause"/"Edit" buttons need the row they belong to; the group names it for screen readers.
+            <div role="group" aria-label={typeof title === 'string' ? `Actions for ${title}` : undefined} className="relative flex flex-wrap items-center gap-2">{actions}</div>
+          )}
         </div>
         {children}
       </div>
@@ -1035,4 +1038,37 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabe
       </div>
     </div>
   )
+}
+
+/**
+ * Guards unsaved edits: reload/close via beforeunload, in-app navigation to another path via a confirm dialog
+ * (same-path changes such as `?file=` are the page's own business). Render `dialog` somewhere in the page.
+ * Wrap your own navigation after saving in `bypass`: the router checks the blocker synchronously, before state settles.
+ */
+export const useUnsavedGuard = (active: boolean, message = 'Discard unsaved changes?') => {
+  const bypassing = useRef(false)
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    active && !bypassing.current && currentLocation.pathname !== nextLocation.pathname)
+
+  useEffect(() => {
+    if (!active) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [active])
+
+  // A save landing while the dialog is open leaves nothing to discard.
+  useEffect(() => {
+    if (!active && blocker.state === 'blocked') blocker.reset()
+  }, [active, blocker])
+
+  const bypass = useCallback((go: () => void) => {
+    bypassing.current = true
+    try { go() } finally { bypassing.current = false }
+  }, [])
+
+  const dialog = blocker.state === 'blocked'
+    ? <ConfirmDialog message={message} confirmLabel="Discard" onCancel={() => blocker.reset()} onConfirm={() => blocker.proceed()} />
+    : null
+  return { dialog, bypass }
 }

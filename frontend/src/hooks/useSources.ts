@@ -914,7 +914,7 @@ export const useSources = () => {
 
   // === Transcript Accounts ===
 
-  const listTranscriptProviders = useCallback(async (): Promise<string[]> => {
+  const listTranscriptProviders = useCallback(async (): Promise<{ providers: string[]; push_only: string[] }> => {
     const response = await apiCall('/transcript-accounts/providers')
     if (!response.ok) throw await apiError(response, 'Failed to fetch transcript providers')
     return response.json()

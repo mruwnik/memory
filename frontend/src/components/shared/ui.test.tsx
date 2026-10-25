@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, Modal, SplitView, Tabs, useActionNotice } from './ui'
+import { createMemoryRouter, Link, MemoryRouter, RouterProvider, useSearchParams } from 'react-router-dom'
+import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, List, Modal, Row, SplitView, Tabs, useActionNotice, useUnsavedGuard } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -185,5 +186,70 @@ describe('Tabs', () => {
     rerender(<Tabs label="T" options={options} value="a" onChange={vi.fn()} />)
     expect(scroll.mock.contexts.at(-1)).toBe(screen.getByRole('tab', { name: 'A' }))
     scroll.mockRestore()
+  })
+})
+
+describe('useUnsavedGuard', () => {
+  const Editor = ({ dirty }: { dirty: boolean }) => {
+    const { dialog } = useUnsavedGuard(dirty, 'Discard edits?')
+    const [, setParams] = useSearchParams()
+    return (
+      <>
+        <Link to="/other">Leave</Link>
+        <button onClick={() => setParams({ file: 'a' })}>Same path</button>
+        {dialog}
+      </>
+    )
+  }
+  const renderEditor = (dirty: boolean) => {
+    const router = createMemoryRouter([
+      { path: '/edit', element: <Editor dirty={dirty} /> },
+      { path: '/other', element: <p>Other page</p> },
+    ], { initialEntries: ['/edit'] })
+    render(<RouterProvider router={router} />)
+    return userEvent.setup()
+  }
+
+  it('asks before leaving with unsaved changes, and stays on cancel', async () => {
+    const user = renderEditor(true)
+    await user.click(screen.getByText('Leave'))
+    expect(screen.getByText('Discard edits?')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByText('Other page')).not.toBeInTheDocument()
+    expect(screen.getByText('Leave')).toBeInTheDocument()
+  })
+
+  it('leaves once the discard is confirmed', async () => {
+    const user = renderEditor(true)
+    await user.click(screen.getByText('Leave'))
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(screen.getByText('Other page')).toBeInTheDocument()
+  })
+
+  it('does not interfere when clean', async () => {
+    const clean = renderEditor(false)
+    await clean.click(screen.getByText('Leave'))
+    expect(screen.getByText('Other page')).toBeInTheDocument()
+  })
+
+  it('lets in-page query changes through while dirty', async () => {
+    const user = renderEditor(true)
+    await user.click(screen.getByText('Same path'))
+    expect(screen.queryByText('Discard edits?')).not.toBeInTheDocument()
+  })
+})
+
+describe('Row', () => {
+  it('groups its actions under the row title so repeated buttons are told apart', () => {
+    render(
+      <MemoryRouter>
+        <List>
+          <Row title="Work mail" actions={<Button>Pause</Button>} />
+          <Row title="Home mail" actions={<Button>Pause</Button>} />
+        </List>
+      </MemoryRouter>,
+    )
+    const group = screen.getByRole('group', { name: 'Actions for Home mail' })
+    expect(within(group).getByRole('button', { name: 'Pause' })).toBeInTheDocument()
   })
 })

@@ -1,11 +1,14 @@
-import { ReactElement, ReactNode } from 'react'
+import { createContext, ReactElement, ReactNode, useContext, useState } from 'react'
 import { render, RenderOptions } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 
+const UiContext = createContext<ReactNode>(null)
+const UiSlot = () => <>{useContext(UiContext)}</>
+
 /**
- * Render a component wrapped in a MemoryRouter and return a userEvent instance
+ * Render a component inside a memory data router and return a userEvent instance
  * alongside the usual RTL result. Use `initialEntries` to control the route.
  */
 export function renderWithRouter(
@@ -15,9 +18,12 @@ export function renderWithRouter(
     ...options
   }: { initialEntries?: string[] } & Omit<RenderOptions, 'wrapper'> = {},
 ) {
-  const Wrapper = ({ children }: { children: ReactNode }) => (
-    <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
-  )
+  // A data router, like the app's, so components may use useBlocker. The route reads the UI from
+  // context so that rerender() with new props still reaches it.
+  const Wrapper = ({ children }: { children: ReactNode }) => {
+    const [router] = useState(() => createMemoryRouter([{ path: '*', element: <UiSlot /> }], { initialEntries }))
+    return <UiContext.Provider value={children}><RouterProvider router={router} /></UiContext.Provider>
+  }
   return {
     user: userEvent.setup(),
     ...render(ui, { wrapper: Wrapper, ...options }),

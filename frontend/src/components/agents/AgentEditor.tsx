@@ -6,21 +6,14 @@ import { SpecEditor } from './SpecEditor'
 import { StatusBadge } from './StatusBadge'
 import { Schedules } from './Schedules'
 import { Triggers } from './Triggers'
-import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea, useActionNotice, useSubmit } from '@/components/shared/ui'
+import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea, useActionNotice, useSubmit, useUnsavedGuard } from '@/components/shared/ui'
+import { isForbiddenOrMissing } from '@/hooks/useMCP'
 import { formatCost } from '@/utils/format'
 
-// agent_fetch reports another user's agent like a missing one; useMCP turns access denials into a permission message.
-const NOT_FOUND = /unknown agent definition|permission|failed \(40[34]\)/i
+// agent_fetch reports a missing agent with no status code; access denials and HTTP 403/404 arrive typed.
+const UNKNOWN_AGENT = /unknown agent definition/i
 
 const snapshot = (name: string, description: string, spec: AgentSpec | null) => JSON.stringify({ name, description, spec })
-
-// The app uses BrowserRouter, not a data router, so useBlocker isn't available: only reloads and closing the tab are guarded.
-const useWarnOnUnload = (active: boolean) => useEffect(() => {
-  if (!active) return
-  const warn = (e: BeforeUnloadEvent) => e.preventDefault()
-  window.addEventListener('beforeunload', warn)
-  return () => window.removeEventListener('beforeunload', warn)
-}, [active])
 
 export default function AgentEditor() {
   const { id } = useParams()
@@ -46,7 +39,7 @@ export default function AgentEditor() {
   const { run: act, notice } = useActionNotice()
   const current = useMemo(() => snapshot(name, description, spec), [name, description, spec])
   const dirty = saved !== null && current !== saved
-  useWarnOnUnload(dirty)
+  const { dialog: leaveDialog, bypass } = useUnsavedGuard(dirty, `Discard unsaved changes to ${name || 'this agent'}?`)
 
   const load = useCallback(() => {
     if (!validId) return
@@ -68,7 +61,7 @@ export default function AgentEditor() {
         setChangedTools(d.changed_tools ?? [])
         setSaved(snapshot(d.name, d.description, d.spec))
       })
-      .catch(e => NOT_FOUND.test(e.message) ? setMissing(true) : setLoadError(e.message))
+      .catch(e => isForbiddenOrMissing(e) || UNKNOWN_AGENT.test(e.message) ? setMissing(true) : setLoadError(e.message))
   }, [loadCatalog, getDefinition, isNew, definitionId, validId])
   useEffect(load, [load])
 
@@ -86,7 +79,7 @@ export default function AgentEditor() {
     setSpec(stored.spec)
     setChangedTools([])
     setSaved(snapshot(stored.name, stored.description, stored.spec))
-    if (isNew) navigate(`/ui/agents/${stored.id}`)
+    if (isNew) bypass(() => navigate(`/ui/agents/${stored.id}`))
   })
 
   const run = () => running.submit(async () => {
@@ -97,7 +90,7 @@ export default function AgentEditor() {
   const remove = () => act(async () => {
     if (definitionId === undefined) return
     await deleteDefinition(definitionId)
-    navigate('/ui/agents')
+    bypass(() => navigate('/ui/agents'))
   })
 
   const back = { to: '/ui/agents', label: 'Agents' }
@@ -108,6 +101,7 @@ export default function AgentEditor() {
     <Page back={back} title={name || (isNew ? 'New agent' : 'Untitled agent')}
       actions={!isNew && <ConfirmButton size="md" confirm={`Delete agent "${name}"? Its runs are kept.`} onConfirm={remove}>Delete agent</ConfirmButton>}>
       {notice}
+      {leaveDialog}
       <FieldRow>
         <Field label="Name"><Input required maxLength={100} value={name} onChange={e => setName(e.target.value)} /></Field>
         <Field label="Description"><Input value={description} onChange={e => setDescription(e.target.value)} /></Field>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen } from '@/test/utils'
+import { renderWithRouter, screen, waitFor } from '@/test/utils'
 import type { AgentRun } from '@/hooks/useAgents'
 import AgentRuns from './AgentRuns'
 
@@ -53,5 +53,48 @@ describe('AgentRuns', () => {
     await screen.findByRole('link', { name: 'Ad-hoc run' })
     await user.click(screen.getByRole('button', { name: 'Refresh' }))
     expect(listRuns).toHaveBeenCalledTimes(2)
+  })
+
+  it('pages older runs with the before cursor until a short page', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => run({ id: `n${i}`, created_at: `2026-10-24T10:${String(59 - (i % 60)).padStart(2, '0')}:00` }))
+    full[99] = run({ id: 'n99', created_at: '2026-10-01T00:00:00' })
+    listRuns.mockReset().mockResolvedValueOnce(full).mockResolvedValueOnce([run({ id: 'old', input: 'an older run' })])
+    const { user } = renderWithRouter(<AgentRuns />)
+    await user.click(await screen.findByRole('button', { name: 'Load more' }))
+    expect(listRuns).toHaveBeenLastCalledWith({ status: undefined, limit: 100, before: { createdAt: '2026-10-01T00:00:00', id: 'n99' } })
+    expect(await screen.findByText('an older run')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+  })
+
+  const fullPage = () => Array.from({ length: 100 }, (_, i) => run({ id: `n${i}`, input: `page one ${i}`, created_at: '2026-10-01T00:00:00' }))
+
+  it('keeps page one and retries only the next page when Load more fails', async () => {
+    listRuns.mockReset().mockResolvedValueOnce(fullPage()).mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([run({ id: 'old', input: 'an older run' })])
+    const { user } = renderWithRouter(<AgentRuns />)
+    await user.click(await screen.findByRole('button', { name: 'Load more' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('boom')
+    expect(screen.getByText('page one 0')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('an older run')).toBeInTheDocument()
+    expect(screen.getByText('page one 0')).toBeInTheDocument()
+    expect(listRuns).toHaveBeenCalledTimes(3)
+    expect(listRuns).toHaveBeenLastCalledWith(expect.objectContaining({ before: { createdAt: '2026-10-01T00:00:00', id: 'n99' } }))
+  })
+
+  it('drops a Load more response that arrives after the filter changed', async () => {
+    let finishMore!: (page: AgentRun[]) => void
+    listRuns.mockReset()
+      .mockResolvedValueOnce(fullPage())
+      .mockReturnValueOnce(new Promise(resolve => { finishMore = resolve }))
+      .mockResolvedValueOnce([run({ id: 'f1', input: 'filtered run', status: 'failed' })])
+    const { user } = renderWithRouter(<AgentRuns />)
+    await user.click(await screen.findByRole('button', { name: 'Load more' }))
+    await user.click(screen.getByRole('button', { name: 'Failed' }))
+    expect(await screen.findByText('filtered run')).toBeInTheDocument()
+
+    finishMore([run({ id: 'stale', input: 'stale run' })])
+    await waitFor(() => expect(screen.queryByText('page one 0')).not.toBeInTheDocument())
+    expect(screen.queryByText('stale run')).not.toBeInTheDocument()
   })
 })

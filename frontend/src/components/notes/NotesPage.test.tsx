@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { Link } from 'react-router-dom'
+import { Link, Route, Routes } from 'react-router-dom'
 import { fireEvent, renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import userEvent from '@testing-library/user-event'
 import { NotesPage } from './NotesPage'
@@ -139,6 +139,26 @@ describe('NotesPage', () => {
     await user.click(screen.getByText('go other'))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
     await waitFor(() => expect(fetchFile).toHaveBeenLastCalledWith('/notes/other.md'))
+  })
+
+  it('asks before an in-app link leaves the page with unsaved edits', async () => {
+    listNotes.mockResolvedValue([['/notes/readme.md']])
+    const user = userEvent.setup()
+    renderWithRouter(
+      <><Routes><Route path="/ui/notes" element={<NotesPage />} /><Route path="/ui/elsewhere" element={<p>Elsewhere</p>} /></Routes><Link to="/ui/elsewhere">leave</Link></>,
+      { initialEntries: ['/ui/notes?file=readme.md'] },
+    )
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.type(await screen.findByRole('textbox'), '!')
+
+    await user.click(screen.getByText('leave'))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByText('Elsewhere')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toHaveValue('# Hello\n\nbody!')
+
+    await user.click(screen.getByText('leave'))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard' }))
+    expect(await screen.findByText('Elsewhere')).toBeInTheDocument()
   })
 
   it('warns before the tab closes only while there are unsaved edits', async () => {

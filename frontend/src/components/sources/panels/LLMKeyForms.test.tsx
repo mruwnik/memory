@@ -39,7 +39,7 @@ const panels: [string, ComponentType, string, Record<string, MockResponseInit>][
     '/calendar-accounts': { json: [calendarAccount] }, '/google-drive/accounts': { json: [] }, '/mcp/organizer_upcoming': mcp([]),
   }],
   ['Transcripts', TranscriptsPanel, '/transcript-accounts/3', {
-    '/transcript-accounts/providers': { json: ['fireflies'] }, '/transcript-accounts': { json: [transcriptAccount] },
+    '/transcript-accounts/providers': { json: { providers: ['fireflies'], push_only: [] } }, '/transcript-accounts': { json: [transcriptAccount] },
   }],
   ['GitHub', AccountsPanel, '/github/accounts/4', {
     '/github/accounts': { json: [githubAccount] }, '/google-drive/accounts': { json: [] },

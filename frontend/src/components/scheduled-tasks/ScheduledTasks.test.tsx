@@ -341,6 +341,7 @@ describe('ScheduledTasks', () => {
     await user.selectOptions(screen.getByDisplayValue(/env-a/), '4')
     // toggle playwright on
     await user.click(screen.getByLabelText('Enable Playwright'))
+    await user.click(screen.getByLabelText('Use my saved write token'))
     // edit custom env vars
     await user.type(screen.getByPlaceholderText(/KEY=value/), 'API_KEY=secret')
     await user.click(screen.getByRole('button', { name: 'Save' }))
@@ -350,6 +351,7 @@ describe('ScheduledTasks', () => {
       expect(call?.[1].spawn_config).toMatchObject({
         environment_id: 4,
         enable_playwright: true,
+        use_saved_write_token: true,
         custom_env: { API_KEY: 'secret' },
       })
     })

@@ -107,6 +107,7 @@ function dataFacts(task: ScheduledTask): string[] {
       config.repo_url && `repo: ${String(config.repo_url).replace(/^https?:\/\/github\.com\//, '')}`,
       config.run_id && `run: ${config.run_id}`,
       config.enable_playwright && 'Playwright',
+      config.use_saved_write_token && 'saved write token',
       tools && `tools: ${tools.length > 3 ? `${tools.slice(0, 3).join(', ')}...` : tools.join(', ')}`,
     ].filter((f): f is string => !!f)
   }
@@ -298,6 +299,7 @@ interface SpawnConfigState {
   repoUrl: string
   allowedTools: string
   enablePlaywright: boolean
+  useSavedWriteToken: boolean
   runId: string
   customEnvText: string
 }
@@ -310,6 +312,7 @@ function buildSpawnConfig(s: SpawnConfigState): Record<string, unknown> {
   const tools = s.allowedTools.split(',').map(t => t.trim()).filter(Boolean)
   if (tools.length) cfg.allowed_tools = tools
   if (s.enablePlaywright) cfg.enable_playwright = true
+  if (s.useSavedWriteToken) cfg.use_saved_write_token = true
   if (s.runId) cfg.run_id = s.runId
   const env: Record<string, string> = {}
   for (const line of s.customEnvText.split('\n')) {
@@ -352,6 +355,7 @@ const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsP
       <Textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className="font-mono" />
     </Field>
     <Checkbox label="Enable Playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
+    <Checkbox label="Use my saved write token" checked={state.useSavedWriteToken} onChange={e => setState(s => ({ ...s, useSavedWriteToken: e.target.checked }))} />
   </Fieldset>
 )
 
@@ -363,6 +367,7 @@ const spawnStateOf = (config: Record<string, unknown>): SpawnConfigState => ({
   repoUrl: (config.repo_url as string) || '',
   allowedTools: Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : '',
   enablePlaywright: !!config.enable_playwright,
+  useSavedWriteToken: !!config.use_saved_write_token,
   runId: (config.run_id as string) || '',
   customEnvText: envText(config.custom_env),
 })
@@ -405,6 +410,7 @@ const EditForm = ({ task, onSave, onCancel, saving, error }: EditFormProps) => {
         configUpdates.allowed_tools = tools.length > 0 ? tools : null
       }
       if (spawn.enablePlaywright !== original.enablePlaywright) configUpdates.enable_playwright = spawn.enablePlaywright || null
+      if (spawn.useSavedWriteToken !== original.useSavedWriteToken) configUpdates.use_saved_write_token = spawn.useSavedWriteToken || null
       if (spawn.runId !== original.runId) configUpdates.run_id = spawn.runId || null
       if (spawn.customEnvText !== original.customEnvText) {
         const env = buildSpawnConfig({ ...spawn }).custom_env
@@ -467,7 +473,7 @@ const CreateForm = ({ onCreate, onCancel, saving, error }: CreateFormProps) => {
   const [channel, setChannel] = useState('')
   const [target, setTarget] = useState('')
   const [spawn, setSpawn] = useState<SpawnConfigState>({
-    envId: null, repoUrl: '', allowedTools: '', enablePlaywright: false, runId: '', customEnvText: '',
+    envId: null, repoUrl: '', allowedTools: '', enablePlaywright: false, useSavedWriteToken: false, runId: '', customEnvText: '',
   })
 
   const { listEnvironments } = useClaude()

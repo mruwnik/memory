@@ -65,7 +65,7 @@ const passwordInputs = () =>
 beforeEach(() => {
   vi.clearAllMocks()
   listTranscriptAccounts.mockResolvedValue([])
-  listTranscriptProviders.mockResolvedValue(['fireflies', 'generic'])
+  listTranscriptProviders.mockResolvedValue({ providers: ['fireflies', 'generic'], push_only: ['generic'] })
   listProjects.mockResolvedValue([project])
   createTranscriptAccount.mockResolvedValue(account())
   updateTranscriptAccount.mockResolvedValue(account())
@@ -161,7 +161,7 @@ describe('TranscriptsPanel - create flow', () => {
   })
 
   it('shows the "no providers" guard when provider list is empty', async () => {
-    listTranscriptProviders.mockResolvedValue([])
+    listTranscriptProviders.mockResolvedValue({ providers: [], push_only: [] })
     const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 

@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAgents, type AgentRun, type RunStatus } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { STATUS_LABELS, StatusBadge, TRIGGER_LABELS } from './StatusBadge'
-import { ButtonLink, EmptyState, ErrorState, List, LoadingState, Page, RefreshButton, Row, ToggleGroup, Toolbar } from '@/components/shared/ui'
+import { Button, ButtonLink, EmptyState, ErrorState, List, LoadingState, Page, RefreshButton, Row, ToggleGroup, Toolbar } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 
-const LIMIT = 100
+const LIMIT = 100 // also the page size: a full page means there may be older runs
 
 const FILTERS: { value: RunStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -18,11 +18,47 @@ export default function AgentRuns() {
   const [runs, setRuns] = useState<AgentRun[] | null>(null)
   const [agentNames, setAgentNames] = useState<Map<number, string>>(new Map())
   const [error, setError] = useState<string | null>(null)
+  const [more, setMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const filter = status === 'all' ? undefined : status
+
+  // Bumped by every page-1 load, so a "Load more" that outlives its filter or a refresh is dropped.
+  const generation = useRef(0)
+  const [moreError, setMoreError] = useState<string | null>(null)
 
   const load = useCallback(() => {
+    const mine = ++generation.current
     setError(null)
-    listRuns({ status: status === 'all' ? undefined : status, limit: LIMIT }).then(setRuns).catch(e => setError(e.message))
-  }, [listRuns, status])
+    setMoreError(null)
+    setLoadingMore(false)
+    listRuns({ status: filter, limit: LIMIT })
+      .then(page => {
+        if (mine !== generation.current) return
+        setRuns(page)
+        setMore(page.length === LIMIT)
+      })
+      .catch(e => { if (mine === generation.current) setError(e.message) })
+  }, [listRuns, filter])
+
+  const loadMore = () => {
+    const last = runs?.[runs.length - 1]
+    if (!last?.created_at) return
+    const mine = generation.current
+    setLoadingMore(true)
+    setMoreError(null)
+    listRuns({ status: filter, limit: LIMIT, before: { createdAt: last.created_at, id: last.id } })
+      .then(page => {
+        if (mine !== generation.current) return
+        setRuns(held => [...(held ?? []), ...page])
+        setMore(page.length === LIMIT)
+        setLoadingMore(false)
+      })
+      .catch(e => {
+        if (mine !== generation.current) return
+        setMoreError(e.message)
+        setLoadingMore(false)
+      })
+  }
 
   useEffect(() => {
     setRuns(null)
@@ -65,7 +101,8 @@ export default function AgentRuns() {
           ))}
         </List>
       )}
-      {runs?.length === LIMIT && <p className="text-sm text-slate-600">Showing the latest {LIMIT} runs.</p>}
+      {moreError && <p role="alert" className="text-red-700">Couldn't load older runs: {moreError}</p>}
+      {more && <Button onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Loading...' : moreError ? 'Retry' : 'Load more'}</Button>}
     </Page>
   )
 }
