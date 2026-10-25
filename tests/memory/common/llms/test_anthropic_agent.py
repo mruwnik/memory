@@ -356,6 +356,50 @@ async def test_a_paused_turn_is_returned_to_the_caller(monkeypatch):
     assert len(client.sent) == 1
 
 
+def server_call(name, caller=None):
+    block = {"type": "server_tool_use", "id": f"s-{name}", "name": name, "input": {}}
+    return block | ({"caller": caller} if caller else {})
+
+
+CODE_CALLER = {"type": "code_execution_20260120", "tool_id": "c1"}
+
+
+@pytest.mark.parametrize(
+    "blocks,reported,searches,fetches",
+    [
+        # Direct calls have been seen with web_search_requests 0.
+        ([server_call("web_search"), server_call("web_search")], 0, 2, 0),
+        ([server_call("web_search")], None, 1, 0),
+        ([server_call("web_fetch")], 0, 0, 1),
+        # Recorded shape of a search run from code execution: counted once, not twice.
+        (
+            [server_call("code_execution"), server_call("web_search", CODE_CALLER)],
+            1,
+            1,
+            0,
+        ),
+        ([server_call("web_search")], 3, 3, 0),
+    ],
+)
+def test_usage_counts_provider_calls_the_reported_usage_misses(
+    blocks, reported, searches, fetches
+):
+    server = (
+        {}
+        if reported is None
+        else {
+            "server_tool_use": {
+                "web_search_requests": reported,
+                "web_fetch_requests": 0,
+            }
+        }
+    )
+
+    usage = AnthropicProvider.agent_usage(message(blocks, "end_turn", **server))
+
+    assert (usage.web_searches, usage.web_fetches) == (searches, fetches)
+
+
 def test_pricing_table_covers_the_documented_models():
     assert set(ANTHROPIC_MODELS) == {
         "claude-opus-5-5",

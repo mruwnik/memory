@@ -120,7 +120,7 @@ def submit_block(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def sdk_block(data: dict[str, Any]) -> SimpleNamespace:
-    return SimpleNamespace(to_dict=lambda: data)
+    return SimpleNamespace(to_dict=lambda: data, **data)
 
 
 def batch_result(

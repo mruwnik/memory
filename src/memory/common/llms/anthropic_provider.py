@@ -245,13 +245,21 @@ class AnthropicProvider(BaseLLMProvider):
     def agent_usage(msg: anthropic.types.Message) -> AgentUsage:
         u = msg.usage
         server = u.server_tool_use
+        calls = [b.name for b in msg.content if b.type == "server_tool_use"]
+        # Direct calls have been reported as 0 requests, so the calls in the content set a floor.
         return AgentUsage(
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
             cache_read_tokens=u.cache_read_input_tokens or 0,
             cache_write_tokens=u.cache_creation_input_tokens or 0,
-            web_searches=(server.web_search_requests or 0) if server else 0,
-            web_fetches=(server.web_fetch_requests or 0) if server else 0,
+            web_searches=max(
+                (server.web_search_requests or 0) if server else 0,
+                calls.count("web_search"),
+            ),
+            web_fetches=max(
+                (server.web_fetch_requests or 0) if server else 0,
+                calls.count("web_fetch"),
+            ),
         )
 
     @staticmethod
