@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import require_rest_access, resolve_user_filter
 from memory.api.notes_source import sync_failing, visible_notes
 from memory.common.access_control import (
     AccessFilter,
@@ -85,7 +85,7 @@ def visible_books(db: Session, access: AccessFilter | None) -> int:
 @router.get("")
 def source_tabs(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ) -> SourceTabs:
     """Per-tab counts of what the Sources tabs list, and how many of those are failing to sync.

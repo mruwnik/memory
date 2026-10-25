@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, get_user_account, resolve_user_filter
+from memory.api.auth import get_interactive_user, get_user_account, resolve_user_filter
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common.access_control import has_admin_scope
@@ -224,7 +224,7 @@ def verify_account_identity(account: GithubAccount) -> str | None:
 @router.get("/accounts")
 def list_accounts(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[GithubAccountResponse]:
     """List GitHub accounts. Admins can view any user's accounts or all accounts."""
@@ -247,7 +247,7 @@ class GithubRepoBasic(BaseModel):
 
 @router.get("/repos")
 def list_all_repos(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[GithubRepoBasic]:
     """List all tracked repos. Admins see all repos, others see only their own."""
@@ -279,7 +279,7 @@ def list_all_repos(
 @router.post("/accounts")
 def create_account(
     data: GithubAccountCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
     """Create a new GitHub account."""
@@ -327,7 +327,7 @@ def create_account(
 @router.get("/accounts/{account_id}")
 def get_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
     """Get a single GitHub account."""
@@ -339,7 +339,7 @@ def get_account(
 def update_account(
     account_id: int,
     updates: GithubAccountUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
     """Update a GitHub account."""
@@ -384,7 +384,7 @@ def update_account(
 @router.delete("/accounts/{account_id}")
 def delete_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Delete a GitHub account and all its repos."""
@@ -399,7 +399,7 @@ def delete_account(
 @router.post("/accounts/{account_id}/validate")
 def validate_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Validate GitHub API access for an account.
@@ -484,7 +484,7 @@ def list_available_repos(
     limit: int | None = None,
     include_archived: bool = False,
     refresh: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[AvailableRepoResponse]:
     """List repositories available from GitHub for this account.
@@ -528,7 +528,7 @@ def list_available_projects(
     owner: str,
     is_org: bool = True,
     include_closed: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[AvailableProjectResponse]:
     """List projects available from GitHub for this account.
@@ -569,7 +569,7 @@ def list_available_projects(
 def add_repo(
     account_id: int,
     data: GithubRepoCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubRepoResponse:
     """Add a repo to track for a GitHub account."""
@@ -638,7 +638,7 @@ def update_repo(
     account_id: int,
     repo_id: int,
     updates: GithubRepoUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubRepoResponse:
     """Update a repo's tracking configuration."""
@@ -675,7 +675,7 @@ def update_repo(
 def remove_repo(
     account_id: int,
     repo_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Remove a repo from tracking."""
@@ -699,7 +699,7 @@ def trigger_repo_sync(
     account_id: int,
     repo_id: int,
     force_full: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a repo."""
@@ -786,7 +786,7 @@ def project_to_response(project: GithubProject) -> GithubProjectResponse:
 def list_account_projects(
     account_id: int,
     include_closed: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[GithubProjectResponse]:
     """List all synced GitHub projects for a specific account."""
@@ -806,7 +806,7 @@ def list_account_projects(
 def add_project(
     account_id: int,
     data: GithubProjectCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubProjectResponse:
     """Add a single GitHub project to track for an account.
@@ -878,7 +878,7 @@ def list_projects(
     owner: str | None = None,
     include_closed: bool = False,
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[GithubProjectResponse]:
     """List synced GitHub projects.
@@ -929,7 +929,7 @@ def trigger_projects_sync(
     owner: str,
     is_org: bool = True,
     include_closed: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Trigger a sync of all GitHub Projects for an owner."""
@@ -956,7 +956,7 @@ def trigger_projects_sync(
 @router.delete("/projects/{project_id}")
 def delete_project(
     project_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Delete a synced GitHub project."""

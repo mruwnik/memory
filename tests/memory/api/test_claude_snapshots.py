@@ -193,10 +193,8 @@ def test_extract_snapshot_summary_limits_members():
     """Test that member count is limited to prevent zip bombs."""
     # Create tarball with more members than allowed
     content = create_tarball_with_many_members(MAX_TAR_MEMBERS + 100)
-    # Should not hang or crash, just process up to limit
-    summary = extract_snapshot_summary(content)
-    # The summary should still be a valid dict
-    assert isinstance(summary, dict)
+    with pytest.raises(ValueError, match="member limit"):
+        extract_snapshot_summary(content)
 
 
 def test_extract_snapshot_summary_handles_invalid_tarball():
@@ -370,3 +368,35 @@ def test_snapshot_dedup_rejects_same_user_duplicate(db_session, admin_user):
 @pytest.mark.skip("Not implemented - needs FastAPI TestClient setup")
 def test_delete_removes_file():
     """Test that deleting a snapshot removes the file from disk."""
+
+
+@pytest.mark.parametrize("extract", [extract_snapshot_summary, extract_account_info])
+def test_snapshot_expansion_cap_includes_padding(monkeypatch, extract):
+    from memory.claude_containers import claude_snapshots as snapshots
+    monkeypatch.setattr(snapshots, "MAX_EXPANDED_SIZE", 1024)
+    with pytest.raises(ValueError, match="expanded size"):
+        extract(create_test_tarball({"small": b"x"}))
+
+
+def test_folder_iteration_stops_before_loading_all_members(monkeypatch):
+    from memory.claude_containers import claude_snapshots as snapshots
+    monkeypatch.setattr(snapshots, "MAX_TAR_MEMBERS", 2)
+    with tarfile.open(fileobj=io.BytesIO(create_tarball_with_many_members(5)), mode="r:gz") as tar:
+        with pytest.raises(ValueError, match="member limit"):
+            snapshots.extract_folders_from_tar(tar)
+        assert len(getattr(tar, "members")) == 3
+
+
+@pytest.mark.asyncio
+async def test_upload_reads_only_compressed_limit_plus_one(monkeypatch):
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException, UploadFile
+    from memory.claude_containers import claude_snapshots as snapshots
+    monkeypatch.setattr(snapshots, "MAX_SNAPSHOT_SIZE", 8)
+    upload = UploadFile(io.BytesIO(b"x" * 9))
+    read = AsyncMock(wraps=upload.read)
+    monkeypatch.setattr(upload, "read", read)
+    with pytest.raises(HTTPException) as exc:
+        await snapshots.upload_snapshot(file=upload, name="test")
+    assert exc.value.status_code == 413
+    read.assert_awaited_once_with(9)

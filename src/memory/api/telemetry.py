@@ -18,7 +18,7 @@ from sqlalchemy import exists, func
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy.orm import joinedload
 
-from memory.api.auth import get_current_user, request_api_key, resolve_user_filter
+from memory.api.auth import require_rest_access, request_api_key, resolve_user_filter
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
@@ -65,7 +65,7 @@ class IngestResponse(BaseModel):
 async def ingest_telemetry(
     request: Request,
     background_tasks: BackgroundTasks,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> IngestResponse:
     """
@@ -161,7 +161,7 @@ def get_raw_events(
     limit: int = Query(100, ge=1, le=1000, description="Max events to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """
@@ -257,7 +257,7 @@ def get_aggregated_metrics(
     ),
     api_key_id: int | None = Query(None, description="Filter by the API key that sent the events"),
     user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """
@@ -377,7 +377,7 @@ class TelemetryUser(BaseModel):
 
 @router.get("/users", response_model=list[TelemetryUser])
 def get_users_with_telemetry(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> list[TelemetryUser]:
     """
@@ -460,7 +460,7 @@ def get_session_usage(
     to_time: datetime | None = Query(None, alias="to", description="End time (ISO format)"),
     api_key_id: int | None = Query(None, description="Filter by the API key that sent the events"),
     user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> SessionUsageResponse:
     """
@@ -546,7 +546,7 @@ class TelemetryAPIKey(BaseModel):
 @router.get("/api-keys", response_model=list[TelemetryAPIKey])
 def get_api_keys_with_telemetry(
     user_id: int | None = Query(None, description="Filter by key owner (admin only, omit for all users)"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> list[TelemetryAPIKey]:
     """API keys that have sent at least one telemetry event, for the key filter."""

@@ -4,6 +4,9 @@ Manages config snapshots for running Claude Code in containers.
 """
 
 import hashlib
+import gzip
+import tempfile
+from contextlib import contextmanager
 import io
 import json
 import re
@@ -12,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import require_scope
@@ -25,6 +29,7 @@ MAX_SNAPSHOT_SIZE = 100 * 1024 * 1024
 
 # Maximum number of tar members to iterate (prevents zip bombs)
 MAX_TAR_MEMBERS = 10000
+MAX_EXPANDED_SIZE = 512 * 1024 * 1024
 
 # Maximum size of individual file to extract from tarball for reading
 MAX_EXTRACT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -89,11 +94,35 @@ def is_safe_tar_member(member: tarfile.TarInfo) -> bool:
     return True
 
 
+@contextmanager
+def bounded_tar(content: bytes):
+    """Bound expansion before tar parsing, including extended headers and padding."""
+    if len(content) > MAX_SNAPSHOT_SIZE:
+        raise ValueError("Snapshot compressed size limit exceeded")
+    with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as expanded:
+        with gzip.GzipFile(fileobj=io.BytesIO(content)) as compressed:
+            total = 0
+            while chunk := compressed.read(min(64 * 1024, MAX_EXPANDED_SIZE - total + 1)):
+                total += len(chunk)
+                if total > MAX_EXPANDED_SIZE:
+                    raise ValueError("Snapshot expanded size limit exceeded")
+                expanded.write(chunk)
+        expanded.seek(0)
+        with tarfile.open(fileobj=expanded, mode="r:") as tar:
+            # Iterate lazily; never getmembers() before enforcing the cap.
+            for count, member in enumerate(tar):
+                if count >= MAX_TAR_MEMBERS:
+                    raise ValueError("Snapshot member limit exceeded")
+                if member.size < 0 or member.size > MAX_EXPANDED_SIZE:
+                    raise ValueError("Snapshot member size limit exceeded")
+            yield tar
+
+
 def extract_folders_from_tar(tar: tarfile.TarFile) -> dict[str, list[str]]:
     """Extract folder contents from tarball.
 
     Returns dict mapping folder names to list of unique top-level items in each folder.
-    Stops after MAX_TAR_MEMBERS to prevent zip bomb DoS.
+    Rejects archives exceeding MAX_TAR_MEMBERS.
 
     Expects new format: .claude/skills/, .claude/agents/, etc.
     """
@@ -105,9 +134,9 @@ def extract_folders_from_tar(tar: tarfile.TarFile) -> dict[str, list[str]]:
         "commands": set(),
     }
 
-    for count, member in enumerate(tar.getmembers()):
+    for count, member in enumerate(tar):
         if count >= MAX_TAR_MEMBERS:
-            break
+            raise ValueError("Snapshot member limit exceeded")
 
         if not is_safe_tar_member(member):
             continue
@@ -140,8 +169,9 @@ def extract_mcp_servers_from_tar(tar: tarfile.TarFile) -> list[str]:
 
     try:
         config = json.loads(claude_json.read().decode())
-        return list(config.get("mcpServers", {}).keys())
-    except json.JSONDecodeError:
+        servers = config.get("mcpServers", {}) if isinstance(config, dict) else {}
+        return list(servers) if isinstance(servers, dict) else []
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return []
 
 
@@ -166,10 +196,10 @@ def extract_credentials_from_tar(tar: tarfile.TarFile) -> dict[str, str | None]:
 
     try:
         creds = json.loads(creds_file.read().decode())
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return info
 
-    claude_oauth = creds.get("claudeAiOauth", {})
+    claude_oauth = creds.get("claudeAiOauth", {}) if isinstance(creds, dict) else {}
     if not isinstance(claude_oauth, dict):
         return info
 
@@ -190,11 +220,11 @@ def extract_snapshot_summary(content: bytes) -> dict[str, Any]:
     }
 
     try:
-        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+        with bounded_tar(content) as tar:
             folders = extract_folders_from_tar(tar)
             summary.update(folders)
             summary["mcp_servers"] = extract_mcp_servers_from_tar(tar)
-    except tarfile.TarError:
+    except (tarfile.TarError, OSError, EOFError):
         pass
 
     return summary
@@ -203,9 +233,9 @@ def extract_snapshot_summary(content: bytes) -> dict[str, Any]:
 def extract_account_info(content: bytes) -> dict[str, str | None]:
     """Extract Claude account info from snapshot credentials."""
     try:
-        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+        with bounded_tar(content) as tar:
             return extract_credentials_from_tar(tar)
-    except tarfile.TarError:
+    except (tarfile.TarError, OSError, EOFError):
         return {"claude_account_email": None, "subscription_type": None}
 
 
@@ -251,7 +281,7 @@ async def upload_snapshot(
     db: DBSession = Depends(get_session),
 ) -> SnapshotResponse:
     """Upload a new config snapshot. Deduplicates by content hash."""
-    content = await file.read()
+    content = await file.read(MAX_SNAPSHOT_SIZE + 1)
 
     if len(content) > MAX_SNAPSHOT_SIZE:
         raise HTTPException(
@@ -259,11 +289,18 @@ async def upload_snapshot(
             detail=f"Snapshot too large. Maximum size is {MAX_SNAPSHOT_SIZE // (1024 * 1024)} MB",
         )
 
+    def parse_snapshot():
+        with bounded_tar(content) as tar:
+            summary = extract_folders_from_tar(tar)
+            summary["mcp_servers"] = extract_mcp_servers_from_tar(tar)
+            return summary, extract_credentials_from_tar(tar)
+
     try:
-        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz"):
-            pass
-    except tarfile.TarError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid tarball: {e}")
+        summary, account_info = await run_in_threadpool(parse_snapshot)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid tarball") from exc
 
     content_hash = hashlib.sha256(content).hexdigest()
 
@@ -285,9 +322,6 @@ async def upload_snapshot(
     path = settings.SNAPSHOT_STORAGE_DIR / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
-
-    summary = extract_snapshot_summary(content)
-    account_info = extract_account_info(content)
 
     snapshot = ClaudeConfigSnapshot(
         user_id=user.id,

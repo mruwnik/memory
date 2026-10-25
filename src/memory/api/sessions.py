@@ -23,7 +23,7 @@ from sqlalchemy import func
 
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import require_rest_access, resolve_user_filter
 from memory.common import settings
 from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import get_session, make_session
@@ -417,7 +417,7 @@ def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
 @router.post("/ingest/batch", response_model=BatchIngestResponse)
 async def ingest_session_events_batch(
     request: BatchIngestRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
 ) -> BatchIngestResponse:
     """
     Ingest multiple session events in a single request.
@@ -628,7 +628,7 @@ def get_tool_usage_stats(
     from_time: datetime | None = Query(None, alias="from", description="Start time"),
     to_time: datetime | None = Query(None, alias="to", description="End time"),
     user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> ToolUsageResponse:
     """

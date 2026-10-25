@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import (
     assert_project_membership,
-    get_current_user,
+    get_interactive_user,
     resolve_user_filter,
 )
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
@@ -521,7 +521,7 @@ async def slack_callback_for_app(
     code: str = Query(...),
     state: str = Query(...),
     error: str | None = Query(None),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Multi-tenant OAuth callback (slack-changes.md §3.2 / §3.4 row 4).
@@ -570,7 +570,7 @@ async def slack_callback_for_app(
 @router.get("/workspaces")
 def list_workspaces(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[SlackWorkspaceResponse]:
     """List Slack workspaces. Admins can view any user's workspaces."""
@@ -603,7 +603,7 @@ def list_workspaces(
 @router.get("/workspaces/{workspace_id}")
 def get_workspace(
     workspace_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
     """Get details of a specific workspace."""
@@ -615,7 +615,7 @@ def get_workspace(
 def update_workspace(
     workspace_id: str,
     updates: SlackWorkspaceUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
     """Update workspace settings.
@@ -655,7 +655,7 @@ def update_workspace(
 @router.delete("/workspaces/{workspace_id}")
 def disconnect_workspace(
     workspace_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Disconnect user's credentials from a Slack workspace.
@@ -715,7 +715,7 @@ def disconnect_workspace(
 @router.post("/workspaces/{workspace_id}/sync")
 def trigger_sync(
     workspace_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Trigger a manual sync for a workspace.
@@ -751,7 +751,7 @@ def trigger_sync(
 def list_channels(
     workspace_id: str,
     channel_type: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[SlackChannelResponse]:
     """List channels in a workspace."""
@@ -771,7 +771,7 @@ def list_channels(
 def update_channel(
     channel_id: str,
     updates: SlackChannelUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackChannelResponse:
     """Update channel collection settings."""
@@ -860,7 +860,7 @@ def list_slack_apps_for_user(db: Session, user: User) -> list[SlackApp]:
 @router.post("/apps", response_model=SlackAppResponse, status_code=201)
 def create_slack_app(
     body: SlackAppCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
     """Create a draft SlackApp claim for a (new) Slack client_id.
@@ -899,7 +899,7 @@ def create_slack_app(
 
 @router.get("/apps", response_model=list[SlackAppResponse])
 def list_slack_apps(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[SlackAppResponse]:
     """List the apps the current user owns."""
@@ -910,7 +910,7 @@ def list_slack_apps(
 @router.get("/apps/{app_id}", response_model=SlackAppResponse)
 def get_slack_app(
     app_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
     """Get a single SlackApp by id (owner only)."""
@@ -922,7 +922,7 @@ def get_slack_app(
 def update_slack_app(
     app_id: int,
     body: SlackAppUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
     """Update display name / is_active. Owner only."""
@@ -941,7 +941,7 @@ def update_slack_app(
 @router.delete("/apps/{app_id}", status_code=204)
 def delete_slack_app(
     app_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> None:
     """Delete a SlackApp. Owner only.
@@ -1395,7 +1395,7 @@ def _callback_url_for(slack_app_id: int) -> str:
 def set_client_secret(
     app_id: int,
     body: SlackAppSecretBody,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
     """Store the SlackApp client_secret encrypted. Owner only.
@@ -1416,7 +1416,7 @@ def set_client_secret(
 def set_signing_secret(
     app_id: int,
     body: SlackAppSecretBody,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
     """Store the SlackApp signing_secret encrypted. Owner only.
@@ -1436,7 +1436,7 @@ def set_signing_secret(
 @router.post("/apps/{app_id}/wizard-nonce", response_model=SlackAppNonceResponse)
 def issue_wizard_nonce(
     app_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppNonceResponse:
     """Issue a fresh wizard_nonce bound to (slack_app_id, user_id).
@@ -1463,7 +1463,7 @@ def issue_wizard_nonce(
 @router.post("/apps/{app_id}/oauth-state", response_model=SlackOAuthStateResponse)
 def issue_oauth_state(
     app_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackOAuthStateResponse:
     """Mint a fresh OAuth state for the wizard's "Open Slack OAuth" step.
@@ -1486,7 +1486,7 @@ def issue_oauth_state(
 @router.get("/apps/{app_id}/wizard-status", response_model=SlackWizardStatus)
 def wizard_status(
     app_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackWizardStatus:
     """Return wizard progress for the frontend's polling loop."""
@@ -1509,7 +1509,7 @@ def wizard_status(
 def begin_test_message(
     app_id: int,
     body: SlackTestMessageStart,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackTestMessageStatus:
     """Begin the 60s test-message window. Owner only.
@@ -1538,7 +1538,7 @@ def begin_test_message(
 @router.get("/apps/{app_id}/test-message", response_model=SlackTestMessageStatus)
 def poll_test_message(
     app_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackTestMessageStatus:
     """Poll for the test-message advance.

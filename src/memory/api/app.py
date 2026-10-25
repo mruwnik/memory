@@ -34,7 +34,7 @@ from memory.common.db.models.source_items import Report
 from memory import claude_containers
 from memory.api.auth import (
     AuthenticationMiddleware,
-    get_current_user,
+    require_rest_access,
     router as auth_router,
 )
 from memory.api.google_drive import router as google_drive_router
@@ -398,7 +398,7 @@ async def serve_react_app(full_path: str):
 async def serve_report(
     path: str,
     download: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db=Depends(get_session),
 ):
     """Serve a report file with per-report access control and CSP sandboxing for HTML."""
@@ -455,7 +455,7 @@ async def serve_report(
 async def serve_file(
     path: str,
     download: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db=Depends(get_session),
 ):
     """Serve a stored file with per-item access control.

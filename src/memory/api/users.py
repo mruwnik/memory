@@ -36,7 +36,7 @@ from memory.common.scopes import (
     known_scopes,
     validate_scopes,
 )
-from memory.api.auth import get_current_user, get_token, require_scope
+from memory.api.auth import get_interactive_user, get_current_user, get_token, require_scope
 from memory.api.field_errors import field_error
 from memory.common.access_control import has_admin_scope
 from memory.common.people import find_person_by_email, make_identifier
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Valid API key types for validation (derived from APIKeyType constants)
 VALID_KEY_TYPES = frozenset(APIKeyType.ALL_TYPES)
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(get_interactive_user)])
 
 
 class UserCreate(BaseModel):

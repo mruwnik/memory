@@ -1,32 +1,4 @@
-"""Streaming HTTP download with a hard size cap.
-
-Centralises the "fetch a URL into RAM or disk, but never buffer more than
-``max_bytes``" pattern used by image-cache (parsers/html.py),
-Discord-attachment ingest (workers/tasks/discord.py), and Slack-file
-ingest (workers/tasks/slack.py). Pre-extraction the three sites had
-slightly different shapes — Discord even used MD5 for filenames while
-the others used SHA-256 — and the Slack version had no cap at all,
-buffered the entire 1 GB-max body in RAM, and held a second copy in
-``response.content``.
-
-Two entry points:
-
-- :func:`stream_download_to_bytes` — return the body as bytes (suitable
-  for in-memory consumers like PIL).
-- :func:`stream_download_to_path` — write directly to a file on disk,
-  cleaning up the partial file if the cap is exceeded.
-
-Both return ``None`` on any failure (size cap, HTTP error, network
-error). The reason is logged at WARNING.
-
-Redirect handling: ``requests``'s default ``allow_redirects=True`` follows
-redirects inside a single ``urlopen()`` pass with no intermediate hook,
-so an attacker who controls the response of a public URL can ``302`` to
-``http://169.254.169.254/`` (cloud IMDS) or to internal docker-network
-services. :func:`safe_get` disables native redirect following and
-re-validates each redirect target via :func:`memory.common.ssrf.validate_public_url`
-before issuing the next hop. ``stream_download_*`` use it transparently.
-"""
+"""Bounded streaming downloads with public-only, dial-time address checks."""
 
 import logging
 import pathlib
@@ -34,6 +6,10 @@ from typing import Any, Literal, Mapping, overload
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
+from requests.structures import CaseInsensitiveDict
+import httpx
+
+from memory.common.safe_http import public_sync_http_client
 
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
@@ -221,6 +197,8 @@ def _follow_redirect(
     # We do this AFTER URL validation so a same-host 302 (the common
     # case) keeps every header untouched.
     if _is_cross_host_redirect(current_url, next_url):
+        kwargs.pop("auth", None)
+        kwargs.pop("cookies", None)
         stripped = _strip_sensitive_headers(kwargs.get("headers"))
         if stripped != kwargs.get("headers"):
             logger.info(
@@ -233,6 +211,54 @@ def _follow_redirect(
     return next_url
 
 
+class DownloadResponse(requests.Response):
+    """Requests-compatible response owning the checked HTTP client's lifetime."""
+
+    def __init__(self, response: httpx.Response, client: httpx.Client):
+        super().__init__()
+        self.response = response
+        self.client = client
+        self.status_code = response.status_code
+        self.headers = CaseInsensitiveDict(response.headers)
+        self.url = str(response.url)
+        self.encoding = response.encoding
+
+    def iter_content(self, chunk_size=1, decode_unicode=False):
+        try:
+            for chunk in self.response.iter_bytes(chunk_size):
+                yield chunk.decode(self.encoding or "utf-8") if decode_unicode else chunk
+        except httpx.HTTPError as exc:
+            raise requests.RequestException(str(exc)) from exc
+        finally:
+            self.close()
+
+    def close(self):
+        self.response.close()
+        self.client.close()
+
+
+def checked_get(url: str, **kwargs: Any) -> requests.Response:
+    """One checked hop; keep streaming until the response is closed."""
+    stream = kwargs.pop("stream", False)
+    kwargs.pop("allow_redirects", None)
+    client = public_sync_http_client(timeout=kwargs.pop("timeout", 30.0))
+    try:
+        response = DownloadResponse(client.send(client.build_request("GET", url, **kwargs), stream=True), client)
+        if not stream:
+            # requests.Response.content consumes iter_content, including its cap.
+            _ = response.content
+        return response
+    except UnsafeURLError:
+        client.close()
+        raise
+    except httpx.HTTPError as exc:
+        client.close()
+        raise requests.RequestException(str(exc)) from exc
+    except Exception:
+        client.close()
+        raise
+
+
 def safe_get(
     url: str,
     *,
@@ -241,43 +267,10 @@ def safe_get(
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     **kwargs: Any,
 ) -> requests.Response:
-    """GET ``url`` with redirect-aware SSRF validation.
+    """GET with public-only dial-time checks and credential-safe redirects.
 
-    Disables ``requests``'s native redirect handling and follows redirects
-    manually so each ``Location`` target is re-validated via
-    :func:`validate_public_url` (DNS-resolution + private-IP check). This
-    closes the SSRF redirect-bypass attack where an attacker hosts a
-    public URL that 302s to ``http://169.254.169.254/`` (cloud IMDS) or
-    to docker-network services.
-
-    The initial URL is validated unless ``validate_url=False`` (callers
-    that already validated may opt out to avoid double DNS lookup; intermediate
-    redirect targets are still validated). The kwargs are passed through
-    to ``requests.get`` (``stream``, ``timeout``, ``headers``, ...);
-    ``allow_redirects`` is forced off internally.
-
-    On a cross-host redirect (different scheme, hostname, or port), the
-    ``Authorization``, ``Proxy-Authorization``, and ``Cookie`` headers
-    are stripped before the next request — mirroring the
-    ``requests.Session.rebuild_auth`` credential-leak defence which the
-    bare ``requests.get`` path doesn't get for free. This protects callers
-    that pass per-host bearer tokens against an attacker who controls
-    the ``Location`` of a public 302 hop.
-
-    DNS-rebinding TOCTOU residual risk: ``validate_public_url`` does its
-    own ``getaddrinfo`` and then ``requests.get`` does another at dial
-    time. An attacker who controls authoritative DNS for a public
-    domain can return a public IP for the first lookup and a private
-    IP for the second. The single-resolve attacker is closed; the
-    DNS-rebinding attacker is not. See ``memory.common.ssrf`` module
-    docstring + follow-up task ``5a471003`` for the proper fix (pin
-    the validated IP across validate→fetch via a custom HTTPAdapter).
-
-    Raises:
-        UnsafeURLError: initial or any redirect target failed SSRF policy,
-            or redirect loop / hop-count cap hit.
-        requests.RequestException: connection / timeout / decoding error
-            (caller's responsibility — kept consistent with ``requests.get``).
+    validate_url=False skips only the preliminary check; every connection
+    still resolves, checks, and dials the same numeric address.
     """
     if validate_url:
         validate_public_url(url)
@@ -294,7 +287,7 @@ def safe_get(
     visited: set[str] = {canonicalize_url_for_loop_detection(url)}
 
     for _ in range(max_redirects + 1):
-        response = requests.get(current_url, **kwargs)
+        response = checked_get(current_url, **kwargs)
 
         if not follow_redirects or response.status_code not in _REDIRECT_STATUS_CODES:
             return response

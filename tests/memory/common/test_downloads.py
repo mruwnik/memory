@@ -74,7 +74,7 @@ def _stub_ssrf_validation():
 def test_stream_download_to_bytes_returns_body_within_cap():
     """A small response under the cap returns the joined body."""
     fake = _FakeChunkResponse([b"hello, ", b"world!"], content_length=13)
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
     assert result == b"hello, world!"
 
@@ -82,7 +82,7 @@ def test_stream_download_to_bytes_returns_body_within_cap():
 def test_stream_download_to_bytes_aborts_on_content_length():
     """Server-supplied Content-Length over the cap fast-fails before reading body."""
     fake = _FakeChunkResponse([b"X" * 1024], content_length=10_000_000)
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
     assert result is None
 
@@ -94,7 +94,7 @@ def test_stream_download_to_bytes_aborts_mid_stream_when_cap_exceeded():
         [b"X" * 1024] * 8,
         content_length=None,  # omitted — only the streaming loop catches us
     )
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=4096)
     assert result is None
 
@@ -102,7 +102,7 @@ def test_stream_download_to_bytes_aborts_mid_stream_when_cap_exceeded():
 def test_stream_download_to_bytes_handles_request_exception():
     """Network errors return None; the caller doesn't have to wrap a try/except."""
     with patch(
-        "memory.common.downloads.requests.get",
+        "memory.common.downloads.checked_get",
         side_effect=requests.RequestException("boom"),
     ):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
@@ -112,7 +112,7 @@ def test_stream_download_to_bytes_handles_request_exception():
 def test_stream_download_to_path_writes_file_and_returns_true(tmp_path: pathlib.Path):
     fake = _FakeChunkResponse([b"the body bytes"], content_length=14)
     dest = tmp_path / "out.bin"
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         ok = stream_download_to_path("http://example.com/f", dest, max_bytes=1024)
     assert ok is True
     assert dest.read_bytes() == b"the body bytes"
@@ -124,7 +124,7 @@ def test_stream_download_to_path_cleans_up_partial_file_on_cap_exceeded(
     """A truncated download must NOT leave a partial file behind."""
     fake = _FakeChunkResponse([b"X" * 1024] * 4, content_length=None)
     dest = tmp_path / "partial.bin"
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         ok = stream_download_to_path("http://example.com/f", dest, max_bytes=2048)
     assert ok is False
     assert not dest.exists(), "partial file must be removed"
@@ -134,7 +134,7 @@ def test_stream_download_to_path_creates_parent_directory(tmp_path: pathlib.Path
     """The helper mkdirs the parent path so callers don't have to."""
     fake = _FakeChunkResponse([b"x"], content_length=1)
     dest = tmp_path / "a" / "b" / "c" / "out.bin"
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         ok = stream_download_to_path("http://example.com/f", dest, max_bytes=1024)
     assert ok is True
     assert dest.exists()
@@ -147,7 +147,7 @@ def test_stream_download_to_path_handles_request_exception(tmp_path: pathlib.Pat
     dest.write_bytes(b"stale content")
 
     with patch(
-        "memory.common.downloads.requests.get",
+        "memory.common.downloads.checked_get",
         side_effect=requests.RequestException("boom"),
     ):
         ok = stream_download_to_path("http://example.com/f", dest, max_bytes=1024)
@@ -159,7 +159,7 @@ def test_stream_download_to_bytes_return_content_type_surfaces_header():
     """return_content_type=True returns (content_type, body) tuple."""
     fake = _FakeChunkResponse([b"hello"], content_length=5)
     fake.headers["content-type"] = "application/pdf"
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes(
             "http://example.com/f", max_bytes=1024, return_content_type=True
         )
@@ -169,7 +169,7 @@ def test_stream_download_to_bytes_return_content_type_surfaces_header():
 def test_stream_download_to_bytes_return_content_type_none_when_absent():
     """return_content_type=True with no Content-Type header returns None for type."""
     fake = _FakeChunkResponse([b"data"])
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes(
             "http://example.com/f", max_bytes=1024, return_content_type=True
         )
@@ -179,7 +179,7 @@ def test_stream_download_to_bytes_return_content_type_none_when_absent():
 def test_stream_download_to_bytes_return_content_type_none_on_failure():
     """return_content_type=True returns (None, None) on network error."""
     with patch(
-        "memory.common.downloads.requests.get",
+        "memory.common.downloads.checked_get",
         side_effect=requests.RequestException("boom"),
     ):
         result = stream_download_to_bytes(
@@ -192,7 +192,7 @@ def test_stream_download_to_bytes_default_false_unchanged():
     """Default return_content_type=False keeps backward-compatible bytes return."""
     fake = _FakeChunkResponse([b"body"])
     fake.headers["content-type"] = "text/plain"
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
     assert result == b"body"
 
@@ -202,7 +202,7 @@ def test_stream_download_to_bytes_ignores_unparseable_content_length(invalid_cl)
     """Garbage Content-Length doesn't crash; we just rely on the streaming cap."""
     fake = _FakeChunkResponse([b"ok"])
     fake.headers["Content-Length"] = invalid_cl
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
     assert result == b"ok"
 
@@ -217,7 +217,7 @@ def test_stream_download_to_bytes_ignores_unparseable_content_length(invalid_cl)
 def test_safe_get_returns_response_when_no_redirect():
     """Non-3xx response is returned directly."""
     fake = _FakeChunkResponse([b"ok"], status_code=200)
-    with patch("memory.common.downloads.requests.get", return_value=fake):
+    with patch("memory.common.downloads.checked_get", return_value=fake):
         response = safe_get("http://example.com/f")
     assert response is fake
 
@@ -229,7 +229,7 @@ def test_safe_get_follows_safe_redirect_chain():
     final = _FakeChunkResponse([b"final"], status_code=200)
 
     with patch(
-        "memory.common.downloads.requests.get",
+        "memory.common.downloads.checked_get",
         side_effect=[hop1, hop2, final],
     ):
         response = safe_get("http://start.example/1")
@@ -250,7 +250,7 @@ def test_safe_get_blocks_redirect_to_private_ip():
     with patch("memory.common.downloads.validate_public_url") as mock_validate:
         mock_validate.side_effect = [None, UnsafeURLError("non-public IP")]
         with patch(
-            "memory.common.downloads.requests.get", return_value=hop
+            "memory.common.downloads.checked_get", return_value=hop
         ) as mock_get:
             with pytest.raises(UnsafeURLError):
                 safe_get("http://attacker.example/")
@@ -267,7 +267,7 @@ def test_safe_get_initial_url_validation_can_be_skipped():
     final = _FakeChunkResponse([b"x"], status_code=200)
     with patch("memory.common.downloads.validate_public_url") as mock_validate:
         with patch(
-            "memory.common.downloads.requests.get",
+            "memory.common.downloads.checked_get",
             side_effect=[hop, final],
         ):
             safe_get("http://start.example/", validate_url=False)
@@ -283,7 +283,7 @@ def test_safe_get_caps_redirect_count():
         for i in range(7)
     ]
     with patch(
-        "memory.common.downloads.requests.get", side_effect=hops
+        "memory.common.downloads.checked_get", side_effect=hops
     ):
         with pytest.raises(UnsafeURLError, match="Too many redirects"):
             safe_get("http://start.example/", max_redirects=5)
@@ -295,7 +295,7 @@ def test_safe_get_detects_redirect_loop():
     # requests.get gets called repeatedly with the same URL; loop detection
     # fires once we revisit a URL we've already seen.
     with patch(
-        "memory.common.downloads.requests.get", return_value=loop
+        "memory.common.downloads.checked_get", return_value=loop
     ):
         with pytest.raises(UnsafeURLError, match="loop"):
             safe_get("http://start.example/")
@@ -306,7 +306,7 @@ def test_safe_get_does_not_follow_when_follow_redirects_false():
     redirect = _FakeChunkResponse(
         [], status_code=302, location="http://other.example/"
     )
-    with patch("memory.common.downloads.requests.get", return_value=redirect):
+    with patch("memory.common.downloads.checked_get", return_value=redirect):
         response = safe_get("http://start.example/", follow_redirects=False)
     assert response is redirect
     assert response.status_code == 302
@@ -315,7 +315,7 @@ def test_safe_get_does_not_follow_when_follow_redirects_false():
 def test_safe_get_returns_3xx_without_location_header():
     """3xx without Location is unusual but not a redirect to follow."""
     weird = _FakeChunkResponse([b"body"], status_code=304)  # no Location
-    with patch("memory.common.downloads.requests.get", return_value=weird):
+    with patch("memory.common.downloads.checked_get", return_value=weird):
         response = safe_get("http://start.example/")
     assert response is weird
 
@@ -336,7 +336,7 @@ def test_safe_get_resolves_relative_redirect():
         "memory.common.downloads.validate_public_url", side_effect=fake_validate
     ):
         with patch(
-            "memory.common.downloads.requests.get",
+            "memory.common.downloads.checked_get",
             side_effect=[relative_hop, final],
         ):
             safe_get("http://start.example/page")
@@ -356,7 +356,7 @@ def test_stream_download_to_bytes_blocks_unsafe_redirect():
     with patch("memory.common.downloads.validate_public_url") as mock_validate:
         mock_validate.side_effect = [None, UnsafeURLError("10.0.0.5 is private")]
         with patch(
-            "memory.common.downloads.requests.get", return_value=redirect
+            "memory.common.downloads.checked_get", return_value=redirect
         ):
             result = stream_download_to_bytes(
                 "http://attacker.example/", max_bytes=1024
@@ -373,7 +373,7 @@ def test_stream_download_to_path_blocks_unsafe_redirect(tmp_path: pathlib.Path):
     with patch("memory.common.downloads.validate_public_url") as mock_validate:
         mock_validate.side_effect = [None, UnsafeURLError("192.168.1.1 is private")]
         with patch(
-            "memory.common.downloads.requests.get", return_value=redirect
+            "memory.common.downloads.checked_get", return_value=redirect
         ):
             ok = stream_download_to_path(
                 "http://attacker.example/", dest, max_bytes=1024
@@ -402,7 +402,7 @@ def test_safe_get_strips_authorization_on_cross_host_redirect():
         captured.append({"url": url, "headers": kwargs.get("headers")})
         return [hop, final][len(captured) - 1]
 
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get(
             "http://api.example/me",
             headers={"Authorization": "Bearer s3cret", "User-Agent": "ua"},
@@ -444,7 +444,7 @@ def test_safe_get_strip_is_case_insensitive(header_name: str):
         captured.append(kwargs.get("headers"))
         return [hop, final][len(captured) - 1]
 
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get(
             "http://api.example/me",
             headers={header_name: "secret-value", "Accept": "*/*"},
@@ -471,7 +471,7 @@ def test_safe_get_keeps_headers_on_same_host_redirect():
         return [hop, final][len(captured) - 1]
 
     headers = {"Authorization": "Bearer s3cret", "Cookie": "session=abc"}
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get("http://api.example/me", headers=headers)
 
     # Both hops see the full header set — same-host redirects don't strip.
@@ -493,7 +493,7 @@ def test_safe_get_strips_on_scheme_change_same_host():
         captured.append(kwargs.get("headers"))
         return [hop, final][len(captured) - 1]
 
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get(
             "http://api.example/me",
             headers={"Authorization": "Bearer s3cret"},
@@ -514,7 +514,7 @@ def test_safe_get_strips_on_port_change_same_host():
         captured.append(kwargs.get("headers"))
         return [hop, final][len(captured) - 1]
 
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get(
             "http://api.example/me",
             headers={"Authorization": "Bearer s3cret"},
@@ -534,7 +534,7 @@ def test_safe_get_no_headers_no_change():
         captured.append(kwargs.get("headers"))
         return [hop, final][len(captured) - 1]
 
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get("http://api.example/me")  # no headers kwarg
 
     # Neither call gets headers; no headers got materialised by the strip path.
@@ -560,7 +560,7 @@ def test_safe_get_strip_persists_across_chained_redirects():
         captured.append(kwargs.get("headers"))
         return [hop1, hop2, final][len(captured) - 1]
 
-    with patch("memory.common.downloads.requests.get", side_effect=fake_get):
+    with patch("memory.common.downloads.checked_get", side_effect=fake_get):
         safe_get(
             "http://api.example/me",
             headers={"Authorization": "Bearer s3cret"},
@@ -783,7 +783,7 @@ def test_safe_get_detects_loop_across_case_differences():
     hop1 = _FakeChunkResponse([], status_code=302, location="http://A.Example/")
     hop2 = _FakeChunkResponse([], status_code=302, location="http://a.example/")
     with patch(
-        "memory.common.downloads.requests.get", side_effect=[hop1, hop2]
+        "memory.common.downloads.checked_get", side_effect=[hop1, hop2]
     ):
         with pytest.raises(UnsafeURLError, match="loop"):
             safe_get("http://a.example/")
@@ -795,7 +795,7 @@ def test_safe_get_detects_loop_across_fragment_differences():
         [], status_code=302, location="http://start.example/#frag"
     )
     with patch(
-        "memory.common.downloads.requests.get", return_value=hop1
+        "memory.common.downloads.checked_get", return_value=hop1
     ):
         with pytest.raises(UnsafeURLError, match="loop"):
             safe_get("http://start.example/")
@@ -808,7 +808,7 @@ def test_safe_get_detects_loop_across_query_param_reorder():
         [], status_code=302, location="http://start.example/?b=2&a=1"
     )
     with patch(
-        "memory.common.downloads.requests.get", return_value=hop
+        "memory.common.downloads.checked_get", return_value=hop
     ):
         with pytest.raises(UnsafeURLError, match="loop"):
             safe_get("http://start.example/?a=1&b=2")

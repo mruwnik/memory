@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import imaplib
+import ssl
 import logging
 import re
 from collections import defaultdict
@@ -295,13 +296,15 @@ def process_folder(
 def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, None]:
     host = cast(str, account.imap_server)
     port = cast(int, account.imap_port)
-    # use_ssl defaults to True when unset — SSL (993) is the norm and the
-    # historical behaviour. Only an explicit False selects plain IMAP (143).
+    context = ssl.create_default_context()
+    # Port 143 requires STARTTLS before any credentials are sent.
     if account.use_ssl is False:
         conn: imaplib.IMAP4 = imaplib.IMAP4(host=host, port=port)
     else:
-        conn = imaplib.IMAP4_SSL(host=host, port=port)
+        conn = imaplib.IMAP4_SSL(host=host, port=port, ssl_context=context)
     try:
+        if account.use_ssl is False:
+            conn.starttls(ssl_context=context)
         conn.login(cast(str, account.username), cast(str, account.password))
         yield conn
     finally:

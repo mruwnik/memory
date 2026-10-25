@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import distinct, exists
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, resolve_user_filter
+from memory.api.auth import require_rest_access, resolve_user_filter
 from memory.common.access_control import has_admin_scope
 from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import get_session
@@ -30,7 +30,7 @@ def can_access_job(job, current_user: User) -> bool:
     """Check if user can access a specific job."""
     if has_admin_scope(current_user):
         return True
-    return job.user_id is None or job.user_id == current_user.id
+    return job.user_id is not None and job.user_id == current_user.id
 
 
 def parse_iso_datetime_query(name: str, value: str | None) -> datetime | None:
@@ -55,7 +55,7 @@ def parse_iso_datetime_query(name: str, value: str | None) -> datetime | None:
 
 @router.get("/types")
 def get_job_types(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> list[str]:
     """Get distinct job types that exist in the database.
@@ -77,7 +77,7 @@ def get_job_types(
 @router.get("/external/{external_id}")
 def get_job_by_external_id(
     external_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
     job_type: str | None = Query(None, description="Filter by job type"),
 ) -> PendingJobPayload:
@@ -100,7 +100,7 @@ def get_job_by_external_id(
 
 @router.get("/counts")
 def get_job_counts(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
     job_type: str | None = Query(None, description="Filter by job type"),
     user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
@@ -125,7 +125,7 @@ def get_job_counts(
 @router.get("/{job_id}")
 def get_job(
     job_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> PendingJobPayload:
     """
@@ -147,7 +147,7 @@ def get_job(
 
 @router.get("")
 def list_jobs(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
     status: str | None = Query(None, description="Filter by status"),
     job_type: str | None = Query(None, description="Filter by job type"),
@@ -190,7 +190,7 @@ def list_jobs(
 @router.post("/{job_id}/retry")
 def retry_job(
     job_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> PendingJobPayload:
     """
@@ -225,7 +225,7 @@ def retry_job(
 @router.post("/{job_id}/reingest")
 def reingest_job_endpoint(
     job_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> PendingJobPayload:
     """
@@ -261,7 +261,7 @@ def reingest_job_endpoint(
 
 @router.get("/users/with-jobs", response_model=list[JobUser])
 def get_users_with_jobs(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> list[JobUser]:
     """

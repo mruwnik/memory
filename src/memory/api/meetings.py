@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
+from memory.api.auth import require_rest_access
 from memory.common.celery_app import PROCESS_MEETING
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, JobType
@@ -52,7 +52,7 @@ MAX_TRANSCRIPT_SIZE = 500_000  # 500KB limit for transcripts
 @router.post("")
 def create_meeting(
     data: MeetingCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> MeetingQueued:
     """

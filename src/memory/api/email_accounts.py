@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import (
     assert_project_membership,
-    get_current_user,
+    get_interactive_user,
     get_user_account,
     resolve_user_filter,
 )
@@ -268,7 +268,7 @@ def account_to_response(
 @router.get("")
 def list_accounts(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[EmailAccountResponse]:
     """List email accounts. Admins can view any user's accounts or all accounts."""
@@ -283,7 +283,7 @@ def list_accounts(
 @router.post("")
 def create_account(
     data: EmailAccountCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> EmailAccountResponse:
     """Create a new email account."""
@@ -346,7 +346,7 @@ def create_account(
 def update_account(
     account_id: int,
     updates: EmailAccountUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> EmailAccountResponse:
     """Update an email account."""
@@ -416,7 +416,7 @@ def update_account(
 @router.delete("/{account_id}")
 def delete_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Delete an email account."""
@@ -432,7 +432,7 @@ def delete_account(
 def trigger_sync(
     account_id: int,
     since_date: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for an email account."""
@@ -450,7 +450,7 @@ def trigger_sync(
 @router.post("/test")
 def test_connection(
     data: EmailAccountTest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> EmailAccountTestResult:
     """Test an IMAP login against typed and/or stored credentials.

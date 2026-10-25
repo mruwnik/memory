@@ -14,7 +14,7 @@ from memory.common.db.models import User
 from memory.common.db.models.sources import ArticleFeed
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 from memory.parsers.feeds import get_feed_parser
-from memory.api.auth import get_current_user
+from memory.api.auth import require_rest_access
 from memory.api.field_errors import field_error
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 
@@ -115,7 +115,7 @@ def feed_to_response(feed: ArticleFeed, db: Session, user: User) -> ArticleFeedR
 
 @router.get("")
 def list_feeds(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ) -> list[ArticleFeedResponse]:
     """List article feeds — admin sees all, regular users see their own."""
@@ -129,7 +129,7 @@ def list_feeds(
 @router.post("")
 def create_feed(
     data: ArticleFeedCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ) -> ArticleFeedResponse:
     """Create a new article feed owned by the calling user."""
@@ -163,7 +163,7 @@ def create_feed(
 def update_feed(
     feed_id: int,
     updates: ArticleFeedUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ) -> ArticleFeedResponse:
     """Update an article feed (owner or admin only)."""
@@ -190,7 +190,7 @@ def update_feed(
 @router.delete("/{feed_id}")
 def delete_feed(
     feed_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ):
     """Delete an article feed (owner or admin only)."""
@@ -205,7 +205,7 @@ def delete_feed(
 @router.post("/{feed_id}/sync")
 def trigger_sync(
     feed_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for an article feed (owner or admin only)."""
@@ -227,7 +227,7 @@ def trigger_sync(
 @router.post("/discover")
 def discover_feed(
     url: HttpUrl,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
 ) -> FeedDiscoveryResponse:
     """Auto-discover feed metadata from a URL."""
     url_str = str(url)

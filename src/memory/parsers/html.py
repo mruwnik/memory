@@ -102,33 +102,35 @@ def fetch_html(
     except UnsafeURLError as e:
         raise ValueError(f"URL failed SSRF validation during redirect: {e}") from e
 
-    # 304 Not Modified carries no body — nothing changed since ``modified``.
-    # ``raise_for_status`` would not catch this (304 is not 4xx/5xx), so
-    # short-circuit explicitly rather than iterating an empty stream.
-    if response.status_code == 304:
+    try:
+        # 304 Not Modified carries no body — nothing changed since ``modified``.
+        # ``raise_for_status`` would not catch this (304 is not 4xx/5xx), so
+        # short-circuit explicitly rather than iterating an empty stream.
+        if response.status_code == 304:
+            return b"" if as_bytes else ""
+
+        response.raise_for_status()
+
+        # Check Content-Length header
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_HTML_SIZE:
+            raise ValueError(f"Response too large: {content_length} bytes")
+
+        # Stream download with size limit (using list to avoid O(n^2) concatenation)
+        chunks = []
+        size = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            size += len(chunk)
+            if size > MAX_HTML_SIZE:
+                raise ValueError("Response exceeded size limit during download")
+            chunks.append(chunk)
+        content = b"".join(chunks)
+
+        if as_bytes:
+            return content
+        return content.decode("utf-8", errors="replace")
+    finally:
         response.close()
-        return b"" if as_bytes else ""
-
-    response.raise_for_status()
-
-    # Check Content-Length header
-    content_length = response.headers.get("Content-Length")
-    if content_length and int(content_length) > MAX_HTML_SIZE:
-        raise ValueError(f"Response too large: {content_length} bytes")
-
-    # Stream download with size limit (using list to avoid O(n^2) concatenation)
-    chunks = []
-    size = 0
-    for chunk in response.iter_content(chunk_size=8192):
-        size += len(chunk)
-        if size > MAX_HTML_SIZE:
-            raise ValueError("Response exceeded size limit during download")
-        chunks.append(chunk)
-    content = b"".join(chunks)
-
-    if as_bytes:
-        return content
-    return content.decode("utf-8", errors="replace")
 
 
 @dataclass

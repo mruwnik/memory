@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPExcep
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user, request_api_key
+from memory.api.auth import require_rest_access, request_api_key
 from memory.common.access_control import (
     credential_scopes,
     get_user_project_roles,
@@ -110,7 +110,7 @@ class PhotoResponse(BaseModel):
 @router.get("/photos")
 def list_photos(
     limit: int = Query(default=100, ge=1, le=500),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> list[PhotoResponse]:
     """List photos the user has access to.
@@ -161,7 +161,7 @@ class DeleteResponse(BaseModel):
 @router.delete("/photos/{photo_id}")
 def delete_photo(
     photo_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> DeleteResponse:
     """Delete a photo and its associated data."""
@@ -219,7 +219,7 @@ async def upload_book(
     title: str = Form(default=""),
     author: str = Form(default=""),
     tags: str = Form(default=""),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> UploadResponse:
     """
@@ -296,7 +296,7 @@ async def upload_photo(
     request: Request,
     file: UploadFile = File(...),
     tags: str = Form(default=""),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> UploadResponse:
     """
@@ -378,7 +378,7 @@ async def upload_report(
     project_id: int | None = Form(default=None),
     allow_scripts: bool = Form(default=False),
     allowed_connect_urls: str = Form(default=""),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
     db: DBSession = Depends(get_session),
 ) -> UploadResponse:
     """Upload an HTML or PDF report for indexing.
@@ -533,7 +533,7 @@ class ForumSyncResponse(BaseModel):
 @router.post("/forums/sync")
 def trigger_forum_sync(
     request: ForumSyncRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_rest_access),
 ) -> ForumSyncResponse:
     """Trigger a LessWrong forum sync with the given parameters.
 

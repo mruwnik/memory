@@ -5,6 +5,7 @@ from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+import ssl
 
 from memory.common import embedding, settings
 from memory.common.db.models import (
@@ -1125,12 +1126,16 @@ def test_imap_connection_uses_ssl_by_default(mock_imaplib):
     )
     with imap_connection(account):
         pass
-    mock_imaplib.IMAP4_SSL.assert_called_once_with(host="imap.example.com", port=993)
+    kwargs = mock_imaplib.IMAP4_SSL.call_args.kwargs
+    assert kwargs["host"] == "imap.example.com"
+    assert kwargs["port"] == 993
+    assert kwargs["ssl_context"].verify_mode == ssl.CERT_REQUIRED
+    assert kwargs["ssl_context"].check_hostname is True
     mock_imaplib.IMAP4.assert_not_called()
 
 
 @patch("memory.workers.email.imaplib")
-def test_imap_connection_plain_when_ssl_disabled(mock_imaplib):
+def test_imap_connection_starttls_when_ssl_disabled(mock_imaplib):
     account = EmailAccount(
         name="t",
         email_address="t2@example.com",
@@ -1145,3 +1150,23 @@ def test_imap_connection_plain_when_ssl_disabled(mock_imaplib):
         pass
     mock_imaplib.IMAP4.assert_called_once_with(host="imap.example.com", port=143)
     mock_imaplib.IMAP4_SSL.assert_not_called()
+    conn = mock_imaplib.IMAP4.return_value
+    assert [call[0] for call in conn.method_calls] == ["starttls", "login", "logout"]
+    context = conn.starttls.call_args.kwargs["ssl_context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname
+
+
+@patch("memory.workers.email.imaplib.IMAP4")
+def test_imap_starttls_failure_never_sends_password(connect):
+    account = EmailAccount(imap_server="imap.example.com", imap_port=143,
+                           username="u", password="p", use_ssl=False)
+    connect.return_value.starttls.side_effect = ssl.SSLCertVerificationError("untrusted")
+    with pytest.raises(ssl.SSLCertVerificationError):
+        with imap_connection(account):
+            pytest.fail("connection must not be yielded")
+    connect.return_value.login.assert_not_called()
+    context = connect.return_value.starttls.call_args.kwargs["ssl_context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname
+    connect.return_value.logout.assert_called_once()

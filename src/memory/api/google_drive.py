@@ -29,7 +29,7 @@ from memory.common.db.models.sources import (
 from memory.common.scopes import SCOPE_ADMIN
 from memory.api.auth import (
     assert_project_membership,
-    get_current_user,
+    get_interactive_user,
     get_user_account,
     require_scope,
     resolve_user_filter,
@@ -205,7 +205,7 @@ class BrowseResponse(BaseModel):
     next_page_token: str | None = None
 
 
-@router.post("/config")
+@router.post("/config", dependencies=[Depends(get_interactive_user)])
 async def upload_oauth_config(
     file: UploadFile,
     name: str = "default",
@@ -268,7 +268,7 @@ async def upload_oauth_config(
 
 @router.get("/config")
 def get_config(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> OAuthConfigResponse | None:
     """Get current OAuth configuration (without secrets)."""
@@ -288,7 +288,7 @@ def get_config(
     )
 
 
-@router.delete("/config")
+@router.delete("/config", dependencies=[Depends(get_interactive_user)])
 def delete_config(
     _user: User = require_scope(SCOPE_ADMIN),
     db: DBSession = Depends(get_session),
@@ -342,7 +342,7 @@ BASE_GOOGLE_SCOPES = [
 
 @router.get("/available-scopes")
 def get_available_scopes(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
 ) -> dict:
     """Get the list of available Google OAuth scopes users can select."""
     return {"scopes": AVAILABLE_GOOGLE_SCOPES}
@@ -351,7 +351,7 @@ def get_available_scopes(
 @router.get("/authorize")
 def google_authorize(
     scopes: list[str] | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """Initiate Google OAuth2 flow. Returns the authorization URL.
@@ -512,7 +512,7 @@ def google_callback(
 @router.get("/accounts")
 def list_accounts(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> list[AccountResponse]:
     """List Google accounts. Admins can view any user's accounts or all accounts."""
@@ -546,7 +546,7 @@ def browse_folder(
     folder_id: str = "root",
     page_size: int = 100,
     page_token: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> BrowseResponse:
     """Browse a Google Drive folder to list its contents.
@@ -659,7 +659,7 @@ def browse_folder(
 def add_folder(
     account_id: int,
     folder: FolderCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> FolderResponse:
     """Add a folder to sync for a Google account."""
@@ -704,7 +704,7 @@ def update_folder(
     account_id: int,
     folder_id: int,
     updates: FolderUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> FolderResponse:
     """Update a folder's configuration."""
@@ -764,7 +764,7 @@ def update_folder(
 def remove_folder(
     account_id: int,
     folder_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ):
     """Remove a folder from sync."""
@@ -792,7 +792,7 @@ def trigger_sync(
     account_id: int,
     folder_id: int,
     force_full: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ):
     """Manually trigger a sync for a folder."""
@@ -821,7 +821,7 @@ def trigger_sync(
 @router.delete("/accounts/{account_id}")
 def disconnect_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ):
     """Disconnect a Google account (removes account and all folders)."""
@@ -841,7 +841,7 @@ class ReauthorizeRequest(BaseModel):
 def reauthorize_account(
     account_id: int,
     request: ReauthorizeRequest | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: DBSession = Depends(get_session),
 ) -> dict:
     """Re-authorize a Google account to get updated scopes.

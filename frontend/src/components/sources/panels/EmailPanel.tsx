@@ -360,7 +360,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
               />
             )}
 
-            <Checkbox checked={formData.use_ssl} onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })} label="Use SSL" />
+            <Checkbox checked={formData.use_ssl} onChange={e => setFormData({ ...formData, use_ssl: e.target.checked })} label="Use implicit TLS (otherwise STARTTLS)" />
 
             <FieldRow>
               <Field label={<>

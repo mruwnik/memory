@@ -493,3 +493,87 @@ def mcp_http_client(
 ) -> httpx.AsyncClient:
     """fastmcp's `httpx_client_factory`: MCP streams are capped per event."""
     return public_http_client(headers, timeout, auth, per_event=True, **kwargs)
+
+
+class PinnedSyncBackend(httpcore.NetworkBackend):
+    """Synchronous download backend; only checked numeric addresses are dialed."""
+
+    def __init__(self, policy: NetworkPolicy | None = None, inner=None):
+        self.policy = policy or NetworkPolicy(public_only=True)
+        self.inner = inner or httpcore.SyncBackend()
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            addresses = list(dict.fromkeys(
+                ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos
+            ))
+            self.policy.check(host, addresses)
+        except (socket.gaierror, UnicodeError, UnsafeURLError) as exc:
+            raise BlockedDestination() from exc
+        last_error = None
+        for address in addresses:
+            try:
+                return self.inner.connect_tcp(
+                    str(address), port, timeout=timeout,
+                    local_address=local_address, socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+    def connect_unix_socket(self, *args, **kwargs):
+        raise BlockedDestination()
+
+
+class CappedSyncStream(httpx.SyncByteStream):
+    def __init__(self, response: httpcore.Response, limit: int):
+        self.response = response
+        self.limit = limit
+
+    def __iter__(self):
+        seen = 0
+        with map_errors():
+            for chunk in self.response.iter_stream():
+                seen += len(chunk)
+                if seen > self.limit:
+                    raise ResponseTooLarge(f"response exceeded {self.limit} bytes")
+                yield chunk
+
+    def close(self):
+        self.response.close()
+
+
+class PinnedSyncTransport(httpx.BaseTransport):
+    def __init__(self, max_response_bytes: int, backend: PinnedSyncBackend | None = None):
+        self.pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False),
+            network_backend=backend or PinnedSyncBackend(),
+        )
+        self.limit = max_response_bytes
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        request.headers["Accept-Encoding"] = "identity"
+        with map_errors():
+            response = self.pool.handle_request(httpcore.Request(
+                method=request.method,
+                url=httpcore.URL(scheme=request.url.raw_scheme, host=request.url.raw_host,
+                                port=request.url.port, target=request.url.raw_path),
+                headers=request.headers.raw, content=request.stream,
+                extensions=request.extensions,
+            ))
+        if httpx.Headers(response.headers).get("content-encoding", "identity").lower() not in ("", "identity"):
+            response.close()
+            raise UnsupportedEncoding("compressed responses are not accepted")
+        return httpx.Response(response.status, headers=response.headers,
+                              stream=CappedSyncStream(response, self.limit))
+
+    def close(self):
+        self.pool.close()
+
+
+def public_sync_http_client(*, timeout=30.0, max_response_bytes=100 * 1024 * 1024) -> httpx.Client:
+    """Synchronous counterpart of public_http_client with strict public-only policy."""
+    return httpx.Client(transport=PinnedSyncTransport(max_response_bytes),
+                        timeout=timeout, trust_env=False, follow_redirects=False)

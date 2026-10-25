@@ -636,7 +636,7 @@ def test_get_current_user_falls_back_to_session_auth_without_request_state():
     )
 
     # Mock get_session_user to return our user (this is the fallback path)
-    with patch("memory.api.auth.get_session_user", return_value=user) as mock_get_session:
+    with patch("memory.api.auth.authenticate_request", return_value=(user, None)) as mock_get_session:
         result = auth.get_current_user(cast(Any, request), db)
 
     assert result is user

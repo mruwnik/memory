@@ -381,3 +381,62 @@ async def test_one_oversized_event_is_aborted():
 
     with pytest.raises(ResponseTooLarge):
         await get_local(stream + event, max_response_bytes=1000, per_event=True)
+
+
+def test_sync_backend_pins_checked_address_across_dns_rebinding(monkeypatch):
+    from unittest.mock import Mock
+    import socket
+    answers = iter(["93.184.216.34", "127.0.0.1"])
+    calls = []
+
+    def resolve(host, port, **kwargs):
+        calls.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (next(answers), port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    inner = Mock()
+    backend = safe_http.PinnedSyncBackend(inner=inner)
+    backend.connect_tcp("rebind.example", 443)
+    assert calls == ["rebind.example"]
+    assert inner.connect_tcp.call_args.args == ("93.184.216.34", 443)
+    with pytest.raises(BlockedDestination):
+        backend.connect_tcp("rebind.example", 443)
+    assert inner.connect_tcp.call_count == 1
+
+
+@pytest.mark.parametrize("address", ["10.0.0.1", "127.0.0.1", "169.254.169.254", "::1", "192.168.1.1"])
+def test_sync_backend_denies_nonpublic_addresses(monkeypatch, address):
+    from unittest.mock import Mock
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [(2, 1, 6, "", (address, 80))])
+    inner = Mock()
+    with pytest.raises(BlockedDestination):
+        safe_http.PinnedSyncBackend(inner=inner).connect_tcp("untrusted.example", 80)
+    inner.connect_tcp.assert_not_called()
+
+
+def test_sync_transport_enforces_stream_cap_and_preserves_tls_hostname():
+    from unittest.mock import Mock
+    class Stream(httpcore.NetworkStream):
+        def __init__(self):
+            self.raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+            self.server_hostname = None
+        def read(self, max_bytes, timeout=None):
+            result, self.raw = self.raw[:max_bytes], self.raw[max_bytes:]
+            return result
+        def write(self, buffer, timeout=None):
+            pass
+        def close(self):
+            pass
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            self.server_hostname = server_hostname
+            return self
+        def get_extra_info(self, info):
+            return None
+    stream = Stream()
+    backend = Mock()
+    backend.connect_tcp.return_value = stream
+    with httpx.Client(transport=safe_http.PinnedSyncTransport(4, backend)) as client:
+        with pytest.raises(ResponseTooLarge):
+            client.get("https://original.example/file")
+    assert stream.server_hostname == "original.example"

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import (
     assert_project_membership,
-    get_current_user,
+    get_interactive_user,
     get_user_account,
     resolve_user_filter,
 )
@@ -125,7 +125,7 @@ def list_providers() -> dict[str, list[str]]:
 @router.get("")
 def list_accounts(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[TranscriptAccountResponse]:
     """List transcript accounts. Admins can view any user's accounts or all accounts."""
@@ -140,7 +140,7 @@ def list_accounts(
 @router.post("")
 def create_account(
     data: TranscriptAccountCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> TranscriptAccountResponse:
     """Create a new transcript account.
@@ -211,7 +211,7 @@ def create_account(
 @router.get("/{account_id}")
 def get_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> TranscriptAccountResponse:
     """Get a single transcript account."""
@@ -223,7 +223,7 @@ def get_account(
 def update_account(
     account_id: int,
     updates: TranscriptAccountUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> TranscriptAccountResponse:
     """Update a transcript account."""
@@ -270,7 +270,7 @@ def update_account(
 @router.delete("/{account_id}")
 def delete_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Delete a transcript account."""
@@ -283,7 +283,7 @@ def delete_account(
 @router.post("/{account_id}/webhook-secret")
 def generate_webhook_secret(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> WebhookSecretResponse:
     """Generate or rotate the push secret. The only response that contains it."""
@@ -301,7 +301,7 @@ def generate_webhook_secret(
 @router.delete("/{account_id}/webhook-secret")
 def delete_webhook_secret(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> TranscriptAccountResponse:
     """Remove the push secret, which disables push ingest for this account."""
@@ -324,7 +324,7 @@ def get_polled_account(
 @router.post("/{account_id}/sync")
 def trigger_sync(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Manually trigger a quick sync for a transcript account."""
@@ -336,7 +336,7 @@ def trigger_sync(
 @router.post("/{account_id}/rescan")
 def trigger_rescan(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Manually trigger a full rescan for a transcript account."""

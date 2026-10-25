@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import cache
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -426,6 +426,25 @@ def get_session_user(
     return user
 
 
+class CredentialUser:
+    """Read-through account view with credential scopes, never ORM scope mutation."""
+
+    def __init__(self, user: User, scopes: list[str]):
+        self.account = user
+        self.scopes = scopes
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.account, name)
+
+
+def credential_user(user: User, key: APIKey | None) -> User:
+    if key is None:
+        return user
+    # Endpoint annotations describe the account interface; this view forwards
+    # its fields while keeping authorization scopes separate from the ORM row.
+    return cast(User, CredentialUser(user, credential_scopes(user, key)))
+
+
 def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> User:
     """FastAPI dependency to get current authenticated user.
 
@@ -436,17 +455,40 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     if hasattr(request.state, "authenticated_user_id"):
         user = db.get(User, request.state.authenticated_user_id)
         if user:
-            return user
+            return credential_user(user, request_api_key(request, db))
         # User was deleted after middleware authenticated - fall through to re-auth
         # which will also fail, returning appropriate 401
 
     # Fall back to normal authentication. This handles:
     # 1. Whitelisted paths where middleware doesn't run
     # 2. User deleted after middleware auth (db.get returned None above)
-    user = get_session_user(request, db)
+    user, key = authenticate_request(request, db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
+    return credential_user(user, key)
+
+
+def get_interactive_user(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> User:
+    """Account recovery and stored credentials require a login session."""
+    if request_api_key(request, db) is not None:
+        raise HTTPException(status_code=403, detail="Interactive session required")
+    return user
+
+
+def require_rest_access(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> User:
+    """General REST reads require read; mutations require write."""
+    scope = "read" if request.method in {"GET", "HEAD", "OPTIONS"} else "write"
+    if not has_scope(credential_scopes(user, request_api_key(request, db)), scope):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     return user
 
 
@@ -463,7 +505,12 @@ def request_api_key(request: Request, db: DBSession) -> APIKey | None:
     """The API key that authenticated ``request``; None for a session token."""
     if hasattr(request.state, "authenticated_user_id"):
         key_id = getattr(request.state, "authenticated_api_key_id", None)
-        return db.get(APIKey, key_id) if key_id is not None else None
+        if key_id is None:
+            return None
+        key = db.get(APIKey, key_id)
+        if key is None or not key.is_valid() or key.user_id != request.state.authenticated_user_id:
+            raise HTTPException(status_code=401, detail="Invalid or expired API key")
+        return key
     token = get_token(request)
     if token and any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
         return lookup_api_key(token, db)

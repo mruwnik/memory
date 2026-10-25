@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import (
     assert_project_membership,
-    get_current_user,
+    get_interactive_user,
     resolve_user_filter,
 )
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
@@ -141,7 +141,7 @@ def get_user_bot(db: Session, bot_id: int, user: User) -> DiscordBot:
 
 
 def require_discord_access(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> tuple[User, Session]:
     """Require user to have at least one authorized Discord bot.
@@ -206,7 +206,7 @@ def channel_to_response(channel: DiscordChannel) -> DiscordChannelResponse:
 @router.get("/bots")
 def list_bots(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[DiscordBotResponse]:
     """List Discord bots. Admins can view any user's authorized bots."""
@@ -229,7 +229,7 @@ def list_bots(
 @router.post("/bots")
 def create_bot(
     data: DiscordBotCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> DiscordBotResponse:
     """Create a new Discord bot.
@@ -271,7 +271,7 @@ def create_bot(
 def update_bot(
     bot_id: int,
     updates: DiscordBotUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> DiscordBotResponse:
     """Update a Discord bot."""
@@ -291,7 +291,7 @@ def update_bot(
 @router.delete("/bots/{bot_id}")
 def delete_bot(
     bot_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Remove user authorization from a bot.
@@ -314,7 +314,7 @@ def delete_bot(
 @router.get("/bots/{bot_id}/health")
 def get_bot_health(
     bot_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Get real-time connection status for a bot."""
@@ -326,7 +326,7 @@ def get_bot_health(
 @router.post("/bots/{bot_id}/refresh")
 def refresh_bot_metadata(
     bot_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Trigger metadata refresh from Discord API."""
@@ -340,7 +340,7 @@ def refresh_bot_metadata(
 @router.get("/bots/{bot_id}/invite")
 def get_bot_invite_url(
     bot_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Generate a Discord invite URL for the bot.
@@ -358,7 +358,7 @@ def get_bot_invite_url(
 def add_user_to_bot(
     bot_id: int,
     data: AddUserRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> UserStatusResponse:
     """Add another user to a bot's authorized users.
@@ -386,7 +386,7 @@ def add_user_to_bot(
 def remove_user_from_bot(
     bot_id: int,
     user_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> UserStatusResponse:
     """Remove a user from a bot's authorized users.
@@ -419,7 +419,7 @@ def remove_user_from_bot(
 @router.get("/bots/{bot_id}/users", response_model=list[BotUserResponse])
 def list_bot_users(
     bot_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[BotUserResponse]:
     """List users authorized to use a bot."""

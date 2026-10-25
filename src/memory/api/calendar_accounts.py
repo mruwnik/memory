@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import (
     assert_project_membership,
-    get_current_user,
+    get_interactive_user,
     get_user_account,
     resolve_user_filter,
 )
@@ -204,7 +204,7 @@ def account_to_response(
 @router.get("")
 def list_accounts(
     user_id: int | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[CalendarAccountResponse]:
     """List calendar accounts. Admins can view any user's accounts or all accounts."""
@@ -220,7 +220,7 @@ def list_accounts(
 @router.post("")
 def create_account(
     data: CalendarAccountCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> CalendarAccountResponse:
     """Create a new calendar account."""
@@ -280,7 +280,7 @@ def create_account(
 @router.get("/{account_id}")
 def get_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> CalendarAccountResponse:
     """Get a single calendar account."""
@@ -292,7 +292,7 @@ def get_account(
 def update_account(
     account_id: int,
     updates: CalendarAccountUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> CalendarAccountResponse:
     """Update a calendar account."""
@@ -356,7 +356,7 @@ def update_account(
 @router.delete("/{account_id}")
 def delete_account(
     account_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> dict[str, str]:
     """Delete a calendar account."""
@@ -372,7 +372,7 @@ def delete_account(
 def trigger_sync(
     account_id: int,
     force_full: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
     """Manually trigger a sync for a calendar account."""
