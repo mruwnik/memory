@@ -12,6 +12,7 @@ import { UserSettings, UserManagement } from '@/components/users'
 import { SettingsPage } from '@/components/settings'
 import { PeopleManagement } from '@/components/people'
 import { SetupWizard } from '@/components/setup/SetupWizard'
+import SecretsPage from '@/components/secrets/SecretsPage'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
 import { AppShell } from '@/components/shared/AppShell'
@@ -107,6 +108,7 @@ const AuthWrapper = () => {
     { path: '/ui/users', element: <UserManagement />, scope: 'admin:users' },
     { path: '/ui/search', element: <Search /> },
     { path: '/ui/sources', element: <Sources /> },
+    { path: '/ui/secrets', element: <SecretsPage /> },
     { path: '/ui/calendar', element: <Calendar /> },
     { path: '/ui/tasks', element: <Tasks /> },
     { path: '/ui/metrics', element: <Suspense fallback={<LoadingState />}><Metrics /></Suspense> },

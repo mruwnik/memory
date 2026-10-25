@@ -74,6 +74,7 @@ def test_admins_see_an_unset_vault(client):
             "author_email": None,
             "token": {"set": False, "hint": None, "locked": False},
             "ssh_public_key": None,
+            "ssh": None,
         },
     }
 
@@ -92,7 +93,8 @@ def test_an_existing_remote_is_shown_without_its_password_and_locked(client):
         "author_name": "Old Name",
         "author_email": "old@example.com",
         "token": None,
-        "ssh_public_key": "ssh-ed25519 AAAA memory",
+        "ssh_public_key": None,
+        "ssh": None,
     }
 
 

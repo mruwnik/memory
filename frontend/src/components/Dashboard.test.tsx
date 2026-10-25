@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderWithRouter, screen } from '@/test/utils'
 import Dashboard from './Dashboard'
+vi.mock('./IngestionOverview', () => ({ default: () => <div>Ingestion overview</div> }))
 
 const renderDashboard = (hasScope: (scope: string) => boolean = () => false) =>
   renderWithRouter(<Dashboard hasScope={hasScope} />)

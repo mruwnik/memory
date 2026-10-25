@@ -4,7 +4,7 @@ from sqlalchemy import LargeBinary, text
 
 from memory.common import settings
 from memory.common.db import rekey
-from memory.common.db.models import Base, Secret
+from memory.common.db.models import Base, Secret, SSHKey
 from memory.common.db.models.secrets import (
     create_secret,
     derive_encryption_key,
@@ -50,7 +50,8 @@ def test_rekey_reencrypts_secrets_and_user_keys(db_session, regular_user):
     old_key, new_key = derive_encryption_key(old, salt), derive_encryption_key(new, salt)
     secret = create_secret(db_session, regular_user.id, "tok", "x")
     secret.encrypted_value = Fernet(old_key).encrypt(b"s3cret")
-    regular_user.ssh_private_key_encrypted = Fernet(old_key).encrypt(b"ssh-key")
+    ssh_key = SSHKey(user_id=regular_user.id, name="SSH", public_key="public", private_key_encrypted=Fernet(old_key).encrypt(b"ssh-key"))
+    db_session.add(ssh_key)
     db_session.flush()
 
     rotated = rekey_all_secrets(db_session, new, [old])
@@ -58,7 +59,7 @@ def test_rekey_reencrypts_secrets_and_user_keys(db_session, regular_user):
 
     assert rotated == 2
     assert Fernet(new_key).decrypt(db_session.get(Secret, secret.id).encrypted_value).decode() == "s3cret"
-    assert Fernet(new_key).decrypt(regular_user.ssh_private_key_encrypted).decode() == "ssh-key"
+    assert Fernet(new_key).decrypt(ssh_key.private_key_encrypted).decode() == "ssh-key"
 
 
 def stored_under(db_session, user, key_secret, name="tok"):

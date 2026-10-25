@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import UserSelector, { useUserSelection } from '../common/UserSelector'
 import { useAuth } from '../../hooks/useAuth'
 import { SourceTabCounts, useSources } from '../../hooks/useSources'
@@ -15,7 +15,7 @@ import { BooksPanel } from './panels/BooksPanel'
 import { ForumsPanel } from './panels/ForumsPanel'
 import { PhotosPanel } from './panels/PhotosPanel'
 import { NotesPanel } from './panels/NotesPanel'
-import { SecretsPanel } from './panels/SecretsPanel'
+import { SSHKeysPanel } from './panels/SSHKeysPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
 import { Page, Tabs } from '@/components/shared/ui'
@@ -34,7 +34,7 @@ const TABS = [
   { value: 'notes', label: 'Notes', panel: NotesPanel },
   { value: 'discord', label: 'Discord', panel: DiscordPanel },
   { value: 'slack', label: 'Slack', panel: SlackPanel },
-  { value: 'secrets', label: 'Secrets', panel: SecretsPanel },
+  { value: 'ssh-keys', label: 'SSH keys', panel: SSHKeysPanel },
 ] as const
 type TabType = typeof TABS[number]['value']
 
@@ -74,10 +74,12 @@ const Sources = () => {
   // Compute userId for API calls
   const userId = selectedUser.id || undefined
 
+  if (tabParam === 'secrets') return <Navigate to="/ui/secrets" replace />
+
   return (
     <SourcesContext.Provider value={{ selectedUser, userId, refreshCounts }}>
       <Page
-        title={activeTab === 'secrets' ? 'Secrets' : 'Sources'}
+        title="Sources"
         actions={isAdmin && <UserSelector value={selectedUser} onChange={setSelectedUser} onlyHumanUsers />}
         width="wide"
       >

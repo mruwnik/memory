@@ -226,7 +226,7 @@ def encrypted_columns(metadata: MetaData = Base.metadata) -> dict[Table, list[Co
     """Every encrypted column in `metadata`: the models', or a database's as reflected."""
     found = {
         table: [c for c in table.columns if is_encrypted_column(c)]
-        for table in metadata.sorted_tables
+        for table in metadata.tables.values()
     }
     return {table: columns for table, columns in found.items() if columns}
 

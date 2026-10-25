@@ -60,6 +60,7 @@ from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
 from memory.claude_containers.claude_environments import mark_environment_used
 from memory.claude_containers.github_tokens import github_token_env
+from memory.common.ssh_keys import container_private_key
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 logger = logging.getLogger(__name__)
@@ -419,6 +420,8 @@ class SpawnRequest(BaseModel):
     # Secret name or literal; overrides the user's saved GitHub token of that kind
     github_token: str | None = None  # For HTTPS clone
     github_token_write: str | None = None  # For differ (push, PR creation)
+    ssh_key_id: int | None = None  # Omitted: use the user's default key
+    use_ssh_key: bool = True
     use_saved_write_token: bool = False  # Inject the user's saved write PAT
     enable_playwright: bool = False  # Enable Playwright MCP server in container
     allowed_tools: list[str] | None = (
@@ -721,8 +724,12 @@ async def spawn_session(
             env[key] = value
 
     # Inject secrets as env vars (previously handled by old orchestrator)
-    if user.ssh_private_key:
-        env["SSH_PRIVATE_KEY"] = user.ssh_private_key
+    try:
+        ssh_private = container_private_key(db, user, request.ssh_key_id) if request.use_ssh_key else None
+    except ValueError as exc:
+        raise HTTPException(404, "SSH key not available") from exc
+    if ssh_private:
+        env["SSH_PRIVATE_KEY"] = ssh_private
     env |= github_token_env(
         db,
         user.id,

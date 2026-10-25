@@ -4,6 +4,9 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 import requests
+import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory.common.github import (
     GithubCredentials,
@@ -43,6 +46,29 @@ def mock_rest_response(data=None, status_code=200):
 # =============================================================================
 # Tests for utility functions
 # =============================================================================
+
+
+def test_app_auth_signs_jwt_with_string_issuer():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    credentials = GithubCredentials(
+        auth_type="app", app_id=12345, installation_id=67890, private_key=private_key
+    )
+    with patch("memory.common.github.core.requests.post") as post:
+        post.return_value = mock_rest_response({"token": "installation-token"})
+        client = GithubClient(credentials)
+
+    token = post.call_args.kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+    claims = jwt.decode(token, key.public_key(), algorithms=["RS256"], issuer="12345")
+    assert claims["iss"] == "12345"
+    assert claims["exp"] - claims["iat"] == 660
+    assert post.call_args.args[0].endswith("/app/installations/67890/access_tokens")
+    assert client.session.headers["Authorization"] == "Bearer installation-token"
+    client.session.close()
 
 
 @pytest.mark.parametrize(

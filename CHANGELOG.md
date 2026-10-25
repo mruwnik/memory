@@ -20,9 +20,30 @@ None.
 
 ### Manual steps
 
-None.
+For Notes SSH sync using an operator-mounted key, import that key in Sources → SSH keys, then select it in Sources → Notes and configure trusted host keys. Notes SSH sync now requires a database key.
 
 ### Other changes for operators
+
+- The dashboard shows access-scoped ingested item totals, indexing status,
+  additions in the last 24 hours, and counts by content type.
+
+- Notes can probe an SSH server and show its host-key fingerprints for explicit
+  confirmation. Manual host-key entry is under Advanced. The API image includes
+  `openssh-client`; rebuild it to enable probing. Probing does not authenticate or
+  save trust until confirmed.
+
+- Secrets has its own page at `/ui/secrets`; old Sources links redirect there.
+
+- Search filters load correctly when there are no searchable tags.
+
+- GitHub App authentication now encodes the JWT issuer as a string, fixing
+  “Issuer (iss) must be a string” errors when managing or syncing repositories.
+
+- Sources → SSH keys manages encrypted personal and instance SSH identities:
+  import a private key (including passphrase-protected files), generate, replace,
+  delete, or choose a container default. Notes selects an accessible personal or instance key and stores
+  remote-bound host trust separately. Claude sessions and MCP public-key discovery
+  use the shared table. Private keys are write-only. Notes no longer falls back to operator-mounted keys. Requires the existing `SECRETS_ENCRYPTION_KEY`.
 
 - A `SERVER_URL` change no longer needs an image rebuild: the web UI uses
   same-origin URLs instead of a baked-in host.
@@ -45,7 +66,11 @@ None.
 
 ### Migrations
 
-None.
+- `20261108_ssh_keys` moves existing users’ encrypted SSH keys into `ssh_keys`
+  and selects them as defaults, without decrypting or changing the ciphertext.
+  Adds Notes SSH configuration and removes the old user key columns. No content
+  tables are rewritten. Downgrading preserves only each user’s default key;
+  additional keys and Notes host-trust configuration are lost.
 
 ### Post-deploy commands
 

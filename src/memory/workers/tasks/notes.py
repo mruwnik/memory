@@ -45,6 +45,7 @@ from memory.common.notes_git import (
     token_for_remote,
 )
 from memory.common.redis_lock import distributed_lock
+from memory.common.notes_ssh import ssh_command
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,10 @@ def run_git(
             env[TOKEN_ENV] = token
     cmd += args
     try:
-        return subprocess.run(cmd, text=True, capture_output=True, env=env, timeout=timeout)
+        with ssh_command(read_vault_git(repo_root).remote_url if network else None) as managed_ssh:
+            if managed_ssh and env is not None:
+                env["GIT_SSH_COMMAND"] = f"{managed_ssh} {SSH_TIMEOUT_OPTIONS}"
+            return subprocess.run(cmd, text=True, capture_output=True, env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="timed out")
 

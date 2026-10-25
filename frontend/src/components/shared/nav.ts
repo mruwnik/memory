@@ -43,7 +43,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and agent runs' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/ui/server-settings', title: 'Server settings', description: 'Voyage key, modules, MCP servers and search limits for this server', scope: 'admin' },
-      { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
+      { to: '/ui/secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],
   },
@@ -60,7 +60,7 @@ export const visibleSections = (hasScope: (scope: string) => boolean, modules: R
     .map(s => ({ ...s, items: s.items.filter(i => isVisible(i, hasScope, modules)) }))
     .filter(s => s.items.length)
 
-/** The item for the current location: the longest matching path, where a query (`?tab=secrets`) must also match. */
+/** The item for the current location: the longest matching path, where a query (`?tab=notes`) must also match. */
 export const activeItem = (items: NavItem[], pathname: string, search: string) => {
   const params = new URLSearchParams(search)
   const matches = items.filter(i => {

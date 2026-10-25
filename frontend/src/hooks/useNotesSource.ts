@@ -9,6 +9,13 @@ export interface NotesSyncStatus {
   at: string
 }
 
+export interface SSHProbe {
+  remote_url: string
+  host: string
+  port: number
+  keys: { public_key: string; fingerprint: string; algorithm: string }[]
+}
+
 export interface NotesGitSetup {
   has_repo: boolean
   branch: string | null
@@ -20,6 +27,7 @@ export interface NotesGitSetup {
   /** Write-only: only the last four characters ever come back. */
   token: { set: boolean; hint: string | null; locked: boolean }
   ssh_public_key: string | null
+  ssh?: { key_id: number; public_key: string; remote_url: string; host_keys: string } | null
 }
 
 export interface NotesSource {
@@ -59,10 +67,22 @@ export const useNotesSource = () => {
     return response.json()
   }, [apiCall])
 
+  const setUpNotesSSH = useCallback(async (remote_url: string, host_keys: string, key_id: number | null): Promise<NotesSource> => {
+    const response = await apiCall('/notes-source/git/ssh', { method: 'PUT', body: JSON.stringify({ remote_url, host_keys, key_id }) })
+    if (!response.ok) throw await apiError(response, 'Failed to configure SSH')
+    return response.json()
+  }, [apiCall])
+
   const syncNotes = useCallback(async (): Promise<void> => {
     const response = await apiCall('/notes-source/sync', { method: 'POST' })
     if (!response.ok) throw await apiError(response, 'Failed to start a sync')
   }, [apiCall])
 
-  return { getNotesSource, setUpNotesGit, clearNotesGitToken, syncNotes }
+  const probeNotesSSH = useCallback(async (remote_url: string): Promise<SSHProbe> => {
+    const response = await apiCall('/notes-source/git/ssh/probe', { method: 'POST', body: JSON.stringify({ remote_url }) })
+    if (!response.ok) throw await apiError(response, 'Failed to check SSH server')
+    return response.json()
+  }, [apiCall])
+
+  return { getNotesSource, setUpNotesGit, clearNotesGitToken, syncNotes, setUpNotesSSH, probeNotesSSH }
 }

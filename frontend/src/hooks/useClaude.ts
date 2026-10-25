@@ -141,6 +141,8 @@ export interface StatsHistoryResponse {
 }
 
 export interface SpawnRequest {
+  ssh_key_id?: number
+  use_ssh_key?: boolean
   snapshot_id?: number // Static snapshot (mutually exclusive with environment_id)
   environment_id?: number // Persistent environment (mutually exclusive with snapshot_id)
   repo_url?: string

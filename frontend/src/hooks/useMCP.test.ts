@@ -285,6 +285,16 @@ describe('convenience wrappers', () => {
     expect(findToolCall(fetchMock, tool)).toBeDefined()
   })
 
+  it('getTags returns an empty list when FastMCP emits no content blocks', async () => {
+    mockFetch(async () => jsonRpcResult([]))
+    const { result } = renderHook(() => useMCP())
+    let tags: string[] | undefined
+    await act(async () => {
+      tags = await result.current.getTags()
+    })
+    expect(tags).toEqual([])
+  })
+
   it('getMetadataSchemas unwraps the first content item', async () => {
     mockFetch(async () =>
       jsonRpcResult([{ text: '{"schema":{}}' }]),

@@ -53,6 +53,7 @@ from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.sessions import router as sessions_router
 from memory.api.secrets import router as secrets_router
+from memory.api.ssh_keys import router as ssh_keys_router
 from memory.api.instance_settings import router as instance_settings_router
 from memory.api.users import check_single_user, router as users_router
 from memory.api.password_reset import router as password_reset_router
@@ -60,6 +61,7 @@ from memory.api.setup import announce_setup_token, router as setup_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.source_tabs import router as source_tabs_router
+from memory.api.ingestion_overview import router as ingestion_overview_router
 from memory.api.notes_source import router as notes_source_router
 from memory.api.celery_overview import router as celery_overview_router
 from memory.api.ingest import router as ingest_router
@@ -186,6 +188,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 # and account-credential endpoints — the offending value is exactly the secret
 # the user just typed, so Pydantic's default `input` echo is a credential leak.
 SENSITIVE_VALIDATION_FIELDS = frozenset({
+    "private_key", "passphrase",
     "password",
     "current_password",
     "new_password",
@@ -515,6 +518,7 @@ if CLAUDE_CONTAINERS in enabled_modules():
     for claude_router in claude_containers.routers:
         app.include_router(claude_router)
 app.include_router(secrets_router)
+app.include_router(ssh_keys_router)
 app.include_router(instance_settings_router)
 app.include_router(users_router)
 app.include_router(password_reset_router)
@@ -522,6 +526,7 @@ app.include_router(setup_router)
 app.include_router(discord_router)
 app.include_router(slack_router)
 app.include_router(source_tabs_router)
+app.include_router(ingestion_overview_router)
 app.include_router(notes_source_router)
 app.include_router(celery_overview_router)
 app.include_router(ingest_router)

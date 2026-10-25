@@ -35,6 +35,7 @@ from memory.common.dates import parse_wall_clock_utc
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
+from memory.common.ssh_keys import container_key
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.notify import (
     format_notification_message,
@@ -85,7 +86,7 @@ def _get_current_user(session: DBSession) -> dict:
         "scopes": access_token.scopes if access_token else [],
         "client_id": access_token.client_id if access_token else None,
         "user": user_info,
-        "public_key": user_session.user.ssh_public_key,
+        "public_key": key.public_key if (key := container_key(session, user_session.user)) else None,
     }
 
 

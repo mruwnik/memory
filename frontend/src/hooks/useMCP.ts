@@ -191,7 +191,8 @@ export const useMCP = () => {
   }, [mcpCall])
 
   const getTags = useCallback(async (): Promise<string[]> => {
-    return (await mcpCall('meta_get_tags'))[0]
+    // FastMCP serializes an empty list as zero content blocks.
+    return (await mcpCall<string[][]>('meta_get_tags'))[0] ?? []
   }, [mcpCall])
 
   const getSearchDefaults = useCallback(async (): Promise<Record<string, boolean>> => {

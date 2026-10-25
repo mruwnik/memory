@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     python3-dev \
     curl \
+    openssh-client \
     tmux \
     docker.io \
     && rm -rf /var/lib/apt/lists/*

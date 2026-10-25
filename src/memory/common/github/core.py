@@ -152,7 +152,7 @@ class GithubClientCore:
         payload = {
             "iat": now - 60,
             "exp": now + 600,
-            "iss": self.credentials.app_id,
+            "iss": str(self.credentials.app_id),
         }
         return jwt.encode(payload, self.credentials.private_key, algorithm="RS256")
 

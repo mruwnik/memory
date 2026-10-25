@@ -304,3 +304,5 @@ describe('ClaudeSessions', () => {
     expect(await screen.findByText('Fleet overview')).toBeInTheDocument()
   })
 })
+
+vi.mock('./SSHKeySelect', () => ({ default: () => <div /> }))

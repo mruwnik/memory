@@ -5,6 +5,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { useUsers, type User } from '../../hooks/useUsers'
 import XtermTerminal from './XtermTerminal'
 import GithubTokens from './GithubTokens'
+import SSHKeySelect from './SSHKeySelect'
 import ClaudeFleetStats, { SessionStatsPanel, Usage, formatMb, sessionDisplay } from './ClaudeFleetStats'
 import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Fieldset, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
 import { formatUserDateTime } from '@/utils/timezones'
@@ -414,12 +415,15 @@ const ClaudeSessions = () => {
     }
   }
 
+  const [sshChoice, setSSHChoice] = useState('')
+
   const buildSpawnConfig = () => {
     const customEnv = parseEnvText(customEnvText)
     return {
       snapshot_id: selectedConfig?.type === 'snapshot' ? selectedConfig.id : undefined,
       environment_id: selectedConfig?.type === 'environment' ? selectedConfig.id : undefined,
       repo_url: selectedRepoUrl || undefined,
+      ...(sshChoice === 'none' ? { use_ssh_key: false } : sshChoice ? { ssh_key_id: Number(sshChoice) } : {}),
       enable_playwright: enablePlaywright || undefined,
       allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
       custom_env: Object.keys(customEnv).length > 0 ? customEnv : undefined,
@@ -640,6 +644,7 @@ const ClaudeSessions = () => {
                   )}
 
                   <GithubTokens />
+                  <SSHKeySelect value={sshChoice} onChange={setSSHChoice} />
 
                   {/* Playwright toggle */}
                   <Checkbox checked={enablePlaywright} onChange={(e) => setEnablePlaywright(e.target.checked)}

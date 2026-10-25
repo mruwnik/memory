@@ -90,3 +90,13 @@ def test_session_can_manage_keys(security_client, db_session):
     response = security_client.post(f"/users/{user.id}/api-keys", headers=headers,
                                    json={"name": "session-created", "scopes": ["read"]})
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize('session', [True, False])
+def test_ssh_key_management_requires_interactive_session(security_client, db_session, session):
+    from memory.api.ssh_keys import router
+    security_client.app.include_router(router)
+    _, headers = identity(db_session, key_scopes=['*'], session=session)
+    response = security_client.post('/ssh-keys', headers=headers, json={'name': 'SSH', 'generate': True})
+    assert response.status_code == (200 if session else 403)
+    assert security_client.get('/ssh-keys', headers=headers).status_code == (200 if session else 403)

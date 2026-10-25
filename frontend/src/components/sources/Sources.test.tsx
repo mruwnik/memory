@@ -22,7 +22,6 @@ vi.mock('./panels/BooksPanel', () => ({ BooksPanel: () => <div data-testid="pane
 vi.mock('./panels/ForumsPanel', () => ({ ForumsPanel: () => <div data-testid="panel-forums" /> }))
 vi.mock('./panels/PhotosPanel', () => ({ PhotosPanel: () => <div data-testid="panel-photos" /> }))
 vi.mock('./panels/NotesPanel', () => ({ NotesPanel: () => <div data-testid="panel-notes" /> }))
-vi.mock('./panels/SecretsPanel', () => ({ SecretsPanel: () => <div data-testid="panel-secrets" /> }))
 vi.mock('./panels/DiscordPanel', () => ({ DiscordPanel: () => <div data-testid="panel-discord" /> }))
 vi.mock('./panels/SlackPanel', () => ({ SlackPanel: () => <div data-testid="panel-slack" /> }))
 
@@ -97,14 +96,14 @@ describe('Sources container', () => {
 
   it('follows the URL when a link elsewhere or Back changes ?tab=', async () => {
     mockFetchRoutes({ '/auth/me': meWith(['teams']), __default: { json: {} } })
-    const { user } = renderWithRouter(<><Link to="/?tab=secrets">Secrets link</Link><Back /><Sources /></>)
-    await user.click(screen.getByRole('link', { name: 'Secrets link' }))
-    expect(screen.getByTestId('panel-secrets')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Secrets' })).toBeInTheDocument()
+    const { user } = renderWithRouter(<><Link to="/?tab=notes">Notes link</Link><Back /><Sources /></>)
+    await user.click(screen.getByRole('link', { name: 'Notes link' }))
+    expect(screen.getByTestId('panel-notes')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Sources' })).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: 'Email' }))
     expect(screen.getByTestId('panel-email')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'back' }))
-    expect(screen.getByTestId('panel-secrets')).toBeInTheDocument()
+    expect(screen.getByTestId('panel-notes')).toBeInTheDocument()
   })
 
   it('badges each tab with its count and flags failing ones', async () => {
@@ -156,3 +155,5 @@ describe('Sources container', () => {
     expect(screen.getByRole('tab', { name: 'RSS feeds (1), has problems' })).toBeInTheDocument()
   })
 })
+
+vi.mock('./panels/SSHKeysPanel', () => ({ SSHKeysPanel: () => <div data-testid="panel-ssh-keys" /> }))

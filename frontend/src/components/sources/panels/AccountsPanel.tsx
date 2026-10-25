@@ -397,6 +397,40 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
           </Select>
         </Field>
 
+        <Disclosure summary="Set up a personal access token">
+          <p>
+            Open{' '}
+            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline">
+              GitHub personal access token settings
+            </a>{' '}
+            and generate a token for the account and repositories you want to sync.
+          </p>
+          <ol className="list-decimal pl-5 mt-2 space-y-1">
+            <li>Choose an expiration date and grant permission to read the repository data you want to ingest.</li>
+            <li>Complete any organization approval or SSO authorization required for those repositories.</li>
+            <li>Copy the generated token and paste it into the Access token field. GitHub only shows the token once.</li>
+          </ol>
+          <p className="mt-2">No callback URL or webhook is needed. After saving, add the repositories you want to sync in Memory. Replace the token here when it expires.</p>
+        </Disclosure>
+
+        <Disclosure summary="Set up a GitHub App">
+          <p>
+            Open{' '}
+            <a href="https://github.com/settings/apps" target="_blank" rel="noopener noreferrer" className="underline">
+              GitHub Apps settings
+            </a>{' '}
+            and select your app, or choose “New GitHub App”.
+          </p>
+          <ol className="list-decimal pl-5 mt-2 space-y-1">
+            <li>Leave the callback URL blank and uncheck “Active” under Webhook. Memory uses installation credentials and polling, so neither an OAuth redirect nor a webhook is needed.</li>
+            <li>Copy the App ID from the app’s settings.</li>
+            <li>Choose “Install App”, install it on your account or organization, and grant access to the repositories you want to sync.</li>
+            <li>Open the installation’s configuration page and copy the number after /installations/ in its URL.</li>
+            <li>In the app’s settings, choose “Generate a private key” and paste the downloaded PEM file below.</li>
+          </ol>
+          <p className="mt-2">Memory polls GitHub for updates; no webhook setup is needed. After saving, add the repositories you want to sync in Memory.</p>
+        </Disclosure>
+
         {formData.auth_type === 'pat' ? (
           <Field label={<>
               Access token {account?.has_access_token && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
@@ -410,7 +444,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
           </Field>
         ) : (
           <>
-            <Field label="App ID">
+            <Field label="App ID" hint="Use the numeric App ID, not the Client ID.">
               <Input
                 type="number"
                 value={formData.app_id || ''}
@@ -418,7 +452,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
                 required={!account}
               />
             </Field>
-            <Field label="Installation ID">
+            <Field label="Installation ID" hint="This identifies the app’s installation on your account or organization, not the app itself.">
               <Input
                 type="number"
                 value={formData.installation_id || ''}
@@ -426,7 +460,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
                 required={!account}
               />
             </Field>
-            <Field label={<>
+            <Field hint="Paste the entire PEM file, including the BEGIN and END lines." label={<>
                 Private key {account?.has_private_key && <span className="text-slate-500">(leave blank to keep current)</span>}</>}>
               <Textarea
                 value={formData.private_key}

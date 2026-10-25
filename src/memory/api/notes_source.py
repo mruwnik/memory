@@ -3,13 +3,15 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+from cryptography.exceptions import UnsupportedAlgorithm
+
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
-from memory.api.auth import get_current_user, require_scope, request_api_key, system_scopes, TokenLookup
+from memory.api.auth import get_interactive_user, get_current_user, require_scope, request_api_key, system_scopes, TokenLookup
 from memory.api.field_errors import field_error
 from memory.common import instance_settings, settings
 from memory.common.access_control import (
@@ -32,6 +34,8 @@ from memory.common.notes_git import (
     read_vault_git,
 )
 from memory.common.scopes import SCOPE_ADMIN
+from memory.common.notes_ssh import configure_ssh, ssh_view, probe_host_keys
+from memory.common.ssrf import UnsafeURLError
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,23 @@ class TokenView(BaseModel):
     locked: bool
 
 
+class SSHSetup(BaseModel):
+    key_id: int
+    public_key: str
+    remote_url: str
+    host_keys: str
+
+
+class SSHSetupIn(BaseModel):
+    key_id: int | None
+    remote_url: str
+    host_keys: str = ""
+
+
+class SSHProbeIn(BaseModel):
+    remote_url: str
+
+
 class GitSetup(BaseModel):
     has_repo: bool
     branch: str | None
@@ -69,6 +90,7 @@ class GitSetup(BaseModel):
     token: TokenView
     # What to add as a deploy key for an ssh remote.
     ssh_public_key: str | None
+    ssh: SSHSetup | None = None
 
 
 class NotesSource(BaseModel):
@@ -122,11 +144,6 @@ def sync_in_flight(db: Session) -> bool:
     ).first() is not None
 
 
-def ssh_public_key() -> str | None:
-    path = settings.SSH_PUBLIC_KEY_FILE
-    return (path.read_text().strip() or None) if path.is_file() else None
-
-
 def token_view(db: Session) -> TokenView:
     if env := TOKEN.env_value():
         return TokenView(set=True, hint=env[-4:], locked=True)
@@ -144,7 +161,8 @@ def git_setup(db: Session) -> GitSetup:
         author_name=vault.author_name,
         author_email=vault.author_email,
         token=token_view(db),
-        ssh_public_key=ssh_public_key(),
+        ssh_public_key=managed["public_key"] if (managed := ssh_view(db)) else None,
+        ssh=SSHSetup(**managed) if managed else None,
     )
 
 
@@ -274,3 +292,32 @@ def sync_now(user: User = require_scope(SCOPE_ADMIN), db: Session = Depends(get_
         db, job_type=SYNC_JOB_TYPE, task_name=TRACK_GIT_CHANGES, task_kwargs={}, user_id=user.id
     ).job
     return {"job_id": job.id, "status": "scheduled"}
+
+
+@router.put("/git/ssh", dependencies=[Depends(get_interactive_user)])
+def set_up_ssh(
+    body: SSHSetupIn, user: User = require_scope(SCOPE_ADMIN), db: Session = Depends(get_session)
+) -> NotesSource:
+    """Select an accessible database SSH key and bind trusted server keys to the Notes remote."""
+    if not settings.SECRETS_ENCRYPTION_KEY:
+        raise HTTPException(409, "SECRETS_ENCRYPTION_KEY must be set to store an SSH key")
+    if len(body.host_keys) > 65536:
+        raise HTTPException(422, "Host keys are too long")
+    try:
+        configure_ssh(db, body.remote_url, body.host_keys, body.key_id, user)
+    except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
+        raise HTTPException(422, "Enter a valid SSH remote and host public keys") from exc
+    return notes_source(db, user)
+
+
+@router.post("/git/ssh/probe", dependencies=[Depends(get_interactive_user)])
+async def probe_ssh(
+    body: SSHProbeIn, user: User = require_scope(SCOPE_ADMIN)
+) -> dict:
+    """Preview the server's host keys for explicit trust confirmation."""
+    try:
+        return await probe_host_keys(body.remote_url)
+    except (ValueError, UnsafeURLError, UnsupportedAlgorithm) as exc:
+        raise HTTPException(422, "Unable to probe this SSH server. Check the remote URL and network policy.") from exc
+    except (OSError, TimeoutError) as exc:
+        raise HTTPException(502, "SSH server probe failed or timed out. Check the hostname and port.") from exc

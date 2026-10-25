@@ -7,10 +7,14 @@ const getNotesSource = vi.fn()
 const setUpNotesGit = vi.fn()
 const clearNotesGitToken = vi.fn()
 const syncNotes = vi.fn()
+const listKeys = vi.fn().mockResolvedValue([])
+const setUpNotesSSH = vi.fn()
+const probeNotesSSH = vi.fn()
+vi.mock('@/hooks/useSSHKeys', () => ({ useSSHKeys: () => ({ list: listKeys }) }))
 let scopes: string[] = []
 
 vi.mock('@/hooks/useNotesSource', () => ({
-  useNotesSource: () => ({ getNotesSource, setUpNotesGit, clearNotesGitToken, syncNotes }),
+  useNotesSource: () => ({ getNotesSource, setUpNotesGit, clearNotesGitToken, syncNotes, setUpNotesSSH, probeNotesSSH }),
 }))
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -76,13 +80,13 @@ describe('NotesPanel', () => {
     expect(await screen.findByText(/The vault syncs in the background/)).toBeInTheDocument()
   })
 
-  it('shows the deploy key for an ssh remote, and the server\'s reason on the remote field', async () => {
+  it('shows the selected database key for an ssh remote, and the server\'s reason on the remote field', async () => {
     scopes = ['*']
-    getNotesSource.mockResolvedValue(source({ git: git({ author_name: 'Me', author_email: 'me@example.com' }) }))
+    getNotesSource.mockResolvedValue(source({ git: git({ remote_url: 'git@github.com:me/notes.git', author_name: 'Me', author_email: 'me@example.com', ssh: { key_id: 7, public_key: 'ssh-ed25519 AAAA memory', remote_url: 'git@github.com:me/notes.git', host_keys: 'ssh-ed25519 host' } }) }))
     setUpNotesGit.mockRejectedValue(new ApiError('Use an https:// or ssh:// URL', { remote_url: 'Use an https:// or ssh:// URL' }))
     const { user } = renderWithUser(<NotesPanel />)
 
-    await user.type(await screen.findByLabelText('Remote URL'), 'git@github.com:me/notes.git')
+    await screen.findByLabelText('Remote URL')
     expect(screen.getByText('ssh-ed25519 AAAA memory')).toBeInTheDocument()
     expect(screen.queryByLabelText('Access token')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Save and sync' }))
@@ -141,4 +145,43 @@ it('requires confirmation before changing the remote and branch', async () => {
   expect(screen.getByRole('dialog')).toHaveTextContent('entire vault history')
   await user.click(screen.getByRole('button', { name: 'Change destination' }))
   expect(setUpNotesGit).toHaveBeenCalledWith(expect.objectContaining({ remote_url: 'https://new.example/repo.git', branch: 'notes', confirm_destination_change: true }))
+})
+
+it.each([null, 1])('selects a database SSH key owned by %s and saves host trust before syncing', async (owner) => {
+  scopes = ['*']
+  const remote = 'git@example.com:notes.git'
+  const ssh = { key_id: 7, public_key: 'ssh-ed25519 public', remote_url: remote, host_keys: 'ssh-ed25519 host' }
+  listKeys.mockResolvedValue([{ id: 7, name: 'Database identity', user_id: owner, public_key: ssh.public_key }])
+  getNotesSource.mockResolvedValue(source({ git: git({ remote_url: remote }) }))
+  setUpNotesSSH.mockResolvedValue(source({ git: git({ remote_url: remote, ssh }) }))
+  const { user } = renderWithUser(<NotesPanel />)
+  await screen.findByRole('option', { name: 'Database identity' })
+  await user.selectOptions(screen.getByLabelText('SSH key'), '7')
+  expect(screen.getByRole('button', { name: 'Save and sync' })).toBeDisabled()
+  await user.click(screen.getByText('Advanced: enter trusted host keys manually'))
+  await user.type(screen.getByLabelText('Trusted SSH host keys'), ssh.host_keys)
+  await user.click(screen.getByRole('button', { name: 'Save SSH configuration' }))
+  expect(setUpNotesSSH).toHaveBeenCalledWith(remote, ssh.host_keys, 7)
+  expect(await screen.findByText('SSH configuration saved.')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Save and sync' })).toBeEnabled()
+})
+
+
+it('probes without saving trust and saves only after confirmation', async () => {
+  scopes = ['*']
+  const remote = 'ssh://git@example.com:2222/notes.git'
+  listKeys.mockResolvedValue([{ id: 7, name: 'My key', user_id: 1, public_key: 'ssh-ed25519 identity' }])
+  getNotesSource.mockResolvedValue(source({ git: git({ remote_url: remote }) }))
+  probeNotesSSH.mockResolvedValue({ remote_url: remote, host: 'example.com', port: 2222, keys: [{ algorithm: 'ssh-ed25519', public_key: 'ssh-ed25519 server', fingerprint: 'SHA256:server' }] })
+  setUpNotesSSH.mockResolvedValue(source({ git: git({ remote_url: remote, ssh: { key_id: 7, public_key: 'ssh-ed25519 identity', remote_url: remote, host_keys: 'ssh-ed25519 server' } }) }))
+  const { user } = renderWithUser(<NotesPanel />)
+  await screen.findByRole('option', { name: 'My key' })
+  await user.selectOptions(screen.getByLabelText('SSH key'), '7')
+  await user.click(screen.getByRole('button', { name: 'Check server' }))
+  expect(await screen.findByText('SHA256:server')).toBeInTheDocument()
+  expect(probeNotesSSH).toHaveBeenCalledWith(remote)
+  expect(setUpNotesSSH).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'Trust this server' }))
+  expect(setUpNotesSSH).toHaveBeenCalledWith(remote, 'ssh-ed25519 server', 7)
+  expect(await screen.findByText('Server trusted. SSH configuration saved.')).toBeInTheDocument()
 })

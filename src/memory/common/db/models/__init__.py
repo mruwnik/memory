@@ -331,6 +331,8 @@ __all__ = [
     "ClaudeEnvironment",
     "ClaudeEnvironmentPayload",
     "ClaudeGitHubToken",
+    "SSHKey",
+    "NotesSSHConfig",
     # Secrets
     "Secret",
     "extract",
@@ -351,3 +353,5 @@ __all__ = [
     "DeadlinePayload",
     "deadline_attachments",
 ]
+
+from memory.common.db.models.ssh_keys import SSHKey, NotesSSHConfig

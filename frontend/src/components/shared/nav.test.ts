@@ -11,7 +11,7 @@ describe('activeItem', () => {
     ['/ui/keys', '', '/ui/keys'],
     ['/ui/sources', '', '/ui/sources'],
     ['/ui/sources', '?tab=email', '/ui/sources'],
-    ['/ui/sources', '?tab=secrets', '/ui/sources?tab=secrets'],
+    ['/ui/secrets', '', '/ui/secrets'],
     ['/ui/claude/abc', '', '/ui/claude'],
     ['/ui/settings', '', undefined],
     ['/ui/searching', '', undefined],

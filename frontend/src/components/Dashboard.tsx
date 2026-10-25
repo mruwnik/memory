@@ -1,3 +1,4 @@
+import IngestionOverview from './IngestionOverview'
 import { Link } from 'react-router-dom'
 import { Page, Section } from '@/components/shared/ui'
 import { visibleSections } from '@/components/shared/nav'
@@ -7,6 +8,7 @@ const Dashboard = ({ hasScope }: { hasScope: (scope: string) => boolean }) => {
   const sections = visibleSections(hasScope, useModules())
   return (
     <Page title="Memory" description="Your self-hosted knowledge base." width="wide">
+      <IngestionOverview />
       {sections.map(section => (
         <Section key={section.title} title={section.title}>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

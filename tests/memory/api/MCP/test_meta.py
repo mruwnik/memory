@@ -329,7 +329,11 @@ async def test_get_user_no_email_accounts_uses_fallback(db_session, admin_sessio
 @pytest.mark.asyncio
 async def test_get_user_returns_ssh_public_key(db_session, admin_user, admin_session):
     """Get user returns the user's SSH public key as 'public_key'."""
-    admin_user.ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
+    from memory.common.db.models import SSHKey
+    key = SSHKey(user_id=admin_user.id, name="SSH", public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", private_key_encrypted=b"encrypted")
+    db_session.add(key)
+    db_session.flush()
+    admin_user.default_ssh_key_id = key.id
     db_session.commit()
 
     with mcp_auth_context(admin_session.id):
@@ -342,7 +346,7 @@ async def test_get_user_returns_ssh_public_key(db_session, admin_user, admin_ses
 @pytest.mark.asyncio
 async def test_get_user_returns_none_when_no_ssh_key(db_session, admin_user, admin_session):
     """Get user returns None for public_key when user has no SSH key."""
-    admin_user.ssh_public_key = None
+    admin_user.default_ssh_key_id = None
     db_session.commit()
 
     with mcp_auth_context(admin_session.id):

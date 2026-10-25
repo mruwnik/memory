@@ -15,7 +15,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
-    LargeBinary,
     Numeric,
     String,
 )
@@ -24,7 +23,6 @@ from sqlalchemy.sql import func
 
 from memory.common.db.models.agents import money
 from memory.common.db.models.base import Base
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordBot
@@ -96,32 +94,13 @@ class User(Base):
         String, nullable=False, default="UTC", server_default="UTC"
     )
 
-    # SSH keys for container Git operations
-    # Public key stored as plaintext (safe to expose)
-    ssh_public_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Private key encrypted at rest using Fernet with SECRETS_ENCRYPTION_KEY
-    ssh_private_key_encrypted: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True
+    default_ssh_key_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("ssh_keys.id", ondelete="SET NULL", use_alter=True, name="users_default_ssh_key_fk"), nullable=True
     )
 
     @validates("timezone")
     def validate_timezone(self, key: str, value: str) -> str:
         return check_timezone(value)
-
-    @property
-    def ssh_private_key(self) -> str | None:
-        """Decrypt and return the SSH private key."""
-        if self.ssh_private_key_encrypted is None:
-            return None
-        return decrypt_value(self.ssh_private_key_encrypted)
-
-    @ssh_private_key.setter
-    def ssh_private_key(self, value: str | None) -> None:
-        """Encrypt and store the SSH private key."""
-        if value is None:
-            self.ssh_private_key_encrypted = None
-        else:
-            self.ssh_private_key_encrypted = encrypt_value(value)
 
     # Relationship to sessions
     sessions: Mapped[list[UserSession]] = relationship(

@@ -401,7 +401,7 @@ def test_validate_differ_subpath_allows_normal_paths(good_path):
     validate_differ_subpath(good_path)  # Should not raise
 
 
-# Tests for SSH key encryption (in users.py, using secrets module)
+# Tests for shared secret encryption used by SSH keys
 
 
 def test_ssh_key_encryption_roundtrip():
@@ -429,51 +429,6 @@ def test_ssh_key_encryption_requires_secret():
             encrypt_value("test key")
 
     assert "SECRETS_ENCRYPTION_KEY must be set" in str(exc_info.value)
-
-
-def test_ssh_key_user_property(db_session):
-    """Test that User.ssh_private_key property encrypts/decrypts."""
-    with patch(
-        "memory.common.settings.SECRETS_ENCRYPTION_KEY",
-        "test-secret-key-32-chars-minimum!",
-    ):
-        user = HumanUser.create_with_password(
-            email="ssh@example.com", name="SSH User", password="test123"
-        )
-        db_session.add(user)
-        db_session.commit()
-
-        # Set private key
-        user.ssh_private_key = "test-private-key"
-        db_session.commit()
-
-        # Verify it's stored encrypted
-        assert user.ssh_private_key_encrypted is not None
-        assert user.ssh_private_key_encrypted != b"test-private-key"
-
-        # Verify it decrypts correctly
-        assert user.ssh_private_key == "test-private-key"
-
-
-def test_ssh_key_user_property_none(db_session):
-    """Test that None ssh_private_key is handled correctly."""
-    with patch(
-        "memory.common.settings.SECRETS_ENCRYPTION_KEY",
-        "test-secret-key-32-chars-minimum!",
-    ):
-        user = HumanUser.create_with_password(
-            email="nossh@example.com", name="No SSH User", password="test123"
-        )
-        db_session.add(user)
-        db_session.commit()
-
-        # Should be None by default
-        assert user.ssh_private_key is None
-        assert user.ssh_private_key_encrypted is None
-
-        # Setting to None should work
-        user.ssh_private_key = None
-        assert user.ssh_private_key_encrypted is None
 
 
 def test_spawn_request_enable_playwright_cannot_be_set_via_custom_env():
@@ -687,7 +642,7 @@ def _make_spawn_session_test_doubles(snapshot_filename: str = "snap.tar.gz"):
     """
     fake_user = MagicMock()
     fake_user.id = 7
-    fake_user.ssh_private_key = None  # avoid env injection branches
+    fake_user.default_ssh_key_id = None  # avoid env injection branches
 
     # snapshot row returned by the DB query chain
     snapshot_row = MagicMock()
