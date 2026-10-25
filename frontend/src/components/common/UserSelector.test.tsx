@@ -53,12 +53,10 @@ describe('UserSelector rendering', () => {
     expect(listUsers).not.toHaveBeenCalled()
   })
 
-  it('holds the select\'s place while users load, so the page below does not jump', () => {
+  it('renders nothing while users load', () => {
     listUsers.mockReturnValue(new Promise(() => {}))
     render(<UserSelector value={selected} onChange={() => {}} />)
-    const select = screen.getByLabelText('User')
-    expect(select).toBeDisabled()
-    expect(select).toHaveDisplayValue('Loading users...')
+    expect(screen.queryByLabelText('User')).not.toBeInTheDocument()
   })
 
   it('renders the loaded users with a (you) marker for the current user', async () => {

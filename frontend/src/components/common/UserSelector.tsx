@@ -89,7 +89,7 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
     if (soleUser && value.id !== soleUser.id) onChange({ type: 'user', id: soleUser.id, name: soleUser.name })
   }, [soleUser, value.id, onChange])
 
-  if (!isAdmin || soleUser) return null
+  if (!isAdmin || loading || soleUser) return null
 
   if (error) {
     return (
@@ -106,9 +106,7 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
       </label>
       <Select
         id={id}
-        // The select renders while users load, so the content below doesn't shift when they arrive.
-        disabled={loading}
-        value={loading ? '' : value.id}
+        value={value.id}
         onChange={(e) => {
           const userId = parseInt(e.target.value, 10)
           if (userId === ALL_USERS_ID) {
@@ -121,7 +119,6 @@ const UserSelector = ({ value, onChange, className = '', filterToUsers, onlyHuma
           }
         }}
       >
-        {loading && <option value="">Loading users...</option>}
         {showAllOption && (
           <option value={ALL_USERS_ID}>All users</option>
         )}
