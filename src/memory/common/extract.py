@@ -235,13 +235,11 @@ def extract_pdf(
 
 def docx_to_pdf(
     docx_path: pathlib.Path,
-    output_path: pathlib.Path | None = None,
+    output_path: pathlib.Path,
 ) -> pathlib.Path:
     """Convert DOCX to PDF using pypandoc"""
     if not HAS_PANDOC or pypandoc is None:
         raise RuntimeError("pandoc is not installed — cannot convert DOCX to PDF")
-    if output_path is None:
-        output_path = docx_path.with_suffix(".pdf")
 
     # Now that we have all packages installed, try xelatex first as it has better Unicode support
     try:
@@ -289,9 +287,10 @@ def extract_docx(docx_path: pathlib.Path | bytes | str) -> list[DataChunk]:
     """
     with as_file(docx_path) as file_path:
         try:
-            pdf_path = docx_to_pdf(file_path)
-            logger.info(f"Extracted PDF from {file_path}")
-            return doc_to_images(pdf_path)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                pdf_path = docx_to_pdf(file_path, pathlib.Path(tmp_dir) / "out.pdf")
+                logger.info(f"Extracted PDF from {file_path}")
+                return doc_to_images(pdf_path)
         except Exception as e:
             logger.warning(f"PDF conversion failed for {file_path}, falling back to text extraction: {e}")
             return extract_docx_text(file_path)

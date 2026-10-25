@@ -228,16 +228,6 @@ def test_docx_to_pdf(tmp_path):
         assert pdf.page_count > 0
 
 
-@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
-@pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
-def test_docx_to_pdf_default_output():
-    # Test with default output path
-    result_path = docx_to_pdf(SAMPLE_DOCX)
-
-    assert result_path == SAMPLE_DOCX.with_suffix(".pdf")
-    assert result_path.exists()
-
-
 @pytest.mark.parametrize(
     "dicts,expected",
     [
@@ -382,3 +372,15 @@ def test_extract_docx_uses_pdf_when_available():
     assert any(
         isinstance(d, Image.Image) for c in chunks for d in c.data
     )
+
+
+@pytest.mark.skipif(not HAS_PANDOC, reason="pandoc not installed")
+@pytest.mark.skipif(not is_pdflatex_available(), reason="pdflatex not installed")
+def test_extract_docx_leaves_no_pdf_beside_source(tmp_path):
+    docx = tmp_path / "doc.docx"
+    docx.write_bytes(SAMPLE_DOCX.read_bytes())
+    (tmp_path / "doc.pdf").write_bytes(b"precious")
+
+    extract_docx(docx)
+
+    assert (tmp_path / "doc.pdf").read_bytes() == b"precious"
