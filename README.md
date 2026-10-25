@@ -227,8 +227,6 @@ Personal keys belong to their user. Admins can also create **Instance** keys. In
 
 In **Sources → SSH keys**, **Use for my containers** selects your default. The Claude session form can override this with another accessible key or **No SSH key**, including for scheduled sessions. Existing user keys migrate automatically into this table as their users’ defaults. Replacement and deletion affect future connections and containers; running containers retain their injected copy. A key selected for Notes cannot be deleted until the selection is changed or cleared.
 
-Choosing **Operator-installed key** in Notes retains support for keys in `secrets/`. `tools/install.sh` can generate them; alternatively create `secrets/ssh_private_key`, `secrets/ssh_public_key`, and a verified `secrets/ssh_known_hosts`. No manual import of these files is required.
-
 ### Discord integration
 
 To get notifications in Discord, [create a bot](https://discord.com/developers/applications), then run:
