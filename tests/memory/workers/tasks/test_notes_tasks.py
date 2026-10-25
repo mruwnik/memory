@@ -1,6 +1,9 @@
+import json
+import subprocess
 import uuid
 import pytest
 import pathlib
+import redis
 from contextlib import ExitStack, contextmanager
 from unittest.mock import Mock, patch
 
@@ -509,155 +512,6 @@ def test_sync_notes_propagates_file_read_errors(mock_sync_note, mock_make_sessio
         notes.sync_notes(settings.NOTES_STORAGE_DIR)
 
 
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_success(mock_git_command):
-    """Test check_git_command with successful git command execution."""
-    # Mock successful git command
-    mock_result = Mock()
-    mock_result.returncode = 0
-    mock_result.stdout = "  main  \n"  # Test that it strips whitespace
-    mock_result.stderr = ""
-    mock_git_command.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-    result = notes.check_git_command(repo_root, "branch", "--show-current")
-
-    assert result == "main"
-    mock_git_command.assert_called_once_with(
-        repo_root, "branch", "--show-current", force=False
-    )
-
-
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_with_force(mock_git_command):
-    """Test check_git_command with force=True parameter."""
-    mock_result = Mock()
-    mock_result.returncode = 0
-    mock_result.stdout = "output"
-    mock_result.stderr = ""
-    mock_git_command.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-    result = notes.check_git_command(repo_root, "status", force=True)
-
-    assert result == "output"
-    mock_git_command.assert_called_once_with(repo_root, "status", force=True)
-
-
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_no_git_repo(mock_git_command):
-    """Test check_git_command when git_command returns None (no git repo)."""
-    mock_git_command.return_value = None
-
-    repo_root = pathlib.Path("/test/repo")
-
-    with pytest.raises(RuntimeError, match=r"`status` failed"):
-        notes.check_git_command(repo_root, "status")
-
-    mock_git_command.assert_called_once_with(repo_root, "status", force=False)
-
-
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_git_failure(mock_git_command):
-    """Test check_git_command when git command fails with non-zero return code."""
-    mock_result = Mock()
-    mock_result.returncode = 1
-    mock_result.stdout = "fatal: not a git repository"
-    mock_result.stderr = "error: unknown command"
-    mock_git_command.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-
-    with pytest.raises(
-        RuntimeError, match=r"`branch --invalid` failed with return code 1"
-    ):
-        notes.check_git_command(repo_root, "branch", "--invalid")
-
-    mock_git_command.assert_called_once_with(
-        repo_root, "branch", "--invalid", force=False
-    )
-
-
-def test_check_git_command_does_not_double_log_on_failure(caplog):
-    """Regression: check_git_command must not duplicate the error log
-    that git_command already emitted on failure. Previously both
-    functions logged stderr/stdout/returncode independently, producing
-    two copies of every git failure in operator logs."""
-    repo_root = pathlib.Path("/test/repo")
-
-    # We want git_command's REAL error logging to fire (so we can count
-    # it), but we don't want subprocess to actually run. Patch
-    # subprocess.run to return a failing result.
-    failing = Mock()
-    failing.returncode = 1
-    failing.stdout = "out-text"
-    failing.stderr = "err-text"
-
-    with patch("memory.workers.tasks.notes.subprocess.run", return_value=failing):
-        # Force the early "no .git directory" return path in git_command.
-        with patch.object(pathlib.Path, "exists", return_value=True):
-            with caplog.at_level("ERROR", logger="memory.workers.tasks.notes"):
-                with pytest.raises(RuntimeError):
-                    notes.check_git_command(repo_root, "status")
-
-    error_records = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
-    assert error_records == ["git status failed with exit 1"]
-
-
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_multiple_args(mock_git_command):
-    """Test check_git_command with multiple arguments."""
-    mock_result = Mock()
-    mock_result.returncode = 0
-    mock_result.stdout = "commit-hash"
-    mock_result.stderr = ""
-    mock_git_command.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-    result = notes.check_git_command(repo_root, "rev-parse", "--short", "HEAD")
-
-    assert result == "commit-hash"
-    mock_git_command.assert_called_once_with(
-        repo_root, "rev-parse", "--short", "HEAD", force=False
-    )
-
-
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_empty_stdout(mock_git_command):
-    """Test check_git_command when git command succeeds but returns empty stdout."""
-    mock_result = Mock()
-    mock_result.returncode = 0
-    mock_result.stdout = ""
-    mock_result.stderr = ""
-    mock_git_command.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-    result = notes.check_git_command(repo_root, "diff", "--exit-code")
-
-    assert result == ""
-    mock_git_command.assert_called_once_with(
-        repo_root, "diff", "--exit-code", force=False
-    )
-
-
-@patch("memory.workers.tasks.notes.git_command")
-def test_check_git_command_whitespace_handling(mock_git_command):
-    """Test check_git_command properly strips whitespace from stdout."""
-    mock_result = Mock()
-    mock_result.returncode = 0
-    mock_result.stdout = "\n\n  some output with spaces  \n\n"
-    mock_result.stderr = ""
-    mock_git_command.return_value = mock_result
-
-    repo_root = pathlib.Path("/test/repo")
-    result = notes.check_git_command(repo_root, "log", "--oneline", "-1")
-
-    assert result == "some output with spaces"
-    mock_git_command.assert_called_once_with(
-        repo_root, "log", "--oneline", "-1", force=False
-    )
-
-
 @pytest.mark.parametrize(
     "stdout,warnings",
     [
@@ -684,313 +538,6 @@ def test_git_command_keeps_git_output_out_of_error_records(caplog, stdout, warni
         "git commit failed with exit 128"
     ]
     assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == warnings
-
-
-@patch("memory.workers.tasks.notes.settings")
-def test_track_git_changes_no_git_repo(mock_settings):
-    """Test track_git_changes when no git repository exists."""
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = False
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
-
-    result = notes.track_git_changes()
-
-    assert result == {"status": "no_git_repo"}
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
-def test_track_git_changes_no_changes(
-    mock_settings, mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes when there are no new changes."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
-
-    # Mock git commands to return same commit hash
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin (no return needed)
-        "abc123",  # latest commit (same as current)
-    ]
-    mock_git_command.return_value = Mock()  # pull command
-
-    result = notes.track_git_changes()
-
-    assert result == {
-        "status": "no_changes",
-        "current_commit": "abc123",
-        "latest_commit": "abc123",
-        "changed_files": [],
-    }
-
-    # Should not call sync_note when no changes
-    mock_sync_note.delay.assert_not_called()
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
-def test_track_git_changes_diff_failure(
-    mock_settings, mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes when diff command fails."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
-
-    # Mock git commands
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit (different from current)
-    ]
-
-    # Mock pull command success, diff command failure
-    mock_git_command.side_effect = [
-        Mock(),  # pull command
-        Mock(returncode=1, stdout="", stderr="diff failed"),  # diff command fails
-    ]
-
-    result = notes.track_git_changes()
-
-    assert result == {
-        "status": "error",
-        "error": "Failed to get changed files",
-    }
-
-    # Should not call sync_note when diff fails
-    mock_sync_note.delay.assert_not_called()
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
-def test_track_git_changes_diff_returns_none(
-    mock_settings, mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes when diff command returns None."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
-
-    # Mock git commands
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit (different from current)
-    ]
-
-    # Mock pull command success, diff command returns None
-    mock_git_command.side_effect = [
-        Mock(),  # pull command
-        None,  # diff command returns None
-    ]
-
-    result = notes.track_git_changes()
-
-    assert result == {
-        "status": "error",
-        "error": "Failed to get changed files",
-    }
-
-    # Should not call sync_note when diff returns None
-    mock_sync_note.delay.assert_not_called()
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.settings")
-def test_track_git_changes_empty_diff(
-    mock_settings, mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes when diff returns empty (no actual file changes)."""
-    # Mock git repo exists
-    mock_repo_root = Mock()
-    mock_repo_root.__truediv__ = Mock(return_value=Mock())
-    mock_repo_root.__truediv__.return_value.exists.return_value = True
-    mock_settings.NOTES_STORAGE_DIR = mock_repo_root
-
-    # Mock git commands
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit (different from current)
-    ]
-
-    # Mock pull command success, diff command returns empty
-    mock_git_command.side_effect = [
-        Mock(),  # pull command
-        Mock(returncode=0, stdout=""),  # diff command returns empty
-    ]
-
-    result = notes.track_git_changes()
-
-    assert result == {
-        "status": "success",
-        "current_commit": "abc123",
-        "latest_commit": "def456",
-        "changed_files": [],
-    }
-
-    # Should not call sync_note when no files changed
-    mock_sync_note.delay.assert_not_called()
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-def test_track_git_changes_whitespace_in_filenames(
-    mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes handles whitespace in filenames correctly."""
-    # Use the autouse mock_file_storage'd NOTES_STORAGE_DIR so paths are
-    # real and FILE_STORAGE_DIR-relative — to_db_filename now requires
-    # absolute paths inside FILE_STORAGE_DIR.
-    notes_dir = settings.NOTES_STORAGE_DIR
-    (notes_dir / ".git").mkdir(parents=True, exist_ok=True)
-    file1 = notes_dir / "file1.md"
-    file2 = notes_dir / "file2.md"
-    file1.write_text("Content 1")
-    file2.write_text("Content 2")
-
-    # Mock git commands
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit (different from current)
-    ]
-
-    # Mock diff with whitespace and empty lines
-    mock_git_command.side_effect = [
-        Mock(),  # pull command
-        Mock(
-            returncode=0, stdout="  file1.md  \n\n  file2.md  \n\n"
-        ),  # diff with whitespace
-    ]
-
-    result = notes.track_git_changes()
-
-    assert result == {
-        "status": "success",
-        "current_commit": "abc123",
-        "latest_commit": "def456",
-        "changed_files": ["file1.md", "file2.md"],
-    }
-
-    # Should call sync_note for each non-empty file
-    assert mock_sync_note.delay.call_count == 2
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-def test_track_git_changes_feature_branch(
-    mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes works with feature branches."""
-    # Use the autouse mock_file_storage'd NOTES_STORAGE_DIR.
-    notes_dir = settings.NOTES_STORAGE_DIR
-    (notes_dir / ".git").mkdir(parents=True, exist_ok=True)
-    feature_file = notes_dir / "feature_file.md"
-    feature_file.write_text("Feature content")
-
-    # Mock git commands for feature branch
-    mock_check_git.side_effect = [
-        "feature/notes-sync",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit from origin/feature/notes-sync
-    ]
-
-    mock_git_command.side_effect = [
-        Mock(),  # pull origin feature/notes-sync
-        Mock(returncode=0, stdout="feature_file.md\n"),  # diff command
-    ]
-
-    result = notes.track_git_changes()
-
-    assert result == {
-        "status": "success",
-        "current_commit": "abc123",
-        "latest_commit": "def456",
-        "changed_files": ["feature_file.md"],
-    }
-
-    # Verify correct branch was used in git commands
-    mock_git_command.assert_any_call(
-        notes_dir, "pull", "origin", "feature/notes-sync"
-    )
-    mock_check_git.assert_any_call(
-        notes_dir, "rev-parse", "origin/feature/notes-sync"
-    )
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-@patch("memory.workers.tasks.notes.logger")
-def test_track_git_changes_logging(
-    mock_logger, mock_check_git, mock_git_command, mock_sync_note
-):
-    """Test track_git_changes logs appropriately."""
-    # Use the autouse mock_file_storage'd NOTES_STORAGE_DIR.
-    notes_dir = settings.NOTES_STORAGE_DIR
-    (notes_dir / ".git").mkdir(parents=True, exist_ok=True)
-
-    # Test no changes scenario
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "abc123",  # latest commit (same as current)
-    ]
-    mock_git_command.return_value = Mock()  # pull command
-
-    notes.track_git_changes()
-
-    # Verify logging
-    mock_logger.info.assert_any_call("Tracking git changes")
-    mock_logger.info.assert_any_call("No new changes")
-
-    # Reset mocks for changes scenario
-    mock_logger.reset_mock()
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit (different)
-    ]
-    mock_git_command.side_effect = [
-        Mock(),  # pull command
-        Mock(returncode=0, stdout="test.md\n"),  # diff command
-    ]
-    test_file = notes_dir / "test.md"
-    test_file.write_text("Test content")
-
-    notes.track_git_changes()
-
-    # Verify logging for changes scenario
-    mock_logger.info.assert_any_call("Tracking git changes")
-    mock_logger.info.assert_any_call("Changed files: ['test.md']")
 
 
 # Profile handling tests
@@ -1034,67 +581,6 @@ Profile notes."""
     assert mock_sync_note.delay.call_count == 1
     note_call_args = mock_sync_note.delay.call_args
     assert note_call_args[1]["subject"] == "regular_note"
-
-
-@patch("memory.workers.tasks.notes.sync_note")
-@patch("memory.workers.tasks.notes.git_command")
-@patch("memory.workers.tasks.notes.check_git_command")
-def test_track_git_changes_skips_profile_files(
-    mock_check_git, mock_git_command, mock_sync_note, tmp_path
-):
-    """Test that track_git_changes skips profile files in the profiles folder."""
-    from unittest.mock import Mock
-
-    # Create notes dir structure
-    notes_dir = tmp_path / "notes"
-    notes_dir.mkdir(parents=True, exist_ok=True)
-    (notes_dir / ".git").mkdir()  # Fake git repo
-
-    # Create regular note and profile file
-    regular_note = notes_dir / "regular_note.md"
-    regular_note.write_text("Regular note content")
-
-    profiles_dir = notes_dir / "profiles"
-    profiles_dir.mkdir(exist_ok=True)
-    profile_file = profiles_dir / "jane_doe.md"
-    profile_file.write_text(
-        """---
-identifier: jane_doe
-display_name: Jane Doe
----
-
-Jane's notes."""
-    )
-
-    # Mock git commands to return both files as changed
-    mock_check_git.side_effect = [
-        "main",  # current branch
-        "abc123",  # current commit
-        None,  # fetch origin
-        "def456",  # latest commit
-    ]
-    mock_git_command.side_effect = [
-        Mock(),  # pull command
-        Mock(
-            returncode=0, stdout="regular_note.md\nprofiles/jane_doe.md\n"
-        ),  # diff command
-    ]
-
-    mock_sync_note.delay.return_value = Mock(id="task-note")
-
-    with patch("memory.common.settings.NOTES_STORAGE_DIR", notes_dir):
-        with patch("memory.common.settings.PROFILES_FOLDER", "profiles"):
-            result = notes.track_git_changes()
-
-    assert result["status"] == "success"
-    assert "regular_note.md" in result["changed_files"]
-    assert "profiles/jane_doe.md" in result["changed_files"]
-
-    # Only regular note should be synced (profile is skipped)
-    assert mock_sync_note.delay.call_count == 1
-    note_call_args = mock_sync_note.delay.call_args
-    assert note_call_args[1]["subject"] == "regular_note"
-    assert note_call_args[1]["save_to_file"] is False
 
 
 @patch("memory.workers.tasks.notes.sync_note")
@@ -1295,3 +781,668 @@ def test_git_notes_lock_gives_up_after_wait():
         with pytest.raises(RuntimeError, match="Could not acquire git notes lock"):
             with notes.git_notes_lock("tracking", wait_seconds=0):
                 pass
+
+
+# ----- Git sync against real repos: a bare "remote", the vault, and another clone -----
+
+
+def git(repo: pathlib.Path, *args: str) -> str:
+    res = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    )
+    return res.stdout.strip()
+
+
+def configure_identity(repo: pathlib.Path):
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test")
+
+
+def commit_file(repo: pathlib.Path, name: str, text: str):
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    git(repo, "add", name)
+    git(repo, "commit", "-q", "-m", f"add {name}")
+
+
+def make_vault(tmp_path: pathlib.Path, branch: str) -> tuple[pathlib.Path, pathlib.Path]:
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", branch, str(remote))
+    vault = settings.NOTES_STORAGE_DIR
+    git(vault, "init", "-q", "-b", branch)
+    configure_identity(vault)
+    git(vault, "remote", "add", "origin", str(remote))
+    commit_file(vault, "existing.md", "existing")
+    git(vault, "push", "-q", "-u", "origin", branch)
+    mark_indexed(vault)
+    return vault, remote
+
+
+def mark_indexed(vault: pathlib.Path):
+    redis.from_url(settings.REDIS_URL).set(
+        notes.GIT_INDEXED_COMMIT_KEY, git(vault, "rev-parse", "HEAD")
+    )
+
+
+def push_from_other_clone(tmp_path: pathlib.Path, remote: pathlib.Path, name: str, text: str):
+    other = tmp_path / "other"
+    if not other.exists():
+        git(tmp_path, "clone", "-q", str(remote), str(other))
+        configure_identity(other)
+    git(other, "pull", "-q")
+    commit_file(other, name, text)
+    git(other, "push", "-q")
+
+
+def save_note(vault: pathlib.Path, name: str, text: str):
+    with notes.git_tracking(vault, f"Sync note {name}") as sync:
+        sync.track(vault / name)
+        (vault / name).write_text(text)
+
+
+def remote_files(remote: pathlib.Path, branch: str) -> set[str]:
+    return set(git(remote, "ls-tree", "--name-only", branch).splitlines())
+
+
+def head_files(vault: pathlib.Path) -> set[str]:
+    return set(git(vault, "ls-tree", "--name-only", "HEAD").splitlines())
+
+
+def last_status() -> dict:
+    return json.loads(redis.from_url(settings.REDIS_URL).get(notes.GIT_SYNC_STATUS_KEY))
+
+
+@pytest.fixture(autouse=True)
+def queued_reindexes():
+    with patch.object(notes.reindex_note, "delay") as delay:
+        yield delay
+
+
+@pytest.fixture
+def reindexed(queued_reindexes):
+    """Filenames git sync queued for reindexing."""
+    return lambda: [c.args[0] for c in queued_reindexes.call_args_list]
+
+
+def run_queued_reindexes(queued_reindexes) -> list[str]:
+    """Run the queued reindexes, as a worker would once the git lock is free."""
+    return [notes.reindex_note(c.args[0])["status"] for c in queued_reindexes.call_args_list]
+
+
+@pytest.mark.parametrize("branch", ["main", "master"])
+def test_git_tracking_pushes_to_the_current_branch(tmp_path, branch):
+    vault, remote = make_vault(tmp_path, branch)
+
+    save_note(vault, "new.md", "new")
+
+    assert remote_files(remote, branch) == {"existing.md", "new.md"}
+    assert git(vault, "status", "--porcelain") == ""
+    assert last_status()["ok"] is True
+
+
+@pytest.mark.parametrize("branch", ["main", "master"])
+def test_git_tracking_merges_local_commits_with_remote_edits(tmp_path, branch, reindexed):
+    vault, remote = make_vault(tmp_path, branch)
+    commit_file(vault, "local-only.md", "unpushed")
+    push_from_other_clone(tmp_path, remote, "elsewhere.md", "pushed elsewhere")
+
+    save_note(vault, "new.md", "new")
+
+    assert remote_files(remote, branch) == {
+        "existing.md",
+        "local-only.md",
+        "elsewhere.md",
+        "new.md",
+    }
+    assert git(vault, "rev-parse", "HEAD") == git(remote, "rev-parse", branch)
+    assert last_status()["ok"] is True
+
+
+def test_git_tracking_reindexes_notes_the_pull_changed(tmp_path, reindexed):
+    vault, remote = make_vault(tmp_path, "master")
+    push_from_other_clone(tmp_path, remote, "elsewhere.md", "pushed elsewhere")
+    push_from_other_clone(tmp_path, remote, "café.md", "non-ascii name")
+    push_from_other_clone(tmp_path, remote, "ours.md", "remote version")
+
+    save_note(vault, "ours.md", "memory version")
+
+    assert sorted(reindexed()) == ["notes/café.md", "notes/elsewhere.md"]
+    assert (vault / "ours.md").read_text() == "memory version"
+
+
+def test_git_tracking_keeps_local_commits_when_remote_is_unreachable(tmp_path, caplog):
+    vault, remote = make_vault(tmp_path, "master")
+    commit_file(vault, "local-only.md", "unpushed")
+    git(vault, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+    with caplog.at_level("WARNING", logger="memory.workers.tasks.notes"):
+        save_note(vault, "new.md", "new")
+        save_note(vault, "newer.md", "newer")
+
+    assert head_files(vault) == {"existing.md", "local-only.md", "new.md", "newer.md"}
+    assert git(vault, "status", "--porcelain") == ""
+    assert remote_files(remote, "master") == {"existing.md"}
+    status = last_status()
+    assert (status["ok"], status["failed_step"]) == (False, "fetch")
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings
+    assert not any(str(tmp_path) in m or ".md" in m for m in warnings)
+
+
+def test_git_tracking_pushes_kept_commits_once_remote_is_back(tmp_path, reindexed):
+    vault, remote = make_vault(tmp_path, "master")
+    git(vault, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    save_note(vault, "offline.md", "offline")
+    git(vault, "remote", "set-url", "origin", str(remote))
+    push_from_other_clone(tmp_path, remote, "elsewhere.md", "pushed elsewhere")
+
+    save_note(vault, "online.md", "online")
+
+    assert remote_files(remote, "master") == {
+        "existing.md",
+        "offline.md",
+        "elsewhere.md",
+        "online.md",
+    }
+    assert last_status()["ok"] is True
+
+
+@pytest.mark.parametrize("remote_edits", [[], [("elsewhere.md", "pushed elsewhere")]])
+def test_git_tracking_leaves_outside_edits_alone(tmp_path, remote_edits, reindexed):
+    vault, remote = make_vault(tmp_path, "master")
+    commit_file(vault, "edited.md", "original")
+    commit_file(vault, "deleted.md", "original")
+    git(vault, "push", "-q")
+    for name, text in remote_edits:
+        push_from_other_clone(tmp_path, remote, name, text)
+    (vault / "edited.md").write_text("edited outside Memory")
+    (vault / "deleted.md").unlink()
+    (vault / "untracked.md").write_text("draft")
+    before = git(vault, "status", "--porcelain")
+
+    save_note(vault, "new.md", "new")
+
+    assert git(vault, "status", "--porcelain") == before
+    assert (vault / "edited.md").read_text() == "edited outside Memory"
+    assert git(vault, "stash", "list") == ""
+    assert remote_files(remote, "master") == {
+        "existing.md",
+        "edited.md",
+        "deleted.md",
+        "new.md",
+        *(name for name, _ in remote_edits),
+    }
+    assert last_status()["ok"] is True
+
+
+def test_git_tracking_keeps_local_commits_when_merge_conflicts(tmp_path):
+    vault, remote = make_vault(tmp_path, "master")
+    commit_file(vault, "existing.md", "local version")
+    local_head = git(vault, "rev-parse", "HEAD")
+    push_from_other_clone(tmp_path, remote, "existing.md", "remote version")
+
+    save_note(vault, "new.md", "new")
+
+    assert git(vault, "merge-base", "--is-ancestor", local_head, "HEAD") == ""
+    assert (vault / "existing.md").read_text() == "local version"
+    assert git(vault, "status", "--porcelain") == ""
+    assert last_status()["failed_step"] == "merge_conflict"
+    assert last_status()["hint"]
+
+
+def test_git_tracking_never_conflicts_an_uncommitted_edit(tmp_path):
+    """Remote and user both changed a file the user hasn't committed: leave it, and say so."""
+    vault, remote = make_vault(tmp_path, "master")
+    commit_file(vault, "local-only.md", "unpushed")
+    push_from_other_clone(tmp_path, remote, "existing.md", "remote version")
+    (vault / "existing.md").write_text("user's uncommitted version")
+
+    save_note(vault, "first.md", "first")
+    save_note(vault, "second.md", "second")
+
+    assert (vault / "existing.md").read_text() == "user's uncommitted version"
+    assert git(vault, "status", "--porcelain") == "M existing.md"
+    assert git(vault, "ls-files", "--unmerged") == ""
+    assert git(vault, "stash", "list") == ""
+    assert {"local-only.md", "first.md", "second.md"} <= head_files(vault)
+    assert last_status()["failed_step"] == "merge_conflict"
+    assert last_status()["hint"]
+
+
+def test_git_tracking_commits_users_edit_before_overwriting_it(tmp_path):
+    vault, remote = make_vault(tmp_path, "master")
+    (vault / "existing.md").write_text("existing\nuser's uncommitted paragraph")
+
+    save_note(vault, "existing.md", "memory version")
+
+    assert (vault / "existing.md").read_text() == "memory version"
+    assert git(remote, "show", "master~1:existing.md") == "existing\nuser's uncommitted paragraph"
+    assert git(remote, "show", "master:existing.md") == "memory version"
+    assert git(vault, "status", "--porcelain") == ""
+
+
+def detach_head(vault: pathlib.Path, remote: pathlib.Path, tmp_path: pathlib.Path):
+    git(vault, "checkout", "-q", "--detach")
+
+
+def stop_mid_rebase(vault: pathlib.Path, remote: pathlib.Path, tmp_path: pathlib.Path):
+    commit_file(vault, "existing.md", "local version")
+    push_from_other_clone(tmp_path, remote, "existing.md", "remote version")
+    git(vault, "fetch", "-q")
+    subprocess.run(["git", "-C", str(vault), "rebase", "origin/master"], capture_output=True)
+
+
+def stop_mid_merge(vault: pathlib.Path, remote: pathlib.Path, tmp_path: pathlib.Path):
+    stop_mid_rebase(vault, remote, tmp_path)
+    git(vault, "rebase", "--abort")
+    subprocess.run(["git", "-C", str(vault), "merge", "origin/master"], capture_output=True)
+
+
+@pytest.mark.parametrize(
+    "block, step",
+    [
+        (detach_head, "detached"),
+        (stop_mid_rebase, "operation_in_progress"),
+        (stop_mid_merge, "operation_in_progress"),
+    ],
+)
+def test_git_tracking_never_writes_into_a_blocked_vault(tmp_path, block, step):
+    vault, remote = make_vault(tmp_path, "master")
+    block(vault, remote, tmp_path)
+    (vault / "existing.md").write_text("user's resolution")
+    head = git(vault, "rev-parse", "HEAD")
+    before = git(vault, "status", "--porcelain")
+
+    with pytest.raises(notes.VaultBusy):
+        save_note(vault, "existing.md", "memory version")
+
+    assert (vault / "existing.md").read_text() == "user's resolution"
+    assert git(vault, "status", "--porcelain") == before
+    assert git(vault, "rev-parse", "HEAD") == head
+    assert remote_files(remote, "master") == {"existing.md"}
+    assert last_status()["failed_step"] == step
+
+
+@pytest.fixture
+def deferred_writes():
+    """Arguments of the file writes sync_note deferred while the vault was busy."""
+    with patch.object(notes.write_note_file_when_free, "apply_async") as apply_async:
+        yield lambda: [c.args[0] for c in apply_async.call_args_list]
+
+
+def note_args(content: str, filename: str | None = "notes/n.md", subject: str = "n") -> dict:
+    return {"subject": subject, "content": content, "filename": filename}
+
+
+def test_sync_note_defers_the_file_write_while_vault_is_busy(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    vault, remote = make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    git(vault, "checkout", "-q", "--detach")
+
+    notes.sync_note(**note_args("v2"))
+
+    row = mock_make_session.query(Note).filter(Note.filename == "notes/n.md").one()
+    assert row.content == "v2"
+    assert (vault / "n.md").read_text() == "v1"
+    assert last_status()["failed_step"] == "detached"
+    [write] = deferred_writes()
+
+    git(vault, "checkout", "-q", "master")
+    assert notes.write_note_file_when_free(*write)["status"] == "written"
+
+    assert (vault / "n.md").read_text() == "v2"
+    assert git(remote, "show", "master:n.md") == "v2"
+
+
+def test_deferred_write_keeps_waiting_while_vault_is_busy(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    git(vault, "checkout", "-q", "--detach")
+    notes.sync_note(**note_args("v1"))
+    [write] = deferred_writes()
+
+    with pytest.raises(notes.VaultBusy):
+        notes.write_note_file_when_free(*write)
+
+    assert not (vault / "n.md").exists()
+
+
+def test_deferred_write_never_replays_older_content(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    git(vault, "checkout", "-q", "--detach")
+    notes.sync_note(**note_args("v2"))
+    git(vault, "checkout", "-q", "master")
+    notes.sync_note(**note_args("v3"))
+    [stale_write] = deferred_writes()
+
+    # Celery may deliver it any number of times; every delivery must be a no-op.
+    results = [notes.write_note_file_when_free(*stale_write) for _ in range(2)]
+
+    assert [r["status"] for r in results] == ["superseded", "superseded"]
+    assert (vault / "n.md").read_text() == "v3"
+    row = mock_make_session.query(Note).filter(Note.filename == "notes/n.md").one()
+    assert row.content == "v3"
+
+
+def test_sync_note_gives_filenameless_notes_their_own_rows(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    git(vault, "checkout", "-q", "--detach")
+
+    notes.sync_note(**note_args("ALPHA BODY", filename=None, subject="alpha"))
+    notes.sync_note(**note_args("BETA BODY", filename=None, subject="beta"))
+
+    rows = {(n.filename, n.content) for n in mock_make_session.query(Note).all()}
+    assert rows == {("notes/alpha.md", "ALPHA BODY"), ("notes/beta.md", "BETA BODY")}
+
+
+def test_sync_note_dedupe_hit_keeps_a_users_committed_edit(mock_make_session, qdrant, tmp_path):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    commit_file(vault, "n.md", "user edit committed in the vault")
+
+    notes.sync_note(**note_args("v1"))
+
+    assert (vault / "n.md").read_text() == "user edit committed in the vault"
+
+
+def test_sync_note_failures_still_notify(tmp_path):
+    with patch("memory.common.content_processing.notify_task_failure") as notify:
+        with pytest.raises(ValueError):
+            notes.sync_note(**note_args("x", filename="../escape.md"))
+
+    notify.assert_called_once()
+
+
+def test_git_tracking_reindexes_notes_committed_in_the_vault(tmp_path, reindexed):
+    vault, _ = make_vault(tmp_path, "master")
+    save_note(vault, "first.md", "first")
+    commit_file(vault, "by-hand.md", "committed in the vault")
+
+    save_note(vault, "second.md", "second")
+
+    assert reindexed() == ["notes/by-hand.md"]
+
+
+def test_git_tracking_unstages_its_paths_when_commit_fails(tmp_path):
+    vault, _ = make_vault(tmp_path, "master")
+    hook = vault / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+
+    save_note(vault, "new.md", "new")
+
+    assert git(vault, "status", "--porcelain") == "?? new.md"
+    assert last_status()["failed_step"] == "commit"
+
+
+def test_git_tracking_skips_pulled_files_it_cannot_reindex(tmp_path, reindexed):
+    vault, remote = make_vault(tmp_path, "master")
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", str(remote), str(other))
+    configure_identity(other)
+    (other / "escape.md").symlink_to("/etc/hosts")
+    (other / "binary.md").write_bytes(b"\xff\xfe not utf-8")
+    (other / "good.md").write_text("good")
+    git(other, "add", ".")
+    git(other, "commit", "-q", "-m", "mixed")
+    git(other, "push", "-q")
+
+    save_note(vault, "new.md", "new")
+    with patch.object(notes, "upsert_note") as upsert:
+        statuses = [notes.reindex_note(f)["status"] for f in ["notes/binary.md", "notes/escape.md"]]
+        notes.reindex_note("notes/good.md")
+
+    assert sorted(reindexed()) == ["notes/binary.md", "notes/escape.md", "notes/good.md"]
+    assert statuses == ["unreadable", "unreadable"]
+    upsert.assert_called_once_with(
+        subject="good", content="good", filename="notes/good.md", save_to_file=False
+    )
+    assert "new.md" in remote_files(remote, "master")
+    assert last_status()["ok"] is True
+
+
+def test_git_tracking_without_upstream_commits_locally(tmp_path):
+    vault = settings.NOTES_STORAGE_DIR
+    git(vault, "init", "-q", "-b", "main")
+    configure_identity(vault)
+    commit_file(vault, "existing.md", "existing")
+
+    save_note(vault, "new.md", "new")
+
+    assert head_files(vault) == {"existing.md", "new.md"}
+    assert last_status()["failed_step"] == "no_upstream"
+
+
+def test_git_tracking_without_repo_just_writes():
+    save_note(settings.NOTES_STORAGE_DIR, "new.md", "new")
+
+    assert (settings.NOTES_STORAGE_DIR / "new.md").read_text() == "new"
+
+
+def test_setup_git_notes_pushes_and_later_syncs_follow(tmp_path):
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    (settings.NOTES_STORAGE_DIR / "existing.md").write_text("existing")
+
+    notes.setup_git_notes(str(remote), "test@example.com", "Test")
+    save_note(settings.NOTES_STORAGE_DIR, "new.md", "new")
+
+    assert remote_files(remote, "main") == {"existing.md", "new.md"}
+
+
+def test_track_git_changes_without_repo():
+    assert notes.track_git_changes() == {"status": "no_git_repo"}
+
+
+def test_track_git_changes_pulls_remote_notes(tmp_path, reindexed):
+    vault, remote = make_vault(tmp_path, "main")
+    commit_file(vault, "local-only.md", "unpushed")
+    (vault / "draft.md").write_text("draft")
+    push_from_other_clone(tmp_path, remote, "elsewhere.md", "pushed elsewhere")
+    push_from_other_clone(tmp_path, remote, "profiles/someone.md", "profile")
+
+    result = notes.track_git_changes()
+
+    assert result["status"] == "success"
+    assert result["changed_files"] == ["elsewhere.md", "local-only.md", "profiles/someone.md"]
+    assert reindexed() == ["notes/elsewhere.md", "notes/local-only.md"]
+    assert "local-only.md" in remote_files(remote, "main")
+    assert (vault / "draft.md").read_text() == "draft"
+
+
+def test_track_git_changes_reports_unreachable_remote(tmp_path, reindexed):
+    vault, _ = make_vault(tmp_path, "master")
+    git(vault, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+    result = notes.track_git_changes()
+
+    assert (result["status"], result["failed_step"]) == ("sync_failed", "fetch")
+    assert last_status()["failed_step"] == "fetch"
+    assert reindexed() == []
+
+
+def test_sync_note_rewrites_missing_file_on_dedupe_hit(mock_note_data, mock_make_session, qdrant):
+    notes.sync_note(**mock_note_data)
+    path = settings.FILE_STORAGE_DIR / mock_note_data["filename"]
+    path.unlink()
+
+    result = notes.sync_note(**mock_note_data)
+
+    assert result["status"] == "already_exists"
+    assert path.read_text() == mock_note_data["content"]
+
+
+def note_row(db_session, filename: str = "notes/n.md") -> str:
+    db_session.expire_all()
+    return db_session.query(Note).filter(Note.filename == filename).one().content
+
+
+def test_reindex_never_overwrites_an_edit_awaiting_its_file_write(
+    mock_make_session, qdrant, tmp_path, deferred_writes, queued_reindexes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    commit_file(vault, "n.md", "older hand commit")
+    git(vault, "checkout", "-q", "--detach")
+    notes.sync_note(**note_args("memory v2"))
+    git(vault, "checkout", "-q", "master")
+
+    notes.track_git_changes()
+    assert run_queued_reindexes(queued_reindexes) == ["write_pending"]
+    [write] = deferred_writes()
+    notes.write_note_file_when_free(*write)
+
+    assert note_row(mock_make_session) == "memory v2"
+    assert (vault / "n.md").read_text() == "memory v2"
+
+
+def test_reindex_skips_a_note_whose_write_never_happened(
+    mock_make_session, qdrant, tmp_path, queued_reindexes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    old = git(vault, "rev-parse", "HEAD")
+    notes.sync_note(**note_args("v2"))
+    with patch.object(notes, "write_note_file_or_defer"):
+        notes.sync_note(**note_args("v3"))
+    redis.from_url(settings.REDIS_URL).set(notes.GIT_INDEXED_COMMIT_KEY, old)
+
+    notes.track_git_changes()
+
+    assert run_queued_reindexes(queued_reindexes) == ["write_pending"]
+    assert note_row(mock_make_session) == "v3"
+
+
+def test_reindex_indexes_the_file_once_its_write_is_done(
+    mock_make_session, qdrant, tmp_path, queued_reindexes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    commit_file(vault, "n.md", "hand edit")
+
+    notes.track_git_changes()
+
+    assert run_queued_reindexes(queued_reindexes) == ["processed"]
+    assert note_row(mock_make_session) == "hand edit"
+
+
+def test_first_sync_reindexes_every_tracked_note(
+    mock_make_session, qdrant, tmp_path, reindexed
+):
+    vault, _ = make_vault(tmp_path, "master")
+    commit_file(vault, "n.md", "hand commit")
+    redis.from_url(settings.REDIS_URL).delete(notes.GIT_INDEXED_COMMIT_KEY)
+
+    first = notes.track_git_changes()
+    second = notes.track_git_changes()
+
+    assert sorted(first["changed_files"]) == ["existing.md", "n.md"]
+    assert second["changed_files"] == []
+    assert sorted(reindexed()) == ["notes/existing.md", "notes/n.md"]
+
+
+def test_sync_note_defers_when_the_git_lock_is_taken(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    make_vault(tmp_path, "master")
+    with patch.object(notes, "write_note_file", side_effect=notes.GitLockTimeout("busy")):
+        notes.sync_note(**note_args("v1"))
+
+    assert len(deferred_writes()) == 1
+
+
+def test_deferred_write_clears_its_mark_when_it_gives_up(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    git(vault, "checkout", "-q", "--detach")
+    notes.sync_note(**note_args("v1"))
+    [write] = deferred_writes()
+    assert notes.write_pending("notes/n.md")
+
+    notes.write_note_file_when_free.apply(write, retries=notes.VAULT_BUSY_RETRIES)
+
+    assert not notes.write_pending("notes/n.md")
+
+
+def test_sync_note_clears_its_mark_when_saving_the_row_fails(mock_make_session, tmp_path):
+    make_vault(tmp_path, "master")
+    with patch.object(notes, "process_content_item", side_effect=RuntimeError("db down")):
+        with pytest.raises(RuntimeError):
+            notes.sync_note(**note_args("v1"))
+
+    assert not notes.write_pending("notes/n.md")
+
+
+def test_reindex_keeps_the_rows_subject(mock_make_session, qdrant, tmp_path, queued_reindexes):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(subject="Meeting with Bob, 3 Oct", content="body", filename="notes/n.md")
+    redis.from_url(settings.REDIS_URL).delete(notes.GIT_INDEXED_COMMIT_KEY)
+
+    notes.track_git_changes()
+    unchanged = run_queued_reindexes(queued_reindexes)
+    queued_reindexes.reset_mock()
+    commit_file(vault, "n.md", "hand-edited body")
+    notes.track_git_changes()
+    edited = run_queued_reindexes(queued_reindexes)
+
+    assert sorted(unchanged) == ["processed", "unchanged"]  # existing.md is new to the DB
+    assert edited == ["processed"]
+    mock_make_session.expire_all()
+    row = mock_make_session.query(Note).filter(Note.filename == "notes/n.md").one()
+    assert (row.subject, row.content) == ("Meeting with Bob, 3 Oct", "hand-edited body")
+
+
+def test_reindex_runs_the_untracked_upsert(mock_make_session, qdrant, tmp_path):
+    vault, _ = make_vault(tmp_path, "master")
+    commit_file(vault, "n.md", "hand commit")
+
+    with patch.object(notes, "sync_note") as tracked:
+        result = notes.reindex_note("notes/n.md")
+
+    assert result["status"] == "processed"
+    tracked.assert_not_called()
+
+
+def test_reindex_retries_when_the_git_lock_is_taken(tmp_path):
+    with patch.object(notes, "git_notes_lock", side_effect=notes.GitLockTimeout("busy")) as lock:
+        notes.reindex_note.apply(("notes/n.md",))
+
+    # Eager mode runs each retry at once.
+    assert lock.call_count == notes.VAULT_BUSY_RETRIES + 1
+
+
+def test_reindex_never_saves_over_an_edit_marked_during_it(mock_make_session, qdrant, tmp_path):
+    make_vault(tmp_path, "master")
+    notes.sync_note(**note_args("v1"))
+    notes.mark_pending_write("notes/n.md", create_content_hash("newer"))
+
+    result = notes.upsert_note(subject="n", content="hand", filename="notes/n.md", save_to_file=False)
+
+    assert result["status"] == "write_pending"
+    assert note_row(mock_make_session) == "v1"
+
+
+def test_superseded_write_leaves_the_newer_edits_mark(
+    mock_make_session, qdrant, tmp_path, deferred_writes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    git(vault, "checkout", "-q", "--detach")
+    notes.sync_note(**note_args("A"))
+    notes.sync_note(**note_args("B"))
+    git(vault, "checkout", "-q", "master")
+    write_a, write_b = deferred_writes()
+
+    assert notes.write_note_file_when_free(*write_a)["status"] == "superseded"
+    assert notes.write_pending("notes/n.md")
+    assert notes.write_note_file_when_free(*write_b)["status"] == "written"
+    assert not notes.write_pending("notes/n.md")
+    assert (vault / "n.md").read_text() == "B"

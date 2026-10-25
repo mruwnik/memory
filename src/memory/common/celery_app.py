@@ -54,6 +54,8 @@ UPDATE_SLACK_CHANNEL = f"{SLACK_ROOT}.update_slack_channel"
 
 SYNC_NOTES = f"{NOTES_ROOT}.sync_notes"
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
+WRITE_NOTE_FILE = f"{NOTES_ROOT}.write_note_file_when_free"
+REINDEX_NOTE = f"{NOTES_ROOT}.reindex_note"
 SETUP_GIT_NOTES = f"{NOTES_ROOT}.setup_git_notes"
 TRACK_GIT_CHANGES = f"{NOTES_ROOT}.track_git_changes"
 SYNC_OBSERVATION = f"{OBSERVATIONS_ROOT}.sync_observation"

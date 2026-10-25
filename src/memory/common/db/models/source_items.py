@@ -1366,19 +1366,23 @@ class Note(SourceItem):
             "tags": self.tags,
         }
 
-    def save_to_file(self) -> None:
+    @staticmethod
+    def default_filename(subject: str | None) -> str:
+        """The FILE_STORAGE_DIR-relative filename for a note given no filename."""
+        # Derive the notes-folder prefix from settings rather than
+        # hardcoding "notes/" — NOTES_STORAGE_DIR is env-overridable.
+        notes_prefix = paths.to_db_filename(settings.NOTES_STORAGE_DIR)
+        # `clean_filename` strips everything to alphanumerics+underscore,
+        # so an empty subject (or one made of only special chars) collapses
+        # to the empty string — without this fallback we'd produce a
+        # useless ``"notes/.md"`` filename.
+        safe_subject = clean_filename(subject or "") or "untitled"
+        return f"{notes_prefix}/{safe_subject}.md"
+
+    def file_path(self) -> pathlib.Path:
+        """The absolute path of this note's file, deriving ``filename`` from the subject if unset."""
         if not self.filename:
-            # Derive the notes-folder prefix from settings rather than
-            # hardcoding "notes/" — NOTES_STORAGE_DIR is env-overridable.
-            notes_prefix = paths.to_db_filename(settings.NOTES_STORAGE_DIR)
-            # `clean_filename` strips everything to alphanumerics+underscore,
-            # so an empty subject (or one made of only special chars) collapses
-            # to the empty string — without this fallback we'd produce a
-            # useless ``"notes/.md"`` filename. ``"untitled"`` is reachable
-            # only when sync_note created a Note with no filename and an
-            # empty subject, which shouldn't happen in normal flow.
-            safe_subject = clean_filename(self.subject or "") or "untitled"
-            self.filename = f"{notes_prefix}/{safe_subject}.md"
+            self.filename = self.default_filename(self.subject)
         # Note.filename is FILE_STORAGE_DIR-relative (matches every other
         # SourceItem subtype). Defense in depth: resolve the path and
         # require it to land inside NOTES_STORAGE_DIR — preventing path
@@ -1392,6 +1396,10 @@ class Note(SourceItem):
             raise ValueError(
                 f"Note filename must resolve under {notes_root}: {self.filename!r}"
             )
+        return path
+
+    def save_to_file(self) -> None:
+        path = self.file_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.content or "")
 
