@@ -7,6 +7,7 @@ import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboa
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
+import { SettingsPage } from '@/components/settings'
 import { PeopleManagement } from '@/components/people'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
@@ -114,6 +115,7 @@ const AuthWrapper = () => {
     { path: '/ui/snapshots', element: <ConfigSources /> },
     { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions' },
     { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions' },
+    { path: '/ui/instance-settings', element: <SettingsPage />, scope: 'admin' },
     { path: '/ui/celery', element: <CeleryOverview />, scope: 'admin' },
     { path: '/ui/polls', element: <PollList /> },
     { path: '/ui/polls/new', element: <PollCreate /> },

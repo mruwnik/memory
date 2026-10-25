@@ -41,6 +41,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and Claude sessions' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
+      { to: '/ui/instance-settings', title: 'Instance settings', description: 'Voyage key, MCP servers and search limits for this instance', scope: 'admin' },
       { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],
