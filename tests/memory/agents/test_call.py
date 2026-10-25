@@ -71,18 +71,28 @@ async def test_a_schema_agent_that_does_not_submit_fails_but_is_still_charged(db
 
 @pytest.mark.asyncio
 async def test_a_call_its_caller_gave_up_on_is_still_charged(db_session, regular_user, llm_key, scripted_llm):
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
     async def slow():
-        await asyncio.sleep(0.1)
+        started.set()
+        await finish.wait()
         return submitted(SUMMARY)
 
     scripted_llm.script = [slow]
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST),
-            timeout=0.01,
-        )
-    await detached_calls_finish()
+    caller = asyncio.create_task(
+        run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+    )
+    try:
+        await started.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert call._detached
+    finally:
+        finish.set()
+        await detached_calls_finish()
 
     db_session.expire_all()
     assert db_session.query(LLMSpend).one().calls == 1
@@ -92,8 +102,12 @@ async def test_a_call_its_caller_gave_up_on_is_still_charged(db_session, regular
 async def test_a_detached_call_that_fails_unexpectedly_is_logged(
     db_session, regular_user, llm_key, scripted_llm, monkeypatch, caplog
 ):
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
     async def slow():
-        await asyncio.sleep(0.1)
+        started.set()
+        await finish.wait()
         return submitted(SUMMARY)
 
     def broken_charge(*args):
@@ -102,12 +116,18 @@ async def test_a_detached_call_that_fails_unexpectedly_is_logged(
     scripted_llm.script = [slow]
     monkeypatch.setattr(call, "charge", broken_charge)
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST),
-            timeout=0.01,
-        )
-    await detached_calls_finish()
+    caller = asyncio.create_task(
+        run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+    )
+    try:
+        await started.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert call._detached
+    finally:
+        finish.set()
+        await detached_calls_finish()
 
     records = [r for r in caplog.records if r.name == call.__name__]
     assert [(r.levelno, r.getMessage()) for r in records] == [
