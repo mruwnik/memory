@@ -22,7 +22,7 @@ def git(cwd, *args):
 def clone(tmp_path):
     """A clone at v0.0.9 with a newer v0.0.10, whose origin is an empty bare repo."""
     clone = tmp_path / "clone"
-    git(tmp_path, "clone", "--quiet", str(REPO_ROOT), str(clone))
+    git(tmp_path, "clone", "--quiet", "--no-tags", str(REPO_ROOT), str(clone))
     git(tmp_path, "init", "--quiet", "--bare", str(tmp_path / "origin.git"))
     git(clone, "remote", "set-url", "origin", str(tmp_path / "origin.git"))
     for script in ["update.sh", "select_release.sh"]:

@@ -1,5 +1,6 @@
 set -eu
-d=$(mktemp -d)
+# Not /tmp: the transient unit below can't see the SSM agent's private one.
+d=$(mktemp -d -p /run memory-ops.XXXXXX)
 trap 'rm -rf "$d"' EXIT
 cat > "$d/lib.sh" <<'MEMORY_OPS_LIB'
 ${lib}
@@ -7,4 +8,7 @@ MEMORY_OPS_LIB
 cat > "$d/${action}.sh" <<'MEMORY_OPS_SCRIPT'
 ${script}
 MEMORY_OPS_SCRIPT
-MEMORY_ROOT=${install_dir} bash "$d/${action}.sh" ${args}
+# Under the SSM agent the snap AWS CLI's writes to redirected files silently
+# vanish; a transient unit runs the script as the systemd timers do.
+systemd-run --quiet --wait --pipe --collect --setenv=MEMORY_ROOT=${install_dir} \
+    bash "$d/${action}.sh" ${args}

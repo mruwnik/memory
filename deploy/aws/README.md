@@ -103,7 +103,34 @@ The instance reads its config from SSM. Changes to `release_signers`, `auto_upda
 
 ## On the instance
 
-The first boot takes 10–20 minutes: it installs Docker, Caddy, the AWS CLI and unattended-upgrades, builds the images and starts the stack. Follow it in `/var/log/memory-bootstrap.log` (root only; it never contains secret values). To re-run it, for example after a failure, run `sudo memory-bootstrap`. It keeps whatever is already set up.
+The first boot takes 10–20 minutes: it installs Docker, Caddy, the AWS CLI and unattended-upgrades, builds the images and starts the stack. Follow it in `/var/log/memory-bootstrap.log` (root only; it never contains secret values). To re-run it, for example after a failure, run `sudo memory-bootstrap`. It keeps whatever is already set up. On an instance created from a release after v0.2.1, a re-run before any install has succeeded also moves the checkout to the newest signed release and rebuilds the images, so a fixed release replaces a broken one. Once installed, only `update-to` and the nightly update change the version.
+
+### Recovering a failed first install on an older instance
+
+Terraform ignores user-data changes, so an instance created from v0.2.1 or earlier keeps its old `memory-bootstrap`. That version doesn't move the checkout on a re-run, and it isn't protected from the snap AWS CLI problem under SSM. To move it to a fixed release, in a Session Manager shell:
+
+0. Stop the old bootstrap from rewriting `daemon.json`: run `sudo sed -i '\|> /etc/docker/daemon.json$|d' /usr/local/sbin/memory-bootstrap`. Then follow "Moving images off the root disk" below, and skip its last step.
+1. Run `sudo systemd-run --wait --pipe --collect /usr/local/sbin/memory-bootstrap`. This rewrites `/etc/memory/allowed_signers`. The install step may still fail.
+2. If it failed, check out the newest signed release using the copy of `select_release.sh` that the first boot installed, which verifies the tag's signature:
+   ```
+   sudo -i
+   cd /opt/memory && git fetch -q --tags --force origin
+   tag=$(STATE_DIR=/var/lib/memory bash /usr/local/lib/memory/select_release.sh \
+       --require-signed /etc/memory/allowed_signers --min-age-hours 0) && git checkout -q --detach "refs/tags/$tag"
+   ```
+   Exit status 3 means the checkout is already at the newest signed release.
+3. Run step 1 again. The checkout's `tools/install.sh` now rebuilds the images and starts the whole stack.
+
+### Moving images off the root disk
+
+On Docker 29, the containerd image store keeps image layers in `/var/lib/containerd` on the 30 GB root disk, where the worker image can fill it. Instances created after v0.2.1 use the classic store under `/srv/memory/docker`. To move an older instance, run these as root in `/opt/memory`. The stack is down until the images are rebuilt, and the worker image takes a while.
+
+1. `docker compose down`, without `-v`. The volumes are under `/srv/memory/docker` and neither store change touches them.
+2. `docker system prune -af && docker builder prune -af`. Run this while the containerd store is still active, so its space is freed.
+3. Set `/etc/docker/daemon.json` to `{"data-root": "/srv/memory/docker", "features": {"containerd-snapshotter": false}}`, then `systemctl restart docker`.
+4. `docker compose up -d`. This rebuilds the images on the data volume.
+
+If you already moved containerd's `root` to the data volume in `/etc/containerd/config.toml`, the layers are off the root disk already. The same steps still apply, and that containerd root then holds only container state.
 
 Everything that must outlive the root disk is on the data volume, mounted at `/srv/memory`:
 
@@ -111,7 +138,7 @@ Everything that must outlive the root disk is on the data volume, mounted at `/s
 |---|---|
 | `/opt/memory` → `/srv/memory/app` | The checkout, `.env`, `secrets/`, `memory_files/`, update dumps in `backups/` |
 | `/var/lib/memory` → `/srv/memory/state` | Update, restore and backup markers, first sightings of tags |
-| `/srv/memory/docker` | Docker's data root, including the Postgres, Qdrant and Redis volumes |
+| `/srv/memory/docker` | Docker's data root: images, build cache and the Postgres, Qdrant and Redis volumes. Bootstrap turns off the containerd image store, which would keep image layers in `/var/lib/containerd` on the root disk. The nightly update prunes build cache older than a week. |
 
 `/etc/memory/` holds `allowed_signers` and `ops.env` (the backup key and bucket, read by the ops scripts and the nightly jobs), mode 600. `deploy/aws/host/configure.sh` renders them from SSM, along with the Caddyfile and the systemd units and timers from the checkout. Bootstrap runs it, and so does every nightly update, before and after updating. A re-apply or a new release therefore reaches the box without a new instance. Containers run as uid 1000, the instance's first user, which owns `.env`, `secrets/` and `memory_files/`. The code itself belongs to root. Bootstrap removes cloud-init's passwordless sudo for that user and, after the install, its docker and lxd groups (both root-equivalent). Admins get in through Session Manager's own `ssm-user`.
 
@@ -152,7 +179,7 @@ Each document embeds `tools/ops/lib.sh` and the action's script as they were whe
 
 A document's name ends in a hash of its content, for example `memory-status-1a2b3c4d`. A changed script makes a new document and deletes the old one, so no earlier version stays runnable. The `documents` output has the current names, and the operator roles always point at them.
 
-You can run any of these yourself on the box, for example `sudo /opt/memory/tools/ops/status.sh`. A careful owner never needs the operator.
+You can run any of these yourself on the box, for example `sudo systemd-run --wait --pipe --collect /opt/memory/tools/ops/status.sh`. Run them, and any `aws` command that writes to a file, through `systemd-run` like this: in a Session Manager shell the snap AWS CLI can exit 0 yet leave a redirected file empty. The documents and `memory-bootstrap` do this themselves. A careful owner never needs the operator.
 
 ### Rotating keys
 

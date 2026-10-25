@@ -195,6 +195,12 @@ run "all_roles" {
     error_message = "exactly the destructive documents pass --yes"
   }
   assert {
+    condition = alltrue([
+      for d in aws_ssm_document.op : strcontains(yamldecode(d.content).mainSteps[0].inputs.runCommand[0], "systemd-run --quiet --wait --pipe --collect")
+    ])
+    error_message = "every document runs its script outside the SSM agent, in a transient unit"
+  }
+  assert {
     condition = toset([
       for a, d in aws_ssm_document.op : a if yamldecode(d.content).mainSteps[0].inputs.timeoutSeconds == 14400
     ]) == toset(["update-to", "rollback", "restore-latest-backup", "rotate-keys"])

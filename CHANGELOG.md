@@ -20,7 +20,24 @@ None.
 
 ### Manual steps
 
-None.
+- EC2: re-apply Terraform so the SSM documents run their scripts through
+  `systemd-run`. Run through the SSM agent, the snap AWS CLI's output to a
+  file comes out empty, which broke bootstrap re-runs and the repair actions.
+  An SSM run that times out now reports TimedOut while the script keeps running
+  until it next writes output.
+- EC2, an instance whose first install failed: the apply doesn't touch user
+  data, so it keeps its old `memory-bootstrap`, which neither of the changes
+  below reaches. Follow "Recovering a failed first install on an older
+  instance" in deploy/aws/README.md: check out the newest signed release with
+  `select_release.sh`, then run
+  `sudo systemd-run --wait --pipe --collect /usr/local/sbin/memory-bootstrap`.
+- EC2, existing instances: Docker's containerd image store keeps image layers
+  on the 30 GB root disk, not the data volume, and the worker image can fill
+  it. Follow "Moving images off the root disk" in deploy/aws/README.md:
+  `docker compose down` (no `-v`), prune images and build cache, add
+  `"features": {"containerd-snapshotter": false}` to `/etc/docker/daemon.json`,
+  restart docker, `docker compose up -d`. The stack is down while the images
+  rebuild. New instances get this from bootstrap.
 
 ### Other changes for operators
 
@@ -30,6 +47,16 @@ None.
   submitted again; their content cannot be recovered from the deduplicated row.
 - Note submissions that match another user's stored content now enforce ownership
   before returning duplicate metadata or recreating a missing vault file.
+- EC2: the nightly update prunes build cache older than a week. It leaves
+  images alone; `disk-cleanup` prunes those.
+- EC2, instances created from this release on: `sudo memory-bootstrap` runs
+  itself in a transient systemd unit. Until an install has succeeded, a re-run
+  moves to the newest signed release, or keeps the checkout when it is already
+  that release, so re-running after a failed first install picks up a fix.
+- `tools/install.sh --non-interactive` builds the images before migrating, so a
+  re-run on a newer checkout no longer starts the old ones. It now ends with the
+  whole stack up; before, a first install (and so the EC2 bootstrap) started
+  only the api, leaving the workers and ingest-hub down.
 
 ### Migrations
 

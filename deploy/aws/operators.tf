@@ -42,7 +42,8 @@ locals {
       action = "aws:runShellScript"
       name   = replace(a, "-", "_")
       inputs = {
-        # SIGKILL at the timeout skips the scripts' failure traps, so the long ones get room.
+        # The timeout kills only the systemd-run client: SSM reports TimedOut while
+        # the script runs on until it next writes output, so the long ones get room.
         timeoutSeconds = lookup(v, "timeout", 3600)
         runCommand = [templatefile("${path.module}/ops-document.sh.tftpl", {
           action      = a

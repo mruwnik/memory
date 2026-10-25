@@ -553,9 +553,12 @@ if [ "$NON_INTERACTIVE" = true ]; then
     unset POSTGRES_PASSWORD REDIS_PASSWORD SERVER_URL API_PORT \
         FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES
     cd "$PROJECT_DIR"
+    # compose builds only missing images, so a re-run on a newer checkout would start the old ones.
+    docker compose build --pull
     # The api's healthcheck passes on an empty schema, so migrate first, as update.sh does
     docker compose run --rm migrate
     docker compose up -d --wait api
+    docker compose up -d
     if [ -n "${ADMIN_EMAIL:-}" ]; then
         # The password travels through the environment and no API key is made, so
         # neither ends up in argv, logs or output.

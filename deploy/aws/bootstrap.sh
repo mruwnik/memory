@@ -1,11 +1,20 @@
 #!/bin/bash
 # First-boot setup of a memory instance: user data, rendered by instance.tf.
 # Keeps a copy as /usr/local/sbin/memory-bootstrap; re-running that as root
-# keeps whatever is already set up. Logs to /var/log/memory-bootstrap.log,
+# keeps whatever is already set up, but until an install succeeds it moves to
+# the newest signed release. Logs to /var/log/memory-bootstrap.log,
 # never secret values.
 set -Eeuo pipefail
 umask 022
-[[ $0 -ef /usr/local/sbin/memory-bootstrap ]] || install -m 0700 "$0" /usr/local/sbin/memory-bootstrap
+if [[ ! $0 -ef /usr/local/sbin/memory-bootstrap ]]; then
+    install -m 0700 "$0" /usr/local/sbin/memory-bootstrap
+elif [[ ! -v MEMORY_BOOTSTRAP_UNIT ]]; then
+    # Started from an SSM session or command, the snap AWS CLI's writes to
+    # redirected files silently vanish; a transient unit runs as cloud-init did.
+    # KillMode=process lets the log's tee drain after the script exits.
+    exec systemd-run --quiet --wait --pipe --collect --property=KillMode=process \
+        --setenv=MEMORY_BOOTSTRAP_UNIT=1 /usr/local/sbin/memory-bootstrap
+fi
 touch /var/log/memory-bootstrap.log
 chmod 600 /var/log/memory-bootstrap.log
 exec > >(tee -a /var/log/memory-bootstrap.log) 2>&1
@@ -18,6 +27,7 @@ VOLUME=${data_volume_id}
 DATA=/srv/memory
 STATE_DIR=/var/lib/memory
 SIGNERS=/etc/memory/allowed_signers
+SELECT_RELEASE=/usr/local/lib/memory/select_release.sh
 export DEBIAN_FRONTEND=noninteractive
 
 log() { echo "==> $(date -u +%FT%TZ) $*"; }
@@ -78,7 +88,17 @@ ln -sfnT "$DATA/state" "$STATE_DIR"
 
 log "Docker"
 mkdir -p /etc/docker /etc/systemd/system/docker.service.d
-echo "{\"data-root\": \"$DATA/docker\"}" > /etc/docker/daemon.json
+# Docker's default containerd image store keeps layers in /var/lib/containerd,
+# on the small root disk; the classic store keeps them under data-root.
+daemon_json="{\"data-root\": \"$DATA/docker\", \"features\": {\"containerd-snapshotter\": false}}"
+docker_changed=0
+if [[ $(cat /etc/docker/daemon.json 2>/dev/null) != "$daemon_json" ]]; then
+    # On a running daemon this hides images and containers in the other store;
+    # README "Moving images off the root disk" frees their space first.
+    log "Writing a changed /etc/docker/daemon.json; docker restarts with it"
+    echo "$daemon_json" > /etc/docker/daemon.json
+    docker_changed=1
+fi
 printf '[Unit]\nRequiresMountsFor=%s\n' "$DATA" > /etc/systemd/system/docker.service.d/memory.conf
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -92,6 +112,8 @@ apt_get update
 apt_get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin caddy
 systemctl daemon-reload
 systemctl enable --now docker
+# A running daemon (a re-run) reads a changed daemon.json only on restart.
+if ((docker_changed)); then systemctl restart docker; fi
 
 log "Unattended upgrades"
 # memory-reboot.timer reboots instead, in the 03:30 window with a random delay.
@@ -119,7 +141,6 @@ drop_groups sudo
 log "Config from SSM $PREFIX"
 for _ in $(seq 30); do param domain >/dev/null && break; sleep 10; done
 domain=$(param domain)
-delay=$(param update_delay_hours)
 repo_url=$(param repo_url)
 mkdir -p /etc/memory
 chmod 700 /etc/memory
@@ -134,24 +155,32 @@ log "Checkout"
 for dir in "$ROOT" "$DATA/app"; do
     git config --system --get-all safe.directory | grep -qxF "$dir" || git config --system --add safe.directory "$dir"
 done
-if ! git -C "$ROOT" rev-parse -q --verify HEAD >/dev/null; then
-    # No checkout yet: pick the release before any of the repo's code runs, with
-    # the copy of select_release.sh embedded at apply time.
-    install -m 0755 -d /usr/local/lib/memory
-    cat > /usr/local/lib/memory/select_release.sh <<'MEMORY_SELECT_RELEASE'
+checkout_release() {
+    local min_age=0 rc=0 tag
+    # Until an install succeeds, perhaps after a failed attempt, take the newest
+    # signed release however young, so a fixed release replaces a broken one.
+    # After that only the update path moves the checkout, unless it is gone.
+    if [[ -e $STATE_DIR/installed ]]; then
+        git -C "$ROOT" rev-parse -q --verify HEAD >/dev/null && return
+        min_age=$(param update_delay_hours)
+    fi
+    # The copy embedded at apply time picks the release, not the repo's code.
+    install -m 0755 -d "$(dirname "$SELECT_RELEASE")"
+    cat > "$SELECT_RELEASE" <<'MEMORY_SELECT_RELEASE'
 ${select_release}
 MEMORY_SELECT_RELEASE
     [[ -d $ROOT/.git ]] || git init -q "$ROOT"
     git -C "$ROOT" remote get-url origin >/dev/null 2>&1 || git -C "$ROOT" remote add origin "$repo_url"
     git -C "$ROOT" fetch -q --tags --force origin
-    # The first install takes the newest signed release however young.
-    min_age=$delay
-    [[ -e $STATE_DIR/installed ]] || min_age=0
-    tag=$(cd "$ROOT" && STATE_DIR=$STATE_DIR bash /usr/local/lib/memory/select_release.sh \
-        --require-signed "$SIGNERS" --min-age-hours "$min_age")
+    tag=$(cd "$ROOT" && STATE_DIR=$STATE_DIR bash "$SELECT_RELEASE" \
+        --require-signed "$SIGNERS" --min-age-hours "$min_age") || rc=$?
+    # 3: HEAD already holds the newest signed release.
+    ((rc == 3)) && { log "Keeping $(git -C "$ROOT" describe --tags)"; return; }
+    ((rc == 0)) || return "$rc"
     log "Installing $tag"
     git -C "$ROOT" checkout -q --detach "refs/tags/$tag"
-fi
+}
+checkout_release
 # The code stays root's; the app user gets the top directory for .env,
 # secrets/ and memory_files/.
 chown "$app_user:" "$DATA/app"

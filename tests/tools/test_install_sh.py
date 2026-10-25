@@ -228,6 +228,17 @@ def test_output_and_docker_args_contain_no_secrets(project):
     assert leaked == []
 
 
+@pytest.mark.parametrize("admin", [ADMIN, {}], ids=["admin", "setup-token"])
+def test_builds_then_migrates_then_starts_the_whole_stack(project, admin):
+    install(project, {**REQUIRED, **admin})
+
+    calls = (project / "docker.log").read_text().splitlines()
+    # A re-run on a newer checkout must not start the old images.
+    steps = ["compose build --pull", "compose run --rm migrate", "compose up -d --wait api", "compose up -d"]
+    order = [calls.index(c) for c in steps]
+    assert order == sorted(order)
+
+
 def test_migrates_then_starts_the_api_then_creates_first_user_with_password_via_environment(project):
     install(project, {**REQUIRED, **ADMIN})
 

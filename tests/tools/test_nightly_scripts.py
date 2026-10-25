@@ -64,6 +64,9 @@ exit "${FAKE_UPDATE_RC:-0}"
 FAKE_SYSTEMCTL = """#!/usr/bin/env bash
 echo "systemctl $*" >> "$FAKE_LOG"
 """
+FAKE_DOCKER = """#!/usr/bin/env bash
+echo "docker $*" >> "$FAKE_LOG"
+"""
 FAKE_CHOWN = """#!/usr/bin/env bash
 echo "chown $*" >> "$FAKE_LOG"
 """
@@ -103,6 +106,7 @@ def host(tmp_path):
         "compose": FAKE_COMPOSE,
         "chown": FAKE_CHOWN,
         "systemctl": FAKE_SYSTEMCTL,
+        "docker": FAKE_DOCKER,
     }.items():
         write_exe(tmp_path / "bin" / name, body)
     ssm = tmp_path / "ssm"
@@ -287,6 +291,17 @@ def test_update_skips_update_sh(host, auto_update, select_rc, selects, code, mar
     assert (host.parent / "state" / "last-update-check").read_text().split()[0] == marker
     # Signers are refreshed even when nothing installs, so update-to sees a revocation.
     assert (host.parent / "allowed_signers").read_text() == SIGNERS + "\n"
+
+
+# Each update's build leaves gigabytes of cache that nothing else removes.
+@pytest.mark.parametrize("auto_update, select_rc", [("false", 0), ("true", 3), ("true", 0)])
+def test_update_prunes_build_cache_older_than_a_week_every_night(host, auto_update, select_rc):
+    (host.parent / "ssm" / "auto_update").write_text(auto_update + "\n")
+
+    code, output = nightly(host, "nightly-update", FAKE_SELECT_RC=str(select_rc))
+
+    assert code == 0, output
+    assert call_lines(host, "docker") == ["docker builder prune -af --filter until=168h"]
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,8 @@
 # tools/update.sh and runs the new release's configure.sh, so its units and
 # timers replace the old ones. A tag that fails to install is added to
 # skip-tags: it isn't retried, but a newer release still is. Writes "ok" or
-# "failed" as the first word of $STATE_DIR/last-update-check.
+# "failed" as the first word of $STATE_DIR/last-update-check. Every run also
+# prunes build cache older than a week.
 #
 # Env: MEMORY_SSM_PREFIX and AWS_DEFAULT_REGION (ops.env), ALLOWED_SIGNERS
 #      (default /etc/memory/allowed_signers), REMOTE (default origin).
@@ -31,6 +32,8 @@ if [[ ! $auto_update =~ ^(true|false)$ ]]; then
     exit 1
 fi
 deploy/aws/host/configure.sh
+# Every build leaves gigabytes of cache; a week's worth keeps the next one fast.
+$DOCKER builder prune -af --filter until=168h >/dev/null || log "build cache prune failed"
 delay=$(sed -n 's/^MIN_AGE_HOURS=//p' "$OPS_ENV")
 
 if [[ $auto_update != true ]]; then
