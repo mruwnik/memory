@@ -12,6 +12,33 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+Existing vaults with independent local and remote histories still require manual
+reconciliation; the update does not rewrite either history.
+
+### Other changes for operators
+
+- Notes initialization adopts the remote's existing history and default branch
+  before committing local notes. Overlapping local files are preserved and
+  reported so setup can be retried after reconciliation.
+- Notes sync distinguishes unrelated histories, rejected write access, branch
+  rules, and concurrent remote changes in its failure messages.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.2.5 (2026-10-26)
 
 ### Required env vars

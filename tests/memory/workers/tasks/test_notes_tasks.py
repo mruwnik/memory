@@ -1452,3 +1452,81 @@ def test_changed_destination_never_overwrites_unrelated_remote_history(tmp_path)
     assert result["status"] == "sync_failed"
     assert git(vault, "rev-parse", "HEAD") == original
     assert git(remote, "rev-parse", "HEAD") == remote_head
+
+
+@pytest.mark.parametrize("branch", [None, "master"])
+@pytest.mark.parametrize("local_notes", [False, True])
+def test_initial_setup_adopts_remote_history(tmp_path, branch, local_notes):
+    remote = tmp_path / "seed.git"
+    seed = tmp_path / "seed"
+    git(tmp_path, "init", "-q", "--bare", "-b", "master", str(remote))
+    git(tmp_path, "clone", "-q", str(remote), str(seed))
+    configure_identity(seed)
+    commit_file(seed, "remote.md", "remote notes")
+    git(seed, "push", "-q", "origin", "master")
+    original = git(seed, "rev-parse", "HEAD")
+    vault = settings.NOTES_STORAGE_DIR
+    if local_notes:
+        (vault / "local.md").write_text("local notes")
+    result = notes.setup_git_notes(str(remote), "test@example.com", "Test", branch=branch, change_destination=bool(branch))
+    assert result["status"] == "created"
+    assert git(vault, "symbolic-ref", "--short", "HEAD") == "master"
+    assert git(vault, "rev-list", "--max-parents=0", "HEAD") == original
+    assert (vault / "remote.md").read_text() == "remote notes"
+    assert remote_files(remote, "master") == ({"remote.md", "local.md"} if local_notes else {"remote.md"})
+    assert last_status()["ok"] is True
+
+
+@pytest.mark.parametrize("ignored", [False, True])
+def test_initial_setup_preserves_colliding_local_file_and_retries(tmp_path, ignored):
+    remote = tmp_path / "seed.git"
+    seed = tmp_path / "seed"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    git(tmp_path, "clone", "-q", str(remote), str(seed))
+    configure_identity(seed)
+    commit_file(seed, "note.md", "remote version")
+    git(seed, "push", "-q", "origin", "main")
+    vault = settings.NOTES_STORAGE_DIR
+    (vault / "note.md").write_text("local version")
+    if ignored:
+        (vault / ".gitignore").write_text("note.md\n")
+    result = notes.setup_git_notes(str(remote), "test@example.com", "Test")
+    assert result["failed_step"] == "initial_checkout"
+    assert (vault / "note.md").read_text() == "local version"
+    assert not notes.head_commit(vault)
+    (vault / "note.md").rename(vault / "local.md")
+    assert notes.setup_git_notes(str(remote), "test@example.com", "Test")["status"] == "updated"
+    assert (vault / "note.md").read_text() == "remote version"
+    assert (vault / "local.md").read_text() == "local version"
+
+
+def test_initial_fetch_failure_does_not_create_independent_history(tmp_path):
+    vault = settings.NOTES_STORAGE_DIR
+    (vault / "local.md").write_text("local version")
+    remote = tmp_path / "unavailable.git"
+    result = notes.setup_git_notes(str(remote), "test@example.com", "Test")
+    assert result == {"status": "sync_failed", "failed_step": "fetch"}
+    assert not notes.head_commit(vault)
+    assert (vault / "local.md").read_text() == "local version"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    assert notes.setup_git_notes(str(remote), "test@example.com", "Test")["status"] == "updated"
+    assert remote_files(remote, "main") == {"local.md"}
+
+
+@pytest.mark.parametrize("stderr,reason", [
+    ("remote: Write access to repository not granted.", "push_permission"),
+    ("remote: protected branch hook declined", "push_policy"),
+    ("! [rejected] main -> main (non-fast-forward)", "push_changed"),
+    ("fatal: unable to contact server", "push"),
+])
+def test_push_failure_has_safe_actionable_hint(tmp_path, stderr, reason):
+    vault, _ = make_vault(tmp_path, "main")
+    commit_file(vault, "local.md", "local")
+    original = notes.run_git
+    def fail_push(root, *args, **kwargs):
+        if args[0] == "push":
+            return subprocess.CompletedProcess(args, 1, "", stderr)
+        return original(root, *args, **kwargs)
+    with patch.object(notes, "run_git", fail_push):
+        assert notes.push_upstream(vault, notes.find_upstream(vault)) == reason
+    assert reason in notes.GIT_SYNC_HINTS

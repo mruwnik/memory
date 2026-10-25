@@ -58,6 +58,11 @@ SSH_TIMEOUT_OPTIONS = (
     "-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o BatchMode=yes"
 )
 GIT_SYNC_HINTS = {
+    "initial_checkout": "The remote contains files that overlap local vault files. Move or reconcile those local files, then retry setup; they have not been overwritten.",
+    "unrelated_histories": "The vault and remote have independent Git histories. Reconcile them manually; Memory will not overwrite either history.",
+    "push_permission": "The Git server rejected write access. Grant the selected SSH key or HTTPS token push access to this repository, then retry sync.",
+    "push_policy": "The Git server rejected the push under a branch rule or server hook. Check the repository's branch protection and push rules.",
+    "push_changed": "The remote changed during sync. Retry sync to merge those changes before pushing.",
     "merge_conflict": (
         "Merging the vault's remote failed: commit or discard the vault's uncommitted"
         " edits, or merge by hand."
@@ -236,6 +241,8 @@ def pull_upstream(repo_root: pathlib.Path, upstream: Upstream) -> str | None:
         return None
     if run_git(repo_root, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").returncode == 0:
         run_git(repo_root, "merge", "--abort")
+    if "refusing to merge unrelated histories" in merge.stderr.lower():
+        return "unrelated_histories"
     return "merge_conflict"
 
 
@@ -256,7 +263,16 @@ def push_upstream(repo_root: pathlib.Path, upstream: Upstream) -> str | None:
         f"HEAD:refs/heads/{upstream.branch}",
         network=True,
     )
-    return "push" if git_step_failed("push", push) else None
+    if not git_step_failed("push", push):
+        return None
+    error = push.stderr.lower()
+    if any(text in error for text in ("permission denied", "write access", "access denied", "not allowed to push", "read-only", "read only", "authentication failed")):
+        return "push_permission"
+    if any(text in error for text in ("protected branch", "pre-receive hook declined", "hook declined", "repository rule")):
+        return "push_policy"
+    if "non-fast-forward" in error or "fetch first" in error:
+        return "push_changed"
+    return "push"
 
 
 def repo_path(repo_root: pathlib.Path, path: pathlib.Path) -> str:
@@ -679,6 +695,37 @@ def setup_step(repo_root: pathlib.Path, step: str, *args: str):
         raise RuntimeError(f"Notes git setup failed at {step}")
 
 
+def initialize_vault_history(repo_root: pathlib.Path, branch: str | None) -> str | None:
+    """Adopt existing remote history before committing local files; never overwrite collisions."""
+    upstream = find_upstream(repo_root)
+    if upstream:
+        fetched = run_git(repo_root, "fetch", "--quiet", upstream.remote, network=True)
+        if git_step_failed("fetch", fetched):
+            return "fetch"
+        if branch is None:
+            advertised = run_git(repo_root, "ls-remote", "--symref", upstream.remote, "HEAD", network=True)
+            if git_step_failed("fetch", advertised):
+                return "fetch"
+            for line in advertised.stdout.splitlines():
+                if line.startswith("ref: refs/heads/") and line.endswith("\tHEAD"):
+                    branch = check_branch(line.split()[1].removeprefix("refs/heads/"))
+                    break
+        target_branch = branch or upstream.branch
+        tracking = f"refs/remotes/{upstream.remote}/{target_branch}"
+        if run_git(repo_root, "rev-parse", "--verify", "--quiet", tracking).returncode == 0:
+            checkout = run_git(repo_root, "checkout", "--quiet", "--no-overwrite-ignore", "-B", target_branch, tracking)
+            if git_step_failed("checkout", checkout):
+                return "initial_checkout"
+        elif branch:
+            setup_step(repo_root, "branch", "symbolic-ref", "HEAD", f"refs/heads/{branch}")
+    setup_step(repo_root, "add", "add", "--all")
+    if not head_commit(repo_root):
+        setup_step(repo_root, "commit", "commit", "--quiet", "--allow-empty", "-m", "Initial commit")
+    elif run_git(repo_root, "diff", "--cached", "--quiet").returncode != 0:
+        setup_step(repo_root, "commit", "commit", "--quiet", "-m", "Import local notes")
+    return None
+
+
 @app.task(name=SETUP_GIT_NOTES)
 @tracked_task
 def setup_git_notes(origin: str | None, email: str, name: str, branch: str | None = None, change_destination: bool = False):
@@ -694,7 +741,7 @@ def setup_git_notes(origin: str | None, email: str, name: str, branch: str | Non
         created = not (repo_root / ".git").exists()
         if created:
             repo_root.mkdir(parents=True, exist_ok=True)
-            setup_step(repo_root, "init", "init", "--quiet", "-b", "main")
+            setup_step(repo_root, "init", "init", "--quiet", "-b", branch or "main")
         if change_destination and (blocked := repo_blocked(repo_root)):
             raise RuntimeError(f"Notes git setup blocked: {blocked}")
         if branch and change_destination:
@@ -718,8 +765,9 @@ def setup_git_notes(origin: str | None, email: str, name: str, branch: str | Non
                 setup_step(repo_root, "upstream", "config", f"branch.{vault.branch}.merge", f"refs/heads/{vault.branch}")
         # Not `created`: a first run that failed after init leaves a repo with no commit.
         if not head_commit(repo_root):
-            setup_step(repo_root, "add", "add", "--all")
-            setup_step(repo_root, "commit", "commit", "--quiet", "--allow-empty", "-m", "Initial commit")
+            if failed_step := initialize_vault_history(repo_root, branch):
+                record_git_sync(failed_step)
+                return {"status": "sync_failed", "failed_step": failed_step}
 
     try:
         with git_tracking(repo_root) as sync:
