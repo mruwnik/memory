@@ -1,8 +1,9 @@
 """Server settings an admin can change in the UI.
 
-Each registered key resolves as the env if the operator set it, else the admin's DB
-value, else the default. Live keys are read through `value`, which caches the DB values
-for CACHE_TTL_SECONDS; the restart-bound module flags read `boot_values` once per process.
+Each registered key resolves as the env if the operator set it (keys with no env var
+skip this), else the admin's DB value, else the default. Live keys are read through
+`value`, which caches the DB values for CACHE_TTL_SECONDS; the restart-bound module flags
+read `boot_values` once per process.
 """
 
 import logging
@@ -47,17 +48,20 @@ class Setting:
     # Rejects a value the process can't run with; run on save and on every read.
     validate: Callable[[Any], None] = accept
     choices: frozenset[str] = frozenset()
+    from_env: bool = True
 
     @property
-    def env_var(self) -> str:
-        return self.key.upper()
+    def env_var(self) -> str | None:
+        return self.key.upper() if self.from_env else None
 
     def env_value(self) -> Any:
         """The operator's value, or None when the env leaves it unset."""
+        if self.env_var is None:
+            return None
         value = getattr(settings, self.env_var)
         if self.kind == "bool":
             return value
-        # An empty secret file or list counts as unset.
+        # An empty secret file counts as unset.
         return value or None
 
     def parse(self, raw: Any) -> Any:

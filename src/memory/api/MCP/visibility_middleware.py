@@ -9,7 +9,7 @@ every public tool is grep-able and adding a new tool without thinking
 about authorization defaults to "denied" rather than "anonymous read".
 
 A user can access a tool if:
-- Its server isn't in the admin's live DISABLED_MCP_SERVERS, and
+- Its server isn't one the admin hid on the Server settings page, and
 - The tool's visibility checker returns True for the user.
 """
 

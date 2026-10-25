@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from memory.api.auth import require_scope
-from memory.api.MCP.servers import DISABLED_MCP_SERVERS, check_disabled_servers
+from memory.api.MCP.servers import HIDDEN_MCP_SERVERS, check_disabled_servers
 from memory.common import embedding, settings
 from memory.common.celery_app import REINGEST_ALL_EMPTY_SOURCE_ITEMS, app as celery_app
 from memory.common.db.connection import get_session
@@ -52,7 +52,7 @@ class SettingView(BaseModel):
     kind: Kind
     applies: Applies
     description: str
-    env_var: str
+    env_var: str | None
     source: Source
     # Set by the operator in the env, so read-only here.
     locked: bool
@@ -131,11 +131,11 @@ def setting_view(
 
 def hidden_servers_problem(stored: dict[str, Any], modules: frozenset[str]) -> dict[str, str]:
     """Saving refuses this, but turning a module off from the env can still get there."""
-    hidden = resolve(DISABLED_MCP_SERVERS, lambda: stored)[0] | servers_disabled(modules)
+    hidden = resolve(HIDDEN_MCP_SERVERS, lambda: stored)[0] | servers_disabled(modules)
     try:
         check_disabled_servers(hidden)
     except ValueError as e:
-        return {DISABLED_MCP_SERVERS.key: f"{e}: no MCP tools are visible"}
+        return {HIDDEN_MCP_SERVERS.key: f"{e}: no MCP tools are visible"}
     return {}
 
 
@@ -206,13 +206,13 @@ def check_boots_with(
         on = resolve(setting, lambda: after)[0]
         if problem := run_problem(setting.module, on, humans):
             raise HTTPException(status_code=400, detail=f"{setting.key}: {problem}")
-    if any(s is DISABLED_MCP_SERVERS or isinstance(s, ModuleSetting) for s, _ in changes):
+    if any(s is HIDDEN_MCP_SERVERS or isinstance(s, ModuleSetting) for s, _ in changes):
         modules = checked_modules(lambda: after, humans)[0]
-        hidden = resolve(DISABLED_MCP_SERVERS, lambda: after)[0] | servers_disabled(modules)
+        hidden = resolve(HIDDEN_MCP_SERVERS, lambda: after)[0] | servers_disabled(modules)
         try:
             check_disabled_servers(hidden)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"{DISABLED_MCP_SERVERS.key}: {e}")
+            raise HTTPException(status_code=400, detail=f"{HIDDEN_MCP_SERVERS.key}: {e}")
 
 
 def rejected_voyage_key(key: str) -> int | None:

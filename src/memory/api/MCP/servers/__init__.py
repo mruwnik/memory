@@ -1,17 +1,14 @@
 """MCP subservers for composable tool organization."""
 
-import logging
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from memory.common import instance_settings, settings
+from memory.common import instance_settings
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import MODULE_MCP_SERVERS, servers_disabled
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
-
-logger = logging.getLogger(__name__)
 
 
 class MCPServer(str, Enum):
@@ -49,13 +46,14 @@ def check_disabled_servers(disabled: frozenset[str]) -> None:
         raise ValueError("can't disable every MCP server")
 
 
-DISABLED_MCP_SERVERS = instance_settings.register(
+HIDDEN_MCP_SERVERS = instance_settings.register(
     instance_settings.Setting(
         key="disabled_mcp_servers",
         kind="list",
         applies="live",
         default=frozenset(),
         description="MCP servers whose tools are hidden",
+        from_env=False,
         # A module's servers go with the module.
         choices=ALL_MCP_SERVERS - frozenset().union(*MODULE_MCP_SERVERS.values()),
     )
@@ -63,14 +61,14 @@ DISABLED_MCP_SERVERS = instance_settings.register(
 
 
 def unmounted_servers() -> frozenset[str]:
-    """The env's DISABLED_MCP_SERVERS plus the servers of every module that is off."""
-    return settings.DISABLED_MCP_SERVERS | servers_disabled(enabled_modules())
+    """The servers of every module that is off."""
+    return servers_disabled(enabled_modules())
 
 
 def effective_disabled_servers() -> frozenset[str]:
-    """The servers whose tools are off now: the env's (never mounted), else the admin's live
-    value, plus the servers of every module that is off."""
-    return instance_settings.value(DISABLED_MCP_SERVERS) | servers_disabled(enabled_modules())
+    """The servers whose tools are off now: HIDDEN_MCP_SERVERS (set on the Server settings
+    page) plus the servers of every module that is off."""
+    return instance_settings.value(HIDDEN_MCP_SERVERS) | servers_disabled(enabled_modules())
 
 
 def tool_server(tool: str) -> str | None:
@@ -80,14 +78,6 @@ def tool_server(tool: str) -> str | None:
         key=len,
         default=None,
     )
-
-
-def get_enabled_servers(disabled: frozenset[str]) -> frozenset[str]:
-    """Return set of enabled MCP server names."""
-    invalid = disabled - ALL_MCP_SERVERS
-    if invalid:
-        logger.warning(f"Unknown servers in DISABLED_MCP_SERVERS: {invalid}")
-    return ALL_MCP_SERVERS - disabled
 
 
 def get_server_instance(server: MCPServer) -> "FastMCP":
@@ -185,7 +175,6 @@ __all__ = [
     "MCPServer",
     "ALL_MCP_SERVERS",
     "effective_disabled_servers",
-    "get_enabled_servers",
     "tool_server",
     "unmounted_servers",
     "get_server_instance",

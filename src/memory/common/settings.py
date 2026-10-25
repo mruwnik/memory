@@ -661,9 +661,6 @@ def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[
     return frozenset(s.strip().lower() for s in value.split(",") if s.strip())
 
 
-# Comma-separated MCP server names to leave unmounted (e.g. "slack,forecast"). When
-# empty, an admin can hide servers in the UI (instance_settings).
-DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")
 # Set by the compose api service, whose restart policy brings the api back after
 # POST /settings/restart makes it exit. A host-run api has nothing to restart it.
 API_SELF_RESTART = boolean_env("API_SELF_RESTART", False)

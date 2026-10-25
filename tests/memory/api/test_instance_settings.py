@@ -212,11 +212,14 @@ def test_a_row_that_cant_be_read_is_shown_as_unset_with_why(client, db_session, 
     assert (voyage["set"], voyage["key_hint"], voyage["error"]) == (False, None, "can't be read; set it again")
 
 
-def test_disabling_an_mcp_server_needs_no_restart(client):
+def test_disabling_an_mcp_server_needs_no_restart_and_ignores_the_env(client, monkeypatch):
+    monkeypatch.setenv("DISABLED_MCP_SERVERS", "books")
     response = client.patch("/settings", json={"values": {"disabled_mcp_servers": ["slack"]}})
 
     servers = rows(response)["disabled_mcp_servers"]
-    assert (servers["value"], servers["applies"], response.json()["restart_pending"]) == (["slack"], "live", False)
+    assert (
+        servers["value"], servers["applies"], servers["env_var"], servers["locked"], response.json()["restart_pending"]
+    ) == (["slack"], "live", None, False, False)
 
 
 @pytest.fixture

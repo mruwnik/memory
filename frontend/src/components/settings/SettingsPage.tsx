@@ -150,7 +150,7 @@ interface ToggleProps extends RowProps {
   title?: ReactNode
   /** Names the setting in button labels and messages. */
   label?: string
-  meta?: string[]
+  meta?: (string | null)[]
 }
 
 const Toggle = ({ row, busy, save, title = row.description, label = row.description, meta = [row.env_var] }: ToggleProps) => {
@@ -192,12 +192,11 @@ const McpServers = ({ row, busy, save }: RowProps) => {
   }
   return (
     <>
-      {row.locked && <Notice tone="info">{lockedNote(row)}</Notice>}
       {row.error && <Notice tone="warning">{row.error}</Notice>}
       <List flush>
         {row.choices.map(server => (
           <Row key={server} title={server} badges={<Badge tone={disabled.has(server) ? 'neutral' : 'success'}>{disabled.has(server) ? 'disabled' : 'enabled'}</Badge>}
-            actions={row.locked ? undefined : <Button size="sm" aria-label={`${disabled.has(server) ? 'Enable' : 'Disable'} ${server}`} disabled={busy} onClick={() => toggle(server)}>{disabled.has(server) ? 'Enable' : 'Disable'}</Button>} />
+            actions={<Button size="sm" aria-label={`${disabled.has(server) ? 'Enable' : 'Disable'} ${server}`} disabled={busy} onClick={() => toggle(server)}>{disabled.has(server) ? 'Enable' : 'Disable'}</Button>} />
         ))}
       </List>
     </>

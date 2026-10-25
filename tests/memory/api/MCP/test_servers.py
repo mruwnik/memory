@@ -18,7 +18,6 @@ from memory.api.MCP.servers import (
     ALL_MCP_SERVERS,
     check_disabled_servers,
     effective_disabled_servers,
-    get_enabled_servers,
     get_server_instance,
     tool_server,
     unmounted_servers,
@@ -72,38 +71,17 @@ def test_enum_values_are_strings():
     assert MCPServer.DISCORD == "discord"
 
 
-# --- get_enabled_servers tests ---
-
-
 @pytest.mark.parametrize(
-    "disabled,modules,expected_enabled",
+    "modules,expected_enabled",
     [
-        (frozenset(), ALL_MODULES, ALL_MCP_SERVERS),
-        (frozenset({"slack"}), ALL_MODULES, ALL_MCP_SERVERS - {"slack"}),
-        (frozenset({"slack", "forecast"}), ALL_MODULES, ALL_MCP_SERVERS - {"slack", "forecast"}),
-        (frozenset({"core", "meta", "books"}), ALL_MODULES, ALL_MCP_SERVERS - {"core", "meta", "books"}),
-        (
-            frozenset({"slack"}),
-            frozenset(),
-            ALL_MCP_SERVERS - {"slack", "teams", "projects", "containers"},
-        ),
-        (frozenset(), frozenset({"teams"}), ALL_MCP_SERVERS - {"containers"}),
+        (ALL_MODULES, ALL_MCP_SERVERS),
+        (frozenset(), ALL_MCP_SERVERS - {"teams", "projects", "containers"}),
+        (frozenset({"teams"}), ALL_MCP_SERVERS - {"containers"}),
     ],
 )
-def test_unmounted_servers(monkeypatch, set_modules, disabled, modules, expected_enabled):
-    """DISABLED_MCP_SERVERS and the servers of modules that are off are both unmounted."""
-    monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", disabled)
+def test_unmounted_servers_are_those_of_modules_that_are_off(set_modules, modules, expected_enabled):
     set_modules(modules)
-    assert get_enabled_servers(unmounted_servers()) == expected_enabled
-
-
-def test_get_enabled_servers_warns_on_unknown():
-    """get_enabled_servers warns about unknown server names."""
-    with patch("memory.api.MCP.servers.logger") as mock_logger:
-        result = get_enabled_servers(frozenset({"slack", "unknown_server"}))
-    mock_logger.warning.assert_called_once()
-    assert "unknown_server" in str(mock_logger.warning.call_args)
-    assert "slack" not in result
+    assert ALL_MCP_SERVERS - unmounted_servers() == expected_enabled
 
 
 @pytest.mark.parametrize(
@@ -114,14 +92,6 @@ def test_tool_server(tool, server):
     assert tool_server(tool) == server
 
 
-def test_the_env_disables_servers_over_the_ui_value(db_session, monkeypatch):
-    monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", frozenset({"slack"}))
-    db_session.add(InstanceSetting(key="disabled_mcp_servers", value=[]))
-    db_session.commit()
-
-    assert effective_disabled_servers() == frozenset({"slack"})
-
-
 def test_effective_disabled_servers_adds_modules_that_are_off(db_session, set_modules):
     set_modules([])
     db_session.add(InstanceSetting(key="disabled_mcp_servers", value=["slack"]))
@@ -130,12 +100,11 @@ def test_effective_disabled_servers_adds_modules_that_are_off(db_session, set_mo
     assert effective_disabled_servers() == frozenset({"slack", "teams", "projects", "containers"})
 
 
-def test_only_the_env_and_modules_unmount_servers():
+def test_only_modules_unmount_servers():
     code = "import memory.api.MCP.base as b; print(sorted(b.SUBSERVER_PREFIXES))"
     env = {
         **os.environ,
         "PYTHONPATH": os.pathsep.join(sys.path),
-        "DISABLED_MCP_SERVERS": "slack",
         # Named rather than left to the defaults, so booting reads no stored module flags.
         "ENABLE_MODULES": "",
         "DISABLE_MODULES": ",".join(MODULES),
@@ -143,7 +112,7 @@ def test_only_the_env_and_modules_unmount_servers():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
 
-    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"slack", "teams", "projects", "containers"}))
+    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"teams", "projects", "containers"}))
 
 
 def test_check_disabled_servers_keeps_one_server():

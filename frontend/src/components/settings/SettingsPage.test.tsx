@@ -217,7 +217,7 @@ describe('SettingsPage toggles', () => {
   })
 
   it('disables a server by sending the whole disabled list', async () => {
-    const mcp = row({ key: 'disabled_mcp_servers', kind: 'list', description: 'Disabled MCP servers', env_var: 'DISABLED_MCP_SERVERS', value: ['forecast'], choices: ['core', 'forecast', 'github'] })
+    const mcp = row({ key: 'disabled_mcp_servers', kind: 'list', description: 'Disabled MCP servers', env_var: null, value: ['forecast'], choices: ['core', 'forecast', 'github'] })
     const calls = install(state([mcp]))
     const { user } = renderWithRouter(<SettingsPage />)
 

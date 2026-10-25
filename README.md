@@ -289,7 +289,7 @@ Reports must be created with `allow_scripts=True` for this to load (set via the 
 
 ## Configuration
 
-Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic or OpenAI key, added under LLM API keys (`/ui/keys`); the server holds none. Summaries and search steps use the default Anthropic key, else the default OpenAI one. An admin can also set the Voyage key, the search `ENABLE_*` switches and `DISABLED_MCP_SERVERS` on the settings page (`/settings` API); a value set in the env wins and shows there read-only. Key settings:
+Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic or OpenAI key, added under LLM API keys (`/ui/keys`); the server holds none. Summaries and search steps use the default Anthropic key, else the default OpenAI one. An admin can also set the Voyage key and the search `ENABLE_*` switches on the settings page (`/settings` API), where a value set in the env wins and shows read-only, and switch MCP servers off there. Key settings:
 
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |
@@ -316,7 +316,6 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `ENABLE_QUERY_ANALYSIS`           | `true`               | LLM intent extraction from queries                             |
 | `ENABLE_RERANKING`                | `true`               | Voyage reranking of fused results                              |
 | `ENABLE_SEARCH_SCORING`           | `true`               | Recency / popularity / title-match score boosts                |
-| `DISABLED_MCP_SERVERS`            | unset                | Comma-separated MCP servers to leave unmounted (set on the settings page, it hides their tools instead) |
 | `API_SELF_RESTART`                | `false` (`1` in compose) | Lets an admin restart the api from the settings page; the container's restart policy brings it back |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
 | `LATEST_RELEASE_URL`              | unset                | URL returning the latest release tag; enables `update_available` in `/health` |

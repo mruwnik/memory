@@ -1,7 +1,7 @@
 import pytest
 from cryptography.fernet import Fernet
 
-from memory.api.MCP.servers import DISABLED_MCP_SERVERS
+from memory.api.MCP.servers import HIDDEN_MCP_SERVERS
 from memory.common import instance_settings, settings
 from memory.common.db.models import InstanceSetting
 from memory.common.db.models.secrets import encrypt_value_with_key
@@ -24,8 +24,6 @@ from memory.common.instance_settings import (
         (ENABLE_RERANKING, False, {"enable_reranking": True}, (False, "env")),
         (ENABLE_RERANKING, None, {"enable_reranking": False}, (False, "ui")),
         (ENABLE_RERANKING, None, {}, (True, "default")),
-        (DISABLED_MCP_SERVERS, frozenset(), {"disabled_mcp_servers": frozenset({"slack"})}, (frozenset({"slack"}), "ui")),
-        (DISABLED_MCP_SERVERS, frozenset({"books"}), {"disabled_mcp_servers": frozenset({"slack"})}, (frozenset({"books"}), "env")),
     ],
 )
 def test_env_wins_over_the_ui_value_which_wins_over_the_default(
@@ -82,8 +80,8 @@ def test_live_reads_survive_a_secret_encrypted_under_another_key(
         (ENABLE_RERANKING, "yes"),
         (VOYAGE_API_KEY, "  "),
         (VOYAGE_API_KEY, 12),
-        (DISABLED_MCP_SERVERS, "slack"),
-        (DISABLED_MCP_SERVERS, ["slack", "nope"]),
+        (HIDDEN_MCP_SERVERS, "slack"),
+        (HIDDEN_MCP_SERVERS, ["slack", "nope"]),
     ],
 )
 def test_parse_rejects_values_of_the_wrong_shape(setting, raw):

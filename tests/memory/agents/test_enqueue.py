@@ -13,7 +13,7 @@ from memory.agents.enqueue import (
 from memory.agents.spec import AgentSpec
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
-from memory.common.db.models import AgentDefinition, AgentRun, APIKey
+from memory.common.db.models import AgentDefinition, AgentRun, APIKey, InstanceSetting
 from memory.common.modules import TEAMS
 from tests.memory.agents.test_provider_keys import MODEL, add_key
 
@@ -578,10 +578,11 @@ def test_enqueue_refuses_what_stops_an_agent(db_session, regular_user, fake_prov
     ],
 )
 def test_tools_of_a_disabled_server_are_a_problem(
-    db_session, regular_user, fake_providers, monkeypatch, set_modules, modules, disabled, expected
+    db_session, regular_user, fake_providers, set_modules, modules, disabled, expected
 ):
     set_modules(modules)
-    monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", disabled)
+    db_session.add(InstanceSetting(key="disabled_mcp_servers", value=sorted(disabled)))
+    db_session.commit()
     stored = SPEC | {"tools": ["notes_upsert", "teams_upsert", "projects_fetch"]}
     problems = stored_spec_problems(db_session, regular_user.id, stored)
 

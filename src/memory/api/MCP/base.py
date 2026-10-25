@@ -14,7 +14,6 @@ from memory.api.MCP.visibility_middleware import VisibilityMiddleware
 from memory.api.MCP.metrics_middleware import MetricsMiddleware
 from memory.api.MCP.servers import (
     MCPServer,
-    get_enabled_servers,
     get_server_instance,
     unmounted_servers,
 )
@@ -59,21 +58,12 @@ mcp = FastMCP(
 )
 
 
-# Only the env and module flags unmount a server. The UI value hides tools live
+# Only module flags unmount a server. The UI value hides tools live
 # (VisibilityMiddleware), so turning a server off reaches the agents worker too, without
 # restarting anything. Module flags are fixed here, since a module's servers, routes and
 # loops can only change on restart.
 boot_modules()
-SUBSERVER_PREFIXES = list(get_enabled_servers(unmounted_servers()))
-
-if not SUBSERVER_PREFIXES:
-    raise ValueError(
-        "DISABLED_MCP_SERVERS disables all servers - this is probably a mistake"
-    )
-if MCPServer.CORE.value not in SUBSERVER_PREFIXES:
-    logger.warning(
-        "Core MCP server is disabled - search and observations will be unavailable"
-    )
+SUBSERVER_PREFIXES = [s.value for s in MCPServer if s.value not in unmounted_servers()]
 
 
 def _get_user_info_for_middleware() -> dict:

@@ -9,7 +9,8 @@ export interface SettingRow {
   kind: 'bool' | 'secret' | 'list'
   applies: 'live' | 'restart'
   description: string
-  env_var: string
+  /** Null for a setting no env var can set. */
+  env_var: string | null
   source: SettingSource
   locked: boolean
   set: boolean

@@ -91,9 +91,9 @@ section has nothing in it:
   Access control is unchanged by modules, and core features (search, ingest,
   people, notes, reports, journal, tasks, polls, agents, keys, transcript
   search) never depend on them. The enabled set is returned to logged-in users
-  with the user payload (`/auth/me`), not in `/health`. Only
-  `DISABLED_MCP_SERVERS` in the env and the module flags unmount a server; a
-  server disabled on the settings page is hidden and refused live, as before.
+  with the user payload (`/auth/me`), not in `/health`. Only the module flags
+  unmount a server; a server disabled on the settings page is hidden and
+  refused live, as before.
 
   **MCP tool renames.** The `claude` MCP server is split. Transcript search
   (`claude_session_search`, `claude_session_fetch`) stays core. The file
@@ -226,17 +226,21 @@ section has nothing in it:
   and no longer copies the key into `.env`. EC2: `voyage_api_key` is optional in
   the Terraform; leave it out to enter the key in the web UI.
 - New admin settings API (`GET`/`PATCH /settings`, `POST /settings/restart`) for
-  the Voyage key, `DISABLED_MCP_SERVERS` and the search `ENABLE_*` switches. A
+  the Voyage key, the disabled MCP servers and the search `ENABLE_*` switches. A
   value set in the env still wins and is read-only there; to hand a setting to
   the UI, remove it from `.env` (or empty its secret file) and restart. Secrets
   set there are encrypted with `SECRETS_ENCRYPTION_KEY`, and `rotate-keys.sh`
   re-encrypts them. A server disabled on the page hides its tools at once, in
-  the api and in agent runs; `DISABLED_MCP_SERVERS` in the env still unmounts it.
+  the api and in agent runs.
   The compose api service now sets `API_SELF_RESTART=1`, which lets an admin
   restart it from the page for restart-bound settings (it exits, and
   `restart: unless-stopped` brings it back). The compose
   file no longer sets `ENABLE_BM25_SEARCH` (it was the default), so it can be
   changed in the UI. `/health` reports a `boot_id`.
+- `DISABLED_MCP_SERVERS` is removed and ignored. Servers it listed are mounted
+  again; switch them off on the Server settings page (this hides their tools and
+  refuses calls, but does not unmount them). To unmount a server's code, turn
+  off its module.
 - The Check queue is removed: the `check_*` MCP tools, the `/check` HTTP
   endpoints, the `check` scope and the Check page. Fact-checking runs on the
   prebuilt fact-check agent instead: `agent_run(input=..., agent="fact-check")`
@@ -488,7 +492,6 @@ section has nothing in it:
   `tools/update.sh` does this.
 - The GitHub MCP server and the Discord management MCP tools are removed. The
   Discord server keeps `send_message`, `channel_history` and `list_channels`.
-  `github` in `DISABLED_MCP_SERVERS` no longer has any effect.
 - Qdrant: a new `task` collection, and a `source_id` payload index on every
   collection. Both are created automatically at startup.
 - `/health` now reports `version`, `db_revision` and `expected_revision`.
