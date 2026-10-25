@@ -58,7 +58,7 @@ from memory.common.db.models import (
     SourceItem,
     UserSession,
 )
-from memory.common.db.models.source_item import item_summaries, source_item_people
+from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.formatters import observation
 
@@ -298,10 +298,10 @@ def _build_search_description() -> str:
             {filters_section}
 
         Returns: List of results with id, chunks (matching excerpts), size, mime_type,
-            content, summary, filename, tags, metadata, created_at (when stored) and
+            content, filename, tags, metadata, created_at (when stored) and
             search_score (relative relevance; higher is more relevant).
-            summary is the item's LLM summary, or null when it has none. content is the
-            item's text cut to the length above, or its summary when the text is longer."""
+            content is the item's text cut to the length above or, when the text is
+            longer and the item has a summary, its summary."""
     ).format(
         filters_section=_build_filters_section(),
         modalities_str=modalities_str,
@@ -736,8 +736,7 @@ async def fetch(
         include_content: Whether to include full content (default True)
         include_journal: Whether to include journal entries (default False)
 
-    Returns: Full item details (single dict if id, list of dicts if ids); summary is
-    the item's LLM summary, or null when it has none.
+    Returns: Full item details (single dict if id, list of dicts if ids).
 
     Access control behaviour differs by mode:
         - Single id: raises ValueError if the item is not found or access is denied.
@@ -806,7 +805,6 @@ async def fetch(
             for entry in journal_query.order_by(JournalEntry.created_at.asc()).all():
                 journal_by_item.setdefault(entry.target_id, []).append(entry.as_payload())
 
-        summaries = item_summaries(session, [item.id for item in items])
         # Build result dicts indexed by item ID for order preservation
         results_by_id: dict[int, dict] = {}
         for item in items:
@@ -820,7 +818,6 @@ async def fetch(
                 "tags": item.tags,
                 "inserted_at": item.inserted_at.isoformat() if item.inserted_at else None,
                 "metadata": item.as_payload(),
-                "summary": summaries.get(item.id),
             }
             if include_content:
                 result["content"] = item.content

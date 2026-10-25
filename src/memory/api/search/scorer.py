@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from memory.agents.call import Record, run_agent
 from memory.agents.provider_keys import Credential
 from memory.agents.system import CHUNK_SCORE
+from memory.api.search.types import chunk_score
 from memory.common.db.models.source_item import Chunk
 
 logger = logging.getLogger(__name__)
@@ -76,12 +77,12 @@ async def rank_chunks(
         failures.append(f"{len(pending)} timed out")
     if failures:
         logger.warning(f"Scoring failed for some of {len(chunks)} chunks: {', '.join(failures)}")
-    for chunk, chunk_score in zip(chunks, scores):
+    for chunk, llm_score in zip(chunks, scores):
         # A failed score keeps the reranker's: a rate limit shouldn't drop results under min_score.
-        if isinstance(chunk_score, float):
-            chunk.relevance_score = chunk_score
+        if isinstance(llm_score, float):
+            chunk.relevance_score = llm_score
     return sorted(
-        [chunk for chunk in chunks if (chunk.relevance_score or 0) >= min_score],
-        key=lambda x: x.relevance_score or 0,
+        [chunk for chunk in chunks if chunk_score(chunk) >= min_score],
+        key=chunk_score,
         reverse=True,
     )

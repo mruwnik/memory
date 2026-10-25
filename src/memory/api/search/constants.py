@@ -12,37 +12,32 @@ RRF_K = 60
 # This helps find results that rank well in one method but not the other
 CANDIDATE_MULTIPLIER = 5
 
-# How many candidates to pass to reranker (multiplier of final limit)
-# Higher = more accurate but slower and more expensive
-RERANK_CANDIDATE_MULTIPLIER = 3
+# How many fused candidates (multiple of the final limit) are boosted and reranked
+# before the cut to the limit. Higher = more accurate but slower and more expensive
+FINAL_CANDIDATE_MULTIPLIER = 3
 
-# Bonus for chunks containing query terms (added to RRF score)
-QUERY_TERM_BOOST = 0.005
+# Boosts are fractions of a chunk's final score: score + |score| * (sum of boosts),
+# applied after reranking and LLM scoring (types.chunk_score), so they mean the same on
+# every score scale. They nudge near-ties; none should beat a clearly better match.
 
-# Bonus when query terms match the source title (stronger signal)
-TITLE_MATCH_BOOST = 0.01
+# When query terms appear in the chunk text (scaled by the fraction matched)
+QUERY_TERM_BOOST = 0.05
 
-# Bonus when source title matches LLM-recalled content exactly
-# This is larger than regular title boost because it's a strong signal
-# that the user is looking for specific known content
-RECALLED_TITLE_BOOST = 0.05
+# When query terms appear in the source title, which the reranker doesn't see
+TITLE_MATCH_BOOST = 0.1
 
-# Fraction added to a summary chunk's final score (score += |score| * SUMMARY_MATCH_BOOST).
-# Applied when results are built, after reranking and LLM scoring, which replace the
-# other boosts' scores; 5% breaks near-ties toward the summary without letting it
-# beat a clearly better match on the content.
+# When the source title matches LLM-recalled content: a strong sign the user is
+# looking for that specific item
+RECALLED_TITLE_BOOST = 0.5
+
+# For a match on the item's summary chunk, which is about the whole item
 SUMMARY_MATCH_BOOST = 0.05
 
-# Additive popularity bonus (applied as: score += POPULARITY_BOOST * (popularity - 1))
-# This gives a small boost to popular items without dominating relevance.
-# Additive (rather than multiplicative) keeps the boost direction correct
-# even for negative scores from e.g. cross-encoder reranker logits.
-POPULARITY_BOOST = 0.02
+# Applied as POPULARITY_BOOST * (popularity - 1); popularity runs 0.5..2.5
+POPULARITY_BOOST = 0.05
 
-# Recency boost settings
-# Maximum bonus for brand new content (additive)
-RECENCY_BOOST_MAX = 0.005
-# Half-life in days: content loses half its recency boost every N days
+# For brand new content, halving every RECENCY_HALF_LIFE_DAYS
+RECENCY_BOOST_MAX = 0.05
 RECENCY_HALF_LIFE_DAYS = 90
 
 # Common words to ignore when checking for query term presence

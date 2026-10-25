@@ -28,12 +28,14 @@ def _make_chunk(
     content: str | None = "test content",
     score: float = 0.5,
     embedding_score: float = 0.0,
+    boost: float = 0.0,
 ):
     """Create a mock chunk."""
     chunk = MagicMock()
     chunk.content = content
     chunk.relevance_score = score
     chunk.embedding_score = embedding_score
+    chunk.boost = boost
     chunk.data = None
     return chunk
 
@@ -166,21 +168,20 @@ async def test_rerank_chunks_uses_default_model(mock_voyageai):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("top_k", [1, 5, 10])
 @patch("memory.api.search.rerank.voyageai")
-async def test_rerank_chunks_respects_top_k(mock_voyageai, top_k):
-    """Should pass top_k to VoyageAI."""
+async def test_rerank_chunks_cut_to_top_k_after_boosting(mock_voyageai):
+    """Voyage scores every candidate; the top_k cut ranks by the boosted score."""
     mock_client = MagicMock()
     mock_voyageai.Client.return_value = mock_client
-    mock_client.rerank.return_value = MockRerankResponse([
-        MockRerankResult(index=0, relevance_score=0.8),
-    ])
+    mock_client.rerank.side_effect = lambda query, documents, model, top_k: MockRerankResponse(
+        [MockRerankResult(index=0, relevance_score=0.60), MockRerankResult(index=1, relevance_score=0.59)][:top_k]
+    )
+    leader = _make_chunk("leader")
+    boosted = _make_chunk("boosted", boost=0.1)
 
-    chunks = [_make_chunk() for _ in range(10)]
-    await rerank_chunks("query", chunks, top_k=top_k)
+    result = await rerank_chunks("query", [leader, boosted], top_k=1)
 
-    call_kwargs = mock_client.rerank.call_args[1]
-    assert call_kwargs["top_k"] == top_k
+    assert result == [boosted]
 
 
 # ============================================================================

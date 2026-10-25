@@ -11,14 +11,17 @@ from PIL import Image
 from memory.agents.call import LLMError
 from memory.agents.provider_keys import credential
 from memory.api.search import scorer
+from memory.common.db.models import Chunk
 from tests.memory.agents.fakes import submitted
 
 
 pytestmark = pytest.mark.usefixtures("serial_llm_charges")
 
 
-def chunk_with_text(text, score=None):
-    return MagicMock(data=[text], relevance_score=score)
+def chunk_with_text(text, score=0.0, boost=0.0):
+    chunk = Chunk(content=text, relevance_score=score)
+    chunk.boost = boost
+    return chunk
 
 
 async def slow():
@@ -52,6 +55,27 @@ async def test_ranked_chunks_are_sorted_by_score(db_session, llm_key, scripted_l
     ranked = await scorer.rank_chunks("query", chunks, credential(llm_key))
 
     assert [c.relevance_score for c in ranked] == [0.9, 0.5, 0.3]
+
+
+@pytest.mark.asyncio
+async def test_llm_score_ties_are_broken_by_the_chunks_boost(db_session, llm_key, scripted_llm):
+    scripted_llm.script = [submitted({"score": 0.5}), submitted({"score": 0.5})]
+    plain, boosted = chunk_with_text("a"), chunk_with_text("b", boost=0.1)
+
+    ranked = await scorer.rank_chunks("query", [plain, boosted], credential(llm_key))
+
+    assert ranked == [boosted, plain]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boost, kept", [(0.0, 0), (0.1, 1)])
+async def test_min_score_cuts_the_boosted_score(db_session, llm_key, scripted_llm, boost, kept):
+    scripted_llm.script = [submitted({"score": 0.29})]
+    chunk = chunk_with_text("a", boost=boost)
+
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key), min_score=0.3)
+
+    assert len(ranked) == kept
 
 
 @pytest.mark.asyncio
@@ -146,7 +170,7 @@ async def test_a_slow_provider_bounds_both_the_wait_and_the_calls_in_flight(
 
 @pytest.mark.asyncio
 async def test_image_only_chunks_keep_their_score_unscored(db_session, llm_key, scripted_llm):
-    chunk = MagicMock(data=[Image.new("RGB", (1, 1))], relevance_score=0.4)
+    chunk = MagicMock(data=[Image.new("RGB", (1, 1))], relevance_score=0.4, boost=0.0)
 
     ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key))
 
@@ -155,7 +179,7 @@ async def test_image_only_chunks_keep_their_score_unscored(db_session, llm_key, 
 
 @pytest.mark.asyncio
 async def test_unreadable_chunks_keep_their_score_unscored(db_session, llm_key, scripted_llm):
-    chunk = MagicMock(relevance_score=0.2)
+    chunk = MagicMock(relevance_score=0.2, boost=0.0)
     type(chunk).data = property(lambda self: (_ for _ in ()).throw(OSError("gone")))
 
     ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key))

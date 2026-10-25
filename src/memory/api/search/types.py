@@ -5,7 +5,6 @@ from typing import Optional, cast, TypedDict, NotRequired, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, with_config
 
-from memory.api.search.constants import SUMMARY_MATCH_BOOST
 from memory.common.db.models import Chunk, SourceItem
 from memory.common import settings
 
@@ -27,11 +26,11 @@ def elide_content(content: str, max_length: int = 100) -> str:
 
 
 def chunk_score(chunk: Chunk) -> float:
+    """The chunk's relevance with its boosts applied: what every cut and ordering ranks by."""
     score = chunk.relevance_score or 0
-    # A match on the summary is a match on what the whole item is about.
-    # Scaled by |score| so it holds on every scale a score can be on (RRF,
-    # reranker, embedding similarity, LLM score) and never flips a negative one.
-    return score + abs(score) * SUMMARY_MATCH_BOOST if chunk.is_summary else score
+    # Scaled by |score| so a boost means the same on every scale a score can be on
+    # (RRF, reranker, embedding similarity, LLM score) and never flips a negative one.
+    return score + abs(score) * chunk.boost
 
 
 class SearchResult(BaseModel):
@@ -40,7 +39,6 @@ class SearchResult(BaseModel):
     size: int | None = None
     mime_type: str | None = None
     content: Optional[str | dict] = None
-    summary: str | None = None
     filename: Optional[str] = None
     tags: list[str] | None = None
     metadata: dict | None = None
@@ -79,7 +77,6 @@ class SearchResult(BaseModel):
             mime_type=cast(str, source.mime_type),
             chunks=[elide_content(str(chunk.content), chunk_size) for chunk in chunks],
             content=elide_content(content, limit),
-            summary=summary,
             filename=cast(str, source.filename),
             tags=cast(list[str], source.tags),
             metadata=metadata,

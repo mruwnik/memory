@@ -13,6 +13,7 @@ from typing import Optional
 import voyageai
 
 from memory.common import embedding, settings
+from memory.api.search.types import chunk_score
 from memory.common.db.models import Chunk
 
 logger = logging.getLogger(__name__)
@@ -39,16 +40,9 @@ def merge_no_content_chunks(
     chunk below every text chunk (and under any downstream min_score cut),
     regardless of how well it actually matched. Fall back to their raw
     embedding similarity, which is on a comparable 0..1 scale, so they compete
-    fairly with reranked text. The merged list is re-sorted by relevance so the
-    fallback-scored chunks interleave instead of always trailing, and truncated
-    to ``top_k`` when set.
-
-    The embedding-score fallback deliberately overwrites any recency/popularity/
-    title boost ``_apply_boosts`` placed on these chunks: those boosts are tuned
-    to the RRF/cross-encoder scale, not the embedding-similarity scale, so
-    carrying them over would mix incomparable magnitudes. Reranked text chunks
-    likewise lose their boosts (the cross-encoder score replaces them), so both
-    paths stay consistent.
+    fairly with reranked text. The merged list is sorted by boosted score
+    (``chunk_score``) so the fallback-scored chunks interleave instead of always
+    trailing, and truncated to ``top_k`` when set.
     """
     merged = list(reranked)
     for chunk in no_content_chunks:
@@ -57,7 +51,7 @@ def merge_no_content_chunks(
             chunk.relevance_score = fallback
         merged.append(chunk)
 
-    merged.sort(key=lambda c: c.relevance_score or 0, reverse=True)
+    merged.sort(key=chunk_score, reverse=True)
     if top_k:
         merged = merged[:top_k]
     return merged
@@ -79,10 +73,10 @@ async def rerank_chunks(
         query: The search query
         chunks: List of candidate chunks to rerank
         model: VoyageAI reranker model to use
-        top_k: If set, only return top k results
+        top_k: If set, only return the top k results by boosted score
 
     Returns:
-        Chunks sorted by reranker relevance score
+        Chunks sorted by boosted reranker score
     """
     if not chunks:
         return []
@@ -126,7 +120,8 @@ async def rerank_chunks(
             query=query,
             documents=documents,
             model=model,
-            top_k=top_k or len(documents),
+            # Every document's score, so the top_k cut can rank by boosted score.
+            top_k=len(documents),
         )
 
         # Map results back to chunks with updated scores

@@ -2,11 +2,9 @@
 
 import pytest
 from datetime import datetime, timezone
-from typing import cast
 from unittest.mock import Mock
 
-from memory.api.search.constants import SUMMARY_MATCH_BOOST
-from memory.api.search.types import SearchResult, elide_content
+from memory.api.search.types import SearchResult, chunk_score, elide_content
 from memory.common import settings
 from memory.common.db.models import Chunk, SourceItem
 
@@ -44,7 +42,7 @@ class TestSearchResult:
         chunk = Mock()
         chunk.relevance_score = relevance_score
         chunk.content = content
-        chunk.is_summary = False
+        chunk.boost = 0.0
         return chunk
 
     def _make_source_item(self, **kwargs) -> Mock:
@@ -156,14 +154,10 @@ def make_source(content: str = "test content") -> SourceItem:
     )
 
 
-def make_chunk(score: float, is_summary: bool = False) -> Chunk:
-    return Chunk(content="chunk", relevance_score=score, is_summary=is_summary)
-
-
-@pytest.mark.parametrize("summary", ["the summary", None])
-def test_search_result_carries_the_items_summary(summary):
-    result = SearchResult.from_source_item(make_source(), [make_chunk(0.5)], summary=summary)
-    assert result.summary == summary
+def make_chunk(score: float, boost: float = 0.0) -> Chunk:
+    chunk = Chunk(content="chunk", relevance_score=score)
+    chunk.boost = boost
+    return chunk
 
 
 @pytest.mark.parametrize(
@@ -186,17 +180,16 @@ def test_long_content_is_previewed_by_its_summary(
         make_source(content), [make_chunk(0.5)], previews, summary=summary
     )
     assert result.content == expected
+    assert "summary" not in result.model_dump()
+
+
+@pytest.mark.parametrize("score", [0.5, 0.02, -0.5, 0.0])
+@pytest.mark.parametrize("boost", [0.0, 0.1, -0.05])
+def test_search_score_scales_the_chunks_boost_by_its_score(score, boost):
+    result = SearchResult.from_source_item(make_source(), [make_chunk(score, boost)])
+    assert result.search_score == pytest.approx(score + abs(score) * boost)
 
 
 @pytest.mark.parametrize("score", [0.5, 0.02, -0.5])
-def test_a_summary_match_scores_a_little_above_an_equal_content_match(score):
-    content_hit = SearchResult.from_source_item(make_source(), [make_chunk(score)])
-    summary_hit = SearchResult.from_source_item(make_source(), [make_chunk(score, True)])
-    assert content_hit.search_score == score
-    assert summary_hit.search_score == pytest.approx(score + abs(score) * SUMMARY_MATCH_BOOST)
-
-
-def test_a_summary_match_does_not_beat_a_clearly_better_content_match():
-    content_hit = SearchResult.from_source_item(make_source(), [make_chunk(0.6)])
-    summary_hit = SearchResult.from_source_item(make_source(), [make_chunk(0.5, True)])
-    assert cast(float, content_hit.search_score) > cast(float, summary_hit.search_score)
+def test_a_positive_boost_raises_any_score(score):
+    assert chunk_score(make_chunk(score, 0.1)) > chunk_score(make_chunk(score))

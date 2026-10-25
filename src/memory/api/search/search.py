@@ -34,12 +34,13 @@ from memory.api.search import scorer
 from memory.api.search.constants import (
     RRF_K,
     CANDIDATE_MULTIPLIER,
-    RERANK_CANDIDATE_MULTIPLIER,
+    FINAL_CANDIDATE_MULTIPLIER,
     QUERY_TERM_BOOST,
     TITLE_MATCH_BOOST,
     RECALLED_TITLE_BOOST,
     POPULARITY_BOOST,
     RECENCY_BOOST_MAX,
+    SUMMARY_MATCH_BOOST,
     RECENCY_HALF_LIFE_DAYS,
     STOPWORDS,
 )
@@ -48,7 +49,7 @@ from memory.api.search.bm25 import search_bm25_chunks
 from memory.api.search.hyde import expand_query_hyde
 from memory.api.search.rerank import rerank_chunks, rerank_timeout
 from memory.api.search.query_analysis import analyze_query, QueryAnalysis
-from memory.api.search.types import SearchConfig, SearchFilters, SearchResult
+from memory.api.search.types import SearchConfig, SearchFilters, SearchResult, chunk_score
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def apply_query_term_boost(
     query_terms: set[str],
 ) -> None:
     """
-    Boost chunk scores when query terms appear in content.
+    Boost chunks whose content contains query terms.
 
     This helps surface chunks that contain exact query words even if
     embedding similarity is lower.
@@ -88,29 +89,7 @@ def apply_query_term_boost(
     for chunk in chunks:
         content = (chunk.content or "").lower()
         matches = sum(1 for term in query_terms if term in content)
-        if matches > 0:
-            # Boost proportional to fraction of query terms matched
-            boost = QUERY_TERM_BOOST * (matches / len(query_terms))
-            chunk.relevance_score = (chunk.relevance_score or 0) + boost
-
-
-def deduplicate_by_source(chunks: Sequence[Chunk]) -> list[Chunk]:
-    """
-    Keep only the highest-scoring chunk per source.
-
-    This prevents multiple chunks from the same article from crowding out
-    other potentially relevant sources.
-    """
-    best_by_source: dict[int, Chunk] = {}
-    for chunk in chunks:
-        source_id = chunk.source_id
-        if source_id not in best_by_source:
-            best_by_source[source_id] = chunk
-        elif (chunk.relevance_score or 0) > (
-            best_by_source[source_id].relevance_score or 0
-        ):
-            best_by_source[source_id] = chunk
-    return list(best_by_source.values())
+        chunk.boost += QUERY_TERM_BOOST * (matches / len(query_terms))
 
 
 def apply_source_boosts(
@@ -158,46 +137,27 @@ def apply_source_boosts(
 
     for chunk in chunks:
         source_data = source_map.get(chunk.source_id, {})
-        score = chunk.relevance_score or 0
+        boost = 0.0
 
-        # Apply title boost if query terms match
         title = source_data.get("title", "")
         if query_terms and title:
             matches = sum(1 for term in query_terms if term in title)
-            if matches > 0:
-                score += TITLE_MATCH_BOOST * (matches / len(query_terms))
+            boost += TITLE_MATCH_BOOST * (matches / len(query_terms))
 
-        # Apply recalled title boost - large boost if title matches LLM-recalled content
-        if recalled_lower and title:
-            for recalled in recalled_lower:
-                if recalled in title or title in recalled:
-                    score += RECALLED_TITLE_BOOST
-                    break
+        if title and any(recalled in title or title in recalled for recalled in recalled_lower):
+            boost += RECALLED_TITLE_BOOST
 
-        # Apply popularity boost (additive, like the other boosts in this
-        # function). The previous implementation was multiplicative
-        # (`score *= (1 + POPULARITY_BOOST * (popularity - 1))`), which
-        # inverted direction for any negative score: cross-encoder
-        # rerankers emit unbounded real-valued logits including negatives,
-        # so popular bad-match items would rank *worse* than equally-bad
-        # unpopular items. Additive avoids that and matches how recency
-        # and title boosts compose.
-        popularity = source_data.get("popularity", 1.0)
-        if popularity != 1.0:
-            score += POPULARITY_BOOST * (popularity - 1.0)
+        boost += POPULARITY_BOOST * (source_data.get("popularity", 1.0) - 1.0)
 
-        # Apply recency boost (exponential decay with half-life)
         inserted_at = source_data.get("inserted_at")
         if inserted_at:
             # Handle timezone-naive timestamps
             if inserted_at.tzinfo is None:
                 inserted_at = inserted_at.replace(tzinfo=timezone.utc)
             age_days = (now - inserted_at).total_seconds() / 86400
-            # Exponential decay: boost = max_boost * 0.5^(age/half_life)
-            decay = math.pow(0.5, age_days / RECENCY_HALF_LIFE_DAYS)
-            score += RECENCY_BOOST_MAX * decay
+            boost += RECENCY_BOOST_MAX * math.pow(0.5, age_days / RECENCY_HALF_LIFE_DAYS)
 
-        chunk.relevance_score = score
+        chunk.boost += boost
 
 
 def fuse_scores_rrf(
@@ -550,10 +510,9 @@ def _fetch_chunks(
     fused_scores: dict[str, float],
     embedding_scores: dict[str, float],
     limit: int,
-    use_reranking: bool,
 ) -> list[Chunk]:
     """
-    Fetch chunk objects from database and set their relevance scores.
+    Fetch the top ``limit`` fused chunks from the database and set their relevance scores.
 
     ``embedding_scores`` carries the raw per-chunk embedding similarity, stashed
     on each chunk so reranking can fall back to it for content-less chunks.
@@ -561,16 +520,10 @@ def _fetch_chunks(
     if not fused_scores:
         return []
 
-    # Sort by score and take top results
-    # If reranking is enabled, fetch more candidates for the reranker to work with
     sorted_ids = sorted(
         fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True
     )
-    if use_reranking:
-        fetch_limit = limit * RERANK_CANDIDATE_MULTIPLIER
-    else:
-        fetch_limit = limit
-    top_ids = sorted_ids[:fetch_limit]
+    top_ids = sorted_ids[:limit]
 
     with make_session() as db:
         chunks = (
@@ -596,10 +549,13 @@ def _apply_boosts(
     recalled_content: list[str] | None = None,
 ) -> None:
     """
-    Apply query term, title, popularity, and recency boosts to chunks.
+    Set each chunk's boost from its summary flag, query terms, title, popularity and recency.
     """
     if not chunks:
         return
+
+    for chunk in chunks:
+        chunk.boost = SUMMARY_MATCH_BOOST if chunk.is_summary else 0.0
 
     # Extract query text for boosting
     query_text = " ".join(
@@ -623,19 +579,17 @@ async def _apply_reranking(
     use_reranking: bool,
 ) -> list[Chunk]:
     """
-    Apply cross-encoder reranking if enabled.
+    The ``limit`` best chunks by boosted score, reranked by the cross-encoder if enabled.
     """
-    if not (use_reranking and chunks and query_text.strip()):
-        return list(chunks)
-
-    try:
-        return await asyncio.wait_for(
-            rerank_chunks(query_text, chunks, model=settings.RERANK_MODEL, top_k=limit),
-            rerank_timeout(len(chunks)),
-        )
-    except Exception as e:
-        logger.warning(f"Reranking failed, using RRF order: {e!r}")
-        return list(chunks)
+    if use_reranking and chunks and query_text.strip():
+        try:
+            chunks = await asyncio.wait_for(
+                rerank_chunks(query_text, chunks, model=settings.RERANK_MODEL, top_k=limit),
+                rerank_timeout(len(chunks)),
+            )
+        except Exception as e:
+            logger.warning(f"Reranking failed, using RRF order: {e!r}")
+    return sorted(chunks, key=chunk_score, reverse=True)[:limit]
 
 
 async def search_chunks(
@@ -724,14 +678,12 @@ async def search_chunks(
     )
 
     # Fetch chunks from database
+    # Boosts apply to whichever score ends up last (types.chunk_score), so they're
+    # set on more candidates than the limit and every cut after this ranks by them.
     chunks = await asyncio.to_thread(
-        _fetch_chunks, fused_scores, embedding_scores, limit, use_reranking
+        _fetch_chunks, fused_scores, embedding_scores, limit * FINAL_CANDIDATE_MULTIPLIER
     )
-
-    # Apply various boosts including recalled content title matching
     await asyncio.to_thread(_apply_boosts, chunks, data, recalled_content)
-
-    # Apply reranking if enabled
     chunks = await _apply_reranking(chunks, query_text, limit, use_reranking)
 
     return chunks

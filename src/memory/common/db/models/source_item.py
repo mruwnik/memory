@@ -241,6 +241,9 @@ class Chunk(Base):
     # search, preserved through fusion so reranking can fall back to it for
     # chunks the text cross-encoder cannot score (e.g. image/page chunks).
     embedding_score: float
+    # Fraction of |relevance_score| the search boosts add (see search.types.chunk_score).
+    # Kept apart from the score because reranking and LLM scoring replace the score.
+    boost: float
 
     def __init__(self, **kwargs: Any) -> None:
         # Initialize transient mutable attributes per-instance
@@ -249,6 +252,7 @@ class Chunk(Base):
         self.images = kwargs.pop("images", [])
         self.relevance_score = kwargs.pop("relevance_score", 0.0)
         self.embedding_score = kwargs.pop("embedding_score", 0.0)
+        self.boost = kwargs.pop("boost", 0.0)
         super().__init__(**kwargs)
 
     @orm.reconstructor
@@ -263,6 +267,7 @@ class Chunk(Base):
         self.images = []
         self.relevance_score = 0.0
         self.embedding_score = 0.0
+        self.boost = 0.0
 
     # One of file_path or content must be populated
     __table_args__ = (

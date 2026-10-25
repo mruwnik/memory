@@ -1362,22 +1362,15 @@ async def test_fetch_bulk_returns_list(db_session, admin_session):
 
 
 @pytest.mark.asyncio
-async def test_fetch_returns_each_items_summary(db_session, admin_session):
-    summarised = make_source_item(db_session, 1)
-    plain = make_source_item(db_session, 2)
-    db_session.add_all([
-        Chunk(source_id=summarised.id, content="a section", is_summary=False),
-        Chunk(source_id=summarised.id, content="the summary", is_summary=True),
-        Chunk(source_id=plain.id, content="a section", is_summary=False),
-    ])
+async def test_fetch_returns_content_not_a_separate_summary(db_session, admin_session):
+    item = make_source_item(db_session, 1)
+    db_session.add(Chunk(source_id=item.id, content="the summary", is_summary=True))
     db_session.commit()
 
     with mcp_auth_context(admin_session.id):
-        bulk = await fetch.fn(ids=[summarised.id, plain.id], include_content=False)
-        single = await fetch.fn(id=summarised.id)
+        result = await fetch.fn(id=item.id)
 
-    assert [r["summary"] for r in bulk] == ["the summary", None]
-    assert single["summary"] == "the summary"
+    assert (result["content"], "summary" in result) == (item.content, False)
 
 
 @pytest.mark.asyncio

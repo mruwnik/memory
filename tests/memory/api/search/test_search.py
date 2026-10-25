@@ -7,6 +7,7 @@ import asyncio
 import importlib
 import sys
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,12 +28,12 @@ from memory.api.search.constants import (
     RECENCY_HALF_LIFE_DAYS,
     RRF_K,
     STOPWORDS,
+    SUMMARY_MATCH_BOOST,
     TITLE_MATCH_BOOST,
 )
 from memory.api.search.search import (
     apply_query_term_boost,
     apply_source_boosts,
-    deduplicate_by_source,
     extract_query_terms,
     fuse_scores_rrf,
 )
@@ -116,119 +117,46 @@ def test_common_stopwords_in_set(word):
 # ============================================================================
 
 
-def _make_chunk(content: str, source_id: int = 1, score: float = 0.5):
-    """Create a mock chunk with given content and score."""
-    chunk = MagicMock()
-    chunk.content = content
-    chunk.source_id = source_id
-    chunk.relevance_score = score
-    return chunk
+def _make_chunk(content: str | None, source_id: int = 1, score: float = 0.5) -> Chunk:
+    return Chunk(content=content, source_id=source_id, relevance_score=score)
 
 
 @pytest.mark.parametrize(
-    "content,query_terms,initial_score,expected_boost_fraction",
+    "content,query_terms,expected_boost_fraction",
     [
-        ("machine learning is powerful", {"machine", "learning"}, 0.5, 1.0),  # Both match
-        ("machine vision systems", {"machine", "learning"}, 0.5, 0.5),  # One of two
-        ("deep neural networks", {"machine", "learning"}, 0.5, 0.0),  # No match
-        ("MACHINE Learning AlGoRiThMs", {"machine", "learning", "algorithms"}, 0.5, 1.0),  # Case insensitive
+        ("machine learning is powerful", {"machine", "learning"}, 1.0),  # Both match
+        ("machine vision systems", {"machine", "learning"}, 0.5),  # One of two
+        ("deep neural networks", {"machine", "learning"}, 0.0),  # No match
+        ("MACHINE Learning AlGoRiThMs", {"machine", "learning", "algorithms"}, 1.0),  # Case insensitive
+        (None, {"machine"}, 0.0),
     ],
 )
-def test_apply_query_term_boost(content, query_terms, initial_score, expected_boost_fraction):
-    """Should boost chunks based on query term matches."""
-    chunks = [_make_chunk(content, score=initial_score)]
-    apply_query_term_boost(chunks, query_terms)
-    expected = initial_score + QUERY_TERM_BOOST * expected_boost_fraction
-    assert chunks[0].relevance_score == pytest.approx(expected)
+def test_apply_query_term_boost(content, query_terms, expected_boost_fraction):
+    """Query terms in the content add to the chunk's boost, not to its score."""
+    chunk = _make_chunk(content)
+    apply_query_term_boost([chunk], query_terms)
+    assert (chunk.relevance_score, chunk.boost) == pytest.approx(
+        (0.5, QUERY_TERM_BOOST * expected_boost_fraction)
+    )
 
 
 def test_apply_query_term_boost_empty_inputs():
     """Should handle empty query_terms or chunks."""
-    chunks = [_make_chunk("machine learning", score=0.5)]
+    chunks = [_make_chunk("machine learning")]
     apply_query_term_boost(chunks, set())
-    assert chunks[0].relevance_score == 0.5
+    assert chunks[0].boost == 0.0
 
     apply_query_term_boost([], {"machine"})  # Should not raise
 
 
-def test_apply_query_term_boost_none_values():
-    """Should handle None content and relevance_score."""
-    chunk_none_content = MagicMock()
-    chunk_none_content.content = None
-    chunk_none_content.relevance_score = 0.5
-    apply_query_term_boost([chunk_none_content], {"machine"})
-    assert chunk_none_content.relevance_score == 0.5
+def test_summary_chunks_are_boosted_above_the_items_other_chunks(db_session):
+    source = make_source_item(db_session, 1)
+    summary = Chunk(source_id=source.id, content="text", relevance_score=0.5, is_summary=True)
+    section = Chunk(source_id=source.id, content="text", relevance_score=0.5)
 
-    chunk_none_score = MagicMock()
-    chunk_none_score.content = "machine learning"
-    chunk_none_score.relevance_score = None
-    apply_query_term_boost([chunk_none_score], {"machine", "learning"})
-    assert chunk_none_score.relevance_score == pytest.approx(QUERY_TERM_BOOST)
+    search_module._apply_boosts([summary, section], [], None)
 
-
-def test_apply_query_term_boost_multiple_chunks():
-    """Should boost each chunk independently."""
-    chunks = [
-        _make_chunk("machine learning", score=0.5),
-        _make_chunk("deep networks", score=0.6),
-        _make_chunk("machine vision", score=0.4),
-    ]
-    query_terms = {"machine", "learning"}
-    apply_query_term_boost(chunks, query_terms)
-
-    assert chunks[0].relevance_score == pytest.approx(0.5 + QUERY_TERM_BOOST)
-    assert chunks[1].relevance_score == 0.6  # No match
-    assert chunks[2].relevance_score == pytest.approx(0.4 + QUERY_TERM_BOOST * 0.5)
-
-
-# ============================================================================
-# deduplicate_by_source tests
-# ============================================================================
-
-
-def _make_source_chunk(source_id: int, score: float | None):
-    """Create a mock chunk with given source_id and score."""
-    chunk = MagicMock()
-    chunk.source_id = source_id
-    chunk.relevance_score = score
-    return chunk
-
-
-@pytest.mark.parametrize(
-    "chunks_data,expected_count,expected_scores",
-    [
-        # Multiple chunks per source - keep highest
-        ([(1, 0.5), (1, 0.8), (1, 0.3), (2, 0.6)], 2, {1: 0.8, 2: 0.6}),
-        # Single chunk per source - keep all
-        ([(1, 0.5), (2, 0.6), (3, 0.7)], 3, {1: 0.5, 2: 0.6, 3: 0.7}),
-        # Empty list
-        ([], 0, {}),
-    ],
-)
-def test_deduplicate_by_source(chunks_data, expected_count, expected_scores):
-    """Should keep only highest scoring chunk per source."""
-    chunks = [_make_source_chunk(sid, score) for sid, score in chunks_data]
-    result = deduplicate_by_source(chunks)
-
-    assert len(result) == expected_count
-    for chunk in result:
-        assert chunk.relevance_score == expected_scores[chunk.source_id]
-
-
-def test_deduplicate_by_source_preserves_objects():
-    """Should return the actual chunk objects, not copies."""
-    chunk1 = _make_source_chunk(1, 0.5)
-    chunk2 = _make_source_chunk(1, 0.8)
-    result = deduplicate_by_source([chunk1, chunk2])
-    assert result[0] is chunk2
-
-
-def test_deduplicate_by_source_none_scores():
-    """Should handle None relevance_score as 0."""
-    chunk1 = _make_source_chunk(1, None)
-    chunk2 = _make_source_chunk(1, 0.5)
-    result = deduplicate_by_source([chunk1, chunk2])
-    assert result[0].relevance_score == 0.5
+    assert summary.boost - section.boost == pytest.approx(SUMMARY_MATCH_BOOST)
 
 
 # ============================================================================
@@ -236,25 +164,22 @@ def test_deduplicate_by_source_none_scores():
 # ============================================================================
 
 
-def _make_boost_chunk(source_id: int, score: float = 0.5):
-    """Create a mock chunk for boost tests."""
-    chunk = MagicMock()
-    chunk.source_id = source_id
-    chunk.relevance_score = score
-    return chunk
+def _make_boost_chunk(source_id: int) -> Chunk:
+    return Chunk(source_id=source_id, content="text", relevance_score=0.5)
 
 
 @pytest.mark.parametrize(
-    "title,query_terms,initial_score,expected_boost_fraction",
+    "title,query_terms,expected_boost_fraction",
     [
-        ("Machine Learning Tutorial", {"machine", "learning"}, 0.5, 1.0),
-        ("Machine Vision Systems", {"machine", "learning"}, 0.5, 0.5),
-        ("Deep Neural Networks", {"machine", "learning"}, 0.5, 0.0),
-        ("MACHINE LEARNING Tutorial", {"machine", "learning"}, 0.5, 1.0),  # Case insensitive
+        ("Machine Learning Tutorial", {"machine", "learning"}, 1.0),
+        ("Machine Vision Systems", {"machine", "learning"}, 0.5),
+        ("Deep Neural Networks", {"machine", "learning"}, 0.0),
+        ("MACHINE LEARNING Tutorial", {"machine", "learning"}, 1.0),  # Case insensitive
+        (None, {"machine"}, 0.0),
     ],
 )
 @patch("memory.api.search.search.make_session")
-def test_apply_source_boosts_title(mock_make_session, title, query_terms, initial_score, expected_boost_fraction):
+def test_apply_source_boosts_title(mock_make_session, title, query_terms, expected_boost_fraction):
     """Should boost chunks when title matches query terms."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
@@ -267,11 +192,11 @@ def test_apply_source_boosts_title(mock_make_session, title, query_terms, initia
     mock_source.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_boost_chunk(1, initial_score)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, query_terms)
 
-    expected = initial_score + TITLE_MATCH_BOOST * expected_boost_fraction
-    assert chunks[0].relevance_score == pytest.approx(expected)
+    assert chunks[0].boost == pytest.approx(TITLE_MATCH_BOOST * expected_boost_fraction)
+    assert chunks[0].relevance_score == 0.5
 
 
 @patch("memory.api.search.search.make_session")
@@ -282,49 +207,25 @@ def test_apply_source_boosts_empty_inputs(mock_make_session):
     mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
     mock_session.query.return_value.filter.return_value.all.return_value = []
 
-    chunks = [_make_boost_chunk(1, 0.5)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())
-    assert chunks[0].relevance_score == 0.5
+    assert chunks[0].boost == 0.0
 
     apply_source_boosts([], {"machine"})  # Should not raise
 
 
-@patch("memory.api.search.search.make_session")
-def test_apply_source_boosts_none_title(mock_make_session):
-    """Should handle sources with None or missing title."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
-    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
-
-    # Source with None title
-    mock_source = MagicMock()
-    mock_source.id = 1
-    mock_source.title = None
-    mock_source.popularity = 1.0  # Default popularity, no boost
-    mock_source.inserted_at = None  # No recency boost
-    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
-
-    chunks = [_make_boost_chunk(1, 0.5)]
-    apply_source_boosts(chunks, {"machine"})
-    assert chunks[0].relevance_score == 0.5
-
-
 @pytest.mark.parametrize(
-    "popularity,initial_score,expected_delta",
+    "popularity,expected_boost",
     [
-        (1.0, 0.5, 0.0),  # Default popularity, no change
-        (2.0, 0.5, POPULARITY_BOOST),  # High popularity, +POPULARITY_BOOST
-        (0.5, 0.5, -POPULARITY_BOOST * 0.5),  # Low popularity, small penalty
-        (1.5, 1.0, POPULARITY_BOOST * 0.5),  # Moderate popularity
-        # Regression for the multiplicative-on-negative-scores bug:
-        # additive boost preserves direction even when the input score
-        # is negative (e.g. cross-encoder reranker logits).
-        (2.0, -0.5, POPULARITY_BOOST),
+        (1.0, 0.0),  # Default popularity, no change
+        (2.0, POPULARITY_BOOST),
+        (0.5, -POPULARITY_BOOST * 0.5),  # Low popularity, small penalty
+        (1.5, POPULARITY_BOOST * 0.5),
     ],
 )
 @patch("memory.api.search.search.make_session")
-def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_score, expected_delta):
-    """Should boost chunks based on source popularity (additive)."""
+def test_apply_source_boosts_popularity(mock_make_session, popularity, expected_boost):
+    """Should boost chunks based on source popularity."""
     mock_session = MagicMock()
     mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
     mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
@@ -335,11 +236,10 @@ def test_apply_source_boosts_popularity(mock_make_session, popularity, initial_s
     mock_source.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_boost_chunk(1, initial_score)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())  # No query terms, just popularity
 
-    expected = initial_score + expected_delta
-    assert chunks[0].relevance_score == pytest.approx(expected)
+    assert chunks[0].boost == pytest.approx(expected_boost)
 
 
 def test_apply_source_boosts_empty_chunks():
@@ -364,13 +264,10 @@ def test_apply_source_boosts_multiple_sources(mock_make_session):
     source2.inserted_at = None  # No recency boost
     mock_session.query.return_value.filter.return_value.all.return_value = [source1, source2]
 
-    chunks = [_make_boost_chunk(1, 0.5), _make_boost_chunk(2, 0.5)]
+    chunks = [_make_boost_chunk(1), _make_boost_chunk(2)]
     apply_source_boosts(chunks, set())
 
-    # Source 1 should be boosted (additive)
-    assert chunks[0].relevance_score == pytest.approx(0.5 + POPULARITY_BOOST)
-    # Source 2 should be unchanged (popularity = 1.0)
-    assert chunks[1].relevance_score == 0.5
+    assert [c.boost for c in chunks] == pytest.approx([POPULARITY_BOOST, 0.0])
 
 
 # ============================================================================
@@ -458,14 +355,6 @@ def test_fuse_scores_rrf_only_ranks_matter():
 # ============================================================================
 
 
-def _make_recency_chunk(source_id: int, score: float = 0.5):
-    """Create a mock chunk for recency boost tests."""
-    chunk = MagicMock()
-    chunk.source_id = source_id
-    chunk.relevance_score = score
-    return chunk
-
-
 @patch("memory.api.search.search.make_session")
 def test_recency_boost_new_content(mock_make_session):
     """Brand new content should get full recency boost."""
@@ -481,12 +370,10 @@ def test_recency_boost_new_content(mock_make_session):
     mock_source.inserted_at = now  # Just inserted
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_recency_chunk(1, 0.5)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())
 
-    # Should get nearly full recency boost
-    expected = 0.5 + RECENCY_BOOST_MAX
-    assert chunks[0].relevance_score == pytest.approx(expected, rel=0.01)
+    assert chunks[0].boost == pytest.approx(RECENCY_BOOST_MAX, rel=0.01)
 
 
 @patch("memory.api.search.search.make_session")
@@ -504,12 +391,10 @@ def test_recency_boost_half_life_decay(mock_make_session):
     mock_source.inserted_at = now - timedelta(days=RECENCY_HALF_LIFE_DAYS)
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_recency_chunk(1, 0.5)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())
 
-    # Should get half the recency boost
-    expected = 0.5 + RECENCY_BOOST_MAX * 0.5
-    assert chunks[0].relevance_score == pytest.approx(expected, rel=0.01)
+    assert chunks[0].boost == pytest.approx(RECENCY_BOOST_MAX * 0.5, rel=0.01)
 
 
 @patch("memory.api.search.search.make_session")
@@ -527,12 +412,11 @@ def test_recency_boost_old_content(mock_make_session):
     mock_source.inserted_at = now - timedelta(days=365)  # 1 year old
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_recency_chunk(1, 0.5)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())
 
     # Should get very little boost (about 0.5^4 ≈ 0.0625 of max)
-    assert chunks[0].relevance_score > 0.5
-    assert chunks[0].relevance_score < 0.5 + RECENCY_BOOST_MAX * 0.1
+    assert 0 < chunks[0].boost < RECENCY_BOOST_MAX * 0.1
 
 
 @patch("memory.api.search.search.make_session")
@@ -549,11 +433,10 @@ def test_recency_boost_none_timestamp(mock_make_session):
     mock_source.inserted_at = None
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_recency_chunk(1, 0.5)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())
 
-    # No recency boost applied
-    assert chunks[0].relevance_score == 0.5
+    assert chunks[0].boost == 0.0
 
 
 @patch("memory.api.search.search.make_session")
@@ -572,11 +455,10 @@ def test_recency_boost_timezone_naive(mock_make_session):
     mock_source.inserted_at = naive_dt
     mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
 
-    chunks = [_make_recency_chunk(1, 0.5)]
+    chunks = [_make_boost_chunk(1)]
     apply_source_boosts(chunks, set())  # Should not raise
 
-    # Should get nearly full boost since it's very recent
-    assert chunks[0].relevance_score > 0.5
+    assert chunks[0].boost == pytest.approx(RECENCY_BOOST_MAX, rel=0.01)
 
 
 @patch("memory.api.search.search.make_session")
@@ -601,11 +483,10 @@ def test_recency_boost_ordering(mock_make_session):
 
     mock_session.query.return_value.filter.return_value.all.return_value = [source_new, source_old]
 
-    chunks = [_make_recency_chunk(1, 0.5), _make_recency_chunk(2, 0.5)]
+    chunks = [_make_boost_chunk(1), _make_boost_chunk(2)]
     apply_source_boosts(chunks, set())
 
-    # Newer content should have higher score
-    assert chunks[0].relevance_score > chunks[1].relevance_score
+    assert chunks[0].boost > chunks[1].boost
 
 
 # =============================================================================
@@ -713,9 +594,10 @@ def test_search_sources_fails_closed_when_filters_missing():
         raise AssertionError("search_sources(filters={}) should have raised")
 
 
-def test_search_sources_return_each_items_summary(db_session):
-    summarised = make_source_item(db_session, 1)
-    plain = make_source_item(db_session, 2)
+def test_search_sources_show_long_items_by_their_summary(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_NON_PREVIEW_LENGTH", 12)
+    summarised = make_source_item(db_session, 1, content="a" * 20)
+    plain = make_source_item(db_session, 2, content="b" * 20)
     hit = Chunk(source_id=summarised.id, content="a section", is_summary=False)
     other_hit = Chunk(source_id=plain.id, content="a section", is_summary=False)
     summary = Chunk(source_id=summarised.id, content="the summary", is_summary=True)
@@ -726,7 +608,10 @@ def test_search_sources_return_each_items_summary(db_session):
         search_module.search_sources([hit, other_hit], filters={"access_filter": None})
     )
 
-    assert {r.id: r.summary for r in results} == {summarised.id: "the summary", plain.id: None}
+    assert {r.id: r.content for r in results} == {
+        summarised.id: "the summary",
+        plain.id: "b" * 12 + "...",
+    }
 
 
 def test_search_sources_empty_chunks_returns_empty():
@@ -978,7 +863,7 @@ async def test_apply_reranking_keeps_fused_order_when_rerank_stalls():
     async def stall(*args, **kwargs):
         await asyncio.sleep(60)
 
-    chunks = [MagicMock(relevance_score=0.2), MagicMock(relevance_score=0.1)]
+    chunks = [MagicMock(relevance_score=0.2, boost=0.0), MagicMock(relevance_score=0.1, boost=0.0)]
     with patch.object(search_module, "rerank_chunks", stall), \
          patch.object(settings, "RERANK_TIMEOUT", 0.01):
         result = await asyncio.wait_for(
@@ -1019,3 +904,68 @@ async def test_search_writes_a_hyde_passage_only_for_a_keyed_searcher(
     )
 
     assert len(scripted_llm.requests) == hyde_requests
+
+
+# ============================================================================
+# Boosts apply to the final scores, whichever scoring ran last
+# ============================================================================
+
+LONG_AGO = datetime.now(timezone.utc) - timedelta(days=720)
+
+
+def fake_voyage(scores: dict[str, float]) -> MagicMock:
+    """A Voyage client whose reranker scores each document by its text, honouring top_k."""
+
+    def rerank(query, documents, model, top_k):
+        ranked = sorted(
+            (SimpleNamespace(index=i, relevance_score=scores[d]) for i, d in enumerate(documents)),
+            key=lambda r: r.relevance_score,
+            reverse=True,
+        )
+        return SimpleNamespace(results=ranked[:top_k])
+
+    voyage = MagicMock()
+    voyage.Client.return_value.rerank.side_effect = rerank
+    return voyage
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_reranking", [True, False])
+@pytest.mark.parametrize(
+    "overrides, winner",
+    [
+        ({}, "plain"),
+        ({"filename": "kettle descale guide"}, "boosted"),
+        ({"inserted_at": datetime.now(timezone.utc)}, "boosted"),
+    ],
+)
+async def test_boosts_reorder_near_ties_in_the_final_scores(
+    db_session, monkeypatch, use_reranking, overrides, winner
+):
+    monkeypatch.setattr(settings, "VOYAGE_API_KEY", "test")
+    monkeypatch.setattr(settings, "ENABLE_RERANKING", True)
+    plain = make_source_item(db_session, 1, filename="notes", inserted_at=LONG_AGO)
+    boosted = make_source_item(
+        db_session, 2, **{"filename": "notes", "inserted_at": LONG_AGO, **overrides}
+    )
+    leader = Chunk(source_id=plain.id, content="descale a kettle: notes")
+    runner_up = Chunk(source_id=boosted.id, content="descale a kettle: guide")
+    db_session.add_all([leader, runner_up])
+    db_session.commit()
+    fused = {str(leader.id): 0.0164, str(runner_up.id): 0.0161}
+    rerank_scores = {"descale a kettle: notes": 0.60, "descale a kettle: guide": 0.59}
+
+    with (
+        patch.object(search_module, "_run_searches", AsyncMock(return_value=(fused, {}))),
+        patch("memory.api.search.rerank.voyageai", fake_voyage(rerank_scores)),
+    ):
+        results = await search_module.search(
+            [DataChunk(data=["descale kettle"])],
+            filters={"access_filter": None},
+            config=SearchConfig(
+                limit=1, useBm25=False, useHyde=False,
+                useReranking=use_reranking, useQueryAnalysis=False,
+            ),
+        )
+
+    assert [r.id for r in results] == [{"plain": plain.id, "boosted": boosted.id}[winner]]

@@ -40,10 +40,17 @@ Implemented in `src/memory/api/search/`. Each stage is independently toggleable 
 6. **Fusion** — the vector and BM25 result lists are merged with Reciprocal Rank Fusion
    (`fuse_scores_rrf` in `search.py`, `RRF_K = 60` in `constants.py`). RRF is rank-based;
    there are no embedding/BM25 weight constants.
-7. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2.5` cross-encoder
-   reorders the fused candidates; past `RERANK_TIMEOUT` the fused order is kept.
-8. **Scoring** (`scorer.py`, `ENABLE_SEARCH_SCORING`) — recency / popularity /
-   title-match boosts applied to the ranked results.
+7. **Boosts** (`_apply_boosts` in `search.py`, constants in `constants.py`) — the top
+   `limit * FINAL_CANDIDATE_MULTIPLIER` fused candidates get a boost from query terms
+   in the chunk, query terms or LLM-recalled titles in the source title, popularity,
+   recency and being the summary chunk. A boost is a fraction of the score
+   (`score + |score| * boost`, `types.chunk_score`), kept apart from it so it applies
+   to whichever score comes last; every cut and ordering below ranks by it.
+8. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2.5` cross-encoder
+   scores the candidates, which are then cut to `limit` by boosted score; past
+   `RERANK_TIMEOUT` the fused scores are kept.
+9. **LLM scoring** (`scorer.py`, `ENABLE_SEARCH_SCORING`, per request `useScores`) —
+   an LLM scores those `limit` chunks; chunks under `min_score` (boosted) are dropped.
 
 Access-control filters are applied at the Qdrant, BM25, and final-merge layers (defense
 in depth).
