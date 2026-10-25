@@ -24,6 +24,11 @@ def boolean_env(key: str, default: bool = False) -> bool:
     return os.getenv(key, "0").lower() in ("1", "true", "yes")
 
 
+def optional_boolean_env(key: str) -> bool | None:
+    """None when the env leaves `key` unset, so an instance setting can supply it."""
+    return boolean_env(key) if key in os.environ else None
+
+
 def secret_env(key: str, default: str = "") -> str:
     """Read a secret from a file (KEY_FILE) or env var (KEY), with file taking priority."""
     if file_path := os.getenv(f"{key}_FILE"):
@@ -258,8 +263,8 @@ CHUNK_REINGEST_SINCE_MINUTES = int(os.getenv("CHUNK_REINGEST_SINCE_MINUTES", 60 
 # Embedding settings
 # Voyage powers both embeddings (embedding.py) and reranking (search/rerank.py).
 # Read via secret_env so it can be supplied as a Docker secret (VOYAGE_API_KEY_FILE)
-# instead of a plain env var. The voyageai SDK only reads the VOYAGE_API_KEY env
-# var itself, so call sites must pass this value explicitly as api_key=.
+# instead of a plain env var. When empty, an admin can set it in the UI: read it
+# through instance_settings, and pass it explicitly as api_key=.
 VOYAGE_API_KEY = secret_env("VOYAGE_API_KEY")
 TEXT_EMBEDDING_MODEL = os.getenv("TEXT_EMBEDDING_MODEL", "voyage-3-large")
 MIXED_EMBEDDING_MODEL = os.getenv("MIXED_EMBEDDING_MODEL", "voyage-multimodal-3")
@@ -313,17 +318,15 @@ MCP_BLOCKED_NETWORKS = os.getenv("MCP_BLOCKED_NETWORKS", "")
 MCP_BLOCK_CONTAINER_NETWORKS = boolean_env("MCP_BLOCK_CONTAINER_NETWORKS", False)
 
 
-# Search settings
-ENABLE_BM25_SEARCH = boolean_env("ENABLE_BM25_SEARCH", True)
-ENABLE_SEARCH_SCORING = boolean_env("ENABLE_SEARCH_SCORING", True)
-# Off by default: in retrieval evals it cost ~0.5s per search (it is usually the
-# slower of the two LLM calls) without improving retrieval.
-ENABLE_HYDE_EXPANSION = boolean_env("ENABLE_HYDE_EXPANSION", False)
+# Search settings. The ENABLE_* ceilings are None when unset: their defaults are in
+# instance_settings, where an admin can change them. HyDE is off by default: in
+# retrieval evals it cost ~0.5s per search without improving retrieval.
+ENABLE_BM25_SEARCH = optional_boolean_env("ENABLE_BM25_SEARCH")
+ENABLE_SEARCH_SCORING = optional_boolean_env("ENABLE_SEARCH_SCORING")
+ENABLE_HYDE_EXPANSION = optional_boolean_env("ENABLE_HYDE_EXPANSION")
 HYDE_TIMEOUT = float(os.getenv("HYDE_TIMEOUT", "3.0"))
-ENABLE_QUERY_ANALYSIS = boolean_env(
-    "ENABLE_QUERY_ANALYSIS", True
-)  # Runs in parallel with HyDE
-ENABLE_RERANKING = boolean_env("ENABLE_RERANKING", True)
+ENABLE_QUERY_ANALYSIS = optional_boolean_env("ENABLE_QUERY_ANALYSIS")
+ENABLE_RERANKING = optional_boolean_env("ENABLE_RERANKING")
 RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-2.5")
 # A stalled rerank falls back to fused order instead of holding the search.
 RERANK_TIMEOUT = float(os.getenv("RERANK_TIMEOUT", "4.0"))
@@ -670,10 +673,12 @@ def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[
     return frozenset(s.strip().lower() for s in value.split(",") if s.strip())
 
 
-# MCP server configuration
-# Comma-separated list of server names to disable (e.g., "slack,forecast")
-# Valid names: books, core, discord, email, forecast, meta, organizer, people, polling, schedule, slack
+# Comma-separated MCP server names to leave unmounted (e.g. "slack,forecast"). When
+# empty, an admin can choose them in the UI (instance_settings), applied on restart.
 DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")
+# Set by the compose api service, whose restart policy brings the api back after
+# POST /settings/restart makes it exit. A host-run api has nothing to restart it.
+API_SELF_RESTART = boolean_env("API_SELF_RESTART", False)
 
 # Custom tasks directory for deployment-specific periodic tasks
 CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None
@@ -699,11 +704,9 @@ LATEST_RELEASE_CHECK_INTERVAL = int(os.getenv("LATEST_RELEASE_CHECK_INTERVAL", 6
 def missing_required_settings(values: Any) -> list[str]:
     """Empty settings that the api and workers can't run without.
 
-    Everything embeds via Voyage. LLM calls run on users' own keys, so none are required.
+    The Voyage key can be set in the UI, and LLM calls run on users' own keys.
     """
-    required = ["VOYAGE_API_KEY"]
-    if values.S3_BACKUP_BUCKET:
-        required.append("BACKUP_ENCRYPTION_KEY")
+    required = ["BACKUP_ENCRYPTION_KEY"] if values.S3_BACKUP_BUCKET else []
     return [name for name in required if not getattr(values, name)]
 
 

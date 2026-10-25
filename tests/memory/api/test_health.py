@@ -26,3 +26,4 @@ async def test_health_stays_healthy_when_release_check_raises(monkeypatch, db_en
     assert body["database"] == "healthy"
     assert body["latest_release"] is None
     assert body["db_revision"] == body["expected_revision"]
+    assert body["boot_id"] == base.BOOT_ID

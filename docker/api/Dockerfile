@@ -80,4 +80,4 @@ EXPOSE 8000
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
-CMD python -m memory.common.settings api && exec uvicorn memory.api.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS"
+CMD python -m memory.common.settings api && exec uvicorn memory.api.app:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10 --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS"

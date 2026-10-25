@@ -160,6 +160,20 @@ describe('SearchForm', () => {
     expect((screen.getByLabelText(label) as HTMLInputElement).disabled).toBe(!available)
   })
 
+  it.each([
+    [true, true],
+    [false, false],
+  ])('warns about keyword-only search when semantic search is unavailable (%s)', async (unavailable, warned) => {
+    installFetch([], { ...searchDefaults, semantic_search_unavailable: unavailable })
+    const onSearch = vi.fn()
+    const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
+    await waitFor(() => expect(screen.getByLabelText('BM25 keyword search')).toBeEnabled())
+    expect(screen.queryByText(/Keyword search only/) !== null).toBe(warned)
+    await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+    expect(onSearch.mock.calls[0][0].config.enhancements).toEqual(enhancementDefaults)
+  })
+
   it('offers the server tags and submits the chosen ones', async () => {
     installFetch()
     const onSearch = vi.fn()

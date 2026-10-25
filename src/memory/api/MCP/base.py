@@ -1,5 +1,6 @@
 import logging
 import pathlib
+import uuid
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
@@ -15,7 +16,6 @@ from memory.api.MCP.servers import (
     MCPServer,
     get_enabled_servers,
     get_server_instance,
-    is_server_enabled,
 )
 from memory.api.auth import authenticate_user
 from memory.api.password_reset import sender_account
@@ -29,6 +29,7 @@ from memory.common.version import db_revision, version_info
 
 logger = logging.getLogger(__name__)
 engine = get_engine()
+BOOT_ID = uuid.uuid4().hex
 
 # OAuth parameters that are safe to pass through to the login form
 ALLOWED_OAUTH_PARAMS = frozenset([
@@ -56,10 +57,10 @@ mcp = FastMCP(
 )
 
 
-# Build list of enabled server prefixes dynamically
-SUBSERVER_PREFIXES = list(get_enabled_servers())
+# Only the env unmounts a server. The UI value hides tools live (VisibilityMiddleware), so
+# turning a server off reaches the agents worker too, without restarting anything.
+SUBSERVER_PREFIXES = list(get_enabled_servers(settings.DISABLED_MCP_SERVERS))
 
-# Startup validation
 if not SUBSERVER_PREFIXES:
     raise ValueError(
         "DISABLED_MCP_SERVERS disables all servers - this is probably a mistake"
@@ -272,6 +273,8 @@ async def health_check(request: Request):
         all_healthy = False
 
     checks |= await version_info(db_rev)
+    # The restart flow waits for a new one to know the api came back.
+    checks["boot_id"] = BOOT_ID
     checks["status"] = "healthy" if all_healthy else "degraded"
     status_code = 200 if all_healthy else 503
     return JSONResponse(checks, status_code=status_code)
@@ -280,7 +283,7 @@ async def health_check(request: Request):
 # Mount only enabled subservers onto the main MCP server
 # Tools will be prefixed with their server name (e.g., core_search_knowledge_base)
 for server in MCPServer:
-    if is_server_enabled(server):
+    if server.value in SUBSERVER_PREFIXES:
         mcp.mount(get_server_instance(server), prefix=server.value)
         logger.info(f"Mounted MCP server: {server.value}")
 

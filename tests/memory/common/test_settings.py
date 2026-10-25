@@ -100,7 +100,8 @@ COMPLETE_SETTINGS = dict(
     "overrides, expected",
     [
         ({}, []),
-        ({"VOYAGE_API_KEY": ""}, ["VOYAGE_API_KEY"]),
+        # An admin can set it in the UI.
+        ({"VOYAGE_API_KEY": ""}, []),
         ({"S3_BACKUP_BUCKET": "b"}, ["BACKUP_ENCRYPTION_KEY"]),
         ({"S3_BACKUP_BUCKET": "b", "BACKUP_ENCRYPTION_KEY": "k"}, []),
         ({"BACKUP_ENCRYPTION_KEY": "k"}, []),
@@ -109,15 +110,6 @@ COMPLETE_SETTINGS = dict(
 def test_missing_required_settings(overrides, expected):
     values = SimpleNamespace(**{**COMPLETE_SETTINGS, **overrides})
     assert missing_required_settings(values) == expected
-
-
-def test_require_settings_lists_every_missing_setting(capsys):
-    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "VOYAGE_API_KEY": ""})
-    with pytest.raises(SystemExit) as exc:
-        require_settings(values, "worker")
-    assert exc.value.code == 1
-    err = capsys.readouterr().err
-    assert "VOYAGE_API_KEY" in err
 
 
 def test_bucket_without_key_names_both_variables_but_no_values(capsys):

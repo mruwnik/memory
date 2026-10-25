@@ -373,3 +373,16 @@ run "name_rejects_reserved_and_malformed" {
   }
   expect_failures = [var.name]
 }
+
+run "voyage_key_is_optional" {
+  command = plan
+
+  variables {
+    voyage_api_key = ""
+  }
+
+  assert {
+    condition     = length(aws_ssm_parameter.voyage_api_key) == 0
+    error_message = "an empty voyage_api_key must not create its parameter"
+  }
+}

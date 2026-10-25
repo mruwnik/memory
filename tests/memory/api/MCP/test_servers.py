@@ -1,5 +1,8 @@
 """Tests for MCP server configuration and enabling/disabling."""
 
+import os
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -7,10 +10,14 @@ import pytest
 from memory.api.MCP.servers import (
     MCPServer,
     ALL_MCP_SERVERS,
+    check_disabled_servers,
+    effective_disabled_servers,
     get_enabled_servers,
-    is_server_enabled,
     get_server_instance,
+    tool_server,
 )
+from memory.common import settings
+from memory.common.db.models import InstanceSetting
 
 
 # --- MCPServer enum tests ---
@@ -70,44 +77,46 @@ def test_enum_values_are_strings():
 )
 def test_get_enabled_servers(disabled, expected_enabled):
     """get_enabled_servers returns all servers except disabled ones."""
-    with patch("memory.api.MCP.servers.settings") as mock_settings:
-        mock_settings.DISABLED_MCP_SERVERS = disabled
-        result = get_enabled_servers()
-        assert result == expected_enabled
+    assert get_enabled_servers(disabled) == expected_enabled
 
 
 def test_get_enabled_servers_warns_on_unknown():
     """get_enabled_servers warns about unknown server names."""
-    with patch("memory.api.MCP.servers.settings") as mock_settings:
-        mock_settings.DISABLED_MCP_SERVERS = frozenset({"slack", "unknown_server"})
-        with patch("memory.api.MCP.servers.logger") as mock_logger:
-            result = get_enabled_servers()
-            mock_logger.warning.assert_called_once()
-            assert "unknown_server" in str(mock_logger.warning.call_args)
-            # Should still disable valid servers
-            assert "slack" not in result
-
-
-# --- is_server_enabled tests ---
+    with patch("memory.api.MCP.servers.logger") as mock_logger:
+        result = get_enabled_servers(frozenset({"slack", "unknown_server"}))
+    mock_logger.warning.assert_called_once()
+    assert "unknown_server" in str(mock_logger.warning.call_args)
+    assert "slack" not in result
 
 
 @pytest.mark.parametrize(
-    "disabled,server,expected",
-    [
-        (frozenset(), MCPServer.CORE, True),
-        (frozenset(), "core", True),
-        (frozenset({"core"}), MCPServer.CORE, False),
-        (frozenset({"core"}), "core", False),
-        (frozenset({"slack"}), MCPServer.CORE, True),
-        (frozenset({"slack", "forecast"}), MCPServer.SLACK, False),
-        (frozenset({"slack", "forecast"}), MCPServer.DISCORD, True),
-    ],
+    "tool, server",
+    [("core_search", "core"), ("people_tidbit_list", "people"), ("mcp_3_fetch", None)],
 )
-def test_is_server_enabled(disabled, server, expected):
-    """is_server_enabled checks if server is in disabled set."""
-    with patch("memory.api.MCP.servers.settings") as mock_settings:
-        mock_settings.DISABLED_MCP_SERVERS = disabled
-        assert is_server_enabled(server) == expected
+def test_tool_server(tool, server):
+    assert tool_server(tool) == server
+
+
+def test_the_env_disables_servers_over_the_ui_value(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", frozenset({"slack"}))
+    db_session.add(InstanceSetting(key="disabled_mcp_servers", value=[]))
+    db_session.commit()
+
+    assert effective_disabled_servers() == frozenset({"slack"})
+
+
+def test_a_server_the_env_disables_is_never_mounted():
+    code = "import memory.api.MCP.base as b; print(sorted(b.SUBSERVER_PREFIXES))"
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path), "DISABLED_MCP_SERVERS": "slack"}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env)
+
+    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"slack"}))
+
+
+def test_check_disabled_servers_keeps_one_server():
+    check_disabled_servers(ALL_MCP_SERVERS - {"core"})
+    with pytest.raises(ValueError):
+        check_disabled_servers(ALL_MCP_SERVERS)
 
 
 # --- get_server_instance tests ---

@@ -185,6 +185,17 @@ def test_reingest_chunk(db_session, qdrant, chunk):
     assert chunk.checked_at.isoformat() > start.isoformat()
 
 
+@pytest.mark.parametrize("chunk", ["text"], indirect=True)
+def test_reingest_chunk_without_a_voyage_key_logs_no_error(db_session, qdrant, chunk, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "VOYAGE_API_KEY", "")
+
+    reingest_chunk(str(chunk.id), "text")
+
+    assert [r for r in caplog.records if r.name == "memory.workers.tasks.maintenance" and r.levelname == "ERROR"] == []
+    db_session.refresh(chunk)
+    assert chunk.checked_at is not None
+
+
 def test_reingest_chunk_not_found(db_session, qdrant):
     """Test when the chunk to reingest doesn't exist."""
     non_existent_id = str(uuid.uuid4())

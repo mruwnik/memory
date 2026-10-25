@@ -41,8 +41,8 @@ section has nothing in it:
   tokens, client secrets and headers are encrypted with it). Registration fails
   with a clear error without it; nothing else changes.
 - The api and workers now check settings at startup and refuse to start,
-  listing everything that's missing. Only `VOYAGE_API_KEY` is required;
-  `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are no longer read.
+  listing everything that's missing. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`
+  are no longer read.
 
 ### Manual steps
 
@@ -90,6 +90,26 @@ section has nothing in it:
   `PATCH /users/{id}`. Cron schedules, both scheduled tasks and agent schedules,
   run on their owner's local time, following DST; changing a timezone moves
   the user's pending cron runs.
+- `VOYAGE_API_KEY` is no longer required. Without it the api and workers start,
+  search is keyword-only (no reranking or HyDE), and new items are stored with
+  `embed_status = FAILED` until an admin sets the key; saving it queues
+  `reingest-all-empty-source-items` to embed them. `secrets/voyage_key.txt` must
+  still exist (compose needs it), and may be empty: `tools/install.sh` now always
+  writes it, makes the Voyage prompt skippable (also with `--non-interactive`),
+  and no longer copies the key into `.env`. EC2: `voyage_api_key` is optional in
+  the Terraform; leave it out to enter the key in the web UI.
+- New admin settings API (`GET`/`PATCH /settings`, `POST /settings/restart`) for
+  the Voyage key, `DISABLED_MCP_SERVERS` and the search `ENABLE_*` switches. A
+  value set in the env still wins and is read-only there; to hand a setting to
+  the UI, remove it from `.env` (or empty its secret file) and restart. Secrets
+  set there are encrypted with `SECRETS_ENCRYPTION_KEY`, and `rotate-keys.sh`
+  re-encrypts them. A server disabled on the page hides its tools at once, in
+  the api and in agent runs; `DISABLED_MCP_SERVERS` in the env still unmounts it.
+  The compose api service now sets `API_SELF_RESTART=1`, which lets an admin
+  restart it from the page for restart-bound settings (it exits, and
+  `restart: unless-stopped` brings it back). The compose
+  file no longer sets `ENABLE_BM25_SEARCH` (it was the default), so it can be
+  changed in the UI. `/health` reports a `boot_id`.
 - The Discord collector no longer serves its channel, category and permission
   endpoints (the collector API keeps only health, DMs, channel messages,
   typing, reactions and metadata refresh). The `discord-admin` and
@@ -508,6 +528,7 @@ section has nothing in it:
 - `20261103_drop_one_time_keys`: deletes the `api_keys` rows of type `one_time`. Fast.
   Downgrading does not restore them.
 - `20261103_user_timezone`: adds `users.timezone` (IANA name, default `UTC`). Fast.
+- `20261103_instance_settings`: creates the empty `instance_settings` table. Fast.
 
 ### Post-deploy commands
 

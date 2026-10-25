@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
-from memory.common import metrics, settings, summarizer
+from memory.common import instance_settings, metrics, settings, summarizer
 from memory.common.db.models import LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
@@ -556,6 +556,21 @@ def no_job_rows_without_db_session(request):
         yield
 
 
+@pytest.fixture(autouse=True)
+def instance_settings_from_db_session(request):
+    """Live settings come from the test DB with db_session, else from no DB at all.
+
+    Without db_session, reading them would query the dev DB (or hang without one).
+    """
+    instance_settings.invalidate_cache()
+    if "db_session" in request.fixturenames:
+        yield
+    else:
+        with patch.object(instance_settings, "read_stored_values", return_value={}):
+            yield
+    instance_settings.invalidate_cache()
+
+
 @pytest.fixture(scope="session")
 def mcp_servers():
     """Pre-load MCP server modules once per test session.
@@ -957,6 +972,8 @@ def mock_api_keys():
     test_encryption_key = "0" * 64
     with (
         patch.object(settings, "SECRETS_ENCRYPTION_KEY", test_encryption_key),
+        # voyageai.Client is mocked above; tests of a missing key clear this.
+        patch.object(settings, "VOYAGE_API_KEY", "test-voyage-key"),
     ):
         yield
 

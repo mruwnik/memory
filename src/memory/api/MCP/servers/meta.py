@@ -21,7 +21,15 @@ from memory.api.search.search import searcher_keys
 from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
 from memory.api.search.types import MCPSearchFilters
 from memory.common.access_control import apply_access_filter_to_query
-from memory.common import qdrant, settings
+from memory.common import embedding, qdrant
+from memory.common.instance_settings import (
+    ENABLE_BM25_SEARCH,
+    ENABLE_HYDE_EXPANSION,
+    ENABLE_QUERY_ANALYSIS,
+    ENABLE_RERANKING,
+    ENABLE_SEARCH_SCORING,
+    value as setting,
+)
 from memory.common.collections import SESSION_COLLECTIONS
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.celery_app import SEND_NOTIFICATION
@@ -202,16 +210,21 @@ async def get_search_defaults() -> dict[str, bool]:
     is false; `use_scores` is opt-in. A false one is off on this server, or is an
     LLM step and you have no default Anthropic or OpenAI key to pay for it, and no
     flag can turn it on.
+
+    `semantic_search_unavailable` is true while no embeddings key is set: `search`
+    then matches keywords only.
     """
     user = get_mcp_current_user()
     keys = await asyncio.to_thread(searcher_keys, user.id if user else None)
+    embeds = embedding.configured()
     return {
-        "use_bm25": settings.ENABLE_BM25_SEARCH,
-        "use_hyde": settings.ENABLE_HYDE_EXPANSION and keys[HYDE.slug] is not None,
-        "use_reranking": settings.ENABLE_RERANKING,
-        "use_query_analysis": settings.ENABLE_QUERY_ANALYSIS
+        "use_bm25": not embeds or setting(ENABLE_BM25_SEARCH),
+        "use_hyde": embeds and setting(ENABLE_HYDE_EXPANSION) and keys[HYDE.slug] is not None,
+        "use_reranking": embeds and setting(ENABLE_RERANKING),
+        "use_query_analysis": setting(ENABLE_QUERY_ANALYSIS)
         and keys[QUERY_ANALYSIS.slug] is not None,
-        "use_scores": settings.ENABLE_SEARCH_SCORING and keys[CHUNK_SCORE.slug] is not None,
+        "use_scores": setting(ENABLE_SEARCH_SCORING) and keys[CHUNK_SCORE.slug] is not None,
+        "semantic_search_unavailable": not embeds,
     }
 
 

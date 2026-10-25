@@ -28,6 +28,22 @@ param() {
         --query Parameter.Value --output text
 }
 
+# Empty when the parameter doesn't exist; any other failure still fails.
+optional_param() {
+    local out err rc=0
+    err=$(mktemp)
+    # stderr apart from stdout, so a CLI warning can't end up in the value.
+    out=$(param "$1" 2>"$err") || rc=$?
+    if ((rc == 0)); then
+        printf %s "$out"
+    elif ! grep -q ParameterNotFound "$err"; then
+        cat "$err" >&2
+        rm -f "$err"
+        return 1
+    fi
+    rm -f "$err"
+}
+
 log "Base packages"
 apt_get update
 apt_get install ca-certificates curl gnupg git openssl unattended-upgrades
@@ -159,7 +175,8 @@ else
         DOMAIN=$domain
         ADMIN_EMAIL=$(param admin_email)
         ADMIN_PASSWORD=$(param admin_password)
-        VOYAGE_API_KEY=$(param voyage_api_key)
+        # Terraform leaves it out when the owner will enter it in the web UI.
+        VOYAGE_API_KEY=$(optional_param voyage_api_key)
         POSTGRES_PASSWORD=$(param postgres_password)
         REDIS_PASSWORD=$(param redis_password)
         APP_VERSION=$(git -C "$ROOT" describe --tags --always)

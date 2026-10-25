@@ -242,7 +242,8 @@ services:
       VITE_SERVER_URL: "${SERVER_URL:-http://localhost:8000}"
       STATIC_DIR: "/app/static"
       VOYAGE_API_KEY_FILE: /run/secrets/voyage_key
-      ENABLE_BM25_SEARCH: true
+      # POST /settings/restart exits the api, and restart: unless-stopped brings it back.
+      API_SELF_RESTART: 1
       SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/secrets_encryption_key
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}

@@ -5,7 +5,8 @@ import sys
 import pytest
 
 from memory.agents.mcp_client import memory_tools
-from memory.common.db.models import APIKey
+from memory.common import instance_settings
+from memory.common.db.models import APIKey, InstanceSetting
 
 
 async def listed(token: str, scopes: list[str]) -> set[str]:
@@ -84,6 +85,22 @@ async def test_denied_call_is_an_error_result(db_session, user_session, name):
 
     assert is_error
     assert text == f"Access denied: {name}"
+
+
+@pytest.mark.asyncio
+async def test_a_server_disabled_in_the_ui_is_gone_from_the_next_run(db_session, admin_session):
+    assert "people_list_all" in await listed(admin_session.id, ["*"])
+
+    db_session.add(InstanceSetting(key="disabled_mcp_servers", value=["people"]))
+    db_session.commit()
+    instance_settings.invalidate_cache()
+
+    names = await listed(admin_session.id, ["*"])
+    async with memory_tools(admin_session.id, ["*"]) as tools:
+        text, is_error = await tools.call("people_list_all", {})
+
+    assert ("people_list_all" in names, "meta_get_user" in names) == (False, True)
+    assert (text, is_error) == ("Access denied: people_list_all", True)
 
 
 def test_importing_does_not_load_the_mcp_server():

@@ -187,6 +187,10 @@ def embed_source_item(
                 f"No chunks generated for {type(source_item).__name__}: {getattr(source_item, 'title', 'unknown')}"
             )
             return 0
+    except embedding.EmbeddingsNotConfigured:
+        source_item.embed_status = "FAILED"  # type: ignore
+        embedding.warn_not_configured()
+        return 0
     except Exception:
         source_item.embed_status = "FAILED"  # type: ignore
         logger.exception(f"Failed to embed {type(source_item).__name__}")

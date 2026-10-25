@@ -51,6 +51,7 @@ from memory.api.polls import router as polls_router
 from memory.api.source_items import router as source_items_router
 from memory.api.sessions import router as sessions_router
 from memory.api.secrets import router as secrets_router
+from memory.api.instance_settings import router as instance_settings_router
 from memory.api.users import router as users_router
 from memory.api.password_reset import router as password_reset_router
 from memory.api.discord import router as discord_router
@@ -121,6 +122,7 @@ tags_metadata = [
     {"name": "claude-environments", "description": "Claude environment management"},
     {"name": "cloud-claude", "description": "Cloud Claude integration"},
     {"name": "secrets", "description": "Secret management"},
+    {"name": "settings", "description": "Instance settings (admin)"},
     {"name": "discord", "description": "Discord integration"},
     {"name": "slack", "description": "Slack integration"},
     {"name": "celery", "description": "Celery task overview and ingestion summary"},
@@ -500,6 +502,7 @@ app.include_router(sessions_router)
 for claude_router in claude_containers.routers:
     app.include_router(claude_router)
 app.include_router(secrets_router)
+app.include_router(instance_settings_router)
 app.include_router(users_router)
 app.include_router(password_reset_router)
 app.include_router(discord_router)

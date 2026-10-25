@@ -552,6 +552,20 @@ def test_collect_applies_summary_and_is_idempotent(db_session, llm_key, batches,
     assert payloads[str(summary_chunks[0].id)]["type"] == "summary"
 
 
+def test_a_summary_collected_without_a_voyage_key_logs_no_error(
+    db_session, llm_key, batches, monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "VOYAGE_API_KEY", "")
+    request = add_request(
+        db_session, make_item(db_session), llm_key, status="submitted", batch_id="batch_1",
+        chunk_metadata={"type": "summary"},
+    )
+    batches.results["batch_1"] = [batch_result(request.id)]
+
+    assert summary_batch.collect_finished(db_session) == {"apply_failed": 1}
+    assert [r for r in caplog.records if r.name == "memory.common.summary_batch" and r.levelname == "ERROR"] == []
+
+
 def test_collect_tags_only_request_adds_no_chunk(db_session, llm_key, batches, qdrant):
     item = make_item(db_session)
     request = add_request(db_session, item, llm_key, status="submitted", batch_id="batch_1")

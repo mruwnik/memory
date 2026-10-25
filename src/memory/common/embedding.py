@@ -5,13 +5,14 @@ import time
 from typing import Any, Callable, Literal, cast
 
 import voyageai
+import voyageai.error
 from PIL import Image
 from sqlalchemy.orm import object_session
 
 from memory.agents.call import LLMError, Record, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, ingest_key
 from memory.agents.system import SUMMARISE
-from memory.common import extract, settings, summarizer
+from memory.common import extract, instance_settings, settings, summarizer
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.llms.anthropic_provider import AnthropicProvider
 from memory.common.chunker import (
@@ -79,6 +80,46 @@ class EmbeddingError(Exception):
     pass
 
 
+class EmbeddingsNotConfigured(EmbeddingError):
+    """No Voyage key is set, in the env or the settings page."""
+
+
+NOT_CONFIGURED_WARNING_INTERVAL = 600
+_last_not_configured_warning = 0.0
+
+
+def voyage_api_key() -> str:
+    return instance_settings.value(instance_settings.VOYAGE_API_KEY)
+
+
+def configured() -> bool:
+    return bool(voyage_api_key())
+
+
+def warn_not_configured() -> None:
+    """Throttled: without a key every item of every task would otherwise log it."""
+    global _last_not_configured_warning
+    now = time.monotonic()
+    if now - _last_not_configured_warning < NOT_CONFIGURED_WARNING_INTERVAL:
+        return
+    _last_not_configured_warning = now
+    logger.warning(
+        "Items are stored unembedded: no Voyage key is set. Set it on the settings page."
+    )
+
+
+def check_key(key: str) -> int | None:
+    """Voyage's HTTP status for a one-word embed with `key`, or None when it accepts it."""
+    try:
+        voyageai.Client(api_key=key, timeout=10).embed(  # type: ignore
+            ["ok"], model=settings.TEXT_EMBEDDING_MODEL, input_type="query"
+        )
+    except voyageai.error.VoyageError as e:
+        # A connection failure has no status: report it as a bad gateway.
+        return e.http_status or 502
+    return None
+
+
 def as_string(
     chunk: extract.MulitmodalChunk | list[extract.MulitmodalChunk],
 ) -> str:
@@ -120,8 +161,10 @@ def embed_chunks(
         # long timeout and three attempts on a stalled connection.
         timeout, max_retries = settings.QUERY_EMBEDDING_TIMEOUT, min(max_retries, 2)
 
+    if not (key := voyage_api_key()):
+        raise EmbeddingsNotConfigured()
     logger.debug(f"Embedding {len(chunks)} chunks with model {model}")
-    vo = voyageai.Client(api_key=settings.VOYAGE_API_KEY, timeout=timeout)  # type: ignore
+    vo = voyageai.Client(api_key=key, timeout=timeout)  # type: ignore
 
     last_error = None
     for attempt in range(max_retries):
@@ -260,6 +303,9 @@ def embed_source_item(
 ) -> list[Chunk]:
     """Chunk and embed item. before_embed runs once the chunks are built, before
     any embedding API call, e.g. to end a DB transaction the calls would outlast."""
+    # Before chunking, which can spend the item's LLM key on summaries.
+    if not configured():
+        raise EmbeddingsNotConfigured()
     db = object_session(item)
     found = ingest_key(db, item, SUMMARISE) if db is not None else None
     key = credential(found) if found is not None else None

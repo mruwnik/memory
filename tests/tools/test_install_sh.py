@@ -12,9 +12,9 @@ REQUIRED = {
     "DOMAIN": "memory.example.com",
     "ADMIN_EMAIL": "owner@example.com",
     "ADMIN_PASSWORD": "admin-pw-Zk3v9QeXr7",
-    "VOYAGE_API_KEY": "voyage-key-Hq82LmPz41",
     "S3_BACKUP": "off",
 }
+VOYAGE = {"VOYAGE_API_KEY": "voyage-key-Hq82LmPz41"}
 S3 = {
     "S3_BACKUP_BUCKET": "my-backups",
     "S3_BACKUP_PREFIX": "kb",
@@ -24,7 +24,7 @@ SUPPLIED = {
     "POSTGRES_PASSWORD": "pg-supplied-Aa11Bb22",
     "REDIS_PASSWORD": "redis-supplied-Ee55Ff66",
 }
-SECRET_FILES = ["postgres_password.txt", "voyage_key.txt"]
+SECRET_FILES = ["postgres_password.txt"]
 
 
 @pytest.fixture
@@ -140,7 +140,26 @@ def test_supplied_secrets_are_used(project):
     env = read_env(project)
     assert (project / "secrets" / "postgres_password.txt").read_text() == SUPPLIED["POSTGRES_PASSWORD"]
     assert env["REDIS_PASSWORD"] == SUPPLIED["REDIS_PASSWORD"]
-    assert (project / "secrets" / "voyage_key.txt").read_text() == REQUIRED["VOYAGE_API_KEY"]
+
+
+# Compose needs the file even without a key, which an admin then sets in the web UI.
+@pytest.mark.parametrize(
+    "env, stdin, key",
+    [
+        (REQUIRED, None, ""),
+        ({**REQUIRED, **VOYAGE}, None, VOYAGE["VOYAGE_API_KEY"]),
+        # Every prompt left blank, then no backups and no SSH keys.
+        ({}, "\n" * 5 + "N\n" + "n\n", ""),
+    ],
+    ids=["non-interactive-without", "non-interactive-with", "interactive-skipped"],
+)
+def test_the_voyage_key_is_optional_and_only_in_its_secret_file(project, env, stdin, key):
+    result = install(project, env, interactive_input=stdin)
+
+    assert result.returncode == 0, result.stderr
+    voyage = project / "secrets" / "voyage_key.txt"
+    assert (voyage.read_text(), mode(voyage)) == (key, 0o600)
+    assert "VOYAGE_API_KEY" not in read_env(project)
 
 
 def test_rerun_keeps_existing_secrets_even_if_different_ones_are_supplied(project):
@@ -159,7 +178,7 @@ def test_rerun_keeps_existing_secrets_even_if_different_ones_are_supplied(projec
 
 
 def test_output_and_docker_args_contain_no_secrets(project):
-    result = install(project, {**REQUIRED, **SUPPLIED})
+    result = install(project, {**REQUIRED, **SUPPLIED, **VOYAGE})
 
     generated = [
         p.read_text() for p in (project / "secrets").iterdir() if p.read_text()
@@ -167,7 +186,7 @@ def test_output_and_docker_args_contain_no_secrets(project):
     haystack = result.stdout + result.stderr + (project / "docker.log").read_text()
     leaked = [
         s
-        for s in [*generated, *SUPPLIED.values(), REQUIRED["ADMIN_PASSWORD"], REQUIRED["VOYAGE_API_KEY"]]
+        for s in [*generated, *SUPPLIED.values(), REQUIRED["ADMIN_PASSWORD"], VOYAGE["VOYAGE_API_KEY"]]
         if s in haystack
     ]
     assert leaked == []
@@ -234,7 +253,7 @@ def test_supplied_secrets_do_not_reach_compose_environment(project, earlier_runs
 @pytest.mark.parametrize("var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "POSTGRES_PASSWORD"])
 @pytest.mark.parametrize("bad", ["a b", "a$b", "a|b"])
 def test_rejects_unsafe_values_naming_variable_but_not_value(project, var, bad):
-    result = install(project, {**REQUIRED, var: bad})
+    result = install(project, {**REQUIRED, **VOYAGE, var: bad})
 
     assert result.returncode != 0
     assert var in result.stderr

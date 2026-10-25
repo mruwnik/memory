@@ -14,7 +14,15 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 
 from memory.agents.provider_keys import Credential, credential, personal_key
 from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
-from memory.common import extract, settings
+from memory.common import embedding, extract, settings
+from memory.common.instance_settings import (
+    ENABLE_BM25_SEARCH,
+    ENABLE_HYDE_EXPANSION,
+    ENABLE_QUERY_ANALYSIS,
+    ENABLE_RERANKING,
+    ENABLE_SEARCH_SCORING,
+    value as setting,
+)
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
@@ -481,6 +489,7 @@ async def _run_searches(
     timeout: int,
     use_bm25: bool,
     recalled_titles: list[str] | None = None,
+    use_embeddings: bool = True,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """
     Run embedding and optionally BM25 searches in parallel.
@@ -490,9 +499,13 @@ async def _run_searches(
     (max cosine across collections) so reranking can fall back to them for
     chunks the text cross-encoder cannot score.
     """
-    # Build tasks to run in parallel
-    embedding_task = search_chunks_embeddings(
-        search_data, modalities, internal_limit, filters, timeout
+    async def no_scores() -> dict[str, float]:
+        return {}
+
+    embedding_task = (
+        search_chunks_embeddings(search_data, modalities, internal_limit, filters, timeout)
+        if use_embeddings
+        else no_scores()
     )
 
     if use_bm25:
@@ -662,11 +675,19 @@ async def search_chunks(
 
     # The settings are the operator's ceiling: a request can turn an
     # enhancement off, never on (they can cost LLM calls on the server's key).
-    use_bm25 = settings.ENABLE_BM25_SEARCH and config.useBm25 is not False
-    use_hyde = settings.ENABLE_HYDE_EXPANSION and config.useHyde is not False
-    use_reranking = settings.ENABLE_RERANKING and config.useReranking is not False
+    # Without a Voyage key only keyword search can run, so it runs regardless.
+    use_embeddings = embedding.configured()
+    use_bm25 = not use_embeddings or (
+        setting(ENABLE_BM25_SEARCH) and config.useBm25 is not False
+    )
+    use_hyde = (
+        use_embeddings and setting(ENABLE_HYDE_EXPANSION) and config.useHyde is not False
+    )
+    use_reranking = (
+        use_embeddings and setting(ENABLE_RERANKING) and config.useReranking is not False
+    )
     use_query_analysis = (
-        settings.ENABLE_QUERY_ANALYSIS and config.useQueryAnalysis is not False
+        setting(ENABLE_QUERY_ANALYSIS) and config.useQueryAnalysis is not False
     )
 
     internal_limit = limit * CANDIDATE_MULTIPLIER
@@ -698,7 +719,7 @@ async def search_chunks(
     # Run searches and fuse scores
     fused_scores, embedding_scores = await _run_searches(
         search_data, modalities, internal_limit, filters, timeout, use_bm25,
-        recalled_titles=recalled_content,
+        recalled_titles=recalled_content, use_embeddings=use_embeddings,
     )
 
     # Fetch chunks from database
@@ -800,7 +821,7 @@ async def search(
         config,
         keys=keys,
     )
-    if settings.ENABLE_SEARCH_SCORING and config.useScores and data and data[0].data:
+    if setting(ENABLE_SEARCH_SCORING) and config.useScores and data and data[0].data:
         query_item = data[0].data[0]
         if isinstance(query_item, str):
             chunks = await scorer.rank_chunks(

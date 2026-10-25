@@ -12,7 +12,7 @@ from typing import Optional
 
 import voyageai
 
-from memory.common import settings
+from memory.common import embedding, settings
 from memory.common.db.models import Chunk
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ async def rerank_chunks(
 
     try:
         vo = voyageai.Client(  # type: ignore[reportPrivateImportUsage]
-            api_key=settings.VOYAGE_API_KEY, timeout=rerank_timeout(len(documents))
+            api_key=embedding.voyage_api_key(), timeout=rerank_timeout(len(documents))
         )
         result = await asyncio.to_thread(
             vo.rerank,

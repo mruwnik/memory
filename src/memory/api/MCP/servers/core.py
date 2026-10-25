@@ -289,7 +289,7 @@ def _build_search_description() -> str:
             limit: Maximum number of results to return (default 20, max 100)
             previews: Whether to include content in results (up to MAX_PREVIEW_LENGTH characters)
             use_scores: Whether to score results with an LLM before returning - better but slower
-            use_bm25, use_hyde, use_reranking, use_query_analysis: Set false to skip a search enhancement. meta_get_search_defaults lists the ones available to you; true cannot enable one the server turned off or that has no key of yours to pay for it
+            use_bm25, use_hyde, use_reranking, use_query_analysis: Set false to skip a search enhancement. meta_get_search_defaults lists the ones available to you; true cannot enable one the server turned off or that has no key of yours to pay for it. Its semantic_search_unavailable is true while the server has no embeddings key, and search then matches keywords only
             {filters_section}
 
         Returns: List of search results with id, score, chunks, content, filename

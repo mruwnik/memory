@@ -930,6 +930,32 @@ async def test_search_chunks_settings_cap_enhancements(monkeypatch, enabled, req
 
 
 @pytest.mark.asyncio
+async def test_search_chunks_without_a_voyage_key_searches_keywords_only(monkeypatch):
+    monkeypatch.setattr(settings, "VOYAGE_API_KEY", "")
+    for setting in ENHANCEMENT_SETTINGS:
+        monkeypatch.setattr(settings, setting, True)
+    llm = AsyncMock(return_value=(None, None))
+    searches = AsyncMock(return_value=({}, {}))
+    rerank = AsyncMock(return_value=[])
+    with (
+        patch.object(search_module, "_run_llm_analysis", llm),
+        patch.object(search_module, "restrict_to_date_range", lambda filters, *_: filters),
+        patch.object(search_module, "_run_searches", searches),
+        patch.object(search_module, "_fetch_chunks", MagicMock(return_value=[])),
+        patch.object(search_module, "_apply_reranking", rerank),
+    ):
+        await search_module.search_chunks(
+            [DataChunk(data=["query"])],
+            filters={"access_filter": None},
+            config=SearchConfig(useBm25=False),
+        )
+
+    use_hyde = llm.call_args.args[3]
+    use_bm25, use_embeddings = searches.call_args.args[5], searches.call_args.kwargs["use_embeddings"]
+    assert (use_bm25, use_embeddings, use_hyde, rerank.call_args.args[3]) == (True, False, False, False)
+
+
+@pytest.mark.asyncio
 async def test_apply_reranking_keeps_fused_order_when_rerank_stalls():
     async def stall(*args, **kwargs):
         await asyncio.sleep(60)

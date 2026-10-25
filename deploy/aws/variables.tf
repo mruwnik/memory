@@ -34,11 +34,12 @@ variable "admin_email" {
 }
 
 variable "voyage_api_key" {
-  description = "Voyage AI API key for embeddings."
+  description = "Voyage AI API key for embeddings. Leave empty to enter it in the web UI's setup."
   type        = string
   sensitive   = true
+  default     = ""
   validation {
-    condition     = can(regex("^[A-Za-z0-9._@:/+-]+$", var.voyage_api_key))
+    condition     = var.voyage_api_key == "" || can(regex("^[A-Za-z0-9._@:/+-]+$", var.voyage_api_key))
     error_message = "voyage_api_key may only contain A-Za-z0-9._@:/+-."
   }
 }

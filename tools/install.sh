@@ -6,9 +6,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SECRETS_DIR="$PROJECT_DIR/secrets"
 ENV_FILE="$PROJECT_DIR/.env"
 
-# --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD,
-# VOYAGE_API_KEY. Optional, used instead of generating: POSTGRES_PASSWORD,
-# REDIS_PASSWORD, APP_NAME, BACKUP_ENCRYPTION_KEY. Anything already installed is
+# --non-interactive never prompts. Required: DOMAIN, ADMIN_EMAIL, ADMIN_PASSWORD.
+# Optional: VOYAGE_API_KEY (else an admin sets it on the settings page), and, used
+# instead of generating, POSTGRES_PASSWORD, REDIS_PASSWORD, APP_NAME,
+# BACKUP_ENCRYPTION_KEY. Anything already installed is
 # kept. S3 backups need an explicit choice: S3_BACKUP_BUCKET (with optional
 # S3_BACKUP_PREFIX and S3_BACKUP_REGION) to enable them, or S3_BACKUP=off.
 NON_INTERACTIVE=false
@@ -20,7 +21,7 @@ for arg in "$@"; do
 done
 
 if [ "$NON_INTERACTIVE" = true ]; then
-    for var in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD VOYAGE_API_KEY; do
+    for var in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD; do
         if [ -z "${!var:-}" ]; then
             echo "✗ $var is required with --non-interactive" >&2
             exit 1
@@ -97,44 +98,6 @@ set_env_value() {
         fi
     else
         echo "${key}=${value}" >> "$ENV_FILE"
-    fi
-}
-
-# Prompt for a value if not already set
-prompt_if_missing() {
-    local key="$1"
-    local prompt="$2"
-    local required="${3:-false}"
-    local current_value
-
-    current_value=$(get_env_value "$key")
-
-    if [ -n "$current_value" ]; then
-        success "$key already configured"
-        return 0
-    fi
-
-    if [ "$NON_INTERACTIVE" = true ]; then
-        [ -n "${!key:-}" ] && set_env_value "$key" "${!key}"
-        return 0
-    fi
-
-    echo ""
-    if [ "$required" = "true" ]; then
-        echo -e "${YELLOW}[Required]${NC} $prompt"
-    else
-        echo -e "${CYAN}[Optional]${NC} $prompt"
-    fi
-
-    read -r -p "Enter value (or press Enter to skip): " value
-
-    if [ -n "$value" ]; then
-        set_env_value "$key" "$value"
-        success "$key configured"
-    elif [ "$required" = "true" ]; then
-        warn "$key skipped - you'll need to set this before running"
-    else
-        info "$key skipped"
     fi
 }
 
@@ -237,7 +200,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
-# API Keys (require user input)
+# API Keys
 # ─────────────────────────────────────────────────────────────────────
 
 echo ""
@@ -245,19 +208,25 @@ echo "────────────────────────�
 echo "                         API Keys                                "
 echo "─────────────────────────────────────────────────────────────────"
 echo ""
-info "The following API keys are needed for core functionality."
-info "You can get them from the respective provider dashboards."
+info "Get it from the provider's dashboard, or set it later on the settings page."
 echo ""
 
-# Voyage AI - embeddings + reranking
-prompt_if_missing "VOYAGE_API_KEY" \
-    "Voyage AI API Key (https://dash.voyageai.com/api-keys)
-    Used for: all embeddings (voyage-3-large / voyage-multimodal-3) and reranking" \
-    "true"
-
-# Also write to secrets file for Docker
-voyage_key=$(get_env_value "VOYAGE_API_KEY")
-if [ -n "$voyage_key" ]; then
+# Voyage AI - embeddings + reranking. Only the secret file holds it: the stack reads
+# that file in preference to .env. Compose won't start without the file, so it is
+# written even when empty, which leaves the key to the settings page.
+if [ -s "$SECRETS_DIR/voyage_key.txt" ]; then
+    success "VOYAGE_API_KEY already configured"
+else
+    # Older installs also wrote it to .env.
+    voyage_key=$(get_env_value "VOYAGE_API_KEY")
+    if [ -z "$voyage_key" ] && [ "$NON_INTERACTIVE" = true ]; then
+        voyage_key=${VOYAGE_API_KEY:-}
+    elif [ -z "$voyage_key" ]; then
+        echo ""
+        echo -e "${CYAN}[Optional]${NC} Voyage AI API Key (https://dash.voyageai.com/api-keys)
+    Used for: all embeddings (voyage-3-large / voyage-multimodal-3) and reranking"
+        read -r -p "Enter value (or leave blank to set it in the web UI): " voyage_key
+    fi
     write_secret "voyage_key.txt" "$voyage_key"
 fi
 
@@ -506,16 +475,8 @@ echo "                      Setup Complete!                          "
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 
-# Check what's configured
-missing=()
-[ -z "$(get_env_value 'VOYAGE_API_KEY')" ] && missing+=("VOYAGE_API_KEY")
-
-if [ ${#missing[@]} -gt 0 ]; then
-    warn "Missing required keys: ${missing[*]}"
-    echo ""
-    info "Edit $ENV_FILE to add them, then re-run this script."
-else
-    success "All required keys configured!"
+if [ ! -s "$SECRETS_DIR/voyage_key.txt" ]; then
+    info "No Voyage key yet: search is keyword-only until an admin sets it on the settings page."
 fi
 
 if [ "$NON_INTERACTIVE" != true ]; then

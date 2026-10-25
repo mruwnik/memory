@@ -42,14 +42,14 @@ git clone <this-repo> memory && cd memory
 
 The installer will:
 - Generate `secrets/postgres_password.txt` and a Redis password
-- Prompt for the three API keys and write them to `.env` + `secrets/*.txt`
+- Ask for the Voyage API key (optional: leave it blank to set it on the settings page) and write it to `secrets/voyage_key.txt`
 - Set DB / Redis / Qdrant defaults in `.env` (Postgres on `localhost:15432`, etc.)
 - Detect your Docker group GID (needed for Claude session orchestration)
 - Optionally generate an SSH keypair for git-based notes sync
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `VOYAGE_API_KEY` are required (it exits before writing anything if one is missing), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are required (it exits before writing anything if one is missing), `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, creates the `memory-api-<stack>` Docker network that compose expects, starts the api, and creates the admin user (full access) if it doesn't exist. To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 
@@ -256,7 +256,7 @@ Reports must be created with `allow_scripts=True` for this to load (set via the 
 
 ## Configuration
 
-Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic or OpenAI key, added under LLM API keys (`/ui/keys`); the server holds none. Summaries and search steps use the default Anthropic key, else the default OpenAI one. Key settings:
+Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic or OpenAI key, added under LLM API keys (`/ui/keys`); the server holds none. Summaries and search steps use the default Anthropic key, else the default OpenAI one. An admin can also set the Voyage key, the search `ENABLE_*` switches and `DISABLED_MCP_SERVERS` on the settings page (`/settings` API); a value set in the env wins and shows there read-only. Key settings:
 
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |
@@ -265,7 +265,7 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `DB_HOST`, `DB_PORT`              | `postgres` / `5432`  | PostgreSQL — set to `localhost` / `15432` for host-side dev   |
 | `REDIS_HOST`, `REDIS_PORT`        | `redis` / `6379`     | Celery broker + cache                                          |
 | `QDRANT_HOST`, `QDRANT_PORT`      | `qdrant` / `6333`    | Vector store (workers also accept `QDRANT_URL` for the full URL)|
-| `VOYAGE_API_KEY`                  | required             | All embeddings + reranking                                     |
+| `VOYAGE_API_KEY`                  | unset                | All embeddings + reranking. Without it search is keyword-only and new items aren't embedded until an admin sets it on the settings page |
 | `TEXT_EMBEDDING_MODEL`            | `voyage-3-large`     | Voyage text embedding model (1024d)                            |
 | `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |
 | `RERANK_MODEL`                    | `rerank-2.5`         | Voyage reranker used after candidate retrieval                 |
@@ -281,6 +281,8 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `ENABLE_QUERY_ANALYSIS`           | `true`               | LLM intent extraction from queries                             |
 | `ENABLE_RERANKING`                | `true`               | Voyage reranking of fused results                              |
 | `ENABLE_SEARCH_SCORING`           | `true`               | Recency / popularity / title-match score boosts                |
+| `DISABLED_MCP_SERVERS`            | unset                | Comma-separated MCP servers to leave unmounted (set on the settings page, it hides their tools instead) |
+| `API_SELF_RESTART`                | `false` (`1` in compose) | Lets an admin restart the api from the settings page; the container's restart policy brings it back |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
 | `LATEST_RELEASE_URL`              | unset                | URL returning the latest release tag; enables `update_available` in `/health` |
 | `CLAUDE_MAINTENANCE_INTERVAL_SEC` | `300`                | How often the api settles scheduled Claude sessions and removes exited containers; `0` turns it off |

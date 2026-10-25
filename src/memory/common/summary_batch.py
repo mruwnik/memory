@@ -260,8 +260,11 @@ def collect_batch(
             _, data = parse_result(SUMMARISE, completion)
             apply_summary(session, request, data or {})
             stats["applied"] += 1
-        except Exception:
-            logger.exception(f"Failed to apply summary request {request.id}")
+        except Exception as e:
+            if isinstance(e, embedding.EmbeddingsNotConfigured):
+                embedding.warn_not_configured()
+            else:
+                logger.exception(f"Failed to apply summary request {request.id}")
             session.rollback()
             stats["apply_failed"] += 1
             # Re-fetch: the rollback expired it, and it may since have been claimed

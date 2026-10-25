@@ -156,6 +156,29 @@ async def test_get_search_defaults_reports_server_settings(
         assert (await get_search_defaults.fn())[key] is value
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "voyage_key, expected",
+    [
+        # Keyword search is all there is, so its ceiling can't turn it off.
+        ("", {"semantic_search_unavailable": True, "use_bm25": True, "use_hyde": False, "use_reranking": False}),
+        ("pa-key", {"semantic_search_unavailable": False, "use_bm25": False, "use_hyde": True, "use_reranking": True}),
+    ],
+)
+async def test_search_defaults_say_when_search_is_keyword_only(
+    db_session, user_session, llm_key, monkeypatch, voyage_key, expected
+):
+    monkeypatch.setattr("memory.common.settings.VOYAGE_API_KEY", voyage_key)
+    monkeypatch.setattr("memory.common.settings.ENABLE_BM25_SEARCH", False)
+    for setting in ("ENABLE_HYDE_EXPANSION", "ENABLE_RERANKING"):
+        monkeypatch.setattr(f"memory.common.settings.{setting}", True)
+
+    with mcp_auth_context(user_session.id):
+        defaults = await get_search_defaults.fn()
+
+    assert {k: defaults[k] for k in expected} == expected
+
+
 @pytest.fixture
 def llm_search_steps_on(monkeypatch):
     for setting in ("ENABLE_HYDE_EXPANSION", "ENABLE_QUERY_ANALYSIS", "ENABLE_SEARCH_SCORING"):

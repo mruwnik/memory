@@ -166,6 +166,8 @@ def reingest_chunk(chunk_id: str, collection: str):
                 [vector],
                 [dict(source.as_payload())],
             )
+        except embedding.EmbeddingsNotConfigured:
+            embedding.warn_not_configured()
         except Exception:
             logger.exception(f"Failed to reingest chunk {chunk_id}")
         finally:

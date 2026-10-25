@@ -4,7 +4,7 @@ import logging
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from memory.common import settings
+from memory.common import instance_settings
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -41,19 +41,44 @@ class MCPServer(str, Enum):
 ALL_MCP_SERVERS: frozenset[str] = frozenset(s.value for s in MCPServer)
 
 
-def get_enabled_servers() -> frozenset[str]:
+def check_disabled_servers(disabled: frozenset[str]) -> None:
+    if ALL_MCP_SERVERS <= disabled:
+        raise ValueError("can't disable every MCP server")
+
+
+DISABLED_MCP_SERVERS = instance_settings.register(
+    instance_settings.Setting(
+        key="disabled_mcp_servers",
+        kind="list",
+        applies="live",
+        default=frozenset(),
+        description="MCP servers whose tools are hidden",
+        validate=check_disabled_servers,
+        choices=ALL_MCP_SERVERS,
+    )
+)
+
+
+def effective_disabled_servers() -> frozenset[str]:
+    """The servers whose tools are off now: the env's (never mounted), else the admin's live value."""
+    return instance_settings.value(DISABLED_MCP_SERVERS)
+
+
+def tool_server(tool: str) -> str | None:
+    """The server a mounted tool, named <server>_<tool>, belongs to; longest prefix wins."""
+    return max(
+        (name for name in ALL_MCP_SERVERS if tool.startswith(f"{name}_")),
+        key=len,
+        default=None,
+    )
+
+
+def get_enabled_servers(disabled: frozenset[str]) -> frozenset[str]:
     """Return set of enabled MCP server names."""
-    disabled = settings.DISABLED_MCP_SERVERS
     invalid = disabled - ALL_MCP_SERVERS
     if invalid:
         logger.warning(f"Unknown servers in DISABLED_MCP_SERVERS: {invalid}")
     return ALL_MCP_SERVERS - disabled
-
-
-def is_server_enabled(server: str | MCPServer) -> bool:
-    """Check if a server is enabled for this deployment."""
-    name = server.value if isinstance(server, MCPServer) else server
-    return name not in settings.DISABLED_MCP_SERVERS
 
 
 def get_server_instance(server: MCPServer) -> "FastMCP":
@@ -150,7 +175,8 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
 __all__ = [
     "MCPServer",
     "ALL_MCP_SERVERS",
+    "effective_disabled_servers",
     "get_enabled_servers",
-    "is_server_enabled",
+    "tool_server",
     "get_server_instance",
 ]

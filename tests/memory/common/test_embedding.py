@@ -8,7 +8,7 @@ import pytest
 from typing import cast
 from PIL import Image
 
-from memory.common import collections, embedding, extract, settings
+from memory.common import collections, content_processing, embedding, extract, settings
 from memory.common.embedding import (
     as_string,
     embed_chunks,
@@ -357,6 +357,19 @@ def test_items_without_a_key_are_embedded_without_a_summary(db_session, regular_
 
     assert chunks
     assert scripted_llm.requests == []
+
+
+def test_items_without_a_voyage_key_are_stored_failed_without_summarising(
+    db_session, regular_user, llm_key, scripted_llm, monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "VOYAGE_API_KEY", "")
+    note = note_by(db_session, regular_user.id)
+
+    assert content_processing.embed_source_item(note) == 0
+
+    assert note.embed_status == "FAILED"
+    assert scripted_llm.requests == []
+    assert not [r for r in caplog.records if r.exc_info]
 
 
 async def connection_dropped():

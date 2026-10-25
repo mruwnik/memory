@@ -32,7 +32,7 @@ When an operator sets up an account for someone else, the owner has to end up as
 8. If the operator could have seen the secrets before the hand-over (they ran an apply, or held the state), the owner:
    - moves the Terraform state to a backend only they can read, since a refresh writes the current values into it;
    - changes the admin password in the app (`admin_password` is the web login, and rotation doesn't touch it);
-   - replaces the Voyage key at Voyage, puts the new one in `voyage_api_key` (re-apply) and in `/opt/memory/secrets/voyage_key.txt` on the box, and runs `restart`;
+   - replaces the Voyage key at Voyage, and enters the new one on the settings page. If the key came from `voyage_api_key`, they instead put the new one there (re-apply) and in `/opt/memory/secrets/voyage_key.txt` on the box, and run `restart`;
    - runs `sudo /opt/memory/tools/ops/rotate-keys.sh --yes` on the box once data matters ([Rotating keys](#rotating-keys)).
 
 ## What your operator can and can't do
@@ -56,7 +56,7 @@ Two limits:
 # terraform.tfvars: this file holds a key, so keep it out of git
 domain          = "memory.example.com"
 admin_email     = "you@example.com"
-voyage_api_key  = "pa-..."
+voyage_api_key  = "pa-..." # optional: or enter it on the settings page
 release_signers = ["ssh-ed25519 AAAA... releases@example.com"]
 ```
 
@@ -79,7 +79,7 @@ The Terraform state holds every generated secret. Use a remote backend with encr
 | `domain` | required | Hostname to serve |
 | `name` | `memory` | Prefix for every account-wide name. Up to 20 lowercase letters, digits and dashes |
 | `admin_email` | required | First user |
-| `voyage_api_key` | required | Embeddings key, stored as a SecureString |
+| `voyage_api_key` | `""` | Embeddings key, stored as a SecureString. Leave it out to enter it on the settings page after install. Blanking it on an existing stack deletes the SSM parameter; the box keeps its key file |
 | `release_signers` | required | SSH public keys whose signed `v*` tags auto-install |
 | `region` | `eu-central-1` | |
 | `instance_type` | `t3.large` | 2 vCPU and 8 GB, enough for light use. Use `t3.xlarge` for heavy agent use |

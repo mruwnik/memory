@@ -318,6 +318,11 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, Non
 
 
 def vectorize_email(email: MailMessage):
+    if not embedding.configured():
+        for item in [email, *email.attachments]:
+            item.embed_status = "FAILED"  # type: ignore
+        embedding.warn_not_configured()
+        return
     qdrant_client = qdrant.get_qdrant_client()
 
     chunks = embedding.embed_source_item(email)

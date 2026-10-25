@@ -65,6 +65,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
     const [enhancements, setEnhancements] = useState<Record<string, boolean>>({})
     const [availableEnhancements, setAvailableEnhancements] = useState<Record<string, boolean>>({})
     const [scoresAvailable, setScoresAvailable] = useState(false)
+    const [semanticUnavailable, setSemanticUnavailable] = useState(false)
     const [filtersReady, setFiltersReady] = useState(false)
     const [filtersError, setFiltersError] = useState<string | null>(null)
     const submittedQuery = useRef<string | null>(null)
@@ -80,10 +81,11 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
            setSchemas(schemas)
            setModalities(createFlags(Object.keys(schemas), true))
            setTags(createFlags(tags))
-           const { use_scores = false, ...enhancementDefaults } = defaults
+           const { use_scores = false, semantic_search_unavailable = false, ...enhancementDefaults } = defaults
            setEnhancements(enhancementDefaults)
            setAvailableEnhancements(enhancementDefaults)
            setScoresAvailable(use_scores)
+           setSemanticUnavailable(semantic_search_unavailable)
         }
         setupFilters()
             .catch(e => setFiltersError(e instanceof Error ? e.message : String(e)))
@@ -129,6 +131,11 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
         <Card>
         <form onSubmit={handleSubmit}>
             {filtersError && <Notice tone="warning" className="mb-4">Couldn't load search filters: {filtersError}</Notice>}
+            {semanticUnavailable && (
+                <Notice tone="warning" className="mb-4">
+                    Keyword search only: no embeddings key is set, so results won't match by meaning. An admin can add one in the settings.
+                </Notice>
+            )}
             <div className="flex gap-4 items-center mb-6">
                 <Input
                     type="text"

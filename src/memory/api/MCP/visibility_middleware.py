@@ -9,6 +9,7 @@ every public tool is grep-able and adding a new tool without thinking
 about authorization defaults to "denied" rather than "anonymous read".
 
 A user can access a tool if:
+- Its server isn't in the admin's live DISABLED_MCP_SERVERS, and
 - The tool's visibility checker returns True for the user.
 """
 
@@ -20,6 +21,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import Tool, ToolResult
 
+from memory.api.MCP.servers import effective_disabled_servers, tool_server
 from memory.api.MCP.visibility import get_call_checker, get_visibility_checker
 from memory.common.db.connection import DBSession, make_session
 
@@ -92,12 +94,14 @@ class VisibilityMiddleware(Middleware):
         """Filter tool list to only show tools the user can access."""
         tools = await call_next(context)
         user_info = self.get_user_info()
+        disabled = effective_disabled_servers()
 
         with make_session() as session:
             filtered = [
                 tool
                 for tool in tools
-                if await self._check_visibility(tool, user_info, session)
+                if tool_server(tool.key) not in disabled
+                and await self._check_visibility(tool, user_info, session)
             ]
 
         logger.debug(
@@ -118,6 +122,8 @@ class VisibilityMiddleware(Middleware):
         or race conditions.
         """
         tool_name = context.message.name
+        if tool_server(tool_name) in effective_disabled_servers():
+            raise ToolError(f"Access denied: {tool_name}")
         checker = get_call_checker(tool_name)
 
         if checker is None:

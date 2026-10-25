@@ -11,7 +11,8 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from memory.common import settings
+from memory.common import instance_settings, settings
+from memory.common.instance_settings import VOYAGE_API_KEY
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     APIKey,
@@ -754,10 +755,17 @@ def logout(request: Request, db: DBSession = Depends(get_session)):
     return {"message": "Logged out successfully"}
 
 
+def setup_warnings(user: User) -> list[str]:
+    """Settings an admin still has to set for the instance to work fully."""
+    if not has_admin_scope(user):
+        return []
+    return [] if instance_settings.value(VOYAGE_API_KEY) else [VOYAGE_API_KEY.key]
+
+
 @router.get("/me")
 def get_me(user: User = Depends(get_current_user)):
     """Get current user info"""
-    return user.serialize()
+    return user.serialize() | {"setup_warnings": setup_warnings(user)}
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):

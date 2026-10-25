@@ -47,7 +47,9 @@ resource "aws_ssm_parameter" "secret" {
   }
 }
 
+# Optional: without it the owner enters the key in the web UI.
 resource "aws_ssm_parameter" "voyage_api_key" {
+  count  = var.voyage_api_key == "" ? 0 : 1
   name   = "${local.ssm_prefix}/voyage_api_key"
   type   = "SecureString"
   key_id = aws_kms_key.this.arn
@@ -57,6 +59,11 @@ resource "aws_ssm_parameter" "voyage_api_key" {
 moved {
   from = aws_ssm_parameter.secret["voyage_api_key"]
   to   = aws_ssm_parameter.voyage_api_key
+}
+
+moved {
+  from = aws_ssm_parameter.voyage_api_key
+  to   = aws_ssm_parameter.voyage_api_key[0]
 }
 
 # Re-read by the box before each update, so changing release_signers or the
