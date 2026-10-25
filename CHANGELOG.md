@@ -42,6 +42,8 @@ section has nothing in it:
   `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml`.
   Replacing it drops the proxy overlay silently: the api stops trusting the
   proxy's forwarded headers and rate limits key on the proxy's address.
+  A `docker-compose.override.yml` is no longer read once `COMPOSE_FILE` is
+  set, so list it too if you have one.
 
   Then `docker compose up -d`. What stops a process from starting:
   - The api refuses to start while `multi_user` is off and several human users
