@@ -1,5 +1,6 @@
 import { useState, type ComponentProps, type RefObject } from 'react'
 import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
+import { formatUserDate, formatUserDateTime } from '@/utils/timezones'
 import { Badge, Button, ConfirmButton, Input, Notice, Row, RowError, Select, Fieldset } from '@/components/shared/ui'
 
 /** A number input's state: '' while cleared, so editing never snaps back to a default. */
@@ -19,7 +20,7 @@ export const formatRelativeTime = (dateString: string | null): string => {
   if (diffMins < 60) return `${diffMins}m ago`
   if (diffHours < 24) return `${diffHours}h ago`
   if (diffDays < 7) return `${diffDays}d ago`
-  return date.toLocaleDateString()
+  return formatUserDate(date)
 }
 
 export const StatusBadge = ({ active }: { active: boolean }) => (
@@ -33,8 +34,8 @@ const failingSince = (since: string | null) => {
   const at = new Date(since)
   const ago = formatRelativeTime(since)
   // Beyond a week formatRelativeTime gives the bare date, which `at` already shows.
-  const suffix = ago === at.toLocaleDateString() ? '' : ` (${ago})`
-  return `Sync failing since ${at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}${suffix}`
+  const suffix = ago === formatUserDate(at) ? '' : ` (${ago})`
+  return `Sync failing since ${formatUserDateTime(at)}${suffix}`
 }
 
 /** Flags a source whose latest sync failed, for a Row's badges. */

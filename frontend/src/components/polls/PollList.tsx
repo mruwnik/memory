@@ -4,6 +4,7 @@ import type { Poll, PollStatus } from '../../hooks/usePolls'
 import { formatShortDate } from '../../utils/timezones'
 import { Button, ButtonLink, ConfirmButton, EmptyState, List, LoadingState, Notice, Page, Row, Select, Toolbar, useActionNotice, copyText } from '@/components/shared/ui'
 import { PollStatusBadge } from './PollStatusBadge'
+import { formatUserDateTime } from '@/utils/timezones'
 
 export const PollList: React.FC = () => {
   const { listPolls, deletePoll } = usePolls()
@@ -73,7 +74,7 @@ export const PollList: React.FC = () => {
               meta={[
                 `${formatShortDate(poll.datetime_start)} - ${formatShortDate(poll.datetime_end)}`,
                 `${poll.response_count} ${poll.response_count === 1 ? 'response' : 'responses'}`,
-                poll.finalized_time && `Meeting: ${new Date(poll.finalized_time).toLocaleString()}`,
+                poll.finalized_time && `Meeting: ${formatUserDateTime(poll.finalized_time)}`,
               ]}
               actions={<>
                 <ButtonLink size="sm" to={`/ui/polls/edit/${poll.slug}`}>Edit</ButtonLink>

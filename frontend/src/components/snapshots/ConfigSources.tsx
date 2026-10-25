@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useClaude, Snapshot, Environment, CreateEnvironmentRequest } from '../../hooks/useClaude'
 import { apiError } from '../../hooks/apiError'
 import { Badge, Button, ConfirmButton, EmptyState, Field, Input, Label, List, Modal, Notice, Page, RefreshButton, Row, Select, Tabs, Textarea, ToggleGroup, type Tone, Toolbar, useActionNotice } from '@/components/shared/ui'
+import { formatUserDateTime } from '@/utils/timezones'
 
 interface SnapshotSummary {
   skills: string[]
@@ -172,8 +173,7 @@ const ConfigSources = () => {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'Never'
-    const date = new Date(dateStr)
-    return date.toLocaleDateString('en-US', {
+    return formatUserDateTime(dateStr, {
       month: 'short',
       day: 'numeric',
       year: 'numeric',

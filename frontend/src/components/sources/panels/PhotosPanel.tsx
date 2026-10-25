@@ -3,6 +3,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useSources } from '@/hooks/useSources'
 import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, Section, useActionNotice } from '@/components/shared/ui'
 import { FileButton } from '../shared'
+import { formatUserDate } from '@/utils/timezones'
 
 interface Photo {
   id: number
@@ -83,8 +84,7 @@ export const PhotosPanel = () => {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return null
-    const date = new Date(dateStr)
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return formatUserDate(dateStr, { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
   const handleDelete = async () => {

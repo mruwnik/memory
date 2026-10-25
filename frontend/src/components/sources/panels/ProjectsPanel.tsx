@@ -5,6 +5,7 @@ import { useJournal } from '@/hooks/useJournal'
 import { usePeople } from '@/hooks/usePeople'
 import { PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
 import { Badge, Button, ConfirmButton, cx, EmptyState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, MultiSelect, Notice, Page, Row, RowError, Select, SubList, Textarea, ToggleGroup, Toolbar, useActionNotice } from '@/components/shared/ui'
+import { formatUserDateTime } from '@/utils/timezones'
 
 
 export const ProjectsPanel = () => {
@@ -433,7 +434,7 @@ const JournalSection = ({ projectId, getProject, addJournalEntry }: JournalSecti
     }
   }
 
-  const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString(undefined, {
+  const formatDate = (dateStr: string) => formatUserDateTime(dateStr, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

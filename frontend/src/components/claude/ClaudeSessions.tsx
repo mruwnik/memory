@@ -7,6 +7,7 @@ import XtermTerminal from './XtermTerminal'
 import GithubTokens from './GithubTokens'
 import ClaudeFleetStats, { SessionStatsPanel, Usage, formatMb, sessionDisplay } from './ClaudeFleetStats'
 import { Badge, Button, Checkbox, ConfirmButton, DetailList, Disclosure, Field, Fieldset, Hint, Input, List, Notice, Page, PaneHeader, Row, Select, SplitView, Textarea, ToggleGroup, type Tone } from '@/components/shared/ui'
+import { formatUserDateTime } from '@/utils/timezones'
 
 const COMMON_TOOLS = [
   'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
@@ -711,7 +712,7 @@ const ClaudeSessions = () => {
                         Task ID: <code className="bg-green-100 px-1 rounded">{scheduleSuccess.task_id}</code>
                       </p>
                       <p className="text-sm mt-1">
-                        Next run: {new Date(scheduleSuccess.next_scheduled_time).toLocaleString()}
+                        Next run: {formatUserDateTime(scheduleSuccess.next_scheduled_time)}
                       </p>
                     </Notice>
                   )}

@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { getPollBySlug, submitPollResponse, getPollResults, getResponseByToken, updatePollResponse } from '../../hooks/usePolls'
 import type { Poll, AvailabilitySlot, SlotAggregation, AvailabilityLevel } from '../../hooks/usePolls'
 import PollGrid from './PollGrid'
-import { getBrowserTimezone, COMMON_TIMEZONES, formatTimezone } from '../../utils/timezones'
+import { getUserTimezone, COMMON_TIMEZONES, formatTimezone } from '../../utils/timezones'
 import { Button, ButtonLink, Card, Field, FieldRow, Input, Notice, Page, Select, ToggleGroup, useActionNotice, requiredLabel, copyText } from '@/components/shared/ui'
 
 export const PollRespond: React.FC = () => {
@@ -19,7 +19,7 @@ export const PollRespond: React.FC = () => {
   const [respondentName, setRespondentName] = useState('')
   const [selectedSlots, setSelectedSlots] = useState<AvailabilitySlot[]>([])
   const [currentLevel, setCurrentLevel] = useState<AvailabilityLevel>(1)
-  const [displayTimezone, setDisplayTimezone] = useState(getBrowserTimezone())
+  const [displayTimezone, setDisplayTimezone] = useState(getUserTimezone())
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [responseEditToken, setResponseEditToken] = useState<string | null>(null)

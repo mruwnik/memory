@@ -5,6 +5,7 @@ import { StatusBadge, TRIGGER_LABELS } from './StatusBadge'
 import { Badge, Button, ConfirmButton, DetailList, Disclosure, List, Notice, Page, Row, Section, useActionNotice, type Tone } from '@/components/shared/ui'
 import { isForbiddenOrMissing } from '@/hooks/useMCP'
 import { formatCost } from '@/utils/format'
+import { formatUserDateTime } from '@/utils/timezones'
 
 const POLL_MS = 2000
 const PAGE_SIZE = 100
@@ -154,7 +155,7 @@ function RunView({ runId }: { runId: string }) {
         : run.input],
       ['Model', <span className="font-mono">{run.model}</span>],
       ['Trigger', TRIGGER_LABELS[run.trigger_kind] ?? run.trigger_kind],
-      ['Started', run.started_at && new Date(run.started_at).toLocaleString()],
+      ['Started', run.started_at && formatUserDateTime(run.started_at)],
       ['Duration', run.started_at && run.finished_at && formatDuration(run.started_at, run.finished_at)],
       ['Cost', `${formatCost(run.cost_usd)} of ${formatCost(run.max_cost_usd)}`],
       ['Turns', run.num_turns],

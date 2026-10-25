@@ -1,6 +1,7 @@
 import type { Person, Tidbit } from '../../hooks/usePeople'
 import type { Team } from '../../hooks/useTeams'
 import { Badge, Button, ConfirmButton, DetailList, Row, SubList, type Tone } from '@/components/shared/ui'
+import { formatUserDate } from '@/utils/timezones'
 
 interface PersonCardProps {
   person: Person
@@ -60,7 +61,7 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
             ['Teams', teamsLoading ? 'Loading teams...' : !!teams?.length && (
               <span className="flex flex-wrap gap-1">{teams.map(team => <Badge key={team.id} tone="primary">{team.name}</Badge>)}</span>
             )],
-            ['Added', person.created_at && new Date(person.created_at).toLocaleDateString()],
+            ['Added', person.created_at && formatUserDate(person.created_at)],
           ]} />
           <SubList title={tidbits?.length ? `Tidbits (${tidbits.length})` : 'Tidbits'}
             actions={<Button size="sm" onClick={onAddTidbit}>Add tidbit</Button>} empty={tidbitsLoading ? 'Loading tidbits...' : 'No tidbits yet'}>
@@ -75,7 +76,7 @@ const PersonCard = ({ person, expanded, onToggleExpand, onEdit, onDelete, teams,
                   )}
                   {tidbit.tags?.map((tag, i) => <Badge tone="info" key={i}>{tag}</Badge>)}
                 </>}
-                meta={[tidbit.source, tidbit.created_at && new Date(tidbit.created_at).toLocaleDateString()]}
+                meta={[tidbit.source, tidbit.created_at && formatUserDate(tidbit.created_at)]}
                 actions={canEditTidbit(tidbit) && <>
                   <Button size="sm" onClick={() => onEditTidbit(tidbit)} aria-label={`Edit tidbit: ${tidbit.content.slice(0, 40)}`}>Edit</Button>
                   <ConfirmButton aria-label={`Delete tidbit: ${tidbit.content.slice(0, 40)}`} confirm="Delete this tidbit? This cannot be undone." onConfirm={() => onDeleteTidbit(tidbit)} />

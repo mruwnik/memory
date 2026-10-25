@@ -3,6 +3,7 @@ import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { StrictMode } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { MCPError } from '@/hooks/useMCP'
+import { resetUserTimezone, setUserTimezone } from '@/utils/timezones'
 import { RunView } from './index'
 
 const waitRun = vi.fn()
@@ -35,7 +36,10 @@ beforeEach(() => {
   getDefinition.mockReset().mockResolvedValue({ id: 3, name: 'digest' })
 })
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.useRealTimers()
+  resetUserTimezone()
+})
 
 describe('RunView', () => {
   it('renders tool calls and results from the transcript', async () => {
@@ -111,6 +115,7 @@ describe('RunView', () => {
   })
 
   it('names the agent and shows what was asked, when and how', async () => {
+    setUserTimezone('America/Los_Angeles')
     waitRun.mockResolvedValueOnce({
       run: run({
         status: 'done', definition_id: 3, trigger_kind: 'cron', usage: { input_tokens: 12345, output_tokens: 1500 },
@@ -124,6 +129,7 @@ describe('RunView', () => {
     expect(screen.getByText('do it')).toBeInTheDocument()
     expect(screen.getByText('Schedule')).toBeInTheDocument()
     expect(screen.getByText('2m 5s')).toBeInTheDocument()
+    expect(screen.getByText('Dec 31, 2025, 4:00 PM')).toBeInTheDocument()
     expect(screen.getByText(/12,345 context/)).toBeInTheDocument()
   })
 

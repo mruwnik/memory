@@ -4,7 +4,7 @@ import { getPollResults, usePolls } from '../../hooks/usePolls'
 import type { Poll, SlotAggregation } from '../../hooks/usePolls'
 import PollGrid from './PollGrid'
 import {
-  getBrowserTimezone,
+  getUserTimezone,
   COMMON_TIMEZONES,
   formatTimezone,
   formatSlotTime,
@@ -25,7 +25,7 @@ export const PollResults: React.FC = () => {
   const [bestSlots, setBestSlots] = useState<SlotAggregation[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [displayTimezone, setDisplayTimezone] = useState(getBrowserTimezone())
+  const [displayTimezone, setDisplayTimezone] = useState(getUserTimezone())
   const [isOwner, setIsOwner] = useState(false)
 
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)

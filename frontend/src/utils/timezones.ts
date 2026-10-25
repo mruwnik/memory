@@ -57,6 +57,39 @@ export function getBrowserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone
 }
 
+// The signed-in user's timezone, for absolute times that have no timezone of their own.
+// Formatters keep the browser locale: only the clock is the user's.
+let userTimezone = getBrowserTimezone()
+
+export const getUserTimezone = (): string => userTimezone
+
+export const setUserTimezone = (timezone: string): void => {
+  userTimezone = timezone || getBrowserTimezone()
+}
+
+export const resetUserTimezone = (): void => setUserTimezone('')
+
+export function formatUserDateTime(
+  date: Date | string,
+  options: Intl.DateTimeFormatOptions = { dateStyle: 'medium', timeStyle: 'short' },
+): string {
+  return new Date(date).toLocaleString(undefined, { timeZone: userTimezone, ...options })
+}
+
+export function formatUserDate(
+  date: Date | string,
+  options: Intl.DateTimeFormatOptions = { dateStyle: 'medium' },
+): string {
+  return new Date(date).toLocaleDateString(undefined, { timeZone: userTimezone, ...options })
+}
+
+export function formatUserTime(
+  date: Date | string,
+  options: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' },
+): string {
+  return new Date(date).toLocaleTimeString(undefined, { timeZone: userTimezone, ...options })
+}
+
 // Get UTC offset for a timezone (e.g., "UTC-5" or "UTC+5:30")
 export function getUtcOffset(tz: string): string {
   try {

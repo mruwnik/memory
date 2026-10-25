@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { resetUserTimezone, setUserTimezone } from '@/utils/timezones'
 
 export const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 export const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
@@ -118,6 +119,7 @@ export const useAuth = () => {
 
   useEffect(() => {
     const onAuthLost = () => {
+      resetUserTimezone()
       setIsAuthenticated(false)
       setUser(null)
       setIsLoading(false)
@@ -144,6 +146,7 @@ export const useAuth = () => {
     const accessToken = getCookie('access_token')
     const sessionId = getCookie(SESSION_COOKIE_NAME)
     if (!accessToken && !sessionId) {
+      resetUserTimezone()
       setIsAuthenticated(false)
       setIsLoading(false)
       return false
@@ -162,11 +165,13 @@ export const useAuth = () => {
     // shares over a network blip or a 5xx would sign them all out.
     if (response?.status === 401) dropAuth()
     if (!userData) {
+      resetUserTimezone()
       setIsAuthenticated(false)
       setIsLoading(false)
       return false
     }
 
+    setUserTimezone(userData.timezone)
     setUser({
       id: userData.user_id,
       name: userData.name,

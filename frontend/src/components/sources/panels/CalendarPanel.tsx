@@ -6,6 +6,7 @@ import { IntervalInput, ProjectSelect, SensitivitySelect, SourceRow, TagsInput, 
 import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../Sources'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
+import { formatUserDate, formatUserTime } from '@/utils/timezones'
 
 interface GroupedEvents {
   [calendarName: string]: CalendarEvent[]
@@ -103,13 +104,11 @@ export const CalendarPanel = () => {
   }
 
   const formatEventDate = (dateStr: string) => {
-    const date = new Date(dateStr)
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return formatUserDate(dateStr, { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
   const formatEventTime = (dateStr: string) => {
-    const date = new Date(dateStr)
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    return formatUserTime(dateStr)
   }
 
   if (loading) return <LoadingState />

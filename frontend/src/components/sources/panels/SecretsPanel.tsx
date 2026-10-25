@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSecrets, Secret, SecretWithValue } from '@/hooks/useSecrets'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, LoadingState, Modal, Notice, Textarea, ConfirmButton, List, Row, Section, useActionNotice } from '@/components/shared/ui'
+import { formatUserDate } from '@/utils/timezones'
 
 export const SecretsPanel = () => {
   const { listSecrets, createSecret, updateSecret, deleteSecret, getSecretValue } = useSecrets()
@@ -117,7 +118,7 @@ interface SecretRowProps {
 const SecretRow = ({ secret, revealedValue, isRevealing, onToggleReveal, onCopy, onEdit, onDelete }: SecretRowProps) => (
   <Row
     title={<span className="font-mono">{secret.name}</span>}
-    meta={[secret.description, `Updated ${new Date(secret.updated_at).toLocaleDateString()}`]}
+    meta={[secret.description, `Updated ${formatUserDate(secret.updated_at)}`]}
     actions={<>
       <Button size="sm" onClick={onEdit} title="Edit secret">Edit</Button>
       <ConfirmButton confirm={`Delete the secret "${secret.name}"? This action cannot be undone.`} onConfirm={onDelete} title="Delete secret" />

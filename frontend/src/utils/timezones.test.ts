@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   COMMON_TIMEZONES,
   getBrowserTimezone,
@@ -14,6 +14,12 @@ import {
   getTimeKey,
   getDateKey,
   formatShortDate,
+  setUserTimezone,
+  resetUserTimezone,
+  getUserTimezone,
+  formatUserDate,
+  formatUserDateTime,
+  formatUserTime,
 } from './timezones'
 
 describe('COMMON_TIMEZONES', () => {
@@ -182,5 +188,29 @@ describe('formatShortDate', () => {
     const out = formatShortDate('2024-01-15')
     expect(out).toMatch(/Jan/)
     expect(out).toMatch(/2024/)
+  })
+})
+
+describe('user timezone formatters', () => {
+  afterEach(resetUserTimezone)
+
+  it.each([
+    ['Asia/Tokyo', 'Jan 16, 2024, 8:30 AM', 'Jan 16, 2024', '8:30 AM'],
+    ['America/Los_Angeles', 'Jan 15, 2024, 3:30 PM', 'Jan 15, 2024', '3:30 PM'],
+  ])('shows an instant on %s\'s clock', (tz, dateTime, date, time) => {
+    setUserTimezone(tz)
+    const instant = '2024-01-15T23:30:00Z'
+    expect(formatUserDateTime(instant)).toBe(dateTime)
+    expect(formatUserDate(instant)).toBe(date)
+    expect(formatUserTime(instant)).toBe(time)
+  })
+
+  it('falls back to the browser timezone when reset or given none', () => {
+    setUserTimezone('Asia/Tokyo')
+    resetUserTimezone()
+    expect(getUserTimezone()).toBe(getBrowserTimezone())
+    setUserTimezone('Asia/Tokyo')
+    setUserTimezone('')
+    expect(getUserTimezone()).toBe(getBrowserTimezone())
   })
 })

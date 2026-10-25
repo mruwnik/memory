@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useJobs, Job, JobCounts, JobStatus, JobSource, JobUser } from '@/hooks/useJobs'
 import UserSelector, { useUserSelection, ALL_USERS_ID, NO_USER_ID } from '@/components/common/UserSelector'
 import { Badge, Button, EmptyState, Input, List, LoadingState, Notice, Page, Pager, RefreshButton, Row, RowError, Select, ToggleGroup, Toolbar, type Tone } from '@/components/shared/ui'
+import { formatUserDate } from '@/utils/timezones'
 
 type StatusFilter = 'all' | JobStatus
 
@@ -171,7 +172,7 @@ const Jobs = () => {
     if (diffMins < 60) return `${diffMins}m ago`
     if (diffHours < 24) return `${diffHours}h ago`
     if (diffDays < 7) return `${diffDays}d ago`
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return formatUserDate(date, { month: 'short', day: 'numeric' })
   }
 
   const formatJobType = (type: string) => {

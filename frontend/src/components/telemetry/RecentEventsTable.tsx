@@ -2,6 +2,7 @@ import React from 'react'
 import { TelemetryEvent } from '@/hooks/useTelemetry'
 import { Badge, EmptyState, Table, type Tone } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
+import { formatUserDate, formatUserDateTime, formatUserTime } from '@/utils/timezones'
 
 interface RecentEventsTableProps {
   events: TelemetryEvent[]
@@ -38,11 +39,10 @@ export const RecentEventsTable: React.FC<RecentEventsTableProps> = ({ events }) 
 
 // A time alone is ambiguous once the range spans days, so anything before today carries its date.
 function formatTime(isoString: string): string {
-  const date = new Date(isoString)
   const time = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false } as const
-  return date.toDateString() === new Date().toDateString()
-    ? date.toLocaleTimeString(undefined, time)
-    : date.toLocaleString(undefined, { month: 'short', day: 'numeric', ...time })
+  return formatUserDate(isoString) === formatUserDate(new Date())
+    ? formatUserTime(isoString, time)
+    : formatUserDateTime(isoString, { month: 'short', day: 'numeric', ...time })
 }
 
 function eventTone(name: string): Tone {
