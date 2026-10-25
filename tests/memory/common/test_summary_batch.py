@@ -666,8 +666,7 @@ def test_collect_applies_summary_and_is_idempotent(db_session, llm_key, batches,
     db_session.commit()
     push_chunks_to_qdrant([existing])
     request = add_request(
-        db_session, item, llm_key, status="submitted", batch_id="batch_1",
-        chunk_metadata={"type": "summary"},
+        db_session, item, llm_key, status="submitted", batch_id="batch_1", chunk_metadata={}
     )
     batches.results["batch_1"] = [batch_result(request.id)]
 
@@ -685,6 +684,7 @@ def test_collect_applies_summary_and_is_idempotent(db_session, llm_key, batches,
     assert set(payloads[str(existing.id)]["tags"]) == {"bla", "t1", "t2"}
     assert set(payloads[str(summary_chunks[0].id)]["tags"]) == {"bla", "t1", "t2"}
     assert payloads[str(summary_chunks[0].id)]["type"] == "summary"
+    assert [c.is_summary for c in sorted(item.chunks, key=lambda c: c.content)] == [False, True]
 
 
 def test_a_summary_collected_without_a_voyage_key_logs_no_error(

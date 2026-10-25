@@ -27,6 +27,12 @@ TITLE_MATCH_BOOST = 0.01
 # that the user is looking for specific known content
 RECALLED_TITLE_BOOST = 0.05
 
+# Fraction added to a summary chunk's final score (score += |score| * SUMMARY_MATCH_BOOST).
+# Applied when results are built, after reranking and LLM scoring, which replace the
+# other boosts' scores; 5% breaks near-ties toward the summary without letting it
+# beat a clearly better match on the content.
+SUMMARY_MATCH_BOOST = 0.05
+
 # Additive popularity bonus (applied as: score += POPULARITY_BOOST * (popularity - 1))
 # This gives a small boost to popular items without dominating relevance.
 # Additive (rather than multiplicative) keeps the boost direction correct

@@ -2,9 +2,13 @@
 
 import pytest
 from datetime import datetime, timezone
+from typing import cast
 from unittest.mock import Mock
 
+from memory.api.search.constants import SUMMARY_MATCH_BOOST
 from memory.api.search.types import SearchResult, elide_content
+from memory.common import settings
+from memory.common.db.models import Chunk, SourceItem
 
 
 class TestElideContent:
@@ -40,6 +44,7 @@ class TestSearchResult:
         chunk = Mock()
         chunk.relevance_score = relevance_score
         chunk.content = content
+        chunk.is_summary = False
         return chunk
 
     def _make_source_item(self, **kwargs) -> Mock:
@@ -143,3 +148,55 @@ class TestSearchResult:
         # Chunk content should be truncated
         assert len(result.chunks[0]) < len(long_content)
         assert result.chunks[0].endswith("...")
+
+
+def make_source(content: str = "test content") -> SourceItem:
+    return SourceItem(
+        id=1, sha256=b"x", content=content, modality="text", mime_type="text/plain", size=1, tags=[]
+    )
+
+
+def make_chunk(score: float, is_summary: bool = False) -> Chunk:
+    return Chunk(content="chunk", relevance_score=score, is_summary=is_summary)
+
+
+@pytest.mark.parametrize("summary", ["the summary", None])
+def test_search_result_carries_the_items_summary(summary):
+    result = SearchResult.from_source_item(make_source(), [make_chunk(0.5)], summary=summary)
+    assert result.summary == summary
+
+
+@pytest.mark.parametrize(
+    "content, previews, summary, expected",
+    [
+        ("a" * 20, False, "s", "a" * 20),  # content that fits wins
+        ("a" * 50, False, "s", "s"),
+        ("a" * 50, True, "s", "a" * 50),  # fits the longer preview limit
+        ("a" * 500, True, "s", "s"),
+        ("a" * 50, False, None, "a" * 20 + "..."),  # no summary: cut content
+        ("a" * 50, False, "b" * 30, "b" * 20 + "..."),  # summaries obey the limit too
+    ],
+)
+def test_long_content_is_previewed_by_its_summary(
+    monkeypatch, content, previews, summary, expected
+):
+    monkeypatch.setattr(settings, "MAX_PREVIEW_LENGTH", 100)
+    monkeypatch.setattr(settings, "MAX_NON_PREVIEW_LENGTH", 20)
+    result = SearchResult.from_source_item(
+        make_source(content), [make_chunk(0.5)], previews, summary=summary
+    )
+    assert result.content == expected
+
+
+@pytest.mark.parametrize("score", [0.5, 0.02, -0.5])
+def test_a_summary_match_scores_a_little_above_an_equal_content_match(score):
+    content_hit = SearchResult.from_source_item(make_source(), [make_chunk(score)])
+    summary_hit = SearchResult.from_source_item(make_source(), [make_chunk(score, True)])
+    assert content_hit.search_score == score
+    assert summary_hit.search_score == pytest.approx(score + abs(score) * SUMMARY_MATCH_BOOST)
+
+
+def test_a_summary_match_does_not_beat_a_clearly_better_content_match():
+    content_hit = SearchResult.from_source_item(make_source(), [make_chunk(0.6)])
+    summary_hit = SearchResult.from_source_item(make_source(), [make_chunk(0.5, True)])
+    assert cast(float, content_hit.search_score) > cast(float, summary_hit.search_score)

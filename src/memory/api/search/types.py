@@ -5,6 +5,7 @@ from typing import Optional, cast, TypedDict, NotRequired, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, with_config
 
+from memory.api.search.constants import SUMMARY_MATCH_BOOST
 from memory.common.db.models import Chunk, SourceItem
 from memory.common import settings
 
@@ -25,12 +26,21 @@ def elide_content(content: str, max_length: int = 100) -> str:
     return content
 
 
+def chunk_score(chunk: Chunk) -> float:
+    score = chunk.relevance_score or 0
+    # A match on the summary is a match on what the whole item is about.
+    # Scaled by |score| so it holds on every scale a score can be on (RRF,
+    # reranker, embedding similarity, LLM score) and never flips a negative one.
+    return score + abs(score) * SUMMARY_MATCH_BOOST if chunk.is_summary else score
+
+
 class SearchResult(BaseModel):
     id: int
     chunks: list[str]
     size: int | None = None
     mime_type: str | None = None
     content: Optional[str | dict] = None
+    summary: str | None = None
     filename: Optional[str] = None
     tags: list[str] | None = None
     metadata: dict | None = None
@@ -39,7 +49,11 @@ class SearchResult(BaseModel):
 
     @classmethod
     def from_source_item(
-        cls, source: SourceItem, chunks: Sequence[Chunk], previews: Optional[bool] = False
+        cls,
+        source: SourceItem,
+        chunks: Sequence[Chunk],
+        previews: Optional[bool] = False,
+        summary: str | None = None,
     ) -> "SearchResult":
         try:
             metadata = source.display_contents or {}
@@ -52,21 +66,20 @@ class SearchResult(BaseModel):
         # Use max chunk score - we want to find documents with at least one
         # highly relevant section, not penalize long documents with some irrelevant parts.
         # This is better for "half-remembered" searches where users recall one specific detail.
-        search_score = (
-            max((chunk.relevance_score for chunk in chunks), default=0) if chunks else 0
-        )
+        search_score = max((chunk_score(chunk) for chunk in chunks), default=0)
+        content = cast(str, source.content)
+        limit = settings.MAX_PREVIEW_LENGTH if previews else settings.MAX_NON_PREVIEW_LENGTH
+        # The summary says more about a long item than its first `limit` characters.
+        if summary and content and len(content) > limit:
+            content = summary
 
         return cls(
             id=cast(int, source.id),
             size=cast(int, source.size),
             mime_type=cast(str, source.mime_type),
             chunks=[elide_content(str(chunk.content), chunk_size) for chunk in chunks],
-            content=elide_content(
-                cast(str, source.content),
-                settings.MAX_PREVIEW_LENGTH
-                if previews
-                else settings.MAX_NON_PREVIEW_LENGTH,
-            ),
+            content=elide_content(content, limit),
+            summary=summary,
             filename=cast(str, source.filename),
             tags=cast(list[str], source.tags),
             metadata=metadata,

@@ -26,6 +26,7 @@ from memory.common.instance_settings import (
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models.source_item import item_summaries
 from memory.common.collections import ALL_COLLECTIONS
 from memory.api.search.date_range import date_bounds, source_ids_in_range
 from memory.api.search.embeddings import require_access_filter, search_chunks_embeddings
@@ -777,9 +778,13 @@ async def search_sources(
         with make_session() as db:
             query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
             query = apply_access_filter_to_query(query, filters["access_filter"])
+            sources = query.all()
+            summaries = item_summaries(db, [source.id for source in sources])
             return [
-                SearchResult.from_source_item(source, by_source[source.id], previews)
-                for source in query.all()
+                SearchResult.from_source_item(
+                    source, by_source[source.id], previews, summaries.get(source.id)
+                )
+                for source in sources
             ]
 
     return await asyncio.to_thread(load)

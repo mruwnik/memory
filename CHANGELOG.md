@@ -585,6 +585,12 @@ section has nothing in it:
 - HyDE, query analysis and result scoring run on the searcher's default key for
   their provider and are skipped for users without one; search still works.
   `RANKER_MODEL` is removed; delete it from `.env` if set.
+- Search results and `core_fetch` return each item's LLM summary as `summary`.
+  A long item's search `content` is its summary instead of its first
+  characters, and a match on the summary ranks slightly above an equal match on
+  the text. Only summaries made after this update are marked as summaries
+  (`chunk.is_summary`): older items show and rank as before until they are
+  reingested.
 
 ### Migrations
 
@@ -641,6 +647,8 @@ section has nothing in it:
 - `20261103_instance_settings`: creates the empty `instance_settings` table. Fast.
 - `20261103_summary_batch_pacing`: adds the nullable
   `llm_provider_keys.summary_batch_limit` and `summary_request.submitted_at`. Fast.
+- `20261104_chunk_is_summary`: adds `chunk.is_summary` (default false). Fast: a
+  constant default doesn't rewrite the table.
 
 ### Post-deploy commands
 

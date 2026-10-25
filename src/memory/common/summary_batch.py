@@ -347,11 +347,7 @@ def apply_summary(session: Session, request: SummaryRequest, data: dict[str, Any
     new_chunks: list[Chunk] = []
     if request.chunk_metadata is not None and summary:
         chunk = item.make_chunk(
-            extract.DataChunk(
-                data=[summary],
-                metadata=extract.merge_metadata(request.chunk_metadata, {"tags": tags}),
-                modality=request.modality,
-            )
+            extract.summary_chunk(summary, tags, request.chunk_metadata, request.modality)
         )
         new_chunks = embedding.embed_by_model([chunk], str(chunk.embedding_model))
         session.add(chunk)

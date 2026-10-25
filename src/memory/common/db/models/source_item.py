@@ -193,7 +193,7 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
             for c in chunker.chunk_text(content)
         ]
     if is_long and summary:
-        chunks.append(extract.DataChunk(data=[summary], metadata={"tags": tags}))
+        chunks.append(extract.summary_chunk(summary, tags, {}, None))
 
     return [c for c in chunks if c.data]
 
@@ -224,6 +224,9 @@ class Chunk(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     search_vector: Mapped[Any | None] = mapped_column(TSVECTOR)  # Full-text search index
+    is_summary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Populated by backref from SourceItem.chunks relationship
     source: SourceItem
@@ -300,6 +303,16 @@ class Chunk(Base):
             else:
                 items.append(file_path.read_text())
         return items
+
+
+def item_summaries(db: Session, source_ids: Sequence[int]) -> dict[int, str]:
+    """The text of each item's summary chunk, for the items that have one."""
+    rows = (
+        db.query(Chunk.source_id, Chunk.content)
+        .filter(Chunk.source_id.in_(source_ids), Chunk.is_summary, Chunk.content.isnot(None))
+        .all()
+    )
+    return {source_id: content for source_id, content in rows}
 
 
 class SummaryRequest(Base):
@@ -633,6 +646,7 @@ class SourceItem(AccessControlMixin, Base):
             item_metadata=extract.merge_metadata(
                 dict(self.as_payload()), data.metadata, metadata
             ),
+            is_summary=data.metadata.get("type") == "summary",
         )
         return chunk
 

@@ -16,7 +16,9 @@ from memory.api.search import hyde
 from memory.api.search.query_analysis import QueryAnalysis
 from memory.api.search.types import SearchConfig
 from memory.common import settings
+from memory.common.db.models import Chunk
 from memory.common.extract import DataChunk
+from tests.conftest import make_source_item
 from tests.memory.agents.fakes import reply
 from memory.api.search.constants import (
     POPULARITY_BOOST,
@@ -709,6 +711,22 @@ def test_search_sources_fails_closed_when_filters_missing():
         assert "access_filter" in str(e)
     else:
         raise AssertionError("search_sources(filters={}) should have raised")
+
+
+def test_search_sources_return_each_items_summary(db_session):
+    summarised = make_source_item(db_session, 1)
+    plain = make_source_item(db_session, 2)
+    hit = Chunk(source_id=summarised.id, content="a section", is_summary=False)
+    other_hit = Chunk(source_id=plain.id, content="a section", is_summary=False)
+    summary = Chunk(source_id=summarised.id, content="the summary", is_summary=True)
+    db_session.add_all([hit, other_hit, summary])
+    db_session.commit()
+
+    results = asyncio.run(
+        search_module.search_sources([hit, other_hit], filters={"access_filter": None})
+    )
+
+    assert {r.id: r.summary for r in results} == {summarised.id: "the summary", plain.id: None}
 
 
 def test_search_sources_empty_chunks_returns_empty():

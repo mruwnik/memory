@@ -364,6 +364,19 @@ def test_source_item_make_chunk(tmp_path, texts, expected_content):
     assert chunk.item_metadata == expected_payload
 
 
+@pytest.mark.parametrize(
+    "metadata, is_summary",
+    [({"type": "summary", "tags": ["t"]}, True), ({"type": "page"}, False), ({}, False)],
+)
+def test_make_chunk_marks_summary_chunks(metadata, is_summary):
+    source = SourceItem(sha256=b"test123", content="test", modality="text", tags=[])
+    source.people = []
+
+    chunk = source.make_chunk(extract.DataChunk(data=["text"], metadata=metadata))
+
+    assert chunk.is_summary is is_summary
+
+
 def test_source_item_as_payload():
     source = SourceItem(
         id=123,
@@ -646,6 +659,7 @@ def test_chunk_mixed_long_content_is_chunked_and_summarised(words):
         ["s"],
     ]
     assert {frozenset(c.metadata["tags"]) for c in result} == {frozenset({"t"})}
+    assert [c.metadata.get("type") for c in result] == [None] * (len(result) - 1) + ["summary"]
 
 
 @pytest.mark.parametrize(

@@ -25,7 +25,7 @@ from memory.api.MCP.servers.core import (
 from memory.api.search.types import SearchFilters
 from memory.common.access_control import AccessFilter
 from memory.common.db.models import Note
-from memory.common.db.models.source_item import SourceItem
+from memory.common.db.models.source_item import Chunk, SourceItem
 from tests.conftest import make_source_item, mcp_auth_context
 
 
@@ -1102,9 +1102,10 @@ def mock_source_item_query(mock_session, items):
     the builder chain (options/filter × N) varies with the access gate. Making
     query()/options()/filter() return the same mock keeps these tests focused on
     fetch's result-shaping, not the exact call sequence; .all() yields `items`.
+    Other queries (the summaries) find nothing.
     """
     q = MagicMock()
-    mock_session.query.return_value = q
+    mock_session.query.side_effect = lambda *entities: q if entities[0] is SourceItem else MagicMock()
     q.options.return_value = q
     q.filter.return_value = q
     q.all.return_value = items
@@ -1257,7 +1258,7 @@ async def test_fetch_with_journal_entries(mock_make_session, mock_get_user, mock
     from memory.common.db.models.journal import JournalEntry
 
     _query_map = {SourceItem: item_query, JournalEntry: journal_query}
-    mock_session.query.side_effect = lambda model: _query_map.get(model, MagicMock())
+    mock_session.query.side_effect = lambda *entities: _query_map.get(entities[0], MagicMock())
 
     result = await fetch.fn(id=123, include_content=False, include_journal=True)
 
@@ -1358,6 +1359,25 @@ async def test_fetch_bulk_returns_list(db_session, admin_session):
     assert len(result) == 2
     assert result[0]["id"] == item_a.id
     assert result[1]["id"] == item_b.id
+
+
+@pytest.mark.asyncio
+async def test_fetch_returns_each_items_summary(db_session, admin_session):
+    summarised = make_source_item(db_session, 1)
+    plain = make_source_item(db_session, 2)
+    db_session.add_all([
+        Chunk(source_id=summarised.id, content="a section", is_summary=False),
+        Chunk(source_id=summarised.id, content="the summary", is_summary=True),
+        Chunk(source_id=plain.id, content="a section", is_summary=False),
+    ])
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        bulk = await fetch.fn(ids=[summarised.id, plain.id], include_content=False)
+        single = await fetch.fn(id=summarised.id)
+
+    assert [r["summary"] for r in bulk] == ["the summary", None]
+    assert single["summary"] == "the summary"
 
 
 @pytest.mark.asyncio

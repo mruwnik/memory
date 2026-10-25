@@ -484,7 +484,7 @@ def test_book_section_data_chunks(pages, expected_chunks, stub_summaries):
                 ),
                 extract.DataChunk(
                     data=["test summary"],
-                    metadata={"tags": ["tag1", "tag2"]},
+                    metadata={"tags": {"tag1", "tag2"}, "type": "summary"},
                 ),
             ],
         ),

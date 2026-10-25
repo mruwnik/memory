@@ -91,7 +91,7 @@ def test_longer_content_gets_a_summary_chunk(length):
     content = "word " * (length // 5)
     with summarizer.summarising(lambda prompt: {"summary": "s", "tags": ["t"]}):
         chunks = extract_text(content)
-    assert (chunks[-1].data, chunks[-1].metadata) == (["s"], {"tags": {"t"}})
+    assert (chunks[-1].data, chunks[-1].metadata) == (["s"], {"tags": {"t"}, "type": "summary"})
     assert chunks[:-1] == extract_text(content, skip_summary=True)
 
 

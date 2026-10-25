@@ -851,23 +851,17 @@ class BookSection(SourceItem):
             return extract.extract_text(
                 content,
                 metadata={"type": "page"},
-                summary_metadata={"type": "summary"},
                 modality="book",
             )
 
-        result = summarizer.summarize_or_defer(content, {"type": "summary"}, "book")
+        result = summarizer.summarize_or_defer(content, {}, "book")
         summary, tags = result or ("", [])
         section = extract.DataChunk(
             data=[content], metadata={"type": "section", "tags": tags}, modality="book"
         )
         if not summary:
             return [section]
-        return [
-            section,
-            extract.DataChunk(
-                data=[summary], metadata={"type": "summary", "tags": tags}, modality="book"
-            ),
-        ]
+        return [section, extract.summary_chunk(summary, tags, {}, "book")]
 
 
 class BlogPostPayload(SourceItemPayload):

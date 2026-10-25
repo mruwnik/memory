@@ -147,6 +147,17 @@ class DataChunk:
     modality: str | None = None
 
 
+def summary_chunk(
+    summary: str, tags: list[str], metadata: dict[str, Any], modality: str | None
+) -> DataChunk:
+    """The chunk holding an item's LLM summary, marked by its "summary" type."""
+    return DataChunk(
+        data=[summary],
+        metadata=merge_metadata(metadata, {"type": "summary", "tags": tags}),
+        modality=modality,
+    )
+
+
 @contextmanager
 def as_file(content: bytes | str | pathlib.Path) -> Generator[pathlib.Path, None, None]:
     if isinstance(content, pathlib.Path):
@@ -330,7 +341,6 @@ def extract_text(
     metadata: dict[str, Any] = {},
     modality: str = "text",
     skip_summary: bool = False,
-    summary_metadata: dict[str, Any] = {},
 ) -> list[DataChunk]:
     if isinstance(content, pathlib.Path):
         content = content.read_text()
@@ -345,18 +355,11 @@ def extract_text(
     if skip_summary or not summarizer.needs_summary(content):
         return chunks
 
-    summary_meta = merge_metadata(metadata, summary_metadata)
-    if result := summarizer.summarize_or_defer(content, summary_meta, modality):
+    if result := summarizer.summarize_or_defer(content, metadata, modality):
         summary, tags = result
         if not summary:
             return [replace(c, metadata=merge_metadata(c.metadata, {"tags": tags})) for c in chunks]
-        chunks.append(
-            DataChunk(
-                data=[summary],
-                metadata=merge_metadata(summary_meta, {"tags": tags}),
-                modality=modality,
-            )
-        )
+        chunks.append(summary_chunk(summary, tags, metadata, modality))
     return chunks
 
 
