@@ -62,6 +62,8 @@ def project(tmp_path):
     getent = bin_dir / "getent"
     getent.write_text('#!/bin/sh\n[ "$*" != "group docker" ] || echo docker:x:4242:\n')
     getent.chmod(0o755)
+    # Re-runs find their stack running from the checkout.
+    (tmp_path.parent / "containers").write_text(f"project {tmp_path}\n")
     return tmp_path
 
 
@@ -313,32 +315,42 @@ def test_forces_loopback_api_port_over_existing_value(project):
 
 # Compose names the project after the directory it runs in; a symlinked
 # checkout must keep the name it was installed under, whatever path runs later.
-@pytest.mark.parametrize(
-    "link, via, existing, containers, expected",
-    [
-        ("memory", "memory", "", "", "memory"),
-        ("My.Memory-2", "My.Memory-2", "", "", "mymemory-2"),
-        ("memory", "memory", "COMPOSE_PROJECT_NAME=chris\n", "", "chris"),
-        ("memory", "memory", "COMPOSE_PROJECT_NAME=\n", "", "memory"),
-        ("memory", "project", "DOMAIN=x\n", "memory {link}\n", "memory"),
-    ],
-    ids=["fresh", "sanitised", "kept", "empty-is-missing", "rerun-via-resolved-path"],
-)
-def test_pins_the_compose_project_that_owns_the_checkout(
-    project, tmp_path, link, via, existing, containers, expected
-):
+@pytest.mark.parametrize("link, expected", [("memory", "memory"), ("My.Memory-2", "mymemory-2")])
+def test_fresh_install_pins_the_directory_name_as_invoked(project, tmp_path, link, expected):
     (tmp_path / link).symlink_to(project)
-    (tmp_path / "containers").write_text(containers.format(link=tmp_path / link))
-    (project / ".env").write_text(existing)
+    # Other stacks on the host are not this checkout's.
+    (tmp_path / "volumes").write_text("chris db_data\n")
 
-    result = install(project, REQUIRED, root=tmp_path / via)
+    result = install(project, REQUIRED, root=tmp_path / link)
 
     assert result.returncode == 0, result.stderr
     assert read_env(project)["COMPOSE_PROJECT_NAME"] == expected
 
 
-def test_refuses_to_guess_the_compose_project_over_existing_volumes(project, tmp_path):
-    (tmp_path / "volumes").write_text("memory db_data\nchris db_data\n")
+@pytest.mark.parametrize(
+    "existing, expected",
+    [
+        ("COMPOSE_PROJECT_NAME=chris\n", "chris"),
+        ("COMPOSE_PROJECT_NAME=\n", "memory"),
+        ("DOMAIN=x\n", "memory"),
+    ],
+    ids=["kept", "empty-is-missing", "from-running-stack"],
+)
+def test_rerun_via_the_resolved_path_keeps_the_running_project(project, tmp_path, existing, expected):
+    (tmp_path / "memory").symlink_to(project)
+    (tmp_path / "containers").write_text(f"memory {tmp_path / 'memory'}\n")
+    (project / ".env").write_text(existing)
+
+    result = install(project, REQUIRED)
+
+    assert result.returncode == 0, result.stderr
+    assert read_env(project)["COMPOSE_PROJECT_NAME"] == expected
+
+
+def test_rerun_refuses_when_the_running_project_is_unclear(project, tmp_path):
+    (tmp_path / "containers").write_text("")
+    (tmp_path / "volumes").write_text("memory db_data\n")
+    (project / ".env").write_text("DOMAIN=x\n")
 
     result = install(project, REQUIRED)
 

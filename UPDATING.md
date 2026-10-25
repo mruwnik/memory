@@ -39,7 +39,8 @@ the stack was started from.
    `docker-compose.override.yml` and `secrets/`, which are gitignored.
    `.env` pins `COMPOSE_PROJECT_NAME` (the script adds it from the existing
    stack when missing, or stops if it can't tell which one that is); changing
-   it moves compose to new, empty volumes.
+   it moves compose to new, empty volumes. On podman, or where the script
+   can't reach the docker socket, set `COMPOSE_PROJECT_NAME` in `.env` by hand.
 4. Check free disk. The script refuses to start with less free space in
    `backups/` than the database size plus `MIN_FREE_GB` (default 5) GiB for
    new images:

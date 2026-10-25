@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SECRETS_DIR="$PROJECT_DIR/secrets"
 ENV_FILE="$PROJECT_DIR/.env"
+ENV_EXISTED=$([ -f "$ENV_FILE" ] && echo true || echo false)
 
 # --non-interactive never prompts. Required: DOMAIN. Optional: ADMIN_EMAIL with
 # ADMIN_PASSWORD (else the first account is claimed with the setup token),
@@ -291,9 +292,18 @@ if [ "$NON_INTERACTIVE" = true ]; then
 fi
 
 # Pinning the compose project keeps runs from any path to a symlinked checkout
-# on the stack that holds the volumes.
+# on the stack that holds the volumes. A fresh install takes the directory
+# name as invoked; an existing one must prove its stack's name.
 if [ -z "$(get_env_value 'COMPOSE_PROJECT_NAME')" ]; then
-    project_name=$("$SCRIPT_DIR/compose_project.sh" "$PROJECT_DIR") || exit 1
+    if [ "$ENV_EXISTED" = true ]; then
+        project_name=$("$SCRIPT_DIR/compose_project.sh" "$PROJECT_DIR") || exit 1
+    else
+        project_name=$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-' | sed 's/^[_-]*//')
+        if [ -z "$project_name" ]; then
+            echo "✗ $(basename "$PROJECT_DIR") is not a usable compose project name; set COMPOSE_PROJECT_NAME in .env" >&2
+            exit 1
+        fi
+    fi
     set_env_value "COMPOSE_PROJECT_NAME" "$project_name"
 fi
 

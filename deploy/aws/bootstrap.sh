@@ -216,7 +216,8 @@ else
         export DOMAIN VOYAGE_API_KEY POSTGRES_PASSWORD REDIS_PASSWORD APP_VERSION S3_BACKUP
         cd "$ROOT"
         usermod -aG docker "$app_user"
-        runuser -u "$app_user" -- bash tools/install.sh --non-interactive || { drop_groups docker lxd; exit 1; }
+        # Through $ROOT, the symlink: install.sh names the compose project after it.
+        runuser -u "$app_user" -- bash "$ROOT/tools/install.sh" --non-interactive || { drop_groups docker lxd; exit 1; }
     )
 fi
 # docker and lxd are root-equivalent. Only install.sh runs docker as the app

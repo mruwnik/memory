@@ -82,12 +82,12 @@ None.
   `.env` when it is missing, so compose stays on the same project (and its
   volumes) whichever path the checkout is reached by: on EC2, a run from
   `/srv/memory/app` instead of `/opt/memory` built a second, empty stack.
-  Both take the name from the compose containers of the checkout, else the one
-  project with a `db_data` volume, and use the directory name only on a host
-  with no compose volumes. Otherwise, or when `docker` can't be asked (e.g.
-  podman without `.Label` in `--format`), they stop and ask you to set
-  `COMPOSE_PROJECT_NAME` in `.env` by hand. A `-p` in `COMPOSE` still wins
-  over `.env`.
+  A fresh install (no `.env` yet) takes the directory name as invoked. On an
+  existing install, the name is the single project whose containers run from
+  the checkout, and only if it owns a `<project>_db_data` volume or no other
+  project does. Otherwise, or when `docker` can't be asked (e.g. podman), the
+  scripts stop and ask you to set `COMPOSE_PROJECT_NAME` in `.env` by hand. A
+  `-p` in `COMPOSE` still wins over `.env`.
 
 ### Migrations
 

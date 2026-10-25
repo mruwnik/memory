@@ -15,13 +15,13 @@ def checkout(tmp_path):
     return tmp_path / "app"
 
 
-def project(tmp_path, docker_bin, via, containers=(), volumes=(), docker="docker"):
+def project(tmp_path, docker_bin, via, containers=(), volumes=()):
     paths = {"app": tmp_path / "app", "link": tmp_path / "memory", "elsewhere": tmp_path / "elsewhere"}
     (tmp_path / "containers").write_text("".join(f"{c.format(**paths)}\n" for c in containers))
     (tmp_path / "volumes").write_text("".join(f"{v}\n" for v in volumes))
     result = subprocess.run(
         ["bash", str(SCRIPT), via.format(**paths)],
-        env={"PATH": f"{docker_bin}:/usr/bin:/bin", "DOCKER": docker},
+        env={"PATH": f"{docker_bin}:/usr/bin:/bin"},
         capture_output=True,
         text=True,
         timeout=30,
@@ -35,22 +35,11 @@ def project(tmp_path, docker_bin, via, containers=(), volumes=(), docker="docker
         (["memory {link}", "memory {link}"], ["memory db_data"], "{app}", "memory"),
         (["chris {app}"], ["chris db_data", "memory db_data"], "{link}", "chris"),
         (["memory {link}", "other /nonexistent", "other {elsewhere}"], [], "{app}", "memory"),
-        ([], ["memory db_data", "memory redis_data", "other cache"], "{app}", "memory"),
-        (["chris {elsewhere}"], ["chris db_data"], "{app}", "chris"),
-        ([], [], "{link}", "memory"),
-        ([], [], "{app}", "app"),
+        (["memory {link}"], ["other cache"], "{app}", "memory"),
     ],
-    ids=[
-        "containers-via-link",
-        "containers-under-p",
-        "ignores-other-stacks",
-        "stopped-stack-volumes",
-        "p-with-working-dir-elsewhere",
-        "fresh-via-link",
-        "fresh",
-    ],
+    ids=["via-link", "under-p-beside-another-stack", "ignores-other-stacks", "no-db-volumes-yet"],
 )
-def test_names_the_project_that_owns_the_checkout(
+def test_names_the_project_running_from_the_checkout(
     tmp_path, checkout, docker_bin, containers, volumes, via, expected
 ):
     code, name, err = project(tmp_path, docker_bin, via, containers, volumes)
@@ -59,20 +48,22 @@ def test_names_the_project_that_owns_the_checkout(
 
 
 @pytest.mark.parametrize(
-    "containers, volumes, message",
+    "containers, volumes, listed",
     [
-        (["memory {app}", "app {app}"], ["memory db_data"], "Several compose projects"),
-        ([], ["memory db_data", "chris db_data"], "Several compose projects"),
-        ([], ["other redis_data"], "compose volumes exist"),
+        (["memory {app}", "app {app}"], ["memory db_data"], "memory_db_data"),
+        ([], ["memory db_data"], "memory_db_data"),
+        ([], [], "none"),
+        (["chris {elsewhere}"], ["chris db_data"], "chris_db_data"),
+        (["app {app}"], ["memory db_data", "app redis_data"], "memory_db_data"),
     ],
-    ids=["two-running", "two-with-data", "volumes-without-db"],
+    ids=["two-running", "stack-down", "nothing", "p-with-working-dir-elsewhere", "stray-app"],
 )
-def test_refuses_to_guess(tmp_path, checkout, docker_bin, containers, volumes, message):
+def test_refuses_to_guess(tmp_path, checkout, docker_bin, containers, volumes, listed):
     code, name, err = project(tmp_path, docker_bin, "{app}", containers, volumes)
 
     assert code != 0
     assert name == ""
-    assert message in err
+    assert f"db_data volumes: {listed}" in err
     assert "Set COMPOSE_PROJECT_NAME in .env" in err
 
 
@@ -84,12 +75,3 @@ def test_a_failing_docker_is_reported(tmp_path, checkout, docker_bin):
     assert code != 0
     assert "Cannot connect to the Docker daemon" in err
     assert "Set COMPOSE_PROJECT_NAME in .env" in err
-
-
-def test_a_name_with_no_usable_characters_is_refused(tmp_path, docker_bin):
-    (tmp_path / "---").mkdir()
-
-    code, name, err = project(tmp_path, docker_bin, str(tmp_path / "---"))
-
-    assert code != 0
-    assert "not a usable compose project name" in err

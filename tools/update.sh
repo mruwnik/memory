@@ -82,14 +82,10 @@ pin_project_name() {
     fi
     local name
     name=$(DOCKER=$DOCKER tools/compose_project.sh "$PWD") || exit 1
-    # Rewritten in place: on EC2 .env belongs to the app user, not root.
-    if grep -q '^COMPOSE_PROJECT_NAME=$' .env 2>/dev/null; then
-        local kept
-        kept=$(grep -v '^COMPOSE_PROJECT_NAME=$' .env || true)
-        printf '%s\n' "$kept" > .env
-    fi
-    [[ ! -s .env || -z $(tail -c1 .env) ]] || echo >> .env
-    echo "COMPOSE_PROJECT_NAME=$name" >> .env
+    # cp -p keeps the mode and owner: on EC2 .env belongs to the app user, not root.
+    [[ ! -f .env ]] || cp -p .env .env.tmp
+    { grep -v '^COMPOSE_PROJECT_NAME=$' .env 2>/dev/null || true; echo "COMPOSE_PROJECT_NAME=$name"; } > .env.tmp
+    mv .env.tmp .env
     log "Pinned COMPOSE_PROJECT_NAME=$name in .env"
 }
 pin_project_name

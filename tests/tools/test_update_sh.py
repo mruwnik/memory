@@ -267,7 +267,7 @@ def test_update_keeps_a_project_name_already_in_env(clone):
 @pytest.mark.parametrize(
     "state, message",
     [
-        ({"containers": "memory {clone}\napp {clone}\n"}, "Several compose projects"),
+        ({"containers": "memory {clone}\napp {clone}\n"}, "No single compose project"),
         ({"docker.fails": ""}, "Cannot connect to the Docker daemon"),
     ],
 )
