@@ -24,6 +24,8 @@ None.
 
 ### Other changes for operators
 
+- A `SERVER_URL` change no longer needs an image rebuild: the web UI uses
+  same-origin URLs instead of a baked-in host.
 - The server's own `SERVER_URL` origin is now always allowed as an OAuth redirect
   target, so `OAUTH_REDIRECT_URI_ALLOWLIST` is only needed for other origins.
 - REST account/key recovery, secret management/export, and source credential
