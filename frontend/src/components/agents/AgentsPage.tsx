@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAgents, type AgentDefinition, type SystemAgentEntry } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { StatusBadge } from './StatusBadge'
-import { Badge, ButtonLink, EmptyState, List, Notice, Page, Row, RowError, Section } from '@/components/shared/ui'
+import { SystemAgents } from './SystemAgents'
+import { Badge, ButtonLink, EmptyState, List, Page, Row, RowError } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 
 const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`
@@ -67,29 +68,8 @@ export default function AgentsPage() {
           ))}
         </List>
       )}
-      {(systemError || !!systemAgents?.length) && (
-        <Section title="System agents" description="Defined by memory and run with your default key for each provider. Read-only.">
-          {systemError && <Notice tone="error" onRetry={load}>{systemError}</Notice>}
-          {!!systemAgents?.length && (
-            <List>
-              {systemAgents.map(a => (
-                <Row
-                  key={a.slug}
-                  title={a.title}
-                  badges={<>
-                    <Badge tone="neutral">System</Badge>
-                    {a.problem && <Badge tone="danger">Can't run</Badge>}
-                  </>}
-                  meta={[<span className="font-mono">{a.model}</span>, a.use]}
-                >
-                  <p className="text-slate-600">{a.description}</p>
-                  {a.problem && <RowError>{a.problem}</RowError>}
-                </Row>
-              ))}
-            </List>
-          )}
-        </Section>
-      )}
+      <SystemAgents agents={systemAgents} error={systemError} onRetry={load}
+        description="Defined by memory and run with your default key for each provider. Read-only." />
     </Page>
   )
 }

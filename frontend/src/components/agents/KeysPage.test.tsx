@@ -6,10 +6,11 @@ import type { ProviderKey } from '@/hooks/useAgents'
 const listKeys = vi.fn()
 const upsertKey = vi.fn()
 const deleteKey = vi.fn()
+const listSystemAgents = vi.fn()
 
 vi.mock('@/hooks/useAgents', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useAgents')>()),
-  useAgents: () => ({ listKeys, upsertKey, deleteKey }),
+  useAgents: () => ({ listKeys, upsertKey, deleteKey, listSystemAgents }),
 }))
 
 const providerKey = (overrides: Partial<ProviderKey> = {}): ProviderKey => ({
@@ -23,9 +24,24 @@ beforeEach(() => {
   listKeys.mockReset()
   upsertKey.mockReset()
   deleteKey.mockReset()
+  listSystemAgents.mockReset()
+  listSystemAgents.mockResolvedValue([])
 })
 
 describe('KeysPage', () => {
+  it('lists the system agents your default keys pay for, and which have none', async () => {
+    listKeys.mockResolvedValue(listed([providerKey()]))
+    listSystemAgents.mockResolvedValue([
+      { slug: 'system:summarise', title: 'Summaries', description: 'd', use: 'ingest', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: true, problem: null },
+      { slug: 'system:hyde', title: 'Search: hypothetical passages', description: 'd', use: 'search', model: 'anthropic/claude-haiku-5-5', provider: 'anthropic', has_key: false, problem: 'add a default anthropic or openai key to run this; until then it is skipped' },
+    ])
+    renderWithRouter(<KeysPage />)
+    const section = (await screen.findByText('Summaries')).closest('section')!
+    expect(within(section).getByText('Search: hypothetical passages')).toBeInTheDocument()
+    expect(within(section).getAllByText("Can't run")).toHaveLength(1)
+    expect(within(section).getByText(/until then it is skipped/)).toBeInTheDocument()
+  })
+
   it('groups keys by provider with their hint, default, status and cap', async () => {
     listKeys.mockResolvedValue(listed([
       providerKey({ status: 'invalid', status_detail: 'anthropic rejected this key', max_cost_usd_per_day: '5.000000' }),

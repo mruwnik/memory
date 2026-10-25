@@ -391,12 +391,14 @@ async def test_names_are_unique_across_providers(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", ["agent_key_list", "agent_key_upsert", "agent_key_delete"])
+@pytest.mark.parametrize(
+    "tool", ["agent_key_list", "agent_key_upsert", "agent_key_delete", "agent_system_list"]
+)
 @pytest.mark.parametrize(
     "scopes, allowed",
     [
         (["read"], False),
-        (["read", "agents"], False),
+        (["read", "teams"], False),
         (["read", "write"], True),
         (["*"], True),
     ],

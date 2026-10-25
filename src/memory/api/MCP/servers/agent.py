@@ -345,7 +345,8 @@ async def list_all() -> dict:
 
 
 @agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
+# The keys page lists these for everyone whose keys pay for them, not only agent users.
+@visible_when(require_scopes(SCOPE_AGENTS, SCOPE_WRITE))
 async def system_list() -> dict:
     """The system agents memory runs for you (summaries, search steps): the model
     each runs on for you, picked by the first provider you have a default key for,

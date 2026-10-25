@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   DEFAULT_KEY_DAILY_CAP_USD, KEY_PROVIDERS, PROVIDER_NAMES, useAgents,
-  type KeyDeleteResult, type KeyProvider, type KeyUpsert, type ProviderKey,
+  type KeyDeleteResult, type KeyProvider, type KeyUpsert, type ProviderKey, type SystemAgentEntry,
 } from '@/hooks/useAgents'
+import { SystemAgents } from './SystemAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { formatCost } from '@/utils/format'
 import { Badge, Button, ConfirmDialog, EmptyState, Field, FieldRow, FormActions, Input, List, Modal, Notice, Page, Row, RowError, Section, Select, useSubmit } from '@/components/shared/ui'
@@ -156,20 +157,24 @@ const deleteOutcome = (entry: ProviderKey, result: KeyDeleteResult, keys: Keys) 
 }
 
 export default function KeysPage() {
-  const { listKeys, upsertKey, deleteKey } = useAgents()
+  const { listKeys, upsertKey, deleteKey, listSystemAgents } = useAgents()
   const [keys, setKeys] = useState<Keys | null>(null)
   const [adding, setAdding] = useState<KeyProvider | null>(null)
   const [deleting, setDeleting] = useState<ProviderKey | null>(null)
   const [outcome, setOutcome] = useState<{ tone: 'success' | 'warning'; message: string } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [systemAgents, setSystemAgents] = useState<SystemAgentEntry[] | null>(null)
+  const [systemError, setSystemError] = useState<string | null>(null)
 
   const load = useCallback(() => {
     setLoadError(null)
+    setSystemError(null)
     listKeys()
       .then(result => setKeys(result.providers))
       .catch(e => setLoadError(e.message))
-  }, [listKeys])
+    listSystemAgents().then(setSystemAgents).catch(e => setSystemError(e.message))
+  }, [listKeys, listSystemAgents])
   useEffect(load, [load])
 
   const save: Save = async body => {
@@ -221,6 +226,10 @@ export default function KeysPage() {
             )}
         </Section>
       ))}
+      {keys && (
+        <SystemAgents agents={systemAgents} error={systemError} onRetry={load}
+          description="What memory runs for you, and the model your default keys run each on." />
+      )}
       {deleting && (
         <ConfirmDialog title="Delete key" confirmLabel="Delete"
           message={`Delete the ${PROVIDER_NAMES[deleting.provider]} key '${deleting.label}'? Agents that pin it stop working until you pick another key, and sources that use it go back to their default key.`}
