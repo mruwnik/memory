@@ -26,6 +26,8 @@ None.
 
 GitHub account setup shows instructions only for the selected authentication
 method, with explicit read permissions and installation repository-access steps.
+Manage repos has a Refresh from GitHub action to bypass cached results after
+installation permissions or repository access change.
 
 - Google Calendar fetch and queue failures now appear on the calendar account
   instead of being reported as successful empty syncs.

@@ -497,3 +497,18 @@ describe('GitHubPanel repo form partial failure', () => {
     expect(deletes(50)).toBe(1)
   })
 })
+
+
+it('bypasses the repository cache when explicitly refreshed', async () => {
+  const mock = mockFetchRoutes({
+    '/github/accounts/4/available-repos?refresh=true': { json: [availRepo()] },
+    '/github/accounts/4/available-repos': { json: [] },
+    ...routes([account()]),
+  })
+  const { user } = renderWithUser(<GitHubPanel />)
+  await user.click(await screen.findByRole('button', { name: 'Add repo' }))
+  expect(await screen.findByText('No repositories available')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Refresh from GitHub' }))
+  expect(await screen.findByText('octocat/hello')).toBeInTheDocument()
+  expect(mock.mock.calls.some(([url]) => String(url).endsWith('/available-repos?refresh=true'))).toBe(true)
+})

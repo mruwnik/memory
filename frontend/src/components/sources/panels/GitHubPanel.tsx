@@ -444,13 +444,14 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [refreshCount, setRefreshCount] = useState(0)
 
   useEffect(() => {
     const loadRepos = async () => {
       setLoading(true)
       setError(null)
       try {
-        const available = await listAvailableRepos(accountId)
+        const available = await listAvailableRepos(accountId, refreshCount > 0)
         // Sort by full_name
         available.sort((a, b) => a.full_name.localeCompare(b.full_name))
         setRepos(available)
@@ -461,7 +462,7 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
       }
     }
     loadRepos()
-  }, [accountId, listAvailableRepos])
+  }, [accountId, listAvailableRepos, refreshCount])
 
   const filteredRepos = repos.filter(repo =>
     repo.full_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -491,10 +492,14 @@ const RepoSelector = ({ accountId, monitoredRepos, onChange }: RepoSelectorProps
   }
 
   if (loading) return <LoadingState message="Loading repositories... This may take a moment for large accounts." />
-  if (error) return <Notice tone="error">{error}</Notice>
+  if (error) return <>
+    <Notice tone="error">{error}</Notice>
+    <Button type="button" onClick={() => setRefreshCount(n => n + 1)}>Refresh from GitHub</Button>
+  </>
 
   return (
     <div className="space-y-2">
+      <Button type="button" onClick={() => setRefreshCount(n => n + 1)}>Refresh from GitHub</Button>
       <Input
         type="search"
         aria-label="Filter repositories"

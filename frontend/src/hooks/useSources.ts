@@ -662,8 +662,8 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
-  const listAvailableRepos = useCallback(async (accountId: number): Promise<AvailableRepo[]> => {
-    const response = await apiCall(`/github/accounts/${accountId}/available-repos`)
+  const listAvailableRepos = useCallback(async (accountId: number, refresh = false): Promise<AvailableRepo[]> => {
+    const response = await apiCall(`/github/accounts/${accountId}/available-repos${refresh ? '?refresh=true' : ''}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch available repos')
     return response.json()
   }, [apiCall])
