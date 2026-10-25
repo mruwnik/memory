@@ -6,7 +6,7 @@ from functools import reduce
 from typing import Any, Literal
 
 from fastmcp import FastMCP
-from sqlalchemy import Text, or_, text
+from sqlalchemy import Text, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
@@ -245,17 +245,10 @@ def link_discord_from_contact_info(
         if identifier.isdigit():
             discord_user = session.get(DiscordUser, int(identifier))
 
-        # If not found by ID, search by username/display_name
+        # Usernames are unique on Discord; display names are not, and anyone picks theirs.
         if not discord_user:
             discord_user = (
-                session.query(DiscordUser)
-                .filter(
-                    or_(
-                        DiscordUser.username == identifier,
-                        DiscordUser.display_name == identifier,
-                    )
-                )
-                .first()
+                session.query(DiscordUser).filter(DiscordUser.username == identifier).first()
             )
 
         if not discord_user:
@@ -849,21 +842,15 @@ def merge_team_ownership(session: DBSession, primary: Person, secondaries: list[
 
 
 def merged_user_id(session: DBSession, primary: Person, secondaries: list[Person]) -> int | None:
-    """The User the merged Person will link to: the people's own links first
-    (primary's before the rest), then their Discord accounts' system users.
+    """The User the merged Person will link to: the people's own links,
+    primary's before the rest.
 
     Raises ValueError when that User already has a Person outside the merge,
     since a user is linked to at most one Person.
     """
     people = [primary, *secondaries]
     person_ids = [p.id for p in people]
-    discord_user_ids = [
-        uid
-        for (uid,) in session.query(DiscordUser.system_user_id).filter(
-            DiscordUser.person_id.in_(person_ids), DiscordUser.system_user_id.isnot(None)
-        )
-    ]
-    candidates = list(dict.fromkeys([p.user_id for p in people if p.user_id] + discord_user_ids))
+    candidates = list(dict.fromkeys(p.user_id for p in people if p.user_id))
     if not candidates:
         return None
 

@@ -29,7 +29,7 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
-    from memory.common.db.models.discord import DiscordBot, DiscordUser
+    from memory.common.db.models.discord import DiscordBot
     from memory.common.db.models.sources import Person
     from memory.common.db.models.secrets import Secret
     from memory.common.db.models.slack import SlackApp, SlackUserCredentials
@@ -140,9 +140,6 @@ class User(Base):
     )
 
     # Discord relationships
-    discord_accounts: Mapped[list[DiscordUser]] = relationship(
-        "DiscordUser", back_populates="system_user"
-    )
     discord_bots: Mapped[list[DiscordBot]] = relationship(
         "DiscordBot",
         secondary="discord_bot_users",
@@ -179,7 +176,8 @@ class User(Base):
                 # str keys: Discord ids are int snowflakes, but JSON object keys
                 # are always strings — coerce here so in-process consumers see the
                 # same shape clients get after the JSON-RPC boundary.
-                str(account.id): account.username for account in self.discord_accounts
+                str(account.id): account.username
+                for account in (self.person.discord_accounts if self.person else [])
             },
             "discord_bots": [bot.id for bot in self.discord_bots],
         }

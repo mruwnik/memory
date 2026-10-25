@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.api.users import check_single_user
-from memory.common.db.models import APIKey, HumanUser, ScheduledTask, UserSession
+from memory.common.db.models import APIKey, HumanUser, Person, ScheduledTask, UserSession
 from memory.common.db.models.users import verify_password
 from memory.common.modules import MODULES, MULTI_USER
 
@@ -470,6 +470,41 @@ def test_create_user_allows_one_human_without_multi_user(
     )
 
     assert response.status_code == status
+
+
+@pytest.mark.parametrize(
+    "contact_info, links_to_contact",
+    [
+        ({"email": "Alice@Example.com"}, True),
+        ({"email": "someone@else.com"}, False),
+        ({}, False),
+    ],
+)
+def test_create_user_links_an_existing_person_only_by_email(
+    client: TestClient, admin_user, db_session, set_modules, contact_info, links_to_contact
+):
+    """Names and aliases are free text whoever created the Person chose, so a
+    same-named contact must not become the new user's Person."""
+    set_modules(ALL_MODULES)
+    contact = Person(
+        identifier="alice_smith",
+        display_name="Alice Smith",
+        aliases=["Alice Smith"],
+        contact_info=contact_info,
+    )
+    db_session.add(contact)
+    db_session.commit()
+
+    response = client.post(
+        "/users",
+        json={"name": "Alice Smith", "email": "alice@example.com", "password": "testpass123"},
+    )
+
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+    db_session.expire_all()
+    assert (db_session.get(Person, contact.id).user_id == user_id) is links_to_contact
+    assert db_session.query(Person).filter(Person.user_id == user_id).count() == 1
 
 
 def test_create_user_points_a_taken_email_at_the_email_field(client: TestClient, admin_user):

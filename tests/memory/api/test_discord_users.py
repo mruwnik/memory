@@ -1,16 +1,8 @@
 """Tests for /discord/users access control.
 
-The endpoints used to be open to any user with at least one Discord bot,
-which let bot owners enumerate / re-link any other Discord user — including
-the admin's, which is an identity-hijack vector. These tests pin the new
-visibility model:
-
 - A non-admin can only see DiscordUsers that one of their bots has
   authored a stored DiscordMessage for.
-- A non-admin can only set ``system_user_id`` to their own user id.
-- A non-admin can only set ``person_id`` to a Person they already own
-  (or one with no User link).
-- Admins bypass all of the above.
+- Only admins can link a DiscordUser to a Person.
 """
 
 from datetime import datetime, timezone
@@ -204,127 +196,52 @@ def test_get_user_succeeds_when_callers_bot_saw_them(
 # --- link_discord_user -----------------------------------------------------
 
 
-def test_link_user_403_when_linking_to_other_user(
+@pytest.mark.parametrize("new_owner", ["me", "nobody"])
+def test_non_admin_cannot_relink_someone_elses_discord_account(
     regular_client,
     db_session,
     user,
     other_user,
     my_bot,
     discord_channel,
+    new_owner,
 ):
-    """Non-admin cannot point system_user_id at another user (identity hijack)."""
-    target = _make_discord_user(db_session, id_=3001, name="target")
+    """A bot owner who has seen another user's Discord account can't move it off
+    that user's Person, either onto their own Person or to nobody."""
+    victim_person = Person(
+        identifier="victim", display_name="Victim", user_id=other_user.id
+    )
+    my_person = Person(identifier="me", display_name="Me", user_id=user.id)
+    db_session.add_all([victim_person, my_person])
+    db_session.commit()
+    target = DiscordUser(id=3001, username="victim", person_id=victim_person.id)
+    db_session.add(target)
+    db_session.commit()
     _record_message(
         db_session, bot=my_bot, author=target, channel=discord_channel, message_id=20
     )
+    body = {"person_id": {"me": my_person.id, "nobody": None}[new_owner]}
 
-    response = regular_client.patch(
-        f"/discord/users/{target.id}",
-        json={"system_user_id": other_user.id},
-    )
+    response = regular_client.patch(f"/discord/users/{target.id}", json=body)
 
     assert response.status_code == 403
     db_session.expire_all()
-    refreshed = db_session.get(DiscordUser, target.id)
-    assert refreshed.system_user_id is None
+    assert db_session.get(DiscordUser, target.id).person_id == victim_person.id
 
 
-def test_link_user_succeeds_for_self_link(
-    regular_client,
-    db_session,
-    user,
-    my_bot,
-    discord_channel,
-):
-    target = _make_discord_user(db_session, id_=3002, name="target")
-    _record_message(
-        db_session, bot=my_bot, author=target, channel=discord_channel, message_id=21
-    )
-
-    response = regular_client.patch(
-        f"/discord/users/{target.id}",
-        json={"system_user_id": user.id},
-    )
-
-    assert response.status_code == 200
-    db_session.expire_all()
-    refreshed = db_session.get(DiscordUser, target.id)
-    assert refreshed.system_user_id == user.id
-
-
-def test_link_user_403_when_person_belongs_to_other_user(
-    regular_client,
-    db_session,
-    user,
-    other_user,
-    my_bot,
-    discord_channel,
-):
-    """Non-admin cannot link to a Person owned by another user."""
-    target = _make_discord_user(db_session, id_=3003, name="target")
-    _record_message(
-        db_session, bot=my_bot, author=target, channel=discord_channel, message_id=22
-    )
-    other_person = Person(
-        identifier="other-person", display_name="Other Person", user_id=other_user.id
-    )
-    db_session.add(other_person)
-    db_session.commit()
-
-    response = regular_client.patch(
-        f"/discord/users/{target.id}",
-        json={"person_id": other_person.id},
-    )
-
-    assert response.status_code == 403
-    db_session.expire_all()
-    refreshed = db_session.get(DiscordUser, target.id)
-    assert refreshed.person_id is None
-
-
-def test_link_user_404_when_target_not_seen_by_callers_bot(
-    regular_client,
-    db_session,
-    user,
-    other_user,
-    their_bot,
-    discord_channel,
-):
-    """Even self-linking is forbidden if the target is invisible to the caller."""
-    target = _make_discord_user(db_session, id_=3004, name="target")
-    _record_message(
-        db_session, bot=their_bot, author=target, channel=discord_channel, message_id=23
-    )
-
-    response = regular_client.patch(
-        f"/discord/users/{target.id}",
-        json={"system_user_id": user.id},
-    )
-
-    # Either 403 (forbidden — caller can't see) or 404 (hidden) is acceptable;
-    # the contract is that the caller cannot link to invisible targets.
-    assert response.status_code in (403, 404)
-
-
-def test_admin_can_cross_link(
+def test_admin_can_link_and_unlink_any_discord_account(
     client,
     db_session,
     other_user,
-    my_bot,
-    discord_channel,
 ):
-    """Admin (default test client) can link to any user / any person."""
+    """Admins link without owning a bot or the Person."""
+    person = Person(identifier="other", display_name="Other", user_id=other_user.id)
+    db_session.add(person)
+    db_session.commit()
     target = _make_discord_user(db_session, id_=3005, name="target")
-    _record_message(
-        db_session, bot=my_bot, author=target, channel=discord_channel, message_id=24
-    )
 
-    response = client.patch(
-        f"/discord/users/{target.id}",
-        json={"system_user_id": other_user.id},
-    )
+    linked = client.patch(f"/discord/users/{target.id}", json={"person_id": person.id})
+    unlinked = client.patch(f"/discord/users/{target.id}", json={"person_id": None})
 
-    assert response.status_code == 200
-    db_session.expire_all()
-    refreshed = db_session.get(DiscordUser, target.id)
-    assert refreshed.system_user_id == other_user.id
+    assert (linked.status_code, linked.json()["person_id"]) == (200, person.id)
+    assert (unlinked.status_code, unlinked.json()["person_id"]) == (200, None)

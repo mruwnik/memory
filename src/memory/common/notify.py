@@ -61,29 +61,8 @@ def user_info_for(session: DBSession, user: User) -> dict:
         for a in github_accounts
     ]
 
-    # Enrich from linked Person record (via User.person or discord_accounts)
     person = user.person
-    if not person:
-        for discord_acct in user.discord_accounts:
-            if not discord_acct.person:
-                continue
-            if not person:
-                person = discord_acct.person
-            elif discord_acct.person.id != person.id:
-                logger.warning(
-                    "User %s has discord accounts linked to multiple Person records; using first found",
-                    user.id,
-                )
-                break
-
     if person:
-        # Add Discord from Person if not already on User
-        if not user_info.get("discord_accounts") and person.discord_accounts:
-            user_info["discord_accounts"] = {
-                # str keys to match User.serialize() and the JSON-RPC wire shape.
-                str(acct.id): acct.username for acct in person.discord_accounts
-            }
-
         # Add Slack from Person contact_info if no credentials found
         if not slack_credentials and person.contact_info:
             for workspace_id, slack_user_id in slack_accounts(person.contact_info):

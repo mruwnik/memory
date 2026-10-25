@@ -378,8 +378,7 @@ async def test_get_user_slack_credentials(db_session, admin_session):
 
 
 @pytest.mark.asyncio
-async def test_get_user_person_discord_fallback(db_session, admin_user, admin_session):
-    """Get user enriches Discord accounts from linked Person when User has none."""
+async def test_get_user_discord_accounts_come_from_person(db_session, admin_user, admin_session):
     from memory.common.db.models import DiscordUser, Person
 
     person = Person(
@@ -390,7 +389,6 @@ async def test_get_user_person_discord_fallback(db_session, admin_user, admin_se
     db_session.add(person)
     db_session.flush()
 
-    # Discord account linked to Person, NOT to User
     discord_acct = DiscordUser(id=999, username="person_discord", person_id=person.id)
     db_session.add(discord_acct)
 
@@ -402,9 +400,7 @@ async def test_get_user_person_discord_fallback(db_session, admin_user, admin_se
         result = await get_user.fn()
 
     assert result["authenticated"] is True
-    # User.serialize() returns empty discord_accounts (none linked to user directly)
-    # so Person's discord accounts should be used as fallback. Keys are str:
-    # Discord snowflakes are ints, but JSON object keys are always strings.
+    # str keys: Discord snowflakes are ints, but JSON object keys are always strings.
     assert result["user"]["discord_accounts"] == {"999": "person_discord"}
 
 
@@ -474,42 +470,6 @@ async def test_get_user_slack_credentials_take_precedence(db_session, admin_user
     assert result["authenticated"] is True
     # Credentials should win; Person contact_info should NOT be merged in
     assert result["user"]["slack_accounts"] == {"U_CRED_SLACK": "W_CRED"}
-
-
-@pytest.mark.asyncio
-async def test_get_user_person_via_discord_account(db_session, admin_user, admin_session):
-    """Get user discovers Person through user's discord_accounts when user.person is None."""
-    from memory.common.db.models import DiscordUser, Person
-
-    person = Person(
-        identifier="indirect_person",
-        display_name="Indirect Person",
-        contact_info={
-            "slack": {"W1": {"user_id": "U_FROM_PERSON"}}
-        },
-    )
-    db_session.add(person)
-    db_session.flush()
-
-    # Discord account linked to BOTH the user and the person
-    discord_acct = DiscordUser(
-        id=888,
-        username="shared_discord",
-        system_user_id=admin_user.id,
-        person_id=person.id,
-    )
-    db_session.add(discord_acct)
-    db_session.commit()
-
-    # admin_user.person is None — Person is discovered via discord_accounts
-    assert admin_user.person is None
-
-    with mcp_auth_context(admin_session.id):
-        result = await get_user.fn()
-
-    assert result["authenticated"] is True
-    # Should have found Slack through Person discovered via discord account
-    assert result["user"]["slack_accounts"] == {"U_FROM_PERSON": "W1"}
 
 
 # ====== get_forecasts tests ======

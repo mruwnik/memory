@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import exc as sqlalchemy_exc
+from sqlalchemy import or_
 
 from memory.common import paths, settings
 from memory.common.downloads import stream_download_to_path
@@ -24,9 +25,9 @@ from memory.common.celery_app import (
     app,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordMessage
+from memory.common.db.models import DiscordMessage, Person
 from memory.common.db.models.discord import DiscordUser
-from memory.common.people import find_or_create_person
+from memory.common.people import DBSession, json_string
 from memory.common.content_processing import (
     check_content_exists,
     create_task_result,
@@ -93,6 +94,31 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
         saved_paths.append(paths.to_db_filename(local_path))
 
     return saved_paths
+
+
+def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Person:
+    """The Person whose contact_info names this account by id or username, else a
+    new Person. Never matched by name: the account's owner picks those."""
+    named = (
+        session.query(Person)
+        .filter(
+            or_(
+                Person.contact_info["discord"].contains(json_string(str(discord_user.id))),
+                Person.contact_info["discord"].contains(json_string(discord_user.username)),
+            )
+        )
+        .order_by(Person.id)
+        .first()
+    )
+    if named:
+        return named
+    person = Person(
+        identifier=f"discord_{discord_user.id}",
+        display_name=discord_user.name,
+        contact_info={"discord": str(discord_user.id)},
+    )
+    session.add(person)
+    return person
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
@@ -193,17 +219,9 @@ def add_discord_message(
             reactions=reactions,
         )
 
-        # Link author to Person via DiscordUser
-        # Auto-create Person if DiscordUser exists but has no linked Person
         if discord_user := session.get(DiscordUser, author_id):
             if not discord_user.person:
-                # Create Person from Discord user info
-                person, _ = find_or_create_person(
-                    session,
-                    name=discord_user.display_name or discord_user.username,
-                    create_if_missing=True,
-                )
-                discord_user.person = person
+                discord_user.person = person_for_discord_user(session, discord_user)
                 session.flush()
             if discord_user.person not in discord_message.people:
                 discord_message.people.append(discord_user.person)

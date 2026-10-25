@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from memory.common.db.models.discord import DiscordUser
+from memory.common.db.models.sources import Person
 from memory.common.db.models.users import (
     hash_password,
     verify_password,
@@ -189,9 +190,10 @@ def test_user_serialization_discord_keys_are_str(db_session):
     )
     db_session.add(user)
     db_session.flush()
-    db_session.add(
-        DiscordUser(id=123456789, username="someuser", system_user_id=user.id)
-    )
+    person = Person(identifier="ds", display_name="DS", user_id=user.id)
+    db_session.add(person)
+    db_session.flush()
+    db_session.add(DiscordUser(id=123456789, username="someuser", person_id=person.id))
     db_session.commit()
 
     serialized = user.serialize()

@@ -7,7 +7,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models.users import HumanUser, BotUser, User
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import MULTI_USER
-from memory.common.people import find_or_create_person
+from memory.common.people import find_person_by_email
 from memory.common.scopes import SCOPE_ADMIN
 
 
@@ -78,15 +78,8 @@ if __name__ == "__main__":
         session.commit()
         session.refresh(user)
 
-        # create_if_missing=False: CLI user creation only links to existing
-        # Person records (no auto-creation). The API path in users.py uses
-        # create_if_missing=True so that every registered user gets a Person.
-        person, _ = find_or_create_person(
-            session,
-            name=args.name,
-            email=args.email,
-            create_if_missing=False,
-        )
+        # Email only: names and aliases are free text whoever created the Person chose.
+        person = find_person_by_email(session, args.email)
         if person and person.user_id is None:
             person.user_id = user.id
             session.commit()

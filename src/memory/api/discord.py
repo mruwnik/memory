@@ -141,16 +141,14 @@ class DiscordUserResponse(BaseModel):
     id: str  # String to avoid JavaScript precision loss
     username: str
     display_name: str | None
-    system_user_id: int | None
     person_id: int | None
     person_identifier: str | None
 
 
 class DiscordUserLinkRequest(BaseModel):
-    """Request model for linking a Discord user to a system user or person."""
+    """Request model for linking a Discord user to a person; null unlinks."""
 
-    system_user_id: int | None = None
-    person_id: int | None = None
+    person_id: int | None
 
 
 # --- Helper Functions ---
@@ -586,7 +584,6 @@ def discord_user_to_response(user: DiscordUser) -> DiscordUserResponse:
         id=str(user.id),
         username=user.username,
         display_name=user.display_name,
-        system_user_id=user.system_user_id,
         person_id=user.person_id,
         person_identifier=user.person.identifier if user.person else None,
     )
@@ -606,7 +603,7 @@ def list_discord_users(
 
     Args:
         search: Optional search term (matches username or display_name)
-        linked_only: If True, only return users linked to a system user or person
+        linked_only: If True, only return users linked to a person
     """
     caller, db = auth
     query = db.query(DiscordUser)
@@ -634,12 +631,7 @@ def list_discord_users(
         )
 
     if linked_only:
-        query = query.filter(
-            or_(
-                DiscordUser.system_user_id.isnot(None),
-                DiscordUser.person_id.isnot(None),
-            )
-        )
+        query = query.filter(DiscordUser.person_id.isnot(None))
 
     users = (
         query.order_by(DiscordUser.display_name, DiscordUser.username).limit(100).all()
@@ -668,66 +660,23 @@ def get_discord_user(
 def link_discord_user(
     discord_user_id: int,
     data: DiscordUserLinkRequest,
-    auth: tuple[User, Session] = Depends(require_discord_access),
+    caller: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
 ) -> DiscordUserResponse:
-    """Link a Discord user to a system user and/or person.
+    """Link a Discord user to a person, or unlink it with person_id null.
 
-    Set system_user_id or person_id to link, or set to null to unlink.
-
-    Authorization (non-admin):
-    - The caller must already be able to see the target DiscordUser via
-      one of their authorized bots (else 404).
-    - ``system_user_id`` may only be set to the caller's own user id (or
-      to ``null`` to unlink). Setting it to another user's id would let
-      a bot owner re-attribute their Discord activity to the admin's
-      identity.
-    - ``person_id`` may only be set to a Person that is either unlinked
-      (``person.user_id is None``) or already owned by the caller. This
-      blocks identity-hijack attacks that move an admin's Person record
-      under a Discord ID controlled by the attacker.
-
-    Admins bypass these checks.
+    Admin only: the link decides whose Person every message from that
+    account is attributed to, through every bot.
     """
-    caller, db = auth
+    if not has_admin_scope(caller):
+        raise HTTPException(status_code=403, detail="Only admins can link Discord users")
     discord_user = db.get(DiscordUser, discord_user_id)
-    if not discord_user or not caller_can_see_discord_user(db, caller, discord_user_id):
+    if not discord_user:
         raise HTTPException(status_code=404, detail="Discord user not found")
+    if data.person_id is not None and not db.get(Person, data.person_id):
+        raise HTTPException(status_code=404, detail="Person not found")
 
-    is_admin = has_admin_scope(caller)
-
-    # Validate and link system user
-    if data.system_user_id is not None:
-        if not is_admin and data.system_user_id != caller.id:
-            raise HTTPException(
-                status_code=403,
-                detail="Cannot link Discord user to another system user",
-            )
-        system_user = db.get(User, data.system_user_id)
-        if not system_user:
-            raise HTTPException(status_code=404, detail="System user not found")
-        discord_user.system_user_id = data.system_user_id
-    elif data.system_user_id is None and "system_user_id" in (
-        data.model_fields_set or set()
-    ):
-        # Explicitly set to None = unlink
-        discord_user.system_user_id = None
-
-    # Validate and link person
-    if data.person_id is not None:
-        person = db.get(Person, data.person_id)
-        if not person:
-            raise HTTPException(status_code=404, detail="Person not found")
-        if not is_admin and person.user_id is not None and person.user_id != caller.id:
-            raise HTTPException(
-                status_code=403,
-                detail="Cannot link Discord user to another user's Person",
-            )
-        discord_user.person_id = data.person_id
-    elif data.person_id is None and "person_id" in (data.model_fields_set or set()):
-        # Explicitly set to None = unlink
-        discord_user.person_id = None
-
+    discord_user.person_id = data.person_id
     db.commit()
     db.refresh(discord_user)
-
     return discord_user_to_response(discord_user)

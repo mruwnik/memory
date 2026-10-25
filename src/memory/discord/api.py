@@ -10,11 +10,13 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
-from discord import abc
+from discord import abc, utils
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from memory.common.celery_app import app as celery_app
+from memory.common.db.connection import make_session
+from memory.common.db.models import DiscordChannel, DiscordUser
 from memory.discord.collector import CollectorManager
 
 logger = logging.getLogger(__name__)
@@ -101,9 +103,6 @@ async def resolve_channel_id(channel: str | int) -> int:
         pass
 
     # Look up by name in database
-    from memory.common.db.connection import make_session
-    from memory.common.db.models import DiscordChannel
-
     with make_session() as session:
         ch = session.query(DiscordChannel).filter_by(name=channel).first()
         if ch:
@@ -117,8 +116,8 @@ async def resolve_user_id(user: str | int, mgr: CollectorManager | None = None) 
 
     Tries in order:
     1. Parse as integer ID
-    2. Look up in local database
-    3. Search Discord guild members (if manager provided)
+    2. Username in the local database
+    3. Username among Discord guild members (if manager provided)
     """
     if isinstance(user, int):
         return user
@@ -129,28 +128,17 @@ async def resolve_user_id(user: str | int, mgr: CollectorManager | None = None) 
     except ValueError:
         pass
 
-    # Look up by username or display_name in database
-    from sqlalchemy import or_
-
-    from memory.common.db.connection import make_session
-    from memory.common.db.models import DiscordUser
-
+    # Usernames only: display names and nicknames are unique to nobody and
+    # picked by the member, so they would let anyone take a DM.
     with make_session() as session:
-        u = (
-            session.query(DiscordUser)
-            .filter(or_(DiscordUser.username == user, DiscordUser.display_name == user))
-            .first()
-        )
+        u = session.query(DiscordUser).filter(DiscordUser.username == user).first()
         if u:
             return u.id
 
-    # Fall back to Discord API - search guild members
     if mgr:
         for collector in mgr.collectors.values():
             for guild in collector.guilds:
-                # Search by username (case-insensitive)
-                member = guild.get_member_named(user)
-                if member:
+                if member := utils.get(guild.members, name=user):
                     return member.id
 
     raise HTTPException(status_code=404, detail=f"User '{user}' not found")
@@ -256,7 +244,6 @@ async def refresh_metadata() -> dict[str, Any]:
     """Refresh Discord metadata from API."""
     mgr = get_manager()
 
-    from memory.common.db.connection import make_session
     from memory.discord.ingest import ensure_channel, ensure_server, ensure_user
 
     updated = {"servers": 0, "channels": 0, "users": 0}

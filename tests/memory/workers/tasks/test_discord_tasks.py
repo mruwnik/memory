@@ -15,6 +15,8 @@ from memory.common.db.models import (
     DiscordMessage,
     DiscordServer,
     DiscordUser,
+    HumanUser,
+    Person,
 )
 from memory.workers.tasks import discord
 
@@ -435,3 +437,43 @@ def test_add_discord_message_with_images(
     assert message.images is not None
     assert "discord/999888777/image1.jpg" in message.images
     mock_download.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "username, display_name",
+    [("alice_admin", None), ("mallory", "Alice Admin"), ("mallory", "alice_admin")],
+)
+def test_a_discord_name_never_attaches_the_author_to_someones_person(
+    db_session, sample_message_data, discord_user, qdrant, username, display_name
+):
+    alice = HumanUser(email="alice@example.com", name="Alice Admin", password_hash="x")
+    db_session.add(alice)
+    db_session.flush()
+    alices_person = Person(
+        identifier="alice_admin", display_name="Alice Admin", aliases=["Alice Admin"], user_id=alice.id
+    )
+    db_session.add(alices_person)
+    discord_user.username = username
+    discord_user.display_name = display_name
+    db_session.commit()
+
+    discord.add_discord_message(**sample_message_data)
+
+    db_session.expire_all()
+    author = db_session.get(DiscordUser, discord_user.id)
+    assert author.person_id is not None
+    assert author.person_id != alices_person.id
+
+
+@pytest.mark.parametrize("named_by", ["123456789", "testuser", ["old", "testuser"]])
+def test_the_author_attaches_to_the_person_whose_contact_info_names_them(
+    db_session, sample_message_data, discord_user, qdrant, named_by
+):
+    person = Person(identifier="tess", display_name="Tess", contact_info={"discord": named_by})
+    db_session.add(person)
+    db_session.commit()
+
+    discord.add_discord_message(**sample_message_data)
+
+    db_session.expire_all()
+    assert db_session.get(DiscordUser, discord_user.id).person_id == person.id
