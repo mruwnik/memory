@@ -1,8 +1,8 @@
-"""Instance settings an admin can change in the UI.
+"""Server settings an admin can change in the UI.
 
 Each registered key resolves as the env if the operator set it, else the admin's DB
-value, else the default. Restart-bound keys are read once per process (`booted`);
-live ones through `value`, which caches the DB values for CACHE_TTL_SECONDS.
+value, else the default. Live keys are read through `value`, which caches the DB values
+for CACHE_TTL_SECONDS; the restart-bound module flags read `boot_values` once per process.
 """
 
 import logging
@@ -15,6 +15,7 @@ from typing import Any, Literal
 from cryptography.fernet import InvalidToken
 from sqlalchemy import func, null
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from memory.common import settings
@@ -29,6 +30,7 @@ Applies = Literal["live", "restart"]
 Source = Literal["env", "ui", "default"]
 
 CACHE_TTL_SECONDS = 30
+UNDEFINED_TABLE = "42P01"
 
 
 def accept(_value: Any) -> None:
@@ -79,7 +81,7 @@ class Setting:
 REGISTRY: dict[str, Setting] = {}
 
 
-def register(setting: Setting) -> Setting:
+def register[S: Setting](setting: S) -> S:
     REGISTRY[setting.key] = setting
     return setting
 
@@ -204,31 +206,21 @@ def value(setting: Setting) -> Any:
 
 
 _boot_values: dict[str, Any] | None = None
-_booted: dict[str, Any] = {}
 
 
-def boot(stored: dict[str, Any] | None = None) -> None:
-    """Read the DB values this process boots with, once. A failed query fails the boot.
-
-    Tests pass `stored` to boot without a DB.
-    """
+def boot_values() -> dict[str, Any]:
+    """The DB values this process boots with, read once. Any failure but a missing table fails the boot."""
     global _boot_values
     if _boot_values is None:
-        _boot_values = read_stored_values() if stored is None else stored
-
-
-def booted(setting: Setting) -> Any:
-    """A restart-bound setting's value for the life of this process."""
-    if setting.key not in _booted:
-        boot()
-        assert _boot_values is not None
-        _booted[setting.key] = resolve(setting, lambda: _boot_values or {})[0]
-    return _booted[setting.key]
-
-
-def pending_restart(setting: Setting, stored: dict[str, Any]) -> bool:
-    """Whether a restart would change the value this process runs with."""
-    return setting.key in _booted and resolve(setting, lambda: stored)[0] != _booted[setting.key]
+        try:
+            _boot_values = read_stored_values()
+        except ProgrammingError as e:
+            if getattr(e.orig, "pgcode", None) != UNDEFINED_TABLE:
+                raise
+            # Not migrated yet (a first install), so no admin can have saved a value.
+            logger.warning("Could not read server settings at startup: the database isn't migrated")
+            _boot_values = {}
+    return _boot_values
 
 
 def save(db: Session, setting: Setting, new: Any, user_id: int) -> None:

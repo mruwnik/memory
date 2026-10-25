@@ -20,6 +20,9 @@ export interface SettingRow {
   pending_restart: boolean
   /** Why the stored UI value is being ignored. */
   error: string | null
+  /** Module flags only: the module, and the MCP servers that go with it. */
+  module: string | null
+  mcp_servers: string[]
 }
 
 export interface SettingsState {

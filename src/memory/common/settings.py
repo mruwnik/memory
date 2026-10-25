@@ -662,16 +662,16 @@ def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[
 
 
 # Comma-separated MCP server names to leave unmounted (e.g. "slack,forecast"). When
-# empty, an admin can choose them in the UI (instance_settings), applied on restart.
+# empty, an admin can hide servers in the UI (instance_settings).
 DISABLED_MCP_SERVERS: frozenset[str] = parse_csv_set("DISABLED_MCP_SERVERS")
 # Set by the compose api service, whose restart policy brings the api back after
 # POST /settings/restart makes it exit. A host-run api has nothing to restart it.
 API_SELF_RESTART = boolean_env("API_SELF_RESTART", False)
 
-# Optional features (memory.common.modules), applied on top of each module's default.
+# Optional features (memory.common.modules). A module named here is locked; the others
+# are set on the settings page, else default (module_settings.enabled_modules).
 ENABLE_MODULES: frozenset[str] = parse_csv_set("ENABLE_MODULES")
 DISABLE_MODULES: frozenset[str] = parse_csv_set("DISABLE_MODULES")
-ENABLED_MODULES: frozenset[str] = resolve_modules(ENABLE_MODULES, DISABLE_MODULES)
 
 # Custom tasks directory for deployment-specific periodic tasks
 CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None
@@ -733,7 +733,8 @@ def require_settings(values: Any, role: str) -> None:
         )
         raise SystemExit(1)
     # Only the api reaches the orchestrator; workers spawn sessions through the api.
-    if role == "api" and CLAUDE_CONTAINERS in values.ENABLED_MODULES and not values.ORCHESTRATOR_SOCKET:
+    env_modules = resolve_modules(values.ENABLE_MODULES, values.DISABLE_MODULES)
+    if role == "api" and CLAUDE_CONTAINERS in env_modules and not values.ORCHESTRATOR_SOCKET:
         print(
             "Refusing to start: the claude_containers module needs ORCHESTRATOR_SOCKET; "
             "add docker-compose.claude.yaml to COMPOSE_FILE (or -f), which sets it.",

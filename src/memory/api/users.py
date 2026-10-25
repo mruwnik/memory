@@ -27,6 +27,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.users import check_timezone, hash_password, verify_password
 from memory.common.rate_limit import check_rate_limit_spec
+from memory.common.module_settings import enabled_modules
 from memory.common.modules import MULTI_USER, scopes_hidden
 from memory.common.scopes import (
     SCOPE_ADMIN,
@@ -243,10 +244,10 @@ def create_user(
         )
 
     if data.user_type == "human":
-        if MULTI_USER not in settings.ENABLED_MODULES and db.query(HumanUser).count():
+        if MULTI_USER not in enabled_modules() and db.query(HumanUser).count():
             raise HTTPException(
                 status_code=403,
-                detail="Only one human user is allowed; set ENABLE_MODULES=multi_user for more",
+                detail="Only one human user is allowed; turn on the multi_user module in Server settings for more",
             )
         if not data.password:
             raise HTTPException(status_code=400, detail="Password is required for human users")
@@ -306,7 +307,7 @@ def list_available_scopes(
     user: User = require_scope(SCOPE_ADMIN),
 ) -> list[ScopeResponse]:
     """List all available scopes. Requires admin:users scope."""
-    hidden = scopes_hidden(settings.ENABLED_MODULES)
+    hidden = scopes_hidden(enabled_modules())
     return [ScopeResponse(**scope) for scope in VALID_SCOPES if scope["value"] not in hidden]
 
 

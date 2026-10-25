@@ -1,7 +1,7 @@
 import pytest
 from cryptography.fernet import Fernet
 
-from memory.api.MCP.servers import ALL_MCP_SERVERS, DISABLED_MCP_SERVERS
+from memory.api.MCP.servers import DISABLED_MCP_SERVERS
 from memory.common import instance_settings, settings
 from memory.common.db.models import InstanceSetting
 from memory.common.db.models.secrets import encrypt_value_with_key
@@ -40,12 +40,10 @@ def test_env_wins_over_the_ui_value_which_wins_over_the_default(
     [
         # Encrypted under a SECRETS_ENCRYPTION_KEY this process doesn't have.
         ("voyage_api_key", None, encrypt_value_with_key("pa-secret", Fernet.generate_key())),
-        # Every server off would hide every tool.
-        ("disabled_mcp_servers", sorted(ALL_MCP_SERVERS), None),
         ("disabled_mcp_servers", "slack", None),
         ("enable_reranking", "yes", None),
     ],
-    ids=["foreign_key", "every_server", "not_a_list", "not_a_bool"],
+    ids=["foreign_key", "not_a_list", "not_a_bool"],
 )
 def test_a_row_that_cant_be_read_counts_as_unset_and_is_logged_by_name_only(
     db_session, monkeypatch, caplog, key, value, value_encrypted

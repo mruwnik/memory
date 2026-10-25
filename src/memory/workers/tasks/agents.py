@@ -7,8 +7,22 @@ only the agents-worker image installs, while every worker autodiscovers this mod
 
 import asyncio
 
-from memory.common import settings
+from memory.common import module_settings, settings
 from memory.common.celery_app import FIRE_TRIGGER, RUN_AGENT, START_CRON_RUN, app
+
+
+def follow_module_flags() -> None:
+    """Catch up with the modules the api runs, once per task: this worker mounts the MCP
+    servers in-process and would otherwise keep the set it first saw.
+
+    The set holds for the whole task, so a module switched off mid-run stays visible to
+    that run.
+    """
+    # Before the MCP server is first imported, whose boot checks are the api's.
+    module_settings.follow_modules()
+    from memory.api.MCP.base import mount_followed_modules
+
+    mount_followed_modules()
 
 
 @app.task(
@@ -18,6 +32,7 @@ from memory.common.celery_app import FIRE_TRIGGER, RUN_AGENT, START_CRON_RUN, ap
 )
 def run_agent(run_id: str) -> None:
     """Run one agent. A redelivery finds the run no longer pending and does nothing."""
+    follow_module_flags()
     from memory.agents.runner import execute_run
 
     asyncio.run(execute_run(run_id))
@@ -26,6 +41,7 @@ def run_agent(run_id: str) -> None:
 @app.task(name=FIRE_TRIGGER)
 def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
     """Start a run of a trigger's definition for the items it matched."""
+    follow_module_flags()
     from memory.agents.fire import fire_trigger as fire
 
     return fire(trigger_id, deliveries)
@@ -34,6 +50,7 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
 @app.task(name=START_CRON_RUN)
 def start_cron_run(execution_id: str) -> str | None:
     """Start the run for a due agent_run ScheduledTask execution."""
+    follow_module_flags()
     from memory.agents.cron import start_cron_run as start
 
     return start(execution_id)

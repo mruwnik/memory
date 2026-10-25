@@ -2,7 +2,6 @@ import contextlib
 import os
 import pathlib
 import pty
-import re
 import shutil
 import stat
 import subprocess
@@ -10,7 +9,6 @@ import threading
 
 import pytest
 
-from memory.common.modules import MODULES
 
 REPO_ROOT = pathlib.Path(__file__).parents[2]
 
@@ -140,24 +138,25 @@ def test_writes_reverse_proxy_settings(project, supplied, subnet, gateway):
 
 
 # The claude overlay is appended, never replacing what is there (the proxy overlay).
+# Modules themselves are switched in the web UI, so .env never gets ENABLE_MODULES.
 @pytest.mark.parametrize(
-    "existing, modules, compose_file",
+    "existing, containers, compose_file, docker_gid",
     [
-        ("", "", "docker-compose.yaml:deploy/aws/compose.proxy.yaml"),
-        ("", "claude_containers,teams", "docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml"),
-        ("COMPOSE_FILE=custom.yaml\n", "", "custom.yaml"),
-        ("COMPOSE_FILE=custom.yaml\n", "claude_containers", "custom.yaml:docker-compose.claude.yaml"),
+        ("", "off", "docker-compose.yaml:deploy/aws/compose.proxy.yaml", None),
+        ("", "on", "docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml", "4242"),
+        ("COMPOSE_FILE=custom.yaml\n", "off", "custom.yaml", None),
+        ("COMPOSE_FILE=custom.yaml\n", "on", "custom.yaml:docker-compose.claude.yaml", "4242"),
     ],
 )
-def test_non_interactive_compose_file_and_modules(project, existing, modules, compose_file):
+def test_non_interactive_wires_claude_containers_on_request(project, existing, containers, compose_file, docker_gid):
     (project / ".env").write_text(existing)
 
-    result = install(project, {**REQUIRED, "ENABLE_MODULES": modules})
+    result = install(project, {**REQUIRED, "CLAUDE_CONTAINERS": containers})
 
     assert result.returncode == 0, result.stderr
     env = read_env(project)
-    assert (env["COMPOSE_FILE"], env["ENABLE_MODULES"]) == (compose_file, modules)
-    assert ("DOCKER_GID" in env) == ("claude_containers" in modules)
+    assert (env["COMPOSE_FILE"], env.get("DOCKER_GID")) == (compose_file, docker_gid)
+    assert "ENABLE_MODULES" not in env
 
 
 def test_warns_when_compose_file_lacks_the_proxy_overlay(project):
@@ -249,7 +248,7 @@ def test_migrates_then_starts_the_api_then_creates_first_user_with_password_via_
 @pytest.mark.parametrize(
     "env, stdin",
     [
-        ({**REQUIRED, "ENABLE_MODULES": "claude_containers"}, None),
+        ({**REQUIRED, "CLAUDE_CONTAINERS": "on"}, None),
         # Blank answers, two rejected backup answers, no backups, no SSH keys, containers.
         ({}, "\n" * 7 + "n\n" + "n\n" + "y\n\n"),
     ],
@@ -309,7 +308,7 @@ def test_supplied_secrets_do_not_reach_compose_environment(project, earlier_runs
 
 
 @pytest.mark.parametrize(
-    "var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "POSTGRES_PASSWORD", "ENABLE_MODULES"]
+    "var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "POSTGRES_PASSWORD", "CLAUDE_CONTAINERS"]
 )
 @pytest.mark.parametrize("bad", ["a b", "a$b", "a|b"])
 def test_rejects_unsafe_values_naming_variable_but_not_value(project, var, bad):
@@ -506,37 +505,31 @@ def test_interactive_validates_env_supplied_backup_key(project):
 CLAUDE_COMPOSE = "docker-compose.yaml:docker-compose.claude.yaml"
 
 
-# Teams are only asked about with several users.
+# The only module question: the others need no host wiring and are set in the web UI.
 @pytest.mark.parametrize(
-    "answers, modules, compose_file, docker_gid",
-    [
-        pytest.param("\n\n", "", None, None, id="defaults"),
-        pytest.param("y\nN\n", "claude_containers", CLAUDE_COMPOSE, "4242", id="containers"),
-        pytest.param("n\ny\nN\n", "multi_user", None, None, id="multi-user"),
-        pytest.param("y\ny\ny\n", "claude_containers,multi_user,teams", CLAUDE_COMPOSE, "4242", id="all"),
-    ],
+    "answer, compose_file, docker_gid",
+    [pytest.param("\n", None, None, id="default"), pytest.param("y\n", CLAUDE_COMPOSE, "4242", id="containers")],
 )
-def test_interactive_module_questions(project, answers, modules, compose_file, docker_gid):
-    stdin = PROMPTS_BEFORE_BACKUP + "n\n" + "n\n" + answers
+def test_interactive_claude_containers_question(project, answer, compose_file, docker_gid):
+    stdin = PROMPTS_BEFORE_BACKUP + "n\n" + "n\n" + answer
 
     result = install(project, {}, interactive_input=stdin)
 
     assert result.returncode == 0, result.stderr
     env = read_env(project)
-    assert (env["ENABLE_MODULES"], env.get("COMPOSE_FILE"), env.get("DOCKER_GID")) == (
-        modules,
-        compose_file,
-        docker_gid,
-    )
+    assert (env.get("COMPOSE_FILE"), env.get("DOCKER_GID")) == (compose_file, docker_gid)
+    assert "ENABLE_MODULES" not in env
 
 
-def test_interactive_rerun_keeps_modules_without_asking(project):
-    (project / ".env").write_text("ENABLE_MODULES=teams\n")
+def test_interactive_rerun_keeps_the_wiring_and_the_operators_modules_without_asking(project):
+    (project / ".env").write_text(f"ENABLE_MODULES=teams\nCOMPOSE_FILE={CLAUDE_COMPOSE}\n")
 
     result = install(project, {}, interactive_input=PROMPTS_BEFORE_BACKUP + "n\n" + "n\n")
 
     assert result.returncode == 0, result.stderr
-    assert read_env(project)["ENABLE_MODULES"] == "teams"
+    env = read_env(project)
+    assert (env["ENABLE_MODULES"], env["COMPOSE_FILE"]) == ("teams", CLAUDE_COMPOSE)
+    assert "Wire up Claude Code containers" not in result.stdout
 
 
 @pytest.mark.parametrize("admin", [{"ADMIN_EMAIL": "owner@example.com"}, {"ADMIN_PASSWORD": "pw-Zk3v9QeXr7"}])
@@ -618,18 +611,10 @@ def astuple(result):
     return result.returncode, result.stdout
 
 
-def test_known_modules_match_the_app():
-    script = (REPO_ROOT / "tools" / "install.sh").read_text()
-
-    known = re.search(r'^KNOWN_MODULES="(.*)"$', script, re.M)
-
-    assert known and set(known.group(1).split()) == set(MODULES)
-
-
-@pytest.mark.parametrize("modules", ["claude_container", "teams,projects"])
-def test_unknown_module_fails_before_writing_anything(project, modules):
-    result = install(project, {**REQUIRED, "ENABLE_MODULES": modules})
+@pytest.mark.parametrize("value", ["yes", "claude_containers"])
+def test_claude_containers_must_be_on_or_off(project, value):
+    result = install(project, {**REQUIRED, "CLAUDE_CONTAINERS": value})
 
     assert result.returncode != 0
-    assert "ENABLE_MODULES" in result.stderr
+    assert "CLAUDE_CONTAINERS" in result.stderr
     assert sorted(p.name for p in project.iterdir()) == ["bin", "tools"]

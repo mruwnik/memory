@@ -467,9 +467,9 @@ async def test_scheduling_a_session_needs_the_claude_sessions_scope(
 
 @pytest.mark.asyncio
 async def test_sessions_cannot_be_scheduled_without_claude_containers(
-    db_session, regular_user, user_session, monkeypatch
+    db_session, regular_user, user_session, set_modules
 ):
-    monkeypatch.setattr(settings_mod, "ENABLED_MODULES", frozenset())
+    set_modules([])
     with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
         with pytest.raises(ValueError, match="claude_containers"):
             await scheduler.upsert.fn(**SESSION_TASK)

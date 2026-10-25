@@ -95,7 +95,6 @@ COMPLETE_SETTINGS = dict(
     BACKUP_ENCRYPTION_KEY="",
     ENABLE_MODULES=frozenset(),
     DISABLE_MODULES=frozenset(),
-    ENABLED_MODULES=frozenset(),
     ORCHESTRATOR_SOCKET="",
 )
 
@@ -219,7 +218,7 @@ def test_bad_module_config_refuses_to_start(capsys, enable, disable, named):
 
 
 def test_api_with_claude_containers_needs_the_orchestrator_socket(capsys):
-    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ENABLED_MODULES": CONTAINERS_ON})
+    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ENABLE_MODULES": CONTAINERS_ON})
 
     with pytest.raises(SystemExit) as exc:
         require_settings(values, "api")
@@ -237,7 +236,7 @@ def test_api_with_claude_containers_needs_the_orchestrator_socket(capsys):
 )
 def test_claude_containers_with_a_socket_or_on_a_worker_starts(role, overrides):
     values = SimpleNamespace(
-        **{**COMPLETE_SETTINGS, "ENABLED_MODULES": CONTAINERS_ON, **overrides}
+        **{**COMPLETE_SETTINGS, "ENABLE_MODULES": CONTAINERS_ON, **overrides}
     )
 
     require_settings(values, role)

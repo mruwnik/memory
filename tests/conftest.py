@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
-from memory.common import instance_settings, metrics, settings, summarizer
+from memory.common import instance_settings, metrics, module_settings, settings, summarizer
 from memory.common.db.models import LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
@@ -563,12 +563,34 @@ def instance_settings_from_db_session(request):
     Without db_session, reading them would query the dev DB (or hang without one).
     """
     instance_settings.invalidate_cache()
+    module_settings.invalidate_running_cache()
     if "db_session" in request.fixturenames:
         yield
     else:
-        with patch.object(instance_settings, "read_stored_values", return_value={}):
+        with (
+            patch.object(instance_settings, "read_stored_values", return_value={}),
+            patch.object(module_settings, "read_running", return_value=None),
+        ):
             yield
     instance_settings.invalidate_cache()
+    module_settings.invalidate_running_cache()
+
+
+@pytest.fixture
+def set_modules(monkeypatch):
+    """Run as a process that booted with (or follows) the given modules."""
+    return lambda modules: monkeypatch.setattr(
+        module_settings, "_boot_modules", frozenset(modules)
+    )
+
+
+@pytest.fixture
+def unbooted(monkeypatch):
+    """A worker that hasn't fixed its modules yet, with no module named in the env."""
+    monkeypatch.setattr(settings, "ENABLE_MODULES", frozenset())
+    monkeypatch.setattr(settings, "DISABLE_MODULES", frozenset())
+    monkeypatch.setattr(module_settings, "_boot_modules", None)
+    monkeypatch.setattr(instance_settings, "_boot_values", None)
 
 
 @pytest.fixture(scope="session")

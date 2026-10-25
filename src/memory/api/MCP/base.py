@@ -24,6 +24,7 @@ from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
 from memory.api.MCP.access import fetch_user_by_token
 from memory.common.db.models import OAuthState
+from memory.common.module_settings import boot_modules
 from memory.common.qdrant import get_qdrant_client
 from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
 from memory.common.version import db_revision, version_info
@@ -60,7 +61,9 @@ mcp = FastMCP(
 
 # Only the env and module flags unmount a server. The UI value hides tools live
 # (VisibilityMiddleware), so turning a server off reaches the agents worker too, without
-# restarting anything.
+# restarting anything. Module flags are fixed here, since a module's servers, routes and
+# loops can only change on restart.
+boot_modules()
 SUBSERVER_PREFIXES = list(get_enabled_servers(unmounted_servers()))
 
 if not SUBSERVER_PREFIXES:
@@ -291,3 +294,16 @@ for server in MCPServer:
 
 if disabled := unmounted_servers():
     logger.info(f"Unmounted MCP servers: {sorted(disabled)}")
+
+
+def mount_followed_modules() -> None:
+    """Mount the servers of modules switched on since this process mounted, after follow_modules().
+
+    Those of a module switched off stay mounted, but leave enabled_modules(), so
+    VisibilityMiddleware hides and refuses them.
+    """
+    for server in MCPServer:
+        if server.value not in SUBSERVER_PREFIXES and server.value not in unmounted_servers():
+            mcp.mount(get_server_instance(server), prefix=server.value)
+            SUBSERVER_PREFIXES.append(server.value)
+            logger.info(f"Mounted MCP server: {server.value}")

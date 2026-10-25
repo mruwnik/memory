@@ -578,9 +578,9 @@ def test_enqueue_refuses_what_stops_an_agent(db_session, regular_user, fake_prov
     ],
 )
 def test_tools_of_a_disabled_server_are_a_problem(
-    db_session, regular_user, fake_providers, monkeypatch, modules, disabled, expected
+    db_session, regular_user, fake_providers, monkeypatch, set_modules, modules, disabled, expected
 ):
-    monkeypatch.setattr(settings, "ENABLED_MODULES", modules)
+    set_modules(modules)
     monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", disabled)
     stored = SPEC | {"tools": ["notes_upsert", "teams_upsert", "projects_fetch"]}
     problems = stored_spec_problems(db_session, regular_user.id, stored)
@@ -589,9 +589,9 @@ def test_tools_of_a_disabled_server_are_a_problem(
 
 
 def test_enqueue_refuses_tools_of_a_disabled_module(
-    db_session, regular_user, fake_providers, monkeypatch
+    db_session, regular_user, fake_providers, set_modules
 ):
-    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+    set_modules([])
 
     with pytest.raises(SpecInvalid, match="module teams is off"):
         enqueue_run(

@@ -219,7 +219,14 @@ services:
     networks:
       kbnet:
     security_opt: ["no-new-privileges=true"]
-    depends_on: [postgres, redis, qdrant]
+    # Healthy, not just started: the api reads its module flags from Postgres as it boots.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      qdrant:
+        condition: service_started
     environment:
       <<: *env
       # Cap glibc malloc arenas: with the default (8 × cores) freed transient

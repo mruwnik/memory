@@ -25,6 +25,7 @@ from memory.common.access_control import (
     user_can_access,
 )
 from memory.common.csp import sanitize_csp_source_list
+from memory.common.module_settings import enabled_modules, record_running
 from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session, make_session
@@ -61,7 +62,6 @@ from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.source_tabs import router as source_tabs_router
 from memory.api.celery_overview import router as celery_overview_router
-from memory.api.modules import router as modules_router
 from memory.api.ingest import router as ingest_router
 from memory.api.MCP.base import mcp
 from memory.api.safety import validate_disable_auth_safety
@@ -97,12 +97,14 @@ mcp_http_app = mcp.http_app(stateless_http=True)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         with make_session() as db:
-            check_single_user(db, settings.ENABLED_MODULES)
+            check_single_user(db, enabled_modules())
+            record_running(db, enabled_modules())
     except SQLAlchemyError:
-        # The database may not be up or migrated yet; POST /users and add_user.py still allow one human.
-        logger.warning("Could not check human users at startup")
+        # The database may not be up or migrated yet; POST /users and add_user.py still allow
+        # one human, and workers follow the modules the last recording api ran.
+        logger.warning("Could not check human users or record modules at startup")
     announce_setup_token()
-    containers_on = CLAUDE_CONTAINERS in settings.ENABLED_MODULES
+    containers_on = CLAUDE_CONTAINERS in enabled_modules()
     maintenance = claude_containers.maintenance_running() if containers_on else nullcontext()
     async with mcp_http_app.lifespan(app), maintenance:
         yield
@@ -134,7 +136,7 @@ tags_metadata = [
     {"name": "claude-environments", "description": "Claude environment management"},
     {"name": "cloud-claude", "description": "Cloud Claude integration"},
     {"name": "secrets", "description": "Secret management"},
-    {"name": "settings", "description": "Instance settings (admin)"},
+    {"name": "settings", "description": "Server settings (admin)"},
     {"name": "discord", "description": "Discord integration"},
     {"name": "slack", "description": "Slack integration"},
     {"name": "celery", "description": "Celery task overview and ingestion summary"},
@@ -511,7 +513,7 @@ app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(source_items_router)
 app.include_router(sessions_router)
-if CLAUDE_CONTAINERS in settings.ENABLED_MODULES:
+if CLAUDE_CONTAINERS in enabled_modules():
     for claude_router in claude_containers.routers:
         app.include_router(claude_router)
 app.include_router(secrets_router)
@@ -523,7 +525,6 @@ app.include_router(discord_router)
 app.include_router(slack_router)
 app.include_router(source_tabs_router)
 app.include_router(celery_overview_router)
-app.include_router(modules_router)
 app.include_router(ingest_router)
 
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import SettingsPage from './SettingsPage'
 import type { SettingRow, SettingsState } from '@/hooks/useSettings'
@@ -17,6 +17,8 @@ const row = (overrides: Partial<SettingRow>): SettingRow => ({
   choices: [],
   pending_restart: false,
   error: null,
+  module: null,
+  mcp_servers: [],
   ...overrides,
 })
 
@@ -247,6 +249,38 @@ describe('SettingsPage toggles', () => {
   })
 })
 
+describe('SettingsPage modules', () => {
+  const teams = row({ key: 'module_teams', applies: 'restart', description: 'Teams and projects', env_var: 'ENABLE_MODULES', value: false, module: 'teams', mcp_servers: ['projects', 'teams'] })
+
+  it('lists each module with its MCP servers, and marks a change pending until the api restarts', async () => {
+    const calls = install(
+      state([teams]),
+      {},
+      state([{ ...teams, source: 'ui', set: true, value: true, pending_restart: true }], { restart_pending: true }),
+    )
+    const { user } = renderWithRouter(<SettingsPage />)
+
+    expect(await screen.findByText('MCP servers: projects, teams')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Turn on: module teams' }))
+
+    await waitFor(() => expect(calls.find(c => c.method === 'PATCH')?.body).toEqual({ values: { module_teams: true } }))
+    expect(await screen.findByText('restart pending')).toBeInTheDocument()
+    expect(screen.getByText(/Restart the api to apply: module teams/)).toBeInTheDocument()
+  })
+
+  it('shows an env-set module locked, and why a stored value is ignored', async () => {
+    install(state([
+      { ...teams, source: 'env', locked: true, set: true, value: true },
+      row({ key: 'module_claude_containers', applies: 'restart', module: 'claude_containers', description: 'Claude containers', source: 'ui', set: true, value: true, error: 'needs ORCHESTRATOR_SOCKET' }),
+    ]))
+    renderWithRouter(<SettingsPage />)
+
+    expect(await screen.findByText(/Set by the operator in the environment \(ENABLE_MODULES\)/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /module teams/ })).toBeNull()
+    expect(screen.getByText('needs ORCHESTRATOR_SOCKET')).toBeInTheDocument()
+  })
+})
+
 describe('SettingsPage restart banner', () => {
   const pending = row({ pending_restart: true, description: 'Module flags' })
 
@@ -263,7 +297,8 @@ describe('SettingsPage restart banner', () => {
       '/settings/restart': () => mockResponse({ status: 202, json: { status: 'restarting' } }),
       '/health': () => mockResponse({ json: { boot_id: String(Math.random()) } }),
     })
-    const { user } = renderWithRouter(<SettingsPage />)
+    const onRestarted = vi.fn().mockResolvedValue(true)
+    const { user } = renderWithRouter(<SettingsPage onRestarted={onRestarted} />)
 
     expect(await screen.findByText(/Restart the api to apply: Module flags/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Restart now' }))
@@ -272,6 +307,7 @@ describe('SettingsPage restart banner', () => {
 
     await waitFor(() => expect(calls.some(c => c.url.endsWith('/settings/restart') && c.method === 'POST')).toBe(true))
     expect(await screen.findByText('The api restarted.', {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(onRestarted).toHaveBeenCalled()
   })
 
   it('gives the ops command instead when the api cannot restart itself', async () => {

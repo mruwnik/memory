@@ -8,14 +8,14 @@ ENV_FILE="$PROJECT_DIR/.env"
 
 # --non-interactive never prompts. Required: DOMAIN. Optional: ADMIN_EMAIL with
 # ADMIN_PASSWORD (else the first account is claimed with the setup token),
-# ENABLE_MODULES, VOYAGE_API_KEY (else an admin sets it on the settings page), and,
+# CLAUDE_CONTAINERS=on (wires up the Claude Code containers overlay; an admin then
+# turns the module on in the setup wizard or on the Server settings page),
+# VOYAGE_API_KEY (else an admin sets it on the settings page), and,
 # used instead of generating, POSTGRES_PASSWORD, REDIS_PASSWORD, APP_NAME,
 # BACKUP_ENCRYPTION_KEY. Anything already installed is
 # kept. S3 backups need an explicit choice: S3_BACKUP_BUCKET (with optional
 # S3_BACKUP_PREFIX and S3_BACKUP_REGION) to enable them, or S3_BACKUP=off.
 NON_INTERACTIVE=false
-# Kept equal to MODULES in src/memory/common/modules.py by tests/tools/test_install_sh.py
-KNOWN_MODULES="claude_containers multi_user teams"
 for arg in "$@"; do
     case "$arg" in
         --non-interactive) NON_INTERACTIVE=true ;;
@@ -44,14 +44,10 @@ if [ "$NON_INTERACTIVE" = true ]; then
             exit 1
         fi
     done
-    # Settings refuse an unknown name only once the api starts, after .env keeps it
-    IFS=, read -r -a requested <<< "${ENABLE_MODULES:-}"
-    for module in "${requested[@]}"; do
-        if [[ " $KNOWN_MODULES " != *" $module "* ]]; then
-            echo "✗ ENABLE_MODULES may only list: ${KNOWN_MODULES// /,}" >&2
-            exit 1
-        fi
-    done
+    if [[ ! "${CLAUDE_CONTAINERS:-off}" =~ ^(on|off)$ ]]; then
+        echo "✗ CLAUDE_CONTAINERS must be on or off" >&2
+        exit 1
+    fi
 fi
 
 # Colors
@@ -449,12 +445,14 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
-# Modules
+# Claude Code containers
 # ─────────────────────────────────────────────────────────────────────
 
+# Modules are switched in the web UI (setup wizard, Server settings); only the
+# claude_containers module needs host wiring first: the overlay, its network and DOCKER_GID.
 echo ""
 echo "─────────────────────────────────────────────────────────────────"
-echo "                           Modules                               "
+echo "                    Claude Code containers                       "
 echo "─────────────────────────────────────────────────────────────────"
 echo ""
 
@@ -465,30 +463,22 @@ ask_yes() {
     [[ "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]
 }
 
-# An empty ENABLE_MODULES line still records that the questions were answered
-if grep -q '^ENABLE_MODULES=' "$ENV_FILE"; then
-    success "ENABLE_MODULES already configured: $(get_env_value 'ENABLE_MODULES')"
+claude_wired() {
+    [[ ":$(get_env_value 'COMPOSE_FILE'):" == *:docker-compose.claude.yaml:* ]]
+}
+
+if claude_wired; then
+    wire_claude=true
+    success "Claude Code containers already wired up"
+elif [ "$NON_INTERACTIVE" = true ]; then
+    [ "${CLAUDE_CONTAINERS:-off}" = on ] && wire_claude=true || wire_claude=false
+elif ask_yes "Wire up Claude Code containers (needs the orchestrator on this host)?"; then
+    wire_claude=true
 else
-    if [ "$NON_INTERACTIVE" = true ]; then
-        modules="${ENABLE_MODULES:-}"
-    else
-        chosen=()
-        if ask_yes "Run Claude Code containers (needs the orchestrator on this host)?"; then
-            chosen+=(claude_containers)
-        fi
-        if ask_yes "Will more than one person log in?"; then
-            chosen+=(multi_user)
-            if ask_yes "Organise access with teams and projects?"; then
-                chosen+=(teams)
-            fi
-        fi
-        modules=$(IFS=,; echo "${chosen[*]}")
-    fi
-    set_env_value "ENABLE_MODULES" "$modules"
-    success "ENABLE_MODULES set to ${modules:-(none)}"
+    wire_claude=false
 fi
 
-if [[ ",$(get_env_value 'ENABLE_MODULES' | tr -d ' ')," == *,claude_containers,* ]]; then
+if [ "$wire_claude" = true ]; then
     # Docker group GID - needed for orchestrator socket access
     if [ -z "$(get_env_value 'DOCKER_GID')" ]; then
         docker_gid=$(getent group docker 2>/dev/null | cut -d: -f3)
@@ -510,6 +500,7 @@ if [[ ",$(get_env_value 'ENABLE_MODULES' | tr -d ' ')," == *,claude_containers,*
         set_env_value "COMPOSE_FILE" "$compose_file:docker-compose.claude.yaml"
     fi
     success "COMPOSE_FILE includes docker-compose.claude.yaml"
+    info "Turn on the claude_containers module in the setup wizard or on the Server settings page."
 
     # docker-compose.claude.yaml declares this network external, so compose fails without it there
     stack="${MEMORY_STACK:-$(get_env_value 'MEMORY_STACK')}"
@@ -560,7 +551,7 @@ if [ "$NON_INTERACTIVE" = true ]; then
     # Supplied values already live in .env and secrets/; compose interpolates the
     # shell environment ahead of .env, so a stale one would override what is stored.
     unset POSTGRES_PASSWORD REDIS_PASSWORD SERVER_URL API_PORT \
-        FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES ENABLE_MODULES
+        FORWARDED_ALLOW_IPS RATE_LIMIT_TRUSTED_PROXIES
     cd "$PROJECT_DIR"
     # The api's healthcheck passes on an empty schema, so migrate first, as update.sh does
     docker compose run --rm migrate

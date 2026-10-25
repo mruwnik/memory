@@ -5,9 +5,9 @@ from memory.api import instance_settings as settings_api
 from memory.api.auth import setup_warnings
 from memory.common import embedding, instance_settings, settings
 from memory.common.celery_app import REINGEST_ALL_EMPTY_SOURCE_ITEMS
-from memory.common.db.models import InstanceSetting, TelemetryEvent
+from memory.common.db.models import HumanUser, InstanceSetting, TelemetryEvent
 from memory.common.db.models.secrets import encrypt_value_with_key
-from memory.common.instance_settings import REGISTRY, Setting
+from memory.common.module_settings import RUNNING_MODULES_KEY
 
 
 @pytest.fixture
@@ -22,6 +22,11 @@ def ui_voyage_key(monkeypatch):
 
     monkeypatch.setattr(embedding, "check_key", check_key)
     return checked
+
+
+def saved(db_session):
+    """The settings rows, without the api's record of the modules it runs."""
+    return [r.key for r in db_session.query(InstanceSetting) if r.key != RUNNING_MODULES_KEY]
 
 
 def rows(response):
@@ -41,7 +46,7 @@ def test_settings_are_admin_only(regular_client, db_session, method, path, body)
     response = regular_client.request(method, path, json=body)
 
     assert response.status_code == 403
-    assert db_session.query(InstanceSetting).count() == 0
+    assert saved(db_session) == []
 
 
 def test_an_env_secret_is_locked_and_shows_only_its_hint(client):
@@ -61,6 +66,8 @@ def test_an_env_secret_is_locked_and_shows_only_its_hint(client):
         "choices": [],
         "pending_restart": False,
         "error": None,
+        "module": None,
+        "mcp_servers": [],
     }
 
 
@@ -71,7 +78,7 @@ def test_an_env_setting_cannot_be_changed(client, db_session, monkeypatch):
 
     assert response.status_code == 409
     assert "ENABLE_RERANKING" in response.json()["detail"]
-    assert db_session.query(InstanceSetting).count() == 0
+    assert saved(db_session) == []
 
 
 def test_a_stale_ui_value_can_be_cleared_while_the_env_sets_the_key(client, db_session, monkeypatch):
@@ -82,7 +89,7 @@ def test_a_stale_ui_value_can_be_cleared_while_the_env_sets_the_key(client, db_s
     response = client.patch("/settings", json={"values": {"enable_reranking": None}})
 
     assert response.status_code == 200
-    assert db_session.query(InstanceSetting).count() == 0
+    assert saved(db_session) == []
 
 
 @pytest.mark.parametrize(
@@ -100,16 +107,7 @@ def test_invalid_changes_save_nothing(client, db_session, values):
     response = client.patch("/settings", json={"values": values})
 
     assert response.status_code == 400
-    assert db_session.query(InstanceSetting).count() == 0
-
-
-def test_disabling_every_mcp_server_is_refused(client, db_session):
-    every = rows(client.get("/settings"))["disabled_mcp_servers"]["choices"]
-
-    response = client.patch("/settings", json={"values": {"disabled_mcp_servers": every}})
-
-    assert response.status_code == 400
-    assert "every MCP server" in response.json()["detail"]
+    assert saved(db_session) == []
 
 
 def test_setting_and_clearing_a_value_is_audited(client, db_session, user):
@@ -128,6 +126,8 @@ def test_setting_and_clearing_a_value_is_audited(client, db_session, user):
         "choices": [],
         "pending_restart": False,
         "error": None,
+        "module": None,
+        "mcp_servers": [],
     }
 
     cleared = rows(client.patch("/settings", json={"values": {"enable_reranking": None}}))
@@ -168,7 +168,7 @@ def test_a_key_voyage_rejects_is_not_saved(client, db_session, monkeypatch, no_c
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Voyage rejected the key (HTTP 401)"
-    assert db_session.query(InstanceSetting).count() == 0
+    assert saved(db_session) == []
     no_celery_dispatch.assert_not_called()
 
 
@@ -179,7 +179,7 @@ def test_checking_a_key_saves_nothing(client, db_session, monkeypatch, status, e
     response = client.post("/settings/voyage_api_key/check", json={"value": "pa-try"})
 
     assert response.json() == expected
-    assert db_session.query(InstanceSetting).count() == 0
+    assert saved(db_session) == []
 
 
 def test_admins_are_warned_until_a_voyage_key_is_set(client, ui_voyage_key):
@@ -212,34 +212,112 @@ def test_a_row_that_cant_be_read_is_shown_as_unset_with_why(client, db_session, 
     assert (voyage["set"], voyage["key_hint"], voyage["error"]) == (False, None, "can't be read; set it again")
 
 
-@pytest.fixture
-def restart_flag(monkeypatch):
-    """A restart-bound setting this process has booted with."""
-    flag = Setting(key="restart_flag", kind="bool", applies="restart", default=False, description="")
-    monkeypatch.setattr(settings, "RESTART_FLAG", None, raising=False)
-    monkeypatch.setitem(REGISTRY, flag.key, flag)
-    monkeypatch.setattr(instance_settings, "_boot_values", {})
-    monkeypatch.setattr(instance_settings, "_booted", {})
-    instance_settings.booted(flag)
-    return flag
-
-
-def test_a_restart_bound_change_is_pending_until_the_api_restarts(client, restart_flag):
-    response = client.patch("/settings", json={"values": {"restart_flag": True}})
-
-    flag = rows(response)["restart_flag"]
-    assert (flag["value"], flag["pending_restart"]) == (True, True)
-    assert response.json()["restart_pending"] is True
-
-    response = client.patch("/settings", json={"values": {"restart_flag": None}})
-    assert response.json()["restart_pending"] is False
-
-
 def test_disabling_an_mcp_server_needs_no_restart(client):
     response = client.patch("/settings", json={"values": {"disabled_mcp_servers": ["slack"]}})
 
     servers = rows(response)["disabled_mcp_servers"]
     assert (servers["value"], servers["applies"], response.json()["restart_pending"]) == (["slack"], "live", False)
+
+
+@pytest.fixture
+def ui_modules(monkeypatch, set_modules):
+    """The env names no module, so each is the admin's to set; the api booted with none."""
+    monkeypatch.setattr(settings, "ENABLE_MODULES", frozenset())
+    monkeypatch.setattr(settings, "DISABLE_MODULES", frozenset())
+    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "/orch.sock")
+    set_modules([])
+
+
+def test_env_named_modules_are_locked_and_list_their_servers(client):
+    teams = rows(client.get("/settings"))["module_teams"]
+
+    assert (teams["module"], teams["mcp_servers"], teams["applies"]) == ("teams", ["projects", "teams"], "restart")
+    assert (teams["source"], teams["locked"], teams["env_var"], teams["value"]) == ("env", True, "ENABLE_MODULES", True)
+    assert client.patch("/settings", json={"values": {"module_teams": False}}).status_code == 409
+
+
+def test_a_module_change_is_pending_until_the_api_restarts(client, ui_modules, set_modules):
+    response = client.patch("/settings", json={"values": {"module_teams": True}})
+
+    teams = rows(response)["module_teams"]
+    assert (teams["source"], teams["value"], teams["pending_restart"]) == ("ui", True, True)
+    assert response.json()["restart_pending"] is True
+
+    set_modules(["teams"])
+    assert client.get("/settings").json()["restart_pending"] is False
+
+
+def test_the_mcp_checklist_leaves_module_servers_to_their_modules(client):
+    choices = rows(client.get("/settings"))["disabled_mcp_servers"]["choices"]
+
+    assert not {"teams", "projects", "containers"} & set(choices)
+    assert client.patch("/settings", json={"values": {"disabled_mcp_servers": ["teams"]}}).status_code == 400
+
+
+@pytest.mark.parametrize("modules, status", [({}, 400), ({"module_teams": True}, 200)])
+def test_hiding_every_mounted_server_is_refused(client, db_session, ui_modules, modules, status):
+    every = rows(client.get("/settings"))["disabled_mcp_servers"]["choices"]
+
+    response = client.patch("/settings", json={"values": {"disabled_mcp_servers": every, **modules}})
+
+    assert response.status_code == status
+
+
+def test_turning_off_the_last_visible_servers_module_is_refused(client, db_session, ui_modules):
+    every = rows(client.get("/settings"))["disabled_mcp_servers"]["choices"]
+    client.patch("/settings", json={"values": {"disabled_mcp_servers": every, "module_teams": True}})
+
+    response = client.patch("/settings", json={"values": {"module_teams": False}})
+
+    assert response.status_code == 400
+    assert "every MCP server" in response.json()["detail"]
+
+
+# Clearing goes back to the default, which is off.
+@pytest.mark.parametrize("value", [False, None])
+def test_multi_user_stays_on_while_several_humans_exist(client, db_session, ui_modules, value):
+    client.patch("/settings", json={"values": {"module_multi_user": True}})
+    db_session.add(HumanUser.create_with_password(email="two@example.com", name="Two", password="pw123456"))
+    db_session.commit()
+
+    response = client.patch("/settings", json={"values": {"module_multi_user": value}})
+
+    assert response.status_code == 400
+    assert "more than one human" in response.json()["detail"]
+    assert rows(client.get("/settings"))["module_multi_user"]["value"] is True
+
+
+def test_claude_containers_needs_the_orchestrator_socket(client, db_session, ui_modules, monkeypatch):
+    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "")
+
+    response = client.patch("/settings", json={"values": {"module_claude_containers": True}})
+
+    assert response.status_code == 400
+    assert "ORCHESTRATOR_SOCKET" in response.json()["detail"]
+    assert saved(db_session) == []
+
+
+def test_a_stored_module_flag_the_api_cant_run_with_is_flagged(client, db_session, ui_modules, monkeypatch):
+    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
+    db_session.commit()
+    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "")
+
+    containers = rows(client.get("/settings"))["module_claude_containers"]
+
+    assert "ORCHESTRATOR_SOCKET" in containers["error"]
+    # It falls back to off, which the api already runs, so a restart would change nothing.
+    assert containers["pending_restart"] is False
+
+
+def test_a_stored_mcp_list_that_hides_every_server_is_flagged(client, db_session, ui_modules):
+    every = rows(client.get("/settings"))["disabled_mcp_servers"]["choices"]
+    # Saved while teams was on, which the api no longer runs.
+    db_session.add(InstanceSetting(key="disabled_mcp_servers", value=every))
+    db_session.commit()
+
+    servers = rows(client.get("/settings"))["disabled_mcp_servers"]
+
+    assert servers["error"] == "can't disable every MCP server: no MCP tools are visible"
 
 
 def test_restart_needs_a_restart_policy_to_bring_the_api_back(client, monkeypatch):

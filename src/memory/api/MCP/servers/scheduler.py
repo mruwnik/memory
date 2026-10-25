@@ -20,6 +20,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.db.models.secrets import find_secret
+from memory.common.module_settings import enabled_modules
 from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.scopes import (
     SCOPE_CLAUDE_SESSIONS,
@@ -210,10 +211,10 @@ def build_scheduled_task(
             "Creating a task requires task_type 'notification' or 'claude_session' "
             "(agent runs are scheduled with agent_schedule)"
         )
-    if task_type == TaskType.CLAUDE_SESSION and CLAUDE_CONTAINERS not in settings.ENABLED_MODULES:
+    if task_type == TaskType.CLAUDE_SESSION and CLAUDE_CONTAINERS not in enabled_modules():
         raise ValueError(
             "claude_session tasks need the claude_containers module "
-            "(ENABLE_MODULES=claude_containers)"
+            "(an admin turns it on in Server settings)"
         )
     if bool(cron_expression) == bool(scheduled_time):
         raise ValueError("Provide exactly one of cron_expression or scheduled_time")

@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from memory.common import instance_settings, settings
 from memory.common.instance_settings import VOYAGE_API_KEY
+from memory.common.module_settings import enabled_modules
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     APIKey,
@@ -773,7 +774,7 @@ def setup_warnings(user: User) -> list[str]:
 def get_me(user: User = Depends(get_current_user)):
     """Get current user info, with the modules this instance runs."""
     return user.serialize() | {
-        "modules": sorted(settings.ENABLED_MODULES),
+        "modules": sorted(enabled_modules()),
         "setup_warnings": setup_warnings(user),
     }
 

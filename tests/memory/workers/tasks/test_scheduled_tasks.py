@@ -6,8 +6,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from memory.common import module_settings
 from memory.common.celery_app import START_CRON_RUN
-from memory.common.db.models import APIKey, ScheduledTask, TaskExecution
+from memory.common.db.models import APIKey, InstanceSetting, ScheduledTask, TaskExecution
 from memory.common.db.models.discord import DiscordChannel, DiscordServer
 from memory.workers.tasks import scheduled_tasks
 
@@ -830,34 +831,55 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     assert (task.next_scheduled_time.hour, task.next_scheduled_time.minute) == (3, 30)
 
 
-@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_due_sessions_are_skipped_without_claude_containers(
-    mock_send, db_session, sample_user, monkeypatch, caplog
-):
-    monkeypatch.setattr(scheduled_tasks.settings, "ENABLED_MODULES", frozenset())
+def due_session(db_session, user, cron_expression) -> tuple[ScheduledTask, datetime]:
     due = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
     task = ScheduledTask(
         id=str(uuid.uuid4()),
-        user_id=sample_user.id,
+        user_id=user.id,
         task_type="claude_session",
         next_scheduled_time=due,
         message="Run the digest",
-        cron_expression="0 9 * * *",
+        cron_expression=cron_expression,
         data={"spawn_config": {"environment_id": 1}},
         enabled=True,
     )
     db_session.add(task)
     db_session.commit()
+    return task, due
+
+
+# Switched on in the settings, the module only counts once the api runs it (after a restart).
+@pytest.mark.parametrize("running, dispatched", [([], 0), (["claude_containers"], 1)])
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
+def test_due_sessions_follow_the_modules_the_api_runs(
+    mock_send, db_session, sample_user, unbooted, caplog, running, dispatched
+):
+    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
+    module_settings.record_running(db_session, frozenset(running))
+    task, due = due_session(db_session, sample_user, "0 9 * * *")
 
     result = scheduled_tasks.run_scheduled_tasks()
 
     db_session.refresh(task)
-    assert result["count"] == 0
-    assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == 0
+    assert result["count"] == dispatched
+    assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == dispatched
     assert task.next_scheduled_time is not None
     assert task.next_scheduled_time > due
+    assert mock_send.call_count == dispatched
+    assert ("module is off" in caplog.text) == (dispatched == 0)
+
+
+@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
+def test_a_due_one_off_session_waits_while_the_module_is_off(mock_send, db_session, sample_user, unbooted):
+    module_settings.record_running(db_session, frozenset())
+    task, due = due_session(db_session, sample_user, None)
+
+    result = scheduled_tasks.run_scheduled_tasks()
+
+    db_session.refresh(task)
+    assert (result["count"], task.next_scheduled_time) == (0, due)
+    assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == 0
     mock_send.assert_not_called()
-    assert "claude_containers" in caplog.text
 
 
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
@@ -1444,3 +1466,22 @@ def test_stale_recovery_gives_started_containers_the_session_timeout(
     result = scheduled_tasks.run_scheduled_tasks()
 
     assert result["recovered_stale"] == recovered
+
+
+# A pending execution re-dispatched after the api stopped running the module.
+@patch("memory.workers.tasks.scheduled_tasks.spawn_claude_session")
+def test_a_claude_session_execution_fails_while_the_api_runs_without_the_module(
+    mock_spawn, db_session, sample_user, unbooted
+):
+    module_settings.record_running(db_session, frozenset())
+    task, due = due_session(db_session, sample_user, None)
+    execution = TaskExecution(id=str(uuid.uuid4()), task_id=task.id, scheduled_time=due, status="pending")
+    db_session.add(execution)
+    db_session.commit()
+
+    result = scheduled_tasks.execute_scheduled_task(execution.id)
+
+    db_session.refresh(execution)
+    assert result == {"error": "the claude_containers module is off"}
+    assert (execution.status, execution.error_message) == ("failed", "the claude_containers module is off")
+    mock_spawn.assert_not_called()

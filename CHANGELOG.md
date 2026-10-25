@@ -17,9 +17,10 @@ section has nothing in it:
 ### Required env vars
 
 - **Modules: Claude containers, multiple users and teams are now off by
-  default. Read this before updating.** Three optional modules are chosen with
-  `ENABLE_MODULES` and `DISABLE_MODULES` (comma-separated names, in `.env`; a
-  change needs a restart):
+  default. Read this before updating.** Three optional modules are turned on
+  on the Server settings page, or by the operator with `ENABLE_MODULES` and
+  `DISABLE_MODULES` (comma-separated names, in `.env`; a change needs a
+  restart), which lock the modules they name on the page:
 
   | Module | Turns on |
   |---|---|
@@ -53,6 +54,24 @@ section has nothing in it:
   - With `claude_containers` on, the api refuses to start without
     `ORCHESTRATOR_SOCKET`, which the overlay sets.
 
+  **On the settings page.** A module the env doesn't name is a toggle under
+  Modules on `/ui/server-settings` (and in the setup wizard), applied when the
+  api restarts from the page's banner; the separate `/ui/modules` page and
+  `GET /modules` are gone. The Instance settings page is now Server settings,
+  at `/ui/server-settings`; the old `/ui/instance-settings` URL doesn't
+  redirect. The page refuses `claude_containers` without `ORCHESTRATOR_SOCKET`
+  and `multi_user` off while several humans exist. If the
+  env changes under a saved value, the api logs `Ignoring the stored value of
+  module_<name>` at ERROR, boots with the module the other way and the page
+  flags the row, rather than refusing to start. The api records the modules it
+  booted with (a `running_modules` row in `instance_settings`), and workers
+  follow that record, not the saved values: due `claude_session` tasks wait
+  until the api runs the module, and the agents worker mounts or hides a
+  module's MCP servers at the start of each agent task. The api now waits for
+  a healthy Postgres (`depends_on: condition: service_healthy`).
+  The MCP server checklist no longer lists `teams`, `projects` or `containers`:
+  they go with their module.
+
   **Compose overlay.** The Claude container wiring (the orchestrator socket
   mount, `group_add` with `DOCKER_GID`, the external `memory-api-<MEMORY_STACK>`
   network and its alias, and `ORCHESTRATOR_SOCKET`) left `docker-compose.yaml`
@@ -61,7 +80,7 @@ section has nothing in it:
   `-f docker-compose.claude.yaml` after the base file. Without the overlay, a
   fresh `docker compose up` no longer needs the `memory-api-<stack>` network;
   `tools/install.sh` and `deploy/aws/bootstrap.sh` create it only when
-  `ENABLE_MODULES` lists `claude_containers`.
+  `COMPOSE_FILE` lists the overlay.
 
   **What off means.** The routes return 404 and leave OpenAPI, the MCP servers
   are not mounted (their tools leave `tools/list`, agent catalogs and
@@ -86,7 +105,7 @@ section has nothing in it:
 
   **Leftovers when `claude_containers` is off.** Due `claude_session`
   scheduled tasks are skipped (no execution row, the next run of a cron task
-  advances, a one-off task is dropped and won't run when the module returns; one
+  advances, a one-off task keeps its time and runs once the module is back; one
   log line) and the scheduler MCP refuses to create new ones. Executions already
   pending or running when the module goes off are not cancelled: pending ones
   fail on their next attempt, running ones wait for the stale-execution timeout
@@ -170,14 +189,17 @@ section has nothing in it:
   Creating it needs a setup token that the api writes to its log at startup
   (`docker compose logs api | grep "setup token"`); a new token is made on each
   restart until the account exists. The wizard then walks the new admin through
-  LLM keys, a first source, connecting an AI client, and their timezone. It runs
+  LLM keys, the Voyage key, modules, a first source, connecting an AI client,
+  and their timezone. It runs
   once: an instance that already has an account never shows it.
   `POST /setup/account` returns 404 once any human account exists.
-- `tools/install.sh` asks which modules to turn on (each defaults to no) and
-  writes `ENABLE_MODULES`; `--non-interactive` copies `ENABLE_MODULES` from its
-  environment. Only with `claude_containers` does it detect `DOCKER_GID`,
-  append `docker-compose.claude.yaml` to `COMPOSE_FILE` and create the
-  `memory-api-<stack>` network. A re-run keeps an existing `ENABLE_MODULES` line.
+- `tools/install.sh` no longer asks about modules or writes `ENABLE_MODULES`:
+  modules are switched in the setup wizard and on the Server settings page. It
+  asks only whether to wire up Claude Code containers (`CLAUDE_CONTAINERS=on`
+  with `--non-interactive`; default off): then it detects `DOCKER_GID`, appends
+  `docker-compose.claude.yaml` to `COMPOSE_FILE` and creates the
+  `memory-api-<stack>` network, and the admin turns the module on in the UI. A
+  re-run keeps an existing `ENABLE_MODULES` line and an already wired overlay.
 - `tools/install.sh --non-interactive` no longer requires `ADMIN_EMAIL` and
   `ADMIN_PASSWORD` (set both or neither). Without them it creates no user and
   prints the setup token for `/ui/setup`. It now runs `docker compose run --rm

@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.api.users import check_single_user
-from memory.common import settings
 from memory.common.db.models import APIKey, HumanUser, ScheduledTask, UserSession
 from memory.common.db.models.users import verify_password
 from memory.common.modules import MODULES, MULTI_USER
@@ -455,9 +454,9 @@ def test_create_user_with_valid_scopes(client: TestClient, admin_user, db_sessio
     [("human", frozenset(), 403), ("bot", frozenset(), 200), ("human", ALL_MODULES, 200)],
 )
 def test_create_user_allows_one_human_without_multi_user(
-    client: TestClient, admin_user, monkeypatch, user_type, modules, status
+    client: TestClient, admin_user, set_modules, user_type, modules, status
 ):
-    monkeypatch.setattr(settings, "ENABLED_MODULES", modules)
+    set_modules(modules)
 
     response = client.post(
         "/users",

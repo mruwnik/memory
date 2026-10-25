@@ -52,6 +52,7 @@ from memory.common.email_sender import (
     send_email,
 )
 from memory.common.jobs import tracked_task
+from memory.common.module_settings import enabled_modules
 from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.notify import notify_user_now
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
@@ -491,6 +492,16 @@ def execute_scheduled_task(self, execution_id: str):
             app.send_task(START_CRON_RUN, args=[execution_id])
             return {"handed_off": START_CRON_RUN, "execution_id": execution_id}
 
+        # A pending execution re-dispatched after the module went off has no /claude/spawn to reach.
+        if task_type == TaskType.CLAUDE_SESSION and CLAUDE_CONTAINERS not in enabled_modules():
+            reason = f"the {CLAUDE_CONTAINERS} module is off"
+            logger.warning(f"Not running scheduled Claude session {execution_id}: {reason}")
+            execution.status = ExecutionStatus.FAILED
+            execution.error_message = reason
+            execution.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            session.commit()
+            return {"error": reason}
+
         # Mark as running and commit - use try/finally to ensure we always
         # update the final status even if something goes wrong after this point
         execution.status = ExecutionStatus.RUNNING
@@ -644,8 +655,13 @@ def run_scheduled_tasks():
 
         # 3. Create executions and dispatch
         execution_ids = []
-        containers_on = CLAUDE_CONTAINERS in settings.ENABLED_MODULES
+        containers_on = CLAUDE_CONTAINERS in enabled_modules()
         for task in due_tasks:
+            module_off = task.task_type == TaskType.CLAUDE_SESSION and not containers_on
+            if module_off and not task.cron_expression:
+                # A one-off keeps its time, so it runs once the module is back.
+                logger.debug(f"Holding scheduled Claude session {task.id}: the module is off")
+                continue
             scheduled_time = task.next_scheduled_time
             if task.cron_expression:
                 task.next_scheduled_time = compute_next_cron(
@@ -654,7 +670,7 @@ def run_scheduled_tasks():
             else:
                 task.next_scheduled_time = None
 
-            if task.task_type == TaskType.CLAUDE_SESSION and not containers_on:
+            if module_off:
                 logger.warning(
                     f"Skipping scheduled Claude session {task.id}: the {CLAUDE_CONTAINERS} "
                     "module is off"

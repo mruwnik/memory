@@ -1,6 +1,6 @@
 """Shared fixtures for API tests."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,7 +44,10 @@ def app_client():
     app.dependency_overrides[get_current_user] = mock_get_current_user
 
     _test_client = TestClient(app, raise_server_exceptions=False)
-    _test_client.__enter__()
+    # The lifespan runs once, outside any test's db_session, so a record of the modules
+    # it runs would outlive every test (and could land in the dev DB).
+    with patch("memory.api.app.record_running"):
+        _test_client.__enter__()
 
     yield _test_client, app
 

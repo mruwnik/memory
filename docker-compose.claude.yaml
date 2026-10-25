@@ -1,7 +1,8 @@
 # Wiring for the claude_containers module. Add it in .env with
 #   COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
-# next to ENABLE_MODULES=claude_containers. If COMPOSE_FILE is already set (e.g. with
-# deploy/aws/compose.proxy.yaml), append :docker-compose.claude.yaml to it.
+# then turn the module on in the setup wizard or on the Server settings page. If
+# COMPOSE_FILE is already set (e.g. with deploy/aws/compose.proxy.yaml), append
+# :docker-compose.claude.yaml to it.
 networks:
   memory-api:
     # Created externally; the orchestrator connects Claude containers to it

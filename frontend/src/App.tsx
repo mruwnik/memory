@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { getNeedsAccount } from '@/hooks/useSetup'
 import { ModulesContext, type Module } from '@/hooks/useModule'
-import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage, ModulesPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -128,9 +128,8 @@ const AuthWrapper = () => {
     { path: '/ui/snapshots', element: <ConfigSources />, module: 'claude_containers' },
     { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions', module: 'claude_containers' },
     { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions', module: 'claude_containers' },
-    { path: '/ui/instance-settings', element: <SettingsPage />, scope: 'admin' },
+    { path: '/ui/server-settings', element: <SettingsPage onRestarted={checkAuth} />, scope: 'admin' },
     { path: '/ui/celery', element: <CeleryOverview />, scope: 'admin' },
-    { path: '/ui/modules', element: <ModulesPage />, scope: 'admin' },
     { path: '/ui/polls', element: <PollList /> },
     { path: '/ui/polls/new', element: <PollCreate /> },
     { path: '/ui/polls/edit/:slug', element: <PollEdit /> },

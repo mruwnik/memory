@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import type { SetupStatus } from '@/hooks/useSetup'
 import type { AuthUser } from '@/hooks/useAuth'
+import type { SettingRow, SettingsState } from '@/hooks/useSettings'
 import { SetupWizard } from './SetupWizard'
 import { POLL_MS } from './ClientStep'
 
@@ -14,6 +15,9 @@ const listKeys = vi.fn()
 const upsertKey = vi.fn()
 const listSystemAgents = vi.fn()
 const updateUser = vi.fn()
+const getSettings = vi.fn()
+const updateSettings = vi.fn()
+const restartApi = vi.fn()
 
 vi.mock('@/hooks/useSetup', () => ({
   getNeedsAccount: () => getNeedsAccount(),
@@ -29,6 +33,9 @@ vi.mock('@/hooks/useAgents', async (orig) => ({
   useAgents: () => ({ listKeys, upsertKey, listSystemAgents }),
 }))
 vi.mock('@/hooks/useUsers', () => ({ useUsers: () => ({ updateUser }) }))
+vi.mock('@/hooks/useSettings', () => ({
+  useSettings: () => ({ getSettings, updateSettings, restartApi, checkVoyageKey: vi.fn() }),
+}))
 vi.mock('@/components/sources/panels/EmailPanel', () => ({ EmailPanel: () => <div>EMAIL_PANEL</div> }))
 
 const ADA: AuthUser = { id: 7, name: 'Ada', email: 'ada@example.com', user_type: 'human', scopes: ['*'], timezone: 'UTC', modules: [] }
@@ -41,10 +48,41 @@ const status = (overrides: Partial<SetupStatus> = {}): SetupStatus => ({
   ...overrides,
 })
 
-const Harness = ({ signedIn = false }: { signedIn?: boolean }) => {
+const checkAuth = vi.fn()
+
+const Harness = ({ signedIn = false, scopes = ADA.scopes }: { signedIn?: boolean; scopes?: string[] }) => {
   const [authed, setAuthed] = useState(signedIn)
-  return <SetupWizard isAuthenticated={authed} user={authed ? ADA : null} checkAuth={async () => setAuthed(true)} />
+  return <SetupWizard isAuthenticated={authed} user={authed ? { ...ADA, scopes } : null} checkAuth={async () => {
+    checkAuth()
+    setAuthed(true)
+  }} />
 }
+
+const setting = (overrides: Partial<SettingRow>): SettingRow => ({
+  key: 'module_teams',
+  kind: 'bool',
+  applies: 'restart',
+  description: 'Teams and projects',
+  env_var: 'ENABLE_MODULES',
+  source: 'default',
+  locked: false,
+  set: false,
+  value: false,
+  key_hint: null,
+  choices: [],
+  pending_restart: false,
+  error: null,
+  module: 'teams',
+  mcp_servers: ['projects', 'teams'],
+  ...overrides,
+})
+
+const settings = (rows: SettingRow[], overrides: Partial<SettingsState> = {}): SettingsState => ({
+  settings: rows,
+  restart_pending: false,
+  self_restart: true,
+  ...overrides,
+})
 
 const atStep = (step: string) => ({ initialEntries: [{ pathname: '/ui/setup', state: { step } }] })
 
@@ -114,17 +152,17 @@ describe('SetupWizard', () => {
     ])
     renderWithRouter(<Harness signedIn />, atStep('keys'))
 
-    expect(await screen.findByText(/Voyage key/)).toBeInTheDocument()
     await waitFor(() => expect(listSystemAgents).toHaveBeenCalled())
     expect(await screen.findByText(shown ? 'Summaries' : 'Add a key')).toBeInTheDocument()
     expect(screen.queryByText('Summaries') !== null).toBe(shown)
   })
 
-  it('adds a key from the keys step and says where the Voyage key lives', async () => {
+  it('adds a key from the keys step', async () => {
     upsertKey.mockResolvedValue(undefined)
     const { user } = renderWithRouter(<Harness signedIn />, atStep('keys'))
 
-    expect(await screen.findByText(/Voyage key/)).toBeInTheDocument()
+    // The form remounts once the keys load, which would clear what was typed.
+    await waitFor(() => expect(screen.queryByText('Loading keys...')).toBeNull())
     await user.type(screen.getByLabelText('Label'), 'personal')
     await user.type(screen.getByLabelText('API key'), 'sk-ant-x')
     await user.click(screen.getByRole('button', { name: 'Add key' }))
@@ -173,9 +211,51 @@ describe('SetupWizard', () => {
     const { user } = renderWithRouter(<Harness signedIn />, atStep('keys'))
 
     await user.click(await screen.findByRole('button', { name: 'Next' }))
-    expect(await screen.findByRole('heading', { name: 'Connect a source' })).toBeInTheDocument()
-    expect(document.activeElement).toHaveTextContent('Connect a source')
+    expect(await screen.findByRole('heading', { name: 'Embeddings' })).toBeInTheDocument()
+    expect(document.activeElement).toHaveTextContent('Embeddings')
     await user.click(screen.getByRole('button', { name: 'Back' }))
     expect(await screen.findByRole('heading', { name: 'LLM keys' })).toBeInTheDocument()
+  })
+
+  it.each([
+    [['*'], ['LLM keys', 'Embeddings', 'Modules', 'Connect a source']],
+    [['read'], ['LLM keys', 'Connect a source']],
+  ])('offers the instance-wide steps only to admins (scopes %j)', (scopes, first) => {
+    renderWithRouter(<Harness signedIn scopes={scopes} />, atStep('keys'))
+
+    const steps = within(screen.getByRole('list', { name: 'Setup steps' })).getAllByRole('listitem')
+    expect(steps.slice(0, first.length).map(s => s.textContent?.replace(/^\d+\. /, ''))).toEqual(first)
+  })
+
+  it('sets the Voyage key on its step', async () => {
+    getSettings.mockResolvedValue(settings([setting({ key: 'voyage_api_key', kind: 'secret', applies: 'live', env_var: 'VOYAGE_API_KEY', value: null, module: null, mcp_servers: [] })]))
+    updateSettings.mockResolvedValue(settings([setting({ key: 'voyage_api_key', kind: 'secret', source: 'ui', set: true, key_hint: '9876', value: null, module: null, mcp_servers: [] })]))
+    const { user } = renderWithRouter(<Harness signedIn />, atStep('voyage'))
+
+    await user.type(await screen.findByLabelText('Voyage API key'), 'pa-key-9876')
+    await user.click(screen.getByRole('button', { name: 'Save key' }))
+
+    expect(updateSettings).toHaveBeenCalledWith({ voyage_api_key: 'pa-key-9876' })
+    expect(await screen.findByText('ends in 9876')).toBeInTheDocument()
+  })
+
+  it('turns a module on, shows env-set ones locked, and restarts the api to apply it', async () => {
+    const locked = setting({ key: 'module_multi_user', module: 'multi_user', description: 'More than one human user', source: 'env', locked: true, set: true, value: true, mcp_servers: [] })
+    getSettings.mockResolvedValue(settings([setting({}), locked]))
+    updateSettings.mockResolvedValue(settings([setting({ source: 'ui', set: true, value: true, pending_restart: true }), locked], { restart_pending: true }))
+    restartApi.mockResolvedValue(undefined)
+    const { user } = renderWithRouter(<Harness signedIn />, atStep('modules'))
+
+    expect(await screen.findByText(/Set by the operator in the environment \(ENABLE_MODULES\)/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Turn off: module multi_user' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Turn on: module teams' }))
+    expect(updateSettings).toHaveBeenCalledWith({ module_teams: true })
+
+    expect(await screen.findByText('Restart the api to apply: module teams.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Restart now' }))
+    await user.click(await screen.findByRole('button', { name: 'Restart' }))
+
+    await waitFor(() => expect(checkAuth).toHaveBeenCalled())
+    expect(restartApi).toHaveBeenCalled()
   })
 })

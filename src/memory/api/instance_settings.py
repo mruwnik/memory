@@ -1,8 +1,9 @@
-"""Admin-only instance settings: list, set and clear them, check a Voyage key, restart the api."""
+"""Admin-only server settings: list, set and clear them, check a Voyage key, restart the api."""
 
 import logging
 import os
 import signal
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -10,10 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from memory.api.auth import require_scope
+from memory.api.MCP.servers import DISABLED_MCP_SERVERS, check_disabled_servers
 from memory.common import embedding, settings
 from memory.common.celery_app import REINGEST_ALL_EMPTY_SOURCE_ITEMS, app as celery_app
 from memory.common.db.connection import get_session
-from memory.common.db.models import InstanceSetting, User
+from memory.common.db.models import HumanUser, InstanceSetting, User
 from memory.common.instance_settings import (
     CACHE_TTL_SECONDS,
     REGISTRY,
@@ -26,11 +28,17 @@ from memory.common.instance_settings import (
     clear,
     decode_rows,
     invalidate_cache,
-    pending_restart,
     resolve,
     save,
     stored_values_in,
 )
+from memory.common.module_settings import (
+    ModuleSetting,
+    checked_modules,
+    enabled_modules,
+    run_problem,
+)
+from memory.common.modules import servers_disabled
 from memory.common.scopes import SCOPE_ADMIN
 from memory.common.telemetry import record_event
 
@@ -56,6 +64,9 @@ class SettingView(BaseModel):
     pending_restart: bool
     # Why the stored UI value is being ignored.
     error: str | None = None
+    # Module flags only.
+    module: str | None = None
+    mcp_servers: list[str] = []
 
 
 class SettingsView(BaseModel):
@@ -91,12 +102,14 @@ def secret_hint(row: InstanceSetting | None, resolved: str, source: Source) -> s
 
 def setting_view(
     setting: Setting,
-    rows: dict[str, InstanceSetting],
+    row: InstanceSetting | None,
     stored: dict[str, Any],
-    unreadable: set[str],
+    pending: bool,
+    error: str | None,
 ) -> SettingView:
     resolved, source = resolve(setting, lambda: stored)
     secret = setting.kind == "secret"
+    module = setting if isinstance(setting, ModuleSetting) else None
     return SettingView(
         key=setting.key,
         kind=setting.kind,
@@ -107,17 +120,49 @@ def setting_view(
         locked=source == "env",
         set=source != "default",
         value=None if secret else as_json(setting, resolved),
-        key_hint=secret_hint(rows.get(setting.key), resolved, source) if secret else None,
+        key_hint=secret_hint(row, resolved, source) if secret else None,
         choices=sorted(setting.choices),
-        pending_restart=pending_restart(setting, stored),
-        error=UNREADABLE if setting.key in unreadable else None,
+        pending_restart=pending,
+        error=error,
+        module=module.module if module else None,
+        mcp_servers=sorted(module.mcp_servers) if module else [],
     )
+
+
+def hidden_servers_problem(stored: dict[str, Any], modules: frozenset[str]) -> dict[str, str]:
+    """Saving refuses this, but turning a module off from the env can still get there."""
+    hidden = resolve(DISABLED_MCP_SERVERS, lambda: stored)[0] | servers_disabled(modules)
+    try:
+        check_disabled_servers(hidden)
+    except ValueError as e:
+        return {DISABLED_MCP_SERVERS.key: f"{e}: no MCP tools are visible"}
+    return {}
+
+
+def human_count_in(db: Session) -> Callable[[], int]:
+    return lambda: db.query(HumanUser).count()
 
 
 def settings_view(db: Session) -> SettingsView:
     rows = {row.key: row for row in db.query(InstanceSetting)}
     stored, unreadable = decode_rows(rows.values())
-    views = [setting_view(s, rows, stored, unreadable) for s in REGISTRY.values()]
+    # What a restart would boot with, against what this api runs.
+    next_modules, problems = checked_modules(lambda: stored, human_count_in(db))
+    running = enabled_modules()
+
+    problems |= hidden_servers_problem(stored, running)
+
+    def pending(setting: Setting) -> bool:
+        return isinstance(setting, ModuleSetting) and (
+            (setting.module in next_modules) != (setting.module in running)
+        )
+
+    def error(setting: Setting) -> str | None:
+        return problems.get(setting.key) or (UNREADABLE if setting.key in unreadable else None)
+
+    views = [
+        setting_view(s, rows.get(s.key), stored, pending(s), error(s)) for s in REGISTRY.values()
+    ]
     return SettingsView(
         settings=views,
         restart_pending=any(v.pending_restart for v in views),
@@ -147,6 +192,27 @@ def parse_change(key: str, raw: Any) -> tuple[Setting, Any]:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"{key}: {e}")
     return setting, new
+
+
+def check_boots_with(
+    changes: list[tuple[Setting, Any]], stored: dict[str, Any], humans: Callable[[], int]
+) -> None:
+    """Refuse changes the api couldn't run with, so the boot fallbacks are only for env changes."""
+    changed = {s.key: new for s, new in changes}
+    after = {key: v for key, v in (stored | changed).items() if v is not None}
+    for setting, _ in changes:
+        if not isinstance(setting, ModuleSetting) or setting.env_value() is not None:
+            continue
+        on = resolve(setting, lambda: after)[0]
+        if problem := run_problem(setting.module, on, humans):
+            raise HTTPException(status_code=400, detail=f"{setting.key}: {problem}")
+    if any(s is DISABLED_MCP_SERVERS or isinstance(s, ModuleSetting) for s, _ in changes):
+        modules = checked_modules(lambda: after, humans)[0]
+        hidden = resolve(DISABLED_MCP_SERVERS, lambda: after)[0] | servers_disabled(modules)
+        try:
+            check_disabled_servers(hidden)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"{DISABLED_MCP_SERVERS.key}: {e}")
 
 
 def rejected_voyage_key(key: str) -> int | None:
@@ -184,11 +250,12 @@ def update_settings(
     if not body.values:
         raise HTTPException(status_code=400, detail="no settings to change")
     changes = [parse_change(key, raw) for key, raw in body.values.items()]
+    stored = stored_values_in(db)
+    check_boots_with(changes, stored, human_count_in(db))
     voyage_key = next((new for s, new in changes if s is VOYAGE_API_KEY and new), None)
     if voyage_key is not None and (status := rejected_voyage_key(voyage_key)) is not None:
         raise HTTPException(status_code=400, detail=f"Voyage rejected the key (HTTP {status})")
 
-    stored = stored_values_in(db)
     records = {}
     for setting, new in changes:
         if new is None:

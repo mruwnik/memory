@@ -14,7 +14,6 @@ from memory.agents.spec import (
     resolve_max_output_tokens,
     spec_errors,
 )
-from memory.common import settings
 from memory.common.celery_app import RUN_AGENT, app
 from memory.common.db.connection import DBSession
 from memory.api.auth import TokenLookup, system_scopes
@@ -28,6 +27,7 @@ from memory.common.db.models import (
     User,
 )
 from memory.common.mcp_oauth import unusable_message
+from memory.common.module_settings import enabled_modules
 from memory.common.modules import server_module
 
 
@@ -75,7 +75,7 @@ def disabled_server_errors(spec: AgentSpec) -> list[str]:
 
 def cause(server: str) -> str:
     module = server_module(server)
-    if module is not None and module not in settings.ENABLED_MODULES:
+    if module is not None and module not in enabled_modules():
         return f"module {module} is off"
     return f"server {server} is disabled"
 

@@ -23,15 +23,15 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/calendar', title: 'Calendar', description: 'View upcoming events from your calendars' },
       { to: '/ui/tasks', title: 'Tasks', description: 'Manage your todos and tasks' },
       { to: '/ui/polls', title: 'Polls', description: 'Schedule meetings with availability polls' },
-      { to: '/ui/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
     ],
   },
   {
     title: 'AI',
     items: [
+      { to: '/ui/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
+      { to: '/ui/keys', title: 'LLM keys', description: 'Your Anthropic and OpenAI keys pay for summaries, search steps and agents' },
       { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions', module: 'claude_containers' },
       { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations', module: 'claude_containers' },
-      { to: '/ui/keys', title: 'LLM keys', description: 'Your Anthropic and OpenAI keys pay for summaries, search steps and agents' },
     ],
   },
   {
@@ -41,9 +41,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/telemetry', title: 'Telemetry', description: 'Claude Code usage, tokens, costs, and sessions' },
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and agent runs' },
-      { to: '/ui/modules', title: 'Modules', description: 'Optional features this instance runs', scope: 'admin' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
-      { to: '/ui/instance-settings', title: 'Instance settings', description: 'Voyage key, MCP servers and search limits for this instance', scope: 'admin' },
+      { to: '/ui/server-settings', title: 'Server settings', description: 'Voyage key, modules, MCP servers and search limits for this server', scope: 'admin' },
       { to: '/ui/sources?tab=secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],

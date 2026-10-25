@@ -66,9 +66,9 @@ def test_claiming_creates_a_signed_in_admin(setup_client, db_session):
 
 
 def test_claiming_makes_the_one_human_a_single_user_install_allows(
-    setup_client, db_session, monkeypatch, caplog
+    setup_client, db_session, set_modules, caplog
 ):
-    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+    set_modules([])
     session_id = claim(setup_client).json()["session_id"]
 
     with caplog.at_level(logging.WARNING, logger="memory.api.users"):

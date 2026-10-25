@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { KEY_PROVIDERS, PROVIDER_NAMES, useAgents, type KeyUpsert, type ProviderKey, type SystemAgentEntry } from '@/hooks/useAgents'
 import { AddKeyForm } from '@/components/agents/KeysPage'
 import { SystemAgents } from '@/components/agents/SystemAgents'
@@ -29,11 +28,6 @@ export const KeysStep = () => {
 
   return (
     <>
-      <Notice tone="info">
-        Semantic search also needs a Voyage key, which an admin sets on the{' '}
-        <Link to="/ui/instance-settings" target="_blank" className="underline">Instance settings page (opens in a new tab)</Link>.
-        Until then search matches keywords only.
-      </Notice>
       {loadError && <Notice tone="error" onRetry={load}>{loadError}</Notice>}
       {keys === null && !loadError && <LoadingState message="Loading keys..." />}
       {!!keys?.length && (

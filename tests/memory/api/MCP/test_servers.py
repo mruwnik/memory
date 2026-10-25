@@ -1,13 +1,17 @@
 """Tests for MCP server configuration and enabling/disabling."""
 
+import asyncio
 import os
 import subprocess
 import sys
 from unittest.mock import patch
 
 import pytest
+from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 
-from memory.common import settings
+from memory.api.MCP import base
+from memory.common import module_settings, settings
 from memory.common.modules import MODULES
 from memory.api.MCP.servers import (
     MCPServer,
@@ -20,6 +24,7 @@ from memory.api.MCP.servers import (
     unmounted_servers,
 )
 from memory.common.db.models import InstanceSetting
+from memory.workers.tasks import agents as agent_tasks
 
 ALL_MODULES = frozenset(MODULES)
 
@@ -85,10 +90,10 @@ def test_enum_values_are_strings():
         (frozenset(), frozenset({"teams"}), ALL_MCP_SERVERS - {"containers"}),
     ],
 )
-def test_unmounted_servers(monkeypatch, disabled, modules, expected_enabled):
+def test_unmounted_servers(monkeypatch, set_modules, disabled, modules, expected_enabled):
     """DISABLED_MCP_SERVERS and the servers of modules that are off are both unmounted."""
     monkeypatch.setattr(settings, "DISABLED_MCP_SERVERS", disabled)
-    monkeypatch.setattr(settings, "ENABLED_MODULES", modules)
+    set_modules(modules)
     assert get_enabled_servers(unmounted_servers()) == expected_enabled
 
 
@@ -117,8 +122,8 @@ def test_the_env_disables_servers_over_the_ui_value(db_session, monkeypatch):
     assert effective_disabled_servers() == frozenset({"slack"})
 
 
-def test_effective_disabled_servers_adds_modules_that_are_off(db_session, monkeypatch):
-    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+def test_effective_disabled_servers_adds_modules_that_are_off(db_session, set_modules):
+    set_modules([])
     db_session.add(InstanceSetting(key="disabled_mcp_servers", value=["slack"]))
     db_session.commit()
 
@@ -131,8 +136,9 @@ def test_only_the_env_and_modules_unmount_servers():
         **os.environ,
         "PYTHONPATH": os.pathsep.join(sys.path),
         "DISABLED_MCP_SERVERS": "slack",
+        # Named rather than left to the defaults, so booting reads no stored module flags.
         "ENABLE_MODULES": "",
-        "DISABLE_MODULES": "",
+        "DISABLE_MODULES": ",".join(MODULES),
     }
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -186,3 +192,83 @@ def test_parse_csv_set(env_value, default, expected):
     with patch.dict("os.environ", env, clear=True):
         result = parse_csv_set("TEST_KEY", default)
         assert result == expected
+
+
+def run_follows(db_session, running):
+    """The api records what it runs; the agents worker then follows it."""
+    module_settings.record_running(db_session, frozenset(running))
+    module_settings.invalidate_running_cache()
+    agent_tasks.follow_module_flags()
+
+
+def test_a_module_the_api_switched_on_is_mounted_for_the_next_task(db_session, monkeypatch, set_modules):
+    # A worker that mounted while teams was off.
+    set_modules([])
+    fresh = FastMCP("agents-worker")
+    monkeypatch.setattr(base, "mcp", fresh)
+    monkeypatch.setattr(base, "SUBSERVER_PREFIXES", [])
+
+    run_follows(db_session, ["teams"])
+
+    tools = asyncio.run(fresh.get_tools())
+    assert {"teams_upsert", "projects_fetch", "core_search"} <= set(tools)
+    assert not [t for t in tools if t.startswith("containers_")]
+
+
+def test_a_module_the_api_switched_off_is_refused_for_the_next_task(db_session, set_modules):
+    # A worker that mounted while teams was on.
+    set_modules(["teams"])
+
+    run_follows(db_session, [])
+
+    async def call():
+        async with Client(base.mcp) as client:
+            await client.call_tool("teams_fetch", {})
+
+    with pytest.raises(ToolError, match="Access denied: teams_fetch"):
+        asyncio.run(call())
+    assert {"teams", "projects", "containers"} <= effective_disabled_servers()
+
+
+# The api fell back to claude_containers off (no ORCHESTRATOR_SOCKET), though it is on in the settings.
+def test_the_agents_worker_follows_what_the_api_runs_not_the_saved_value(db_session, monkeypatch, set_modules):
+    monkeypatch.setattr(settings, "ENABLE_MODULES", frozenset())
+    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
+    set_modules([])
+    mounts = []
+    monkeypatch.setattr(base.mcp, "mount", lambda server, prefix: mounts.append(prefix))
+    monkeypatch.setattr(base, "SUBSERVER_PREFIXES", [s for s in base.SUBSERVER_PREFIXES if s != "containers"])
+
+    run_follows(db_session, [])
+
+    assert mounts == []
+    assert "containers" in effective_disabled_servers()
+
+
+async def nothing(*args):
+    return None
+
+
+def none(*args):
+    return None
+
+
+@pytest.mark.parametrize(
+    "task, implementation, stub, args",
+    [
+        ("run_agent", "memory.agents.runner.execute_run", nothing, ["run-1"]),
+        ("fire_trigger", "memory.agents.fire.fire_trigger", none, [1, []]),
+        ("start_cron_run", "memory.agents.cron.start_cron_run", none, ["exec-1"]),
+    ],
+)
+def test_every_agents_task_follows_the_api_first(
+    db_session, monkeypatch, set_modules, task, implementation, stub, args
+):
+    monkeypatch.setattr(implementation, stub)
+    set_modules(["teams"])
+    module_settings.record_running(db_session, frozenset())
+    module_settings.invalidate_running_cache()
+
+    getattr(agent_tasks, task)(*args)
+
+    assert module_settings.enabled_modules() == frozenset()
