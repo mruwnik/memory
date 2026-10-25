@@ -431,7 +431,7 @@ def test_unique_source_items_same_commit(db_session: Session):
     db_session.add(source_item3)
     db_session.commit()
 
-    assert db_session.query(SourceItem.sha256, SourceItem.content).all() == [
+    assert db_session.query(SourceItem.sha256, SourceItem.content).order_by(SourceItem.sha256).all() == [
         (b"1234567890", "test1"),
         (b"1234567891", "test3"),
     ]
@@ -456,7 +456,7 @@ def test_unique_source_items_previous_commit(db_session: Session):
     )
     db_session.commit()
 
-    assert db_session.query(SourceItem.sha256, SourceItem.content).all() == [
+    assert db_session.query(SourceItem.sha256, SourceItem.content).order_by(SourceItem.sha256).all() == [
         (b"1234567890", "test1"),
         (b"1234567891", "test2"),
         (b"1234567892", "test3"),
