@@ -181,6 +181,24 @@ section has nothing in it:
 - The OAuth redirect URI for external MCP servers is now
   `{SERVER_URL}/auth/mcp/callback`; `/auth/callback/discord` is gone. Update any
   OAuth app you registered by hand with the old URI.
+- **Before updating, check that no user is linked to more than one Person.**
+  The `20261106_unique_person_user` migration refuses to run if one is, and
+  `tools/update.sh` has stopped the api by then. On the running old version:
+
+  ```
+  docker compose exec postgres psql -U kb kb -c "SELECT user_id, array_agg(id) AS person_ids, array_agg(identifier) FROM people WHERE user_id IS NOT NULL GROUP BY user_id HAVING count(*) > 1"
+  ```
+
+  For each row, either merge those people with the `people_merge` MCP tool
+  (still on the old version), or keep one link and clear the others:
+
+  ```
+  docker compose exec postgres psql -U kb kb -c "UPDATE people SET user_id = NULL WHERE id IN (<person ids to unlink>)"
+  ```
+
+  If an update already failed on this migration, run the rollback commands
+  `tools/update.sh` printed, clear the duplicates as above, then run
+  `tools/update.sh` again.
 
 ### Other changes for operators
 
@@ -682,6 +700,10 @@ section has nothing in it:
   `source_item.filename` for notes, concurrently, so writes keep flowing, but the
   build reads the whole `source_item` table and can take a while on large
   instances. If the index build fails, re-run the migration.
+- `20261106_unique_person_user`: makes `people.user_id` unique (a user is linked
+  to at most one Person). Fast. **It refuses to run if a user is already linked
+  to several people** and lists them; see Manual steps for the check to run
+  before updating and how to recover.
 
 ### Post-deploy commands
 

@@ -19,7 +19,6 @@ from memory.common.access_control import (
     user_can_access_project,
     user_can_access_team,
 )
-from memory.common.db.models.users import User
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.db.connection import make_session
 from memory.common.db.models import JournalEntry, SourceItem
@@ -43,7 +42,7 @@ TARGET_MODELS: dict[str, type] = {
 
 def can_access_journal_target(
     session,
-    user: UserProxy | User,
+    user: UserProxy,
     target_type: str,
     target: Any,
     project_roles: dict[int, str] | None,
@@ -59,10 +58,8 @@ def can_access_journal_target(
 
     Returns True for admins (they bypass everywhere).
 
-    ``user`` may be a :class:`UserProxy` (just id + scopes) or a full
-    :class:`User`. Membership-based gates (project, team) need the User's
-    ``person`` relationship; if a UserProxy is passed in, we hydrate it
-    from ``session`` for those branches.
+    ``user`` is the caller as ``get_mcp_current_user`` resolves it: its scopes
+    are the token's, so it must not be swapped for the ORM ``User``.
     """
     # "hidden" tombstone: a hidden source_item is invisible to EVERYONE,
     # including admins — checked before the admin bypass so journal entries on a
@@ -80,26 +77,12 @@ def can_access_journal_target(
         return user_can_access(user, target, project_roles)
 
     if target_type == "project":
-        # Use project_roles when available — it was fetched via
-        # ``get_project_roles_by_user_id`` which queries the same User →
-        # Person → team_members → project_teams chain that
-        # ``user_can_access_project`` would re-execute. Avoids a second
-        # round-trip and works without ``user.person`` being available
-        # (UserProxy lacks the ORM relationship).
         if project_roles is not None:
             return target.id in project_roles
-        full_user = session.get(User, user.id)
-        if full_user is None:
-            return False
-        return user_can_access_project(session, full_user, target.id)
+        return user_can_access_project(session, user, target.id)
 
     if target_type == "team":
-        # Gate on team membership — needs ``user.person`` so we hydrate to
-        # the full User if a UserProxy was passed in.
-        full_user = user if isinstance(user, User) else session.get(User, user.id)
-        if full_user is None:
-            return False
-        return user_can_access_team(session, full_user, target.id)
+        return user_can_access_team(session, user, target.id)
 
     if target_type == "poll":
         # Polls have no project_id (per the model), so default to the most

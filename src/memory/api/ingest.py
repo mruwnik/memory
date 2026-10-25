@@ -52,7 +52,7 @@ def land_and_dispatch(
 
     spec.storage_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(content).hexdigest()[:12]
-    safe_name = f"{digest}_{pathlib.Path(intent.filename).name}"
+    safe_name = f"{digest}_{intent.user_id}_{pathlib.Path(intent.filename).name}"
     file_path = spec.storage_dir / safe_name
     file_path.write_bytes(content)
 
@@ -89,6 +89,7 @@ def build_task_kwargs(
         "file_path": str(file_path),
         "tags": intent.tags,
         "creator_id": intent.user_id,
+        "creator_scopes": intent.scopes,
         "project_id": intent.project_id,
     }
     if spec.name == "image":

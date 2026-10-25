@@ -5,19 +5,15 @@ MCP subserver for notes management.
 import logging
 
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_access_token
 
-from memory.api.MCP.access import (
-    UserProxy,
-    get_mcp_current_user,
-    get_project_roles_by_user_id,
-)
+from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import paths, settings
 from memory.common.access_control import (
     UserLike,
     apply_access_filter_to_query,
     build_access_filter,
+    get_user_project_roles,
     has_admin_scope,
     user_can_edit,
 )
@@ -32,21 +28,12 @@ logger = logging.getLogger(__name__)
 notes_mcp = FastMCP("memory-notes")
 
 
-def token_caller() -> UserProxy:
-    """The caller with its access token's scopes, so a narrowed key on an admin account isn't admin."""
-    user = get_mcp_current_user()
-    token = get_access_token()
-    if user is None or token is None:
-        raise PermissionError("Not authenticated")
-    return UserProxy({"id": user.id, "scopes": list(token.scopes or [])})
-
-
 def visible_notes(session, user: UserLike):
     # Notes are private artefacts: no public bypass even if a Note ever ends up
     # with sensitivity="public". Same central filter as search.
     access_filter = build_access_filter(
         user,
-        get_project_roles_by_user_id(user.id, session),
+        get_user_project_roles(session, user),
         include_public=False,
     )
     return apply_access_filter_to_query(session.query(Note), access_filter)
@@ -87,7 +74,9 @@ async def upsert(
     except ValueError as e:
         raise ValueError(f"Invalid filename: {e}")
 
-    user = token_caller()
+    user = get_mcp_current_user()
+    if user is None:
+        raise PermissionError("Not authenticated")
 
     # A note the caller can't see answers as if the path were free, so its
     # existence doesn't leak; the task then refuses to overwrite it.

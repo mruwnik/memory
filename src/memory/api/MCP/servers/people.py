@@ -187,95 +187,31 @@ def combine_contact(primary: Any, secondary: Any) -> Any:
     return append_new(contact_values(primary), contact_values(secondary))
 
 
-def _caller_owns_person(person: Person, caller_id: int | None) -> bool:
-    """Whether ``person`` is already linked to ``caller_id``.
-
-    Used for the "owner override" path in identity-link checks. A
-    Person without ``user_id`` set is treated as having no owner — a
-    non-admin caller can therefore not "claim" Discord re-attribution
-    targeting an unlinked Person owned by nobody, which closes the
-    spoof path where attacker creates a fresh Person with someone
-    else's contact info and then steals Discord rows under it.
-    """
-    if caller_id is None or person.user_id is None:
-        return False
-    return person.user_id == caller_id
+IDENTITY_CONTACT_KEYS = frozenset({"email", "slack", "github", "discord"})
 
 
-def link_user_from_contact_info(
-    session: DBSession,
-    person: Person,
-    contact_info: dict | None,
-    *,
-    caller_id: int | None,
-    caller_is_admin: bool = False,
-) -> int | None:
-    """Link a User to a Person based on email in contact_info.
-
-    Auto-linking is gated to prevent identity-hijack: a non-admin caller
-    can only auto-link a Person to themselves. If the matched User row
-    is someone other than the caller, the link is refused (logged at
-    WARNING) and the Person record is otherwise unchanged. Mirrors the
-    REST endpoint's policy (``api/discord.py:link_discord_user``).
-
-    Returns the User ID that was linked, or None if no link was made.
-    """
-    if not contact_info:
-        return None
-
-    email = contact_info.get("email")
-    if not email or not isinstance(email, str):
-        return None
-
-    email = email.strip().lower()
-    if not email:
-        return None
-
-    # Already linked?
-    if person.user_id:
-        return person.user_id
-
-    # Find user by email
-    user = session.query(User).filter(User.email.ilike(email)).first()
-    if not user:
-        return None
-
-    if not caller_is_admin and user.id != caller_id:
-        # Identity-hijack guard: refuse to attach this Person to a
-        # User row owned by someone else. The Person record is still
-        # created/updated (free-form contact info is fine); only the
-        # auto-link is suppressed.
-        logger.warning(
-            "Refusing to auto-link Person %s to User id=%s (email=%s): "
-            "non-admin caller id=%s cannot bind another user's identity",
-            person.identifier,
-            user.id,
-            user.email,
-            caller_id,
-        )
-        return None
-
-    person.user_id = user.id
-    logger.info(
-        "Linked Person %s to User %s (id=%s)", person.identifier, user.email, user.id
+def set_user_link(session: DBSession, person: Person, user_id: int) -> int:
+    """Link ``person`` to ``user_id``, keeping one Person per user."""
+    if session.get(User, user_id) is None:
+        raise ValueError(f"User {user_id} not found")
+    owner = (
+        session.query(Person)
+        .filter(Person.user_id == user_id, Person.id != person.id)
+        .first()
     )
-    return user.id
+    if owner is not None:
+        raise ValueError(
+            f"User {user_id} is already linked to '{owner.identifier}'. Clear that link first."
+        )
+    person.user_id = user_id
+    return user_id
 
 
 def link_discord_from_contact_info(
-    session: DBSession,
-    person: Person,
-    contact_info: dict | None,
-    *,
-    caller_id: int | None,
-    caller_is_admin: bool = False,
+    session: DBSession, person: Person, contact_info: dict | None
 ) -> list[int]:
-    """Link Discord users to a Person based on contact_info.
-
-    Auto-linking is gated to prevent identity-hijack via DiscordUser
-    re-attribution: a non-admin caller may only link a DiscordUser
-    that is currently unlinked OR already linked to a Person owned by
-    the caller. Re-attributing someone else's DiscordUser is refused.
+    """Attach the Discord users named in contact_info to ``person``. Admin only:
+    a Discord account's messages follow its Person.
 
     Returns list of Discord user IDs that were linked.
     """
@@ -331,31 +267,6 @@ def link_discord_from_contact_info(
             linked_ids.append(discord_user.id)
             continue
 
-        if not caller_is_admin:
-            # Allow only when discord_user is unlinked OR already
-            # linked to a Person the caller owns (and we're moving it
-            # to another caller-owned Person).
-            current_owner_ok = True
-            if discord_user.person_id is not None:
-                current = session.get(Person, discord_user.person_id)
-                current_owner_ok = current is not None and _caller_owns_person(
-                    current, caller_id
-                )
-            target_owner_ok = _caller_owns_person(person, caller_id)
-            if not current_owner_ok or not target_owner_ok:
-                logger.warning(
-                    "Refusing to re-attribute Discord user %s (id=%s) to "
-                    "Person %s: non-admin caller id=%s lacks ownership "
-                    "(current_person_id=%s, target_person_user_id=%s)",
-                    discord_user.username,
-                    discord_user.id,
-                    person.identifier,
-                    caller_id,
-                    discord_user.person_id,
-                    person.user_id,
-                )
-                continue
-
         discord_user.person_id = person.id
         logger.info(
             f"Linked Discord user {discord_user.username} ({discord_user.id}) "
@@ -378,6 +289,8 @@ async def upsert(
     tags: list[str] | None = None,
     project_id: int | None = None,
     sensitivity: str = "basic",
+    user_id: int | None = None,
+    clear_user_id: bool = False,
 ) -> dict:
     """
     Create or update a person.
@@ -420,6 +333,14 @@ async def upsert(
         tags: Tags for the initial tidbit (e.g., ["work", "engineering"])
         project_id: Project ID for the initial tidbit (affects visibility)
         sensitivity: Sensitivity level for the initial tidbit (default: "basic")
+        user_id: Admin only. Link the person to this user, who must not already
+            have a person.
+        clear_user_id: Admin only. Remove the person's link to a user.
+
+    Only admins can change display_name, aliases, or the email, slack, github and
+    discord contact info of an existing person, since those decide which content
+    is linked to them. Only admins' contact_info.discord attaches Discord users.
+    A person is linked to a user only through user_id.
 
     Returns:
         Person data with status "created" or "updated"
@@ -428,6 +349,10 @@ async def upsert(
     user = get_mcp_current_user()
     creator_id = user.id if user else None
     caller_is_admin = has_admin_scope(user) if user else False
+    if (user_id is not None or clear_user_id) and not caller_is_admin:
+        raise PermissionError("Only an admin can set or clear a person's user link")
+    if user_id is not None and clear_user_id:
+        raise ValueError("Pass either user_id or clear_user_id, not both")
 
     with make_session() as session:
         existing = session.query(Person).filter(Person.identifier == identifier).first()
@@ -436,6 +361,18 @@ async def upsert(
             # Update mode
             logger.info(f"MCP: Updating person: {identifier}")
             person = existing
+            # Ingest links content to the Person whose identity fields match
+            # (find_person), so changing them redirects other people's content.
+            changes_identity = (
+                display_name is not None
+                or aliases is not None
+                or bool(IDENTITY_CONTACT_KEYS & set(contact_info or {}))
+            )
+            if changes_identity and not caller_is_admin:
+                raise PermissionError(
+                    "Only an admin can change a person's display_name, aliases, email, "
+                    "slack, github or discord"
+                )
 
             if display_name is not None:
                 person.display_name = display_name
@@ -466,29 +403,19 @@ async def upsert(
 
         session.flush()
 
-        # Auto-link User from contact_info email. The auto-link is
-        # gated by caller authorization — a non-admin upsert with
-        # someone else's email creates the Person record but does NOT
-        # bind person.user_id, blocking the identity-claim attack
-        # where an attacker spoofs admin's email to mint a Person row
-        # attached to admin's User identity.
-        linked_user = link_user_from_contact_info(
-            session,
-            person,
-            person.contact_info,
-            caller_id=creator_id,
-            caller_is_admin=caller_is_admin,
-        )
+        # A Person is linked to a user only explicitly here, or when the user
+        # is created: User.email and name are self-service and unverified, so
+        # matching on them would let anyone claim a Person.
+        linked_user = None
+        if clear_user_id:
+            person.user_id = None
+        elif user_id is not None:
+            linked_user = set_user_link(session, person, user_id)
 
-        # Auto-link Discord users from contact_info, with the same
-        # caller-authorization gate (only admins or the caller-as-owner
-        # may re-attribute Discord rows between Person records).
-        linked_discord = link_discord_from_contact_info(
-            session,
-            person,
-            person.contact_info,
-            caller_id=creator_id,
-            caller_is_admin=caller_is_admin,
+        linked_discord = (
+            link_discord_from_contact_info(session, person, person.contact_info)
+            if caller_is_admin
+            else []
         )
 
         session.commit()
@@ -552,7 +479,6 @@ async def fetch(
     """
     logger.info(f"MCP: Fetching person: {identifier}")
 
-    # For tidbits we can use UserProxy, but for teams/projects we need the full User
     # Fetch project_roles before opening main session to avoid nested session issues
     user_proxy = get_mcp_current_user()
     project_roles: dict[int, str] | None = None
@@ -560,11 +486,6 @@ async def fetch(
         project_roles = get_project_roles_by_user_id(user_proxy.id)
 
     with make_session() as session:
-        # Get full user if we need it for team/project access filtering
-        full_user = None
-        if include_teams or include_projects:
-            full_user = get_mcp_current_user(session, full=True)
-
         query = session.query(Person)
         if include_tidbits:
             query = query.options(selectinload(Person.tidbits))
@@ -593,15 +514,15 @@ async def fetch(
 
         # Include teams (filtered by access)
         if include_teams:
-            if not full_user or full_user.id is None:
+            if not user_proxy or user_proxy.id is None:
                 result["teams"] = []
-            elif has_admin_scope(full_user):
+            elif has_admin_scope(user_proxy):
                 result["teams"] = [
                     {"id": t.id, "slug": t.slug, "name": t.name}
                     for t in person.teams
                 ]
             else:
-                accessible_ids = get_accessible_team_ids(session, full_user) or set()
+                accessible_ids = get_accessible_team_ids(session, user_proxy) or set()
                 result["teams"] = [
                     {"id": t.id, "slug": t.slug, "name": t.name}
                     for t in person.teams
@@ -617,15 +538,15 @@ async def fetch(
                 for project in team.projects:
                     projects[project.id] = project
 
-            if not full_user or full_user.id is None:
+            if not user_proxy or user_proxy.id is None:
                 result["projects"] = []
-            elif has_admin_scope(full_user):
+            elif has_admin_scope(user_proxy):
                 result["projects"] = [
                     {"id": p.id, "title": p.title, "slug": p.slug, "state": p.state}
                     for p in projects.values()
                 ]
             else:
-                accessible_ids = get_accessible_project_ids(session, full_user) or set()
+                accessible_ids = get_accessible_project_ids(session, user_proxy) or set()
                 result["projects"] = [
                     {"id": p.id, "title": p.title, "slug": p.slug, "state": p.state}
                     for p in projects.values()
@@ -927,61 +848,58 @@ def merge_team_ownership(session: DBSession, primary: Person, secondaries: list[
     return total
 
 
-def merge_user_links(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Resolve User links from direct people.user_id and indirect discord_users.system_user_id.
+def merged_user_id(session: DBSession, primary: Person, secondaries: list[Person]) -> int | None:
+    """The User the merged Person will link to: the people's own links first
+    (primary's before the rest), then their Discord accounts' system users.
 
-    Must be called AFTER merge_discord_users so that all discord accounts are on primary.
-    Returns 1 if primary's user_id was changed, 0 otherwise.
+    Raises ValueError when that User already has a Person outside the merge,
+    since a user is linked to at most one Person.
     """
-    original_user_id = primary.user_id
-    candidate_user_ids: list[int] = []
-    if primary.user_id:
-        candidate_user_ids.append(primary.user_id)
-    for sec in secondaries:
-        if sec.user_id:
-            candidate_user_ids.append(sec.user_id)
-        sec.user_id = None
-
-    # Check discord accounts (now all on primary) for system_user_id links.
-    # Flush first so moved discord accounts are visible in the query.
-    session.flush()
-    remaining = (
-        session.query(DiscordUser)
-        .filter(DiscordUser.person_id.in_([s.id for s in secondaries]))
-        .count()
-    )
-    if remaining:
-        raise RuntimeError(
-            "merge_user_links must be called after merge_discord_users; "
-            f"secondaries still have {remaining} discord accounts"
+    people = [primary, *secondaries]
+    person_ids = [p.id for p in people]
+    discord_user_ids = [
+        uid
+        for (uid,) in session.query(DiscordUser.system_user_id).filter(
+            DiscordUser.person_id.in_(person_ids), DiscordUser.system_user_id.isnot(None)
         )
-    discord_accounts = (
-        session.query(DiscordUser)
-        .filter(DiscordUser.person_id == primary.id, DiscordUser.system_user_id.isnot(None))
-        .all()
-    )
-    for acct in discord_accounts:
-        if acct.system_user_id is not None:
-            candidate_user_ids.append(acct.system_user_id)
+    ]
+    candidates = list(dict.fromkeys([p.user_id for p in people if p.user_id] + discord_user_ids))
+    if not candidates:
+        return None
 
-    # Deduplicate while preserving order (primary's existing link first)
-    seen: set[int] = set()
-    unique_user_ids: list[int] = []
-    for uid in candidate_user_ids:
-        if uid not in seen:
-            seen.add(uid)
-            unique_user_ids.append(uid)
-
-    if not unique_user_ids:
-        return 0
-
-    primary.user_id = unique_user_ids[0]
-    for extra_uid in unique_user_ids[1:]:
+    chosen, *skipped = candidates
+    for extra_uid in skipped:
         logger.warning(
             "Person %s has multiple linked users: keeping %s, skipping %s.",
-            primary.identifier, primary.user_id, extra_uid,
+            primary.identifier, chosen, extra_uid,
         )
-    return 1 if primary.user_id != original_user_id else 0
+    owner = (
+        session.query(Person)
+        .filter(Person.user_id == chosen, Person.id.notin_(person_ids))
+        .first()
+    )
+    if owner is not None:
+        raise ValueError(
+            f"User {chosen} is already linked to '{owner.identifier}', which is not part "
+            "of this merge. Include that person in the merge or unlink it first."
+        )
+    return chosen
+
+
+def merge_user_links(
+    session: DBSession, primary: Person, secondaries: list[Person], user_id: int | None
+) -> int:
+    """Link primary to ``user_id`` (from ``merged_user_id``) and unlink the
+    secondaries. Returns 1 if primary's user_id changed, 0 otherwise."""
+    if user_id is None:
+        return 0
+    for sec in secondaries:
+        sec.user_id = None
+    # The secondaries' links must be gone before primary takes one of them.
+    session.flush()
+    changed = primary.user_id != user_id
+    primary.user_id = user_id
+    return int(changed)
 
 
 @people_mcp.tool()
@@ -1006,7 +924,9 @@ async def merge(
        - Discord/GitHub user links
        - Poll responses
        - Project/team ownership
-    4. Resolves User links (direct and via Discord accounts)
+    4. Resolves User links (direct and via Discord accounts). A user has one
+       Person, so the merge is refused if that user already has a Person
+       outside the merge.
     5. Deletes the secondary person records
 
     Only admins can merge people.
@@ -1045,15 +965,11 @@ async def merge(
         primary = people_by_id[primary_id]
         secondaries = [people_by_id[i] for i in secondary_ids]
 
+        user_id = merged_user_id(session, primary, secondaries)
         merge_aliases(primary, secondaries)
         merge_contact_info(primary, secondaries)
-
-        # merge_discord_users must run before merge_user_links (which resolves
-        # user IDs from discord accounts now on the primary person).
-        # Note: merge_user_links calls session.flush(), which also flushes
-        # pending changes from merge_aliases and merge_contact_info above.
         discord_users_moved = merge_discord_users(session, primary, secondaries)
-        users_updated = merge_user_links(session, primary, secondaries)
+        users_updated = merge_user_links(session, primary, secondaries, user_id)
 
         stats = {
             "tidbits_moved": merge_tidbits(session, primary, secondaries),

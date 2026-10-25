@@ -167,7 +167,7 @@ async def list_all(
         List of projects with count and pagination info.
     """
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated", "projects": [], "count": 0}
 
@@ -272,7 +272,7 @@ async def fetch(
         Project data with optional team list, or error if not found/accessible
     """
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated", "project": None}
 
@@ -603,7 +603,7 @@ async def upsert(
         Created/updated project data, or error if validation fails
     """
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated", "project": None}
 
@@ -1255,7 +1255,7 @@ async def delete(
     logger.info(f"MCP: Deleting project: {project_id}")
 
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 

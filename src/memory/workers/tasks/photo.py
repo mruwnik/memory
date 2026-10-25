@@ -15,7 +15,7 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Photo
 from memory.common import jobs as job_utils
 from memory.common.content_processing import (
-    check_content_exists,
+    find_readable_upload,
     clear_item_chunks,
     process_content_item,
     safe_task_execution,
@@ -255,6 +255,7 @@ def sync_photo(
     creator_id: int | None = None,
     project_id: int | None = None,
     job_id: int | None = None,
+    creator_scopes: list[str] | None = None,
 ) -> PhotoProcessingResult:
     """
     Process a new photo file and add it to the knowledge base.
@@ -263,6 +264,7 @@ def sync_photo(
         file_path: Path to the photo file (absolute or relative to PHOTO_STORAGE_DIR)
         tags: Optional list of tags to apply
         creator_id: Optional owner; sets content visibility for the uploader
+        creator_scopes: Scopes of the credential that uploaded, for deduping
         project_id: Optional project to scope visibility
         job_id: Optional job ID for status tracking
 
@@ -279,8 +281,7 @@ def sync_photo(
             job_utils.start_job(session, job_id)
             session.commit()
 
-        # Check for existing photo (idempotency)
-        existing = check_content_exists(session, Photo, sha256=sha256)
+        existing, sha256 = find_readable_upload(session, Photo, sha256, creator_id, creator_scopes)
         if existing:
             logger.info(f"Photo already exists: {existing.filename}")
             if job_id:

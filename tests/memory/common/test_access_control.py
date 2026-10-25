@@ -2,6 +2,8 @@
 
 import logging
 
+import pytest
+
 from memory.common.access_control import (
     SensitivityLevel,
     ProjectRole,
@@ -14,7 +16,9 @@ from memory.common.access_control import (
     build_access_filter,
     get_allowed_project_ids,
     get_max_sensitivity_for_project,
+    get_accessible_source_item_by_filename,
 )
+from memory.common.db.models import HumanUser, SourceItem
 
 
 class MockUser:
@@ -615,3 +619,33 @@ def test_build_access_filter_admin_bypass_is_logged(caplog):
     assert len(bypass_lines) == 1
     assert "user_id=9" in bypass_lines[0].getMessage()
     assert "build_search_filter" in bypass_lines[0].getMessage()
+
+
+def test_get_accessible_source_item_picks_the_callers_copy_of_a_shared_file(
+    db_session, regular_user, admin_user
+):
+    """Two users' copies of one upload share a filename; each sees their own."""
+    other = HumanUser(name="Other", email="o@x.com", password_hash="x", scopes=[])
+    stranger = HumanUser(name="Stranger", email="s@x.com", password_hash="x", scopes=[])
+    db_session.add_all([other, stranger])
+    db_session.flush()
+    copies = {
+        user.id: SourceItem(
+            sha256=bytes([n]) * 32,
+            filename="photos/abc_dupe.png",
+            mime_type="image/png",
+            modality="photo",
+            size=1,
+            creator_id=user.id,
+        )
+        for n, user in enumerate([regular_user, other])
+    }
+    db_session.add_all(copies.values())
+    db_session.commit()
+
+    for user in (regular_user, other):
+        found = get_accessible_source_item_by_filename(db_session, user, "photos/abc_dupe.png")
+        assert found.id == copies[user.id].id
+    assert get_accessible_source_item_by_filename(db_session, admin_user, "photos/abc_dupe.png")
+    with pytest.raises(PermissionError):
+        get_accessible_source_item_by_filename(db_session, stranger, "photos/abc_dupe.png")

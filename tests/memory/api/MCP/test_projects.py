@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import uuid
 
 import pytest
+from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
 
 from memory.common.db.models import Person, Team, HumanUser, UserSession
 from memory.common.db.models.sources import GithubRepo, Project, team_members, project_teams
@@ -151,12 +152,13 @@ def teams_and_projects(db_session, regular_user, qdrant):
 
 
 def make_mock_access_token(session_id: str | None):
-    """Create a mock access token object."""
+    """An access token carrying the session user's scopes, as production issues."""
     if session_id is None:
         return None
-    mock_token = MagicMock()
-    mock_token.token = session_id
-    return mock_token
+    with db_connection.make_session() as session:
+        user_session = session.get(UserSession, session_id)
+        scopes = list(user_session.user.scopes or []) if user_session else []
+    return AccessToken(token=session_id, client_id="test-client", scopes=scopes)
 
 
 def get_fn(tool):

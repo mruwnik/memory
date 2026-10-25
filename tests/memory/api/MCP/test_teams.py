@@ -1,12 +1,8 @@
 """Tests for Teams MCP tools with access control."""
 
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import pytest
-from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
-from mcp.server.auth.middleware.auth_context import auth_context_var
-from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
 from memory.common.db.models import (
     Person,
@@ -30,6 +26,7 @@ from memory.api.MCP.servers.teams import (
     upsert,
     upsert_team_record,
 )
+from tests.conftest import mcp_auth_context
 
 
 @pytest.fixture(autouse=True)
@@ -42,26 +39,6 @@ def reset_db_cache():
     db_connection._engine = None
     db_connection._session_factory = None
     db_connection._scoped_session = None
-
-
-@contextmanager
-def mcp_auth_context(session_token: str):
-    """Set up FastMCP auth context for testing.
-
-    This sets the auth_context_var that FastMCP's get_access_token() reads from,
-    allowing tests to run without mocking.
-    """
-    access_token = AccessToken(
-        token=session_token,
-        client_id="test-client",
-        scopes=[],
-    )
-    auth_user = AuthenticatedUser(access_token)
-    token = auth_context_var.set(auth_user)
-    try:
-        yield
-    finally:
-        auth_context_var.reset(token)
 
 
 @pytest.fixture

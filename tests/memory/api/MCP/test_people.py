@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from memory.api.MCP.servers.core import list_items
 from memory.api.MCP.servers.people import (
     delete,
     fetch,
@@ -17,10 +18,11 @@ from memory.api.MCP.servers.people import (
 )
 from memory.common.db import connection as db_connection
 from memory.common.db.models import Person, PersonTidbit
+from memory.common.db.models.discord import DiscordUser
 from memory.common.content_processing import create_content_hash
 from memory.common.notify import user_info_for
 from memory.common.people import find_person_by_slack_id
-from tests.conftest import mcp_auth_context
+from tests.conftest import make_source_item, mcp_auth_context
 
 
 def get_fn(tool):
@@ -1688,3 +1690,201 @@ async def test_tidbit_add_rejects_contributor_setting_confidential(
                 project_id=project.id,
                 sensitivity="confidential",
             )
+
+
+@pytest.fixture
+def unlinked_person_with_secret(db_session):
+    person = Person(identifier="client_bob", display_name="Bob", contact_info={"email": "bob@client.com"})
+    db_session.add(person)
+    db_session.flush()
+    secret = make_source_item(db_session, 1, sensitivity="confidential", project_id=None)
+    secret.people = [person]
+    db_session.commit()
+    return person
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [{"contact_info": {"email": "regular@example.com"}}, {"aliases": ["regular@example.com"]}],
+)
+async def test_upsert_cannot_claim_someone_elses_person(
+    db_session, regular_user, user_session, unlinked_person_with_secret, change
+):
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(PermissionError):
+            await upsert.fn(identifier="client_bob", **change)
+        visible = await list_items.fn()
+
+    db_session.refresh(unlinked_person_with_secret)
+    assert unlinked_person_with_secret.user_id is None
+    assert unlinked_person_with_secret.contact_info == {"email": "bob@client.com"}
+    assert visible["items"] == []
+
+
+IDENTITY_CHANGES = [
+    {"display_name": "Someone Else"},
+    {"aliases": ["ceo@client.com"]},
+    {"contact_info": {"email": "ceo@client.com"}},
+    {"contact_info": {"slack": {"T1": {"user_id": "U1"}}}},
+    {"contact_info": {"github": "ceo"}},
+    {"contact_info": {"discord": "123456789"}},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", IDENTITY_CHANGES)
+async def test_upsert_owner_cannot_change_what_ingest_matches_people_on(
+    db_session, regular_user, user_session, change
+):
+    """Ingest links content to the Person these fields match, so claiming one would
+    route someone else's mail and events to the owner."""
+    person = Person(identifier="me", display_name="Me", user_id=regular_user.id)
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(PermissionError):
+            await upsert.fn(identifier="me", **change)
+
+
+@pytest.mark.asyncio
+async def test_upsert_owner_may_change_other_contact_info(db_session, regular_user, user_session):
+    person = Person(identifier="me", display_name="Me", user_id=regular_user.id)
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        await upsert.fn(identifier="me", contact_info={"phone": "555"})
+
+    db_session.refresh(person)
+    assert person.contact_info == {"phone": "555"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", IDENTITY_CHANGES)
+async def test_upsert_admin_may_change_identity_fields(db_session, admin_session, change):
+    person = Person(identifier="them", display_name="Them")
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        result = await upsert.fn(identifier="them", **change)
+
+    assert result["status"] == "updated"
+
+
+@pytest.mark.asyncio
+async def test_upsert_update_never_links_a_non_admin(
+    db_session, regular_user, user_session, unlinked_person_with_secret
+):
+    """A user can set their own email to the Person's unverified; a later
+    update must not then link that Person to them."""
+    regular_user.email = "bob@client.com"
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        result = await upsert.fn(identifier="client_bob", contact_info={"phone": "555"})
+        visible = await list_items.fn()
+
+    db_session.refresh(unlinked_person_with_secret)
+    assert "linked_user_id" not in result
+    assert unlinked_person_with_secret.user_id is None
+    assert visible["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_admin_sets_and_clears_the_user_link(db_session, admin_session, regular_user):
+    person = Person(identifier="them", display_name="Them")
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        await upsert.fn(identifier="them", user_id=regular_user.id)
+        db_session.refresh(person)
+        linked = person.user_id
+        await upsert.fn(identifier="them", clear_user_id=True)
+
+    db_session.refresh(person)
+    assert linked == regular_user.id
+    assert person.user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [{"user_id": 1}, {"clear_user_id": True}])
+async def test_upsert_user_link_is_admin_only(db_session, regular_user, user_session, change):
+    person = Person(identifier="me", display_name="Me", user_id=regular_user.id)
+    db_session.add(person)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(PermissionError):
+            await upsert.fn(identifier="me", **change)
+
+
+@pytest.mark.asyncio
+async def test_upsert_user_link_keeps_one_person_per_user(db_session, admin_session, regular_user):
+    db_session.add_all(
+        [
+            Person(identifier="regular", display_name="Regular", user_id=regular_user.id),
+            Person(identifier="them", display_name="Them"),
+        ]
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        with pytest.raises(ValueError, match="already linked to 'regular'"):
+            await upsert.fn(identifier="them", user_id=regular_user.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewer", ["admin", "regular"])
+async def test_upsert_create_never_links_by_email(
+    db_session, regular_user, admin_session, user_session, viewer
+):
+    """User.email and name are self-service and unverified: a user who sets
+    them to a Person's must not be linked to it, whoever creates it."""
+    regular_user.email = "ceo@client.com"
+    regular_user.name = "Client Ceo"
+    db_session.commit()
+    sessions = {"admin": admin_session, "regular": user_session}
+
+    with mcp_auth_context(sessions[viewer].id):
+        result = await upsert.fn(
+            identifier="claim", display_name="Client Ceo", contact_info={"email": "ceo@client.com"}
+        )
+
+    assert "linked_user_id" not in result
+    assert db_session.query(Person).filter(Person.identifier == "claim").one().user_id is None
+
+
+@pytest.mark.asyncio
+async def test_admin_update_never_links_by_email(
+    db_session, regular_user, admin_session, unlinked_person_with_secret
+):
+    regular_user.email = "bob@client.com"
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.id):
+        await upsert.fn(identifier="client_bob", contact_info={"phone": "123"})
+
+    db_session.refresh(unlinked_person_with_secret)
+    assert unlinked_person_with_secret.user_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewer, attached", [("admin", True), ("regular", False)])
+async def test_upsert_create_attaches_discord_users_for_admins_only(
+    db_session, admin_session, user_session, viewer, attached
+):
+    db_session.add(DiscordUser(id=123456789, username="ceo"))
+    db_session.commit()
+    sessions = {"admin": admin_session, "regular": user_session}
+
+    with mcp_auth_context(sessions[viewer].id):
+        result = await upsert.fn(
+            identifier="claim", display_name="Claim", contact_info={"discord": "123456789"}
+        )
+
+    db_session.expire_all()
+    assert (db_session.get(DiscordUser, 123456789).person_id == result["person_id"]) == attached

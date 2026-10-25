@@ -143,6 +143,66 @@ class AccessFilter:
         return len(self.conditions) == 0
 
 
+@dataclass(frozen=True)
+class PersonRef:
+    id: int
+
+
+class UserProxy:
+    """Minimal detached user for access control: id, scopes and person.
+
+    ``person`` carries only the id, which is all the access rules read, so the
+    proxy gets the Person override and team roles a full ``User`` would.
+    Normalizes ``scopes`` to ``list[str]`` at the boundary so callers can rely
+    on the shape regardless of what the source dict contained (None, tuple,
+    missing key, etc.).
+    """
+
+    def __init__(self, user_dict: dict):
+        self.id: int | None = user_dict.get("id")
+        raw_scopes = user_dict.get("scopes") or []
+        self.scopes: list[str] = [str(s) for s in raw_scopes]
+        person_id = user_dict.get("person_id")
+        self.person = PersonRef(person_id) if person_id is not None else None
+
+    @classmethod
+    def from_user(cls, user: "User", scopes: list[str] | None = None) -> "UserProxy":
+        """``scopes`` defaults to the user's own."""
+        return cls(
+            {
+                "id": user.id,
+                "scopes": list(user.scopes or []) if scopes is None else scopes,
+                "person_id": user.person.id if user.person else None,
+            }
+        )
+
+
+def deny_all_filter() -> AccessFilter:
+    """The filter for a caller who can't be identified: not even public items."""
+    return AccessFilter(conditions=[], include_public=False)
+
+
+def uploader_access_filter(
+    session: "Session | scoped_session[Session]",
+    creator_id: int | None,
+    scopes: list[str] | None,
+) -> AccessFilter | None:
+    """What an ingest task's uploader may read, judged by the scopes of the
+    credential that uploaded (unknown scopes are not admin). A task without a
+    creator was run by an operator, who may read everything."""
+    from memory.common.db.models.users import User  # avoid circular import
+
+    if creator_id is None:
+        return None
+    user = session.get(User, creator_id)
+    if user is None:
+        return deny_all_filter()
+    uploader = UserProxy.from_user(user, scopes=scopes or [])
+    if has_admin_scope(uploader):
+        return None
+    return build_access_filter(uploader, get_user_project_roles(session, uploader))
+
+
 def has_admin_scope(user: UserLike) -> bool:
     """Check if user has admin scope (superadmin access)."""
     scopes = getattr(user, "scopes", None)
@@ -184,7 +244,7 @@ def credential_scopes(user: User, api_key: APIKey | None) -> list[str]:
     return sorted(set(user.scopes or []) | {SCOPE_READ, SCOPE_WRITE})
 
 
-def get_user_project_roles(db: "Session | scoped_session[Session]", user: "User") -> dict[int, str]:
+def get_user_project_roles(db: "Session | scoped_session[Session]", user: UserLike) -> dict[int, str]:
     """
     Get the user's roles in each project they have access to via team membership.
 
@@ -350,30 +410,17 @@ def get_accessible_source_item_by_filename(
     """
     from memory.common.db.models.source_item import SourceItem  # avoid circular import
 
-    item = (
-        session.query(SourceItem)
-        .filter(SourceItem.filename == filename)
-        .one_or_none()
-    )
-    if item is None:
+    # Several items can share a file (e.g. one user's copy of another's upload).
+    items = session.query(SourceItem).filter(SourceItem.filename == filename).all()
+    if not items:
         raise FileNotFoundError(filename)
 
-    # "hidden" tombstone: deny the read for EVERYONE, including admins, before
-    # the admin short-circuit. File-serving is a read, so it must mirror the
-    # search / user_can_access exclusions; otherwise an admin could fetch a
-    # hidden email's attachment by filename even though the email is invisible
-    # everywhere else. (Non-admins are already covered via user_can_access.)
-    if normalize_sensitivity(getattr(item, "sensitivity", None) or "basic") == "hidden":
+    # user_can_access applies the "hidden" tombstone to everyone, admins included.
+    project_roles = {} if has_admin_scope(user) else get_user_project_roles(session, user)
+    readable = next((item for item in items if user_can_access(user, item, project_roles)), None)
+    if readable is None:
         raise PermissionError(filename)
-
-    if has_admin_scope(user):
-        return item
-
-    project_roles = get_user_project_roles(session, user)  # type: ignore[arg-type]
-    if not user_can_access(user, item, project_roles):
-        raise PermissionError(filename)
-
-    return item
+    return readable
 
 
 def user_can_access(
@@ -635,7 +682,7 @@ def get_max_sensitivity_for_project(
 # ==============================================================================
 
 
-def get_user_team_ids(db: "Session | scoped_session[Session]", user: "User") -> set[int]:
+def get_user_team_ids(db: "Session | scoped_session[Session]", user: UserLike) -> set[int]:
     """Get the IDs of all teams the user belongs to via their Person record.
 
     Returns an empty set if the user has no associated person or no team memberships.
@@ -651,7 +698,7 @@ def get_user_team_ids(db: "Session | scoped_session[Session]", user: "User") -> 
 
 
 def get_accessible_project_ids(
-    db: "Session | scoped_session[Session]", user: "User"
+    db: "Session | scoped_session[Session]", user: UserLike
 ) -> set[int] | None:
     """Get the IDs of all projects the user can access.
 
@@ -676,7 +723,7 @@ def get_accessible_project_ids(
 
 
 def get_accessible_team_ids(
-    db: "Session | scoped_session[Session]", user: "User"
+    db: "Session | scoped_session[Session]", user: UserLike
 ) -> set[int] | None:
     """Get the IDs of all teams the user can see.
 
@@ -693,7 +740,7 @@ def get_accessible_team_ids(
 
 
 def user_can_access_project(
-    db: "Session | scoped_session[Session]", user: "User", project_id: int
+    db: "Session | scoped_session[Session]", user: UserLike, project_id: int
 ) -> bool:
     """Check if a user can access a specific project.
 
@@ -718,7 +765,7 @@ def user_can_access_project(
 
 
 def user_can_access_team(
-    db: "Session | scoped_session[Session]", user: "User", team_id: int
+    db: "Session | scoped_session[Session]", user: UserLike, team_id: int
 ) -> bool:
     """Check if a user can access a specific team.
 
@@ -732,7 +779,7 @@ def user_can_access_team(
 
 
 def filter_projects_query(
-    db: "Session | scoped_session[Session]", user: "User", query: Query[Project]
+    db: "Session | scoped_session[Session]", user: UserLike, query: Query[Project]
 ) -> Query[Project]:
     """Filter a project query to only include projects the user can access.
 
@@ -756,7 +803,7 @@ def filter_projects_query(
 
 
 def filter_teams_query(
-    db: "Session | scoped_session[Session]", user: "User", query: Query[Team]
+    db: "Session | scoped_session[Session]", user: UserLike, query: Query[Team]
 ) -> Query[Team]:
     """Filter a team query to only include teams the user can access.
 

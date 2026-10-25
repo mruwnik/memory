@@ -1308,7 +1308,12 @@ class Person(Base):
         Index("person_identifier_idx", "identifier"),
         Index("person_display_name_idx", "display_name"),
         Index("person_aliases_idx", "aliases", postgresql_using="gin"),
-        Index("person_user_idx", "user_id"),
+        Index(
+            "person_user_idx",
+            "user_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
     )
 
     @property

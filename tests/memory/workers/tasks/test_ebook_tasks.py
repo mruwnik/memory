@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, Mock
 
-from memory.common.db.models import Book, BookSection
+from memory.common.db.models import Book, BookSection, PendingJob
 from memory.common import settings
 from memory.parsers.ebook import Ebook, Section
 from memory.workers.tasks import ebook
@@ -202,31 +202,89 @@ def test_sync_book_success(mock_parse, mock_ebook, db_session, tmp_path, qdrant)
     assert len(sections) == 4
 
 
-@patch("memory.workers.tasks.ebook.parse_ebook")
-def test_sync_book_already_exists(mock_parse, mock_ebook, db_session, tmp_path):
-    """Test that duplicate books are not processed."""
+def add_existing_book(db_session, *creators):
+    book = Book(title="Existing Book", author="Author", file_path="test/book.epub")
+    db_session.add(book)
+    db_session.flush()
+    db_session.add_all(
+        BookSection(
+            book_id=book.id,
+            section_title="Chapter",
+            modality="book",
+            sha256=f"existing-section-{creator.id}".encode(),
+            content="Chapter content",
+            creator_id=creator.id,
+        )
+        for creator in creators
+    )
+    db_session.commit()
+    return book
+
+
+@pytest.fixture
+def parsed_book(mock_ebook, tmp_path):
     book_file = tmp_path / "test.epub"
     book_file.write_text("dummy content")
+    mock_ebook.file_path = book_file
+    with patch("memory.workers.tasks.ebook.parse_ebook", return_value=mock_ebook):
+        yield book_file
 
-    # Use the same relative path that mock_ebook has
-    existing_book = Book(
-        title="Existing Book",
-        author="Author",
-        file_path="test/book.epub",  # Must match mock_ebook.relative_path
-    )
-    db_session.add(existing_book)
+
+@pytest.mark.parametrize(
+    "existing_creator, uploader, scopes, deduped",
+    [
+        ("admin", "admin", ["read"], True),
+        ("admin", None, None, True),  # an operator may see everything
+        ("admin", "regular", ["read"], False),
+        ("regular", "admin", ["*"], True),
+        ("regular", "admin", ["read"], False),  # an admin's narrowed key
+    ],
+)
+def test_sync_book_dedups_only_onto_a_book_the_uploader_can_read(
+    parsed_book, db_session, qdrant, admin_user, regular_user,
+    existing_creator, uploader, scopes, deduped,
+):
+    users = {"admin": admin_user, "regular": regular_user}
+    existing_book = add_existing_book(db_session, users[existing_creator])
+    creator_id = users.get(uploader) and users[uploader].id
+
+    result = ebook.sync_book(str(parsed_book), creator_id=creator_id, creator_scopes=scopes)
+
+    assert (result.get("status") == "already_exists") == deduped
+    assert (result.get("book_id") == existing_book.id) == deduped
+
+
+def test_sync_book_does_not_dedup_onto_a_book_without_sections(
+    parsed_book, db_session, qdrant, admin_user
+):
+    existing_book = add_existing_book(db_session)
+
+    result = ebook.sync_book(str(parsed_book), creator_id=admin_user.id, creator_scopes=["*"])
+
+    assert result.get("status") == "processed"
+    assert result.get("book_id") != existing_book.id
+
+
+@patch("memory.workers.tasks.ebook.parse_ebook")
+def test_sync_book_without_long_enough_sections_fails_the_job(
+    mock_parse, mock_ebook, db_session, tmp_path
+):
+    book_file = tmp_path / "test.epub"
+    book_file.write_text("dummy content")
+    mock_ebook.file_path = book_file
+    mock_ebook.sections = [Section(title="Cover", pages=["short"], number=1)]
+    mock_parse.return_value = mock_ebook
+    job = PendingJob(job_type="content_ingest")
+    db_session.add(job)
     db_session.commit()
 
-    mock_ebook.file_path = book_file
-    mock_parse.return_value = mock_ebook
+    result = ebook.sync_book(str(book_file), job_id=job.id)
 
-    assert ebook.sync_book(str(book_file)) == {
-        "book_id": existing_book.id,
-        "title": "Existing Book",
-        "author": "Author",
-        "status": "already_exists",
-        "sections_processed": 0,
-    }
+    db_session.refresh(job)
+    assert result == {"status": "error", "error": job.error_message}
+    assert job.status == "failed"
+    assert "no section with at least 100 characters" in (job.error_message or "")
+    assert db_session.query(Book).count() == 0
 
 
 @patch("memory.workers.tasks.ebook.parse_ebook")

@@ -16,7 +16,7 @@ def _intent(**kw):
     base: dict[str, Any] = dict(
         user_id=42, type="application/pdf", filename="f", tags=["t"],
         doc_metadata={"title": "Tt", "author": "Aa", "k": "v"},
-        project_id=9, exp=None,
+        project_id=9, exp=None, scopes=["read", "write"],
     )
     base.update(kw)
     return it.IngestTokenPayload(**base)
@@ -27,6 +27,7 @@ def test_build_task_kwargs_carries_owner_for_every_bucket(bucket):
     spec = getattr(ingest_routing, f"{bucket}_spec")()
     kw = build_task_kwargs(spec, pathlib.Path("/tmp/x"), _intent())
     assert kw["creator_id"] == 42
+    assert kw["creator_scopes"] == ["read", "write"]
     assert kw["project_id"] == 9
     if bucket == "book":
         assert kw["title"] == "Tt" and kw["author"] == "Aa"
@@ -140,7 +141,7 @@ def test_upload_image_routes_to_image_bucket(client, user, tmp_path, monkeypatch
         resp = client.post(f"/ingest/upload?token={token}", content=b"\xff\xd8\xff fake jpeg")
     assert resp.status_code == 200
     dispatched_kwargs = dispatch.call_args.kwargs["task_kwargs"]
-    assert "file_path" in dispatched_kwargs
+    assert dispatched_kwargs["file_path"].endswith(f"_{user.id}_photo.jpg")
     assert "tags" in dispatched_kwargs
     # image bucket does NOT pass mime_type
     assert "mime_type" not in dispatched_kwargs

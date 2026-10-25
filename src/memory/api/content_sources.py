@@ -8,8 +8,13 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPExcep
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import get_current_user
-from memory.common.access_control import get_user_project_roles, has_admin_scope, user_can_access
+from memory.api.auth import get_current_user, request_api_key
+from memory.common.access_control import (
+    credential_scopes,
+    get_user_project_roles,
+    has_admin_scope,
+    user_can_access,
+)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, JobType
 from memory.common.db.models.source_items import Photo
@@ -244,7 +249,7 @@ async def upload_book(
         file, settings.MAX_BOOK_UPLOAD_BYTES, request=request
     )
     content_hash = hashlib.sha256(content).hexdigest()[:12]
-    safe_filename = f"{content_hash}_{Path(file.filename).name}"
+    safe_filename = f"{content_hash}_{user.id}_{Path(file.filename).name}"
     file_path = settings.EBOOK_STORAGE_DIR / safe_filename
 
     # Save the file
@@ -266,6 +271,7 @@ async def upload_book(
                 "title": title,
                 "author": author,
                 "creator_id": user.id,
+                "creator_scopes": credential_scopes(user, request_api_key(request, db)),
             },
             user_id=user.id,
         )
@@ -318,7 +324,7 @@ async def upload_photo(
         file, settings.MAX_PHOTO_UPLOAD_BYTES, request=request
     )
     content_hash = hashlib.sha256(content).hexdigest()[:12]
-    safe_filename = f"{content_hash}_{Path(file.filename).name}"
+    safe_filename = f"{content_hash}_{user.id}_{Path(file.filename).name}"
     file_path = settings.PHOTO_STORAGE_DIR / safe_filename
 
     # Save the file
@@ -338,6 +344,7 @@ async def upload_photo(
                 "file_path": str(file_path),
                 "tags": tag_list,
                 "creator_id": user.id,
+                "creator_scopes": credential_scopes(user, request_api_key(request, db)),
             },
             user_id=user.id,
         )

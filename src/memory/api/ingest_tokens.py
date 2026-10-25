@@ -45,6 +45,7 @@ class IngestTokenPayload:
     doc_metadata: dict[str, Any] = field(default_factory=dict)
     project_id: int | None = None
     exp: int | None = None  # unix ts; None -> default TTL at mint
+    scopes: list[str] = field(default_factory=list)  # the minting credential's
 
 
 def mint_token(payload: IngestTokenPayload, ttl_seconds: int | None = None) -> str:

@@ -9,7 +9,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_access_token
 from pydantic import BaseModel
 from sqlalchemy import Text, exists, func, or_, select
 from sqlalchemy import cast as sql_cast
@@ -17,7 +16,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
-    build_user_access_filter_from_dict,
+    build_mcp_user_access_filter,
     fetch_accessible_source_items,
     get_mcp_current_user,
     log_item_access,
@@ -34,7 +33,6 @@ from memory.common.scopes import (
     SCOPE_OBSERVE_WRITE,
     SCOPE_READ,
 )
-from memory.api.auth import lookup_api_key
 from memory.api.search.filters import (
     FILTER_REGISTRY,
     account_match_sql,
@@ -53,11 +51,7 @@ from memory.common.collections import (
     SESSION_COLLECTIONS,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import (
-    AgentObservation,
-    SourceItem,
-    UserSession,
-)
+from memory.common.db.models import AgentObservation, SourceItem
 from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.formatters import observation
@@ -89,32 +83,11 @@ def get_current_user_access_filter() -> AccessFilter | None:
         a leaked least-privilege integration key cannot inherit the
         underlying user's full data access.
     """
-    access_token = get_access_token()
-    if access_token is None:
-        # No auth - return empty filter (no access)
-        logger.warning("get_current_user_access_filter: no access token")
-        return AccessFilter(conditions=[])
-
-    token_scopes = list(access_token.scopes or [])
-
     with make_session() as session:
-        # Try as session token first
-        user_session = session.get(UserSession, access_token.token)
-        if user_session and user_session.user:
-            return build_user_access_filter_from_dict(
-                {"id": user_session.user.id, "scopes": token_scopes}
-            )
-
-        # Try as API key
-        api_key_record = lookup_api_key(access_token.token, session)
-        if api_key_record and api_key_record.user:
-            return build_user_access_filter_from_dict(
-                {"id": api_key_record.user.id, "scopes": token_scopes}
-            )
-
-    # Couldn't identify user - return empty filter (no access)
-    logger.warning("get_current_user_access_filter: couldn't identify user from token")
-    return AccessFilter(conditions=[])
+        user = get_mcp_current_user(session)
+        if user is None:
+            logger.warning("get_current_user_access_filter: no authenticated user")
+        return build_mcp_user_access_filter(session, user)
 
 
 # Filter definitions: (name, description, applicable_modalities)

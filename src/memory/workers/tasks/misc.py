@@ -7,7 +7,7 @@ import pathlib
 from memory.common import paths, settings
 from memory.common.celery_app import app, SYNC_MISC_DOC
 from memory.common.content_processing import (
-    check_content_exists,
+    find_readable_upload,
     create_task_result,
     process_content_item,
 )
@@ -27,6 +27,7 @@ def sync_misc_doc(
     doc_metadata: dict | None = None,
     creator_id: int | None = None,
     project_id: int | None = None,
+    creator_scopes: list[str] | None = None,
 ) -> dict:
     """Ingest an arbitrary file from MISC_STORAGE_DIR as a MiscDoc."""
     path = pathlib.Path(file_path)
@@ -38,11 +39,8 @@ def sync_misc_doc(
     db_filename = paths.to_db_filename(path.resolve())
 
     with make_session() as session:
-        existing = check_content_exists(session, MiscDoc, sha256=sha256)
+        existing, sha256 = find_readable_upload(session, MiscDoc, sha256, creator_id, creator_scopes)
         if existing:
-            # First-owner-wins: identical bytes dedupe to the original row, so a
-            # later uploader's creator_id/project_id are intentionally not
-            # applied — the content has a single canonical owner.
             logger.info(f"MiscDoc already exists: {existing.id}")
             return create_task_result(existing, "already_exists")
 

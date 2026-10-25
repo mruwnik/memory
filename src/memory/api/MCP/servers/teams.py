@@ -13,6 +13,7 @@ from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.audit import audit_call
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common.access_control import (
+    UserLike,
     filter_projects_query,
     filter_teams_query,
     has_admin_scope,
@@ -23,7 +24,6 @@ from memory.common.db.models import (
     Person,
     Project,
     Team,
-    User,
 )
 from memory.common.people import find_or_create_person, find_person
 from memory.common.db.models.sources import (
@@ -214,7 +214,7 @@ async def upsert(
     }
 
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 
@@ -346,7 +346,7 @@ async def fetch(
         Team data with optional member and project lists, or error if not found/accessible
     """
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 
@@ -410,7 +410,7 @@ async def list_all(
         List of teams (filtered to teams the user has access to)
     """
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 
@@ -473,7 +473,7 @@ async def team_add_member(
         return {"error": f"Invalid role: {role}. Must be 'member', 'lead', or 'admin'"}
 
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 
@@ -558,7 +558,7 @@ async def team_remove_member(
     logger.info(f"MCP: Removing {person} from team {team}")
 
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 
@@ -632,7 +632,7 @@ async def project_list_access(
         or error if project not found/accessible
     """
     with make_session() as session:
-        user = get_mcp_current_user(session, full=True)
+        user = get_mcp_current_user(session)
         if not user:
             return {"error": "Not authenticated"}
 
@@ -670,7 +670,7 @@ _ROLE_RANK = {"member": 0, "lead": 1, "admin": 2}
 
 
 def get_caller_team_role(
-    session: Session | scoped_session[Session], user: User, team_id: int
+    session: Session | scoped_session[Session], user: UserLike, team_id: int
 ) -> str | None:
     """Return the caller's role ('member'/'lead'/'admin') in the given team.
 
@@ -696,7 +696,7 @@ def get_caller_team_role(
     return row.role if row else None
 
 
-def find_project_with_access(session: Session | scoped_session[Session], user: User, project: int | str) -> Project | None:
+def find_project_with_access(session: Session | scoped_session[Session], user: UserLike, project: int | str) -> Project | None:
     """Find a project by ID or slug, with access control filtering."""
     query = session.query(Project).options(selectinload(Project.teams))
 
@@ -730,7 +730,7 @@ def find_project_with_access(session: Session | scoped_session[Session], user: U
     return query.filter(Project.title == project).first()
 
 
-def find_team_with_access(session: Session, user: User, team: str | int) -> Team | None:
+def find_team_with_access(session: Session, user: UserLike, team: str | int) -> Team | None:
     """Find a team by ID or slug, with access control filtering."""
     query = session.query(Team).options(selectinload(Team.members))
 

@@ -7,14 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_access_token
 
-from memory.api.MCP.access import fetch_user_by_token
+from memory.api.MCP.access import UserProxy, fetch_user_by_token, get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
 from memory.common.access_control import get_accessible_source_item_by_filename
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import User
 from memory.common.scopes import SCOPE_EMAIL_WRITE
 from memory.common.email_sender import (
     EmailAttachmentData,
@@ -49,20 +47,7 @@ async def has_send_accounts(user_info: dict, session: DBSession | None) -> bool:
     return await asyncio.to_thread(_check)
 
 
-def _get_user_id(session: DBSession) -> int:
-    """Get the current user ID from the access token or raise ValueError."""
-    access_token = get_access_token()
-    if not access_token:
-        raise ValueError("Not authenticated")
-
-    user = fetch_user_by_token(session, access_token.token)
-    if not user:
-        raise ValueError("User not found")
-
-    return user.id
-
-
-def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | None:
+def _load_attachment(path: str, user: UserProxy | None) -> EmailAttachmentData | None:
     """Load an attachment from the file storage directory.
 
     Only allows files within FILE_STORAGE_DIR for security.
@@ -71,9 +56,8 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
     with other tools (e.g. ``core.fetch_file``) that serve user-supplied
     file paths.
 
-    Takes ``user_id`` rather than a User ORM instance so we don't rely on a
-    caller's session lifetime — lazy-loaded relationships on a detached user
-    would raise ``DetachedInstanceError``.
+    ``user`` is the caller as ``get_mcp_current_user`` resolves it, so access
+    follows the token's scopes rather than the user's own.
 
     Returns ``None`` for the small, expected set of "skip this attachment"
     failures (path-traversal, file missing, no matching SourceItem, no
@@ -81,7 +65,7 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
     connection failures — propagates instead of being silently swallowed
     by a blanket ``except Exception``.
     """
-    if user_id is None:
+    if user is None:
         logger.warning("Unauthenticated attachment request for: %s", path)
         return None
 
@@ -99,10 +83,6 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
         return None
 
     with make_session() as session:
-        user = session.query(User).filter(User.id == user_id).one_or_none()
-        if user is None:
-            logger.warning("User %s not found for attachment: %s", user_id, path)
-            return None
         try:
             get_accessible_source_item_by_filename(session, user, relative)
         except FileNotFoundError:
@@ -110,7 +90,7 @@ def _load_attachment(path: str, user_id: int | None) -> EmailAttachmentData | No
             return None
         except PermissionError:
             logger.warning(
-                "Access denied to attachment %s for user %s", relative, user_id
+                "Access denied to attachment %s for user %s", relative, user.id
             )
             return None
 
@@ -165,7 +145,10 @@ async def send(
         raise ValueError("At least one recipient is required")
 
     with make_session() as session:
-        user_id = _get_user_id(session)
+        user = get_mcp_current_user(session)
+        if user is None or user.id is None:
+            raise ValueError("Not authenticated")
+        user_id = user.id
         # Find the email account
         account = get_account_by_address(session, user_id, from_address)
 
@@ -186,7 +169,7 @@ async def send(
     if attachment_paths:
         attachments = []
         for path in attachment_paths:
-            att = _load_attachment(path, user_id)
+            att = _load_attachment(path, user)
             if att:
                 attachments.append(att)
             else:

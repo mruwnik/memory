@@ -1,11 +1,13 @@
 """Tests for content sources API endpoints."""
 
+import hashlib
 from io import BytesIO
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from memory.common.access_control import credential_scopes
 from memory.common.db.models import JobType
 
 
@@ -56,6 +58,12 @@ def test_upload_book_returns_job_id(client: TestClient, mock_dispatch_job, user,
     assert call_kwargs["task_kwargs"]["author"] == "Test Author"
     assert call_kwargs["task_kwargs"]["tags"] == ["fiction", "test"]
     assert call_kwargs["task_kwargs"]["creator_id"] == user.id
+    assert call_kwargs["task_kwargs"]["creator_scopes"] == credential_scopes(user, None)
+    # Per uploader, so one user's upload never dedups onto or deletes another's file.
+    digest = hashlib.sha256(test_content).hexdigest()[:12]
+    assert call_kwargs["task_kwargs"]["file_path"] == str(
+        tmp_path / f"{digest}_{user.id}_test_book.epub"
+    )
 
 
 def test_upload_book_invalid_extension(client: TestClient, user):
@@ -96,6 +104,11 @@ def test_upload_photo_returns_job_id(client: TestClient, mock_dispatch_job, user
     assert call_kwargs["job_type"] == JobType.CONTENT_INGEST
     assert call_kwargs["task_kwargs"]["tags"] == ["vacation", "beach"]
     assert call_kwargs["task_kwargs"]["creator_id"] == user.id
+    assert call_kwargs["task_kwargs"]["creator_scopes"] == credential_scopes(user, None)
+    digest = hashlib.sha256(jpeg_content).hexdigest()[:12]
+    assert call_kwargs["task_kwargs"]["file_path"] == str(
+        tmp_path / f"{digest}_{user.id}_test_photo.jpg"
+    )
 
 
 def test_upload_photo_invalid_extension(client: TestClient, user):

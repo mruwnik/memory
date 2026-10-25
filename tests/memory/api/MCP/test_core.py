@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 
 from memory.api.MCP.servers.notes import note_files, upsert
 from memory.common import settings
-from memory.common.db.models import Note, Person, Team
+from memory.common.db.models import APIKey, Note, Person, Team
 from memory.common.db.models.sources import Project, project_teams, team_members
 from tests.conftest import mcp_auth_context
 
@@ -334,3 +334,36 @@ async def test_create_note_refuses_a_visible_note_the_caller_cannot_edit(
             subject="s", content="c", filename="team_visible.md", create_only=create_only
         )
     mock_celery.send_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "narrowed, expected",
+    [(False, ["/notes/mine.md", "/notes/theirs.md"]), (True, ["/notes/mine.md"])],
+)
+async def test_note_files_follows_the_token_scopes(
+    mock_settings, db_session, admin_user, regular_user, admin_session, narrowed, expected
+):
+    """A narrowed key on an admin account is not admin: it lists only its own notes."""
+    for name, creator in [("mine", admin_user), ("theirs", regular_user)]:
+        db_session.add(
+            Note(
+                sha256=f"{name}-note".encode(),
+                content="content",
+                modality="text",
+                mime_type="text/markdown",
+                size=7,
+                filename=f"notes/{name}.md",
+                creator_id=creator.id,
+                sensitivity="basic",
+            )
+        )
+    key = APIKey.create(user_id=admin_user.id, name="narrow", scopes=["read", "notes"])
+    db_session.add(key)
+    db_session.commit()
+    tokens = {False: (admin_session.id,), True: (key.key, ["read", "notes"])}
+
+    with mcp_auth_context(*tokens[narrowed]):
+        result = await note_files.fn(path="/")
+
+    assert sorted(result) == expected

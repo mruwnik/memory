@@ -1,12 +1,22 @@
 """Tests for MCP books server."""
 # pyright: reportFunctionMemberAccess=false
 
+from contextlib import nullcontext
+
 import pytest
 
 from memory.api.MCP.servers.books import fetch, list_books
 from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
-from memory.common.db.models import Book, BookSection, HumanUser, JournalEntry, Person, Team
+from memory.common.db.models import (
+    APIKey,
+    Book,
+    BookSection,
+    HumanUser,
+    JournalEntry,
+    Person,
+    Team,
+)
 from memory.common.db.models.sources import Project, project_teams, team_members
 from tests.conftest import mcp_auth_context
 
@@ -54,14 +64,19 @@ def projects(db_session, regular_user):
 
 
 @pytest.fixture
-def viewers(admin_user, regular_user, other_user, admin_session, user_session):
+def viewers(db_session, admin_user, regular_user, other_user, admin_session, user_session):
     users = {"admin": admin_user, "regular": regular_user, "other": other_user}
-    tokens = {
-        "admin": (admin_session.id, None),
-        "admin read-only key": (admin_session.id, ["read"]),
-        "regular": (user_session.id, None),
+    api_key = APIKey.create(user_id=admin_user.id, name="read-only", scopes=["read"])
+    db_session.add(api_key)
+    db_session.commit()
+    auth = {
+        "admin": lambda: mcp_auth_context(admin_session.id),
+        "admin read-only API key": lambda: mcp_auth_context(api_key.key, ["read"]),
+        "regular": lambda: mcp_auth_context(user_session.id),
+        "unknown token": lambda: mcp_auth_context("no-such-token", ["read"]),
+        "no token": nullcontext,
     }
-    return users, tokens
+    return users, auth
 
 
 def add_book(db_session, title="Book", **book_fields):
@@ -90,9 +105,9 @@ TITLE = "Moby Dick"
 
 
 def add_matrix_book(db_session, case, users, projects):
-    project, sensitivity, creator = case
+    project, sensitivity, creator, *linked = case
     book = add_book(db_session, TITLE)
-    add_section(
+    section = add_section(
         db_session,
         book,
         TITLE,
@@ -100,18 +115,19 @@ def add_matrix_book(db_session, case, users, projects):
         sensitivity=sensitivity,
         creator_id=users[creator].id if creator else None,
     )
+    section.people = [users[name].person for name in linked]
     db_session.commit()
 
 
 VISIBLE, DENIED = [TITLE], []
 ACCESS_CASES = [
-    # (viewer, (project, sensitivity, creator), expected)
+    # (viewer, (project, sensitivity, creator, *people linked to it), expected)
     ("admin", ("other", "confidential", "other"), VISIBLE),
     ("admin", (None, "basic", None), VISIBLE),
     ("admin", ("other", "hidden", None), DENIED),
-    ("admin read-only key", ("other", "confidential", "other"), DENIED),
-    ("admin read-only key", (None, "basic", "admin"), VISIBLE),
-    ("admin read-only key", ("other", "public", "other"), VISIBLE),
+    ("admin read-only API key", ("other", "confidential", "other"), DENIED),
+    ("admin read-only API key", (None, "basic", "admin"), VISIBLE),
+    ("admin read-only API key", ("other", "public", "other"), VISIBLE),
     ("regular", (None, "basic", "regular"), VISIBLE),
     ("regular", ("other", "public", "other"), VISIBLE),
     ("regular", ("member", "basic", "other"), VISIBLE),
@@ -119,16 +135,20 @@ ACCESS_CASES = [
     ("regular", ("other", "basic", "other"), DENIED),
     ("regular", (None, "basic", "other"), DENIED),
     ("regular", ("member", "hidden", "regular"), DENIED),
+    ("regular", ("other", "confidential", "other", "regular"), VISIBLE),
+    ("regular", ("other", "hidden", "other", "regular"), DENIED),
+    ("unknown token", ("other", "public", "other"), DENIED),
+    ("no token", ("other", "public", "other"), DENIED),
 ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("viewer, case, expected", ACCESS_CASES)
 async def test_list_books_access(db_session, viewers, projects, viewer, case, expected):
-    users, tokens = viewers
+    users, auth = viewers
     add_matrix_book(db_session, case, users, projects)
 
-    with mcp_auth_context(*tokens[viewer]):
+    with auth[viewer]():
         result = await list_books.fn()
 
     assert [b["title"] for b in result] == expected
@@ -136,11 +156,11 @@ async def test_list_books_access(db_session, viewers, projects, viewer, case, ex
 
 @pytest.mark.parametrize("viewer, case, expected", ACCESS_CASES)
 def test_fetch_access(db_session, viewers, projects, viewer, case, expected):
-    users, tokens = viewers
+    users, auth = viewers
     add_matrix_book(db_session, case, users, projects)
     book_id = db_session.query(Book.id).scalar()
 
-    with mcp_auth_context(*tokens[viewer]):
+    with auth[viewer]():
         result = fetch.fn(book_id=book_id)
 
     assert [s["section_title"] for s in result] == expected
@@ -229,3 +249,30 @@ def test_fetch_with_include_journal(db_session, admin_user, admin_session):
 
     assert [s["section_title"] for s in result["sections"]] == ["Chapter 1"]
     assert [e["content"] for e in result["journal_entries"]] == ["Note about this book"]
+
+
+@pytest.mark.parametrize(
+    "viewer, expected",
+    [("admin", ["Private note"]), ("admin read-only API key", []), ("regular", [])],
+)
+def test_fetch_journal_follows_the_token_scopes(
+    db_session, viewers, viewer, expected
+):
+    users, auth = viewers
+    book = add_book(db_session)
+    section = add_section(db_session, book, sensitivity="public")
+    db_session.add(
+        JournalEntry(
+            target_type="source_item",
+            target_id=section.id,
+            creator_id=users["other"].id,
+            content="Private note",
+            private=True,
+        )
+    )
+    db_session.commit()
+
+    with auth[viewer]():
+        result = fetch.fn(book_id=book.id, include_journal=True)
+
+    assert [e["content"] for e in result["journal_entries"]] == expected

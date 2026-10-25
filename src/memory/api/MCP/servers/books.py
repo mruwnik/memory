@@ -148,10 +148,9 @@ def fetch(
                 JournalEntry.target_id.in_(section_ids),
             )
         )
-        if user is not None:
-            journal_filter = build_journal_access_filter(user, user_id)
-            if journal_filter is not True:
-                journal_query = journal_query.filter(journal_filter)
+        journal_filter = build_journal_access_filter(user, user_id)
+        if journal_filter is not True:
+            journal_query = journal_query.filter(journal_filter)
         journal_entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
 
         return {

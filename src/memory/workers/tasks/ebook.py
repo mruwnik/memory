@@ -5,10 +5,10 @@ from typing import Any, Iterable, TypedDict, cast
 
 import memory.common.settings as settings
 from memory.common import jobs as job_utils
+from memory.common.access_control import apply_access_filter_to_query, uploader_access_filter
 from memory.common import paths
 from memory.common.celery_app import REPROCESS_BOOK, SYNC_BOOK, app
 from memory.common.content_processing import (
-    check_content_exists,
     clear_item_chunks,
     create_content_hash,
     embed_source_item,
@@ -236,6 +236,13 @@ def execute_book_processing(
         all_sections, section_map = create_all_sections(
             ebook.sections, book, creator_id=creator_id, project_id=project_id
         )
+        # A Book is only visible through its sections, so one without any
+        # would be unreachable by everyone.
+        if not all_sections:
+            raise ValueError(
+                f"The book has no section with at least {MIN_SECTION_LENGTH} "
+                "characters of text"
+            )
         session.add_all(all_sections)
         session.flush()
 
@@ -303,7 +310,17 @@ def execute_book_processing(
         if job_id:
             job_utils.fail_job(session, job_id, str(e))
             session.commit()
-        return {"status": "error", "error": str(e), "book_id": book_id}
+        return {"status": "error", "error": str(e)}
+
+
+def find_readable_book(
+    session: DBSession, file_path: str, creator_id: int | None, creator_scopes: list[str] | None
+) -> Book | None:
+    """The Book at ``file_path`` with a section the uploader can read."""
+    sections = session.query(BookSection).join(Book).filter(Book.file_path == file_path)
+    access_filter = uploader_access_filter(session, creator_id, creator_scopes)
+    section = apply_access_filter_to_query(sections, access_filter).first()
+    return section.book if section else None
 
 
 @app.task(name=SYNC_BOOK)
@@ -322,6 +339,7 @@ def sync_book(
     creator_id: int | None = None,
     project_id: int | None = None,
     job_id: int | None = None,
+    creator_scopes: list[str] | None = None,
 ) -> BookProcessingResult:
     """
     Synchronize a new book from a file path.
@@ -333,6 +351,7 @@ def sync_book(
         tags: Optional tags for the book
         title/author/etc: Optional metadata overrides
         creator_id/project_id: Owner + project stamped on each section
+        creator_scopes: Scopes of the credential that uploaded, for deduping
         job_id: Optional job ID for status tracking
 
     Returns:
@@ -349,13 +368,9 @@ def sync_book(
             job_utils.start_job(session, job_id)
             session.commit()
 
-        # Check for existing book (idempotency)
         logger.info(f"Checking for existing book: {ebook.relative_path}")
-        existing_item = check_content_exists(
-            session, Book, file_path=ebook.relative_path
-        )
-        if existing_item:
-            existing_book = cast(Book, existing_item)
+        existing_book = find_readable_book(session, ebook.relative_path, creator_id, creator_scopes)
+        if existing_book:
             logger.info(f"Book already exists: {existing_book.title}")
             if job_id:
                 job_utils.complete_job(

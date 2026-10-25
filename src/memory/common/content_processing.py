@@ -18,6 +18,7 @@ from celery.exceptions import Retry, TaskPredicate
 from sqlalchemy import or_
 from memory.agents.triggers import queue_trigger_match
 from memory.common import embedding, qdrant
+from memory.common.access_control import apply_access_filter_to_query, uploader_access_filter
 from memory.common.db.models import SourceItem, Chunk
 from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
@@ -87,6 +88,50 @@ TASK_LOGGED_PARAMS: dict[str, list[str]] = {
     "sync_calendar_account": ["account_id"],
     # Add more tasks as needed
 }
+
+
+def find_readable_upload(
+    session,
+    model: type[T],
+    content_sha256: bytes,
+    creator_id: int | None,
+    creator_scopes: list[str] | None,
+) -> tuple[T | None, bytes]:
+    """Dedup an upload onto an item of ``model`` the uploader can read.
+
+    Returns the readable item, or ``None`` and the sha256 to store the new item
+    under. Deduping onto an item the uploader can't read would hand them its id
+    and metadata, so they get their own copy; sha256 is unique across all items,
+    so that copy is keyed on the content hash salted with the uploader's id.
+    """
+    hashes = [content_sha256]
+    if creator_id is not None:
+        hashes.append(hashlib.sha256(content_sha256 + f":{creator_id}".encode()).digest())
+    candidates = session.query(model).filter(model.sha256.in_(hashes))  # type: ignore[attr-defined]
+    access_filter = uploader_access_filter(session, creator_id, creator_scopes)
+    readable = apply_access_filter_to_query(candidates, access_filter).first()
+    if readable is not None:
+        return readable, readable.sha256
+    hidden_own = (
+        session.query(model)
+        .filter(
+            model.sha256 == content_sha256,  # type: ignore[attr-defined]
+            model.sensitivity == "hidden",  # type: ignore[attr-defined]
+            model.creator_id == creator_id,  # type: ignore[attr-defined]
+        )
+        .first()
+    )
+    if hidden_own is not None:
+        # The salted hash is for someone else's copy, not a way back for an
+        # item its owner hid.
+        raise ValueError("This file was uploaded before and has been hidden")
+    taken = {
+        sha for (sha,) in session.query(SourceItem.sha256).filter(SourceItem.sha256.in_(hashes))
+    }
+    free = [sha for sha in hashes if sha not in taken]
+    if not free:
+        raise ValueError("This file was uploaded before and has been hidden")
+    return None, free[0]
 
 
 def check_content_exists(

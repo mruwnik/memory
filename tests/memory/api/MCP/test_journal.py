@@ -5,7 +5,7 @@ import pytest
 from memory.api.MCP.servers.journal import add, list_all
 from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
-from memory.common.db.models import JournalEntry, SourceItem, Person, Team
+from memory.common.db.models import APIKey, JournalEntry, SourceItem, Person, Team
 from memory.common.db.models.sources import Project, team_members, project_teams
 from tests.conftest import mcp_auth_context
 
@@ -540,3 +540,55 @@ async def test_admin_bypasses_per_type_gate(
         )
 
     assert result["total"] == 1
+
+
+@pytest.fixture
+def team_and_project_targets(db_session, sample_project, other_user):
+    team = Team(name="Secret", slug="secret", is_active=True)
+    db_session.add(team)
+    db_session.flush()
+    for target_type, target_id in [("team", team.id), ("project", sample_project.id)]:
+        db_session.add(
+            JournalEntry(
+                target_type=target_type,
+                target_id=target_id,
+                creator_id=other_user.id,
+                content="note",
+                private=False,
+            )
+        )
+    db_session.commit()
+    return {"team": team.id, "project": sample_project.id}
+
+
+@pytest.fixture
+def narrowed_admin_key(db_session, admin_user):
+    key = APIKey.create(user_id=admin_user.id, name="narrow", scopes=["read", "write"])
+    db_session.add(key)
+    db_session.commit()
+    return key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_type", ["team", "project"])
+async def test_admin_session_reads_and_adds_any_team_or_project_journal(
+    db_session, admin_session, team_and_project_targets, target_type
+):
+    target_id = team_and_project_targets[target_type]
+    with mcp_auth_context(admin_session.id):
+        listed = await get_fn(list_all)(target_id=target_id, target_type=target_type)
+        await get_fn(add)(target_id=target_id, target_type=target_type, content="mine")
+
+    assert listed["total"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_type", ["team", "project"])
+@pytest.mark.parametrize("tool, args", [(list_all, {}), (add, {"content": "planted"})])
+async def test_narrowed_admin_key_is_not_admin_for_team_or_project_journals(
+    db_session, narrowed_admin_key, team_and_project_targets, target_type, tool, args
+):
+    target_id = team_and_project_targets[target_type]
+    with mcp_auth_context(narrowed_admin_key.key, ["read", "write"]):
+        with pytest.raises(ValueError, match="not found or access denied"):
+            await get_fn(tool)(target_id=target_id, target_type=target_type, **args)

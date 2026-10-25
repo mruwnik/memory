@@ -616,12 +616,10 @@ def mcp_auth_context(session_token: str, scopes: list[str] | None = None):
     This sets the auth_context_var that FastMCP's get_access_token() reads from,
     allowing tests to run without mocking internal functions.
 
-    By default the access token carries the session user's real scopes, exactly
-    as production does for a frontend session (see
-    ``oauth_provider.resolve_session_scopes``): the user's scopes when the session
-    has no OAuth state, else the OAuth state's scopes. This makes an
-    ``admin_session`` actually authorize as admin at the data layer instead of
-    being silently treated as least-privilege. Pass ``scopes`` to override.
+    By default the access token carries the scopes production's ``verify_token``
+    gives the credential (``system_scopes``), so an ``admin_session`` is admin.
+    A session can't be narrowed in production: pass ``scopes`` only with an API
+    key's token.
 
     Usage:
         with mcp_auth_context(admin_session.id):
@@ -630,18 +628,13 @@ def mcp_auth_context(session_token: str, scopes: list[str] | None = None):
     from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from memory.api.auth import lookup_principal, system_scopes
     from memory.common.db.connection import make_session
-    from memory.common.db.models import UserSession
 
     if scopes is None:
         with make_session() as session:
-            user_session = session.get(UserSession, session_token)
-            if user_session and user_session.oauth_state is not None:
-                scopes = list(user_session.oauth_state.scopes or [])
-            elif user_session and user_session.user:
-                scopes = list(user_session.user.scopes or [])
-            else:
-                scopes = []
+            principal = lookup_principal(session_token, session, record_use=False)
+            scopes = system_scopes(principal) if principal else []
 
     # fastmcp's AccessToken (what verify_token returns in production), not the
     # bare SDK one: fastmcp's get_access_token() converts foreign token types
@@ -819,6 +812,8 @@ def mock_file_storage(tmp_path: Path):
     report_storage_dir.mkdir(parents=True, exist_ok=True)
     misc_storage_dir = tmp_path / "misc"
     misc_storage_dir.mkdir(parents=True, exist_ok=True)
+    photo_storage_dir = tmp_path / "photos"
+    photo_storage_dir.mkdir(parents=True, exist_ok=True)
     email_spool_dir = tmp_path / "email_spool"
     email_spool_dir.mkdir(parents=True, exist_ok=True)
     with (
@@ -830,6 +825,7 @@ def mock_file_storage(tmp_path: Path):
         patch.object(settings, "COMIC_STORAGE_DIR", comic_storage_dir),
         patch.object(settings, "REPORT_STORAGE_DIR", report_storage_dir),
         patch.object(settings, "MISC_STORAGE_DIR", misc_storage_dir),
+        patch.object(settings, "PHOTO_STORAGE_DIR", photo_storage_dir),
         patch.object(settings, "EMAIL_SPOOL_DIR", email_spool_dir),
     ):
         yield

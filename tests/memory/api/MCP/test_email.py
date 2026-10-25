@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from memory.api.MCP import visibility
+from memory.api.MCP.access import UserProxy
 
 # Mock FastMCP before importing
 class MockFastMCP:
@@ -175,13 +176,9 @@ def user_session(db_session, test_user):
 
 @pytest.fixture
 def mock_access_token(user_session):
-    """Mock the get_access_token to return our test token."""
-    mock_token = Mock()
-    mock_token.token = user_session.id
-
-    with patch(
-        "memory.api.MCP.servers.email.get_access_token", return_value=mock_token
-    ):
+    """The real fastmcp is mocked out here, so patch the token where access.py reads it."""
+    mock_token = Mock(token=user_session.id, scopes=["read", "write"])
+    with patch("memory.api.MCP.access.get_access_token", return_value=mock_token):
         yield mock_token
 
 
@@ -366,7 +363,7 @@ def test_load_attachment_valid_path(tmp_path, db_session, regular_user):
     db_session.commit()
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment("valid/file.txt", regular_user.id)
+        result = _load_attachment("valid/file.txt", UserProxy.from_user(regular_user))
 
     assert result is not None
     assert result.filename == "file.txt"
@@ -390,13 +387,13 @@ def test_load_attachment_invalid_path(path, tmp_path, regular_user):
     (valid_dir / "file.txt").write_text("test content")
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment(path, regular_user.id)
+        result = _load_attachment(path, UserProxy.from_user(regular_user))
 
     assert result is None
 
 
-def test_load_attachment_no_user_id(tmp_path):
-    """_load_attachment returns None when user_id is None (unauthenticated)."""
+def test_load_attachment_no_user(tmp_path):
+    """_load_attachment returns None when there is no user (unauthenticated)."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
 
@@ -410,14 +407,15 @@ def test_load_attachment_no_user_id(tmp_path):
     assert result is None
 
 
-def test_load_attachment_other_users_file_denied(
-    tmp_path, db_session, regular_user, admin_user
+@pytest.mark.parametrize(
+    "viewer, scopes, served",
+    [("regular", ["read"], False), ("admin", ["read"], False), ("admin", ["*"], True)],
+)
+def test_load_attachment_follows_the_token_scopes(
+    tmp_path, db_session, regular_user, admin_user, viewer, scopes, served
 ):
-    """_load_attachment refuses to serve files owned by another user.
-
-    Confirms ownership check denies cross-user file exfiltration via the
-    attachment path.
-    """
+    """Only a token that is admin may attach a file nobody else can read: an
+    admin's read-only key can't exfiltrate it."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
     from memory.common.db.models import SourceItem
@@ -425,8 +423,6 @@ def test_load_attachment_other_users_file_denied(
     valid_dir = tmp_path / "valid"
     valid_dir.mkdir()
     (valid_dir / "secret.txt").write_text("secret content")
-
-    # SourceItem owned by admin_user with confidential sensitivity
     item = SourceItem(
         sha256=b"y" * 32,
         filename="valid/secret.txt",
@@ -434,12 +430,12 @@ def test_load_attachment_other_users_file_denied(
         modality="text",
         sensitivity="confidential",
         size=len(b"secret content"),
-        creator_id=admin_user.id,
     )
     db_session.add(item)
     db_session.commit()
+    user = {"regular": regular_user, "admin": admin_user}[viewer]
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment("valid/secret.txt", regular_user.id)
+        result = _load_attachment("valid/secret.txt", UserProxy({"id": user.id, "scopes": scopes}))
 
-    assert result is None
+    assert (result is not None) == served

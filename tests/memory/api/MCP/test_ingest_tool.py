@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from memory.api.MCP.servers.ingest import add_content
+from memory.common.db.models import APIKey
 from tests.conftest import mcp_auth_context
 
 SECRET = "test-secret-for-ingest-tool-tests"
@@ -26,6 +27,20 @@ async def test_inline_data_dispatches(db_session, admin_session):
             res = await add_content.fn(type="application/pdf", name="a.pdf", data=data)
     assert res["status"] == "queued"
     assert land.called
+
+
+@pytest.mark.asyncio
+async def test_upload_carries_the_tokens_scopes(db_session, admin_user):
+    """Dedup in the worker judges the uploader by this credential, not the user."""
+    key = APIKey.create(user_id=admin_user.id, name="narrow", scopes=["read", "ingest"])
+    db_session.add(key)
+    db_session.commit()
+    data = base64.b64encode(b"%PDF-1.4 small").decode()
+    with mcp_auth_context(key.key, ["read", "ingest"]):
+        with patch("memory.api.MCP.servers.ingest.land_and_dispatch") as land:
+            land.return_value.model_dump.return_value = {"status": "queued"}
+            await add_content.fn(type="application/pdf", name="a.pdf", data=data)
+    assert land.call_args.kwargs["intent"].scopes == ["read", "ingest"]
 
 
 @pytest.mark.asyncio

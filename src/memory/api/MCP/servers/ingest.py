@@ -95,6 +95,7 @@ async def add_content(
         doc_metadata=dict(metadata),
         project_id=project_id,
         exp=None,
+        scopes=list(user.scopes) if user else [],
     )
 
     if url:

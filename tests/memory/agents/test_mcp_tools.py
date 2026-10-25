@@ -46,8 +46,8 @@ async def test_upsert_creates_then_updates(
     [
         (SPEC | {"tools": ["agent_run"]}, "can never be used inside a run"),
         (
-            SPEC | {"tools": ["meta_get_user"]},
-            "tool 'meta_get_user' is not visible to you",
+            SPEC | {"tools": ["people_merge"]},
+            "tool 'people_merge' is not visible to you",
         ),
         (SPEC | {"bogus": 1}, "invalid spec"),
     ],

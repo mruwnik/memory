@@ -3,12 +3,16 @@
 
 import base64
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from pydantic import ValidationError
 
+from memory.api.MCP.access import UserProxy, get_mcp_current_user
+from memory.api.MCP.oauth_provider import SimpleOAuthProvider
 from memory.api.MCP.servers.core import (
     MAX_FETCH_FILE_BYTES,
     RawObservation,
@@ -21,10 +25,20 @@ from memory.api.MCP.servers.core import (
     count_items,
     filter_observation_source_ids,
     filter_source_ids,
+    get_current_user_access_filter,
 )
 from memory.api.search.types import SearchFilters
-from memory.common.access_control import AccessFilter
-from memory.common.db.models import Note
+from memory.common.access_control import AccessFilter, has_admin_scope
+from memory.common.db.models import (
+    APIKey,
+    JournalEntry,
+    Note,
+    OAuthClientInformation,
+    OAuthState,
+    Person,
+    Project,
+    UserSession,
+)
 from memory.common.db.models.source_item import Chunk, SourceItem
 from tests.conftest import make_source_item, mcp_auth_context
 
@@ -74,7 +88,7 @@ async def test_search_with_modalities(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user, searcher_id", [(MagicMock(id=42), 42), (None, None)])
+@pytest.mark.parametrize("user, searcher_id", [(UserProxy({"id": 42}), 42), (None, None)])
 @patch("memory.api.MCP.servers.core.search_base")
 @patch("memory.api.MCP.servers.core.filter_source_ids", return_value=None)
 async def test_search_runs_its_llm_stages_on_the_callers_keys(
@@ -1477,6 +1491,62 @@ async def test_fetch_bulk_skips_inaccessible_items(db_session, user_session, adm
 
 
 @pytest.mark.asyncio
+@patch("memory.api.MCP.servers.core.search_base", return_value=[])
+@patch("memory.api.MCP.servers.core.extract")
+async def test_person_linked_item_is_visible_on_every_core_path(
+    mock_extract, mock_search_base, db_session, regular_user, user_session
+):
+    """The user's Person on an item grants access even in a project they have no role in."""
+    person = Person(identifier="linked", display_name="Linked")
+    project = Project(title="Not mine", state="open")
+    db_session.add_all([person, project])
+    db_session.flush()
+    regular_user.person = person
+    access = {"project_id": project.id, "sensitivity": "confidential", "tags": ["t"]}
+    linked = make_source_item(db_session, 1, **access)
+    linked.people = [person]
+    unlinked = make_source_item(db_session, 2, **access)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.id):
+        listed = await list_items.fn()
+        counted = await count_items.fn()
+        fetched = await fetch.fn(ids=[linked.id, unlinked.id])
+        await search.fn(query="q", filters={"tags": ["t"]})
+
+    assert [i["id"] for i in listed["items"]] == [linked.id]
+    assert counted["total"] == 1
+    assert [i["id"] for i in fetched] == [linked.id]
+    assert mock_search_base.call_args.kwargs["filters"]["source_ids"] == [linked.id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewer, expected", [("session", ["Private"]), ("read-only key", [])])
+async def test_fetch_journal_follows_the_token_scopes(
+    db_session, admin_user, regular_user, admin_session, viewer, expected
+):
+    item = make_source_item(db_session, 1, sensitivity="public")
+    db_session.add(
+        JournalEntry(
+            target_type="source_item",
+            target_id=item.id,
+            creator_id=regular_user.id,
+            content="Private",
+            private=True,
+        )
+    )
+    key = APIKey.create(user_id=admin_user.id, name="read-only", scopes=["read"])
+    db_session.add(key)
+    db_session.commit()
+    tokens = {"session": (admin_session.id,), "read-only key": (key.key, ["read"])}
+
+    with mcp_auth_context(*tokens[viewer]):
+        result = await fetch.fn(id=item.id, include_journal=True)
+
+    assert [e["content"] for e in result["journal_entries"]] == expected
+
+
+@pytest.mark.asyncio
 async def test_fetch_bulk_deduplicates_ids(db_session, admin_session):
     """Bulk fetch deduplicates repeated IDs in the input."""
     item = make_source_item(db_session, 1)
@@ -1888,9 +1958,7 @@ async def test_search_logs_access(
         r.model_dump.return_value = {}
     mock_search_base.return_value = fake_results
 
-    mock_user = MagicMock()
-    mock_user.id = 7
-    mock_get_user.return_value = mock_user
+    mock_get_user.return_value = UserProxy({"id": 7})
 
     await search.fn(query="hello world")
 
@@ -1916,9 +1984,7 @@ async def test_search_logging_failure_does_not_fail_request(
     mock_extract.extract_text.return_value = "x"
     mock_filter_ids.return_value = None
     mock_search_base.return_value = []
-    mock_user = MagicMock()
-    mock_user.id = 7
-    mock_get_user.return_value = mock_user
+    mock_get_user.return_value = UserProxy({"id": 7})
     mock_log_search.side_effect = RuntimeError("DB blew up")
 
     # Must not raise.
@@ -2227,3 +2293,50 @@ async def test_account_filter_unknown_address_returns_nothing(
         )
 
     assert result["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_admin_oauth_client_granted_read_write_is_still_admin(db_session, admin_user):
+    """verify_token gives a session its user's system scopes whatever the OAuth grant."""
+    db_session.add(
+        OAuthClientInformation(
+            client_id="c",
+            client_secret="s",
+            client_id_issued_at=datetime.now().timestamp(),
+            redirect_uris=["http://localhost/cb"],
+            token_endpoint_auth_method="client_secret_post",
+            grant_types=["authorization_code"],
+            response_types=["code"],
+            scope="read write",
+            client_name="c",
+        )
+    )
+    state = OAuthState(
+        state="st",
+        client_id="c",
+        redirect_uri="http://localhost/cb",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="x",
+        scopes=["read", "write"],
+        user_id=admin_user.id,
+        expires_at=datetime.now() + timedelta(hours=1),
+    )
+    db_session.add(state)
+    db_session.flush()
+    oauth_session = UserSession(
+        user_id=admin_user.id, oauth_state_id=state.id, expires_at=datetime.now() + timedelta(hours=1)
+    )
+    db_session.add(oauth_session)
+    db_session.commit()
+
+    token = await SimpleOAuthProvider().verify_token(str(oauth_session.id))
+    assert token is not None
+    reset = auth_context_var.set(AuthenticatedUser(token))
+    try:
+        user = get_mcp_current_user()
+        access_filter = get_current_user_access_filter()
+    finally:
+        auth_context_var.reset(reset)
+
+    assert user is not None and has_admin_scope(user)
+    assert access_filter is None

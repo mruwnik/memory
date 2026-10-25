@@ -15,7 +15,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 from memory.api.MCP.access import (
-    build_user_access_filter_from_dict,
+    build_mcp_user_access_filter,
     get_mcp_current_user,
     log_search_access,
 )
@@ -140,12 +140,9 @@ async def session_search(
     if not source_ids:
         return []
 
-    filters = SearchFilters(
-        source_ids=source_ids,
-        access_filter=build_user_access_filter_from_dict(
-            {"id": user.id, "scopes": user.scopes}
-        ),
-    )
+    with make_session() as session:
+        access_filter = build_mcp_user_access_filter(session, user)
+    filters = SearchFilters(source_ids=source_ids, access_filter=access_filter)
     # Transcript search should stay cheap/local: no LLM round-trips for HyDE
     # or query analysis — the BM25 + embedding hybrid still applies.
     config = SearchConfig(

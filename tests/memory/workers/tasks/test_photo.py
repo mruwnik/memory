@@ -9,7 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from PIL import Image
+
 from memory.common import settings
+from memory.common.db.models import PendingJob, Photo
 from memory.workers.tasks import photo
 
 
@@ -539,90 +542,51 @@ def test_execute_photo_processing_fails_job_on_error(mock_process, mock_job_util
 # Test sync_photo
 
 
-@patch("memory.workers.tasks.photo.execute_photo_processing")
-@patch("memory.workers.tasks.photo.create_photo_from_file")
-@patch("memory.workers.tasks.photo.check_content_exists")
-@patch("memory.workers.tasks.photo.validate_and_parse_photo")
-@patch("memory.workers.tasks.photo.job_utils")
-@patch("memory.workers.tasks.photo.make_session")
-def test_sync_photo_creates_new(
-    mock_make_session,
-    mock_job_utils,
-    mock_validate,
-    mock_check,
-    mock_create,
-    mock_execute,
+def upload_photo(uploader, scopes=None, **kwargs):
+    """Upload the same bytes to the uploader's own path, as /photos/upload does."""
+    creator_id = uploader and uploader.id
+    path = settings.PHOTO_STORAGE_DIR / f"dupe_{creator_id}.png"
+    Image.new("RGB", (8, 8), "red").save(path)
+    return photo.sync_photo(str(path), creator_id=creator_id, creator_scopes=scopes, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "first, second, second_scopes, deduped",
+    [
+        ("regular", "regular", ["read"], True),
+        ("regular", None, None, True),  # an operator may see everything
+        ("admin", "regular", ["read"], False),
+        ("regular", "admin", ["*"], True),
+        ("regular", "admin", ["read"], False),  # an admin's narrowed key
+    ],
+)
+def test_sync_photo_dedups_only_onto_a_photo_the_uploader_can_read(
+    db_session, admin_user, regular_user, first, second, second_scopes, deduped
 ):
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
+    users = {"admin": admin_user, "regular": regular_user, None: None}
+    original = upload_photo(users[first])
+    again = upload_photo(users[second], second_scopes)
 
-    mock_path = Path("/storage/photo.jpg")
-    mock_content = b"image data"
-    mock_exif = {"Make": "Canon"}
-    mock_sha = hashlib.sha256(mock_content).digest()
-    mock_validate.return_value = (mock_path, mock_content, mock_exif, mock_sha)
-
-    mock_check.return_value = None  # No existing photo
-
-    mock_photo = MagicMock()
-    mock_create.return_value = mock_photo
-
-    mock_execute.return_value = {"status": "created", "photo_id": 123}
-
-    result = photo.sync_photo("/storage/photo.jpg", tags=["test"])
-
-    assert result == {"status": "created", "photo_id": 123}
-    mock_session.add.assert_called_once_with(mock_photo)
-    mock_execute.assert_called_once()
+    assert (again.get("status") == "already_exists") == deduped
+    assert (again.get("photo_id") == original.get("photo_id")) == deduped
+    assert db_session.query(Photo).count() == (1 if deduped else 2)
 
 
-@patch("memory.workers.tasks.photo.check_content_exists")
-@patch("memory.workers.tasks.photo.validate_and_parse_photo")
-@patch("memory.workers.tasks.photo.job_utils")
-@patch("memory.workers.tasks.photo.make_session")
-def test_sync_photo_returns_existing(
-    mock_make_session, mock_job_utils, mock_validate, mock_check
+def test_sync_photo_links_the_job_to_the_uploaders_own_photo(
+    db_session, admin_user, regular_user
 ):
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
+    others = upload_photo(admin_user)
+    job = PendingJob(job_type="content_ingest")
+    db_session.add(job)
+    db_session.commit()
 
-    mock_validate.return_value = (
-        Path("/test.jpg"),
-        b"data",
-        {},
-        hashlib.sha256(b"data").digest(),
-    )
+    own = upload_photo(regular_user, job_id=job.id)
+    again = upload_photo(regular_user)
 
-    existing_photo = MagicMock()
-    existing_photo.id = 456
-    existing_photo.filename = "existing.jpg"
-    mock_check.return_value = existing_photo
-
-    result = photo.sync_photo("/test.jpg")
-
-    assert result == {"status": "already_exists", "photo_id": 456}
-
-
-@patch("memory.workers.tasks.photo.validate_and_parse_photo")
-@patch("memory.workers.tasks.photo.job_utils")
-@patch("memory.workers.tasks.photo.make_session")
-def test_sync_photo_starts_job(mock_make_session, mock_job_utils, mock_validate):
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-    mock_validate.return_value = (
-        Path("/test.jpg"),
-        b"data",
-        {},
-        hashlib.sha256(b"data").digest(),
-    )
-
-    existing = MagicMock()
-    existing.id = 123
-
-    with patch("memory.workers.tasks.photo.check_content_exists", return_value=existing):
-        photo.sync_photo("/test.jpg", job_id=789)
-
-    mock_job_utils.start_job.assert_called_once_with(mock_session, 789)
+    db_session.refresh(job)
+    assert job.status == "complete"
+    assert job.result_id == own.get("photo_id") != others.get("photo_id")
+    assert again == {"status": "already_exists", "photo_id": own.get("photo_id")}
 
 
 # Test reprocess_photo
