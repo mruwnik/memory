@@ -114,7 +114,8 @@ async def test_a_failed_analysis_searches_the_query_as_typed(
 
     assert (result.success, result.cleaned_query, query_analysis._analysis_cache) == (False, "secret q", {})
     # The searcher's own failures aren't the operator's, and stay out of their logs.
-    assert [(r.levelno, "secret" in r.getMessage()) for r in caplog.records] == [(logging.WARNING, False)]
+    records = [r for r in caplog.records if r.name == query_analysis.__name__]
+    assert [(r.levelno, "secret" in r.getMessage()) for r in records] == [(logging.WARNING, False)]
 
 
 @pytest.mark.parametrize(

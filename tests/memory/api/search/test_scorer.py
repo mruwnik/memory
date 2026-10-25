@@ -89,7 +89,7 @@ async def test_failed_scores_log_one_warning_per_search_without_user_text(
     with caplog.at_level(logging.DEBUG, logger=scorer.__name__):
         await scorer.rank_chunks("secret query", chunks, credential(llm_key))
 
-    messages = [(r.levelno, r.getMessage()) for r in caplog.records]
+    messages = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == scorer.__name__]
     assert messages == [(logging.WARNING, "Scoring failed for some of 3 chunks: LLMError")]
 
 
