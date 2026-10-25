@@ -3,7 +3,7 @@ import { renderWithRouter, screen, waitFor, within, mockFetchRoutes, setAuthCook
 import ModulesPage from './ModulesPage'
 
 const moduleList = (enabled: string[]) =>
-  ['claude_containers', 'multi_user', 'teams', 'projects'].map(name => ({
+  ['claude_containers', 'multi_user', 'teams'].map(name => ({
     name,
     description: `${name} description`,
     enabled: enabled.includes(name),
@@ -18,7 +18,6 @@ describe('ModulesPage', () => {
   it.each([
     ['claude_containers', 'on'],
     ['teams', 'on'],
-    ['projects', 'off'],
     ['multi_user', 'off'],
   ])('shows %s as %s with its description', async (module, state) => {
     mockFetchRoutes({ '/modules': { json: moduleList(['teams', 'claude_containers']) } })

@@ -14,7 +14,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/reports', title: 'Reports', description: 'View and create rich HTML and PDF reports' },
       { to: '/ui/people', title: 'People', description: 'Track and manage people you know', scope: 'people' },
       { to: '/ui/teams', title: 'Teams', description: 'Manage teams and their members', module: 'teams' },
-      { to: '/ui/projects', title: 'Projects', description: 'Track projects and milestones', module: 'projects' },
+      { to: '/ui/projects', title: 'Projects', description: 'Track projects and milestones', module: 'teams' },
     ],
   },
   {

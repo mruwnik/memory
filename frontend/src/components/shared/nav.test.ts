@@ -39,7 +39,7 @@ describe('visibleSections', () => {
     ['Claude sessions', 'claude_containers'],
     ['Claude configurations', 'claude_containers'],
     ['Teams', 'teams'],
-    ['Projects', 'projects'],
+    ['Projects', 'teams'],
   ])('shows %s only while %s is on', (title, module) => {
     const others = new Set([...ALL_MODULES].filter(m => m !== module))
     expect(titlesFor(() => true, others)).not.toContain(title)

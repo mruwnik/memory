@@ -937,4 +937,4 @@ def test_me_lists_the_enabled_modules(client):
     response = client.get("/auth/me")
 
     assert response.status_code == 200
-    assert response.json()["modules"] == ["claude_containers", "multi_user", "projects", "teams"]
+    assert response.json()["modules"] == ["claude_containers", "multi_user", "teams"]

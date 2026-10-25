@@ -20,14 +20,12 @@ from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
-from memory.common import settings
 from memory.common.access_control import (
     filter_projects_query,
     get_user_project_roles,
     get_user_team_ids,
     has_admin_scope,
 )
-from memory.common.modules import TEAMS
 from memory.common.scopes import SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE
 from memory.common.db.connection import make_session
 from memory.common.db.models import Project, Team
@@ -356,9 +354,7 @@ def _validate_create_inputs(
     the caller should short-circuit and return it; `teams` and `due_on_dt`
     are undefined in that case.
     """
-    teams, error = validate_teams_for_project(
-        session, user, team_ids, require_non_empty=TEAMS in settings.ENABLED_MODULES
-    )
+    teams, error = validate_teams_for_project(session, user, team_ids)
     if error:
         return None, None, error
 
@@ -574,8 +570,7 @@ async def upsert(
         title: Project title. Required for standalone projects.
                For repo projects, defaults to repo name. For milestone projects,
                defaults to milestone title.
-        team_ids: List of team IDs to assign. Required for new projects when the
-                  teams module is on.
+        team_ids: List of team IDs to assign. Required for new projects.
                   On update, replaces all existing team assignments.
         project_id: ID of existing project to update (omit for create)
         description: Optional project description

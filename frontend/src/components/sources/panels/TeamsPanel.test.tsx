@@ -76,19 +76,6 @@ beforeEach(() => {
   unassignTeamFromProject.mockResolvedValue(undefined)
 })
 
-describe('TeamsPanel - projects off', () => {
-  it('hides the Projects button and project summary', async () => {
-    listTeams.mockResolvedValue([team({ projects: [{ id: 1, title: 'Alpha', state: 'open', repo_path: null }] })])
-    renderWithUser(<TeamsPanel />, { modules: new Set(['teams']) })
-    await screen.findByText('Engineering')
-
-    expect(screen.getByRole('button', { name: 'Members' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
-    expect(screen.queryByText(/Alpha/)).not.toBeInTheDocument()
-    expect(listTeams).toHaveBeenCalledWith(expect.objectContaining({ include_projects: false }))
-  })
-})
-
 describe('TeamsPanel - load states', () => {
   it('shows loading first', () => {
     listTeams.mockReturnValue(new Promise(() => {}))

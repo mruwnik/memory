@@ -231,7 +231,7 @@ describe('SlackPanel - workspace actions', () => {
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { project_id: 9 }))
   })
 
-  it('hides the project picker and skips the project list while projects is off', async () => {
+  it('hides the project picker and skips the project list while teams is off', async () => {
     renderWithUser(<SlackPanel />, { modules: new Set() })
     await screen.findByText('Acme')
 

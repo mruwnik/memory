@@ -13,7 +13,7 @@ export const GoogleDrivePanel = () => {
     addGoogleFolder, updateGoogleFolder, deleteGoogleFolder, syncGoogleFolder
   } = useSources()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<GoogleAccount[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -29,7 +29,7 @@ export const GoogleDrivePanel = () => {
     try {
       const [accountsData, projectsData] = await Promise.all([
         listGoogleAccounts(userId),
-        (projectsOn ? listProjects() : Promise.resolve<Project[]>([]))
+        (teamsOn ? listProjects() : Promise.resolve<Project[]>([]))
       ])
       setAccounts(accountsData)
       setProjects(projectsData)
@@ -39,7 +39,7 @@ export const GoogleDrivePanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listGoogleAccounts, listProjects, projectsOn, userId])
+  }, [listGoogleAccounts, listProjects, teamsOn, userId])
 
   useEffect(() => { loadData() }, [loadData])
 

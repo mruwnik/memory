@@ -112,7 +112,7 @@ const AuthWrapper = () => {
     { path: '/ui/notes', element: <NotesPage /> },
     { path: '/ui/reports', element: <ReportsPage /> },
     { path: '/ui/people', element: <PeopleManagement />, scope: 'people' },
-    { path: '/ui/projects', element: <Projects />, module: 'projects' },
+    { path: '/ui/projects', element: <Projects />, module: 'teams' },
     { path: '/ui/teams', element: <Teams />, module: 'teams' },
     { path: '/ui/telemetry', element: <Suspense fallback={<LoadingState />}><Telemetry /></Suspense> },
     { path: '/ui/jobs', element: <Jobs /> },

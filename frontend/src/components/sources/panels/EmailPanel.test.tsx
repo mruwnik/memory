@@ -91,9 +91,9 @@ describe('EmailPanel load states', () => {
 
 describe('EmailPanel project field', () => {
   it.each([
-    ['on', new Set(['projects']), 1],
+    ['on', new Set(['teams']), 1],
     ['off', new Set<string>(), 0],
-  ])('while projects is %s', async (_state, modules, count) => {
+  ])('while teams is %s', async (_state, modules, count) => {
     const fetchMock = mockFetchRoutes(baseRoutes([]))
     const { user } = renderWithRouter(<EmailPanel />, { modules })
     await waitFor(() => expect(screen.getByText('No email accounts configured')).toBeInTheDocument())
@@ -275,7 +275,7 @@ describe('EmailPanel edit flow', () => {
 
 })
 
-describe('EmailPanel edit with projects off', () => {
+describe('EmailPanel edit with teams off', () => {
   it('keeps the account project_id although the field is hidden', async () => {
     const fetchMock = mockFetchRoutes(baseRoutes([{ ...imapAccount, project_id: 7 }]))
     const { user } = renderWithRouter(<EmailPanel />, { modules: new Set() })

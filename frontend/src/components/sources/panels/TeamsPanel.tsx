@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTeams, Team, TeamCreate, TeamUpdate, TeamMember, TeamProject, TeamSaved } from '@/hooks/useTeams'
 import { usePeople, Person, Tidbit } from '@/hooks/usePeople'
-import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { PersonSearch, PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
 import { Badge, Button, Checkbox, ConfirmButton, DetailList, EmptyState, Field, List, LoadingState, Page, Row, SubList, Toolbar, FormActions, Input, Modal, Notice, Select, Textarea, useActionNotice } from '@/components/shared/ui'
@@ -23,7 +22,6 @@ export const TeamsPanel = () => {
 
   const { listPeople, getPerson } = usePeople()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
   const { run, notice } = useActionNotice()
 
   const [teams, setTeams] = useState<Team[]>([])
@@ -40,13 +38,13 @@ export const TeamsPanel = () => {
     setLoading(true)
     setError(null)
     try {
-      setTeams(await listTeams({ include_inactive: showInactive, include_projects: projectsOn }))
+      setTeams(await listTeams({ include_inactive: showInactive, include_projects: true }))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load teams')
     } finally {
       setLoading(false)
     }
-  }, [listTeams, projectsOn, showInactive])
+  }, [listTeams, showInactive])
 
   useEffect(() => {
     loadTeams()
@@ -177,9 +175,7 @@ const TeamRow = ({
   onManageMembers: () => void
   onManageProjects: () => void
   onArchive: () => void
-}) => {
-  const projectsOn = useModule('projects')
-  return (
+}) => (
   <Row
     title={team.name}
     muted={!team.is_active}
@@ -190,11 +186,11 @@ const TeamRow = ({
       `@${team.slug}`,
       team.owner && `Owner: ${team.owner.display_name || team.owner.identifier}`,
       team.member_count !== undefined && `${team.member_count} member${team.member_count !== 1 ? 's' : ''}`,
-      projectsOn && !!team.projects?.length && `Projects: ${team.projects.map(p => p.title).join(', ')}`,
+      !!team.projects?.length && `Projects: ${team.projects.map(p => p.title).join(', ')}`,
     ]}
     actions={<>
       <Button size="sm" onClick={onManageMembers}>Members</Button>
-      {projectsOn && <Button size="sm" onClick={onManageProjects}>Projects</Button>}
+      <Button size="sm" onClick={onManageProjects}>Projects</Button>
       <Button size="sm" onClick={onEdit}>Edit</Button>
       {team.is_active && (
         <ConfirmButton confirm={`Archive "${team.name}"? Members will lose access to projects through this team.`} onConfirm={onArchive}>Archive</ConfirmButton>
@@ -204,8 +200,7 @@ const TeamRow = ({
     {team.description && <p className="text-slate-600 line-clamp-2">{team.description}</p>}
     {!!team.tags?.length && <div className="flex flex-wrap gap-1">{team.tags.map(tag => <Badge key={tag}>{tag}</Badge>)}</div>}
   </Row>
-  )
-}
+)
 
 const TeamFormModal = ({
   team,

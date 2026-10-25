@@ -397,10 +397,10 @@ export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onCh
   disabled: boolean
   onChange: (updates: { project_id?: number | null; sensitivity?: Sensitivity }) => void
 }) => {
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
   return (
   <>
-    {projectsOn && (
+    {teamsOn && (
       <ProjectSelect className="w-auto py-1 text-xs" value={projectId} projects={projects} disabled={disabled} title="Project" aria-label="Project"
         onChange={id => onChange({ project_id: id ?? null })} />
     )}
@@ -429,6 +429,6 @@ export const FileButton = ({ inputRef, label, busy, accept, multiple, onChange, 
   </>
 )
 
-/** Project picker for an account form; absent while the projects module is off. */
+/** Project picker for an account form; absent while the teams module is off. */
 export const ProjectField = ({ hint, ...props }: ComponentProps<typeof ProjectSelect> & { hint: string }) =>
-  useModule('projects') ? <Field label="Project" hint={hint}><ProjectSelect {...props} /></Field> : null
+  useModule('teams') ? <Field label="Project" hint={hint}><ProjectSelect {...props} /></Field> : null

@@ -10,7 +10,7 @@ import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 export const EmailPanel = () => {
   const { listEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, syncEmailAccount, testEmailAccount, listGoogleAccounts } = useSources()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<EmailAccount[]>([])
   const [googleAccounts, setGoogleAccounts] = useState<GoogleAccount[]>([])
@@ -26,7 +26,7 @@ export const EmailPanel = () => {
       const [emailData, googleData, projectData] = await Promise.all([
         listEmailAccounts(userId),
         listGoogleAccounts(userId),
-        (projectsOn ? listProjects() : Promise.resolve<Project[]>([]))
+        (teamsOn ? listProjects() : Promise.resolve<Project[]>([]))
       ])
       setAccounts(emailData)
       setGoogleAccounts(googleData)
@@ -37,7 +37,7 @@ export const EmailPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listEmailAccounts, listGoogleAccounts, listProjects, projectsOn, userId])
+  }, [listEmailAccounts, listGoogleAccounts, listProjects, teamsOn, userId])
 
   // Reload when userId changes (admin switching user view)
   useEffect(() => { loadAccounts() }, [loadAccounts])

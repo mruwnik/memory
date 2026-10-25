@@ -11,33 +11,28 @@ from memory.common.scopes import (
 CLAUDE_CONTAINERS = "claude_containers"
 MULTI_USER = "multi_user"
 TEAMS = "teams"
-PROJECTS = "projects"
 
 # Module name -> on by default.
 MODULES: dict[str, bool] = {
     CLAUDE_CONTAINERS: False,
     MULTI_USER: False,
     TEAMS: False,
-    PROJECTS: False,
 }
 
 MODULE_DESCRIPTIONS: dict[str, str] = {
     CLAUDE_CONTAINERS: "Claude Code containers, their configurations and scheduled Claude sessions",
     MULTI_USER: "More than one human user",
-    TEAMS: "Teams and their members",
-    PROJECTS: "Projects and milestones",
+    TEAMS: "Teams, their members, and the projects they work on",
 }
 
 MODULE_MCP_SERVERS: dict[str, frozenset[str]] = {
     CLAUDE_CONTAINERS: frozenset({"containers"}),
-    TEAMS: frozenset({"teams"}),
-    PROJECTS: frozenset({"projects"}),
+    TEAMS: frozenset({"teams", "projects"}),
 }
 
 MODULE_SCOPES: dict[str, frozenset[str]] = {
     CLAUDE_CONTAINERS: frozenset({SCOPE_CLAUDE_SESSIONS}),
-    TEAMS: frozenset({SCOPE_TEAMS, SCOPE_TEAMS_WRITE}),
-    PROJECTS: frozenset({SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE}),
+    TEAMS: frozenset({SCOPE_TEAMS, SCOPE_TEAMS_WRITE, SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE}),
 }
 
 

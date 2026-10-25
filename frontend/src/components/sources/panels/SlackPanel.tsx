@@ -20,7 +20,7 @@ export const SlackPanel = () => {
     updateChannel,
   } = useSlack()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
   const { getApp, listApps, deleteApp } = useSlackWizard()
 
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([])
@@ -41,7 +41,7 @@ export const SlackPanel = () => {
     try {
       const [workspacesData, projectsData, appsData] = await Promise.all([
         listWorkspaces(userId),
-        (projectsOn ? listProjects() : Promise.resolve<Project[]>([])),
+        (teamsOn ? listProjects() : Promise.resolve<Project[]>([])),
         listApps(),
       ])
       setWorkspaces(workspacesData)
@@ -53,7 +53,7 @@ export const SlackPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listWorkspaces, listProjects, projectsOn, listApps, userId])
+  }, [listWorkspaces, listProjects, teamsOn, listApps, userId])
 
   useEffect(() => {
     loadData()

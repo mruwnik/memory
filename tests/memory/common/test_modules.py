@@ -62,11 +62,7 @@ def test_valid_module_config_has_no_errors():
             {"teams", "projects", "containers"},
             {"teams", "teams:write", "projects", "projects:write", "claude_sessions"},
         ),
-        (
-            frozenset({"teams"}),
-            {"projects", "containers"},
-            {"projects", "projects:write", "claude_sessions"},
-        ),
+        (frozenset({"teams"}), {"containers"}, {"claude_sessions"}),
         (ALL, set(), set()),
     ],
 )

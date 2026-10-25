@@ -19,7 +19,7 @@ export const CalendarPanel = () => {
     deleteCalendarAccount, syncCalendarAccount, listGoogleAccounts
   } = useSources()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
   const { userId } = useSourcesContext()
   const { getUpcomingEvents } = useCalendar()
   const [accounts, setAccounts] = useState<CalendarAccount[]>([])
@@ -43,7 +43,7 @@ export const CalendarPanel = () => {
       const [calendarData, googleData, projectData, eventsData] = await Promise.all([
         listCalendarAccounts(userId),
         listGoogleAccounts(userId),
-        (projectsOn ? listProjects() : Promise.resolve<Project[]>([])),
+        (teamsOn ? listProjects() : Promise.resolve<Project[]>([])),
         getUpcomingEvents({
           startDate: startDate.toISOString(),
           endDate: endDate.toISOString(),
@@ -61,7 +61,7 @@ export const CalendarPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listCalendarAccounts, listGoogleAccounts, listProjects, projectsOn, getUpcomingEvents, userId])
+  }, [listCalendarAccounts, listGoogleAccounts, listProjects, teamsOn, getUpcomingEvents, userId])
 
   useEffect(() => { loadData() }, [loadData])
 

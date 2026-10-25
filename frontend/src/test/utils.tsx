@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { ModulesContext } from '@/hooks/useModule'
 
-export const ALL_MODULES: ReadonlySet<string> = new Set(['claude_containers', 'multi_user', 'teams', 'projects'])
+export const ALL_MODULES: ReadonlySet<string> = new Set(['claude_containers', 'multi_user', 'teams'])
 
 const UiContext = createContext<ReactNode>(null)
 const UiSlot = () => <>{useContext(UiContext)}</>

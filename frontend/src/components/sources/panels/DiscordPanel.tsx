@@ -27,7 +27,7 @@ export const DiscordPanel = () => {
   } = useDiscord()
   const { listUsers } = useUsers()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
 
   const [bots, setBots] = useState<DiscordBot[]>([])
   const [servers, setServers] = useState<DiscordServer[]>([])
@@ -48,7 +48,7 @@ export const DiscordPanel = () => {
     try {
       const [botsData, projectsData] = await Promise.all([
         listBots(userId),
-        (projectsOn ? listProjects() : Promise.resolve<Project[]>([]))
+        (teamsOn ? listProjects() : Promise.resolve<Project[]>([]))
       ])
       setBots(botsData)
       setProjects(projectsData)
@@ -64,7 +64,7 @@ export const DiscordPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listBots, listServers, listProjects, projectsOn, userId])
+  }, [listBots, listServers, listProjects, teamsOn, userId])
 
   useEffect(() => {
     loadData()

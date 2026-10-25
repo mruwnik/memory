@@ -82,7 +82,7 @@ def test_enum_values_are_strings():
             frozenset(),
             ALL_MCP_SERVERS - {"slack", "teams", "projects", "containers"},
         ),
-        (frozenset(), frozenset({"teams"}), ALL_MCP_SERVERS - {"projects", "containers"}),
+        (frozenset(), frozenset({"teams"}), ALL_MCP_SERVERS - {"containers"}),
     ],
 )
 def test_unmounted_servers(monkeypatch, disabled, modules, expected_enabled):

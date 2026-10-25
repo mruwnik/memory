@@ -18,7 +18,7 @@ export const TranscriptsPanel = () => {
     listTranscriptProviders,
   } = useSources()
   const { listProjects } = useProjects()
-  const projectsOn = useModule('projects')
+  const teamsOn = useModule('teams')
   const { userId } = useSourcesContext()
   const [accounts, setAccounts] = useState<TranscriptAccount[]>([])
   const [providers, setProviders] = useState<string[]>([])
@@ -36,7 +36,7 @@ export const TranscriptsPanel = () => {
       const [accountData, providerData, projectData] = await Promise.all([
         listTranscriptAccounts(userId),
         listTranscriptProviders(),
-        (projectsOn ? listProjects() : Promise.resolve<Project[]>([])),
+        (teamsOn ? listProjects() : Promise.resolve<Project[]>([])),
       ])
       setAccounts(accountData)
       setProviders(providerData.providers)
@@ -48,7 +48,7 @@ export const TranscriptsPanel = () => {
     } finally {
       setLoading(false)
     }
-  }, [listTranscriptAccounts, listTranscriptProviders, listProjects, projectsOn, userId])
+  }, [listTranscriptAccounts, listTranscriptProviders, listProjects, teamsOn, userId])
 
   useEffect(() => { loadAccounts() }, [loadAccounts])
 

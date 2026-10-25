@@ -211,7 +211,7 @@ describe('App routing & auth', () => {
 
   it.each([
     ['/ui/teams', 'teams', 'TEAMS'],
-    ['/ui/projects', 'projects', 'PROJECTS'],
+    ['/ui/projects', 'teams', 'PROJECTS'],
     ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
     ['/ui/claude', 'claude_containers', 'CLAUDE'],
   ])('redirects %s home while %s is off', async (path, module, marker) => {
@@ -225,7 +225,7 @@ describe('App routing & auth', () => {
 
   it.each([
     ['/ui/teams', 'teams', 'TEAMS'],
-    ['/ui/projects', 'projects', 'PROJECTS'],
+    ['/ui/projects', 'teams', 'PROJECTS'],
     ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
   ])('renders %s while %s is on', (path, module, marker) => {
     authState.isAuthenticated = true

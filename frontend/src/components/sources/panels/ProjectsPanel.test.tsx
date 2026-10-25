@@ -133,29 +133,6 @@ describe('ProjectsPanel - load states', () => {
   })
 })
 
-describe('ProjectsPanel - teams off', () => {
-  it('neither loads nor shows teams', async () => {
-    listProjects.mockResolvedValue([project({ teams: [{ id: 5, name: 'Team A', slug: 'team-a' }] })])
-    renderWithUser(<ProjectsPanel />, { modules: new Set(['projects']) })
-    await screen.findByText('Alpha')
-
-    expect(screen.queryByRole('button', { name: 'Teams' })).not.toBeInTheDocument()
-    expect(screen.queryByText('Team A')).not.toBeInTheDocument()
-    expect(listTeams).not.toHaveBeenCalled()
-    expect(listProjects).toHaveBeenCalledWith(expect.objectContaining({ include_teams: false }))
-  })
-
-  it('creates a project without asking for a team', async () => {
-    const { user } = renderWithUser(<ProjectsPanel />, { modules: new Set(['projects']) })
-    await screen.findByText(/No projects found/)
-    await user.click(screen.getAllByRole('button', { name: /New project|Create project/ })[0])
-    const dialog = await screen.findByRole('dialog')
-
-    expect(within(dialog).queryByText('Teams')).not.toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Create project' })).toBeEnabled()
-  })
-})
-
 describe('ProjectsPanel - create flow', () => {
   it('requires at least one team', async () => {
     const { user } = renderWithUser(<ProjectsPanel />)
