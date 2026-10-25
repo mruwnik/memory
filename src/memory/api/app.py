@@ -26,7 +26,7 @@ from memory.common.access_control import (
 from memory.common.csp import sanitize_csp_source_list
 from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.rate_limit import rate_limit_key
-from memory.common.db.connection import get_session
+from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
 from memory import claude_containers
@@ -53,7 +53,7 @@ from memory.api.source_items import router as source_items_router
 from memory.api.sessions import router as sessions_router
 from memory.api.secrets import router as secrets_router
 from memory.api.instance_settings import router as instance_settings_router
-from memory.api.users import router as users_router
+from memory.api.users import check_single_user, router as users_router
 from memory.api.password_reset import router as password_reset_router
 from memory.api.setup import announce_setup_token, router as setup_router
 from memory.api.discord import router as discord_router
@@ -93,6 +93,8 @@ mcp_http_app = mcp.http_app(stateless_http=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    with make_session() as db:
+        check_single_user(db, settings.ENABLED_MODULES)
     announce_setup_token()
     containers_on = CLAUDE_CONTAINERS in settings.ENABLED_MODULES
     maintenance = claude_containers.maintenance_running() if containers_on else nullcontext()

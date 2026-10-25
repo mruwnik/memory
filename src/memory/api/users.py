@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal, TYPE_CHECKING, cast
@@ -26,7 +27,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.users import check_timezone, hash_password, verify_password
 from memory.common.rate_limit import check_rate_limit_spec
-from memory.common.modules import scopes_hidden
+from memory.common.modules import MULTI_USER, scopes_hidden
 from memory.common.scopes import (
     SCOPE_ADMIN,
     VALID_SCOPES,
@@ -36,6 +37,8 @@ from memory.common.scopes import (
 from memory.api.auth import get_current_user, get_token, require_scope
 from memory.common.access_control import has_admin_scope
 from memory.common.people import find_or_create_person
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from memory.common.db.models import Person
@@ -182,6 +185,25 @@ def link_person_to_user(db: Session, user: User) -> Person | None:
     return None
 
 
+def check_single_user(db: Session, enabled: frozenset[str]) -> None:
+    """Refuse to boot a single-user install that has several humans, and warn if its one human can't do everything."""
+    if MULTI_USER in enabled:
+        return
+    count = db.query(HumanUser).count()
+    if count > 1:
+        raise SystemExit(
+            f"{count} human users exist; set ENABLE_MODULES=multi_user or remove users"
+        )
+    if count == 0:
+        return
+    human = db.query(HumanUser).one()
+    if SCOPE_ADMIN not in (human.scopes or []):
+        logger.warning(
+            "The only human user, %s, lacks the * scope, so parts of this single-user install are out of reach",
+            human.email,
+        )
+
+
 @router.get("")
 def list_users(
     user: User = require_scope(SCOPE_ADMIN),
@@ -221,6 +243,11 @@ def create_user(
         )
 
     if data.user_type == "human":
+        if MULTI_USER not in settings.ENABLED_MODULES and db.query(HumanUser).count():
+            raise HTTPException(
+                status_code=403,
+                detail="Only one human user is allowed; set ENABLE_MODULES=multi_user for more",
+            )
         if not data.password:
             raise HTTPException(status_code=400, detail="Password is required for human users")
         validate_password_strength(data.password)

@@ -4,7 +4,9 @@ import sys
 
 import pytest
 
-from memory.common.db.models.users import HumanUser
+from memory.common import settings
+from memory.common.db.models.users import BotUser, HumanUser
+from memory.common.modules import MULTI_USER
 from memory.common.scopes import SCOPE_ADMIN
 
 ADD_USER = pathlib.Path(__file__).parents[2] / "tools" / "add_user.py"
@@ -45,3 +47,36 @@ def test_admin_flag_grants_full_access(db_session, monkeypatch, flags, scopes):
     run_add_user(monkeypatch, "--email", "a@example.com", "--name", "A", "--no-api-key", *flags)
 
     assert db_session.query(HumanUser).filter_by(email="a@example.com").one().scopes == scopes
+
+
+def test_single_user_install_makes_the_human_a_full_admin(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+    monkeypatch.setenv("ADD_USER_PASSWORD", "pw")
+
+    run_add_user(monkeypatch, "--email", "solo@example.com", "--name", "Solo", "--no-api-key")
+    run_add_user(monkeypatch, "--email", "bot@example.com", "--name", "Bot", "--bot")
+
+    assert db_session.query(HumanUser).filter_by(email="solo@example.com").one().scopes == [SCOPE_ADMIN]
+    assert db_session.query(BotUser).filter_by(email="bot@example.com").one().scopes == ["read"]
+
+
+def test_second_human_is_refused_without_multi_user(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset())
+    monkeypatch.setenv("ADD_USER_PASSWORD", "pw")
+    run_add_user(monkeypatch, "--email", "one@example.com", "--name", "One", "--no-api-key")
+
+    with pytest.raises(SystemExit, match="multi_user"):
+        run_add_user(monkeypatch, "--email", "two@example.com", "--name", "Two", "--no-api-key")
+
+    assert db_session.query(HumanUser).count() == 1
+
+
+def test_multi_user_install_allows_a_second_human_with_read_scope(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", frozenset({MULTI_USER}))
+    monkeypatch.setenv("ADD_USER_PASSWORD", "pw")
+
+    run_add_user(monkeypatch, "--email", "one@example.com", "--name", "One", "--no-api-key")
+    run_add_user(monkeypatch, "--email", "two@example.com", "--name", "Two", "--no-api-key")
+
+    humans = db_session.query(HumanUser).all()
+    assert [h.scopes for h in humans] == [["read"], ["read"]]

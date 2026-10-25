@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+from memory.api import app as app_module
 from memory.common.modules import (
     MODULES,
     module_config_errors,
@@ -81,6 +82,8 @@ def test_default_install_has_no_module_tools_scopes_routes_or_loops():
         "def refuse():\n"
         "    raise AssertionError('container maintenance started')\n"
         "claude_containers.maintenance_running = refuse\n"
+        "from memory.api import users\n"
+        "users.check_single_user = lambda db, enabled: None\n"
         "from memory.api.app import app, lifespan\n"
         "from memory.api.MCP.base import mcp\n"
         "from memory.api.users import list_available_scopes\n"
@@ -116,3 +119,15 @@ def test_default_install_has_no_module_tools_scopes_routes_or_loops():
     } & set(found["scopes"])
     assert "/auth/me" in found["routes"]
     assert not [r for r in found["routes"] if r.startswith("/claude")]
+
+
+@pytest.mark.asyncio
+async def test_api_boot_refuses_when_single_user_check_fails(monkeypatch):
+    def refuse(db, enabled):
+        raise SystemExit("too many humans")
+
+    monkeypatch.setattr(app_module, "check_single_user", refuse)
+
+    with pytest.raises(SystemExit):
+        async with app_module.lifespan(app_module.app):
+            pass

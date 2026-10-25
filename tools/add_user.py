@@ -3,8 +3,10 @@
 import argparse
 import os
 import secrets
+from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models.users import HumanUser, BotUser, User
+from memory.common.modules import MULTI_USER
 from memory.common.people import find_or_create_person
 from memory.common.scopes import SCOPE_ADMIN
 
@@ -41,6 +43,7 @@ if __name__ == "__main__":
         help="Don't generate an API key for human users",
     )
     args = parser.parse_args()
+    single_user = MULTI_USER not in settings.ENABLED_MODULES
 
     with make_session() as session:
         if args.if_missing and session.query(User).filter_by(email=args.email).first():
@@ -52,6 +55,10 @@ if __name__ == "__main__":
             )
             print(f"Bot user {args.email} created with API key: {user.api_key}")
         else:
+            if single_user and session.query(HumanUser).count():
+                raise SystemExit(
+                    "A human user already exists; set ENABLE_MODULES=multi_user to add more"
+                )
             if not args.password:
                 raise ValueError("Password required for human users")
             user = HumanUser.create_with_password(
@@ -64,7 +71,8 @@ if __name__ == "__main__":
             else:
                 print(f"Human user {args.email} created (no API key)")
 
-        if args.admin:
+        # A single-user install has nobody else to grant the rest of the scopes.
+        if args.admin or (single_user and not args.bot):
             user.scopes = [SCOPE_ADMIN]
         session.add(user)
         session.commit()

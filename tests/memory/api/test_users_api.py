@@ -5,8 +5,13 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from memory.api.users import check_single_user
+from memory.common import settings
 from memory.common.db.models import APIKey, HumanUser, ScheduledTask, UserSession
 from memory.common.db.models.users import verify_password
+from memory.common.modules import MODULES, MULTI_USER
+
+ALL_MODULES = frozenset(MODULES)
 
 
 @pytest.fixture
@@ -443,6 +448,63 @@ def test_create_user_with_valid_scopes(client: TestClient, admin_user, db_sessio
     assert response.status_code == 200
     data = response.json()
     assert set(data["scopes"]) == {"read", "observe", "discord", "github"}
+
+
+@pytest.mark.parametrize(
+    "user_type, modules, status",
+    [("human", frozenset(), 403), ("bot", frozenset(), 200), ("human", ALL_MODULES, 200)],
+)
+def test_create_user_allows_one_human_without_multi_user(
+    client: TestClient, admin_user, monkeypatch, user_type, modules, status
+):
+    monkeypatch.setattr(settings, "ENABLED_MODULES", modules)
+
+    response = client.post(
+        "/users",
+        json={
+            "name": "Second",
+            "email": "second@example.com",
+            "password": "testpass123",
+            "user_type": user_type,
+            "scopes": ["read"],
+        },
+    )
+
+    assert response.status_code == status
+
+
+def add_humans(db_session, *scopes: list[str]):
+    for i, user_scopes in enumerate(scopes):
+        human = HumanUser.create_with_password(
+            email=f"human{i}@example.com", name=f"Human {i}", password="pw123456"
+        )
+        human.scopes = user_scopes
+        db_session.add(human)
+    db_session.commit()
+
+
+def test_check_single_user_refuses_two_humans_without_multi_user(db_session):
+    add_humans(db_session, ["*"], ["*"])
+
+    with pytest.raises(SystemExit, match="^2 human users exist; set ENABLE_MODULES=multi_user or remove users$"):
+        check_single_user(db_session, frozenset())
+
+
+def test_check_single_user_allows_two_humans_with_multi_user(db_session, caplog):
+    add_humans(db_session, ["read"], ["*"])
+
+    check_single_user(db_session, frozenset({MULTI_USER}))
+
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("scopes, warned", [(["read"], True), (["*"], False)])
+def test_check_single_user_warns_when_sole_human_lacks_full_access(db_session, caplog, scopes, warned):
+    add_humans(db_session, scopes)
+
+    check_single_user(db_session, frozenset())
+
+    assert any("lacks the * scope" in r.getMessage() for r in caplog.records) == warned
 
 
 def test_create_api_key_scope_escalation_blocked(regular_client: TestClient, user, db_session):

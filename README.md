@@ -77,6 +77,8 @@ docker compose exec api python tools/add_user.py \
 
 `--admin` gives the user full access (the `*` scope). Without it, a new user gets the default `read` scope.
 
+Unless the `multi_user` module is on (`ENABLE_MODULES=multi_user`), an install has one human user: `add_user.py` gives that user `*` and refuses a second human, as does `POST /users`, and the api refuses to start if several humans already exist. Bot users and API keys are unaffected.
+
 If you'd rather run it on the host (e.g. as part of a script), `pip install -e ".[all]"` first — but note that the host CLI needs to reach Postgres, which is **not** exposed by default. See [Local development](#local-development-without-docker-for-the-app) for how to publish the data-service ports. The other extras defined in `setup.py` are `api`, `common`, `dev`, `ingesters`, `workers`, and `all` (a superset).
 
 ### 4. Use it
