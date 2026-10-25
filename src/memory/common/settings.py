@@ -667,12 +667,13 @@ API_SELF_RESTART = boolean_env("API_SELF_RESTART", False)
 # Custom tasks directory for deployment-specific periodic tasks
 CUSTOM_TASKS_DIR: str | None = os.getenv("CUSTOM_TASKS_DIR") or None
 
-# Ingestion summaries go through the Anthropic Message Batches API (50% cheaper,
-# results usually within the hour) instead of one synchronous call per item.
-# Only applies while system:summarise runs on an anthropic model.
+# Ingestion summaries go through the paying key's provider batch API (50% cheaper,
+# results within 24h, Anthropic's usually within the hour) instead of one synchronous call per item.
 SUMMARIZER_USE_BATCH = boolean_env("SUMMARIZER_USE_BATCH", True)
+# Anthropic batches; an OpenAI batch takes up to OpenAI's 50,000, one at a time per key
 SUMMARIZER_BATCH_MAX_REQUESTS = int(os.getenv("SUMMARIZER_BATCH_MAX_REQUESTS", 2000))
-# Batches API caps a batch at 256MB; stay well under it.
+# Anthropic caps a batch at 256MB and OpenAI at 200MB; stay well under both, since
+# an OpenAI line adds ~750 bytes on top of its prompt and the batch is built in memory.
 SUMMARIZER_BATCH_MAX_BYTES = int(os.getenv("SUMMARIZER_BATCH_MAX_BYTES", 100_000_000))
 SUMMARIZER_BATCH_MAX_ATTEMPTS = int(os.getenv("SUMMARIZER_BATCH_MAX_ATTEMPTS", 3))
 SUMMARIZER_BATCH_SUBMIT_INTERVAL = int(os.getenv("SUMMARIZER_BATCH_SUBMIT_INTERVAL", 600))

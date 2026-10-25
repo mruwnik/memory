@@ -328,6 +328,8 @@ class SummaryRequest(Base):
         Text, nullable=False, default="pending", server_default="pending"
     )
     batch_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When it was claimed for its batch
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

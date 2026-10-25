@@ -50,8 +50,15 @@ section has nothing in it:
   updating, or ingest stops summarising and search drops HyDE and query
   analysis. Claude sessions of users without a default key stop being
   summarised. System agents run on Claude Haiku with an Anthropic key, else on
-  `gpt-6-luna` with an OpenAI key; summary batching (`SUMMARIZER_USE_BATCH`) only
-  applies to Anthropic keys, so OpenAI-paid summaries run inline at full price.
+  `gpt-6-luna` with an OpenAI key. Summary batching (`SUMMARIZER_USE_BATCH`)
+  uses the key's provider: Anthropic's Message Batches API or OpenAI's Batch
+  API, both at half price. OpenAI batches upload a JSONL file to the key's
+  account, deleted once its results are collected (files of batches never
+  collected expire after 30 days). A key whose batch OpenAI refuses for its
+  queue limit gets smaller batches until they succeed. OpenAI batches can take
+  hours, so each OpenAI key has one batch in flight at a time, of up to 50,000
+  requests (`SUMMARIZER_BATCH_MAX_REQUESTS` applies to Anthropic batches), and
+  a batch only takes as many requests as the key's daily pool could pay for.
 - **Before updating**, drain the summary queue: the migration drops every
   queued summary request, since they were queued on the server's key. Set
   `SUMMARIZER_USE_BATCH=false` on the running version and restart its workers,
@@ -543,6 +550,8 @@ section has nothing in it:
   Downgrading does not restore them.
 - `20261103_user_timezone`: adds `users.timezone` (IANA name, default `UTC`). Fast.
 - `20261103_instance_settings`: creates the empty `instance_settings` table. Fast.
+- `20261103_summary_batch_pacing`: adds the nullable
+  `llm_provider_keys.summary_batch_limit` and `summary_request.submitted_at`. Fast.
 
 ### Post-deploy commands
 

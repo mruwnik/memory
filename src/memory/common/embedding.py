@@ -14,7 +14,7 @@ from memory.agents.provider_keys import Credential, credential, ingest_key
 from memory.agents.system import SUMMARISE
 from memory.common import extract, instance_settings, settings, summarizer
 from memory.common.llms import PROVIDER_ERRORS
-from memory.common.llms.anthropic_provider import AnthropicProvider
+from memory.common.llms.batches import BATCH_APIS
 from memory.common.chunker import (
     DEFAULT_CHUNK_TOKENS,
     OVERLAP_TOKENS,
@@ -309,8 +309,7 @@ def embed_source_item(
     db = object_session(item)
     found = ingest_key(db, item, SUMMARISE) if db is not None else None
     key = credential(found) if found is not None else None
-    # Only the Anthropic Batches API is wired up; other keys summarise inline.
-    batching = key is not None and key.provider == AnthropicProvider.provider and summarizer.batch_enabled()
+    batching = key is not None and key.provider in BATCH_APIS and summarizer.batch_enabled()
     inline = summariser(key) if key is not None and not batching else None
     with summarizer.summarising(inline), summarizer.deferring(batching) as deferred:
         chunks = list(item.data_chunks())

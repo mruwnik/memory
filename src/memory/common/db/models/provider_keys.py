@@ -90,6 +90,9 @@ class LLMProviderKey(Base):
     status_detail: Mapped[str | None] = mapped_column(Text)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     max_cost_usd_per_day: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    # Fewer summary requests per batch than the provider's usual, since
+    # the provider refused a bigger one for its queue limit
+    summary_batch_limit: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -120,6 +123,8 @@ class LLMProviderKey(Base):
     def key(self, value: str) -> None:
         self.key_encrypted = encrypt_value(value)
         self.key_hint = value[-4:]
+        # The new secret may belong to another project, with another queue limit
+        self.summary_batch_limit = None
 
     def serialize(self) -> dict[str, Any]:
         return {
