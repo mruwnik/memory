@@ -8,7 +8,7 @@ A self-hosted knowledge base that ingests, indexes, and provides semantic search
 - **Semantic + keyword search**: vector embeddings (Voyage AI / OpenAI) merged with PostgreSQL BM25
 - **MCP server**: AI assistants (Claude Desktop, Claude Code, Cursor, …) connect over OAuth
 - **Observation system**: assistants can record long-term notes about user preferences and patterns
-- **Multi-user with teams + projects**: role-based access on every search result
+- **Multi-user with teams + projects** (optional modules): role-based access on every search result
 - **Background ingestion**: Celery workers process content asynchronously
 
 ## Architecture
@@ -86,6 +86,27 @@ If you'd rather run it on the host (e.g. as part of a script), `pip install -e "
 - Web UI: <http://localhost:8000/ui> — log in with the account you just created
 - API docs (OpenAPI): <http://localhost:8000/docs> — requires an authenticated session
 - MCP endpoint: <http://localhost:8000/mcp>
+
+## Modules
+
+Three optional features are off by default and switched on in `.env` with `ENABLE_MODULES` (comma-separated), then a restart. `DISABLE_MODULES` turns names off again; an unknown name, or one in both variables, stops every process from starting.
+
+| Module | Adds |
+|---|---|
+| `claude_containers` | Claude Code containers: the `/claude` routes, the `containers_*` MCP tools, the `claude_session` scheduled-task type, the `claude_sessions` scope, and the Claude sessions and configurations pages |
+| `multi_user` | More than one human user. Off, `tools/add_user.py` and `POST /users` allow one human, who gets `*` |
+| `teams` | Teams, their members and projects: routes, MCP servers, scopes, and the team and project pickers |
+
+Everything else (search, ingest, people, notes, reports, journal, tasks, polls, agents, keys, the check queue, transcript search) is always on. Modules never change who can see what. Off means 404 routes, unmounted MCP servers (their tools disappear from `tools/list` and from agent tool catalogs) and hidden scopes; data and existing scope grants stay, so turning a module back on restores it.
+
+`claude_containers` also needs the compose overlay and a running orchestrator. Add both to `.env`:
+
+```
+ENABLE_MODULES=claude_containers
+COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
+```
+
+The overlay mounts the orchestrator socket, adds the Docker group (`DOCKER_GID`, default 992; `tools/install.sh` detects it) and attaches the api to the external `memory-api-<MEMORY_STACK>` network. Without it the api refuses to start with the module on.
 
 ## Updating
 
@@ -264,6 +285,8 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |
 | `SERVER_URL`                      | `http://localhost:8000` | Public origin; used for OAuth redirects, CORS, cookies      |
+| `ENABLE_MODULES`, `DISABLE_MODULES` | unset (all modules off) | Comma-separated modules to turn on or off: `claude_containers`, `multi_user`, `teams` (see Modules) |
+| `ORCHESTRATOR_SOCKET`             | set by `docker-compose.claude.yaml` | Unix socket of the Claude container orchestrator; required by `claude_containers` |
 | `PASSWORD_RESET_FROM_EMAIL`       | unset (reset off)    | Address of an admin-owned, send-enabled email account that mails "Forgot password?" links; its owner can read every link |
 | `DB_HOST`, `DB_PORT`              | `postgres` / `5432`  | PostgreSQL — set to `localhost` / `15432` for host-side dev   |
 | `REDIS_HOST`, `REDIS_PORT`        | `redis` / `6379`     | Celery broker + cache                                          |

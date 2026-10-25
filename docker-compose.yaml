@@ -3,11 +3,6 @@ networks:
   kbnet:
     # internal overlay – NOT exposed
     driver: bridge
-  memory-api:
-    # Network for Claude containers to access the API
-    # Created externally; orchestrator connects Claude containers to it
-    name: memory-api-${MEMORY_STACK:-prod}
-    external: true
 
 # --------------------------------------------------------------------- secrets
 secrets:
@@ -221,14 +216,8 @@ services:
         SESSION_COOKIE_NAME: "${SESSION_COOKIE_NAME:-session_id}"
         APP_VERSION: ${APP_VERSION:-dev}
     restart: unless-stopped
-    # Add docker group for orchestrator socket access (GID varies by host)
-    group_add:
-      - ${DOCKER_GID:-992}
     networks:
       kbnet:
-      memory-api:
-        aliases:
-          - memory-api-${MEMORY_STACK:-prod} # Alias for Claude containers to find us
     security_opt: ["no-new-privileges=true"]
     depends_on: [postgres, redis, qdrant]
     environment:
@@ -253,8 +242,6 @@ services:
       # Discord collector API (running in ingest-hub)
       DISCORD_COLLECTOR_SERVER_URL: ingest-hub
       DISCORD_COLLECTOR_PORT: 8003
-      # Claude session orchestrator (Unix socket)
-      ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
       MEMORY_STACK: ${MEMORY_STACK:-prod}
       HOST_STORAGE_DIR: ${PWD}/memory_files
       # Reverse-proxy trust: which upstream IPs may set X-Forwarded-* headers.
@@ -272,8 +259,6 @@ services:
       [postgres_password, voyage_key, secrets_encryption_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
-      # Socket for Claude session orchestrator
-      - /var/run/claude-sessions:/var/run/claude-sessions:ro,z
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 15s

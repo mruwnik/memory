@@ -13,6 +13,19 @@ the stack was started from.
      and print the full list of what is missing.
    - **Manual steps**, e.g. a Postgres image change. Do these as the entry says.
    - **Slow migrations**: plan for downtime.
+   - **Modules**: Claude containers, multiple users and teams are off unless
+     `ENABLE_MODULES` in `.env` lists them (README § Modules). Before
+     updating an instance that uses them, set
+     `ENABLE_MODULES=claude_containers,multi_user,teams` (only the ones you
+     use). Several human users with `multi_user` off stops the api at boot, by
+     design, rather than hiding users. For Claude containers also add
+     `COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml` to `.env`,
+     or pass `-f docker-compose.claude.yaml` after the base file if you use
+     explicit `-f` flags: the socket mount, `DOCKER_GID` group and
+     `memory-api-<stack>` network moved out of `docker-compose.yaml`. MCP clients
+     that call `claude_session_list`, `_list_dir`, `_pull_url` or `_push_url`
+     use `containers_list_sessions`, `containers_list_dir`,
+     `containers_pull_url` and `containers_push_url` now.
    - **Post-deploy commands**: you run these after step 2.
 2. Find your current version:
    ```bash

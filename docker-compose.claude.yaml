@@ -1,0 +1,22 @@
+# Wiring for the claude_containers module. Add it in .env with
+#   COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
+# next to ENABLE_MODULES=claude_containers.
+networks:
+  memory-api:
+    # Created externally; the orchestrator connects Claude containers to it
+    name: memory-api-${MEMORY_STACK:-prod}
+    external: true
+
+services:
+  api:
+    # Docker group for orchestrator socket access (GID varies by host)
+    group_add:
+      - ${DOCKER_GID:-992}
+    networks:
+      memory-api:
+        aliases:
+          - memory-api-${MEMORY_STACK:-prod} # Claude containers find the api by this name
+    environment:
+      ORCHESTRATOR_SOCKET: /var/run/claude-sessions/orchestrator.sock
+    volumes:
+      - /var/run/claude-sessions:/var/run/claude-sessions:ro,z
