@@ -1,3 +1,4 @@
+import json
 import os
 import pathlib
 import shutil
@@ -261,6 +262,29 @@ def test_first_sighting_is_recorded_once(repo, select, signed_tag, state_dir):
 @pytest.fixture
 def release_repo(repo, tmp_path):
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## v1.2.3\n\n- stuff\n")
+    frontend = repo / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "release-test",
+                "version": "1.0.0",
+                "scripts": {"build": "node build.cjs"},
+            }
+        )
+    )
+    (frontend / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "release-test",
+                "version": "1.0.0",
+                "lockfileVersion": 3,
+                "packages": {"": {"name": "release-test", "version": "1.0.0"}},
+            }
+        )
+    )
+    (frontend / "build.cjs").write_text("require('node:fs').readFileSync('page.js');\n")
+    (frontend / "page.js").write_text("// Application source\n")
     run(repo, "git", "add", ".")
     commit(repo, "changelog")
     run(repo, "git", "push", "-q", "origin", "master")
@@ -309,6 +333,21 @@ def test_release_refuses_and_creates_no_tag(release_repo, release, version, test
 
     assert result.returncode != 0
     assert message in result.stderr
+    assert run(release_repo, "git", "tag").stdout == ""
+
+
+def test_release_refuses_source_present_only_in_working_tree(release_repo, release):
+    run(release_repo, "git", "rm", "--cached", "frontend/page.js")
+    (release_repo / ".gitignore").write_text("frontend/page.js\n")
+    run(release_repo, "git", "add", ".gitignore")
+    commit(release_repo, "omit required source")
+    run(release_repo, "git", "push", "-q", "origin", "master")
+    assert (release_repo / "frontend" / "page.js").exists()
+
+    result = release(release_repo)
+
+    assert result.returncode != 0
+    assert "committed frontend build failed" in result.stderr
     assert run(release_repo, "git", "tag").stdout == ""
 
 
