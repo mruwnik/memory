@@ -407,7 +407,7 @@ async def upsert(
       - Any other shape change (e.g. a string for a dict) is refused; null the
         key first.
 
-    To add information/notes about a person, use tidbit_add() instead.
+    To add information/notes about a person, use people_tidbit_add instead.
 
     Args:
         identifier: Unique slug for the person (e.g., "alice_chen")
@@ -423,16 +423,6 @@ async def upsert(
 
     Returns:
         Person data with status "created" or "updated"
-
-    Example:
-        upsert(
-            identifier="alice_chen",
-            display_name="Alice Chen",
-            aliases=["@alice_c"],
-            contact_info={"email": "alice@example.com"},
-            content="Tech lead on Platform team. Prefers async communication.",
-            tags=["work", "engineering"],
-        )
     """
     # Get current user for creator_id
     user = get_mcp_current_user()
@@ -658,7 +648,7 @@ async def list_all(
     List all tracked people, optionally filtered by tags or search term.
 
     Returns thin Person records (identity only, no tidbits).
-    Use fetch() to get tidbits for a specific person.
+    Use people_fetch to get tidbits for a specific person.
 
     Args:
         tags: Filter to people with at least one of these tags (in their tidbits)
@@ -1028,12 +1018,6 @@ async def merge(
 
     Returns:
         Summary of the merge operation including counts of updated records.
-
-    Example:
-        merge(
-            identifiers=["john_doe", "jdoe", "john.doe"],
-            primary_identifier="john_doe"
-        )
     """
     logger.info(f"MCP: Merging people: {identifiers} -> {primary_identifier or identifiers[0]}")
 
@@ -1119,7 +1103,7 @@ async def tidbit_add(
     Add a tidbit of information about a person.
 
     Tidbits are searchable pieces of information with access control.
-    - If project_id is None: only you (creator) and admins can see it
+    - If project_id is None: only you (creator) and admins can see it, unless it is public
     - If project_id is set: project members can see it based on sensitivity
 
     Args:
@@ -1128,18 +1112,11 @@ async def tidbit_add(
         tidbit_type: Type of tidbit (note, preference, fact, etc.) default: "note"
         tags: Categorization tags
         project_id: Project ID for access control (None = creator-only)
-        sensitivity: Sensitivity level (basic, internal, confidential)
+        sensitivity: public, basic, internal or confidential (default basic). With a
+            project_id, your team role on the project caps the level.
 
     Returns:
         Task status with task_id
-
-    Example:
-        tidbit_add(
-            identifier="alice_chen",
-            content="Prefers morning meetings, allergic to peanuts",
-            tidbit_type="preference",
-            tags=["scheduling", "dietary"],
-        )
     """
     logger.info(f"MCP: Adding tidbit for person: {identifier}")
 

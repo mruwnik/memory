@@ -176,9 +176,8 @@ async def pull_url(
 ) -> dict[str, Any]:
     """Mint a short-lived URL for downloading a file or directory from a session.
 
-    The URL returns a tar stream (single file = one-entry tar; directory =
-    full tree tar). The bundled session-files skill curls the URL and untars
-    locally.
+    A GET on the URL returns a tar stream (single file = one-entry tar;
+    directory = full tree tar), e.g. `curl -s "$URL" | tar -xf -`.
 
     Args:
         session_id: Session ID, or "latest" for the user's most-recent session.
@@ -206,9 +205,8 @@ async def push_url(
 ) -> dict[str, Any]:
     """Mint a short-lived URL+token for uploading files/directories into a session.
 
-    The skill tars the local source and PUTs to the URL with the token in
-    the Authorization header. Path must be a directory inside the container
-    (the tar is extracted at that path).
+    PUT a tar to the URL with the token as `Authorization: Bearer <token>`.
+    Path must be a directory inside the container; the tar is extracted there.
 
     Args:
         session_id: Session ID, or "latest" for the user's most-recent session.

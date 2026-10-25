@@ -204,7 +204,10 @@ async def create_task(
 ) -> TaskDict:
     """
     Create a new task/todo for the user.
-    Use when the user asks you to remember something, add a task, or create a reminder.
+    Use when the user asks you to add a task or a to-do reminder.
+    For information to keep, use notes_upsert; for a dated milestone with
+    attached context, deadlines_upsert; for a ping at a set time,
+    meta_notify_user with scheduled_time.
 
     Args:
         title: The task title/description (required)

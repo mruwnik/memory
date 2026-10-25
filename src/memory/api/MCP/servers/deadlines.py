@@ -217,6 +217,7 @@ async def upsert(
     Use when the user wants to track a date they need to be ready for —
     a grant deadline, a trip, an application due date — and may want to
     attach related context (tickets, drafts, references) to it.
+    For a single to-do with a due date, use organizer_create_task.
 
     Mode is selected by `deadline_id`:
     - `deadline_id=None` (or omitted): **create**. `title` and `date` are
@@ -224,7 +225,7 @@ async def upsert(
       initial set of attached SourceItems.
     - `deadline_id=<int>`: **update**. Only fields you pass are changed; the
       rest are left alone. `attachment_ids` is rejected on update — use
-      `attach` / `detach` for managing attachments after creation.
+      deadlines_attach / deadlines_detach for managing attachments after creation.
 
     Args:
         deadline_id: ID of an existing deadline to update, or None to create.
@@ -236,17 +237,13 @@ async def upsert(
         description: Free-text notes.
         project_id: Project for access control. Defaults to None on create.
         sensitivity: public | basic | internal | confidential. Defaults basic
-            on create. With a `project_id` set, the role-vs-sensitivity matrix
-            in ``ROLE_SENSITIVITY`` applies (contributor → public/basic;
-            manager → +internal; admin → +confidential). With
-            `project_id=None` the row is creator-only regardless of
-            sensitivity, so the matrix is not enforced — but
-            ``list_upcoming`` runs with ``include_public=False`` so a
-            non-admin can't broadcast a project-less public deadline.
-            On update, the same ladder runs against the *effective*
-            post-update tuple, but only when `(project_id, sensitivity)`
-            actually changes — so a user whose role has since been demoted
-            can still edit unrelated fields on deadlines they own.
+            on create. With a `project_id`, you must be on one of the
+            project's teams and your best team role caps the level: member →
+            public or basic; lead → up to internal; admin → up to
+            confidential. Without a project, deadline listings show it only
+            to you whatever its sensitivity. On update this is checked
+            against the resulting values, and only when `project_id` or
+            `sensitivity` changes.
         tags: List of tags for categorization.
         attachment_ids: Create-only. SourceItem IDs to attach immediately.
             Items the caller can't access are silently dropped and surfaced
@@ -269,7 +266,7 @@ async def upsert(
             last two collapse into the same "not found" message to avoid
             leaking existence).
         PermissionError when the (effective) `(project_id, sensitivity)`
-            tuple violates the role-vs-sensitivity ladder for the caller.
+            tuple breaks the sensitivity rule above.
     """
     user = require_user()
     is_create = deadline_id is None

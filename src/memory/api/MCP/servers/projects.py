@@ -601,25 +601,6 @@ async def upsert(
 
     Returns:
         Created/updated project data, or error if validation fails
-
-    Examples:
-        # Create client-level project (standalone)
-        upsert(title="Acme Corp", team_ids=[1])
-
-        # Create repo-level project (tracks a GitHub repo)
-        upsert(repo="acme/product-x", team_ids=[1], parent_id=-1)
-
-        # Create milestone-level project (creates milestone if needed)
-        upsert(repo="acme/product-x", milestone="v2.0", team_ids=[1])
-
-        # Create repo AND milestone in one call
-        upsert(
-            repo="acme/new-product",
-            milestone="Phase 1",
-            team_ids=[1],
-            create_repo=True,
-            private=True,
-        )
     """
     with make_session() as session:
         user = get_mcp_current_user(session, full=True)
@@ -1259,11 +1240,8 @@ async def delete(
     """
     Delete a standalone project.
 
-    Requires lead/admin role in at least one team currently assigned to the
-    project (or the global admin scope). A bare ``member``/``contributor``
-    can read the project but cannot delete it — the previous version only
-    enforced "has access via team membership", letting any contributor on
-    any assigned team destroy the project.
+    Requires the lead or admin role on a team assigned to the project, or the
+    admin scope. Other team members can read the project but not delete it.
 
     GitHub-backed projects cannot be deleted (they are synced from GitHub).
     Children of deleted projects will have their parent_id set to NULL.

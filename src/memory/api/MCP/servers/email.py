@@ -151,7 +151,9 @@ async def send(
         cc: Optional list of CC recipients
         bcc: Optional list of BCC recipients
         reply_to: Optional reply-to address
-        attachment_paths: Optional list of file paths (relative to storage dir) to attach
+        attachment_paths: Optional filenames of stored files you can access, as given in the
+            filename field of search and fetch results. A path that cannot be resolved or that
+            you cannot access is skipped and the email is still sent without it.
 
     Returns:
         Dict with success status, message_id on success, or error message on failure

@@ -433,7 +433,7 @@ async def watch_market(
     Args:
         market_id: The market identifier (ticker for Kalshi, contract ID for others).
         source: The prediction market source ("manifold", "polymarket", or "kalshi").
-        alert_threshold: Optional price threshold to track (for future alerting).
+        alert_threshold: Optional price threshold, stored and shown in the watchlist. No alert is sent.
 
     Returns:
         Dict with status and market info.

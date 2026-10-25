@@ -124,8 +124,13 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
     ("source_ids", "list of source ids to filter by", None),
     ("min_size", "minimum content size in bytes", None),
     ("max_size", "maximum content size in bytes", None),
-    ("min_created_at", "minimum created date, ISO format", None),
-    ("max_created_at", "maximum created date, ISO format", None),
+    (
+        "min_created_at",
+        "earliest time the item was stored in memory, ISO format "
+        "(since/until, where offered, bound when the content happened)",
+        None,
+    ),
+    ("max_created_at", "latest time the item was stored in memory, ISO format", None),
     ("min_sent_at", "minimum email sent date, ISO format", "mail"),
     ("max_sent_at", "maximum email sent date, ISO format", "mail"),
     ("min_published", "minimum publication date, ISO format", "blog, forum"),
@@ -234,13 +239,13 @@ def _build_list_items_description() -> str:
             modalities: Filter by type: mail, blog, book, forum, photo, comic, etc. (empty = all)
             {filters_section}
             Observation-only filters (observation_types, min_confidences) are
-            rejected here - use search_observations for those.
+            rejected here - use core_search_observations for those.
             {scope_section}
             limit: Max results per page (default 50, max 200)
             offset: Skip first N results for pagination
             sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
             sort_order: "asc" or "desc" (default: desc)
-            include_metadata: Include full as_payload() metadata (default True)
+            include_metadata: Include each item's full metadata (default True)
 
         Returns: {{items: [...], total: int, has_more: bool}}"""
     ).format(filters_section=_build_filters_section(), scope_section=SCOPE_SECTION)
@@ -261,7 +266,7 @@ def _build_count_items_description() -> str:
             modalities: Filter by type (empty = all)
             {filters_section}
             Observation-only filters (observation_types, min_confidences) are
-            rejected here - use search_observations for those. count_items and
+            rejected here - use core_search_observations for those. count_items and
             list_items apply the identical filter set, so their totals always agree.
             {scope_section}
 
@@ -278,8 +283,8 @@ def _build_search_description() -> str:
         """
         Search user's stored content including emails, documents, articles, books.
         Use to find specific information the user has saved or received.
-        Combine with search_observations for complete user context.
-        Use the `get_metadata_schemas` tool to get the metadata schema for each collection.
+        Observations about the user are not included; use core_search_observations for those.
+        meta_get_metadata_schemas gives the metadata schema for each collection.
 
         If you know what kind of data you're looking for, filter by modality for better results.
 
@@ -287,14 +292,20 @@ def _build_search_description() -> str:
             query: Natural language search query - be descriptive about what you're looking for
             modalities: Filter by type: {modalities_str} (empty = all)
             limit: Maximum number of results to return (default 20, max 100)
-            previews: Whether to include content in results (up to MAX_PREVIEW_LENGTH characters)
+            previews: Return up to {preview_length} characters of each item's content instead of {non_preview_length}
             use_scores: Whether to score results with an LLM before returning - better but slower
             use_bm25, use_hyde, use_reranking, use_query_analysis: Set false to skip a search enhancement. meta_get_search_defaults lists the ones available to you; true cannot enable one the server turned off or that has no key of yours to pay for it. Its semantic_search_unavailable is true while the server has no embeddings key, and search then matches keywords only
             {filters_section}
 
-        Returns: List of search results with id, score, chunks, content, filename
-        Higher scores (>0.7) indicate strong matches."""
-    ).format(filters_section=_build_filters_section(), modalities_str=modalities_str)
+        Returns: List of results with id, chunks (matching excerpts), size, mime_type,
+            content, filename, tags, metadata, created_at (when stored) and
+            search_score (relative relevance; higher is more relevant)."""
+    ).format(
+        filters_section=_build_filters_section(),
+        modalities_str=modalities_str,
+        preview_length=settings.MAX_PREVIEW_LENGTH,
+        non_preview_length=settings.MAX_NON_PREVIEW_LENGTH,
+    )
 
 
 core_mcp = FastMCP("memory-core")
@@ -455,27 +466,8 @@ async def observe(
     agent_model: str = "unknown",
 ) -> dict:
     """
-    Record observations about the user for long-term understanding.
-    Use proactively when user expresses preferences, behaviors, beliefs, or contradictions.
-    Be specific and detailed - observations should make sense months later.
-
-    Example call:
-    ```
-    {
-        "observations": [
-            {
-                "content": "The user is a software engineer.",
-                "subject": "user",
-                "observation_type": "belief",
-                "confidences": {"observation_accuracy": 0.9},
-                "evidence": {"quote": "I am a software engineer.", "context": "I work at Google."},
-                "tags": ["programming", "work"]
-            }
-        ],
-        "session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "agent_model": "gpt-4o"
-    }
-    ```
+    Record observations about the user (preferences, behaviors, beliefs, contradictions) for long-term understanding.
+    Observations should be specific enough to make sense months later.
 
     RawObservation fields:
         content (required): Detailed observation text explaining what you observed
@@ -561,9 +553,7 @@ async def search_observations(
     limit: int = 20,
 ) -> list[dict]:
     """
-    Search recorded observations about the user.
-    Use before responding to understand user preferences, patterns, and past insights.
-    Search by meaning - the query matches both content and context.
+    Search recorded observations about the user by meaning; the query matches both content and context.
 
     Args:
         query: Natural language search query describing what you're looking for
@@ -645,9 +635,15 @@ MAX_FETCH_FILE_BYTES = 10 * 1024 * 1024
 @visible_when(require_scopes(SCOPE_READ))
 def fetch_file(filename: str) -> dict:
     """
-    Read file content with automatic type detection.
-    Returns dict with content, mime_type, is_text, file_size.
-    Text content as string, binary as base64.
+    Read a stored file.
+
+    Args:
+        filename: Path relative to file storage, as given in the filename field of search and fetch results
+
+    Returns: {"content": [{"type": "text" | "image" | "blob", "mime_type": str, "data": str}]}.
+    Text files come back as raw text, others base64-encoded.
+    Fails if the item owning the file is not accessible to you, or if a non-text
+    file is larger than 10 MiB.
     """
     try:
         path = paths.validate_path_within_directory(
