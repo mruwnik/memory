@@ -684,7 +684,7 @@ def test_collect_applies_summary_and_is_idempotent(db_session, llm_key, batches,
     assert set(payloads[str(existing.id)]["tags"]) == {"bla", "t1", "t2"}
     assert set(payloads[str(summary_chunks[0].id)]["tags"]) == {"bla", "t1", "t2"}
     assert payloads[str(summary_chunks[0].id)]["type"] == "summary"
-    assert [c.is_summary for c in sorted(item.chunks, key=lambda c: c.content)] == [False, True]
+    assert [c.is_summary for c in sorted(item.chunks, key=lambda c: c.content or "")] == [False, True]
 
 
 def test_a_summary_collected_without_a_voyage_key_logs_no_error(

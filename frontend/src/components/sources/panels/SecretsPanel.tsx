@@ -39,8 +39,9 @@ export const SecretsPanel = () => {
   })
 
   // Form handlers throw, so the open modal shows the failure.
-  const handleCreate = async (data: { name: string; value: string; description?: string }) => {
-    await createSecret(data)
+  const handleCreate = async (data: { name?: string; value?: string; description?: string }) => {
+    if (data.name === undefined || data.value === undefined) throw new Error("Name and value are required")
+    await createSecret({ ...data, name: data.name, value: data.value })
     setShowForm(false)
     loadSecrets()
   }

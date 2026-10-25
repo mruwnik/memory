@@ -579,6 +579,7 @@ const ExclusionBrowser = ({ accountId, folder, onSave, onCancel }: ExclusionBrow
 // === Google Folder Form (add by ID, or edit) ===
 
 interface FolderFormData {
+  llm_key?: LLMKeyChoice
   folder_id: string
   folder_name: string
   recursive: boolean

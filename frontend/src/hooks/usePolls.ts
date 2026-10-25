@@ -64,7 +64,7 @@ export interface UpdatePollRequest {
   datetime_end?: string
   slot_duration?: 15 | 30 | 60
   closes_at?: string
-  status?: 'open' | 'closed' | 'finalized'
+  status?: PollStatus
   finalized_time?: string
 }
 

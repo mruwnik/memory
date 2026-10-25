@@ -218,7 +218,7 @@ describe('useDiscord channels (MCP-backed list)', () => {
     mockFetch(async () =>
       mcpResponse({
         channels: [
-          { id: 12345, name: 'general', type: 'text', server_id: 999, collect_messages: true },
+          { id: 12345, name: 'general', type: 'text', server_id: 999, collect_messages: true, project_id: 7, sensitivity: 'internal' },
         ],
       }),
     )
@@ -232,6 +232,8 @@ describe('useDiscord channels (MCP-backed list)', () => {
         channel_type: 'text',
         collect_messages: true,
         effective_collect: true,
+        project_id: 7,
+        sensitivity: 'internal',
       },
     ])
   })

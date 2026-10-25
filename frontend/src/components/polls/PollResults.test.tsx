@@ -240,7 +240,7 @@ describe('PollResults - management actions (authenticated)', () => {
 
   it('shows Finalize and Close options for an open poll', async () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'open' }) }) })
-    const { user } = renderResults()
+    renderResults()
     await screen.findByRole('link', { name: 'Edit poll' })
     expect(screen.getByRole('button', { name: 'Finalize poll' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Close poll' })).toBeInTheDocument()
@@ -248,7 +248,7 @@ describe('PollResults - management actions (authenticated)', () => {
 
   it('shows Reopen option for a closed poll', async () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'closed' }) }) })
-    const { user } = renderResults()
+    renderResults()
     await screen.findByRole('link', { name: 'Edit poll' })
     expect(screen.getByRole('button', { name: 'Reopen poll' })).toBeInTheDocument()
   })
@@ -377,7 +377,7 @@ describe('PollResults - cancel modal', () => {
 
   it('hides the cancel option for an already-cancelled poll', async () => {
     mockResults({ authed: true, results: makeResults({ poll: makePoll({ status: 'cancelled' }) }) })
-    const { user } = renderResults()
+    renderResults()
     await screen.findByRole('link', { name: 'Edit poll' })
     expect(screen.queryByRole('button', { name: 'Cancel poll' })).not.toBeInTheDocument()
   })

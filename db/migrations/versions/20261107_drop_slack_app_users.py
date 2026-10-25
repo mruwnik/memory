@@ -1,8 +1,8 @@
 """Drop slack_app_users: only a Slack app's owner can use it.
 
-Revision ID: 20261105_drop_slack_app_users
-Revises: 20261105_drop_obs_tables
-Create Date: 2026-11-05
+Revision ID: 20261107_drop_slack_app_users
+Revises: 20261107_drop_obs_tables
+Create Date: 2026-11-07
 """
 
 from typing import Sequence, Union
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20261105_drop_slack_app_users"
-down_revision: Union[str, None] = "20261105_drop_obs_tables"
+revision: str = "20261107_drop_slack_app_users"
+down_revision: Union[str, None] = "20261107_drop_obs_tables"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

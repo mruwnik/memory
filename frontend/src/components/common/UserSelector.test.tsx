@@ -9,7 +9,7 @@ import UserSelector, {
 } from './UserSelector'
 
 const authState = {
-  hasScope: vi.fn((s: string) => s === '*'),
+  hasScope: vi.fn((s: string): boolean => s === '*'),
   user: { id: 1, name: 'Admin', email: 'a@x', user_type: 'human', scopes: ['*'] },
 }
 const listUsers = vi.fn()
@@ -29,7 +29,7 @@ const sampleUsers = [
 
 beforeEach(() => {
   localStorage.clear()
-  authState.hasScope = vi.fn((s: string) => s === '*')
+  authState.hasScope = vi.fn((s: string): boolean => s === '*')
   authState.user = {
     id: 1,
     name: 'Admin',

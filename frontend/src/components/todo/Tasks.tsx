@@ -62,7 +62,7 @@ const Tasks = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [newTaskTitle, setNewTaskTitle] = useState('')
-  const [newTaskPriority, setNewTaskPriority] = useState<string>('')
+  const [newTaskPriority, setNewTaskPriority] = useState<TaskPriority | ''>('')
   const [newTaskDueDate, setNewTaskDueDate] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
@@ -164,7 +164,7 @@ const Tasks = () => {
           </div>
           <FieldRow>
             <Field label="Priority">
-              <Select value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value)}><PriorityOptions /></Select>
+              <Select value={newTaskPriority} onChange={(e) => setNewTaskPriority(e.target.value as TaskPriority | '')}><PriorityOptions /></Select>
             </Field>
             <Field label="Due date">
               <Input type="date" value={newTaskDueDate} onChange={(e) => setNewTaskDueDate(e.target.value)} />

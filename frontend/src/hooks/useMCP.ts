@@ -112,7 +112,7 @@ export const isForbiddenOrMissing = (e: unknown) =>
 export const useMCP = () => {
   const { apiCall, checkAuth } = useAuth()
 
-  const mcpCall = useCallback(async (method: string, params: any = {}) => {
+  const mcpCall = useCallback(async <T = any[]>(method: string, params: any = {}): Promise<T> => {
     // Always POST to exactly /mcp — the tool is named in the JSON-RPC body.
     // fastmcp registers /mcp as an exact route, so subpaths 404.
     const response = await apiCall('/mcp', {
@@ -170,7 +170,7 @@ export const useMCP = () => {
       } catch (e) {
         return item.text
       }
-    })
+    }) as T
   }, [apiCall])
 
   const listNotes = useCallback(async (path: string = "/") => {

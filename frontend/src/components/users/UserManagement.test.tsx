@@ -103,7 +103,7 @@ describe('UserManagement list states', () => {
     mockFetch(async (input) => {
       const url = String(input)
       if (url.includes('/auth/me')) return mockResponse({ json: authMe })
-      if (url.endsWith('/users/scopes')) return mockResponse({ json: state.scopes ?? scopes })
+      if (url.endsWith('/users/scopes')) return mockResponse({ json: scopes })
       return mockResponse({ status: 403, json: { detail: 'no' } })
     })
     renderWithRouter(<UserManagement />)

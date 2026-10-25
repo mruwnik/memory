@@ -123,7 +123,8 @@ const PeopleManagement = () => {
     loadAllTeams()
   }, [listTeams, teamsOn])
 
-  const handleCreate = async (data: PersonCreate) => {
+  const handleCreate = async (data: PersonCreate | PersonUpdate) => {
+    if (!("identifier" in data)) throw new Error("An identifier is required to create a person")
     setCreateLoading(true)
     setCreateError(null)
 

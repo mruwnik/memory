@@ -8,7 +8,6 @@ system metrics, and aggregated summaries.
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
 from sqlalchemy import func
 
 from memory.api.auth import require_scope
@@ -22,49 +21,6 @@ from memory.common.scopes import SCOPE_ADMIN
 # real-time view of every other user's activity. The MCP metrics
 # middleware writes `user_id` into labels for every tool call.
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
-
-
-class MetricSummary(BaseModel):
-    """Summary statistics for a metric."""
-
-    name: str
-    count: int
-    avg_duration_ms: float | None
-    min_duration_ms: float | None
-    max_duration_ms: float | None
-    p50_ms: float | None
-    p95_ms: float | None
-    p99_ms: float | None
-    success_count: int
-    failure_count: int
-
-
-class MetricEvent_Response(BaseModel):
-    """Individual metric event."""
-
-    id: int
-    timestamp: datetime
-    metric_type: str
-    name: str
-    duration_ms: float | None
-    status: str | None
-    labels: dict
-    value: float | None
-
-
-class MetricsSummaryResponse(BaseModel):
-    """Response for summary endpoints."""
-
-    metric_type: str
-    period_hours: int
-    metrics: list[MetricSummary]
-
-
-class SystemMetricsResponse(BaseModel):
-    """Response for system metrics."""
-
-    latest: dict[str, float]
-    history: list[MetricEvent_Response]
 
 
 @router.get("/summary")

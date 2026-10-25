@@ -645,3 +645,82 @@ def test_revoke_rejects_a_key_of_another_user_under_own_id(
     assert response.status_code == 404
     db_session.refresh(key)
     assert key.revoked is False
+
+
+def test_rotate_api_keys_revokes_only_target_users_keys(client, admin_user, someone_elses_key, db_session):
+    old = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "Old"}).json()
+    response = client.post(
+        f"/users/{admin_user.id}/api-keys",
+        json={"name": "Replacement", "revoke_existing": True},
+    )
+    assert response.status_code == 200
+    replacement = response.json()
+    assert replacement["key"]
+    assert replacement["revoked"] is False
+    db_session.expire_all()
+    assert db_session.get(APIKey, old["id"]).revoked is True
+    assert db_session.get(APIKey, replacement["id"]).revoked is False
+    assert someone_elses_key.revoked is False
+
+
+def test_regular_user_cannot_rotate_someone_elses_keys(regular_client, someone_elses_key, db_session):
+    response = regular_client.post(
+        f"/users/{someone_elses_key.user_id}/api-keys", json={"revoke_existing": True}
+    )
+    assert response.status_code == 403
+    db_session.refresh(someone_elses_key)
+    assert someone_elses_key.revoked is False
+
+
+@pytest.mark.transactional_db
+def test_rotation_rolls_back_revocation_when_insert_fails(db_session, admin_user):
+    from sqlalchemy import event
+    from memory.api.users import APIKeyCreate, create_user_api_key
+
+    old = APIKey.create(user_id=admin_user.id, name="Old")
+    db_session.add(old)
+    db_session.commit()
+    old_id = old.id
+    user_id = admin_user.id
+
+    def reject_insert(mapper, connection, target):
+        raise RuntimeError("Insert failed")
+
+    event.listen(APIKey, "before_insert", reject_insert)
+    try:
+        with pytest.raises(RuntimeError, match="Insert failed"):
+            create_user_api_key(user_id, APIKeyCreate(revoke_existing=True), admin_user, db_session)
+    finally:
+        event.remove(APIKey, "before_insert", reject_insert)
+        db_session.rollback()
+    assert db_session.get(APIKey, old_id).revoked is False
+    assert db_session.query(APIKey).filter(APIKey.user_id == user_id).count() == 1
+
+
+@pytest.mark.transactional_db
+def test_concurrent_rotations_leave_one_live_key(db_session, db_engine, admin_user):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from sqlalchemy.orm import Session
+    from memory.api.users import APIKeyCreate, create_user_api_key
+    from memory.common.db.models import User
+
+    user_id = admin_user.id
+    barrier = Barrier(2)
+
+    def rotate():
+        with Session(db_engine) as session:
+            owner = session.get(User, user_id)
+            assert owner is not None
+            barrier.wait(timeout=10)
+            return create_user_api_key(user_id, APIKeyCreate(revoke_existing=True), owner, session).id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(rotate)
+        second = pool.submit(rotate)
+        ids = {first.result(timeout=20), second.result(timeout=20)}
+    db_session.expire_all()
+    live = db_session.query(APIKey).filter(APIKey.user_id == user_id, APIKey.revoked.is_(False)).all()
+    assert len(ids) == 2
+    assert len(live) == 1
+    assert live[0].id in ids

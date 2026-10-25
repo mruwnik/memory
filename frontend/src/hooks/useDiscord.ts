@@ -77,6 +77,8 @@ export interface BotUser {
 
 // MCP list_channels response type
 interface MCPChannelResponse {
+  project_id: number | null
+  sensitivity: DiscordChannel["sensitivity"]
   id: string | number  // MCP may return either
   name: string
   type: string
@@ -211,6 +213,8 @@ export const useDiscord = () => {
       name: ch.name,
       channel_type: ch.type,
       collect_messages: ch.collect_messages,
+      project_id: ch.project_id,
+      sensitivity: ch.sensitivity,
       effective_collect: ch.collect_messages, // MCP returns the resolved value
     }))
   }, [mcpCall])

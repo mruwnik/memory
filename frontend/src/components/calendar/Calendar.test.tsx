@@ -43,8 +43,7 @@ const onDay = (day: number, o: Partial<CalendarEvent> = {}): CalendarEvent => {
 // Ingest stores an all-day event as UTC midnight to the next UTC midnight.
 const allDayOn = (day: number) => new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), day)).toISOString()
 
-const originalTZ = process.env.TZ
-afterEach(() => { process.env.TZ = originalTZ })
+afterEach(() => { vi.unstubAllEnvs() })
 
 beforeEach(() => {
   localStorage.clear()
@@ -272,7 +271,7 @@ describe('Calendar', () => {
   })
 
   it.each(['Europe/Berlin', 'America/New_York', 'UTC'])('shows an all-day event only on its own date in %s', async tz => {
-    process.env.TZ = tz
+    vi.stubEnv('TZ', tz)
     const y = new Date().getFullYear()
     const m = new Date().getMonth()
     getEventsForMonths.mockResolvedValue([

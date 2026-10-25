@@ -8,7 +8,7 @@ const authState = {
   logout: vi.fn(),
   checkAuth: vi.fn(async () => true),
   user: { id: 1, name: 'Ada', email: 'a@b.c', user_type: 'human', scopes: ['*'], modules: [...ALL_MODULES] },
-  hasScope: vi.fn(() => true),
+  hasScope: vi.fn((_scope: string): boolean => true),
 }
 const oauthState = {
   error: null as string | null,

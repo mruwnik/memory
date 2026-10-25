@@ -1,3 +1,6 @@
+from typing import cast
+from celery import Task
+
 import json
 import subprocess
 import uuid
@@ -321,7 +324,9 @@ def test_sync_note_with_long_content(mock_make_session, qdrant):
     assert note is not None
     assert note.content == long_content
     assert result["status"] == "processed"
-    assert result["chunks_count"] > 0
+    chunks_count = result["chunks_count"]
+    assert isinstance(chunks_count, int)
+    assert chunks_count > 0
 
 
 def test_sync_note_unicode_content(mock_make_session, qdrant):
@@ -657,7 +662,9 @@ def head_files(vault: pathlib.Path) -> set[str]:
 
 
 def last_status() -> dict:
-    return json.loads(redis.from_url(settings.REDIS_URL).get(notes.GIT_SYNC_STATUS_KEY))
+    status = redis.from_url(settings.REDIS_URL).get(notes.GIT_SYNC_STATUS_KEY)
+    assert isinstance(status, (str, bytes))
+    return json.loads(status)
 
 
 @pytest.fixture(autouse=True)
@@ -1270,7 +1277,7 @@ def test_deferred_write_clears_its_mark_when_it_gives_up(
     [write] = deferred_writes()
     assert notes.write_pending("notes/n.md")
 
-    notes.write_note_file_when_free.apply(write, retries=notes.VAULT_BUSY_RETRIES)
+    cast(Task, notes.write_note_file_when_free).apply(write, retries=notes.VAULT_BUSY_RETRIES)
 
     assert not notes.write_pending("notes/n.md")
 
@@ -1316,7 +1323,7 @@ def test_reindex_runs_the_untracked_upsert(mock_make_session, qdrant, tmp_path):
 
 def test_reindex_retries_when_the_git_lock_is_taken(tmp_path):
     with patch.object(notes, "git_notes_lock", side_effect=notes.GitLockTimeout("busy")) as lock:
-        notes.reindex_note.apply(("notes/n.md",))
+        cast(Task, notes.reindex_note).apply(("notes/n.md",))
 
     # Eager mode runs each retry at once.
     assert lock.call_count == notes.VAULT_BUSY_RETRIES + 1

@@ -132,7 +132,7 @@ export const NotesPage = () => {
   const [contentError, setContentError] = useState<string | null>(null)
   const { run, notice, clear: clearNotice } = useActionNotice()
   const requestedFileRef = useRef<string | null>(null)
-  const reloadTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // Where our own navigation is taking ?file= (null: no file). Navigations commit in a transition, so until
   // it lands the URL still names the old file, which must not be taken as a Back/link to it.
   const pendingUrlFileRef = useRef<string | null | undefined>(undefined)

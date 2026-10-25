@@ -267,7 +267,6 @@ describe('GitHubPanel add project form', () => {
   it('loads available projects after entering an owner and submits the selected one', async () => {
     const mock = mockFetchRoutes({
       ...availProjectsRoute([availProject(), availProject({ number: 6, title: 'Other', short_description: null })]),
-      '/github/accounts/4/projects': { json: {} },
       ...routes([account()]),
     })
     const { user } = renderWithUser(<GitHubPanel />)
@@ -471,7 +470,7 @@ describe('GitHubPanel repo form partial failure', () => {
   it('reloads tracked repos after a failed batch so a retry does not repeat removals', async () => {
     const repo2 = { ...repo, id: 51, name: 'world', repo_path: 'octocat/world' }
     let tracked = [repo, repo2]
-    const mock = mockFetch(async (input, init) => {
+    const mock = mockFetch(async (input) => {
       const url = String(input)
       if (url.includes('/available-repos')) return mockResponse({ json: [availRepo(), availRepo({ name: 'world', full_name: 'octocat/world' })] })
       if (url.includes('/repos/50')) {

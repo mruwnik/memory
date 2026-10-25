@@ -52,7 +52,8 @@ export const McpUsageChart: React.FC<McpUsageChartProps> = ({ data }) => {
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
         <XAxis
           dataKey="shortName"
-          tick={{ fontSize: 10, angle: -45, textAnchor: 'end' }}
+          angle={-45}
+          tick={{ fontSize: 10, textAnchor: 'end' }}
           stroke="#718096"
           height={60}
           interval={0}
@@ -68,8 +69,8 @@ export const McpUsageChart: React.FC<McpUsageChartProps> = ({ data }) => {
             borderRadius: '4px',
           }}
           formatter={(value: number, name: string) => [value, name]}
-          labelFormatter={(label: string, payload: Array<{ payload: ChartDataPoint }>) => {
-            if (payload.length > 0) {
+          labelFormatter={(label: string, payload: Array<{ payload?: ChartDataPoint }>) => {
+            if (payload[0]?.payload) {
               const item = payload[0].payload
               const duration = item.avgDuration !== null ? ` (${Math.round(item.avgDuration)}ms avg)` : ''
               return `${item.name}${duration}`

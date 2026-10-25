@@ -40,7 +40,7 @@ const setCookie = (name: string, value: string, days = 30) => {
 }
 
 const getClientId = () => localStorage.getItem('oauth_client_id')
-const setClientId = (clientId) => localStorage.setItem('oauth_client_id', clientId)
+const setClientId = (clientId: string) => localStorage.setItem('oauth_client_id', clientId)
 
 // Exchange the authorization code for tokens; resolves to an error message, or null on success
 const exchangeCode = async (clientId: string, code: string, codeVerifier: string | null) => {
@@ -53,7 +53,7 @@ const exchangeCode = async (clientId: string, code: string, codeVerifier: string
         client_id: clientId,
         code,
         redirect_uri: REDIRECT_URI,
-        code_verifier: codeVerifier || undefined
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {})
       })
     })
 
@@ -72,7 +72,7 @@ const exchangeCode = async (clientId: string, code: string, codeVerifier: string
     localStorage.removeItem('code_verifier')
     return null
   } catch (err) {
-    return `Network error: ${err.message}`
+    return `Network error: ${err instanceof Error ? err.message : String(err)}`
   }
 }
 

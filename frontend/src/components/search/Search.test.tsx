@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithRouter, mcpToolFromRequest, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'

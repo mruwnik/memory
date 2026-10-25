@@ -237,5 +237,3 @@ def test_slack_app_cascades_to_credentials(db_session):
     db_session.commit()
 
     assert db_session.get(SlackUserCredentials, cred_id) is None
-
-

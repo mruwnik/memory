@@ -149,6 +149,7 @@ def box(tmp_path, lock_bin):
         "aws": FAKE_AWS,
         "chown": FAKE_CHOWN,
         "systemctl": FAKE_SYSTEMCTL,
+        "df": "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 20971520 1048576 19922944 5%% /\\n'\n",
     }.items():
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)

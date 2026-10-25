@@ -104,7 +104,8 @@ export const ProjectsPanel = () => {
     localStorage.setItem('projects-view-mode', viewMode)
   }, [viewMode])
 
-  const handleCreate = async (data: ProjectCreate) => {
+  const handleCreate = async (data: ProjectCreate | ProjectUpdate) => {
+    if (!("team_ids" in data)) throw new Error("Teams are required to create a project")
     await createProject(data)
     setShowCreateModal(false)
     loadData()

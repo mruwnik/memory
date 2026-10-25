@@ -122,7 +122,7 @@ const UserSettings = () => {
     try {
       const result = await regenerateApiKey(user.id)
       setNewApiKey(result.key)
-      setUser({ ...user, api_key_count: (user.api_key_count || 0) + 1 })
+      setUser({ ...user, api_key_count: 1 })
     } catch (e) {
       setApiKeyError(e instanceof Error ? e.message : 'Failed to generate API key')
     } finally {

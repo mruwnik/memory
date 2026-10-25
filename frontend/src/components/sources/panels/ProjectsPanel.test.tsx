@@ -323,11 +323,11 @@ describe('ProjectsPanel - teams modal', () => {
 describe('ProjectsPanel - due dates', () => {
   afterEach(() => {
     vi.useRealTimers()
-    process.env.TZ = 'UTC'
+    vi.unstubAllEnvs()
   })
 
   it('shows the picked calendar day west of UTC, and is not overdue until that day ends', async () => {
-    process.env.TZ = 'America/Los_Angeles'
+    vi.stubEnv('TZ', 'America/Los_Angeles')
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2026, 9, 30, 20, 0))  // 8pm on the due day, already Oct 31 in UTC
     listProjects.mockResolvedValue([project({ due_on: '2026-10-30T00:00:00Z' })])

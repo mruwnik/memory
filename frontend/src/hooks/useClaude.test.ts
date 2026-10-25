@@ -157,7 +157,7 @@ describe('useClaude sessions', () => {
     })
     await setup().scheduleSession({
       cron_expression: '0 9 * * *',
-      spawn_config: { repo_url: 'r', branch: '', enable_playwright: undefined },
+      spawn_config: { repo_url: 'r', initial_prompt: '', enable_playwright: undefined },
     })
     expect(JSON.parse(mcpCallTo(fetchMock, 'scheduler_upsert').init?.body as string).params.arguments.spawn_config).toEqual({
       repo_url: 'r',

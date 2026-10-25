@@ -149,7 +149,7 @@ describe('update / delete / sync verbs', () => {
     const { result } = renderHook(() => useSources())
     let out!: unknown
     await act(async () => {
-      out = await result.current.testEmailAccount(1)
+      out = await result.current.testEmailAccount({})
     })
     expect(out).toEqual({ status: 'ok', message: 'connected' })
   })

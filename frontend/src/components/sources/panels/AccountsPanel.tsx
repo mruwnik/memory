@@ -237,7 +237,7 @@ export const AccountsPanel = ({ provider }: { provider?: 'github' | 'google' }) 
 
       {provider !== 'github' && (
         <Section title="Google accounts" actions={oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect account</Button>}>
-          {oauthConfig === null ? (
+          {!oauthConfig ? (
             <Card title="OAuth configuration required"
               description="Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).">
               <Hint className="mb-4">Get this from the Google Cloud Console under APIs & Services → Credentials.</Hint>

@@ -247,6 +247,7 @@ def fetch_channels(
                 "category_id": str(ch.category_id) if ch.category_id else None,
                 "collect_messages": ch.should_collect,
                 "project_id": ch.project_id,
+                "sensitivity": ch.sensitivity,
             }
         )
 

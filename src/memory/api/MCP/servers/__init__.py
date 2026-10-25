@@ -62,7 +62,7 @@ HIDDEN_MCP_SERVERS = instance_settings.register(
 
 def unmounted_servers() -> frozenset[str]:
     """The servers of every module that is off."""
-    return servers_disabled(enabled_modules())
+    return frozenset(servers_disabled(enabled_modules()))
 
 
 def effective_disabled_servers() -> frozenset[str]:

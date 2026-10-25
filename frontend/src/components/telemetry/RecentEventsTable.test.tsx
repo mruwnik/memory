@@ -4,6 +4,7 @@ import { RecentEventsTable } from './RecentEventsTable'
 import type { TelemetryEvent } from '@/hooks/useTelemetry'
 
 const makeEvent = (overrides: Partial<TelemetryEvent>): TelemetryEvent => ({
+  api_key_id: null,
   id: 1,
   timestamp: '2026-05-29T12:00:00Z',
   event_type: 'metric',

@@ -69,15 +69,16 @@ export const TaskDurationChart: React.FC<TaskDurationChartProps> = ({ data }) =>
             border: '1px solid #e2e8f0',
             borderRadius: '4px',
           }}
-          formatter={(value: number, name: string, props: { payload: ChartDataPoint }) => {
+          formatter={(value: number, _name: string, props: { payload?: ChartDataPoint }) => {
             const item = props.payload
+            if (!item) return [String(value), 'Avg duration']
             return [
               `${value}ms (${item.count} calls, ${item.successRate}% success)`,
               'Avg duration',
             ]
           }}
-          labelFormatter={(label: string, payload: Array<{ payload: ChartDataPoint }>) => {
-            if (payload.length > 0) {
+          labelFormatter={(label: string, payload: Array<{ payload?: ChartDataPoint }>) => {
+            if (payload[0]?.payload) {
               return payload[0].payload.name
             }
             return label

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'

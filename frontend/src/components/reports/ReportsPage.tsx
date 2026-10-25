@@ -35,7 +35,7 @@ const ReportsPage = () => {
   const [editAllowedConnectUrls, setEditAllowedConnectUrls] = useState<string[]>([])
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
-  const refreshTimerRef = useRef<number>()
+  const refreshTimerRef = useRef<number | undefined>(undefined)
   // Bumped to stop the running poll: a reply that lands after a newer chain started, or after unmount, is dropped.
   const pollGenerationRef = useRef(0)
   const editStartRef = useRef('')

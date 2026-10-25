@@ -522,6 +522,7 @@ class APIKeyCreate(BaseModel):
     key_type: str = APIKeyType.INTERNAL
     scopes: list[str] | None = None
     expires_in_days: int | None = None
+    revoke_existing: bool = False
     agent_max_run_cost_usd: Decimal | None = Field(
         default=None, gt=0, max_digits=12, decimal_places=6
     )
@@ -622,6 +623,13 @@ def create_user_api_key(
     expires_at = None
     if data.expires_in_days:
         expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
+
+    # Serialize rotations on a stable row, including when the user has no keys.
+    db.query(User).filter(User.id == user_id).with_for_update().one()
+    if data.revoke_existing:
+        db.query(APIKey).filter(APIKey.user_id == user_id, APIKey.revoked.is_(False)).update(
+            {APIKey.revoked: True}, synchronize_session="fetch"
+        )
 
     api_key = APIKey.create(
         user_id=user_id,

@@ -654,11 +654,12 @@ section has nothing in it:
   searchable like any other note (git sync already carried them). Notes vaults
   from before Feb 2026 may hold a stale `profiles/` folder of People exports;
   delete it if you don't want it indexed.
-- "Regenerate API key" now revokes the user's other API keys once the new one
-  is made, as its confirmation always said. Revoke a single key with
+- "Regenerate API key" now atomically creates a new key and revokes the user's
+  other API keys, as its confirmation always said. Concurrent rotations are
+  serialized per user; only the latest key remains valid. Revoke a single key with
   `DELETE /users/{id}/api-keys/{key_id}`.
 - Slack apps are owner-only: the list of extra authorized users per app is gone
-  (see `20261105_drop_slack_app_users`). Only an app's creator can see it, run
+  (see `20261107_drop_slack_app_users`). Only an app's creator can see it, run
   its wizard or connect workspaces through it. Workspaces other users already
   connected keep syncing, but those users can't reconnect or see the app.
 - These REST endpoints are removed; nothing in the app called them:
@@ -740,10 +741,10 @@ section has nothing in it:
   to at most one Person). Fast. **It refuses to run if a user is already linked
   to several people** and lists them; see Manual steps for the check to run
   before updating and how to recover.
-- `20261105_drop_obs_tables`: drops the `reaction_pattern`, `observation_pattern`,
+- `20261107_drop_obs_tables`: drops the `reaction_pattern`, `observation_pattern`,
   `belief_cluster` and `conversation_metrics` tables, which nothing wrote to. Fast.
   Any rows in them are lost; downgrading restores the tables empty.
-- `20261105_drop_slack_app_users`: drops `slack_app_users`, the extra users
+- `20261107_drop_slack_app_users`: drops `slack_app_users`, the extra users
   authorized per Slack app. Fast. The grants are lost; downgrading restores the
   table empty.
 
