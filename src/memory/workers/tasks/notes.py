@@ -422,13 +422,17 @@ def note_file_missing(note: Note) -> bool:
     return bool(note.filename) and not (settings.FILE_STORAGE_DIR / str(note.filename)).exists()
 
 
-def find_duplicate(sha256: bytes, save_to_file: bool) -> tuple[dict, int | None] | None:
+def find_duplicate(
+    sha256: bytes, save_to_file: bool, creator_id: int | None = None, admin: bool = False
+) -> tuple[dict, int | None] | None:
     """The result for a note already stored with this content, and its id if its file is missing."""
     with make_session() as session:
         existing = check_content_exists(session, Note, sha256=sha256)
         if not existing:
             return None
         note = cast(Note, existing)
+        if creator_id is not None and not admin and note.creator_id != creator_id:
+            return {"status": "forbidden"}, None
         logger.info(f"Note already exists: {note.subject}")
         missing = save_to_file and note_file_missing(note)
         return create_task_result(note, "already_exists"), (note.id if missing else None)
@@ -563,7 +567,7 @@ def upsert_note(
         )
         raise
 
-    if duplicate := find_duplicate(sha256, save_to_file):
+    if duplicate := find_duplicate(sha256, save_to_file, creator_id, admin):
         result, rewrite_id = duplicate
         if rewrite_id:
             # The row was committed but its file write never happened.

@@ -28,6 +28,8 @@ None.
   Repeated submissions still reuse the same user's existing observation, including
   observations stored before this fix. Previously discarded submissions must be
   submitted again; their content cannot be recovered from the deduplicated row.
+- Note submissions that match another user's stored content now enforce ownership
+  before returning duplicate metadata or recreating a missing vault file.
 
 ### Migrations
 

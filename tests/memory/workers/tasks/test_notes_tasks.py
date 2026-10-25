@@ -531,6 +531,27 @@ def test_sync_note_only_lets_the_owner_or_an_admin_overwrite(
     assert existing.creator_id == regular_user.id  # type: ignore
 
 
+@pytest.mark.parametrize("create_only", [False, True])
+def test_duplicate_note_does_not_expose_or_rewrite_another_users_note(
+    mock_note_data, mock_make_session, regular_user, admin_user, create_only
+):
+    existing = add_existing_note(mock_make_session, mock_note_data["filename"], regular_user.id)
+    existing.subject = mock_note_data["subject"]
+    existing.content = mock_note_data["content"]
+    existing.sha256 = create_content_hash(Note.as_text(existing.content, existing.subject))
+    mock_make_session.commit()
+
+    with patch.object(notes, "write_note_file_or_defer") as write:
+        result = notes.sync_note(
+            **mock_note_data, creator_id=admin_user.id, admin=False, create_only=create_only
+        )
+
+    assert result == {"status": "forbidden"}
+    write.assert_not_called()
+    mock_make_session.refresh(existing)
+    assert existing.creator_id == regular_user.id
+
+
 def test_notes_cannot_share_a_filename(mock_note_data, db_session):
     add_existing_note(db_session, mock_note_data["filename"])
 
