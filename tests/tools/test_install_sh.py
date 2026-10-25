@@ -347,6 +347,20 @@ def test_rerun_via_the_resolved_path_keeps_the_running_project(project, tmp_path
     assert read_env(project)["COMPOSE_PROJECT_NAME"] == expected
 
 
+def test_rerun_after_a_failed_first_install_keeps_its_project(project, tmp_path):
+    (tmp_path / "containers").write_text("")
+    (tmp_path / "memory").symlink_to(project)
+    (project / "secrets").write_text("")  # mkdir secrets/ fails after .env exists
+    failed = install(project, REQUIRED, root=tmp_path / "memory")
+    (project / "secrets").unlink()
+
+    result = install(project, REQUIRED)
+
+    assert failed.returncode != 0
+    assert result.returncode == 0, result.stderr
+    assert read_env(project)["COMPOSE_PROJECT_NAME"] == "memory"
+
+
 def test_rerun_refuses_when_the_running_project_is_unclear(project, tmp_path):
     (tmp_path / "containers").write_text("")
     (tmp_path / "volumes").write_text("memory db_data\n")
