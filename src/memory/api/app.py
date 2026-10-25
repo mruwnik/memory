@@ -189,7 +189,7 @@ SENSITIVE_VALIDATION_FIELDS = frozenset({
 
 # Query-param names whose values must be redacted before logging. Tokens
 # typically arrive as cookies/headers, but legacy callers sometimes pass them
-# in the URL (e.g. one-time keys in Discord redirect flows).
+# in the URL (e.g. in Discord redirect flows).
 SENSITIVE_QUERY_PARAMS = frozenset({
     "token",
     "api_key",

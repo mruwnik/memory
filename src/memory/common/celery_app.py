@@ -84,7 +84,6 @@ UPDATE_METADATA_FOR_SOURCE_ITEMS = (
 )
 UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
-CLEANUP_USED_ONE_TIME_KEYS = f"{MAINTENANCE_ROOT}.cleanup_used_one_time_keys"
 SWEEP_AGENT_RUNS = f"{MAINTENANCE_ROOT}.sweep_agent_runs"
 PURGE_AGENT_RUN_STEPS = f"{MAINTENANCE_ROOT}.purge_agent_run_steps"
 MATCH_INGEST_TRIGGERS = f"{MAINTENANCE_ROOT}.match_ingest_triggers"
@@ -477,10 +476,6 @@ def build_beat_schedule() -> dict:
         "process-raw-items": {
             "task": PROCESS_RAW_ITEMS,
             "schedule": crontab(hour="4", minute="0"),
-        },
-        "cleanup-used-one-time-keys": {
-            "task": CLEANUP_USED_ONE_TIME_KEYS,
-            "schedule": crontab(hour="4", minute="30"),
         },
         "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
         "sweep-trigger-buffers": {"task": SWEEP_TRIGGER_BUFFERS, "schedule": 60},

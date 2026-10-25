@@ -167,7 +167,6 @@ API_KEY_PREFIXES = (
     "google_",
     "github_",
     "mcp_",
-    "ot_",  # Key type prefixes
 )
 
 
@@ -290,11 +289,6 @@ def authenticate_by_api_key(
 
     Uses constant-time comparison to prevent timing attacks.
 
-    For one-time keys, consumes the key atomically (UPDATE ... RETURNING,
-    marking it revoked): if two concurrent requests present the same ot_*
-    token, only one wins. The race-loser gets ``(None, None)`` instead of
-    double-authenticating.
-
     Args:
         api_key: The API key to authenticate.
         db: Database session.
@@ -311,53 +305,17 @@ def authenticate_by_api_key(
     if allowed_key_types and matched_key.key_type not in allowed_key_types:
         return None, None
 
-    # Eagerly load user before handle_api_key_use, which commits (and for
-    # one-time keys revokes). This prevents DetachedInstanceError on lazy load.
+    # Eagerly load user before handle_api_key_use, which commits. This
+    # prevents DetachedInstanceError on lazy load.
     user = matched_key.user
-    if not handle_api_key_use(matched_key, db):
-        # Concurrent request consumed the one-time key first. Debug-level
-        # so it stays out of normal production logs unless an operator is
-        # chasing a "401 from a fresh key" report and bumps verbosity.
-        logger.debug(
-            "One-time API key %s consumed by concurrent request; this request loses race",
-            matched_key.id,
-        )
-        return None, None
+    handle_api_key_use(matched_key, db)
     return user, matched_key
 
 
-def handle_api_key_use(key_record: APIKey, db: DBSession) -> bool:
-    """Handle API key usage: update last_used_at and consume one-time keys.
-
-    Warning: This function commits the database session. This is intentional
-    to ensure one-time keys are consumed before request processing begins,
-    preventing replay attacks. For regular keys, this updates the last_used_at
-    timestamp immediately.
-
-    For one-time keys: soft-deletes via an atomic
-    ``UPDATE ... SET revoked WHERE id=:id AND NOT revoked RETURNING id`` so
-    concurrent requests cannot both succeed. Returns False if another request
-    already consumed the key (race-loser); True otherwise. The row is kept
-    (rather than hard-deleted) so the mint rate limit in
-    ``MCP.servers.meta.create_one_time_key`` can count keys issued in its
-    rolling window; a maintenance task purges rows once they age out.
-
-    For regular keys: updates last_used_at and returns True.
-    """
-    if key_record.is_one_time:
-        result = db.execute(
-            update(APIKey)
-            .where(APIKey.id == key_record.id, APIKey.revoked.is_(False))
-            .values(revoked=True, last_used_at=datetime.now(timezone.utc))
-            .returning(APIKey.id)
-        )
-        won = result.scalar_one_or_none() is not None
-        db.commit()
-        return won
-
+def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
+    """Update last_used_at. Commits the session."""
     key_record.last_used_at = datetime.now(timezone.utc)
     db.commit()
-    return True
 
 
 @dataclass
@@ -367,8 +325,8 @@ class TokenLookup:
     Exactly one of ``user_session`` / ``api_key_record`` is non-None — they
     encode which credential matched. Both ``verify_token`` and
     ``load_access_token`` route on this distinction to project the right
-    scope dimension; the lookup, expiry/validity check, and one-time-key
-    consumption are all shared via :func:`lookup_principal` so the two
+    scope dimension; the lookup, expiry/validity check, and last-used bump
+    are all shared via :func:`lookup_principal` so the two
     methods can never drift on those concerns.
     """
 
@@ -384,7 +342,7 @@ def lookup_principal(
 
     Tries the token as a ``UserSession`` row first (OAuth access tokens and
     frontend cookie sessions are both keyed on ``UserSession.id``); on miss,
-    falls back to ``lookup_api_key`` for bot / discord / mcp / one-time
+    falls back to ``lookup_api_key`` for bot / discord / mcp
     keys.
 
     Side effects on success:
@@ -392,12 +350,11 @@ def lookup_principal(
     * For UserSession matches: none — the caller decides whether to refresh
       anything based on its own scope/return-type contract.
     * For APIKey matches: ``handle_api_key_use`` is called *here* so the
-      last_used_at bump and one-time-key consumption happen atomically with
-      the lookup. Centralising it means both callers run it exactly once, and
+      last_used_at bump happens with the lookup. Centralising it means both callers run it exactly once, and
       a future revocation column / audit hook / key-was-used webhook
       added to ``handle_api_key_use`` reaches both call sites for free.
       ``record_use=False`` skips it, for re-resolving a token that already
-      authenticated this request (it must not consume a one-time key twice).
+      authenticated this request.
 
     Returns ``None`` on:
     * unknown token
@@ -427,14 +384,10 @@ def lookup_principal(
             # constraints rule this out, but a future cascade race or
             # detached-row bug shouldn't escalate to 500.
             return None
-        # Side effect: bumps last_used_at; for one-time keys, atomically
-        # revokes the row. Doing it here means every caller of
-        # lookup_principal runs it exactly once — never twice, never zero.
-        # False = a concurrent request consumed the one-time key first;
-        # the race-loser must not authenticate (CWE-367, same contract as
-        # the REST path in authenticate_by_api_key).
-        if record_use and not handle_api_key_use(api_key_record, session):
-            return None
+        # Doing it here means every caller of lookup_principal bumps
+        # last_used_at exactly once — never twice, never zero.
+        if record_use:
+            handle_api_key_use(api_key_record, session)
         return TokenLookup(user=api_key_record.user, api_key_record=api_key_record)
 
     return None
@@ -491,9 +444,7 @@ def get_current_user(request: Request, db: DBSession = Depends(get_session)) -> 
     """FastAPI dependency to get current authenticated user.
 
     First checks if user was already authenticated by middleware (stored in
-    request.state.authenticated_user_id). This is important for one-time keys,
-    which are consumed on first use - the middleware authenticates and revokes
-    the key, then stores the user_id so endpoints don't try to re-authenticate.
+    request.state.authenticated_user_id), so endpoints don't re-authenticate.
     """
     # Check if middleware already authenticated this request
     if hasattr(request.state, "authenticated_user_id"):
@@ -853,7 +804,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 )
 
             # Store auth info in request state so endpoints don't re-authenticate
-            # (important for one-time keys which are consumed on first use)
             request.state.authenticated_user_id = user.id
             # Both None for session tokens
             request.state.authenticated_key_type = api_key and api_key.key_type

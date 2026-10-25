@@ -287,28 +287,7 @@ def test_api_key_create(db_session):
     assert api_key.key.startswith("internal_")
     assert api_key.name == "Test Key"
     assert api_key.key_type == APIKeyType.INTERNAL
-    assert api_key.is_one_time is False
     assert api_key.revoked is False
-
-
-def test_api_key_create_one_time(db_session):
-    """Test creating a one-time API key."""
-    user = HumanUser.create_with_password(
-        email="onetime@example.com", name="One Time User", password="password123"
-    )
-    db_session.add(user)
-    db_session.commit()
-
-    api_key = APIKey.create(
-        user_id=user.id,
-        key_type=APIKeyType.ONE_TIME,
-    )
-    db_session.add(api_key)
-    db_session.commit()
-
-    assert api_key.key.startswith("ot_")
-    assert api_key.is_one_time is True
-    assert api_key.key_type == APIKeyType.ONE_TIME
 
 
 def test_api_key_is_valid(db_session):
@@ -336,6 +315,22 @@ def test_api_key_is_valid_revoked(db_session):
 
     api_key = APIKey.create(user_id=user.id)
     api_key.revoked = True
+    db_session.add(api_key)
+    db_session.commit()
+
+    assert api_key.is_valid() is False
+
+
+def test_api_key_is_valid_unknown_type(db_session):
+    """A key of a removed type (e.g. a restored one-time key) is invalid."""
+    user = HumanUser.create_with_password(
+        email="oldtype@example.com", name="Old Type User", password="password123"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    api_key = APIKey.create(user_id=user.id)
+    api_key.key_type = "one_time"
     db_session.add(api_key)
     db_session.commit()
 
@@ -417,7 +412,6 @@ def test_api_key_serialize(db_session):
     assert serialized["name"] == "Serialized Key"
     assert serialized["key_type"] == APIKeyType.MCP
     assert serialized["revoked"] is False
-    assert serialized["is_one_time"] is False
     # Key preview should show partial key
     assert serialized["key_preview"].startswith("mcp_")
     assert "..." in serialized["key_preview"]
@@ -491,7 +485,6 @@ def test_api_key_cascade_delete(db_session):
     APIKeyType.GOOGLE,
     APIKeyType.GITHUB,
     APIKeyType.MCP,
-    APIKeyType.ONE_TIME,
 ])
 def test_api_key_types(db_session, key_type):
     """Test creating API keys with different types."""

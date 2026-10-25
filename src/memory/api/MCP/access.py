@@ -191,8 +191,8 @@ def fetch_user_by_token(
 ) -> User | None:
     """Look up a user by token (session token or API key).
 
-    For API keys, validates expiry via is_valid() and handles one-time key
-    consumption via handle_api_key_use() to mirror the REST auth path.
+    For API keys, validates expiry via is_valid() and records use via
+    handle_api_key_use() to mirror the REST auth path.
     """
     user_session = session.get(UserSession, token)
     if user_session and user_session.user and not is_session_expired(user_session):
@@ -202,19 +202,12 @@ def fetch_user_by_token(
     if api_key_record is None or not api_key_record.is_valid():
         return None
 
-    # Eagerly load user before handle_api_key_use, which commits (and for
-    # one-time keys revokes). This prevents DetachedInstanceError on lazy load.
+    # Eagerly load user before handle_api_key_use, which commits. This
+    # prevents DetachedInstanceError on lazy load.
     user = api_key_record.user
     if user is None:
         return None
-    if not handle_api_key_use(api_key_record, session):
-        # Concurrent request consumed the one-time key first. Debug-level
-        # to stay out of normal logs unless operators chase a race.
-        logger.debug(
-            "One-time API key %s consumed by concurrent request; this request loses race",
-            api_key_record.id,
-        )
-        return None
+    handle_api_key_use(api_key_record, session)
     return user
 
 

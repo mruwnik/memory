@@ -151,10 +151,6 @@ def session_principal(session) -> int | None:
     if token is None or not has_scope(list(token.scopes or []), SCOPE_CLAUDE_SESSIONS):
         raise ValueError(f"scheduling Claude sessions needs the '{SCOPE_CLAUDE_SESSIONS}' scope")
     key = lookup_api_key(token.token, session)
-    if key is not None and key.is_one_time:
-        raise ValueError(
-            "one-time API keys can't schedule Claude sessions; use a session or a regular API key"
-        )
     return key.id if key else None
 
 

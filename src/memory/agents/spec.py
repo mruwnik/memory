@@ -33,12 +33,10 @@ MAX_TEXT_CHARS = 200_000
 MAX_NAME_CHARS = 100
 # agent_* and the scheduler writes: a run must not start or manage runs or
 # sessions, which would escape its caps (scheduled sessions can also receive the
-# owner's stored secrets). One-time keys would land a live credential in the
-# transcript and the model context.
+# owner's stored secrets).
 DENIED_TOOL_PREFIXES = ("agent_",)
 DENIED_TOOLS = frozenset(
     {
-        "meta_create_one_time_key",
         "scheduler_upsert",
         "scheduler_delete",
         "scheduler_cancel",

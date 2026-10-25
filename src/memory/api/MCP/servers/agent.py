@@ -106,13 +106,6 @@ def caller_token() -> tuple[str, list[str]]:
     token = get_access_token()
     if token is None:
         raise ValueError("Not authenticated")
-    with make_session() as db:
-        key = lookup_api_key(token.token, db)
-        if key is not None and key.is_one_time:
-            # The key was spent authenticating this call, so it can't be resolved again.
-            raise ValueError(
-                "one-time API keys can't manage agents; use a session or a regular API key"
-            )
     return token.token, list(token.scopes or [])
 
 

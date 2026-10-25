@@ -467,17 +467,6 @@ async def test_scheduled_session_records_the_key_it_will_act_through(
 
 
 @pytest.mark.asyncio
-async def test_one_time_keys_cannot_schedule_sessions(db_session, regular_user):
-    key = APIKey.create(user_id=regular_user.id, key_type="one_time", scopes=["claude_sessions"])
-    db_session.add(key)
-    db_session.commit()
-
-    with mcp_auth_context(key.key, scopes=["claude_sessions"]):
-        with pytest.raises(ValueError, match="one-time"):
-            await scheduler.upsert.fn(**SESSION_TASK)
-
-
-@pytest.mark.asyncio
 async def test_changing_a_session_schedule_restamps_its_key(
     db_session, regular_user, user_session
 ):

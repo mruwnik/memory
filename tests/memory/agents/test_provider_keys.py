@@ -404,8 +404,7 @@ async def test_names_are_unique_across_providers(
     ],
 )
 async def test_key_tools_need_write_scope(tool, scopes, allowed):
-    """Narrow API keys and one-time keys (which carry the user's stored scopes, not a
-    session's read/write) can't read, change or delete provider keys."""
+    """Narrow API keys can't read, change or delete provider keys."""
     user_info = {"authenticated": True, "scopes": scopes}
     for checker in (get_visibility_checker(tool), get_call_checker(tool)):
         assert checker is not None

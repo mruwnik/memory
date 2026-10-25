@@ -14,7 +14,6 @@ from memory.common.db.models import (
     AgentRun,
     AgentRunStep,
     APIKey,
-    APIKeyType,
     LLMProviderKey,
 )
 from tests.conftest import mcp_auth_context
@@ -166,21 +165,6 @@ async def test_runs_via_an_api_key_are_attributed_to_it(
     run = db_session.get(AgentRun, result["run_id"])
     assert run is not None
     assert (run.api_key_id, run.trigger_kind) == (key.id, "mcp")
-
-
-@pytest.mark.asyncio
-async def test_one_time_keys_cannot_manage_agents(
-    db_session, regular_user, fake_providers
-):
-    # verify_token has already spent the key by the time a tool runs.
-    key = APIKey.create(user_id=regular_user.id, key_type=APIKeyType.ONE_TIME)
-    key.revoked = True
-    db_session.add(key)
-    db_session.commit()
-
-    with mcp_auth_context(key.key, scopes=["agents"]):
-        with pytest.raises(ValueError, match="one-time API keys can't manage agents"):
-            await agent.catalog.fn()
 
 
 @pytest.mark.asyncio
@@ -357,7 +341,6 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
     names = {t["name"] for t in catalog["tools"]}
     assert "meta_get_user" in names
     assert not any(n.startswith("agent_") for n in names)
-    assert "meta_create_one_time_key" not in names
     assert catalog["builtins"] == ["web_fetch", "web_search"]
     sonnet = next(
         m for m in catalog["models"] if m["model"] == "anthropic/claude-sonnet-5-5"

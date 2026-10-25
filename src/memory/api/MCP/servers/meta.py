@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, TypedDict, get_args, get_type_hints
 
 import sqlalchemy as sa
@@ -21,7 +21,7 @@ from memory.api.search.search import searcher_keys
 from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
 from memory.api.search.types import MCPSearchFilters
 from memory.common.access_control import apply_access_filter_to_query
-from memory.common import qdrant, rate_limit, settings
+from memory.common import qdrant, settings
 from memory.common.collections import SESSION_COLLECTIONS
 from memory.common.dates import parse_iso_datetime
 from memory.common.celery_app import SEND_NOTIFICATION
@@ -35,8 +35,6 @@ from memory.common.notify import (
 )
 from memory.common.version import db_revision, version_info
 from memory.common.db.models import (
-    APIKey,
-    APIKeyType,
     ScheduledTask,
     SourceItem,
     UserSession,
@@ -60,57 +58,6 @@ def _get_user_session_from_token(session: DBSession) -> UserSession | None:
     if not user_session or not user_session.user:
         return None
     return user_session
-
-
-def _create_one_time_key(session: DBSession, user_session: UserSession) -> APIKey:
-    """Create a one-time API key for the user.
-
-    Returns the committed APIKey row; ``.key`` holds the secret (only
-    available at creation time).
-
-    The issued key carries ``user.scopes ∩ access_token.scopes`` (with a
-    short-circuit for either side carrying admin — see the conditional
-    below). In production today ``access_token.scopes`` from
-    ``verify_token`` equals ``user.scopes ∪ {read, write}``, so the
-    intersection collapses to ``user.scopes`` and the cap is a no-op for
-    OAuth callers — but the math is here so a future ``verify_token``
-    change that DOES emit narrower access-token scopes flows through
-    correctly without a parallel edit. For direct-API-key callers
-    (where ``access_token.scopes`` carries the API key's resolved
-    scopes) the intersection is the live cap.
-    """
-    user_scopes = set(user_session.user.scopes or [])
-    access_token = get_access_token()
-    granted_scopes = set(access_token.scopes or []) if access_token else set()
-
-    # Intersection (or union with user.scopes when the token holds admin)
-    # rather than blind user.scopes assignment, so a future verify_token
-    # change that DOES narrow access_token.scopes will be reflected here
-    # without needing a parallel edit. Today both sides supply the same
-    # information; this just keeps them coupled.
-    if "*" in granted_scopes:
-        effective = user_scopes
-    elif "*" in user_scopes:
-        effective = granted_scopes
-    else:
-        effective = user_scopes & granted_scopes
-
-    scopes = sorted(effective)
-
-    one_time_key = APIKey.create(
-        user_id=user_session.user.id,
-        key_type=APIKeyType.ONE_TIME,
-        name="MCP Client Operation",
-        scopes=scopes,
-        # Unused keys must not become permanent credentials: is_valid()
-        # rejects the key once the TTL elapses, and the maintenance task
-        # purges it once it is also outside the mint rate window.
-        expires_at=datetime.now(timezone.utc)
-        + timedelta(seconds=settings.ONE_TIME_KEY_TTL_SECONDS),
-    )
-    session.add(one_time_key)
-    session.commit()
-    return one_time_key
 
 
 def _get_current_user(session: DBSession) -> dict:
@@ -301,91 +248,6 @@ async def get_user() -> dict:
     if user["authenticated"]:
         user["server"] = await version_info(db_rev)
     return user
-
-
-# Advisory-lock class for one-time key minting; pairs with the user id in
-# pg_advisory_xact_lock(int, int) so unrelated lockers can't collide.
-ONE_TIME_KEY_LOCK_CLASS = 0x07E1
-
-
-def count_one_time_keys_in_window(
-    session: DBSession, user_id: int, window_seconds: int
-) -> int:
-    """Count one-time keys minted for a user within the rolling window.
-
-    Consumed keys are soft-deleted (``revoked=True``) rather than removed
-    precisely so they still count here; a maintenance task purges them
-    once ``created_at`` falls out of the window.
-
-    The cutoff is computed from ``func.now()`` in-query: ``created_at`` is
-    stamped by the Postgres clock (``server_default=func.now()``), so both
-    sides of the comparison must share that clock — an app-side
-    ``datetime.now()`` cutoff would shift the window under app/DB clock
-    skew or a non-UTC DB ``TimeZone``.
-    """
-    return (
-        session.query(APIKey)
-        .filter(
-            APIKey.user_id == user_id,
-            APIKey.key_type == APIKeyType.ONE_TIME,
-            APIKey.created_at > sa.func.now() - timedelta(seconds=window_seconds),
-        )
-        .count()
-    )
-
-
-# Tool descriptions are all MCP callers ever see — bake the deployment's
-# actual configured limits in (settings are import-time constants), never
-# setting *names* the caller can't resolve.
-@meta_mcp.tool(
-    description=(
-        "Mint a one-time API key for client operations.\n\n"
-        "The key stops working after its first use, and expires unused after "
-        f"{settings.ONE_TIME_KEY_TTL_SECONDS} seconds. It carries the caller's "
-        "own scopes capped to the OAuth grant — it can never hold more scope "
-        "than the caller already had.\n\n"
-        f"Minting is rate limited per user to {settings.ONE_TIME_KEY_RATE_LIMIT} "
-        "over a rolling window; the response reports how many mints remain."
-    )
-)
-@visible_when(require_scopes(SCOPE_WRITE))
-async def create_one_time_key() -> dict:
-    with make_session() as session:
-        # FIXME(security): non-admin callers can mint a one-time key here.
-        # `_create_one_time_key` still caps the issued scopes to
-        # `user.scopes ∩ granted_scopes`, so the minted key never carries
-        # more scope than the caller already had — but minting key
-        # material from a non-admin path is a confused-deputy shape that
-        # should be gated on admin (on either the user or the OAuth
-        # grant). Deliberately left open for now to unblock client
-        # workflows; reinstate the admin gate when those are migrated.
-        user_session = _get_user_session_from_token(session)
-        if not user_session:
-            raise ValueError("Not authenticated")
-
-        user_id = user_session.user.id
-        limit, window_seconds = rate_limit.parse_limit(
-            settings.ONE_TIME_KEY_RATE_LIMIT
-        )
-        # Serialize count-then-insert per user so concurrent mints can't
-        # both pass the check; released automatically at COMMIT/ROLLBACK.
-        session.execute(
-            sa.select(sa.func.pg_advisory_xact_lock(ONE_TIME_KEY_LOCK_CLASS, user_id))
-        )
-        minted = count_one_time_keys_in_window(session, user_id, window_seconds)
-        if minted >= limit:
-            raise ValueError(
-                "One-time key rate limit exceeded "
-                f"({settings.ONE_TIME_KEY_RATE_LIMIT}, rolling window); try again later"
-            )
-
-        key = _create_one_time_key(session, user_session)
-        return {
-            "one_time_key": key.key,
-            "expires_at": key.expires_at.isoformat() if key.expires_at else None,
-            "mints_remaining": max(0, limit - minted - 1),
-            "rate_limit": settings.ONE_TIME_KEY_RATE_LIMIT,
-        }
 
 
 # --- Notification tools ---

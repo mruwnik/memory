@@ -228,7 +228,6 @@ class APIKeyType(str):
         GOOGLE: Google services integration
         GITHUB: GitHub integration
         MCP: MCP server access
-        ONE_TIME: Single-use keys for client operations
     """
 
     INTERNAL = "internal"
@@ -236,17 +235,15 @@ class APIKeyType(str):
     GOOGLE = "google"
     GITHUB = "github"
     MCP = "mcp"
-    ONE_TIME = "one_time"
 
     # Tuple of all standard key types for validation
-    ALL_TYPES = (INTERNAL, DISCORD, GOOGLE, GITHUB, MCP, ONE_TIME)
+    ALL_TYPES = (INTERNAL, DISCORD, GOOGLE, GITHUB, MCP)
 
 
 class APIKey(Base):
     """API key for authenticating users and services.
 
-    Supports multiple keys per user with different types, expiration,
-    and one-time use keys that are deleted after first use.
+    Supports multiple keys per user with different types and expiration.
     """
 
     __tablename__ = "api_keys"
@@ -279,11 +276,6 @@ class APIKey(Base):
     # Relationship to user
     user: Mapped[User] = relationship("User", back_populates="api_keys")
 
-    @property
-    def is_one_time(self) -> bool:
-        """Check if this is a one-time use key (derived from key_type)."""
-        return self.key_type == APIKeyType.ONE_TIME
-
     @classmethod
     def generate_key(cls, prefix: str = "key") -> str:
         """Generate a new API key with the given prefix."""
@@ -299,12 +291,9 @@ class APIKey(Base):
         expires_at: datetime | None = None,
         prefix: str | None = None,
     ) -> "APIKey":
-        """Create a new API key for a user.
-
-        For one-time use keys, set key_type=APIKeyType.ONE_TIME.
-        """
+        """Create a new API key for a user."""
         if prefix is None:
-            prefix = "ot" if key_type == APIKeyType.ONE_TIME else key_type
+            prefix = key_type
         return cls(
             user_id=user_id,
             key=cls.generate_key(prefix),
@@ -315,8 +304,9 @@ class APIKey(Base):
         )
 
     def is_valid(self) -> bool:
-        """Check if the key is valid (not revoked, not expired)."""
-        if self.revoked:
+        """Check if the key is valid (a known type, not revoked, not expired)."""
+        # A row of a removed type (e.g. a one-time key restored from a backup) must not authenticate.
+        if self.revoked or self.key_type not in APIKeyType.ALL_TYPES:
             return False
         if self.expires_at:
             now = datetime.now(timezone.utc)
@@ -335,7 +325,6 @@ class APIKey(Base):
             "name": self.name,
             "key_type": self.key_type,
             "scopes": self.scopes,
-            "is_one_time": self.is_one_time,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "last_used_at": (

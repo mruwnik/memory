@@ -421,7 +421,6 @@ def test_authenticate_bot_finds_matching_bot_via_api_key_table(mock_lookup):
     api_key_record = MagicMock()
     api_key_record.key = "bot_test123"
     api_key_record.is_valid.return_value = True
-    api_key_record.is_one_time = False
 
     # Mock user
     bot = MagicMock()
@@ -458,7 +457,6 @@ def test_authenticate_bot_rejects_non_bot_user_from_api_key_table(mock_lookup):
     api_key_record = MagicMock()
     api_key_record.key = "human_key123"
     api_key_record.is_valid.return_value = True
-    api_key_record.is_one_time = False
 
     human_user = MagicMock()
     human_user.user_type = "human"
@@ -481,7 +479,6 @@ def test_authenticate_by_api_key_returns_user_and_key_record(mock_lookup):
     api_key_record.key = "key_test123"
     api_key_record.key_type = "internal"
     api_key_record.is_valid.return_value = True
-    api_key_record.is_one_time = False
 
     user = MagicMock()
     api_key_record.user = user
@@ -529,7 +526,6 @@ def test_authenticate_by_api_key_accepts_matching_key_type(mock_lookup):
     api_key_record.key = "discord_key123"
     api_key_record.key_type = "discord"
     api_key_record.is_valid.return_value = True
-    api_key_record.is_one_time = False
 
     user = MagicMock()
     api_key_record.user = user
@@ -550,7 +546,6 @@ def test_handle_api_key_use_updates_last_used():
     """Test handle_api_key_use updates last_used_at timestamp."""
     db = MagicMock()
     key_record = MagicMock()
-    key_record.is_one_time = False
     key_record.last_used_at = None
 
     auth.handle_api_key_use(key_record, db)
@@ -558,35 +553,6 @@ def test_handle_api_key_use_updates_last_used():
     assert key_record.last_used_at is not None
     db.commit.assert_called_once()
     db.delete.assert_not_called()
-
-
-def test_handle_api_key_use_consumes_one_time_key():
-    """Test handle_api_key_use atomically consumes one-time keys after use.
-
-    Consumption is a soft delete: ``UPDATE ... SET revoked WHERE id=:id AND
-    NOT revoked RETURNING id`` (SQLAlchemy core) rather than an ORM mutation,
-    so concurrent consumers can't both succeed — see CWE-367 / task 45825913.
-    The row is kept so the mint rate limit can count keys issued in its
-    rolling window.
-    """
-    db = MagicMock()
-    # The atomic UPDATE...RETURNING returns the consumed row's id
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = 1
-    db.execute.return_value = result
-
-    key_record = MagicMock()
-    key_record.id = 1
-    key_record.is_one_time = True
-
-    won = auth.handle_api_key_use(key_record, db)
-
-    assert won is True
-    # The row must survive as a tombstone — no delete of any kind
-    db.delete.assert_not_called()
-    # Atomic SQL UPDATE was issued exactly once
-    db.execute.assert_called_once()
-    db.commit.assert_called_once()
 
 
 @patch("memory.api.auth.lookup_api_key")
@@ -603,7 +569,6 @@ def test_get_session_user_uses_api_key_auth_for_api_key_tokens(mock_lookup):
     api_key_record = MagicMock()
     api_key_record.key = "internal_test123"
     api_key_record.is_valid.return_value = True
-    api_key_record.is_one_time = False
     api_key_record.key_type = "internal"
 
     user = MagicMock()
@@ -684,9 +649,7 @@ def test_get_user_account_raises_404_when_user_does_not_own_account():
 def test_get_current_user_uses_request_state_authenticated_user_id():
     """Test that get_current_user uses pre-authenticated user from request.state.
 
-    This is important for one-time keys: the middleware authenticates and deletes
-    the key, storing user_id in request.state. Endpoints must use this rather
-    than re-authenticating (which would fail since key is deleted).
+    Endpoints must use this rather than re-authenticating.
     """
     from memory.common.db.models import User
 
@@ -738,99 +701,6 @@ def test_get_current_user_falls_back_to_session_auth_without_request_state():
     db.get.assert_not_called()
     # Verify fallback auth was used
     mock_get_session.assert_called_once_with(request, db)
-
-
-# ====== One-time API key race condition (CWE-367) ======
-
-
-def _one_time_key_fixture(key_id: int = 99) -> MagicMock:
-    """Build a MagicMock that walks like a valid one-time APIKey row."""
-    record = MagicMock()
-    record.id = key_id
-    record.key = "ot_secret"
-    record.key_type = "one_time"
-    record.is_valid.return_value = True
-    record.is_one_time = True
-    record.user = MagicMock()
-    return record
-
-
-def _make_db_for_atomic_consume(rows_returned: int) -> MagicMock:
-    """Mock SQLAlchemy DB whose execute(update()) returns one row, then None.
-
-    Models the real Postgres semantics of the consuming
-    ``UPDATE ... WHERE NOT revoked RETURNING id``: the first caller wins and
-    gets back the row id; the second matches zero rows (already revoked).
-    """
-    db = MagicMock()
-    results = []
-    for _ in range(rows_returned):
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = 99  # id of the consumed row
-        results.append(result)
-    # Subsequent calls return "no rows" — the key is already revoked.
-    no_row = MagicMock()
-    no_row.scalar_one_or_none.return_value = None
-    db.execute.side_effect = results + [no_row, no_row, no_row]
-    return db
-
-
-@patch("memory.api.auth.lookup_api_key")
-def test_one_time_key_race_only_one_winner(mock_lookup):
-    """Two concurrent authentications with the same ot_* key must not both succeed."""
-    db = _make_db_for_atomic_consume(rows_returned=1)
-    record = _one_time_key_fixture()
-    mock_lookup.return_value = record
-
-    # First call wins the atomic consume.
-    user1, key1 = auth.authenticate_by_api_key("ot_secret", db)
-    # Second concurrent call: the row is gone, RETURNING yields nothing.
-    user2, key2 = auth.authenticate_by_api_key("ot_secret", db)
-
-    assert (user1, key1) == (record.user, record)
-    assert (user2, key2) == (None, None), (
-        "Race-loser must not authenticate — one-time means single use"
-    )
-
-
-def test_handle_api_key_use_one_time_atomic_consume():
-    """handle_api_key_use uses UPDATE...RETURNING for one-time keys."""
-    db = _make_db_for_atomic_consume(rows_returned=1)
-    record = _one_time_key_fixture()
-
-    won = auth.handle_api_key_use(record, db)
-
-    assert won is True
-    # The atomic statement was issued exactly once
-    assert db.execute.call_count == 1
-    # And we committed
-    db.commit.assert_called_once()
-    # And we did NOT use the ORM-level delete (which is non-atomic)
-    db.delete.assert_not_called()
-
-
-def test_handle_api_key_use_regular_key_no_delete():
-    """Regular keys: no DELETE statement; just last_used_at + commit."""
-    db = MagicMock()
-    record = _one_time_key_fixture()
-    record.is_one_time = False
-
-    won = auth.handle_api_key_use(record, db)
-
-    assert won is True
-    db.execute.assert_not_called()
-    db.delete.assert_not_called()
-    db.commit.assert_called_once()
-
-
-def test_handle_api_key_use_one_time_loser_returns_false():
-    """If the row is already gone (race-loser), handle_api_key_use returns False."""
-    db = _make_db_for_atomic_consume(rows_returned=0)  # delete returns no row
-    record = _one_time_key_fixture()
-
-    won = auth.handle_api_key_use(record, db)
-
-    assert won is False
 
 
 # ====== is_expired (tz-aware UTC handling) ======

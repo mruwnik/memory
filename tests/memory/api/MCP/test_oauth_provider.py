@@ -551,8 +551,8 @@ async def test_verify_token_handles_tz_aware_expires_at(db_session):
 # shouldn't have license to escalate from "no user" into a 500. The two
 # tests below pin the symmetric fail-closed: an APIKey whose ``.user`` is
 # None must produce ``lookup_principal -> None`` AND must NOT have its
-# ``handle_api_key_use`` side effect run (which would bump last_used_at /
-# revoke a one-time row for a key the caller can't actually use).
+# ``handle_api_key_use`` side effect run (which would bump last_used_at for a
+# key the caller can't actually use).
 
 
 def _orphan_api_key_stub():
@@ -589,7 +589,7 @@ def test_lookup_principal_returns_none_for_orphan_api_key(monkeypatch):
 def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
     """Discriminator: the ``user is None`` guard MUST come BEFORE
     ``handle_api_key_use`` so a detached row doesn't get its
-    ``last_used_at`` bumped (or, for one-time keys, deleted) on behalf
+    ``last_used_at`` bumped on behalf
     of a caller who can't actually be authenticated. If a future
     refactor reorders the guards, this test pins the regression.
     """
@@ -609,69 +609,28 @@ def test_orphan_api_key_does_not_run_handle_api_key_use(monkeypatch):
     assert handle_calls == []
 
 
-# --- One-time API key tests ---
+# --- API key tests ---
 
 
 @pytest.mark.asyncio
-async def test_verify_token_consumes_one_time_api_key_after_use(db_session):
-    """verify_token soft-deletes one-time API keys after successful verification.
-
-    The row must survive as a revoked tombstone (not be hard-deleted) so the
-    mint rate limit in ``meta.create_one_time_key`` can count keys issued in
-    its rolling window."""
+async def test_verify_token_api_key_is_reusable_and_records_use(db_session):
     user = create_test_user(db_session)
 
-    api_key = APIKey.create(
-        user_id=user.id,
-        key_type=APIKeyType.ONE_TIME,
-        name="One Time Key",
-        scopes=["read", "write"],
-    )
+    api_key = APIKey.create(user_id=user.id, name="Key", scopes=["read", "write"])
     db_session.add(api_key)
     db_session.commit()
     key_value = api_key.key
     key_id = api_key.id
 
-    assert api_key.revoked is False
-
     provider = SimpleOAuthProvider()
-    result = await provider.verify_token(key_value)
+    assert await provider.verify_token(key_value) is not None
+    assert await provider.verify_token(key_value) is not None
 
-    assert result is not None
-    assert "read" in result.scopes
-    assert "write" in result.scopes
-
-    # Refresh to see changes from verify_token's session
     db_session.expire_all()
     stored = db_session.get(APIKey, key_id)
     assert stored is not None
-    assert stored.revoked is True
-
-
-@pytest.mark.asyncio
-async def test_verify_token_one_time_key_fails_on_second_use(db_session):
-    """Test that one-time API keys cannot be reused."""
-    user = create_test_user(db_session)
-
-    api_key = APIKey.create(
-        user_id=user.id,
-        key_type=APIKeyType.ONE_TIME,
-        name="One Time Key",
-        scopes=["read", "write"],
-    )
-    db_session.add(api_key)
-    db_session.commit()
-    key_value = api_key.key
-
-    provider = SimpleOAuthProvider()
-
-    # First use should succeed
-    result1 = await provider.verify_token(key_value)
-    assert result1 is not None
-
-    # Second use should fail (key was revoked on first use)
-    result2 = await provider.verify_token(key_value)
-    assert result2 is None
+    assert stored.revoked is False
+    assert stored.last_used_at is not None
 
 
 # --- resolve_session_scopes tests ---

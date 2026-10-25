@@ -80,6 +80,12 @@ section has nothing in it:
 
 ### Other changes for operators
 
+- One-time API keys are removed: the `meta_create_one_time_key` MCP tool, the
+  `one_time` key type, the `ONE_TIME_KEY_RATE_LIMIT` and `ONE_TIME_KEY_TTL_SECONDS`
+  settings (delete them from `.env`) and the `cleanup-used-one-time-keys` beat
+  task. Existing one-time keys are deleted by the migration and stop working.
+  Anything that minted them, such as a script calling `/claude/spawn`,
+  needs a normal API key instead.
 - The Discord collector no longer serves its channel, category and permission
   endpoints (the collector API keeps only health, DMs, channel messages,
   typing, reactions and metadata refresh). The `discord-admin` and
@@ -495,6 +501,8 @@ section has nothing in it:
   Fast.
 - `20261029_summary_request_keys`: deletes all `summary_request` rows (see Manual steps)
   and adds `provider_key_id`. Fast.
+- `20261103_drop_one_time_keys`: deletes the `api_keys` rows of type `one_time`. Fast.
+  Downgrading does not restore them.
 
 ### Post-deploy commands
 

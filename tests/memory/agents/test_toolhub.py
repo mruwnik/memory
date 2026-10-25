@@ -55,7 +55,7 @@ async def test_tools_invisible_to_the_user_fail_fast(db_session, user_session):
 @pytest.mark.parametrize(
     "overrides,expected",
     [
-        ({"tools": ["meta_create_one_time_key"]}, "meta_create_one_time_key"),
+        ({"tools": ["scheduler_upsert"]}, "scheduler_upsert"),
         ({"mcp_servers": [ExternalMCP(server_id=1, tools=["agent_run"])]}, "agent_run"),
     ],
 )

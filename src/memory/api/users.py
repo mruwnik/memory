@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import Literal, TYPE_CHECKING, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
@@ -466,11 +465,7 @@ def reset_password(
 
 
 class APIKeyCreate(BaseModel):
-    """Request model for creating a new API key.
-
-    One-time keys cannot be minted here — use the MCP create_one_time_key
-    tool, which enforces the TTL and mint rate limit.
-    """
+    """Request model for creating a new API key."""
 
     name: str | None = None
     key_type: str = APIKeyType.INTERNAL
@@ -486,13 +481,6 @@ class APIKeyCreate(BaseModel):
     @field_validator("key_type")
     @classmethod
     def validate_key_type(cls, v: str) -> str:
-        # One-time keys carry a TTL and a per-user mint rate limit that only
-        # the MCP tool applies; minting them here would bypass both.
-        if v == APIKeyType.ONE_TIME:
-            raise ValueError(
-                "One-time keys cannot be created via this endpoint; "
-                "use the MCP create_one_time_key tool instead."
-            )
         if v not in VALID_KEY_TYPES:
             raise ValueError(f"Invalid key_type. Must be one of: {', '.join(sorted(VALID_KEY_TYPES))}")
         return v
@@ -505,7 +493,6 @@ class APIKeyResponse(BaseModel):
     name: str | None
     key_type: str
     scopes: list[str] | None
-    is_one_time: bool
     created_at: str | None
     expires_at: str | None
     last_used_at: str | None
@@ -543,21 +530,7 @@ def list_user_api_keys(
     """List all API keys for a user. Admins can list any user's keys."""
     authorize_user_self_or_admin(db, user_id, user)
 
-    # Consumed one-time keys linger as revoked=True tombstones purely so the
-    # mint rate limit can count them — hide those from the listing. Revoked
-    # regular keys stay visible: revocation via the DELETE endpoint is
-    # user-facing state.
-    keys = (
-        db.query(APIKey)
-        .filter(
-            APIKey.user_id == user_id,
-            or_(
-                APIKey.key_type != APIKeyType.ONE_TIME,
-                APIKey.revoked.is_(False),
-            ),
-        )
-        .all()
-    )
+    keys = db.query(APIKey).filter(APIKey.user_id == user_id).all()
     return [api_key_to_response(k) for k in keys]
 
 
@@ -645,25 +618,12 @@ def delete_user_api_key(
     db: Session = Depends(get_session),
 ):
     """Permanently delete an API key. Users can delete their own, admins can delete any.
-
-    One-time keys are exempt: their rows (including consumed tombstones) must
-    stay countable for the mint rate limit, so only the maintenance task may
-    hard-delete them once they age out of the window.
     """
     require_self_or_admin(user_id, user)
 
     api_key = db.get(APIKey, key_id)
     if not api_key or api_key.user_id != user_id:
         raise HTTPException(status_code=404, detail="API key not found")
-
-    if api_key.key_type == APIKeyType.ONE_TIME:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "One-time keys cannot be permanently deleted; revoke instead. "
-                "They are purged automatically once outside the mint rate-limit window."
-            ),
-        )
 
     db.delete(api_key)
     db.commit()

@@ -432,8 +432,8 @@ class SimpleOAuthProvider(OAuthProvider):
         ``resolve_session_scopes``) — that's the right shape for the OAuth
         auth gate, since FastMCP just checks for ``read`` there.
 
-        Implementation note: the lookup, expiry check, and one-time-key
-        consumption are shared with ``load_access_token`` via
+        Implementation note: the lookup, expiry check, and last-used bump
+        are shared with ``load_access_token`` via
         :func:`lookup_principal`. Each method only contains its own
         scope-projection / return-type logic. This is the structural fix
         for the PR-#76 / audit-2bb3e9c6 class of drift bug — neither
@@ -876,7 +876,7 @@ class SimpleOAuthProvider(OAuthProvider):
         """Load and validate an access token (or bot API key).
 
         Companion to :meth:`verify_token`; both share lookup + expiry +
-        one-time-key consumption via :func:`lookup_principal`. This
+        last-used bump via :func:`lookup_principal`. This
         method differs only in projecting OAuth-grant scopes (via
         :func:`resolve_session_scopes`) instead of system scopes.
         """
