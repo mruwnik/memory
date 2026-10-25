@@ -2,7 +2,12 @@
 Tests for observation syncing tasks.
 """
 
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+from memory.common.db.models import AgentObservation
 
 
 from memory.workers.tasks import observations
@@ -32,12 +37,13 @@ class TestSyncObservation:
         )
 
         # Verify hash was created from content, subject, and type
-        mock_hash.assert_called_once_with(
+        mock_hash.assert_any_call(
             "User prefers dark modeUser preferencespreference"
         )
 
         # Verify check for existing
-        mock_check.assert_called_once_with(mock_db, observations.AgentObservation, sha256="test_hash_123")
+        assert mock_check.call_count == 2
+        mock_check.assert_called_with(mock_db, observations.AgentObservation, sha256="test_hash_123")
 
         # Verify processing was called
         mock_process.assert_called_once()
@@ -406,8 +412,8 @@ class TestSyncObservation:
             observation_type="Type C",
         )
 
-        # Hash should be created from concatenation
-        mock_hash.assert_called_once_with("Content BSubject AType C")
+        # The legacy hash remains readable; new hashes include ownership.
+        mock_hash.assert_any_call("Content BSubject AType C")
 
     @patch("memory.workers.tasks.observations.process_content_item")
     @patch("memory.workers.tasks.observations.check_content_exists")
@@ -641,3 +647,28 @@ def test_sync_observation_creator_id_defaults_none_for_legacy_callers(
     assert created.creator_id is None
     assert created.project_id is None
     assert created.sensitivity == "basic"
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_observation_dedup_preserves_each_creators_copy(db_session, regular_user, admin_user, monkeypatch, legacy):
+    args = dict(subject="Preference", content="Dark mode", observation_type="preference")
+    if legacy:
+        db_session.add(AgentObservation(
+            **args, creator_id=regular_user.id, size=9, mime_type="text/plain", agent_model="unknown",
+            sha256=observations.create_content_hash("Dark modePreferencepreference"),
+        ))
+        db_session.commit()
+    monkeypatch.setattr(observations, "make_session", lambda: nullcontext(db_session))
+    # Exercise real persistence and deduplication without an external embedder.
+    monkeypatch.setattr("memory.common.content_processing.embed_source_item", lambda *args: 0)
+
+    first = observations.sync_observation(**args, creator_id=regular_user.id)
+    second = observations.sync_observation(**args, creator_id=admin_user.id)
+    anonymous = observations.sync_observation(**args)
+    assert len({first["agentobservation_id"], second["agentobservation_id"], anonymous["agentobservation_id"]}) == 3
+    for user_id, result in [(regular_user.id, first), (admin_user.id, second), (None, anonymous)]:
+        repeated = observations.sync_observation(**args, creator_id=user_id)
+        assert repeated["status"] == "already_exists"
+        assert repeated["agentobservation_id"] == result["agentobservation_id"]
+        assert db_session.get(AgentObservation, result["agentobservation_id"]).creator_id == user_id
+    assert db_session.query(AgentObservation).count() == 3

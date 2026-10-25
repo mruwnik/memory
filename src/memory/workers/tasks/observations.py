@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import cast
 
@@ -45,7 +46,10 @@ def sync_observation(
     confidences = confidences or {}
     tags = tags or []
     logger.info(f"Syncing observation {subject}")
-    sha256 = create_content_hash(f"{content}{subject}{observation_type}")
+    legacy_sha256 = create_content_hash(f"{content}{subject}{observation_type}")
+    # Structured fields avoid ambiguous concatenation; ownership is part of
+    # the key because identical observations from different users are distinct.
+    sha256 = create_content_hash(json.dumps(["observation", creator_id, content, subject, observation_type]))
 
     observation = AgentObservation(
         content=content,
@@ -66,6 +70,13 @@ def sync_observation(
     observation.update_confidences(confidences)
 
     with make_session() as session:
+        legacy = check_content_exists(session, AgentObservation, sha256=legacy_sha256)
+        if (
+            legacy is not None
+            and legacy.creator_id == creator_id
+            and (legacy.content, legacy.subject, legacy.observation_type) == (content, subject, observation_type)
+        ):
+            return create_task_result(legacy, "already_exists")
         existing_observation = check_content_exists(
             session, AgentObservation, sha256=sha256
         )

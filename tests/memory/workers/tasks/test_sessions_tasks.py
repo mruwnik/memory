@@ -351,3 +351,21 @@ def test_summarizing_a_session_without_a_key_is_skipped(
     result = sessions_tasks.summarize_session(str(coding_session.id))
 
     assert result == {"status": "skipped", "message": "No key"}
+
+
+def test_identical_transcripts_are_indexed_for_each_owner(indexing_env, coding_session, admin_user, sessions_dir):
+    other = Session(id=uuid.uuid4(), user_id=admin_user.id, transcript_path="other/same.jsonl")
+    indexing_env.add(other)
+    indexing_env.commit()
+    events = make_events(12)
+    for session in (coding_session, other):
+        write_transcript(sessions_dir / session.transcript_path, events)
+        result = sessions_tasks.index_session(str(session.id))
+        assert result["created"] > 0
+        assert result["duplicates"] == 0
+    first = indexing_env.query(SessionSegment).filter_by(session_id=coding_session.id).all()
+    second = indexing_env.query(SessionSegment).filter_by(session_id=other.id).all()
+    assert {s.content for s in first} == {s.content for s in second}
+    assert {s.creator_id for s in first} == {coding_session.user_id}
+    assert {s.creator_id for s in second} == {admin_user.id}
+    assert {s.sha256 for s in first}.isdisjoint(s.sha256 for s in second)

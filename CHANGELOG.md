@@ -12,6 +12,31 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Identical agent observations from different users now retain separate copies.
+  Repeated submissions still reuse the same user's existing observation, including
+  observations stored before this fix. Previously discarded submissions must be
+  submitted again; their content cannot be recovered from the deduplicated row.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.2.1 (2026-10-25)
 
 ### Required env vars
