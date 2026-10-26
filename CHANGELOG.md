@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.3.2 (2026-10-26)
 
 ### Required env vars
 
@@ -23,6 +23,9 @@ None.
 None.
 
 ### Other changes for operators
+
+Admins can opt an LLM provider key into being the shared default for system-agent
+calls when a user has no personal default. Existing keys remain personal-only.
 
 User deletion now cleans up owned source accounts and OAuth refresh tokens without
 failing on database ownership constraints. No migration is required.
