@@ -119,6 +119,35 @@ describe('useCalendar.getMonthEvents (caching)', () => {
     expect(upcomingCalls(fetchMock)).toHaveLength(2)
   })
 
+  it('retries a failed month fetch instead of caching the rejection', async () => {
+    let fails = true
+    routeMcpDynamic(() => {
+      if (fails) throw new Error('temporarily unavailable')
+      return [ev(1, '2024-07-01T00:00:00Z')]
+    })
+    const { result } = renderHook(() => useCalendar())
+    await expect(result.current.getMonthEvents(2024, 6)).rejects.toThrow('temporarily unavailable')
+    fails = false
+    expect(await result.current.getMonthEvents(2024, 6)).toHaveLength(1)
+  })
+
+  it('does not cache an older in-flight response after refresh', async () => {
+    let finishOld!: (response: Response) => void
+    let calls = 0
+    mockFetch(async (input) => {
+      if (String(input).endsWith('/auth/me')) return mockResponse({ json: {} })
+      if (++calls === 1) return new Promise<Response>(resolve => { finishOld = resolve })
+      return mockResponse(mcpResult([ev(2, '2024-07-02T00:00:00Z')]))
+    })
+    const { result } = renderHook(() => useCalendar())
+    const old = result.current.getMonthEvents(2024, 6)
+    result.current.clearCache()
+    await result.current.getMonthEvents(2024, 6)
+    finishOld(mockResponse(mcpResult([ev(1, '2024-07-01T00:00:00Z')])))
+    await old
+    expect((await result.current.getMonthEvents(2024, 6))[0].id).toBe(2)
+  })
+
   it('clearCache forces a re-fetch', async () => {
     const fetchMock = routeMcpDynamic(() => [ev(1, '2024-07-01T00:00:00Z')])
     const { result } = renderHook(() => useCalendar())

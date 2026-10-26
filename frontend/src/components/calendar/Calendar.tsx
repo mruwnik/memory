@@ -4,7 +4,7 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
-import { Badge, Button, Card, Checkbox, DetailList, LoadingState, Modal, Notice, Page, buttonClass, NewTabLink } from '@/components/shared/ui'
+import { Badge, Button, Card, Checkbox, DetailList, LoadingState, Modal, Notice, Page, RefreshButton, buttonClass, NewTabLink } from '@/components/shared/ui'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -314,6 +314,11 @@ const Calendar = () => {
     clearCache()
   }
 
+  const refreshEvents = () => {
+    clearCache()
+    void loadEvents(currentDate, selectedUserIds)
+  }
+
   const formatEventTime = (event: CalendarEvent) => {
     if (event.all_day) return ''
     const date = new Date(event.start_time)
@@ -359,13 +364,14 @@ const Calendar = () => {
           <div className="flex gap-2">
             <Button size="icon" onClick={goToPreviousMonth} aria-label="Previous month">&lt;</Button>
             <Button onClick={goToToday}>Today</Button>
+            <RefreshButton onClick={refreshEvents} disabled={loading} />
             <Button size="icon" onClick={goToNextMonth} aria-label="Next month">&gt;</Button>
           </div>
         </div>
       </>}
       width="wide"
       error={error}
-      onRetry={() => loadEvents(currentDate, selectedUserIds)}
+      onRetry={refreshEvents}
     >
       {!loading && !error && (
         selectedUserIds?.length === 0 ? <Notice tone="info">No users selected.</Notice>

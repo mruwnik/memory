@@ -55,6 +55,16 @@ beforeEach(() => {
 })
 
 describe('Calendar', () => {
+  it('refreshes a partially ingested month to show newly stored events', async () => {
+    getEventsForMonths.mockResolvedValue([onDay(1)])
+    renderWithRouter(<Calendar />)
+    await screen.findByText('Event 1')
+    getEventsForMonths.mockResolvedValue([onDay(1), onDay(20)])
+    await userEvent.setup().click(screen.getByRole('button', { name: /Refresh/i }))
+    expect(clearCache).toHaveBeenCalled()
+    expect(await screen.findByText('Event 20')).toBeInTheDocument()
+  })
+
   it('renders the current month/year header and weekday labels', async () => {
     renderWithRouter(<Calendar />)
     const now = new Date()

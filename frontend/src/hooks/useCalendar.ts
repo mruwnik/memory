@@ -84,9 +84,10 @@ export const useCalendar = () => {
 
     // Fetch and cache
     const fetchPromise = fetchMonthEvents(year, month, userIds).then(events => {
-      monthCache.set(key, events)
-      pendingFetches.delete(key)
+      if (pendingFetches.get(key) === fetchPromise) monthCache.set(key, events)
       return events
+    }).finally(() => {
+      if (pendingFetches.get(key) === fetchPromise) pendingFetches.delete(key)
     })
     pendingFetches.set(key, fetchPromise)
     return fetchPromise
