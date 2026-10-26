@@ -78,7 +78,7 @@ for ts, text in list(keep(stdin))[-int(sys.argv[1]):]:
 PY
 )
 
-for service in api worker; do
+for service in api worker slack-sync-worker; do
     echo "[$service]"
     $COMPOSE logs --no-color --no-log-prefix --timestamps --tail 20000 "$service" 2>/dev/null \
         | python3 -I -c "$filter" "$lines" 2>/dev/null \

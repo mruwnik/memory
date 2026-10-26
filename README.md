@@ -243,7 +243,7 @@ That returns an invite URL for adding the bot to your server.
 python tools/run_celery_task.py <queue> <task-name> [args]
 ```
 
-Queues live in `src/memory/common/celery_app.py` (`task_routes`) and the full set is enumerated in `docker-compose.yaml` (the worker's `QUEUES` env var). At time of writing: `backfill, backup, blogs, calendar, comic, custom, discord, ebooks, email, forums, github, google, maintenance, meetings, notes, people, photos, reports, scheduler, slack, verification`.
+Queues live in `src/memory/common/celery_app.py` (`task_routes`) and the full set is enumerated in `docker-compose.yaml` (the worker's `QUEUES` env var). At time of writing: `backfill, backup, blogs, calendar, comic, custom, discord, ebooks, email, forums, github, google, maintenance, meetings, notes, people, photos, reports, scheduler, slack, slack-sync, verification`.
 
 ## MCP client library for HTML reports
 
@@ -454,3 +454,19 @@ See `custom_tasks/_example.py` and `custom_tasks/_example_manual.py` for full an
 ## Contributing
 
 This is a personal knowledge base system. Feel free to fork and adapt for your own use cases.
+
+### Slack event ingestion and history sweeps
+
+Complete the Slack setup wizard and its test message to verify event delivery.
+Verified installations ingest new messages through Events API; background history
+sweeps default to daily. Set **Sources → Slack → Background sweep frequency** per
+workspace, or use **Sync now** for an immediate sweep. Initial imports run immediately.
+If any polling app for a workspace lacks verified events, normal polling continues.
+The scheduler checks on `SLACK_SYNC_INTERVAL` (default one hour), so sweeps run on
+the next scheduler tick after their interval expires.
+
+Invite the bot to channels whose messages it should receive and subscribe to the
+matching message events. History sweeps cover enabled channels accessible to the
+connected user. Slack allows one Events API Request URL per app: use separate
+Slack apps for independent local and production installations. The dedicated
+`slack-sync-worker` handles history polling while live events use the `slack` queue.

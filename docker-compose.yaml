@@ -301,6 +301,22 @@ services:
       - ./memory_files:/app/memory_files:rw
       - ${CUSTOM_TASKS_DIR:-./custom_tasks}:/app/custom_tasks:ro
 
+  # History polling has its own slot so Slack rate-limit waits cannot block
+  # incoming events or ingestion from email, calendar and other sources.
+  slack-sync-worker:
+    <<: *worker-base
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    environment:
+      <<: *worker-env
+      QUEUES: "slack-sync"
+      CONCURRENCY: "1"
+    volumes:
+      - ./memory_files:/app/memory_files:rw
+
   # Agent runs call memory's MCP tools in-process, so this image installs the
   # API package on top of the worker deps. It uses the prefork pool: the
   # in-process MCP server hangs when event loops in several threads use it at

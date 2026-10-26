@@ -49,7 +49,7 @@ RUN git config --global user.email "${GIT_USER_EMAIL}" && \
 # in the docker-compose override or the task pile up in Redis with no
 # consumer. The default is the superset; out-of-the-box `docker run`
 # should consume every queue the codebase publishes to.
-ENV QUEUES="backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
+ENV QUEUES="backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,slack-sync,verification"
 ENV PYTHONPATH="/app"
 # External MCP servers must never reach the stack's own container networks.
 ENV MCP_BLOCK_CONTAINER_NETWORKS=1
