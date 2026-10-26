@@ -51,7 +51,6 @@ from memory.common.db.models.discord import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,
-    discord_bot_users,
 )
 from memory.common.db.models.slack import (
     SlackApp,
@@ -276,7 +275,6 @@ __all__ = [
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",
-    "discord_bot_users",
     "SlackApp",
     "SlackWorkspace",
     "SlackChannel",

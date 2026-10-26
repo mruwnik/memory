@@ -106,29 +106,6 @@ class DiscordChannelUpdate(BaseModel):
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
 
 
-# --- Bot User Models ---
-
-
-class BotUserResponse(BaseModel):
-    """Response model for bot authorized users (excludes email for privacy)."""
-
-    id: int
-    name: str
-
-
-class UserStatusResponse(BaseModel):
-    """Response model for user add/remove operations."""
-
-    status: str
-    user_id: int
-
-
-class AddUserRequest(BaseModel):
-    """Request model for adding a user to a bot's authorized users."""
-
-    user_id: int
-
-
 # --- Helper Functions ---
 
 
@@ -234,8 +211,7 @@ def create_bot(
 ) -> DiscordBotResponse:
     """Create a new Discord bot.
 
-    The bot ID is extracted from the token. The user is automatically
-    authorized to use the bot.
+    The bot ID is extracted from the token. The registering user owns the bot.
     """
     # Extract bot ID from token (format: base64(user_id).timestamp.hmac)
     try:
@@ -249,16 +225,13 @@ def create_bot(
     # Check if bot already exists
     existing = db.get(DiscordBot, bot_id)
     if existing:
-        # If bot exists, just authorize this user if not already
         if not existing.is_authorized(user):
-            existing.authorized_users.append(user)
-            db.commit()
+            raise HTTPException(status_code=409, detail="This bot is already registered")
         return bot_to_response(existing)
 
     # Create new bot
     bot = DiscordBot(id=bot_id, name=data.name, created_by_user_id=user.id)
     bot.token = data.token
-    bot.authorized_users.append(user)
 
     db.add(bot)
     db.commit()
@@ -294,18 +267,9 @@ def delete_bot(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
-    """Remove user authorization from a bot.
-
-    If the user is the only authorized user, the bot is deleted entirely.
-    """
+    """Delete a bot owned by the caller."""
     bot = get_user_bot(db, bot_id, user)
-
-    if len(bot.authorized_users) == 1:
-        # User is the only one authorized - delete the bot
-        db.delete(bot)
-    else:
-        # Just remove this user's authorization
-        bot.authorized_users.remove(user)
+    db.delete(bot)
 
     db.commit()
     return {"status": "deleted"}
@@ -352,83 +316,6 @@ def get_bot_invite_url(
     permissions = 2048 + 65536 + 1024  # send messages, read history, view channels
     invite_url = f"https://discord.com/oauth2/authorize?client_id={bot_id}&scope=bot&permissions={permissions}"
     return {"invite_url": invite_url}
-
-
-@router.post("/bots/{bot_id}/users", response_model=UserStatusResponse)
-def add_user_to_bot(
-    bot_id: int,
-    data: AddUserRequest,
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> UserStatusResponse:
-    """Add another user to a bot's authorized users.
-
-    Only existing authorized users can add new users.
-    """
-    bot = get_user_bot(db, bot_id, user)  # Verify current user is authorized
-
-    # Get the target user
-    target_user = db.get(User, data.user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Check if already authorized
-    if bot.is_authorized(target_user):
-        return UserStatusResponse(status="already_authorized", user_id=data.user_id)
-
-    bot.authorized_users.append(target_user)
-    db.commit()
-
-    return UserStatusResponse(status="added", user_id=data.user_id)
-
-
-@router.delete("/bots/{bot_id}/users/{user_id}", response_model=UserStatusResponse)
-def remove_user_from_bot(
-    bot_id: int,
-    user_id: int,
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> UserStatusResponse:
-    """Remove a user from a bot's authorized users.
-
-    Users can remove themselves. Otherwise, only authorized users can remove others.
-    Cannot remove the last authorized user (use delete bot instead).
-    """
-    bot = get_user_bot(db, bot_id, user)  # Verify current user is authorized
-
-    # Get the target user
-    target_user = db.get(User, user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if not bot.is_authorized(target_user):
-        raise HTTPException(status_code=404, detail="User not authorized for this bot")
-
-    if len(bot.authorized_users) == 1:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot remove the last authorized user. Delete the bot instead.",
-        )
-
-    bot.authorized_users.remove(target_user)
-    db.commit()
-
-    return UserStatusResponse(status="removed", user_id=user_id)
-
-
-@router.get("/bots/{bot_id}/users", response_model=list[BotUserResponse])
-def list_bot_users(
-    bot_id: int,
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> list[BotUserResponse]:
-    """List users authorized to use a bot."""
-    bot = get_user_bot(db, bot_id, user)  # Verify current user is authorized
-
-    return [
-        BotUserResponse(id=cast(int, u.id), name=cast(str, u.name))
-        for u in bot.authorized_users
-    ]
 
 
 # --- Server Endpoints ---

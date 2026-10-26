@@ -119,8 +119,7 @@ class User(Base):
     # Discord relationships
     discord_bots: Mapped[list[DiscordBot]] = relationship(
         "DiscordBot",
-        secondary="discord_bot_users",
-        back_populates="authorized_users",
+        back_populates="owner",
     )
 
     # Slack relationships (per-user OAuth credentials)

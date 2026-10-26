@@ -99,7 +99,7 @@ def resolve_discord_bot_id(session, params: NotificationParams) -> int | None:
         return bot_id
     bot = (
         session.query(DiscordBot)
-        .filter(DiscordBot.authorized_users.any(id=params.user_id))
+        .filter(DiscordBot.created_by_user_id == params.user_id)
         .first()
     )
     if bot:

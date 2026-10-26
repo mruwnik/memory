@@ -140,46 +140,6 @@ describe('useDiscord bots', () => {
   })
 })
 
-describe('useDiscord bot users', () => {
-  it('listBotUsers fetches /users for the bot', async () => {
-    const fetchMock = mockJson([{ id: 1, name: 'Alice' }])
-    const users = await setup().listBotUsers('2')
-    expect(users).toEqual([{ id: 1, name: 'Alice' }])
-    expect(callTo(fetchMock, '/discord/bots/2/users').url).toContain('/users')
-  })
-
-  it('listBotUsers throws on non-ok', async () => {
-    mockJson({}, 500)
-    await expect(setup().listBotUsers('2')).rejects.toThrow('Failed to fetch bot users')
-  })
-
-  it('addBotUser POSTs the user_id body', async () => {
-    const fetchMock = mockJson({ status: 'added', user_id: 11 })
-    const r = await setup().addBotUser('2', 11)
-    expect(r).toEqual({ status: 'added', user_id: 11 })
-    const { init } = callTo(fetchMock, '/discord/bots/2/users')
-    expect(init?.method).toBe('POST')
-    expect(JSON.parse(init?.body as string)).toEqual({ user_id: 11 })
-  })
-
-  it('addBotUser throws server detail on failure', async () => {
-    mockJson({ detail: 'already added' }, 409)
-    await expect(setup().addBotUser('2', 11)).rejects.toThrow('already added')
-  })
-
-  it('removeBotUser DELETEs the nested user route', async () => {
-    const fetchMock = mockJson({ status: 'removed', user_id: 11 })
-    const r = await setup().removeBotUser('2', 11)
-    expect(r).toEqual({ status: 'removed', user_id: 11 })
-    const { init } = callTo(fetchMock, '/discord/bots/2/users/11')
-    expect(init?.method).toBe('DELETE')
-  })
-
-  it('removeBotUser throws server detail on failure', async () => {
-    mockJson({ detail: 'no such user' }, 404)
-    await expect(setup().removeBotUser('2', 11)).rejects.toThrow('no such user')
-  })
-})
 
 describe('useDiscord servers', () => {
   it('listServers without botId hits the bare endpoint', async () => {

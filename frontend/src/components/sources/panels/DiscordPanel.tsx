@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, BotUser, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
+import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { useUsers, User } from '@/hooks/useUsers'
 import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
 import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
@@ -21,11 +20,7 @@ export const DiscordPanel = () => {
     updateServer,
     listChannels,
     updateChannel,
-    listBotUsers,
-    addBotUser,
-    removeBotUser,
   } = useDiscord()
-  const { listUsers } = useUsers()
   const { listProjects } = useProjects()
   const teamsOn = useModule('teams')
 
@@ -38,9 +33,6 @@ export const DiscordPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [addingBot, setAddingBot] = useState(false)
-  const [usersByBot, setUsersByBot] = useState<Record<string, BotUser[]>>({})
-  const [allUsers, setAllUsers] = useState<User[]>([])
-  const [managingUsersBot, setManagingUsersBot] = useState<DiscordBot | null>(null)
   const [blockedInvite, setBlockedInvite] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
 
@@ -111,25 +103,6 @@ export const DiscordPanel = () => {
     const { blockedUrl } = await openPopup(async () => (await getBotInviteUrl(botId)).invite_url, '', false)
     setBlockedInvite(blockedUrl)
   })
-
-  const handleManageUsers = (bot: DiscordBot) => run(async () => {
-    const [botUsers, users] = await Promise.all([usersByBot[bot.id] ?? listBotUsers(bot.id), listUsers()])
-    setUsersByBot(prev => ({ ...prev, [bot.id]: botUsers }))
-    setAllUsers(users)
-    setManagingUsersBot(bot)
-  })
-
-  const handleAddUserToBot = async (botId: string, userId: number) => {
-    await addBotUser(botId, userId)
-    const users = await listBotUsers(botId)
-    setUsersByBot(prev => ({ ...prev, [botId]: users }))
-  }
-
-  const handleRemoveUserFromBot = async (botId: string, userId: number) => {
-    await removeBotUser(botId, userId)
-    const users = await listBotUsers(botId)
-    setUsersByBot(prev => ({ ...prev, [botId]: users }))
-  }
 
   const handleToggleServerCollect = (server: DiscordServer) => run(async () => {
     await updateServer(server.id, { collect_messages: !server.collect_messages })
@@ -202,7 +175,6 @@ export const DiscordPanel = () => {
               onUpdateServer={handleUpdateServer}
               onUpdateChannel={handleUpdateChannel}
               onGetInviteUrl={() => handleGetInviteUrl(bot.id)}
-              onManageUsers={() => handleManageUsers(bot)}
             />
           ))}
         </List>
@@ -215,16 +187,7 @@ export const DiscordPanel = () => {
         />
       )}
 
-      {managingUsersBot && (
-        <ManageUsersModal
-          bot={managingUsersBot}
-          botUsers={usersByBot[managingUsersBot.id] || []}
-          allUsers={allUsers}
-          onAddUser={(userId) => handleAddUserToBot(managingUsersBot.id, userId)}
-          onRemoveUser={(userId) => handleRemoveUserFromBot(managingUsersBot.id, userId)}
-          onClose={() => setManagingUsersBot(null)}
-        />
-      )}
+
     </Section>
   )
 }
@@ -246,7 +209,6 @@ interface BotCardProps {
   onUpdateServer: (server: DiscordServer, updates: DiscordServerUpdate) => Promise<unknown>
   onUpdateChannel: (channel: DiscordChannel, updates: DiscordChannelUpdate) => Promise<unknown>
   onGetInviteUrl: () => Promise<unknown>
-  onManageUsers: () => Promise<unknown>
 }
 
 const BotRow = ({
@@ -266,7 +228,6 @@ const BotRow = ({
   onUpdateServer,
   onUpdateChannel,
   onGetInviteUrl,
-  onManageUsers,
 }: BotCardProps) => {
   return (
     <Row
@@ -281,8 +242,7 @@ const BotRow = ({
         <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />
         <PauseButton active={bot.is_active} onClick={onToggleActive} />
         <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>
-        <Button size="sm" onClick={onManageUsers}>Manage users</Button>
-        <ConfirmButton confirm={`Remove "${bot.name}"? This will revoke your access to this bot.`} onConfirm={onDelete}>Remove</ConfirmButton>
+        <ConfirmButton confirm={`Remove "${bot.name}"? This removes the bot from Memory.`} onConfirm={onDelete}>Remove</ConfirmButton>
       </>}
     >
       <SubList
@@ -468,136 +428,6 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
           </Button>
         </FormActions>
       </form>
-    </Modal>
-  )
-}
-
-interface ManageUsersModalProps {
-  bot: DiscordBot
-  botUsers: BotUser[]
-  allUsers: User[]
-  onAddUser: (userId: number) => Promise<void>
-  onRemoveUser: (userId: number) => Promise<void>
-  onClose: () => void
-}
-
-const ManageUsersModal = ({
-  bot,
-  botUsers,
-  allUsers,
-  onAddUser,
-  onRemoveUser,
-  onClose,
-}: ManageUsersModalProps) => {
-  const [adding, setAdding] = useState<number | null>(null)
-  const [removing, setRemoving] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const authorizedUserIds = new Set(botUsers.map(u => u.id))
-  const availableUsers = allUsers.filter(u => !authorizedUserIds.has(u.id))
-
-  const handleAdd = async (userId: number) => {
-    setAdding(userId)
-    setError(null)
-    try {
-      await onAddUser(userId)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to add user')
-    } finally {
-      setAdding(null)
-    }
-  }
-
-  const handleRemove = async (userId: number) => {
-    setRemoving(userId)
-    setError(null)
-    try {
-      await onRemoveUser(userId)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to remove user')
-    } finally {
-      setRemoving(null)
-    }
-  }
-
-  return (
-    <Modal title={`Manage users - ${bot.name}`} onClose={onClose}>
-      <div className="space-y-4">
-        {error && <Notice tone="error">{error}</Notice>}
-
-        {/* Current authorized users */}
-        <div>
-          <h4 className="text-sm font-medium text-slate-700 mb-2">Authorized users</h4>
-          {botUsers.length === 0 ? (
-            <p className="text-sm text-slate-500 italic">No users authorized</p>
-          ) : (
-            <div className="space-y-2">
-              {botUsers.map(user => (
-                <div
-                  key={user.id}
-                  className="flex items-center justify-between p-2 bg-slate-50 rounded"
-                >
-                  <span className="text-sm text-slate-800">{user.name}</span>
-                  <button
-                    className={cx(
-                      'px-2 py-1 text-xs rounded',
-                      removing === user.id
-                        ? 'bg-slate-200 text-slate-500'
-                        : 'bg-red-100 text-red-700 hover:bg-red-200'
-                    )}
-                    onClick={() => handleRemove(user.id)}
-                    disabled={removing === user.id || botUsers.length === 1}
-                    title={botUsers.length === 1 ? 'Cannot remove the last user' : 'Remove user'}
-                  >
-                    {removing === user.id ? 'Removing...' : 'Remove'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Add new user */}
-        {availableUsers.length > 0 && (
-          <div>
-            <h4 className="text-sm font-medium text-slate-700 mb-2">Add user</h4>
-            <div className="space-y-2">
-              {availableUsers.map(user => (
-                <div
-                  key={user.id}
-                  className="flex items-center justify-between p-2 bg-slate-50 rounded"
-                >
-                  <div>
-                    <span className="text-sm text-slate-800">{user.name}</span>
-                    <span className="text-xs text-slate-500 ml-2">{user.email}</span>
-                  </div>
-                  <button
-                    className={cx(
-                      'px-2 py-1 text-xs rounded',
-                      adding === user.id
-                        ? 'bg-slate-200 text-slate-500'
-                        : 'bg-green-100 text-green-700 hover:bg-green-200'
-                    )}
-                    onClick={() => handleAdd(user.id)}
-                    disabled={adding === user.id}
-                  >
-                    {adding === user.id ? 'Adding...' : 'Add'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="pt-4 border-t border-slate-200">
-          <Button
-            className="w-full"
-            onClick={onClose}
-          >
-            Done
-          </Button>
-        </div>
-      </div>
     </Modal>
   )
 }

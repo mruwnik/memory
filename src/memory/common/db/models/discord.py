@@ -2,7 +2,7 @@
 Database models for the Discord integration.
 
 This module provides models for:
-- DiscordBot: Discord bots we control (with many-to-many user authorization)
+- DiscordBot: Discord bots owned by their registrants
 - DiscordServer: Discord servers (guilds)
 - DiscordChannel: Discord channels (text, voice, DM, thread)
 - DiscordUser: Discord user accounts (may link to a Person)
@@ -17,14 +17,12 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
     String,
-    Table,
     Text,
     func,
 )
@@ -39,19 +37,10 @@ if TYPE_CHECKING:
     from memory.common.db.models.users import User
 
 
-# Association table for User <-> DiscordBot many-to-many
-discord_bot_users = Table(
-    "discord_bot_users",
-    Base.metadata,
-    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
-    Column("bot_id", BigInteger, ForeignKey("discord_bots.id", ondelete="CASCADE"), primary_key=True),
-)
-
-
 class DiscordBot(Base):
     """A Discord bot we control.
 
-    Multiple Memory users can be authorized to use the same bot.
+    The registering Memory user owns the bot.
     The bot token is stored encrypted.
     """
 
@@ -76,12 +65,7 @@ class DiscordBot(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # Many-to-many relationship with users who can use this bot
-    authorized_users: Mapped[list[User]] = relationship(
-        "User",
-        secondary=discord_bot_users,
-        back_populates="discord_bots",
-    )
+    owner: Mapped[User | None] = relationship("User", back_populates="discord_bots")
 
     @property
     def token(self) -> str | None:
@@ -100,7 +84,7 @@ class DiscordBot(Base):
 
     def is_authorized(self, user: User) -> bool:
         """Check if a user is authorized to use this bot."""
-        return user in self.authorized_users
+        return self.created_by_user_id is not None and self.created_by_user_id == user.id
 
 
 class DiscordServer(LLMKeyChoice, Base):

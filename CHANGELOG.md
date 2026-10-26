@@ -12,6 +12,33 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+Discord bot user sharing is removed from Sources and the API. Bots belong to
+their recorded registrant; additional shared users no longer have bot access.
+Discord member identities, messages, and Person attribution are preserved.
+
+### Migrations
+
+`20261110_drop_discord_bot_users` removes the sharing table. Bots without a
+registrant retain the lowest-ID remaining shared user as their owner. Bots with
+no registrant or shared user remain unowned. Downgrading restores owner entries
+only, not the former sharing grants.
+
+### Post-deploy commands
+
+None.
+
 ## v0.3.1 (2026-10-26)
 
 ### Required env vars

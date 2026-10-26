@@ -96,7 +96,7 @@ def slack(db, user):
 
 def discord(db, user):
     bot = DiscordBot(id=7, name="b", created_by_user_id=user.id)
-    bot.authorized_users.append(user)
+    bot.created_by_user_id = user.id
     db.add(bot)
     db.flush()
     row = DiscordServer(id=5, name="s", bot_id=bot.id)
@@ -166,14 +166,6 @@ def slack_co_user(db, caller, other):
     return row, url
 
 
-def discord_co_user(db, caller, other):
-    row, url = discord(db, other)
-    bot = db.get_one(DiscordBot, row.bot_id)
-    bot.authorized_users.append(caller)
-    db.commit()
-    return row, url
-
-
 def slack_admin(db, caller, other):
     return slack(db, other)
 
@@ -182,7 +174,7 @@ def slack_admin(db, caller, other):
 # its default.
 PAYERS = [(own_email, "regular_client")]
 ADMINS = [(admin_on_email, "client"), (slack_admin, "client")]
-CO_USERS = [(slack_co_user, "regular_client"), (discord_co_user, "regular_client")]
+CO_USERS = [(slack_co_user, "regular_client")]
 VIEWERS = PAYERS + ADMINS + CO_USERS
 
 
@@ -408,3 +400,10 @@ def test_a_new_folder_takes_its_owners_key(client, db_session, user):
 
     assert response.status_code == 200, response.text
     assert response.json()["llm_key"]["key_id"] == mine.id
+
+
+def test_discord_non_owner_cannot_change_server_keys(regular_client, db_session, user, admin_user):
+    row, url = discord(db_session, admin_user)
+    assert regular_client.patch(url, json={"llm_key": "none"}).status_code == 403
+    db_session.refresh(row)
+    assert not row.llm_disabled

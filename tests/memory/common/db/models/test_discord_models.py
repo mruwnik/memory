@@ -248,7 +248,7 @@ def test_discord_bot_token_encryption(db_session):
 
 
 def test_discord_bot_user_authorization(db_session):
-    """Test many-to-many relationship between bots and users."""
+    """Only the registrant is authorized to use a bot."""
     user1 = HumanUser.create_with_password(
         email="user1@example.com", name="User 1", password="password123"
     )
@@ -259,7 +259,7 @@ def test_discord_bot_user_authorization(db_session):
     db_session.commit()
 
     bot = DiscordBot(id=123456789, name="Test Bot")
-    bot.authorized_users.append(user1)
+    bot.created_by_user_id = user1.id
     db_session.add(bot)
     db_session.commit()
 
@@ -269,27 +269,6 @@ def test_discord_bot_user_authorization(db_session):
     # User should have the bot in their discord_bots list
     assert bot in user1.discord_bots
     assert bot not in user2.discord_bots
-
-
-def test_discord_bot_multiple_users(db_session):
-    """Test that multiple users can be authorized for a bot."""
-    user1 = HumanUser.create_with_password(
-        email="user1@example.com", name="User 1", password="password123"
-    )
-    user2 = HumanUser.create_with_password(
-        email="user2@example.com", name="User 2", password="password123"
-    )
-    db_session.add_all([user1, user2])
-    db_session.commit()
-
-    bot = DiscordBot(id=123456789, name="Test Bot")
-    bot.authorized_users.extend([user1, user2])
-    db_session.add(bot)
-    db_session.commit()
-
-    assert len(bot.authorized_users) == 2
-    assert bot.is_authorized(user1) is True
-    assert bot.is_authorized(user2) is True
 
 
 def test_user_multiple_bots(db_session):
@@ -302,8 +281,8 @@ def test_user_multiple_bots(db_session):
 
     bot1 = DiscordBot(id=111111111, name="Bot 1")
     bot2 = DiscordBot(id=222222222, name="Bot 2")
-    bot1.authorized_users.append(user)
-    bot2.authorized_users.append(user)
+    bot1.created_by_user_id = user.id
+    bot2.created_by_user_id = user.id
     db_session.add_all([bot1, bot2])
     db_session.commit()
 

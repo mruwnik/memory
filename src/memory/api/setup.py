@@ -32,7 +32,7 @@ from memory.common.db.models import (
     TranscriptAccount,
     User,
 )
-from memory.common.db.models.discord import discord_bot_users
+from memory.common.db.models.discord import DiscordBot
 from memory.common.rate_limit import rate_limit_key
 from memory.common.scopes import SCOPE_ADMIN
 
@@ -101,7 +101,7 @@ def source_counts(db: Session, user_id: int) -> dict[str, int]:
         + count_rows(db, CalendarAccount, CalendarAccount.user_id == user_id),
         "github": count_rows(db, GithubAccount, GithubAccount.user_id == user_id),
         "slack": count_rows(db, SlackUserCredentials, SlackUserCredentials.user_id == user_id),
-        "discord": count_rows(db, discord_bot_users, discord_bot_users.c.user_id == user_id),
+        "discord": count_rows(db, DiscordBot, DiscordBot.created_by_user_id == user_id),
         "feeds": count_rows(db, ArticleFeed, ArticleFeed.user_id == user_id),
         "notes": count_rows(db, Note, Note.creator_id == user_id),
         "transcripts": count_rows(db, TranscriptAccount, TranscriptAccount.user_id == user_id),

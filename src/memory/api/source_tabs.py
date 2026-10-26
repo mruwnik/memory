@@ -15,7 +15,7 @@ from memory.common.access_control import (
 from memory.common.db.connection import get_session
 from memory.common.db.counts import count_rows
 from memory.common.db.models import BookSection, User
-from memory.common.db.models.discord import DiscordBot, discord_bot_users
+from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.secrets import Secret
 from memory.common.db.models.slack import SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import Photo
@@ -115,7 +115,7 @@ def source_tabs(
             SlackUserCredentials.user_id == uid
         )
         slack_filter = [SlackWorkspace.id.in_(connected)]
-        discord_bots = count_rows(db, discord_bot_users, discord_bot_users.c.user_id == uid)
+        discord_bots = count_rows(db, DiscordBot, DiscordBot.created_by_user_id == uid)
 
     google = with_failures(db, GoogleAccount, *owned(GoogleAccount.user_id))
     folders = with_failures(db, GoogleFolder, *of_accounts(GoogleFolder, GoogleAccount))

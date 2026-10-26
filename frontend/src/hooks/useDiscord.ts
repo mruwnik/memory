@@ -70,10 +70,6 @@ export interface DiscordChannelUpdate {
 }
 
 // Types for Bot Users
-export interface BotUser {
-  id: number
-  name: string
-}
 
 // MCP list_channels response type
 interface MCPChannelResponse {
@@ -141,31 +137,6 @@ export const useDiscord = () => {
   const getBotInviteUrl = useCallback(async (botId: string): Promise<{ invite_url: string }> => {
     const response = await apiCall(`/discord/bots/${botId}/invite`)
     if (!response.ok) throw await apiError(response, 'Failed to get bot invite URL')
-    return response.json()
-  }, [apiCall])
-
-  // === Bot User Operations ===
-
-  const listBotUsers = useCallback(async (botId: string): Promise<BotUser[]> => {
-    const response = await apiCall(`/discord/bots/${botId}/users`)
-    if (!response.ok) throw await apiError(response, 'Failed to fetch bot users')
-    return response.json()
-  }, [apiCall])
-
-  const addBotUser = useCallback(async (botId: string, userId: number): Promise<{ status: string; user_id: number }> => {
-    const response = await apiCall(`/discord/bots/${botId}/users`, {
-      method: 'POST',
-      body: JSON.stringify({ user_id: userId }),
-    })
-    if (!response.ok) throw await apiError(response, 'Failed to add user to bot')
-    return response.json()
-  }, [apiCall])
-
-  const removeBotUser = useCallback(async (botId: string, userId: number): Promise<{ status: string; user_id: number }> => {
-    const response = await apiCall(`/discord/bots/${botId}/users/${userId}`, {
-      method: 'DELETE',
-    })
-    if (!response.ok) throw await apiError(response, 'Failed to remove user from bot')
     return response.json()
   }, [apiCall])
 
@@ -238,9 +209,6 @@ export const useDiscord = () => {
     refreshBotMetadata,
     getBotInviteUrl,
     // Bot Users
-    listBotUsers,
-    addBotUser,
-    removeBotUser,
     // Servers
     listServers,
     updateServer,

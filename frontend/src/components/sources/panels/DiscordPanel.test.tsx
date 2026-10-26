@@ -392,72 +392,9 @@ describe('DiscordPanel channels', () => {
   })
 })
 
-describe('DiscordPanel manage users', () => {
-  it('lists authorized and available users and adds an available one', async () => {
-    const mock = mockFetchRoutes({
-      // bot-users route precedes /discord/bots; /users override comes last to win
-      '/discord/bots/bot-1/users': { json: [{ id: 1, name: 'Owner' }] },
-      ...routes({ bots: [bot] }),
-      '/users': { json: [{ id: 1, name: 'Owner', email: 'o@e.com' }, { id: 2, name: 'Guest', email: 'g@e.com' }] },
-    })
-    const { user } = renderWithUser(<DiscordPanel />)
-    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage users' }))
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText('Owner')).toBeInTheDocument()
-    expect(within(dialog).getByText('Guest')).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: 'Add' }))
-    await waitFor(() => {
-      const post = mock.mock.calls.find(
-        ([url, init]) => String(url).includes('/discord/bots/bot-1/users') && (init as RequestInit)?.method === 'POST',
-      )
-      expect(post).toBeTruthy()
-    })
-  })
-
-  it('removes an authorized user with a DELETE when more than one exists', async () => {
-    const mock = mockFetchRoutes({
-      '/discord/bots/bot-1/users/2': { json: { status: 'removed', user_id: 2 } },
-      '/discord/bots/bot-1/users': { json: [{ id: 1, name: 'Owner' }, { id: 2, name: 'Second' }] },
-      ...routes({ bots: [bot] }),
-      '/users': { json: [{ id: 1, name: 'Owner', email: 'o@e.com' }, { id: 2, name: 'Second', email: 's@e.com' }] },
-    })
-    const { user } = renderWithUser(<DiscordPanel />)
-    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage users' }))
-    const dialog = await screen.findByRole('dialog')
-    const removeBtns = within(dialog).getAllByRole('button', { name: 'Remove' })
-    await user.click(removeBtns[removeBtns.length - 1])
-    await waitFor(() => {
-      const del = mock.mock.calls.find(
-        ([url, init]) => String(url).includes('/discord/bots/bot-1/users/2') && (init as RequestInit)?.method === 'DELETE',
-      )
-      expect(del).toBeTruthy()
-    })
-  })
-
-  it('reports a failed user load instead of opening an empty list', async () => {
-    mockFetchRoutes({
-      '/discord/bots/bot-1/users': { status: 500, json: { detail: 'bot users down' } },
-      ...routes({ bots: [bot] }),
-    })
-    const { user } = renderWithUser(<DiscordPanel />)
-    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage users' }))
-    expect(await screen.findByText(/bot users down/)).toBeInTheDocument()
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  })
-
-  it('disables removal of the last authorized user', async () => {
-    mockFetchRoutes({
-      '/discord/bots/bot-1/users': { json: [{ id: 1, name: 'Owner' }] },
-      ...routes({ bots: [bot] }),
-      '/users': { json: [{ id: 1, name: 'Owner', email: 'o@e.com' }] },
-    })
-    const { user } = renderWithUser(<DiscordPanel />)
-    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Manage users' }))
-    const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByRole('button', { name: 'Remove' })).toBeDisabled()
-  })
+it('does not offer bot user sharing', async () => {
+  mockFetchRoutes(routes({ bots: [bot] }))
+  renderWithUser(<DiscordPanel />)
+  await screen.findByText('KB Bot')
+  expect(screen.queryByRole('button', { name: 'Manage users' })).not.toBeInTheDocument()
 })

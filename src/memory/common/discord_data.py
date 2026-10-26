@@ -19,7 +19,6 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
     User,
-    discord_bot_users,
 )
 
 
@@ -62,10 +61,9 @@ def caller_can_see_discord_user(
     seen = (
         db.query(DiscordMessage.id)
         .join(DiscordBot, DiscordMessage.bot_id == DiscordBot.id)
-        .join(discord_bot_users, discord_bot_users.c.bot_id == DiscordBot.id)
         .filter(
             DiscordMessage.author_id == discord_user_id,
-            discord_bot_users.c.user_id == caller.id,
+            DiscordBot.created_by_user_id == caller.id,
         )
         .first()
     )
@@ -94,8 +92,7 @@ def get_user_bots(session: DBSession, user_id: int) -> list[DiscordBot]:
     """Get all Discord bots authorized for a user."""
     return (
         session.query(DiscordBot)
-        .join(discord_bot_users)
-        .filter(discord_bot_users.c.user_id == user_id)
+        .filter(DiscordBot.created_by_user_id == user_id)
         .all()
     )
 
