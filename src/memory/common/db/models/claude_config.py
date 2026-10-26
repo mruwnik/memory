@@ -19,7 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.orm import backref, relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
@@ -55,7 +55,7 @@ class ClaudeConfigSnapshot(Base):
 
     # User who owns this snapshot
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    user: Mapped[User] = relationship("User", backref="claude_snapshots", lazy="select")
+    user: Mapped[User] = relationship("User", backref=backref("claude_snapshots", passive_deletes="all"), lazy="select")
 
     # Snapshot metadata
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -131,7 +131,7 @@ class ClaudeEnvironment(Base):
 
     # User who owns this environment
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    user: Mapped[User] = relationship("User", backref="claude_environments", lazy="select")
+    user: Mapped[User] = relationship("User", backref=backref("claude_environments", passive_deletes="all"), lazy="select")
 
     # Environment metadata
     name: Mapped[str] = mapped_column(Text, nullable=False)

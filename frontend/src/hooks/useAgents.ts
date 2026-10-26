@@ -131,6 +131,7 @@ export interface ProviderKey {
   label: string
   key_hint: string
   is_default: boolean
+  is_system_default: boolean
   status: 'ok' | 'invalid'
   status_detail: string | null
   last_used_at: string | null
@@ -145,6 +146,7 @@ export interface KeyUpsert {
   label?: string
   key?: string
   isDefault?: boolean
+  isSystemDefault?: boolean
   // '' removes the cap
   maxCostUsdPerDay?: string
 }
@@ -420,6 +422,7 @@ export const useAgents = () => {
         ...(body.label !== undefined ? { label: body.label } : {}),
         ...(body.key ? { key: body.key } : {}),
         ...(body.isDefault !== undefined ? { is_default: body.isDefault } : {}),
+        ...(body.isSystemDefault !== undefined ? { is_system_default: body.isSystemDefault } : {}),
         ...(body.maxCostUsdPerDay !== undefined ? { max_cost_usd_per_day: body.maxCostUsdPerDay } : {}),
       }),
     [call],

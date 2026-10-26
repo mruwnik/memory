@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from memory.agents.provider_keys import chosen_key, payer_id, personal_key, usable
+from memory.agents.provider_keys import chosen_key, payer_id, system_key, usable
 from memory.agents.system import SOURCE_PROVIDERS, SUMMARISE
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import DBSession
@@ -83,7 +83,7 @@ def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyVie
         pays = usable(key) if key.provider in SOURCE_PROVIDERS else None
     else:
         payer = payer_id(holder)
-        pays = personal_key(db, payer, SUMMARISE) if payer is not None else None
+        pays = system_key(db, payer, SUMMARISE)
     mine = pays is not None and pays.user_id == viewer.id
     # Which provider another user's key is on is theirs to keep, like its name.
     shown = next((k for k in (pays, key) if k is not None and k.user_id == viewer.id), None)

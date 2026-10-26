@@ -330,30 +330,9 @@ describe('SettingsPage restart banner', () => {
   })
 })
 
-describe('SettingsPage notes sync interval', () => {
-  const interval = (overrides: Partial<SettingRow> = {}) =>
-    row({ key: 'notes_sync_interval', kind: 'int', description: 'Seconds between notes syncs', env_var: 'NOTES_SYNC_INTERVAL', value: 900, ...overrides })
-
-  it('saves the interval in seconds from minutes', async () => {
-    const calls = install(state([interval()]), {}, state([interval({ source: 'ui', set: true, value: 1800 })]))
-    const { user } = renderWithRouter(<SettingsPage />)
-
-    const minutes = await screen.findByLabelText('Minutes between syncs')
-    expect(minutes).toHaveValue(15)
-    await user.clear(minutes)
-    await user.type(minutes, '30')
-    await user.click(screen.getByRole('button', { name: 'Save interval' }))
-
-    await waitFor(() => expect(calls.find(c => c.method === 'PATCH')?.body).toEqual({ values: { notes_sync_interval: 1800 } }))
-    expect(await screen.findByText('set here')).toBeInTheDocument()
-  })
-
-  it('shows an env-set interval locked', async () => {
-    install(state([interval({ source: 'env', locked: true, set: true, value: 600 })]))
-    renderWithRouter(<SettingsPage />)
-
-    expect(await screen.findByText(/Every 10 minutes/)).toBeInTheDocument()
-    expect(screen.getByText(/Set by the operator in the environment \(NOTES_SYNC_INTERVAL\)/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('Minutes between syncs')).toBeNull()
-  })
+it('keeps notes sync out of server settings', async () => {
+  install(state([row({ key: 'notes_sync_interval', kind: 'int', value: 900 })]))
+  renderWithRouter(<SettingsPage />)
+  await screen.findByRole('region', { name: 'MCP servers' })
+  expect(screen.queryByRole('region', { name: 'Notes sync' })).toBeNull()
 })

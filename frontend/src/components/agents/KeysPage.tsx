@@ -3,6 +3,7 @@ import {
   DEFAULT_KEY_DAILY_CAP_USD, KEY_PROVIDERS, PROVIDER_NAMES, useAgents,
   type KeyDeleteResult, type KeyProvider, type KeyUpsert, type ProviderKey, type SystemAgentEntry,
 } from '@/hooks/useAgents'
+import { useAuth } from '@/hooks/useAuth'
 import { SystemAgents } from './SystemAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { formatCost } from '@/utils/format'
@@ -92,7 +93,8 @@ function EditKeyForm({ entry, edit, onSave, onDone }: { entry: ProviderKey; edit
   )
 }
 
-function KeyRow({ entry, onSave, onDelete }: {
+function KeyRow({ entry, onSave, onDelete, isAdmin }: {
+  isAdmin: boolean
   entry: ProviderKey
   onSave: Save
   onDelete: () => void
@@ -119,6 +121,7 @@ function KeyRow({ entry, onSave, onDelete }: {
       badges={<>
         <span className="font-mono text-xs text-slate-600">••••{entry.key_hint}</span>
         {entry.is_default && <Badge tone="primary">Default</Badge>}
+        {entry.is_system_default && <Badge tone="info">System default</Badge>}
         {entry.status === 'ok' ? <Badge tone="success">OK</Badge> : <Badge tone="danger">Rejected</Badge>}
       </>}
       meta={[`#${entry.id}`, entry.last_used_at ? `Used ${formatRelativeTime(entry.last_used_at)}` : 'Never used', cap]}
@@ -130,6 +133,12 @@ function KeyRow({ entry, onSave, onDelete }: {
           <Button size="sm" disabled={makeDefault.busy}
             onClick={() => makeDefault.submit(() => onSave({ keyId: entry.id, isDefault: true }))}>
             {makeDefault.busy ? 'Saving...' : 'Make default'}
+          </Button>
+        )}
+        {isAdmin && (
+          <Button size="sm" disabled={makeDefault.busy}
+            onClick={() => makeDefault.submit(() => onSave({ keyId: entry.id, isSystemDefault: !entry.is_system_default }))}>
+            {entry.is_system_default ? 'Clear system default' : 'Use as system default'}
           </Button>
         )}
         <ConfirmButton onConfirm={onDelete}
@@ -158,6 +167,7 @@ const deleteOutcome = (entry: ProviderKey, result: KeyDeleteResult, keys: Keys) 
 }
 
 export default function KeysPage() {
+  const { hasScope } = useAuth()
   const { listKeys, upsertKey, deleteKey, listSystemAgents } = useAgents()
   const [keys, setKeys] = useState<Keys | null>(null)
   const [adding, setAdding] = useState<KeyProvider | null>(null)
@@ -195,7 +205,7 @@ export default function KeysPage() {
   return (
     <Page
       title="LLM keys"
-      description="Your default Anthropic key, else your default OpenAI key, pays for summaries and other LLM work on items you own, and for the LLM steps of your searches. Each provider's keys pay for agents on its models. Nothing LLM-backed runs without one. Tools refer to keys by name or id."
+      description="Your default Anthropic key, else your default OpenAI key, pays for summaries and other LLM work on items you own, and for the LLM steps of your searches. Each provider's keys pay for agents on its models. System agents fall back to shared system defaults when you have no usable default. Shared usage counts toward that key’s daily cap. Tools refer to keys by name or id."
       actions={<Button variant="primary" onClick={() => setAdding('anthropic')}>Add key</Button>}
       loading={keys === null && 'Loading keys...'}
       error={loadError}
@@ -219,7 +229,7 @@ export default function KeysPage() {
             : (
               <List>
                 {keys[provider].map(entry => (
-                  <KeyRow key={entry.id} entry={entry} onSave={save} onDelete={() => confirmDelete(entry)} />
+                  <KeyRow key={entry.id} isAdmin={hasScope('admin')} entry={entry} onSave={save} onDelete={() => confirmDelete(entry)} />
                 ))}
               </List>
             )}
@@ -227,7 +237,7 @@ export default function KeysPage() {
       ))}
       {keys && (
         <SystemAgents agents={systemAgents} error={systemError} onRetry={load}
-          description="What memory runs for you, and the model your default keys run each on." />
+          description="What memory runs for you, using your personal defaults or shared system defaults." />
       )}
     </Page>
   )

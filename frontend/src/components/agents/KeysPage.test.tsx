@@ -3,6 +3,9 @@ import { renderWithRouter, screen, within } from '@/test/utils'
 import { KeysPage } from './index'
 import type { ProviderKey } from '@/hooks/useAgents'
 
+const hasScope = vi.fn()
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ hasScope }) }))
+
 const listKeys = vi.fn()
 const upsertKey = vi.fn()
 const deleteKey = vi.fn()
@@ -14,13 +17,14 @@ vi.mock('@/hooks/useAgents', async (orig) => ({
 }))
 
 const providerKey = (overrides: Partial<ProviderKey> = {}): ProviderKey => ({
-  id: 1, provider: 'anthropic', label: 'personal', key_hint: 'ab12', is_default: true, status: 'ok', status_detail: null,
+  id: 1, provider: 'anthropic', label: 'personal', key_hint: 'ab12', is_default: true, is_system_default: false, status: 'ok', status_detail: null,
   last_used_at: null, max_cost_usd_per_day: null, created_at: null, updated_at: null, ...overrides,
 })
 
 const listed = (anthropic: ProviderKey[]) => ({ providers: { anthropic, openai: [] } })
 
 beforeEach(() => {
+  hasScope.mockReturnValue(false)
   listKeys.mockReset()
   upsertKey.mockReset()
   deleteKey.mockReset()
@@ -113,4 +117,21 @@ describe('KeysPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Add OpenAI key' }))
     expect(within(screen.getByRole('dialog')).getByLabelText('Provider')).toHaveDisplayValue('OpenAI')
   })
+})
+
+
+it.each([false, true])('admins can toggle system default from %s', async selected => {
+  hasScope.mockReturnValue(true)
+  listKeys.mockResolvedValue(listed([providerKey({ is_system_default: selected })]))
+  upsertKey.mockResolvedValue({})
+  const { user } = renderWithRouter(<KeysPage />)
+  await user.click(await screen.findByRole('button', { name: selected ? 'Clear system default' : 'Use as system default' }))
+  expect(upsertKey).toHaveBeenCalledWith({ keyId: 1, isSystemDefault: !selected })
+})
+
+it('hides system default controls from non-admins', async () => {
+  listKeys.mockResolvedValue(listed([providerKey()]))
+  renderWithRouter(<KeysPage />)
+  await screen.findByText('personal')
+  expect(screen.queryByRole('button', { name: /system default/i })).not.toBeInTheDocument()
 })

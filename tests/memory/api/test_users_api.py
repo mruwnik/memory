@@ -759,3 +759,78 @@ def test_concurrent_rotations_leave_one_live_key(db_session, db_engine, admin_us
     assert len(ids) == 2
     assert len(live) == 1
     assert live[0].id in ids
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+def test_delete_user_with_owned_sources(client, db_session, regular_user, loaded):
+    from memory.common.db.models import ArticleFeed, EmailAccount, User
+    from memory.common.db.models.watchlist import WatchedMarket
+    from memory.common.db.models.sources import CalendarAccount, GithubAccount, GoogleAccount, TranscriptAccount
+    from memory.common.db.models.claude_config import ClaudeConfigSnapshot, ClaudeEnvironment
+
+    user_id = regular_user.id
+    mail = EmailAccount(user_id=user_id, name="Mail", email_address="delete@example.com")
+    feed = ArticleFeed(user_id=user_id, url="https://example.com/delete-feed")
+    market = WatchedMarket(user_id=user_id, market_id="delete-market", source="manifold")
+    owned = {
+        "email_accounts": mail,
+        "article_feeds": feed,
+        "watched_markets": market,
+        "github_accounts": GithubAccount(user_id=user_id, name="GitHub", auth_type="pat"),
+        "google_accounts": GoogleAccount(user_id=user_id, name="Google", email="delete@gmail.com"),
+        "calendar_accounts": CalendarAccount(user_id=user_id, name="Calendar", calendar_type="caldav"),
+        "transcript_accounts": TranscriptAccount(user_id=user_id, name="Transcripts", provider="generic"),
+        "claude_snapshots": ClaudeConfigSnapshot(user_id=user_id, name="Snapshot", content_hash="test", filename="test.tar", size=0),
+        "claude_environments": ClaudeEnvironment(user_id=user_id, name="Environment", volume_name="test-delete-user"),
+    }
+    person = Person(user_id=user_id, identifier="retained-contact", display_name="Contact to retain")
+    bystander = EmailAccount(user_id=1, name="Other mail", email_address="keep@example.com")
+    db_session.add_all([*owned.values(), person, bystander])
+    db_session.commit()
+    person_id, bystander_id = person.id, bystander.id
+    ids = [(type(item), item.id) for item in owned.values()]
+    if loaded:
+        for name in owned:
+            list(getattr(regular_user, name))
+
+    response = client.delete(f"/users/{user_id}")
+
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+    assert db_session.get(User, user_id) is None
+    for model, item_id in ids:
+        assert db_session.get(model, item_id) is None
+    retained_person = db_session.get(Person, person_id)
+    assert retained_person is not None and retained_person.user_id is None
+    assert db_session.get(EmailAccount, bystander_id) is not None
+
+
+def test_delete_user_with_oauth_refresh_tokens(client, db_session, regular_user):
+    from memory.common.db.models.users import OAuthClientInformation, OAuthRefreshToken, User
+
+    user_id = regular_user.id
+    oauth_client = OAuthClientInformation(
+        client_id="delete-user-client", client_id_issued_at=datetime.now().timestamp(),
+        redirect_uris=["https://example.com/callback"], token_endpoint_auth_method="none",
+        grant_types=["authorization_code", "refresh_token"], response_types=["code"],
+        scope="read", client_name="Deletion test",
+    )
+    session = UserSession(user_id=user_id, expires_at=datetime.now() + timedelta(hours=1))
+    db_session.add_all([oauth_client, session])
+    db_session.flush()
+    token = OAuthRefreshToken(
+        client_id=oauth_client.client_id, user_id=user_id, scopes=["read"],
+        expires_at=datetime.now() + timedelta(days=1), access_token_session_id=session.id,
+    )
+    db_session.add(token)
+    db_session.commit()
+    token_id, session_id = token.id, session.id
+
+    response = client.delete(f"/users/{user_id}")
+
+    assert response.status_code == 200, response.text
+    db_session.expire_all()
+    assert db_session.get(User, user_id) is None
+    assert db_session.get(OAuthRefreshToken, token_id) is None
+    assert db_session.get(UserSession, session_id) is None
+    assert db_session.get(OAuthClientInformation, "delete-user-client") is not None

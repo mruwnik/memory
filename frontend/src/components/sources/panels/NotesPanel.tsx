@@ -1,3 +1,4 @@
+import { NotesSyncSettings } from './NotesSyncSettings'
 import { useSSHKeys, type SSHKey } from '@/hooks/useSSHKeys'
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
@@ -230,6 +231,7 @@ export const NotesPanel = () => {
         <DetailList items={[['Notes', source.count], ['Last git sync', <LastSync source={source} />]]} />
         {sync && !sync.ok && <Notice tone="error" className="mt-3">{sync.hint ?? `The sync failed at ${sync.failed_step}.`}</Notice>}
       </Card>
+      {isAdmin && <NotesSyncSettings />}
       {source.git && <GitForm key={source.git.remote_url ?? ''} git={source.git} onSaved={saved} />}
     </Section>
   )

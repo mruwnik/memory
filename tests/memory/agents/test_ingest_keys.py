@@ -204,3 +204,17 @@ def test_a_rejected_anthropic_default_falls_back_to_the_openai_one(db_session, r
     gpt = key(db_session, regular_user, "gpt", provider="openai", is_default=True)
 
     assert ingest_key(db_session, note_by(db_session, regular_user), SUMMARISE) == gpt
+
+
+@pytest.mark.parametrize("choice", ["default", "explicit", "disabled", "invalid"])
+def test_shared_default_respects_source_choice(db_session, admin_user, regular_user, choice):
+    shared = key(db_session, admin_user, "shared")
+    shared.is_system_default = True
+    explicit = key(db_session, regular_user, "explicit", status="invalid" if choice == "invalid" else "ok")
+    fields = {"llm_disabled": True} if choice == "disabled" else (
+        {"llm_key_id": explicit.id} if choice in ("explicit", "invalid") else {}
+    )
+    post = blog_post(db_session, feed_of(db_session, regular_user, **fields))
+    post.creator_id = regular_user.id
+    expected = shared if choice == "default" else explicit if choice == "explicit" else None
+    assert ingest_key(db_session, post, SUMMARISE) == expected

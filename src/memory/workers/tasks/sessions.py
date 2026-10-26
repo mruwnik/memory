@@ -15,7 +15,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.call import LLMError, Record, run_agent_sync
-from memory.agents.provider_keys import Credential, credential, personal_key
+from memory.agents.provider_keys import Credential, credential, system_key
 from memory.agents.system import SESSION_SUMMARY
 from memory.common import settings
 from memory.common.celery_app import (
@@ -152,7 +152,7 @@ def summarize_session(session_id: str) -> dict:
                 logger.info(f"Session {session_id} summary is already fresh, skipping")
                 return {"status": "skipped", "message": "Summary already fresh"}
 
-        found = personal_key(db, session.user_id, SESSION_SUMMARY)
+        found = system_key(db, session.user_id, SESSION_SUMMARY)
         if found is None:
             return {"status": "skipped", "message": "No key"}
 
@@ -224,7 +224,7 @@ def summarize_stale_sessions() -> dict:
 
             if session.user_id not in keyed:
                 keyed[session.user_id] = (
-                    personal_key(db, session.user_id, SESSION_SUMMARY) is not None
+                    system_key(db, session.user_id, SESSION_SUMMARY) is not None
                 )
             if not keyed[session.user_id]:
                 skipped += 1

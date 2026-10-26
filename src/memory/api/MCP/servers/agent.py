@@ -45,6 +45,7 @@ from memory.agents.provider_keys import (
     choose_key,
     default_key,
     resolve_key_ref,
+    system_key,
     usable,
 )
 from memory.agents.system import SYSTEM_AGENTS, SystemAgent
@@ -346,17 +347,15 @@ PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI"}
 @visible_when(require_scopes(SCOPE_AGENTS, SCOPE_WRITE))
 async def system_list() -> dict:
     """The system agents memory runs for you (summaries, search steps): the model
-    each runs on for you, picked by the first provider you have a default key for,
-    and whether you have one. They are defined by memory and can't be edited."""
+    each runs on using your personal defaults, then shared system defaults,
+    and whether a usable key exists. They are defined by memory and can't be edited."""
     user_id, _ = caller()
     with make_session() as db:
-        has_key = {
-            provider: usable(default_key(db, user_id, provider)) is not None
-            for provider in {p for a in SYSTEM_AGENTS.values() for p in a.providers}
-        }
+        selected = {a.slug: system_key(db, user_id, a) for a in SYSTEM_AGENTS.values()}
+        providers = {slug: key.provider if key else None for slug, key in selected.items()}
 
     def entry(a: SystemAgent) -> dict:
-        provider = next((p for p in a.providers if has_key[p]), None)
+        provider = providers[a.slug]
         return {
             "slug": a.slug,
             "title": a.title,
@@ -1196,6 +1195,7 @@ async def key_upsert(
     label: str | None = None,
     key: str | None = None,
     is_default: bool | None = None,
+    is_system_default: bool | None = None,
     max_cost_usd_per_day: str | None = None,
     key_ref: int | str | None = None,
 ) -> dict:
@@ -1207,12 +1207,16 @@ async def key_upsert(
     provider becomes its default; un-defaulting it makes your most recently used
     other key the default. max_cost_usd_per_day caps daily spend on this key (""
     removes the cap; with no cap here or on the agent, AGENT_DEFAULT_USER_KEY_DAILY_COST_USD
-    applies).
+    applies). Admins may set is_system_default to fund system agents for everyone
+    without a usable personal default, or clear it with false. There is one shared
+    default per provider; clearing or deleting it does not promote another key.
 
     Prefer entering keys in the web UI: a key passed in a tool call stays in the AI
     client's transcript.
     """
-    user_id, _ = caller()
+    user_id, is_admin = caller()
+    if is_system_default is not None and not is_admin:
+        raise ValueError("only admins can set or clear system default keys")
     with make_session() as db:
         existing = resolve_key_ref(db, user_id, key_ref) if key_ref is not None else None
         key_id = existing.id if existing else None
@@ -1246,6 +1250,15 @@ async def key_upsert(
             row.max_cost_usd_per_day = cap
         try:
             db.flush()
+            if is_system_default is not None:
+                if is_system_default:
+                    db.query(LLMProviderKey).filter(
+                        LLMProviderKey.provider == provider,
+                        LLMProviderKey.is_system_default,
+                        LLMProviderKey.id != row.id,
+                    ).update({"is_system_default": False})
+                    db.flush()
+                row.is_system_default = is_system_default
             first = provider_defaults(db, user_id, provider).count() == 0
             if is_default or (is_default is None and first):
                 make_default(db, row)

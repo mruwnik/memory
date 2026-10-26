@@ -150,7 +150,7 @@ class ArticleFeed(SyncStatusMixin, LLMKeyChoice, Base):
         "Project", foreign_keys=[project_id]
     )
     user: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[user_id], backref="article_feeds"
+        "User", foreign_keys=[user_id], backref=backref("article_feeds", passive_deletes="all")
     )
 
     # Add indexes
@@ -252,7 +252,7 @@ class EmailAccount(SyncStatusMixin, LLMKeyChoice, Base):
     )
 
     user: Mapped[User] = relationship(
-        "User", foreign_keys=[user_id], backref="email_accounts"
+        "User", foreign_keys=[user_id], backref=backref("email_accounts", passive_deletes="all")
     )
     google_account: Mapped[GoogleAccount | None] = relationship(
         "GoogleAccount", foreign_keys=[google_account_id]
@@ -378,7 +378,7 @@ class GithubAccount(LLMKeyChoice, Base):
 
     # Relationships
     user: Mapped[User] = relationship(
-        "User", foreign_keys=[user_id], backref="github_accounts"
+        "User", foreign_keys=[user_id], backref=backref("github_accounts", passive_deletes="all")
     )
     repos: Mapped[list[GithubRepo]] = relationship(
         "GithubRepo", back_populates="account", cascade="all, delete-orphan"
@@ -886,7 +886,7 @@ class GoogleAccount(SyncStatusMixin, Base):
 
     # Relationships
     user: Mapped[User] = relationship(
-        "User", foreign_keys=[user_id], backref="google_accounts"
+        "User", foreign_keys=[user_id], backref=backref("google_accounts", passive_deletes="all")
     )
     folders: Mapped[list[GoogleFolder]] = relationship(
         "GoogleFolder", back_populates="account", cascade="all, delete-orphan"
@@ -1097,7 +1097,7 @@ class CalendarAccount(SyncStatusMixin, LLMKeyChoice, Base):
 
     # Relationships
     user: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[user_id], backref="calendar_accounts"
+        "User", foreign_keys=[user_id], backref=backref("calendar_accounts", passive_deletes="all")
     )
     google_account: Mapped[GoogleAccount | None] = relationship(
         "GoogleAccount", foreign_keys=[google_account_id]
@@ -1204,7 +1204,7 @@ class TranscriptAccount(SyncStatusMixin, LLMKeyChoice, Base):
     )
 
     user: Mapped[User] = relationship(
-        "User", foreign_keys=[user_id], backref="transcript_accounts"
+        "User", foreign_keys=[user_id], backref=backref("transcript_accounts", passive_deletes="all")
     )
     project: Mapped["Project | None"] = relationship(
         "Project", foreign_keys=[project_id]

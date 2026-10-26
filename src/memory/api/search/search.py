@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.orm.exc import DetachedInstanceError
 
-from memory.agents.provider_keys import Credential, credential, personal_key
+from memory.agents.provider_keys import Credential, credential, system_key
 from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
 from memory.common import embedding, extract, settings
 from memory.common.instance_settings import (
@@ -57,12 +57,12 @@ SEARCH_AGENTS = (HYDE, QUERY_ANALYSIS, CHUNK_SCORE)
 
 
 def searcher_keys(searcher_id: int | None) -> dict[str, Credential | None]:
-    """Each search agent's key: the searcher's first usable default among its providers."""
+    """Each search agent's key: personal defaults first, then shared system defaults."""
     if searcher_id is None:
         return {a.slug: None for a in SEARCH_AGENTS}
     agent_for = {a.providers: a for a in SEARCH_AGENTS}
     with make_session() as db:
-        found = {p: personal_key(db, searcher_id, a) for p, a in agent_for.items()}
+        found = {p: system_key(db, searcher_id, a) for p, a in agent_for.items()}
         creds = {p: credential(k) if k is not None else None for p, k in found.items()}
     return {a.slug: creds[a.providers] for a in SEARCH_AGENTS}
 

@@ -24,11 +24,20 @@ None.
 
 ### Other changes for operators
 
+User deletion now cleans up owned source accounts and OAuth refresh tokens without
+failing on database ownership constraints. No migration is required.
+
+The notes sync interval is now configured under Sources → Notes instead of Server
+settings. Existing values and environment overrides are preserved.
+
 Discord bot user sharing is removed from Sources and the API. Bots belong to
 their recorded registrant; additional shared users no longer have bot access.
 Discord member identities, messages, and Person attribution are preserved.
 
 ### Migrations
+
+`20261111_system_default_keys` adds an opt-in shared-default flag and unique
+index per provider to LLM keys. Existing keys remain personal-only.
 
 `20261110_drop_discord_bot_users` removes the sharing table. Bots without a
 registrant retain the lowest-ID remaining shared user as their owner. Bots with
@@ -109,6 +118,10 @@ Existing vaults with independent local and remote histories still require manual
 reconciliation; the update does not rewrite either history.
 
 ### Other changes for operators
+
+Admins can set and clear shared LLM defaults on the keys page. System agents
+fall back to these keys when no usable personal default exists. Usage shares
+the selected key’s daily cap; custom agent runs still require personal keys.
 
 Discord channel lists send the supported server filter, fixing the unexpected
 server_id argument error when expanding a server in Sources.

@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import backref, Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
 
@@ -60,7 +60,7 @@ class WatchedMarket(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    user: Mapped[User] = relationship("User", backref="watched_markets")
+    user: Mapped[User] = relationship("User", backref=backref("watched_markets", passive_deletes="all"))
 
     __table_args__ = (
         UniqueConstraint("user_id", "market_id", "source", name="uq_watched_market"),

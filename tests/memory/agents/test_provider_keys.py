@@ -409,3 +409,78 @@ async def test_key_tools_need_write_scope(tool, scopes, allowed):
     for checker in (get_visibility_checker(tool), get_call_checker(tool)):
         assert checker is not None
         assert await checker(user_info, None) is allowed
+
+
+@pytest.mark.asyncio
+async def test_admin_can_select_replace_and_clear_system_default(
+    db_session, admin_user, admin_session, regular_user, user_session
+):
+    from memory.agents.system import SUMMARISE
+
+    first = add_key(db_session, admin_user, "shared")
+    second = add_key(db_session, admin_user, "replacement")
+    with mcp_auth_context(admin_session.id):
+        saved = await agent.key_upsert.fn(key_ref=first.id, is_system_default=True)
+        assert saved["is_system_default"] is True
+    db_session.expire_all()
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == first.id
+    with mcp_auth_context(user_session.id):
+        listed = await agent.key_list.fn()
+        assert listed["providers"]["anthropic"] == []
+        system_agents = await agent.system_list.fn()
+        assert all(a["has_key"] for a in system_agents["agents"])
+    # Sharing funds system agents only, not arbitrary user agents.
+    with pytest.raises(KeyUnavailable):
+        choose_key(db_session, regular_user.id, MODEL, None)
+    with mcp_auth_context(admin_session.id):
+        await agent.key_upsert.fn(key_ref=second.id, is_system_default=True)
+    db_session.expire_all()
+    assert not first.is_system_default
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == second.id
+    with mcp_auth_context(admin_session.id):
+        await agent.key_upsert.fn(key_ref=second.id, is_system_default=False)
+    db_session.expire_all()
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [True, False])
+async def test_regular_user_cannot_change_system_default(
+    db_session, regular_user, user_session, selected
+):
+    row = add_key(db_session, regular_user)
+    with mcp_auth_context(user_session.id):
+        with pytest.raises(ValueError, match="only admins"):
+            await agent.key_upsert.fn(key_ref=row.id, is_system_default=selected)
+    db_session.expire_all()
+    assert not row.is_system_default
+
+
+@pytest.mark.asyncio
+async def test_deleting_system_default_does_not_promote_shared_successor(
+    db_session, admin_user, admin_session, regular_user
+):
+    from memory.agents.system import SUMMARISE
+
+    shared = add_key(db_session, admin_user, "shared", is_system_default=True)
+    add_key(db_session, admin_user, "other")
+    with mcp_auth_context(admin_session.id):
+        await agent.key_delete.fn(key_ref=shared.id)
+    db_session.expire_all()
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE) is None
+
+
+def test_personal_provider_precedes_shared_and_rejected_shared_keys_are_skipped(
+    db_session, admin_user, regular_user
+):
+    from memory.agents.system import SUMMARISE
+
+    shared = add_key(db_session, admin_user, is_system_default=True)
+    personal = add_key(db_session, regular_user, provider="openai", is_default=True)
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == personal.id
+    personal.status = "invalid"
+    db_session.flush()
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == shared.id
+    shared.status = "invalid"
+    db_session.flush()
+    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE) is None

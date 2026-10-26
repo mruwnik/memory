@@ -119,6 +119,27 @@ def personal_key(db: DBSession, user_id: int, agent: SystemAgent) -> LLMProvider
     return next((k for k in defaults if k is not None), None)
 
 
+def system_key(
+    db: DBSession, user_id: int | None, agent: SystemAgent
+) -> LLMProviderKey | None:
+    """Personal defaults first, then the shared defaults for system agents only."""
+    personal = personal_key(db, user_id, agent) if user_id is not None else None
+    if personal is not None:
+        return personal
+    for provider in agent.providers:
+        key = usable(
+            db.query(LLMProviderKey)
+            .filter(
+                LLMProviderKey.provider == provider,
+                LLMProviderKey.is_system_default,
+            )
+            .one_or_none()
+        )
+        if key is not None:
+            return key
+    return None
+
+
 def payer_id(holder: LLMKeyChoice) -> int | None:
     """Whose default key pays for a source left on default: its owner, else whoever
     registered its app or bot."""
@@ -138,7 +159,8 @@ def ingest_key(db: DBSession, item: SourceItem, agent: SystemAgent) -> LLMProvid
 
     The governing source's "no LLM" choice, or its explicit key, wins. Otherwise the
     default key of whoever brought the item in: its creator, or for Slack and Discord
-    items (which have none) whoever registered the app or bot.
+    items (which have none) whoever registered the app or bot. Shared system defaults
+    pay when no usable personal default exists.
     """
     holder = item.llm_key_holder
     if holder is not None and holder.llm_disabled:
@@ -148,7 +170,7 @@ def ingest_key(db: DBSession, item: SourceItem, agent: SystemAgent) -> LLMProvid
         return usable(key) if key.provider in agent.providers else None
     registrant = (holder and holder.llm_registrant_id) or item.llm_registrant_id
     owner = item.resolve_creator_id() or registrant
-    return personal_key(db, owner, agent) if owner is not None else None
+    return system_key(db, owner, agent)
 
 
 def choose_key(

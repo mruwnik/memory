@@ -84,6 +84,9 @@ class LLMProviderKey(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    is_system_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     status: Mapped[str] = mapped_column(
         Text, nullable=False, default=KeyStatus.OK.value, server_default=KeyStatus.OK.value
     )
@@ -101,6 +104,12 @@ class LLMProviderKey(Base):
     )
 
     __table_args__ = (
+        Index(
+            "llm_provider_keys_one_system_default",
+            "provider",
+            unique=True,
+            postgresql_where=text("is_system_default"),
+        ),
         UniqueConstraint("user_id", "label", name="llm_provider_keys_user_label"),
         CheckConstraint(
             "provider IN ('anthropic', 'openai')", name="llm_provider_keys_provider"
@@ -133,6 +142,7 @@ class LLMProviderKey(Base):
             "label": self.label,
             "key_hint": self.key_hint,
             "is_default": self.is_default,
+            "is_system_default": self.is_system_default,
             "status": self.status,
             "status_detail": self.status_detail,
             "last_used_at": iso(self.last_used_at),

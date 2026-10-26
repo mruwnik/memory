@@ -5,7 +5,6 @@ import { Badge, Button, Card, ConfirmButton, Field, FormActions, Input, List, No
 const RESTART_COMMAND = 'tools/ops/restart.sh api'
 export const VOYAGE_SETTING_KEY = 'voyage_api_key'
 const MCP_SETTING_KEY = 'disabled_mcp_servers'
-const NOTES_INTERVAL_KEY = 'notes_sync_interval'
 const SEARCH_CEILING_KEYS = ['enable_bm25_search', 'enable_search_scoring', 'enable_hyde_expansion', 'enable_query_analysis', 'enable_reranking']
 export const MODULES_DESCRIPTION = 'Applies once the api restarts. A module that is off hides its pages, MCP tools and scopes; its data stays.'
 
@@ -184,40 +183,6 @@ export const ModuleToggles = ({ rows, busy, save }: { rows: SettingRow[]; busy: 
   </List>
 )
 
-const minutesText = (seconds: number) => `Every ${seconds / 60} minute${seconds === 60 ? '' : 's'}`
-
-const NotesInterval = ({ row, busy, save }: RowProps) => {
-  const seconds = typeof row.value === 'number' ? row.value : 0
-  const [minutes, setMinutes] = useState<number | ''>(seconds / 60)
-
-  if (row.locked) {
-    return (
-      <List flush>
-        <Row title={minutesText(seconds)} badges={<SourceBadge row={row} />} meta={[lockedNote(row)]} />
-      </List>
-    )
-  }
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (minutes !== '') save({ [row.key]: Math.round(minutes * 60) }, 'Notes sync interval saved.')
-  }
-
-  return (
-    <form onSubmit={submit} className="space-y-3">
-      {row.error && <Notice tone="warning">{row.error}</Notice>}
-      <div className="flex flex-wrap items-center gap-2"><SourceBadge row={row} /><span className="text-sm text-slate-600">{minutesText(seconds)}</span></div>
-      <Field label="Minutes between syncs" hint="How often the notes vault pulls from and pushes to its git remote: 1 minute to 1 day.">
-        <Input type="number" min={1} max={1440} step={1} className="w-32" value={minutes} onChange={e => setMinutes(e.target.value === '' ? '' : Number(e.target.value))} required />
-      </Field>
-      <FormActions>
-        {row.source === 'ui' && <Button disabled={busy} onClick={() => save({ [row.key]: null }, 'Notes sync interval reset to the default.')}>Reset</Button>}
-        <Button type="submit" variant="primary" disabled={busy || minutes === '' || minutes * 60 === seconds}>{busy ? 'Saving...' : 'Save interval'}</Button>
-      </FormActions>
-    </form>
-  )
-}
-
 const McpServers = ({ row, busy, save }: RowProps) => {
   const disabled = new Set(Array.isArray(row.value) ? row.value : [])
   const toggle = (server: string) => {
@@ -262,7 +227,6 @@ const SettingsPage = ({ onRestarted }: Props) => {
   const voyage = rows.find(s => s.kind === 'secret' && s.key === VOYAGE_SETTING_KEY)
   const mcp = rows.find(s => s.key === MCP_SETTING_KEY)
   const ceilings = rows.filter(s => SEARCH_CEILING_KEYS.includes(s.key))
-  const notesInterval = rows.find(s => s.key === NOTES_INTERVAL_KEY)
   const modules = moduleRows(state)
 
   return (
@@ -291,11 +255,6 @@ const SettingsPage = ({ onRestarted }: Props) => {
       {ceilings.length > 0 && (
         <Card region title="Search" description="Ceilings: a feature turned off here is off for every search, whatever the request asks." flush>
           <List flush>{ceilings.map(row => <Toggle key={row.key} row={row} busy={busy} save={save} />)}</List>
-        </Card>
-      )}
-      {notesInterval && (
-        <Card region title="Notes sync" description="Applies within a minute, without a restart.">
-          <NotesInterval key={String(notesInterval.value)} row={notesInterval} busy={busy} save={save} />
         </Card>
       )}
     </Page>

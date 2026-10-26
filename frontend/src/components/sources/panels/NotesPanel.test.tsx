@@ -3,6 +3,8 @@ import { renderWithUser, screen } from '@/test/utils'
 import { ApiError } from '@/hooks/apiError'
 import type { NotesGitSetup, NotesSource } from '@/hooks/useNotesSource'
 
+vi.mock('./NotesSyncSettings', () => ({ NotesSyncSettings: () => <div data-testid="notes-sync-settings" /> }))
+
 const getNotesSource = vi.fn()
 const setUpNotesGit = vi.fn()
 const clearNotesGitToken = vi.fn()
@@ -54,6 +56,7 @@ describe('NotesPanel', () => {
     expect(await screen.findByText('3')).toBeInTheDocument()
     expect(screen.getByText('failed')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('Pushing to the remote failed.')
+    expect(screen.queryByTestId('notes-sync-settings')).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Git sync' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument()
   })
@@ -64,6 +67,7 @@ describe('NotesPanel', () => {
     const { user } = renderWithUser(<NotesPanel />)
 
     await user.type(await screen.findByLabelText('Remote URL'), 'https://git.example.com/me/notes.git')
+    expect(screen.getByTestId('notes-sync-settings')).toBeInTheDocument()
     await user.type(screen.getByLabelText('Commit author name'), 'Me')
     await user.type(screen.getByLabelText('Commit author email'), 'me@example.com')
     await user.type(screen.getByLabelText('Access token'), 'ghp_secret1234')

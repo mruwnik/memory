@@ -17,7 +17,7 @@ const server = (overrides: Partial<ExternalServer> = {}): ExternalServer => ({
 })
 
 const providerKey = (overrides: Partial<ProviderKey> = {}): ProviderKey => ({
-  id: 3, provider: 'anthropic', label: 'personal', key_hint: 'ab12', is_default: true, status: 'ok', status_detail: null,
+  id: 3, provider: 'anthropic', label: 'personal', key_hint: 'ab12', is_default: true, is_system_default: false, status: 'ok', status_detail: null,
   last_used_at: null, max_cost_usd_per_day: null, created_at: null, updated_at: null, ...overrides,
 })
 

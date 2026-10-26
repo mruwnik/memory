@@ -109,6 +109,9 @@ class User(Base):
     oauth_states: Mapped[list[OAuthState]] = relationship(
         "OAuthState", back_populates="user", cascade="all, delete-orphan"
     )
+    oauth_refresh_tokens: Mapped[list[OAuthRefreshToken]] = relationship(
+        "OAuthRefreshToken", back_populates="user", cascade="all, delete-orphan"
+    )
     secrets: Mapped[list[Secret]] = relationship(
         "Secret", back_populates="user", cascade="all, delete-orphan"
     )
@@ -468,7 +471,7 @@ class OAuthRefreshToken(Base, OAuthToken):
 
     # Relationships
     client: Mapped[OAuthClientInformation] = relationship("OAuthClientInformation")
-    user: Mapped[User | None] = relationship("User")
+    user: Mapped[User | None] = relationship("User", back_populates="oauth_refresh_tokens")
     access_token_session: Mapped[UserSession | None] = relationship("UserSession")
 
     def serialize(self) -> dict[str, Any]:
