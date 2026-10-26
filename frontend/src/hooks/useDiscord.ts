@@ -192,8 +192,8 @@ export const useDiscord = () => {
   const listChannels = useCallback(async (serverId?: string, serverName?: string): Promise<DiscordChannel[]> => {
     // Use MCP tool for listing channels
     const params: Record<string, unknown> = {}
-    if (serverId) params.server_id = serverId
-    if (serverName) params.server_name = serverName
+    const server = serverId || serverName
+    if (server) params.server = server
 
     const result = await mcpCall('discord_list_channels', params)
 

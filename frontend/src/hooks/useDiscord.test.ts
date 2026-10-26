@@ -249,12 +249,16 @@ describe('useDiscord channels (MCP-backed list)', () => {
     expect(channel.id).toBe('c1')
   })
 
-  it('listChannels passes server_id and server_name as MCP arguments', async () => {
+  it.each([
+    ['1242557317032054801', 'My Server', { server: '1242557317032054801' }],
+    [undefined, 'My Server', { server: 'My Server' }],
+    [undefined, undefined, {}],
+  ])('listChannels uses the MCP server filter (%s, %s)', async (serverId, serverName, expected) => {
     const fetchMock = mockFetch(async () => mcpResponse({ channels: [] }))
-    await setup().listChannels('999', 'My Server')
+    await setup().listChannels(serverId, serverName)
     const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === 'discord_list_channels')
     const body = JSON.parse(call?.[1]?.body as string)
-    expect(body.params.arguments).toEqual({ server_id: '999', server_name: 'My Server' })
+    expect(body.params.arguments).toEqual(expected)
   })
 
   it('listChannels returns [] when the MCP payload lacks a channels key', async () => {

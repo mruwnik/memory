@@ -25,6 +25,9 @@ reconciliation; the update does not rewrite either history.
 
 ### Other changes for operators
 
+Discord channel lists send the supported server filter, fixing the unexpected
+server_id argument error when expanding a server in Sources.
+
 Google account setup includes expandable step-by-step instructions for project
 configuration, API enablement, OAuth consent, and downloading the credentials JSON.
 
