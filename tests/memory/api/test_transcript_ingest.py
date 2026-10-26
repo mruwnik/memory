@@ -66,9 +66,9 @@ def post(client, account_id, body: bytes, headers: dict):
 def sent():
     calls: list[dict] = []
     with patch.object(celery_app, "send_task") as send:
-        send.side_effect = lambda name, args=None, kwargs=None: (
-            calls.append({"name": name, "args": args, "kwargs": kwargs})
-            or MagicMock(id=f"task-{len(calls)}")
+        send.side_effect = lambda name, args=None, kwargs=None, task_id=None: (
+            calls.append({"name": name, "args": args, "kwargs": kwargs, "task_id": task_id})
+            or MagicMock(id=task_id or f"task-{len(calls)}")
         )
         yield calls
 
@@ -103,6 +103,7 @@ def test_generic_body_queues_process_meeting(client, user, db_session, sent, hea
     assert kwargs["tags"] == ["team"]
     job = db_session.get(PendingJob, response.json()["job_id"])
     assert job.user_id == user.id
+    assert job.celery_task_id == sent[0]["task_id"]
     db_session.refresh(account)
     assert account.last_sync_at is not None
 
@@ -148,7 +149,7 @@ def test_fireflies_notification_queues_one_meeting_fetch(client, user, db_sessio
     response = post(client, account.id, body, {"X-Hub-Signature": f"sha256={sign(body)}"})
 
     assert response.status_code == 202
-    assert sent == [{"name": INGEST_TRANSCRIPT_MEETING, "args": [account.id, "FF123"], "kwargs": None}]
+    assert sent == [{"name": INGEST_TRANSCRIPT_MEETING, "args": [account.id, "FF123"], "kwargs": None, "task_id": None}]
 
 
 @pytest.mark.parametrize(

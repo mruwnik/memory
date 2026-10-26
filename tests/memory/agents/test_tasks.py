@@ -74,32 +74,34 @@ def ago(**delta) -> datetime:
     "overrides,expected_status,expected_error",
     [
         # Without a timeout in the spec, the longest allowed (30 min) plus 10 min.
-        ({"status": "running", "started_at": ago(hours=3)}, "failed", "worker lost"),
-        ({"status": "running", "started_at": ago(minutes=15)}, "running", ""),
+        ({"status": "running", "started_at": timedelta(hours=3)}, "failed", "worker lost"),
+        ({"status": "running", "started_at": timedelta(minutes=15)}, "running", ""),
         # A run's own timeout_sec (60s) plus 10 min.
         (
             {
                 "status": "running",
-                "started_at": ago(minutes=15),
+                "started_at": timedelta(minutes=15),
                 "spec": {"timeout_sec": 60},
             },
             "failed",
             "worker lost",
         ),
-        ({"status": "running", "started_at": ago(seconds=30)}, "running", ""),
+        ({"status": "running", "started_at": timedelta(seconds=30)}, "running", ""),
         (
-            {"status": "pending", "created_at": ago(hours=1)},
+            {"status": "pending", "created_at": timedelta(hours=1)},
             "failed",
             "queue is backed up",
         ),
         # A busy queue can hold runs for the longest run's duration.
-        ({"status": "pending", "created_at": ago(minutes=30)}, "pending", ""),
+        ({"status": "pending", "created_at": timedelta(minutes=30)}, "pending", ""),
         ({"status": "pending"}, "pending", ""),
     ],
 )
 def test_sweep_fails_only_stuck_runs(
     db_session, regular_user, overrides, expected_status, expected_error
 ):
+    now = datetime.now(timezone.utc)
+    overrides = {key: now - value if isinstance(value, timedelta) else value for key, value in overrides.items()}
     r = run(db_session, regular_user, **overrides)
 
     sweep_agent_runs()
