@@ -5,6 +5,7 @@ import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 import { Button, Card, ConfirmButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Row, Section, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { useAuth } from '@/hooks/useAuth'
+import { GoogleSetupInstructions } from './GoogleSetupInstructions'
 
 /** Both providers' accounts, or only one's where a page is about that provider. */
 export const AccountsPanel = ({ provider }: { provider?: 'github' | 'google' }) => {
@@ -237,6 +238,7 @@ export const AccountsPanel = ({ provider }: { provider?: 'github' | 'google' }) 
 
       {provider !== 'github' && (
         <Section title="Google accounts" actions={oauthConfig && <Button variant="primary" onClick={handleConnectGoogle}>Connect account</Button>}>
+          <GoogleSetupInstructions />
           {!oauthConfig ? (
             <Card title="OAuth configuration required"
               description="Upload your Google OAuth credentials JSON file to enable Google integrations (Gmail, Calendar, Drive).">

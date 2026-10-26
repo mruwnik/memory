@@ -25,6 +25,9 @@ reconciliation; the update does not rewrite either history.
 
 ### Other changes for operators
 
+Google account setup includes expandable step-by-step instructions for project
+configuration, API enablement, OAuth consent, and downloading the credentials JSON.
+
 - Notes initialization adopts the remote's existing history and default branch
   before committing local notes. Overlapping local files are preserved and
   reported so setup can be retried after reconciliation.
