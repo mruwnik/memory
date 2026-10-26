@@ -362,7 +362,7 @@ def test_dispatch_job_creates_job_and_dispatches_task(db_session):
     assert result.is_new is True
     assert result.job.id is not None
     assert result.job.job_type == JobType.MEETING.value
-    assert result.job.celery_task_id == "celery-123"
+    assert result.job.celery_task_id == mock_send.call_args.kwargs["task_id"]
     # params includes _task_name for retry support
     assert result.job.params["title"] == "Test Meeting"
     assert result.job.params["transcript"] == "Content"
@@ -799,3 +799,59 @@ def test_retry_reconstructs_kwargs_when_nothing_excluded(db_session):
     assert sent_kwargs["transcript"] == "the body"
     assert sent_kwargs["title"] == "the title"
     assert sent_kwargs["job_id"] == job.id
+
+
+@pytest.mark.transactional_db
+@pytest.mark.parametrize("operation", ["dispatch", "retry", "reingest"])
+@pytest.mark.parametrize("broker_fails", [False, True])
+def test_job_is_committed_before_broker_delivery(db_session, db_engine, operation, broker_fails):
+    from sqlalchemy.orm import Session
+
+    task_name = "test.immediate_job"
+    job = None
+    if operation != "dispatch":
+        job = PendingJob(
+            job_type="track_git_changes",
+            params={"_task_name": task_name},
+            status=JobStatus.FAILED.value if operation == "retry" else JobStatus.COMPLETE.value,
+            celery_task_id="previous-task",
+        )
+        db_session.add(job)
+        db_session.commit()
+
+    delivered_ids = []
+
+    def deliver(name, *, kwargs, task_id):
+        assert name == task_name
+        # A separate connection sees only committed state, just like a worker.
+        with Session(db_engine) as worker:
+            visible = worker.get(PendingJob, kwargs["job_id"])
+            assert visible is not None
+            assert visible.status == JobStatus.PENDING.value
+            assert visible.celery_task_id == task_id
+            assert task_id != "previous-task"
+            delivered_ids.append(visible.id)
+            if broker_fails:
+                raise RuntimeError("broker unavailable")
+            job_utils.start_job(worker, visible.id)
+            job_utils.complete_job(worker, visible.id)
+            worker.commit()
+
+    def dispatch():
+        if operation == "dispatch":
+            return job_utils.dispatch_job(db_session, "track_git_changes", task_name, {})
+        if operation == "retry":
+            return job_utils.retry_failed_job(db_session, job)
+        return job_utils.reingest_job(db_session, job)
+
+    with patch.object(job_utils.celery_app, "send_task", side_effect=deliver):
+        if broker_fails:
+            with pytest.raises(RuntimeError, match="broker unavailable"):
+                dispatch()
+        else:
+            assert dispatch().job.status == JobStatus.COMPLETE.value
+
+    with Session(db_engine) as observer:
+        persisted = observer.get(PendingJob, delivered_ids[0])
+        expected = JobStatus.FAILED.value if broker_fails else JobStatus.COMPLETE.value
+        assert persisted.status == expected

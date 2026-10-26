@@ -12,6 +12,30 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Job dispatch, retries, and reingestion commit their pending record and task ID
+  before publishing to Celery. Fast workers can now update job status reliably,
+  avoiding completed Notes syncs remaining marked as queued.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.2.6 (2026-10-26)
 
 ### Required env vars

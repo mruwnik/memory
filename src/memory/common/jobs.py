@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
+from uuid import uuid4
 from typing import Any, Callable, TypeVar, overload
 
 from sqlalchemy import func
@@ -294,9 +295,8 @@ def dispatch_job(
     This handles the common pattern of:
     1. Check if job with external_id already exists (for idempotency)
     2. Create job record (params derived from task_kwargs)
-    3. Dispatch Celery task (with job_id injected)
-    4. Link job to Celery task ID
-    5. Commit the transaction
+    3. Assign a Celery task ID and commit the job
+    4. Dispatch Celery task (with job_id injected)
 
     Args:
         session: Database session
@@ -379,10 +379,14 @@ def dispatch_job(
 
     # Always inject job_id into task kwargs
     final_kwargs = {**task_kwargs, "job_id": job.id}
+    task_id = str(uuid4())
+    update_job_celery_task_id(session, job, task_id)
+    # Workers must see the pending record and task ID before the broker can deliver it.
+    session.commit()
 
     # Dispatch Celery task - if this fails, mark job as failed
     try:
-        task = celery_app.send_task(task_name, kwargs=final_kwargs)
+        celery_app.send_task(task_name, kwargs=final_kwargs, task_id=task_id)
     except Exception as e:
         # Task dispatch failed - mark job as failed so it doesn't sit in PENDING forever
         job.mark_failed(f"Failed to dispatch Celery task: {e}")
@@ -390,9 +394,7 @@ def dispatch_job(
         logger.error(f"Failed to dispatch task {task_name} for job {job.id}: {e}")
         raise
 
-    # Link job to Celery task and commit
-    update_job_celery_task_id(session, job, task.id)
-    session.commit()
+    session.refresh(job)
 
     return DispatchResult(
         job=job,
@@ -467,8 +469,12 @@ def retry_failed_job(
 
     # Dispatch with same job_id - if this fails, revert status
     final_kwargs = {**task_kwargs, "job_id": locked_job.id}
+    task_id = str(uuid4())
+    update_job_celery_task_id(session, locked_job, task_id)
+    # Workers must see the pending record and task ID before the broker can deliver it.
+    session.commit()
     try:
-        task = celery_app.send_task(task_name, kwargs=final_kwargs)
+        celery_app.send_task(task_name, kwargs=final_kwargs, task_id=task_id)
     except Exception as e:
         # Dispatch failed - revert to failed status
         locked_job.mark_failed(f"Failed to dispatch retry task: {e}")
@@ -476,9 +482,7 @@ def retry_failed_job(
         logger.error(f"Failed to dispatch retry for job {locked_job.id}: {e}")
         raise
 
-    # Update task ID and commit
-    update_job_celery_task_id(session, locked_job, task.id)
-    session.commit()
+    session.refresh(locked_job)
 
     logger.info(f"Retrying job {locked_job.id} (attempt {locked_job.attempts + 1})")
 
@@ -558,8 +562,12 @@ def reingest_job(
 
     # Dispatch with same job_id
     final_kwargs = {**task_kwargs, "job_id": locked_job.id}
+    task_id = str(uuid4())
+    update_job_celery_task_id(session, locked_job, task_id)
+    # Workers must see the pending record and task ID before the broker can deliver it.
+    session.commit()
     try:
-        task = celery_app.send_task(task_name, kwargs=final_kwargs)
+        celery_app.send_task(task_name, kwargs=final_kwargs, task_id=task_id)
     except Exception as e:
         # Dispatch failed - mark as failed
         locked_job.mark_failed(f"Failed to dispatch reingest task: {e}")
@@ -567,9 +575,7 @@ def reingest_job(
         logger.error(f"Failed to dispatch reingest for job {locked_job.id}: {e}")
         raise
 
-    # Update task ID and commit
-    update_job_celery_task_id(session, locked_job, task.id)
-    session.commit()
+    session.refresh(locked_job)
 
     logger.info(f"Reingesting job {locked_job.id}")
 
