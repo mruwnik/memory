@@ -12,6 +12,30 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## v0.3.1 (2026-10-26)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Declare PyJWT with RSA signing support in shared dependencies so GitHub App
+  repository sync works in worker images. Worker builds check that RS256 is available.
+  Rebuild and recreate the worker image to apply the fix.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.3.0 (2026-10-26)
 
 ### Required env vars

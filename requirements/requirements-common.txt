@@ -12,5 +12,6 @@ httpx>=0.28.1
 celery[redis,sqs]==5.6.3
 croniter==2.0.7
 cryptography==50.0.2
+PyJWT[crypto]==2.10.1
 bcrypt==4.3.0
 psutil==7.1.0

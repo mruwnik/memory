@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements ./requirements/
 COPY setup.py ./
 RUN mkdir src
-RUN pip install -e ".[workers]"
+RUN pip install -e ".[workers]" && \
+    python -c 'import jwt; assert "RS256" in jwt.algorithms.get_default_algorithms()'
 
 # Install Python dependencies
 COPY src/ ./src/
