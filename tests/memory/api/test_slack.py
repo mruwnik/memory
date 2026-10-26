@@ -510,7 +510,8 @@ NOW = datetime.now(timezone.utc)
     [
         (None, True, False),
         (NOW - timedelta(minutes=30), True, False),
-        (NOW - timedelta(days=1), True, True),
+        (NOW - timedelta(days=1), True, False),
+        (NOW - timedelta(days=4), True, True),
         (NOW - timedelta(days=1), False, False),
     ],
 )
@@ -1237,3 +1238,18 @@ def test_non_owner_cannot_change_a_slack_app(
     assert response.status_code == 404
     db_session.refresh(app)
     assert app.name == "X"
+
+
+@pytest.mark.parametrize("interval,status", [(21600, 200), (0, 422), (3599, 422)])
+def test_update_reconciliation_interval(client, db_session, user, slack_workspace, slack_credentials, interval, status):
+    response = client.patch(
+        f"/slack/workspaces/{slack_workspace.id}",
+        json={"event_reconcile_interval_seconds": interval},
+    )
+    assert response.status_code == status
+    db_session.refresh(slack_workspace)
+    if status == 200:
+        assert response.json()["event_reconcile_interval_seconds"] == interval
+        assert slack_workspace.event_reconcile_interval_seconds == interval
+    else:
+        assert slack_workspace.event_reconcile_interval_seconds == 86400

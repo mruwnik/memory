@@ -145,6 +145,10 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
     # Default 5 minutes - more conservative to avoid Slack rate limits (tier 3/4)
     sync_interval_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
 
+    event_reconcile_interval_seconds: Mapped[int] = mapped_column(
+        Integer, default=86400, server_default="86400", nullable=False
+    )
+
     # Sync status
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

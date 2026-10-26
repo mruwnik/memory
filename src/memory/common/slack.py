@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from memory.common.db.connection import DBSession
-from memory.common.db.models.slack import SlackApp, SlackUserCredentials
+from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.users import User
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,19 @@ def workspace_poll_plan(db: DBSession, workspace_id: str) -> tuple[list[int], li
             continue
         pollable.append(app_id)
     return pollable, blocked
+
+
+def workspace_sync_interval(db: DBSession, workspace: SlackWorkspace, app_ids: list[int]) -> int:
+    """Use slow reconciliation only when every polling app has verified events.
+
+    Mixed installations keep the polling cadence so an app without event
+    coverage does not lose its fallback. First-time imports are scheduled
+    regardless of this interval by the caller.
+    """
+    apps = [db.get(SlackApp, app_id) for app_id in app_ids]
+    if apps and all(app is not None and app.setup_state == "live" for app in apps):
+        return workspace.event_reconcile_interval_seconds
+    return workspace.sync_interval_seconds
 
 
 class SlackAPIError(Exception):

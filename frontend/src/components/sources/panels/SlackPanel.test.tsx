@@ -464,3 +464,13 @@ describe('SlackPanel - channels', () => {
     within(channelRow).getAllByRole('combobox').forEach(sel => expect(sel).toBeDisabled())
   })
 })
+
+
+it('saves the background sweep frequency', async () => {
+  listWorkspaces.mockResolvedValue([workspace()])
+  const { user } = renderWithUser(<SlackPanel />)
+  const select = await screen.findByRole('combobox', { name: 'Background sweep frequency' })
+  expect(select).toHaveValue('86400')
+  await user.selectOptions(select, '21600')
+  await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith('W1', { event_reconcile_interval_seconds: 21600 }))
+})

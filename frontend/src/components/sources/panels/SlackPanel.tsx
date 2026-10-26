@@ -5,7 +5,7 @@ import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
+import { Field, Select, Hint, Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { SlackAppWizard } from './SlackAppWizard'
 
@@ -306,6 +306,22 @@ const WorkspaceRow = ({
       {update.error && <RowError live>{update.error}</RowError>}
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       <SyncFailure status={workspace} />
+      <Field label="Background sweep frequency">
+        <Select value={workspace.event_reconcile_interval_seconds ?? 86400} disabled={update.busy}
+          onChange={e => update.submit(() => onUpdateWorkspace({ event_reconcile_interval_seconds: Number(e.target.value) }))}>
+          <option value={3600}>Every hour</option>
+          <option value={21600}>Every 6 hours</option>
+          <option value={43200}>Every 12 hours</option>
+          <option value={86400}>Daily (default)</option>
+          <option value={604800}>Weekly</option>
+        </Select>
+      </Field>
+      <Hint>
+        Verified events ingest new messages as they arrive. This sweep checks enabled channels for history and missed messages.
+        Until all connected polling apps have verified events, the existing polling frequency is used.
+        Events only cover channels accessible to the subscribed bot or user. Sync now runs a sweep immediately.
+        {workspace.effective_sync_interval_seconds != null && ` Current scheduled interval: ${Math.round(workspace.effective_sync_interval_seconds / 60)} minutes.`}
+      </Hint>
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels ({workspace.channel_count})</ExpandToggle>}
         {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}

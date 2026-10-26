@@ -1034,3 +1034,45 @@ def test_sync_all_skips_without_warning_when_nothing_is_wrong(
 
     mock_app.send_task.assert_not_called()
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+@pytest.mark.parametrize("state,age_hours,interval,expected", [
+    ("live", 2, 86400, 0),
+    ("live", 25, 86400, 1),
+    ("live", 7, 21600, 1),
+    ("live", 2, 21600, 0),
+    ("draft", 2, 86400, 1),
+    ("degraded", 2, 86400, 1),
+])
+@patch("memory.workers.tasks.slack.app")
+def test_event_reconciliation_cadence(
+    mock_app, db_session, slack_app, slack_workspace, slack_credentials,
+    state, age_hours, interval, expected,
+):
+    slack_app.setup_state = state
+    slack_workspace.last_sync_at = datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    slack_workspace.event_reconcile_interval_seconds = interval
+    db_session.commit()
+
+    result = slack.sync_all_slack_workspaces()
+
+    assert result["workspaces_triggered"] == expected
+    assert mock_app.send_task.call_count == expected
+
+
+def test_mixed_apps_keep_polling(db_session, slack_app, slack_workspace):
+    from memory.common.slack import workspace_sync_interval
+
+    draft = SlackApp(client_id="draft.app", name="Draft", setup_state="draft")
+    db_session.add(draft)
+    db_session.commit()
+    assert workspace_sync_interval(db_session, slack_workspace, [slack_app.id, draft.id]) == slack_workspace.sync_interval_seconds
+
+
+def test_history_routing_is_isolated_from_events():
+    from memory.common import celery_app, settings
+
+    router = celery_app.app.amqp.router
+    for task in (celery_app.SYNC_ALL_SLACK_WORKSPACES, celery_app.SYNC_SLACK_WORKSPACE, celery_app.SYNC_SLACK_CHANNEL):
+        assert router.route({}, task)["queue"].name == f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"
+    assert router.route({}, celery_app.ADD_SLACK_MESSAGE)["queue"].name == f"{settings.CELERY_QUEUE_PREFIX}-slack"

@@ -53,6 +53,7 @@ from memory.common.slack import (
     iter_thread_replies,
     iter_users,
     workspace_poll_plan,
+    workspace_sync_interval,
 )
 from memory.common.content_processing import (
     clear_item_chunks,
@@ -246,7 +247,7 @@ def sync_all_slack_workspaces() -> dict[str, Any]:
                 elapsed = (
                     datetime.now(timezone.utc) - workspace.last_sync_at
                 ).total_seconds()
-                if elapsed < workspace.sync_interval_seconds:
+                if elapsed < workspace_sync_interval(session, workspace, app_ids):
                     continue
 
             for slack_app_id in app_ids:

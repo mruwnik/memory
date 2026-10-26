@@ -466,7 +466,7 @@ export const SlackAppWizard = ({
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
               Almost done. Post the following token in any Slack channel the
-              connected user can see:
+              bot has joined (invite the app to the channel first):
             </p>
             <CopyableCode value={testToken} label="Copy token" />
             <FormActions>

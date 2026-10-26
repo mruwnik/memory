@@ -22,7 +22,7 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -64,7 +64,7 @@ from memory.common.oauth_client import (
     store_state,
     validate_and_consume_state,
 )
-from memory.common.slack import user_has_workspace_membership, workspace_poll_plan
+from memory.common.slack import user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,8 @@ class SlackWorkspaceResponse(SyncStatusResponse):
     domain: str | None
     collect_messages: bool
     sync_interval_seconds: int
+    event_reconcile_interval_seconds: int
+    effective_sync_interval_seconds: int
     last_sync_at: str | None
     channel_count: int
     connected_users: int  # Number of users with credentials for this workspace
@@ -120,7 +122,8 @@ class SlackWorkspaceResponse(SyncStatusResponse):
 
 class SlackWorkspaceUpdate(BaseModel):
     collect_messages: bool | None = None
-    sync_interval_seconds: int | None = None
+    sync_interval_seconds: int | None = Field(default=None, ge=60)
+    event_reconcile_interval_seconds: int | None = Field(default=None, ge=3600)
     # Access control
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
@@ -242,12 +245,12 @@ def poll_blocker(db: Session, ws: SlackWorkspace) -> str | None:
     return None if app_ids else "; ".join(blocked)
 
 
-def is_sync_stale(ws: SlackWorkspace) -> bool:
+def is_sync_stale(ws: SlackWorkspace, interval: int | None = None) -> bool:
     if not ws.collect_messages or ws.last_sync_at is None:
         return False
     # The beat task only runs every SLACK_SYNC_INTERVAL, so a shorter
     # per-workspace interval can't make syncs more frequent than that.
-    cadence = max(ws.sync_interval_seconds, settings.SLACK_SYNC_INTERVAL)
+    cadence = max(interval or ws.sync_interval_seconds, settings.SLACK_SYNC_INTERVAL)
     age = datetime.now(timezone.utc) - ws.last_sync_at
     return age.total_seconds() > SLACK_STALE_SYNC_INTERVALS * cadence
 
@@ -314,19 +317,23 @@ def workspace_to_response(
         is not None
     )
 
+    pollable_apps, _ = workspace_poll_plan(db, ws.id)
+    interval = workspace_sync_interval(db, ws, pollable_apps)
     return SlackWorkspaceResponse(
         id=ws.id,
         name=ws.name,
         domain=ws.domain,
         collect_messages=ws.collect_messages,
         sync_interval_seconds=ws.sync_interval_seconds,
+        event_reconcile_interval_seconds=ws.event_reconcile_interval_seconds,
+        effective_sync_interval_seconds=max(settings.SLACK_SYNC_INTERVAL, interval),
         last_sync_at=ws.last_sync_at.isoformat() if ws.last_sync_at else None,
         **sync_status_fields(ws),
         channel_count=channel_count,
         connected_users=connected_users,
         user_connected=user_connected,
         poll_blocker=poll_blocker(db, ws),
-        sync_stale=is_sync_stale(ws),
+        sync_stale=is_sync_stale(ws, interval),
         apps=workspace_apps(db, ws, current_user),
         project_id=ws.project_id,
         sensitivity=ws.sensitivity or "basic",
@@ -627,6 +634,8 @@ def update_workspace(
     snap_pid, snap_sens = workspace.project_id, workspace.sensitivity
     if updates.collect_messages is not None:
         workspace.collect_messages = updates.collect_messages
+    if updates.event_reconcile_interval_seconds is not None:
+        workspace.event_reconcile_interval_seconds = updates.event_reconcile_interval_seconds
     if updates.sync_interval_seconds is not None:
         workspace.sync_interval_seconds = updates.sync_interval_seconds
     if "project_id" in updates.model_fields_set:

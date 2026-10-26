@@ -356,6 +356,7 @@ def test_logs_keeps_only_error_records_and_the_shape_of_tracebacks(box):
         "[worker]",
         f"{TS} [2026-10-24 10:00:05,000: ERROR/ForkPoolWorker-1] Task memory.workers.tasks.email.sync_account"
         "[***] raised unexpected: ValueError('***')",
+        "[slack-sync-worker]",
     ]
 
 
@@ -384,7 +385,7 @@ def test_logs_scrubs_error_messages(box, message, expected):
     code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, api=[f"{ERROR} {message}"]))
 
     assert code == 0, output
-    assert output.splitlines() == ["[api]", f"{TS} {ERROR} {expected}", "[worker]"]
+    assert output.splitlines() == ["[api]", f"{TS} {ERROR} {expected}", "[worker]", "[slack-sync-worker]"]
 
 
 def test_logs_prints_the_last_lines_per_service(box):
@@ -396,6 +397,7 @@ def test_logs_prints_the_last_lines_per_service(box):
     assert output.splitlines() == [
         "[api]", f"{TS} {ERROR} failure 3", f"{TS} {ERROR} failure 4",
         "[worker]", f"{TS} {ERROR} failure 3", f"{TS} {ERROR} failure 4",
+        "[slack-sync-worker]",
     ]  # fmt: skip
 
 

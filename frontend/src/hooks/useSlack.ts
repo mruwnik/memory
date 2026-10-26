@@ -18,6 +18,8 @@ export interface SlackWorkspace extends SyncStatus {
   domain: string | null
   collect_messages: boolean
   sync_interval_seconds: number
+  event_reconcile_interval_seconds: number
+  effective_sync_interval_seconds: number
   last_sync_at: string | null
   channel_count: number
   connected_users: number
@@ -35,6 +37,7 @@ export interface SlackWorkspace extends SyncStatus {
 export interface SlackWorkspaceUpdate {
   collect_messages?: boolean
   sync_interval_seconds?: number
+  event_reconcile_interval_seconds?: number
   // Access control
   project_id?: number | null
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'

@@ -319,6 +319,9 @@ app.conf.update(
         f"{DISCORD_BACKFILL_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-backfill"
         },
+        SYNC_ALL_SLACK_WORKSPACES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"},
+        SYNC_SLACK_WORKSPACE: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"},
+        SYNC_SLACK_CHANNEL: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"},
         f"{SLACK_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack"},
         f"{EMAIL_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-email"},
         f"{FORUMS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-forums"},
