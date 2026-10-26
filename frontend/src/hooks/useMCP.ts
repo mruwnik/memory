@@ -204,7 +204,7 @@ export const useMCP = () => {
   }, [mcpCall])
 
   const searchKnowledgeBase = useCallback(async (query: string, modalities: string[] = [], filters: Record<string, any> = {}, config: Record<string, any> = {}) => {
-    return await mcpCall('core_search', {
+    const blocks = await mcpCall('core_search', {
       query,
       filters,
       modalities,
@@ -213,6 +213,8 @@ export const useMCP = () => {
       use_scores: config.useScores ?? false,
       ...config.enhancements,
     })
+    // FastMCP encodes the result list in one text block; older servers use one block per item.
+    return blocks.length === 1 && Array.isArray(blocks[0]) ? blocks[0] : blocks
   }, [mcpCall])
 
   useEffect(() => {

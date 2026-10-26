@@ -24,13 +24,23 @@ None.
 
 ### Other changes for operators
 
+- Verified Slack Events installations use daily history reconciliation by default.
+  Change the interval under Sources → Slack → Background sweep frequency.
+  Unverified installations retain polling; initial imports and Sync now still run immediately.
+- Slack history tasks use a dedicated `slack-sync-worker` (one slot, 1 GiB limit),
+  keeping rate-limit waits out of other ingestion. Custom worker deployments must
+  consume the new `slack-sync` queue. Already queued tasks stay on their original queue.
+
+- Search unwraps the server's result list correctly, displaying individual
+  matches and accurate counts instead of one empty "Untitled" result. Relevant
+  sections display the text returned by the search service.
 - Job dispatch, retries, and reingestion commit their pending record and task ID
   before publishing to Celery. Fast workers can now update job status reliably,
   avoiding completed Notes syncs remaining marked as queued.
 
 ### Migrations
 
-None.
+- `20261109_slack_reconcile`: adds the per-workspace background sweep interval.
 
 ### Post-deploy commands
 

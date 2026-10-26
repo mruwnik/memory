@@ -35,7 +35,7 @@ const installFetch = (opts: { results?: unknown[]; searchFails?: boolean; schema
     }
     if (tool === 'core_search') {
       if (opts.searchFails) return mockResponse({ status: 500, json: { detail: 'boom' } })
-      return mockResponse({ json: mcpEnvelopeJson(...(opts.results ?? [])) })
+      return mockResponse({ json: mcpEnvelopeJson(opts.results ?? []) })
     }
     return mockResponse({ status: 404, json: { detail: 'nope' } })
   })

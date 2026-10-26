@@ -307,6 +307,19 @@ describe('convenience wrappers', () => {
     expect(out).toEqual({ schema: {} })
   })
 
+  it.each([
+    [{ text: JSON.stringify([{ filename: 'one.md' }, { filename: 'two.md' }]) }],
+    [{ text: JSON.stringify({ filename: 'one.md' }) }, { text: JSON.stringify({ filename: 'two.md' }) }],
+  ])('unwraps search results across server formats: %j', async (...blocks) => {
+    mockFetch(async () => jsonRpcResult(blocks))
+    const { result } = renderHook(() => useMCP())
+    await act(async () => {
+      expect(await result.current.searchKnowledgeBase('hello')).toEqual([
+        { filename: 'one.md' }, { filename: 'two.md' },
+      ])
+    })
+  })
+
   it('searchKnowledgeBase passes query and applies config defaults', async () => {
     const fetchMock = mockFetch(async () => jsonRpcResult([{ text: '[]' }]))
     const { result } = renderHook(() => useMCP())

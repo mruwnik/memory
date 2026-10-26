@@ -5,7 +5,7 @@ import { Badge, DetailList, Disclosure, Row } from '@/components/shared/ui'
 export type SearchItem = {
     filename: string
     content: string
-    chunks: any[]
+    chunks: (string | { preview: string; score?: number })[]
     tags: string[]
     mime_type: string
     metadata: any
@@ -31,13 +31,13 @@ const Markdown = ({ children }: { children: string }) => (
     <div className="prose prose-sm max-w-none"><ReactMarkdown>{children}</ReactMarkdown></div>
 )
 
-const Chunks = ({ chunks }: { chunks: any[] }) => (
+const Chunks = ({ chunks }: { chunks: (string | { preview: string; score?: number })[] }) => (
     <Disclosure summary="Relevant sections">
         <ul className="space-y-3">
-            {chunks.map(({ preview, score }, i) => (
+            {chunks.map((chunk, i) => (
                 <li key={i} className="bg-slate-50 p-3 rounded-lg">
-                    <div className="text-xs text-primary-dark font-medium mb-1">Score: {(score || 0).toFixed(3)}</div>
-                    <p className="text-sm text-slate-600">{preview}</p>
+                    {typeof chunk !== 'string' && chunk.score != null && <div className="text-xs text-primary-dark font-medium mb-1">Score: {chunk.score.toFixed(3)}</div>}
+                    <p className="text-sm text-slate-600">{typeof chunk === 'string' ? chunk : chunk.preview}</p>
                 </li>
             ))}
         </ul>

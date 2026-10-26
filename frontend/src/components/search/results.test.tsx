@@ -92,12 +92,19 @@ describe('SearchResult bodies', () => {
     expect(screen.getByTestId('md')).toHaveTextContent('# Title')
   })
 
-  it('shows relevant sections with scores, defaulting a missing score to 0', () => {
+  it('shows relevant sections with scores only when provided', () => {
     render({ chunks: [{ preview: 'snippet text', score: 0.1234 }, { preview: 'other' }] })
     expect(screen.getByText('Relevant sections')).toBeInTheDocument()
     expect(screen.getByText('Score: 0.123')).toBeInTheDocument()
-    expect(screen.getByText('Score: 0.000')).toBeInTheDocument()
+    expect(screen.queryByText('Score: 0.000')).not.toBeInTheDocument()
     expect(screen.getByText('snippet text')).toBeInTheDocument()
+  })
+
+  it('renders string sections returned by core_search', () => {
+    render({ chunks: ['matching passage', 'another passage'] })
+    expect(screen.getByText('matching passage')).toBeInTheDocument()
+    expect(screen.getByText('another passage')).toBeInTheDocument()
+    expect(screen.queryByText(/Score:/)).not.toBeInTheDocument()
   })
 
   it('omits relevant sections when there are no chunks', () => {
