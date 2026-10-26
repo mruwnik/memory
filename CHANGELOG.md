@@ -36,6 +36,7 @@ settings. Existing values and environment overrides are preserved.
 Discord bot user sharing is removed from Sources and the API. Bots belong to
 their recorded registrant; additional shared users no longer have bot access.
 Discord member identities, messages, and Person attribution are preserved.
+The Discord setup CLI uses `set-owner` in place of `authorize-user`.
 
 ### Migrations
 

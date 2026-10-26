@@ -840,6 +840,7 @@ def test_job_is_committed_before_broker_delivery(db_session, db_engine, operatio
     def dispatch():
         if operation == "dispatch":
             return job_utils.dispatch_job(db_session, "track_git_changes", task_name, {})
+        assert job is not None
         if operation == "retry":
             return job_utils.retry_failed_job(db_session, job)
         return job_utils.reingest_job(db_session, job)
@@ -854,4 +855,5 @@ def test_job_is_committed_before_broker_delivery(db_session, db_engine, operatio
     with Session(db_engine) as observer:
         persisted = observer.get(PendingJob, delivered_ids[0])
         expected = JobStatus.FAILED.value if broker_fails else JobStatus.COMPLETE.value
+        assert persisted is not None
         assert persisted.status == expected

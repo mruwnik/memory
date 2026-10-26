@@ -1528,5 +1528,7 @@ def test_push_failure_has_safe_actionable_hint(tmp_path, stderr, reason):
             return subprocess.CompletedProcess(args, 1, "", stderr)
         return original(root, *args, **kwargs)
     with patch.object(notes, "run_git", fail_push):
-        assert notes.push_upstream(vault, notes.find_upstream(vault)) == reason
+        upstream = notes.find_upstream(vault)
+        assert upstream is not None
+        assert notes.push_upstream(vault, upstream) == reason
     assert reason in notes.GIT_SYNC_HINTS

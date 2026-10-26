@@ -423,7 +423,8 @@ async def test_admin_can_select_replace_and_clear_system_default(
         saved = await agent.key_upsert.fn(key_ref=first.id, is_system_default=True)
         assert saved["is_system_default"] is True
     db_session.expire_all()
-    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == first.id
+    selected = provider_keys.system_key(db_session, regular_user.id, SUMMARISE)
+    assert selected is not None and selected.id == first.id
     with mcp_auth_context(user_session.id):
         listed = await agent.key_list.fn()
         assert listed["providers"]["anthropic"] == []
@@ -436,7 +437,8 @@ async def test_admin_can_select_replace_and_clear_system_default(
         await agent.key_upsert.fn(key_ref=second.id, is_system_default=True)
     db_session.expire_all()
     assert not first.is_system_default
-    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == second.id
+    selected = provider_keys.system_key(db_session, regular_user.id, SUMMARISE)
+    assert selected is not None and selected.id == second.id
     with mcp_auth_context(admin_session.id):
         await agent.key_upsert.fn(key_ref=second.id, is_system_default=False)
     db_session.expire_all()
@@ -477,10 +479,12 @@ def test_personal_provider_precedes_shared_and_rejected_shared_keys_are_skipped(
 
     shared = add_key(db_session, admin_user, is_system_default=True)
     personal = add_key(db_session, regular_user, provider="openai", is_default=True)
-    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == personal.id
+    selected = provider_keys.system_key(db_session, regular_user.id, SUMMARISE)
+    assert selected is not None and selected.id == personal.id
     personal.status = "invalid"
     db_session.flush()
-    assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE).id == shared.id
+    selected = provider_keys.system_key(db_session, regular_user.id, SUMMARISE)
+    assert selected is not None and selected.id == shared.id
     shared.status = "invalid"
     db_session.flush()
     assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE) is None

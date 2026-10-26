@@ -57,12 +57,12 @@ def generate_bot_invite_url(bot_token: str):
 
 @click.command()
 @click.option("--bot-token", type=str, required=True, help="Discord bot token")
-@click.option("--user-email", type=str, default=None, help="Email of user to authorize (optional)")
+@click.option("--user-email", type=str, default=None, help="Email of bot owner (optional)")
 def add_bot(bot_token: str, user_email: str | None):
     """Add a Discord bot to the system.
 
     This creates a DiscordBot record with the bot's credentials.
-    Optionally authorize a user to use the bot.
+    Optionally set the user who owns the bot.
     """
     from memory.common.db.connection import make_session
     from memory.common.db.models import DiscordBot, HumanUser
@@ -102,17 +102,14 @@ def add_bot(bot_token: str, user_email: str | None):
             session.add(bot)
             click.echo(f"Created new bot: {name}")
 
-        # Optionally authorize a user
+        # Optionally set the owner
         if user_email:
             user = session.query(HumanUser).filter(HumanUser.email == user_email).first()
             if not user:
                 raise click.ClickException(f"User with email '{user_email}' not found")
 
-            if user not in bot.authorized_users:
-                bot.authorized_users.append(user)
-                click.echo(f"Authorized user '{user.name}' to use this bot")
-            else:
-                click.echo(f"User '{user.name}' already authorized")
+            bot.owner = user
+            click.echo(f"Set bot owner to '{user.name}'")
 
         session.commit()
 
@@ -120,7 +117,7 @@ def add_bot(bot_token: str, user_email: str | None):
         click.echo(f"  Bot ID: {bot.id}")
         click.echo(f"  Bot Name: {bot.name}")
         click.echo(f"  Active: {bot.is_active}")
-        click.echo(f"  Authorized Users: {[u.email for u in bot.authorized_users]}")
+        click.echo(f"  Owner: {bot.owner.email if bot.owner else 'unowned'}")
 
     click.echo("\n\nTo add the bot to your server, use this invite URL:")
     click.echo(f"  {make_invite(discord_id)}")
@@ -128,9 +125,9 @@ def add_bot(bot_token: str, user_email: str | None):
 
 @click.command()
 @click.option("--bot-id", type=int, required=True, help="Discord bot ID")
-@click.option("--user-email", type=str, required=True, help="Email of user to authorize")
-def authorize_user(bot_id: int, user_email: str):
-    """Authorize a user to use an existing Discord bot."""
+@click.option("--user-email", type=str, required=True, help="Email of bot owner")
+def set_owner(bot_id: int, user_email: str):
+    """Set the owner of an existing Discord bot."""
     from memory.common.db.connection import make_session
     from memory.common.db.models import DiscordBot, HumanUser
 
@@ -143,13 +140,10 @@ def authorize_user(bot_id: int, user_email: str):
         if not user:
             raise click.ClickException(f"User with email '{user_email}' not found")
 
-        if user in bot.authorized_users:
-            click.echo(f"User '{user.name}' is already authorized to use bot '{bot.name}'")
-            return
-
-        bot.authorized_users.append(user)
+        bot.owner = user
         session.commit()
-        click.echo(f"Authorized user '{user.name}' to use bot '{bot.name}'")
+        click.echo(f"Set owner of bot '{bot.name}' to '{user.name}'")
+
 
 
 @click.command()
@@ -172,7 +166,7 @@ def list_bots():
             click.echo(f"  Name: {bot.name}")
             click.echo(f"  Active: {bot.is_active}")
             click.echo(f"  Has Token: {bot.token is not None}")
-            click.echo(f"  Authorized Users: {[u.email for u in bot.authorized_users]}")
+            click.echo(f"  Owner: {bot.owner.email if bot.owner else 'unowned'}")
             click.echo("-" * 60)
 
 
@@ -184,7 +178,7 @@ def cli():
 
 cli.add_command(generate_bot_invite_url, name="generate-invite")  # type: ignore[attr-defined]
 cli.add_command(add_bot, name="add-bot")  # type: ignore[attr-defined]
-cli.add_command(authorize_user, name="authorize-user")  # type: ignore[attr-defined]
+cli.add_command(set_owner, name="set-owner")  # type: ignore[attr-defined]
 cli.add_command(list_bots, name="list-bots")  # type: ignore[attr-defined]
 
 
