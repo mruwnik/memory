@@ -710,9 +710,14 @@ class SourceItem(AccessControlMixin, Base):
         return True
 
     @property
+    def readable_content(self) -> str | None:
+        """The item's text as a reader sees it, e.g. a mail's body rather than its raw source."""
+        return self.content
+
+    @property
     def preview_text(self) -> str | None:
         """Short text preview for listings. Subclasses can override."""
-        return truncate_preview(self.content)
+        return truncate_preview(self.readable_content)
 
     @property
     def title(self) -> str | None:
@@ -731,7 +736,7 @@ class SourceItem(AccessControlMixin, Base):
         return {
             **payload,
             "tags": self.tags,
-            "content": self.content,
+            "content": self.readable_content,
             "filename": self.filename,
             "mime_type": self.mime_type,
         }

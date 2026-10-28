@@ -782,7 +782,7 @@ async def fetch(
                 "metadata": item.as_payload(),
             }
             if include_content:
-                result["content"] = item.content
+                result["content"] = item.readable_content
             if include_journal:
                 result["journal_entries"] = journal_by_item.get(item.id, [])
             results_by_id[item.id] = result

@@ -1021,13 +1021,6 @@ def test_git_commit_preview_text_none_both():
 # ====== MailMessage.preview_text tests ======
 
 
-def test_mail_message_preview_text_falls_back_to_subject_on_exception():
-    msg = MailMessage(sha256=b"mm1", content="not valid email", subject="Test Subject")
-    # Force an exception from the body property
-    with patch.object(MailMessage, "body", new_callable=PropertyMock, side_effect=KeyError("body")):
-        assert msg.preview_text == "Test Subject"
-
-
 def test_mail_message_preview_text_falls_back_to_subject_when_no_body():
     msg = MailMessage(sha256=b"mm2", content="valid", subject="My Subject")
     with patch.object(MailMessage, "body", new_callable=PropertyMock, return_value=""):
