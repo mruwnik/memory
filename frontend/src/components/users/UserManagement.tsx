@@ -13,6 +13,7 @@ import { useModule } from '@/hooks/useModule'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, Field, Fieldset, FormActions, Hint, Input, List, Modal, Notice, Page, Row, Select } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
+import { TimezoneCombobox } from '@/components/shared/TimezoneCombobox'
 
 const toggleScope = (scopes: string[], scope: string): string[] =>
   scopes.includes(scope) ? scopes.filter((s) => s !== scope) : [...scopes, scope]
@@ -263,7 +264,7 @@ const UserManagement = () => {
                   )}
                   <Button size="sm" onClick={() => {
                     setEditingUser(user)
-                    setEditForm({ name: user.name, email: user.email, scopes: [...user.scopes] })
+                    setEditForm({ name: user.name, email: user.email, timezone: user.timezone, scopes: [...user.scopes] })
                   }}>
                     Edit
                   </Button>
@@ -360,6 +361,10 @@ const UserManagement = () => {
                 value={editForm.email || ''}
                 onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
               />
+            </Field>
+
+            <Field label="Timezone" hint="Their scheduled tasks and agent schedules run on this clock. Pick one or type any IANA name.">
+              <TimezoneCombobox value={editForm.timezone || ''} onChange={(timezone) => setEditForm({ ...editForm, timezone })} />
             </Field>
 
             <ScopeFieldset scopes={availableScopes} value={editForm.scopes || []}

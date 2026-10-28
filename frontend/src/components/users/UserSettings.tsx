@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useUsers, type User, type UserUpdate } from '../../hooks/useUsers'
 import { useAuth } from '../../hooks/useAuth'
-import { Badge, Button, Card, Combobox, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
-import { timezoneOptions } from '../../utils/timezones'
+import { Badge, Button, Card, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
+import { TimezoneCombobox } from '@/components/shared/TimezoneCombobox'
 import { NewApiKey } from './NewApiKey'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
 
@@ -18,7 +18,6 @@ const UserSettings = () => {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [timezone, setTimezone] = useState('UTC')
-  const timezones = useMemo(timezoneOptions, [])
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -158,7 +157,7 @@ const UserSettings = () => {
               <Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
             <Field label="Timezone" hint="Scheduled tasks and agent schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
-              <Combobox value={timezone} onChange={setTimezone} options={timezones} allowCustom />
+              <TimezoneCombobox value={timezone} onChange={setTimezone} />
             </Field>
             <FormActions>
               <Button variant="primary" type="submit" disabled={saving || !profileChanged}>{saving ? 'Saving...' : 'Save changes'}</Button>

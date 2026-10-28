@@ -16,6 +16,7 @@ const user = (overrides = {}) => ({
   email: 'bob@x.com',
   user_type: 'human',
   scopes: ['read'],
+  timezone: 'UTC',
   api_key_count: 0,
   ...overrides,
 })
@@ -292,6 +293,26 @@ describe('UserManagement edit flow', () => {
 
     await waitFor(() => expect(patched).toHaveLength(1))
     expect(patched[0]).toMatchObject({ name: 'Bobby' })
+  })
+
+  it("sets another user's timezone", async () => {
+    const patched: any[] = []
+    installFetch(
+      { users: [user({ id: 1, name: 'Admin' }), user({ id: 2, name: 'Bob' })] },
+      { 'PATCH ': (init) => { patched.push(JSON.parse(init!.body as string)); return mockResponse({ json: user() }) } },
+    )
+    const { user: ue } = renderWithRouter(<UserManagement />)
+    await screen.findByText('Bob')
+
+    await ue.click(screen.getAllByRole('button', { name: 'Edit' })[1])
+    const timezone = within(modalByHeading('Edit user')).getByRole('combobox', { name: 'Timezone' })
+    await ue.clear(timezone)
+    await ue.type(timezone, 'Kolkata')
+    await ue.click(await screen.findByRole('option', { name: /Asia\/Kolkata/ }))
+    await ue.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(patched).toHaveLength(1))
+    expect(patched[0]).toMatchObject({ timezone: 'Asia/Kolkata' })
   })
 })
 

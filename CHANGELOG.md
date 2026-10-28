@@ -24,6 +24,8 @@ None.
 
 ### Other changes for operators
 
+Admins can set another user's timezone from the Edit user dialog in User management.
+
 LessWrong comments are now ingested and searchable, and the LessWrong sync is
 configured from the Forums tab (admin only) instead of code defaults.
 Comments carry their post's tags plus `comment`, so a tag filter can find them.
