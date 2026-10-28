@@ -31,8 +31,10 @@ from memory.common.people import (
 
 logger = logging.getLogger(__name__)
 
-def parse_due_date(date_str: str | None) -> datetime | None:
-    """Parse a due date string into a datetime."""
+MAX_DUE_DATE_HORIZON = timedelta(days=2 * 365)
+
+
+def parse_date(date_str: str | None) -> datetime | None:
     if not date_str:
         return None
     try:
@@ -41,17 +43,31 @@ def parse_due_date(date_str: str | None) -> datetime | None:
         return None
 
 
+def parse_due_date(date_str: str | None, reference: datetime) -> datetime | None:
+    """A due date the meeting held at `reference` could plausibly have set, else None."""
+    due = parse_date(date_str)
+    if due is None:
+        return None
+    if not reference.date() <= due.date() <= (reference + MAX_DUE_DATE_HORIZON).date():
+        return None
+    return due
+
+
+def meeting_time(meeting: Meeting) -> datetime:
+    return meeting.meeting_date or meeting.inserted_at or datetime.now(timezone.utc)
+
+
 def make_task_sha256(meeting_id: int, description: str) -> bytes:
     """Generate a proper SHA256 hash for a task."""
     content = f"meeting:{meeting_id}:{description}"
     return hashlib.sha256(content.encode()).digest()
 
 
-def call_extraction_llm(transcript: str, key: Credential) -> dict:
+def call_extraction_llm(transcript: str, held_at: datetime, key: Credential) -> dict:
     """Summary, notes and action items for `transcript`, paid with `key`."""
     result = run_agent_sync(
         MEETING_EXTRACT.slug,
-        f"Meeting transcript:\n{transcript}",
+        f"Meeting date: {held_at:%A} {held_at.isoformat()}\n\nMeeting transcript:\n{transcript}",
         key=key,
     )
     return result.data or {}
@@ -316,6 +332,7 @@ def create_action_item_tasks(
     """Create Task records for action items. Returns list of created task descriptions."""
     created_tasks = []
     tasks = []
+    held_at = meeting_time(meeting)
 
     for item in action_items:
         if not item.get("description"):
@@ -340,7 +357,7 @@ def create_action_item_tasks(
         task = Task(
             task_title=item["description"],
             source_item_id=meeting.id,
-            due_date=parse_due_date(item.get("due_date")),
+            due_date=parse_due_date(item.get("due_date"), held_at),
             priority=priority,
             status="pending",
             tags=task_tags,
@@ -378,6 +395,11 @@ def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
     return len(tasks)
 
 
+def delete_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
+    for task in session.query(Task).filter(Task.source_item_id == meeting.id):
+        session.delete(task)
+
+
 def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     """
     Run LLM extraction on a meeting and update it with extracted data.
@@ -394,7 +416,7 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     session.flush()
 
     try:
-        extracted = call_extraction_llm(meeting.content or "", credential(found))
+        extracted = call_extraction_llm(meeting.content or "", meeting_time(meeting), credential(found))
     except (LLMError, *PROVIDER_ERRORS) as e:
         logger.warning(f"Failed to extract meeting {meeting.id}: {type(e).__name__}")
         meeting.extraction_status = "failed"
@@ -432,7 +454,7 @@ def create_meeting_record(
     attendee_pairs: list[tuple[str, str]] | None = None,
 ) -> Meeting:
     """Create a new Meeting record from the provided data."""
-    parsed_date = parse_due_date(meeting_date)
+    parsed_date = parse_date(meeting_date)
 
     # Prepend attendee identifiers to transcript so the LLM has a hint about
     # who's in the room. Names take precedence over emails for readability.
@@ -539,6 +561,8 @@ def execute_meeting_processing(
         session.commit()
         session.refresh(meeting)
         embed_result = process_content_item(meeting, session)
+        if meeting.embed_status != "STORED":
+            raise RuntimeError(f"Meeting {meeting.id} was not stored")
 
         # Only mark complete after both extraction AND embedding succeed
         meeting.extraction_status = "skipped" if extract_result["status"] == "skipped" else "complete"
@@ -570,6 +594,8 @@ def execute_meeting_processing(
         if meeting.extraction_status == "processing":
             meeting.extraction_status = "failed"
         # If "extracted", leave it so we know extraction worked but embedding didn't
+        # Tasks would point at a meeting search can't return; reprocessing recreates them.
+        delete_meeting_tasks(session, meeting)
         if job_id:
             job_utils.fail_job(session, job_id, str(e))
         session.commit()

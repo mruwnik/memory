@@ -2,6 +2,7 @@
 
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import anthropic
@@ -202,47 +203,27 @@ def test_find_person_by_name_with_whitespace(mock_make_session, qdrant):
 # ============================================================================
 
 
-def test_parse_due_date_valid_iso():
-    """Test parsing valid ISO date string."""
-    result = meetings.parse_due_date("2024-01-15")
-    assert result is not None
-    assert result.year == 2024
-    assert result.month == 1
-    assert result.day == 15
-
-
-def test_parse_due_date_with_time():
-    """Test parsing date with time."""
-    result = meetings.parse_due_date("2024-01-15T14:30:00")
-    assert result is not None
-    assert result.hour == 14
-    assert result.minute == 30
-
-
-def test_parse_due_date_natural_format():
-    """Test parsing natural date format."""
-    result = meetings.parse_due_date("January 15, 2024")
-    assert result is not None
-    assert result.year == 2024
-    assert result.month == 1
-
-
-def test_parse_due_date_none():
-    """Test parsing None returns None."""
-    result = meetings.parse_due_date(None)
-    assert result is None
-
-
-def test_parse_due_date_empty_string():
-    """Test parsing empty string returns None."""
-    result = meetings.parse_due_date("")
-    assert result is None
-
-
-def test_parse_due_date_invalid():
-    """Test parsing invalid date returns None."""
-    result = meetings.parse_due_date("not a date")
-    assert result is None
+@pytest.mark.parametrize(
+    "date_str, expected",
+    [
+        ("2026-10-22", datetime(2026, 10, 22)),
+        ("2026-10-29T10:30:00", datetime(2026, 10, 29, 10, 30)),
+        ("October 30, 2026", datetime(2026, 10, 30)),
+        ("2028-10-21", datetime(2028, 10, 21)),
+        ("2025-01-01", None),
+        ("2026-10-21", None),
+        ("2028-10-23", None),
+        ("not a date", None),
+        ("", None),
+        (None, None),
+    ],
+)
+@pytest.mark.parametrize(
+    "reference",
+    [datetime(2026, 10, 22, 15, 0), datetime(2026, 10, 22, 15, 0, tzinfo=timezone.utc)],
+)
+def test_parse_due_date_keeps_only_dates_plausible_for_the_meeting(date_str, expected, reference):
+    assert meetings.parse_due_date(date_str, reference) == expected
 
 
 # ============================================================================
@@ -748,6 +729,7 @@ def test_create_action_item_tasks_with_due_date(mock_make_session, qdrant):
         title="Test Meeting",
         content="Test transcript",
         sha256=create_content_hash("meeting:tasks5"),
+        meeting_date=datetime(2024, 3, 1, tzinfo=timezone.utc),
         modality="meeting",
         mime_type="text/plain",
         size=100,
@@ -816,13 +798,30 @@ def test_link_attendees_records_the_meetings_creator_on_new_people(db_session, r
 def test_extraction_runs_on_the_creators_key(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [submitted(EXTRACTED)]
     meeting = meeting_for(db_session, regular_user.id)
+    meeting.meeting_date = datetime(2026, 10, 22, 15, 0, tzinfo=timezone.utc)
 
     result = meetings.extract_and_update_meeting(db_session, meeting)
 
     request = scripted_llm.requests[0]
     assert (result["status"], result["tasks_created"], meeting.summary) == ("success", 1, "We met.")
     assert request["api_key"] == "sk-test-default"
-    assert request["messages"][0].content[0].text == "Meeting transcript:\nAlice: hi"
+    assert request["messages"][0].content[0].text == (
+        "Meeting date: Thursday 2026-10-22T15:00:00+00:00\n\nMeeting transcript:\nAlice: hi"
+    )
+
+
+def test_undated_meetings_are_dated_by_when_they_were_brought_in(db_session, regular_user, llm_key, scripted_llm):
+    scripted_llm.script = [submitted(EXTRACTED)]
+    meeting = meeting_for(db_session, regular_user.id)
+    meeting.inserted_at = datetime(2026, 10, 22, 15, 0, tzinfo=timezone.utc)
+
+    meetings.extract_and_update_meeting(db_session, meeting)
+
+    task = db_session.query(Task).filter(Task.source_item_id == meeting.id).one()
+    assert scripted_llm.requests[0]["messages"][0].content[0].text.startswith(
+        "Meeting date: Thursday 2026-10-22T15:00:00+00:00\n"
+    )
+    assert task.due_date.date() == datetime(2026, 11, 1).date()
 
 
 def test_meetings_without_a_key_are_kept_unextracted(db_session, regular_user, scripted_llm):
@@ -842,6 +841,26 @@ def test_a_failed_extraction_marks_the_meeting_failed(db_session, regular_user, 
 
     assert (result["status"], meeting.extraction_status) == ("error", "failed")
     assert "sk-test-default" not in result["error"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        patch("memory.common.content_processing.push_chunks_to_qdrant", side_effect=RuntimeError("qdrant down")),
+        patch("memory.workers.tasks.meetings.process_content_item", side_effect=RuntimeError("embed down")),
+    ],
+)
+def test_a_meeting_that_is_not_stored_keeps_no_tasks(
+    failure, regular_user, llm_key, scripted_llm, mock_make_session, qdrant
+):
+    scripted_llm.script = [submitted(EXTRACTED)]
+    meeting = meeting_for(mock_make_session, regular_user.id)
+
+    with failure:
+        result = meetings.execute_meeting_processing(mock_make_session, meeting, None, None)
+
+    tasks = mock_make_session.query(Task).filter(Task.source_item_id == meeting.id).all()
+    assert (result["status"], meeting.extraction_status, tasks) == ("error", "extracted", [])
 
 
 def test_keyless_meeting_is_embedded_with_extraction_skipped(
@@ -1237,9 +1256,8 @@ def test_action_item_priority_normalization(
         "15/01/2024",
     ],
 )
-def test_parse_due_date_valid_formats(date_str):
-    """Test due date parsing succeeds with valid formats."""
-    result = meetings.parse_due_date(date_str)
+def test_parse_date_valid_formats(date_str):
+    result = meetings.parse_date(date_str)
     assert result is not None
 
 
@@ -1251,9 +1269,8 @@ def test_parse_due_date_valid_formats(date_str):
         None,
     ],
 )
-def test_parse_due_date_invalid_formats(date_str):
-    """Test due date parsing returns None for invalid formats."""
-    result = meetings.parse_due_date(date_str)
+def test_parse_date_invalid_formats(date_str):
+    result = meetings.parse_date(date_str)
     assert result is None
 
 
