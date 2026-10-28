@@ -61,7 +61,8 @@ calendar accounts, LessWrong) are now each synced on their own "Sync every"
 interval, edited on their Sources tab; beat checks every minute what is due.
 These env vars are no longer read: `EMAIL_SYNC_INTERVAL`,
 `ARTICLE_FEED_SYNC_INTERVAL`, `GITHUB_SYNC_INTERVAL`,
-`GOOGLE_DRIVE_SYNC_INTERVAL`, `CALENDAR_SYNC_INTERVAL`. The migration raises each
+`GOOGLE_DRIVE_SYNC_INTERVAL`, `CALENDAR_SYNC_INTERVAL`, `LESSWRONG_SYNC_CHECK_INTERVAL`
+(`0` there turns the LessWrong scheduled sync off in the migration). The migration raises each
 row's interval to the env value (it used to be the floor), and gives email
 accounts the `EMAIL_SYNC_INTERVAL` value, so keep them set until the migration
 has run in the container that runs migrations, then remove them. Calendar

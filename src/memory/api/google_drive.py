@@ -11,7 +11,7 @@ os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from memory.common import settings
 from memory.common.celery_app import SYNC_GOOGLE_FOLDER, app as celery_app
@@ -71,7 +71,7 @@ class FolderCreate(BaseModel):
     recursive: bool = True
     include_shared: bool = False
     tags: list[str] = []
-    check_interval: int = 60  # Minutes
+    check_interval: int = Field(60, ge=1, description="Minutes between syncs")
     # Access control
     project_id: int | None = None
     sensitivity: str = "basic"
@@ -83,7 +83,7 @@ class FolderUpdate(BaseModel):
     recursive: bool | None = None
     include_shared: bool | None = None
     tags: list[str] | None = None
-    check_interval: int | None = None
+    check_interval: int | None = Field(None, ge=1)
     active: bool | None = None
     exclude_folder_ids: list[str] | None = None
     # Access control: an explicit null project_id clears it, an omitted one is unchanged

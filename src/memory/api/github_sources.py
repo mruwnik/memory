@@ -7,7 +7,7 @@ from typing import Literal, cast
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -118,7 +118,7 @@ class GithubRepoCreate(BaseModel):
     labels_filter: list[str] = []
     state_filter: str | None = None
     tags: list[str] = []
-    check_interval: int = 60
+    check_interval: int = Field(60, ge=1, description="Minutes between syncs")
     full_sync_interval: int = 1440
 
 
@@ -130,7 +130,7 @@ class GithubRepoUpdate(BaseModel):
     labels_filter: list[str] | None = None
     state_filter: str | None = None
     tags: list[str] | None = None
-    check_interval: int | None = None
+    check_interval: int | None = Field(None, ge=1)
     full_sync_interval: int | None = None
     active: bool | None = None
 

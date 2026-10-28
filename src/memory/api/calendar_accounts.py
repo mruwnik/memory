@@ -3,7 +3,7 @@
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from memory.api.auth import (
@@ -109,7 +109,7 @@ class CalendarAccountCreate(BaseModel):
     # Common fields
     calendar_ids: list[str] = []
     tags: list[str] = []
-    check_interval: int = 15  # Minutes
+    check_interval: int = Field(15, ge=1, description="Minutes between syncs")
     days_back: int = 30
     sync_future_days: int = 90
     # Access control
@@ -126,7 +126,7 @@ class CalendarAccountUpdate(BaseModel):
     google_account_id: int | None = None
     calendar_ids: list[str] | None = None
     tags: list[str] | None = None
-    check_interval: int | None = None
+    check_interval: int | None = Field(None, ge=1)
     days_back: int | None = None
     sync_future_days: int | None = None
     active: bool | None = None

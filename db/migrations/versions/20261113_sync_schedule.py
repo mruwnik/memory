@@ -60,6 +60,9 @@ def upgrade():
         "forum_sync_configs", sa.Column("sync_queued_at", sa.DateTime(timezone=True), nullable=True)
     )
     op.execute("UPDATE forum_sync_configs SET sync_queued_at = last_sync_at")
+    # LESSWRONG_SYNC_CHECK_INTERVAL=0 turned the scheduled LessWrong sync off.
+    if os.getenv("LESSWRONG_SYNC_CHECK_INTERVAL") == "0":
+        op.execute("UPDATE forum_sync_configs SET active = false")
 
     op.create_table(
         "delayed_feed_items",

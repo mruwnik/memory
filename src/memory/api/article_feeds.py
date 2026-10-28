@@ -59,7 +59,7 @@ class ArticleFeedCreate(BaseModel):
     title: str | None = None
     description: str | None = None
     tags: list[str] = []
-    check_interval: int = 1440  # 24 hours in minutes
+    check_interval: int = Field(1440, ge=1, description="Minutes between syncs")
     ingest_delay: int = Field(0, ge=0, description="Minutes after publication before an entry is fetched")
     active: bool = True
     llm_key: LLMKeyInput | None = None
@@ -69,7 +69,7 @@ class ArticleFeedUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     tags: list[str] | None = None
-    check_interval: int | None = None
+    check_interval: int | None = Field(None, ge=1)
     ingest_delay: int | None = Field(None, ge=0)
     active: bool | None = None
     llm_key: LLMKeyInput | None = None

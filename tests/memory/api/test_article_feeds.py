@@ -198,6 +198,18 @@ def test_update_feed_fields(client, db_session, user, field, value):
     assert getattr(feed, field) == value
 
 
+@pytest.mark.parametrize("field, value", [("check_interval", 0), ("ingest_delay", -1)])
+def test_update_feed_rejects_out_of_range_schedule(client, db_session, user, field, value):
+    """An interval of 0 would sync the feed on every dispatcher tick."""
+    feed = ArticleFeed(url="https://example.com/feed.xml", title="Test Feed")
+    db_session.add(feed)
+    db_session.commit()
+
+    response = client.patch(f"/article-feeds/{feed.id}", json={field: value})
+
+    assert response.status_code == 422
+
+
 def test_update_feed_multiple_fields(client, db_session, user):
     """Update multiple feed fields at once succeeds."""
     feed = ArticleFeed(
