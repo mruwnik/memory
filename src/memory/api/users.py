@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
@@ -302,6 +302,12 @@ def list_available_scopes(
     """List all available scopes. Requires admin:users scope."""
     hidden = scopes_hidden(enabled_modules())
     return [ScopeResponse(**scope) for scope in VALID_SCOPES if scope["value"] not in hidden]
+
+
+@router.get("/api-key-types")
+def list_api_key_types() -> list[str]:
+    """The key types an API key can be created with."""
+    return list(APIKeyType.ALL_TYPES)
 
 
 @router.get("/{user_id}")
@@ -641,6 +647,27 @@ def create_user_api_key(
     response_data = api_key.serialize()
     response_data["key"] = api_key.key
     return APIKeyCreateResponse(**response_data)
+
+
+@router.post("/{user_id}/api-keys/{key_id}/reveal")
+def reveal_user_api_key(
+    user_id: int,
+    key_id: int,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Return one of the caller's own live API keys in full. Admins can't reveal other users' keys."""
+    if user_id != user.id:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    api_key = db.get(APIKey, key_id)
+    if not api_key or api_key.user_id != user_id or not api_key.is_valid():
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    logger.info("API key %s revealed by user %s", key_id, user.id)
+    response.headers["Cache-Control"] = "no-store"
+    return {"key": api_key.key}
 
 
 @router.delete("/{user_id}/api-keys/{key_id}")

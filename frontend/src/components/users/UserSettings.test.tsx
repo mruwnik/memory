@@ -50,6 +50,8 @@ const install = (
     }
 
     if (url.endsWith('/users/me') && method === 'GET') return mockResponse({ json: meUser })
+    if (url.endsWith('/api-keys') && method === 'GET') return mockResponse({ json: [] })
+    if (url.endsWith('/users/api-key-types')) return mockResponse({ json: ['internal', 'mcp'] })
     return mockResponse({ json: {} })
   })
 
@@ -70,15 +72,9 @@ describe('UserSettings load states', () => {
     renderWithRouter(<UserSettings />)
     expect(await screen.findByDisplayValue('Ada')).toBeInTheDocument()
     expect(screen.getByDisplayValue('ada@x.com')).toBeInTheDocument()
-    expect(screen.getByText('No API key configured')).toBeInTheDocument()
+    expect(await screen.findByText('No API keys yet')).toBeInTheDocument()
     expect(screen.getByText('read')).toBeInTheDocument()
     expect(screen.getByText('admin')).toBeInTheDocument()
-  })
-
-  it('shows the configured API key message when api_key_count > 0', async () => {
-    install(me({ api_key_count: 2 }))
-    renderWithRouter(<UserSettings />)
-    expect(await screen.findByText('You have an API key configured')).toBeInTheDocument()
   })
 
   it('shows an error with retry when loading fails', async () => {
@@ -230,45 +226,163 @@ describe('UserSettings change password', () => {
   })
 })
 
-describe('UserSettings API key', () => {
-  it('shows why generating a key failed inside the dialog', async () => {
-    install(me({ api_key_count: 1 }), authMe(), {
-      '/api-keys': (init) =>
+const apiKey = (overrides = {}) => ({
+  id: 7,
+  name: 'Laptop CLI',
+  key_type: 'mcp',
+  scopes: null,
+  created_at: '2026-10-01T10:00:00',
+  expires_at: null,
+  last_used_at: null,
+  revoked: false,
+  key_preview: 'mcp_abcd...wxyz',
+  ...overrides,
+})
+
+const keysTable = () => screen.getByRole('table')
+
+describe('UserSettings API keys', () => {
+  it('lists live keys masked and hides revoked ones', async () => {
+    install(me(), authMe(), {
+      '/users/1/api-keys': (init) => init?.method ? undefined : mockResponse({
+        json: [
+          apiKey(),
+          apiKey({ id: 8, name: 'Old key', revoked: true }),
+          apiKey({ id: 9, name: 'Scoped', key_type: 'internal', scopes: ['read'], expires_at: '2027-01-01T00:00:00' }),
+        ],
+      }),
+    })
+    renderWithRouter(<UserSettings />)
+    await screen.findByText('Laptop CLI')
+
+    const rows = within(keysTable()).getAllByRole('row').slice(1)
+    expect(rows.map((r) => within(r).getAllByRole('cell')[0].textContent)).toEqual(['Laptop CLI', 'Scoped'])
+    expect(within(rows[0]).getByText('mcp_abcd...wxyz')).toBeInTheDocument()
+    expect(within(rows[0]).getByText('All your scopes')).toBeInTheDocument()
+    expect(within(rows[0]).getByText('Never')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('read')).toBeInTheDocument()
+  })
+
+  it('offers no Show for an expired key', async () => {
+    install(me(), authMe(), {
+      '/users/1/api-keys': (init) => init?.method ? undefined : mockResponse({
+        json: [apiKey({ expires_at: '2020-01-01T00:00:00' })],
+      }),
+    })
+    renderWithRouter(<UserSettings />)
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.getByText('mcp_abcd...wxyz')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()
+  })
+
+  it('shows a key in full only on request, then hides it again', async () => {
+    const reveals: string[] = []
+    install(me(), authMe(), {
+      '/reveal': (init) => {
+        reveals.push(init?.method ?? 'GET')
+        return mockResponse({ json: { key: 'FAKE-full-key' } })
+      },
+      '/users/1/api-keys': (init) => init?.method ? undefined : mockResponse({ json: [apiKey()] }),
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    await screen.findByText('mcp_abcd...wxyz')
+    expect(screen.queryByText('FAKE-full-key')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show' }))
+    expect(await screen.findByText('FAKE-full-key')).toBeInTheDocument()
+    expect(reveals).toEqual(['POST'])
+
+    await user.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(screen.queryByText('FAKE-full-key')).not.toBeInTheDocument()
+    expect(screen.getByText('mcp_abcd...wxyz')).toBeInTheDocument()
+  })
+
+  it('revokes a key after confirmation', async () => {
+    const deleted: string[] = []
+    let keys = [apiKey()]
+    install(me(), authMe(), {
+      '/users/1/api-keys': (init) => {
+        if (init?.method === 'DELETE') return undefined
+        return init?.method ? undefined : mockResponse({ json: keys })
+      },
+      '/users/1/api-keys/7': (init) => {
+        if (init?.method !== 'DELETE') return undefined
+        deleted.push('7')
+        keys = [apiKey({ revoked: true })]
+        return mockResponse({ json: { status: 'revoked' } })
+      },
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    await screen.findByText('Laptop CLI')
+
+    await user.click(screen.getByRole('button', { name: 'Revoke' }))
+    expect(deleted).toEqual([])
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Revoke' }))
+
+    await waitFor(() => expect(deleted).toEqual(['7']))
+    expect(await screen.findByText('No API keys yet')).toBeInTheDocument()
+  })
+
+  it('creates a key from the form and shows it once', async () => {
+    const posted: any[] = []
+    install(me({ scopes: ['read', 'teams'] }), authMe(), {
+      '/users/1/api-keys': (init) => {
+        if (init?.method !== 'POST') return undefined
+        posted.push(JSON.parse(init.body as string))
+        return mockResponse({ json: { ...apiKey(), key: 'FAKE-new-key' } })
+      },
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    await user.click(await screen.findByRole('button', { name: 'New API key' }))
+    const modal = modalByHeading('New API key')
+
+    await user.type(within(modal).getByLabelText('Name'), 'Laptop CLI')
+    await user.selectOptions(within(modal).getByLabelText('Type'), 'mcp')
+    await user.click(within(modal).getByLabelText('Scopes'))
+    await user.click(within(modal).getByRole('option', { name: /read/ }))
+    await user.type(within(modal).getByLabelText('Expires after (days)'), '30')
+    await user.click(within(modal).getByRole('button', { name: 'Create key' }))
+
+    expect(await screen.findByText('FAKE-new-key')).toBeInTheDocument()
+    expect(posted).toEqual([{ name: 'Laptop CLI', key_type: 'mcp', scopes: ['read'], expires_in_days: 30 }])
+
+    // user-event stubs the clipboard, so read it back rather than spying on writeText.
+    await user.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(async () => expect(await navigator.clipboard.readText()).toBe('FAKE-new-key'))
+
+    // The key is shown in full here, so only Done may close the dialog.
+    await user.keyboard('{Escape}')
+    expect(screen.getByText('FAKE-new-key')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByText('FAKE-new-key')).not.toBeInTheDocument()
+  })
+
+  it('creates a key with the owner scopes and no expiry by default', async () => {
+    const posted: any[] = []
+    install(me(), authMe(), {
+      '/users/1/api-keys': (init) => {
+        if (init?.method !== 'POST') return undefined
+        posted.push(JSON.parse(init.body as string))
+        return mockResponse({ json: { ...apiKey(), key: 'FAKE-new-key' } })
+      },
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    await user.click(await screen.findByRole('button', { name: 'New API key' }))
+    await user.click(within(modalByHeading('New API key')).getByRole('button', { name: 'Create key' }))
+
+    await waitFor(() => expect(posted).toEqual([{ key_type: 'internal', scopes: null, expires_in_days: null }]))
+  })
+
+  it('shows why creating a key failed inside the dialog', async () => {
+    install(me(), authMe(), {
+      '/users/1/api-keys': (init) =>
         init?.method === 'POST' ? mockResponse({ status: 500, json: { detail: 'key store down' } }) : undefined,
     })
     const { user } = renderWithRouter(<UserSettings />)
-    await user.click(await screen.findByRole('button', { name: /Regenerate API key/ }))
-    const modal = modalByHeading(/Regenerate API key/)
-    await user.click(within(modal).getByRole('button', { name: 'Regenerate' }))
+    await user.click(await screen.findByRole('button', { name: 'New API key' }))
+    const modal = modalByHeading('New API key')
+    await user.click(within(modal).getByRole('button', { name: 'Create key' }))
 
     expect(await within(modal).findByText(/key store down/)).toBeInTheDocument()
-  })
-
-  it('generates a key and reveals it, then copies to clipboard', async () => {
-    install(me({ api_key_count: 0 }), authMe(), {
-      '/api-keys': (init) =>
-        init?.method === 'POST'
-          ? mockResponse({ json: { id: 7, revoked: false, key: 'mcp_newkey' } })
-          : mockResponse({ json: [] }),
-    })
-    const { user } = renderWithRouter(<UserSettings />)
-    await screen.findByText('No API key configured')
-    await user.click(screen.getByRole('button', { name: /Generate API key/ }))
-    const modal = modalByHeading(/Generate API key/)
-    await user.click(within(modal).getByRole('button', { name: 'Generate' }))
-
-    expect(await screen.findByText('mcp_newkey')).toBeInTheDocument()
-    // Copying invokes navigator.clipboard.writeText; user-event provides its own
-    // clipboard stub, so assert via its readText rather than the spy.
-    await user.click(screen.getByRole('button', { name: 'Copy' }))
-    await waitFor(async () =>
-      expect(await navigator.clipboard.readText()).toBe('mcp_newkey'),
-    )
-
-    // The key is never shown again, so only Done may close the dialog.
-    await user.keyboard('{Escape}')
-    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Done' }))
-    expect(screen.queryByText('mcp_newkey')).not.toBeInTheDocument()
   })
 })

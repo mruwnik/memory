@@ -134,17 +134,21 @@ detail alone, with a back button to the list, or the list with the placeholder u
 
 `Page width="narrow"`, one `Card title description?` per group of settings, `Field`s inside (`FieldRow` for
 pairs, which stack on phones), `FormActions` at the bottom of each card. Settings that are actions rather
-than values (change password, regenerate key) are `Row`s in a flush `List` inside the card.
+than values (change password) are `Row`s in a flush `List` inside the card. A page that also holds a
+`Table` (User settings, with its API keys) uses `width="default"` so the columns fit.
 
 ```tsx
-<Page title="User settings" width="narrow">
+<Page title="User settings" width="default">
   <Card title="Profile">
     <Field label="Name"><Input value={name} onChange={...} /></Field>
     <FormActions><Button variant="primary">Save changes</Button></FormActions>
   </Card>
   <Card title="Security" flush>
-    <List flush><Row title="API key" meta={['No API key configured']} actions={<Button size="sm">Generate</Button>} /></List>
+    <List flush><Row title="Password" meta={['Change your account password']} actions={<Button size="sm">Change password</Button>} /></List>
   </Card>
+  <Section title="API keys" actions={<Button variant="primary" size="sm">New API key</Button>}>
+    <Table>...</Table>
+  </Section>
 </Page>
 ```
 

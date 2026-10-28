@@ -37,6 +37,26 @@ export interface ApiKeyResponse {
   key: string
 }
 
+export interface ApiKey {
+  id: number
+  name: string | null
+  key_type: string
+  /** null: the key acts with its owner's current scopes. */
+  scopes: string[] | null
+  created_at: string | null
+  expires_at: string | null
+  last_used_at: string | null
+  revoked: boolean
+  key_preview: string | null
+}
+
+export interface ApiKeyCreate {
+  name?: string
+  key_type: string
+  scopes: string[] | null
+  expires_in_days: number | null
+}
+
 export interface ScopeInfo {
   value: string
   label: string
@@ -113,6 +133,38 @@ export const useUsers = () => {
     return response.json()
   }, [apiCall])
 
+  const listApiKeys = useCallback(async (userId: number): Promise<ApiKey[]> => {
+    const response = await apiCall(`/users/${userId}/api-keys`)
+    if (!response.ok) throw await apiError(response, 'Failed to fetch API keys')
+    return response.json()
+  }, [apiCall])
+
+  const listApiKeyTypes = useCallback(async (): Promise<string[]> => {
+    const response = await apiCall('/users/api-key-types')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch API key types')
+    return response.json()
+  }, [apiCall])
+
+  const createApiKey = useCallback(async (userId: number, data: ApiKeyCreate): Promise<ApiKey & ApiKeyResponse> => {
+    const response = await apiCall(`/users/${userId}/api-keys`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    if (!response.ok) throw await apiError(response, 'Failed to create API key')
+    return response.json()
+  }, [apiCall])
+
+  const revealApiKey = useCallback(async (userId: number, keyId: number): Promise<string> => {
+    const response = await apiCall(`/users/${userId}/api-keys/${keyId}/reveal`, { method: 'POST' })
+    if (!response.ok) throw await apiError(response, 'Failed to show API key')
+    return (await response.json()).key
+  }, [apiCall])
+
+  const revokeApiKey = useCallback(async (userId: number, keyId: number): Promise<void> => {
+    const response = await apiCall(`/users/${userId}/api-keys/${keyId}`, { method: 'DELETE' })
+    if (!response.ok) throw await apiError(response, 'Failed to revoke API key')
+  }, [apiCall])
+
   const changePassword = useCallback(async (data: PasswordChange): Promise<void> => {
     const response = await apiCall('/users/me/change-password', {
       method: 'POST',
@@ -139,6 +191,11 @@ export const useUsers = () => {
     updateUser,
     deleteUser,
     regenerateApiKey,
+    listApiKeys,
+    listApiKeyTypes,
+    createApiKey,
+    revealApiKey,
+    revokeApiKey,
     changePassword,
     resetPassword,
   }

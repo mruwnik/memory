@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.api.users import check_single_user
-from memory.common.db.models import APIKey, HumanUser, Person, ScheduledTask, UserSession
+from memory.common.db.models import APIKey, APIKeyType, HumanUser, Person, ScheduledTask, UserSession
 from memory.common.db.models.users import verify_password
 from memory.common.modules import MODULES, MULTI_USER
 
@@ -150,6 +150,59 @@ def test_api_key_serialization_hides_full_key(client: TestClient, admin_user, db
     assert "..." in key_data["key_preview"]
     # Full key should not be present in list response
     assert key_data.get("key") != full_key
+
+
+def test_api_key_types_lists_every_type(client: TestClient, admin_user):
+    response = client.get("/users/api-key-types")
+
+    assert response.status_code == 200
+    assert response.json() == list(APIKeyType.ALL_TYPES)
+
+
+def test_owner_can_reveal_own_key(client: TestClient, admin_user):
+    created = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "Mine"}).json()
+
+    response = client.post(f"/users/{admin_user.id}/api-keys/{created['id']}/reveal")
+
+    assert response.status_code == 200
+    assert response.json() == {"key": created["key"]}
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("invalidate", [
+    {"revoked": True},
+    {"expires_at": datetime.now() - timedelta(days=1)},
+    {"key_type": "one_time"},
+])
+def test_invalid_key_cannot_be_revealed(client: TestClient, admin_user, db_session, invalidate):
+    key = APIKey.create(user_id=admin_user.id, name="Unusable")
+    for field, value in invalidate.items():
+        setattr(key, field, value)
+    db_session.add(key)
+    db_session.commit()
+
+    response = client.post(f"/users/{admin_user.id}/api-keys/{key.id}/reveal")
+
+    assert response.status_code == 404
+    assert key.key not in response.text
+
+
+def test_admin_cannot_reveal_another_users_key(client: TestClient, admin_user, someone_elses_key):
+    key = someone_elses_key
+
+    response = client.post(f"/users/{key.user_id}/api-keys/{key.id}/reveal")
+
+    assert response.status_code == 403
+    assert key.key not in response.text
+
+
+def test_reveal_rejects_a_key_of_another_user_under_own_id(
+    regular_client: TestClient, user, someone_elses_key
+):
+    response = regular_client.post(f"/users/{user.id}/api-keys/{someone_elses_key.id}/reveal")
+
+    assert response.status_code == 404
+    assert someone_elses_key.key not in response.text
 
 
 # --- Admin API Key Management Tests ---
