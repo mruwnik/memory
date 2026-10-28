@@ -153,7 +153,6 @@ class MailMessage(SourceItem):
 
     def as_payload(self) -> MailMessagePayload:
         base = super().as_payload()
-        base["tags"] = (self.tags or []) + [self.sender or ""] + (self.recipients or [])
         sender_emails = mail_addresses([self.sender or ""])
         return MailMessagePayload(
             **base,

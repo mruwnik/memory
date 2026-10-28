@@ -30,6 +30,7 @@ from memory.common.db.models import (
 )
 from memory.workers.tasks.maintenance import (
     clean_collection,
+    clean_mail_headers,
     reingest_chunk,
     check_batch,
     reingest_missing_chunks,
@@ -871,19 +872,7 @@ def test_update_metadata_for_item_success(db_session, qdrant, item_type):
         client, collection, chunk_id, updated_payload = args
 
         # Check that tags were merged (existing + new)
-        expected_tags = set(
-            [
-                "existing",
-                "qdrant",
-                "original",
-                "test",
-            ]
-        )
-        if item_type == "MailMessage":
-            expected_tags.update(["recipient@example.com", "sender@example.com"])
-
-        actual_tags = set(updated_payload["tags"])
-        assert actual_tags == expected_tags
+        assert set(updated_payload["tags"]) == {"existing", "qdrant", "original", "test"}
 
         # Check that new metadata is present
         assert updated_payload["source_id"] == item.id
@@ -2148,3 +2137,49 @@ def test_submit_summary_batch_reports_each_keys_batch(monkeypatch, use_batch, ex
     )
 
     assert maintenance_module.submit_summary_batch() == expected
+
+
+def test_clean_mail_headers_decodes_rows_and_strips_address_tags(db_session, qdrant):
+    raw_sender = "=?UTF-8?Q?Karolina_Wal=C4=99cik?= <karolina@far.ai>"
+    message = MailMessage(
+        sha256=b"clean-mail" + bytes(22),
+        modality="mail",
+        sender=raw_sender,
+        subject="=?UTF-8?Q?Cze=C5=9B=C4=87?=",
+        recipients=["r@x.com"],
+        tags=["work"],
+    )
+    attachment = EmailAttachment(
+        sha256=b"clean-att" + bytes(23),
+        modality="doc",
+        mail_message=message,
+        tags=["email", "work"],
+    )
+    mail_chunk, doc_chunk = str(uuid.uuid4()), str(uuid.uuid4())
+    db_session.add_all(
+        [
+            message,
+            attachment,
+            Chunk(id=mail_chunk, source=message, content="m", embedding_model="m", collection_name="mail"),
+            Chunk(id=doc_chunk, source=attachment, content="d", embedding_model="m", collection_name="doc"),
+        ]
+    )
+    db_session.commit()
+    for collection, chunk_id, tags in [
+        ("mail", mail_chunk, ["work", raw_sender, "r@x.com", "summary-tag"]),
+        ("doc", doc_chunk, ["email", raw_sender, "work"]),
+    ]:
+        qd.ensure_collection_exists(qdrant, collection, 1024)
+        qd.upsert_vectors(qdrant, collection, [chunk_id], [[1] * 1024], [{"tags": tags, "sender": raw_sender}])
+
+    clean_mail_headers()
+    clean_mail_headers()
+
+    db_session.refresh(message)
+    assert (message.sender, message.subject) == ("Karolina Walęcik <karolina@far.ai>", "Cześć")
+    assert qd.get_payloads(qdrant, "mail", [mail_chunk])[mail_chunk] == {
+        "tags": ["work", "summary-tag"],
+        "sender": "Karolina Walęcik <karolina@far.ai>",
+        "subject": "Cześć",
+    }
+    assert qd.get_payloads(qdrant, "doc", [doc_chunk])[doc_chunk]["tags"] == ["email", "work"]

@@ -50,17 +50,12 @@ def process_attachment(
             logger.exception("Failed to save an attachment to disk")
             return None
 
-    # Auto-add source and sender tags for filtering
-    auto_tags = ["email"]
-    if message.sender:
-        auto_tags.append(cast(str, message.sender))
-
     return EmailAttachment(
         modality=collections.get_modality(attachment["content_type"]),
         sha256=hashlib.sha256(
             real_content if real_content else str(attachment).encode()
         ).digest(),
-        tags=auto_tags + (message.tags or []),
+        tags=["email"] + (message.tags or []),
         size=attachment["size"],
         mime_type=attachment["content_type"],
         mail_message=message,

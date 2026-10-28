@@ -50,6 +50,7 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     RECONCILE_ACCESS_CONTROL,
+    CLEAN_MAIL_HEADERS,
     TRACK_GIT_CHANGES,
     BACKUP_PATH,
     BACKUP_ALL,
@@ -77,6 +78,7 @@ TASK_MAPPINGS = {
         "update_metadata_for_item": UPDATE_METADATA_FOR_ITEM,
         "update_metadata_for_source_items": UPDATE_METADATA_FOR_SOURCE_ITEMS,
         "reconcile_access_control": RECONCILE_ACCESS_CONTROL,
+        "clean_mail_headers": CLEAN_MAIL_HEADERS,
     },
     "blogs": {
         "sync_webpage": SYNC_WEBPAGE,
@@ -358,6 +360,13 @@ def maintenance_reingest_empty_source_items(ctx, item_type):
 def maintenance_reingest_all_empty_source_items(ctx):
     """Reingest all empty source items."""
     execute_task(ctx, "maintenance", "reingest_all_empty_source_items")
+
+
+@maintenance.command("clean-mail-headers")
+@click.pass_context
+def maintenance_clean_mail_headers(ctx):
+    """Decode stored mail headers and drop address tags from mail Qdrant payloads."""
+    execute_task(ctx, "maintenance", "clean_mail_headers")
 
 
 @maintenance.command("reconcile-access-control")

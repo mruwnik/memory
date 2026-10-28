@@ -124,6 +124,22 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
     )
 
 
+def test_process_attachment_tags_skip_sender():
+    attachment = {"filename": "a.txt", "content_type": "text/plain", "size": 1, "content": b"a"}
+    message = MailMessage(
+        id=1,
+        message_id="<m@example.com>",
+        sender='"mBank" <kontakt@mbank.pl>',
+        folder="INBOX",
+        tags=["bank"],
+    )
+
+    result = process_attachment(cast(Attachment, attachment), message)
+
+    assert result is not None
+    assert result.tags == ["email", "bank"]
+
+
 def test_process_attachment_write_error():
     # Create test attachment
     attachment = {

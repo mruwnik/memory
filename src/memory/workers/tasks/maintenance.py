@@ -1,5 +1,6 @@
 import itertools
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
@@ -28,6 +29,7 @@ from memory.common.celery_app import (
     app,
     CLEAN_ALL_COLLECTIONS,
     CLEAN_COLLECTION,
+    CLEAN_MAIL_HEADERS,
     CLEANUP_EXPIRED_SESSIONS,
     PURGE_AGENT_RUNS,
     SWEEP_AGENT_RUNS,
@@ -83,6 +85,7 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
+from memory.parsers.email import decode_mime_header
 
 logger = logging.getLogger(__name__)
 
@@ -1125,6 +1128,60 @@ def reconcile_access_control(
         changed,
     )
     return {"status": "success", "reconciled": reconciled, "changed": changed}
+
+
+RAW_HEADER_TAG = re.compile(r"<[^>]*@[^>]*>|=\?.*\?=")
+
+
+def strip_address_tags(client, item: SourceItem, stale: set[str], extra: dict[str, Any]) -> None:
+    by_collection: dict[str, list[str]] = defaultdict(list)
+    for chunk in item.chunks:
+        if chunk.id and chunk.collection_name:
+            by_collection[chunk.collection_name].append(str(chunk.id))
+    for collection, ids in by_collection.items():
+        for chunk_id, payload in qdrant.get_payloads(client, collection, ids).items():
+            tags = payload.get("tags") or []
+            kept = [t for t in tags if t not in stale and not RAW_HEADER_TAG.search(t)]
+            changes = {"tags": kept, **extra}
+            if any(payload.get(k) != v for k, v in changes.items()):
+                qdrant.set_payload(client, collection, chunk_id, changes)
+
+
+@app.task(name=CLEAN_MAIL_HEADERS)
+@tracked_task
+def clean_mail_headers() -> dict[str, str | int]:
+    """Decode MIME-encoded sender/subject of stored mail, and drop the sender,
+    recipient and raw-header tags ingest used to write into the Qdrant payloads
+    of mail and attachments. Safe to re-run."""
+    client = qdrant.get_qdrant_client()
+    messages = 0
+    last_id = 0
+    with make_session() as session:
+        while batch := (
+            session.query(MailMessage)
+            .options(
+                selectinload(MailMessage.chunks),
+                selectinload(MailMessage.attachments).selectinload(EmailAttachment.chunks),
+            )
+            .filter(MailMessage.id > last_id)
+            .order_by(MailMessage.id)
+            .limit(100)
+            .all()
+        ):
+            last_id = batch[-1].id
+            for message in batch:
+                stale = {message.sender or "", *(message.recipients or [])}
+                if message.sender:
+                    message.sender = decode_mime_header("From", message.sender)
+                if message.subject:
+                    message.subject = decode_mime_header("Subject", message.subject)
+                headers = {"sender": message.sender, "subject": message.subject}
+                strip_address_tags(client, message, stale, headers)
+                for attachment in message.attachments:
+                    strip_address_tags(client, attachment, stale, {})
+            messages += len(batch)
+            session.commit()
+    return {"status": "success", "messages": messages}
 
 
 @app.task(name=CLEANUP_OLD_TASK_EXECUTIONS)
