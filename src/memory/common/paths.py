@@ -107,3 +107,8 @@ def to_db_filename(
 
     file_storage_root = settings.FILE_STORAGE_DIR.resolve()
     return resolved.relative_to(file_storage_root).as_posix()
+
+
+def is_hidden(path: str | pathlib.Path) -> bool:
+    """Whether any segment of ``path`` is dot-prefixed, like ``.obsidian/`` or ``.gitignore``."""
+    return any(part.startswith(".") for part in pathlib.PurePosixPath(path).parts)

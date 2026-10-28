@@ -1473,15 +1473,21 @@ class Note(SourceItem):
     def db_filename(filename: str | None, subject: str | None) -> str:
         """The canonical FILE_STORAGE_DIR-relative filename a note is stored under.
 
-        Raises ValueError when it would land outside NOTES_STORAGE_DIR.
+        Raises ValueError when it is absolute, isn't markdown, has a hidden
+        segment, or would land outside NOTES_STORAGE_DIR.
         """
-        filename = (filename or Note.default_filename(subject)).lstrip("/")
+        filename = filename or Note.default_filename(subject)
+        if filename.startswith("/"):
+            raise ValueError("Note filename must be relative")
         if not filename.endswith(".md"):
-            filename = f"{filename}.md"
+            raise ValueError("Note filename must end in .md")
         path = paths.validate_path_within_directory(settings.FILE_STORAGE_DIR, filename)
         if not path.is_relative_to(settings.NOTES_STORAGE_DIR.resolve()):
             raise ValueError("Note filename must be inside the notes folder")
-        return paths.to_db_filename(path)
+        db_filename = paths.to_db_filename(path)
+        if paths.is_hidden(db_filename):
+            raise ValueError("Note filename must not have hidden segments")
+        return db_filename
 
     def file_path(self) -> pathlib.Path:
         """The absolute path of this note's file, deriving ``filename`` from the subject if unset."""

@@ -58,7 +58,7 @@ async def upsert(
     Args:
         subject: What the note is about (used for organization)
         content: Note content as a markdown string
-        filename: Optional path relative to notes folder (e.g., "project/ideas.md")
+        filename: Optional markdown path relative to notes folder (e.g., "project/ideas.md"); no hidden (dot-prefixed) segments
         note_type: Optional categorization of the note
         confidences: Dict of scores (0.0-1.0), e.g. {"observation_accuracy": 0.9}
         tags: Organization tags for filtering and discovery
@@ -69,7 +69,10 @@ async def upsert(
     logger.info("MCP: upserting note: %s", subject)
     try:
         if filename:
-            filename = paths.to_db_filename(filename, base_dir=settings.NOTES_STORAGE_DIR)
+            # An absolute path is taken as is, never re-rooted under the notes
+            # folder: /app/memory_files/notes/x.md must not become notes/app/memory_files/notes/x.md.
+            base_dir = None if filename.startswith("/") else settings.NOTES_STORAGE_DIR
+            filename = paths.to_db_filename(filename, base_dir=base_dir)
         filename = Note.db_filename(filename, subject)
     except ValueError as e:
         raise ValueError(f"Invalid filename: {e}")
@@ -159,7 +162,8 @@ async def note_files(path: str = "/"):
         # which would let path="%/secret" enumerate beyond the requested
         # subtree.
         query = query.filter(
-            Note.filename.startswith(db_prefix, autoescape=True)
+            Note.filename.startswith(db_prefix, autoescape=True),
+            ~Note.filename.contains("/.", autoescape=True),
         )
 
         filenames = [row.filename for row in query.with_entities(Note.filename)]

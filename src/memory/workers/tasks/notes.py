@@ -24,6 +24,7 @@ from memory.common.celery_app import (
     SETUP_GIT_NOTES,
     TRACK_GIT_CHANGES,
     SYNC_NOTES_WHEN_DUE,
+    CLEANUP_JUNK_NOTES,
 )
 from memory.common.content_processing import (
     check_content_exists,
@@ -46,6 +47,7 @@ from memory.common.notes_git import (
 )
 from memory.common.redis_lock import distributed_lock
 from memory.common.notes_ssh import ssh_command
+from memory.workers.verification import delete_orphaned_item
 
 logger = logging.getLogger(__name__)
 
@@ -297,13 +299,17 @@ def commit_files(repo_root: pathlib.Path, files: list[pathlib.Path], message: st
     return failed
 
 
+def is_vault_note(path: str) -> bool:
+    return path.endswith(".md") and not paths.is_hidden(path)
+
+
 def changed_notes(repo_root: pathlib.Path, before: str, after: str) -> list[str]:
     if not before or before == after:
         return []
     diff = run_git(repo_root, "diff", "--name-only", "-z", f"{before}..{after}")
     if git_step_failed("diff", diff):
         return []
-    return [f for f in diff.stdout.split("\0") if f.endswith(".md")]
+    return [f for f in diff.stdout.split("\0") if is_vault_note(f)]
 
 
 def reindex_notes(repo_root: pathlib.Path, filenames: list[str]):
@@ -420,7 +426,8 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note") -> 
         if base := indexed_commit(repo_root):
             sync.changed = changed_notes(repo_root, base, head_commit(repo_root))
         else:
-            sync.changed = [f.relative_to(repo_root).as_posix() for f in repo_root.rglob("*.md")]
+            all_files = (f.relative_to(repo_root).as_posix() for f in repo_root.rglob("*.md"))
+            sync.changed = [f for f in all_files if is_vault_note(f)]
 
         try:
             yield sync
@@ -831,3 +838,90 @@ def sync_notes_when_due():
         return {"status": "already_queued"}
     track_git_changes.delay()  # type: ignore[attr-defined]
     return {"status": "queued"}
+
+
+# Memory's copies of non-markdown vault files, which it once saved with ".md" appended.
+JUNK_NOTE_SUFFIXES = (".json.md", ".js.md", ".css.md", "/.gitignore.md")
+# The container's FILE_STORAGE_DIR, once re-rooted under the notes folder from an absolute filename.
+REROOTED_STORAGE_DIR = "app/memory_files/"
+
+
+def memory_made_junk(filename: str) -> bool:
+    notes_prefix = paths.to_db_filename(settings.NOTES_STORAGE_DIR)
+    return filename.endswith(JUNK_NOTE_SUFFIXES) or filename.startswith(
+        f"{notes_prefix}/{REROOTED_STORAGE_DIR}"
+    )
+
+
+def junk_note(filename: str) -> bool:
+    return paths.is_hidden(filename) or memory_made_junk(filename)
+
+
+def removable_vault_file(path: pathlib.Path) -> bool:
+    if path.is_symlink() or not path.is_file():
+        return False
+    return path.resolve().is_relative_to(settings.NOTES_STORAGE_DIR.resolve())
+
+
+def remove_empty_dirs(directory: pathlib.Path, repo_root: pathlib.Path):
+    while directory != repo_root and directory.is_dir() and not any(directory.iterdir()):
+        directory.rmdir()
+        directory = directory.parent
+
+
+def remove_vault_files(files: list[pathlib.Path]):
+    repo_root = settings.NOTES_STORAGE_DIR
+    with git_tracking(repo_root, "Remove junk notes") as sync:
+        for path in files:
+            tracked = sync.is_repo and run_git(
+                repo_root, "ls-files", "--", repo_path(repo_root, path)
+            ).stdout
+            if tracked:
+                sync.track(path)
+            path.unlink()
+            remove_empty_dirs(path.parent, repo_root)
+
+
+@app.task(name=CLEANUP_JUNK_NOTES)
+@tracked_task
+def cleanup_junk_notes(dry_run: bool = False) -> dict:
+    """Delete junk notes with their chunks and vectors, and report notes whose file is gone.
+
+    Junk is a hidden path, Memory's copy of a non-markdown file, or the tree an
+    absolute filename was re-rooted into. Only the junk files Memory itself
+    wrote are removed from the vault: hidden folders may belong to the user's
+    tools. Notes missing their file are only listed: their text still lives in
+    the database. Safe to re-run.
+    """
+    if not settings.NOTES_STORAGE_DIR.is_dir():
+        # Otherwise every note would count as missing its file.
+        raise RuntimeError("Notes folder not found")
+    with make_session() as session:
+        rows = session.query(Note).filter(Note.filename.isnot(None)).all()
+        junk = [n for n in rows if junk_note(str(n.filename))]
+        missing = [
+            n
+            for n in rows
+            if n not in junk and note_file_missing(n) and not write_pending(str(n.filename))
+        ]
+        files = [
+            settings.FILE_STORAGE_DIR / str(n.filename)
+            for n in junk
+            if memory_made_junk(str(n.filename))
+        ]
+        files = [f for f in files if removable_vault_file(f)]
+        result = {
+            "dry_run": dry_run,
+            "junk": len(junk),
+            "missing": sorted(str(n.filename) for n in missing),
+            "files_removed": len(files),
+        }
+        if dry_run:
+            return result
+        # Files first: a re-run still finds the junk rows, but no longer the files of deleted rows.
+        remove_vault_files(files)
+        for note in junk:
+            delete_orphaned_item(note, session)
+        session.commit()
+    logger.info("Removed %s junk notes; %s notes miss their file", len(junk), len(missing))
+    return result

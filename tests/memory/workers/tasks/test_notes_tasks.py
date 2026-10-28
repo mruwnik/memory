@@ -361,10 +361,15 @@ def test_sync_note_unicode_content(mock_make_session, qdrant):
         "/../../etc/passwd",  # leading slash is stripped, then escapes
         "escape.md",  # FILE_STORAGE_DIR-relative but outside notes/
         "emails/escape.md",  # inside FILE_STORAGE_DIR but not under notes/
+        "/notes/absolute.md",
+        "notes/main.js",
+        "notes/.gitignore",
+        "notes/.obsidian/workspace.json.md",
+        "notes/sub/.memory/hidden.md",
     ],
 )
-def test_sync_note_rejects_traversal_filename(bad_filename, tmp_path, caplog):
-    """A path-traversal filename must be rejected before any DB or FS write."""
+def test_sync_note_rejects_unsafe_filename(bad_filename, tmp_path, caplog):
+    """An unsafe filename must be rejected before any DB or FS write."""
     from memory.common import settings
 
     # Anchor the resolution to a writable temp dir so the comparison is
@@ -592,7 +597,7 @@ def test_sync_note_gives_up_on_a_second_filename_race(mock_note_data, mock_make_
 
 
 @pytest.mark.parametrize(
-    "filename", ["notes/sub/../canon.md", "notes//canon.md", "/notes/canon", "notes/./canon.md"]
+    "filename", ["notes/sub/../canon.md", "notes//canon.md", "notes/./canon.md"]
 )
 def test_sync_note_stores_the_canonical_filename(filename, mock_note_data, mock_make_session, qdrant):
     notes.sync_note(**{**mock_note_data, "filename": filename})
@@ -739,6 +744,7 @@ def test_git_tracking_reindexes_notes_the_pull_changed(tmp_path, reindexed):
     push_from_other_clone(tmp_path, remote, "elsewhere.md", "pushed elsewhere")
     push_from_other_clone(tmp_path, remote, "café.md", "non-ascii name")
     push_from_other_clone(tmp_path, remote, "ours.md", "remote version")
+    push_from_other_clone(tmp_path, remote, ".obsidian/hidden.md", "obsidian")
 
     save_note(vault, "ours.md", "memory version")
 
@@ -1269,6 +1275,8 @@ def test_first_sync_reindexes_every_tracked_note(
 ):
     vault, _ = make_vault(tmp_path, "master")
     commit_file(vault, "n.md", "hand commit")
+    commit_file(vault, ".obsidian/hidden.md", "obsidian")
+    commit_file(vault, "sub/.notes-critic/review.md", "critic")
     redis.from_url(settings.REDIS_URL).delete(notes.GIT_INDEXED_COMMIT_KEY)
 
     first = notes.track_git_changes()
@@ -1532,3 +1540,89 @@ def test_push_failure_has_safe_actionable_hint(tmp_path, stderr, reason):
         assert upstream is not None
         assert notes.push_upstream(vault, upstream) == reason
     assert reason in notes.GIT_SYNC_HINTS
+
+
+JUNK_NOTES = {
+    # filename: (row removed, file removed)
+    "notes/good.md": (False, False),
+    "notes/sub/version.1.2.md": (False, False),
+    "notes/.obsidian/workspace.json.md": (True, True),
+    "notes/.obsidian/plugins/obsidian-git/main.js.md": (True, True),
+    "notes/.gitignore.md": (True, True),
+    "notes/theme.css.md": (True, True),
+    "notes/app/memory_files/notes/profiles/peter.md": (True, True),
+    "notes/.memory/kept.md": (True, False),
+    "notes/sub/.notes-critic/review.md": (True, False),
+}
+
+
+def add_raw_note(db_session, filename: str, on_disk: bool = True) -> Note:
+    """A row as older code could store it, bypassing today's filename checks."""
+    note = Note(
+        sha256=create_content_hash(filename),
+        content="x",
+        subject="s",
+        modality="text",
+        mime_type="text/markdown",
+        size=1,
+        filename=filename,
+        chunks=[_make_mock_chunk(0)],
+    )
+    db_session.add(note)
+    db_session.commit()
+    if on_disk:
+        path = settings.FILE_STORAGE_DIR / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    return note
+
+
+def remaining_notes(db_session) -> set[str]:
+    db_session.expire_all()
+    return {str(n.filename) for n in db_session.query(Note)}
+
+
+@pytest.fixture
+def junk_vault(mock_make_session):
+    for filename in JUNK_NOTES:
+        add_raw_note(mock_make_session, filename)
+    add_raw_note(mock_make_session, "notes/gone.md", on_disk=False)
+    add_raw_note(mock_make_session, "notes/pending.md", on_disk=False)
+    notes.mark_pending_write("notes/pending.md", b"sha")
+    return mock_make_session
+
+
+def test_cleanup_junk_notes_removes_junk_rows_and_the_files_memory_made(junk_vault, qdrant):
+    result = notes.cleanup_junk_notes()
+
+    kept = {f for f, (row_removed, _) in JUNK_NOTES.items() if not row_removed}
+    assert remaining_notes(junk_vault) == kept | {"notes/gone.md", "notes/pending.md"}
+    on_disk = {f for f in JUNK_NOTES if (settings.FILE_STORAGE_DIR / f).exists()}
+    assert on_disk == {f for f, (_, file_removed) in JUNK_NOTES.items() if not file_removed}
+    assert not (settings.NOTES_STORAGE_DIR / "app").exists()
+    assert junk_vault.query(Chunk).count() == len(kept) + 2
+    assert result == {"dry_run": False, "junk": 7, "missing": ["notes/gone.md"], "files_removed": 5}
+
+
+def test_cleanup_junk_notes_dry_run_changes_nothing(junk_vault):
+    before = remaining_notes(junk_vault)
+
+    result = notes.cleanup_junk_notes(dry_run=True)
+
+    assert remaining_notes(junk_vault) == before
+    assert all((settings.FILE_STORAGE_DIR / f).exists() for f in JUNK_NOTES)
+    assert result == {"dry_run": True, "junk": 7, "missing": ["notes/gone.md"], "files_removed": 5}
+
+
+def test_cleanup_junk_notes_commits_removed_files_in_the_vault(mock_make_session, qdrant, tmp_path):
+    vault, remote = make_vault(tmp_path, "master")
+    commit_file(vault, ".gitignore.md", "junk")
+    git(vault, "push", "-q")
+    add_raw_note(mock_make_session, "notes/.gitignore.md", on_disk=False)
+    add_raw_note(mock_make_session, "notes/app/memory_files/notes/untracked.md")
+
+    notes.cleanup_junk_notes()
+
+    assert git(vault, "status", "--porcelain") == ""
+    assert remote_files(remote, "master") == {"existing.md"}
+    assert last_status()["ok"] is True
