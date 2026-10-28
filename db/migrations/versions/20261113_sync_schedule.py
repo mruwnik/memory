@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "20261113_sync_schedule"
-down_revision = "20261112_forum_comments"
+down_revision = "20261113_person_creator"
 branch_labels = None
 depends_on = None
 
