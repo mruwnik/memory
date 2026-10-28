@@ -106,7 +106,7 @@ class EmailAccountCreate(BaseModel):
     # Common fields
     folders: list[str] = []
     tags: list[str] = []
-    check_interval: int = Field(60, ge=1, description="Minutes between syncs")
+    check_interval: int = Field(default=60, ge=1, description="Minutes between syncs")
     send_enabled: bool = True
     # Access control
     project_id: int | None = None
@@ -149,7 +149,7 @@ class EmailAccountUpdate(BaseModel):
     # Common fields
     folders: list[str] | None = None
     tags: list[str] | None = None
-    check_interval: int | None = Field(None, ge=1)
+    check_interval: int | None = Field(default=None, ge=1)
     active: bool | None = None  # sync enabled
     send_enabled: bool | None = None
     # Access control
