@@ -60,7 +60,7 @@ class SearchResult(BaseModel):
         # highly relevant section, not penalize long documents with some irrelevant parts.
         # This is better for "half-remembered" searches where users recall one specific detail.
         search_score = max((chunk_score(chunk) for chunk in chunks), default=0)
-        content = cast(str, source.content)
+        content = cast(str, source.readable_content)
         limit = settings.MAX_PREVIEW_LENGTH if previews else settings.MAX_NON_PREVIEW_LENGTH
         # The summary says more about a long item than its first `limit` characters.
         if summary and content and len(content) > limit:

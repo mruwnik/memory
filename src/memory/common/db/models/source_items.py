@@ -169,15 +169,12 @@ class MailMessage(SourceItem):
         )
 
     @property
+    def readable_content(self) -> str | None:
+        return self.body
+
+    @property
     def preview_text(self) -> str | None:
-        """Preview using parsed email body instead of raw RFC822 content."""
-        try:
-            body = self.body
-        except (KeyError, ValueError, TypeError):
-            return truncate_preview(self.subject)
-        if not body:
-            return truncate_preview(self.subject)
-        return truncate_preview(body)
+        return truncate_preview(self.body or self.subject)
 
     @property
     def parsed_content(self) -> dict[str, Any]:
@@ -223,7 +220,6 @@ class MailMessage(SourceItem):
         base = super().display_contents
         return {
             **(base or {}),
-            "content": self.body,
             "subject": self.subject,
             "sender": self.sender,
             "recipients": self.recipients,

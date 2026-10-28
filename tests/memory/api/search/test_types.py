@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 from memory.api.search.types import SearchResult, chunk_score, elide_content
 from memory.common import settings
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import Chunk, MailMessage, SourceItem
 
 
 class TestElideContent:
@@ -52,6 +52,7 @@ class TestSearchResult:
             "size": 1000,
             "mime_type": "text/plain",
             "content": "test content",
+            "readable_content": "test content",
             "filename": "test.txt",
             "tags": ["tag1", "tag2"],
             "display_contents": {"key": "value"},
@@ -181,6 +182,26 @@ def test_long_content_is_previewed_by_its_summary(
     )
     assert result.content == expected
     assert "summary" not in result.model_dump()
+
+
+RAW_MAIL = "Return-Path: <a@example.com>\nDKIM-Signature: v=1; a=rsa-sha256\nSubject: Hi\n\n{body}"
+
+
+@pytest.mark.parametrize(
+    "body, summary, expected",
+    [
+        ("short body", "s", "short body"),  # the body fits, however long the raw source
+        ("b" * 50, "s", "s"),
+        ("b" * 50, None, "b" * 20 + "..."),
+    ],
+)
+def test_mail_is_previewed_by_its_body_not_its_raw_source(monkeypatch, body, summary, expected):
+    monkeypatch.setattr(settings, "MAX_NON_PREVIEW_LENGTH", 20)
+    mail = MailMessage(
+        id=1, sha256=b"x", content=RAW_MAIL.format(body=body), message_id="<m@x>", size=1, tags=[]
+    )
+    result = SearchResult.from_source_item(mail, [make_chunk(0.5)], summary=summary)
+    assert result.content == expected
 
 
 @pytest.mark.parametrize("score", [0.5, 0.02, -0.5, 0.0])

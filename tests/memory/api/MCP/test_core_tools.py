@@ -32,6 +32,7 @@ from memory.common.access_control import AccessFilter, has_admin_scope
 from memory.common.db.models import (
     APIKey,
     JournalEntry,
+    MailMessage,
     Note,
     OAuthClientInformation,
     OAuthState,
@@ -1143,7 +1144,7 @@ async def test_fetch_returns_full_details(mock_make_session, mock_access_filter)
     mock_item.size = 5000
     mock_item.tags = ["tech", "python"]
     mock_item.inserted_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    mock_item.content = "Article content here"
+    mock_item.readable_content = "Article content here"
     mock_item.as_payload.return_value = {"author": "Test Author"}
 
     mock_source_item_query(mock_session, [mock_item])
@@ -1385,6 +1386,24 @@ async def test_fetch_returns_content_not_a_separate_summary(db_session, admin_se
         result = await fetch.fn(id=item.id)
 
     assert (result["content"], "summary" in result) == (item.content, False)
+
+
+@pytest.mark.asyncio
+async def test_fetch_returns_the_mail_body_not_its_raw_source(db_session, admin_session):
+    mail = MailMessage(
+        sha256=b"raw-mail",
+        content="Return-Path: <a@example.com>\nSubject: Hi\n\nthe body",
+        message_id="<m@x>",
+        embed_status="STORED",
+        tags=[],
+    )
+    db_session.add(mail)
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await fetch.fn(id=mail.id)
+
+    assert result["content"] == "the body"
 
 
 @pytest.mark.asyncio
