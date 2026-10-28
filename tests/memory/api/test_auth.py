@@ -808,6 +808,16 @@ def scope_gated_client(with_middleware: bool) -> TestClient:
     return TestClient(app)
 
 
+def test_api_key_lookup_matches_the_key_not_its_stored_hash(db_session, regular_user):
+    key = APIKey.create(user_id=regular_user.id)
+    db_session.add(key)
+    db_session.commit()
+
+    found = auth.lookup_api_key(key.key, db_session)
+    assert found is not None and found.id == key.id
+    assert auth.lookup_api_key(key.key_hash, db_session) is None
+
+
 def make_token(db_session, user_scopes, key_scopes, credential) -> str:
     user = HumanUser(
         name="Scoped", email="scoped@example.com",

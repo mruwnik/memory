@@ -47,7 +47,7 @@ export interface ApiKey {
   expires_at: string | null
   last_used_at: string | null
   revoked: boolean
-  key_preview: string | null
+  key_preview: string
 }
 
 export interface ApiKeyCreate {
@@ -154,12 +154,6 @@ export const useUsers = () => {
     return response.json()
   }, [apiCall])
 
-  const revealApiKey = useCallback(async (userId: number, keyId: number): Promise<string> => {
-    const response = await apiCall(`/users/${userId}/api-keys/${keyId}/reveal`, { method: 'POST' })
-    if (!response.ok) throw await apiError(response, 'Failed to show API key')
-    return (await response.json()).key
-  }, [apiCall])
-
   const revokeApiKey = useCallback(async (userId: number, keyId: number): Promise<void> => {
     const response = await apiCall(`/users/${userId}/api-keys/${keyId}`, { method: 'DELETE' })
     if (!response.ok) throw await apiError(response, 'Failed to revoke API key')
@@ -194,7 +188,6 @@ export const useUsers = () => {
     listApiKeys,
     listApiKeyTypes,
     createApiKey,
-    revealApiKey,
     revokeApiKey,
     changePassword,
     resetPassword,

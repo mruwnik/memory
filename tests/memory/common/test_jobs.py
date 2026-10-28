@@ -11,12 +11,7 @@ from memory.common import jobs as job_utils
 
 @pytest.fixture
 def test_user(db_session):
-    """Create a test user for job ownership tests.
-
-    Uses HumanUser (not the abstract base User) because the `users` table has
-    a `user_has_auth_method` check constraint requiring at least one of
-    password_hash / api_key / ssh credentials.
-    """
+    """Create a test user for job ownership tests."""
     user = HumanUser.create_with_password(
         email="testuser@example.com",
         password="dummy-test-password",

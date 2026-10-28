@@ -84,13 +84,3 @@ def test_ssh_key_management_requires_interactive_session(security_client, db_ses
     response = security_client.post('/ssh-keys', headers=headers, json={'name': 'SSH', 'generate': True})
     assert response.status_code == (200 if session else 403)
     assert security_client.get('/ssh-keys', headers=headers).status_code == (200 if session else 403)
-
-
-@pytest.mark.parametrize("session", [True, False])
-def test_api_key_reveal_requires_session(security_client, db_session, session):
-    user, headers = identity(db_session, key_scopes=["*"], session=session)
-    key = APIKey.create(user_id=user.id, name="revealable")
-    db_session.add(key)
-    db_session.commit()
-    response = security_client.post(f"/users/{user.id}/api-keys/{key.id}/reveal", headers=headers)
-    assert response.status_code == (200 if session else 403)

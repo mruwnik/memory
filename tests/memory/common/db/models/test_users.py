@@ -1,6 +1,8 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 from memory.common.db.models.discord import DiscordUser
 from memory.common.db.models.sources import Person
 from memory.common.db.models.users import (
@@ -124,37 +126,18 @@ def test_create_human_user(db_session):
     assert user.name == "Human User"
     assert user.user_type == "human"
     assert user.password_hash is not None
-    assert user.api_key is None
     assert user.is_valid_password("test_password123")
     assert not user.is_valid_password("wrong_password")
 
 
 def test_create_bot_user(db_session):
-    """Test creating a BotUser with API key"""
-    user = BotUser.create_with_api_key(
-        name="Test Bot", email="bot@example.com", api_key="test_api_key_123"
-    )
+    user = BotUser(name="Test Bot", email="bot@example.com")
     db_session.add(user)
     db_session.commit()
 
     assert user.id is not None
-    assert user.email == "bot@example.com"
-    assert user.name == "Test Bot"
     assert user.user_type == "bot"
-    assert user.api_key == "test_api_key_123"
     assert user.password_hash is None
-
-
-def test_create_bot_user_auto_api_key(db_session):
-    """Test creating a BotUser with auto-generated API key"""
-    user = BotUser.create_with_api_key(name="Auto Bot", email="autobot@example.com")
-    db_session.add(user)
-    db_session.commit()
-
-    assert user.id is not None
-    assert user.api_key is not None
-    assert user.api_key.startswith("bot_")
-    assert len(user.api_key) == 68  # "bot_" + 32 bytes hex encoded (64 chars)
 
 
 def test_user_serialization_human(db_session):
@@ -202,7 +185,7 @@ def test_user_serialization_discord_keys_are_str(db_session):
 
 def test_user_serialization_bot(db_session):
     """Test BotUser serialization"""
-    user = BotUser.create_with_api_key(name="Bot", email="bot@example.com")
+    user = BotUser(name="Bot", email="bot@example.com")
     db_session.add(user)
     db_session.commit()
 
@@ -211,23 +194,6 @@ def test_user_serialization_bot(db_session):
     assert serialized["name"] == "Bot"
     assert serialized["email"] == "bot@example.com"
     assert serialized["user_type"] == "bot"
-    assert "api_key" not in serialized  # Should not expose API key
-
-
-def test_bot_user_api_key_uniqueness(db_session):
-    """Test that API keys must be unique"""
-    user1 = BotUser.create_with_api_key(
-        name="Bot 1", email="bot1@example.com", api_key="same_key"
-    )
-    user2 = BotUser.create_with_api_key(
-        name="Bot 2", email="bot2@example.com", api_key="same_key"
-    )
-    db_session.add(user1)
-    db_session.commit()
-
-    db_session.add(user2)
-    with pytest.raises(Exception):  # IntegrityError from unique constraint
-        db_session.commit()
 
 
 def test_human_user_factory_method(db_session):
@@ -241,21 +207,6 @@ def test_human_user_factory_method(db_session):
     assert user.name == "Factory User"
     assert user.password_hash is not None
     assert user.user_type == "human"
-    assert user.api_key is None
-
-
-def test_bot_user_factory_method(db_session):
-    """Test that BotUser factory method sets all required fields"""
-    user = BotUser.create_with_api_key(
-        name="Factory Bot", email="factorybot@example.com", api_key="test_key"
-    )
-
-    # Factory method should set all required fields
-    assert user.email == "factorybot@example.com"
-    assert user.name == "Factory Bot"
-    assert user.api_key == "test_key"
-    assert user.user_type == "bot"
-    assert user.password_hash is None
 
 
 # --- APIKey Model Tests ---
@@ -422,11 +373,26 @@ def test_api_key_serialize(db_session):
     assert serialized["name"] == "Serialized Key"
     assert serialized["key_type"] == APIKeyType.MCP
     assert serialized["revoked"] is False
-    # Key preview should show partial key
-    assert serialized["key_preview"].startswith("mcp_")
-    assert "..." in serialized["key_preview"]
-    # Full key should NOT be in serialized output
-    assert "key" not in serialized or serialized.get("key_preview") != api_key.key
+    assert serialized["key_preview"] == f"mcp_...{api_key.key[-4:]}"
+    assert api_key.key not in str(serialized)
+
+
+def test_api_key_is_stored_hashed(db_session, regular_user):
+    api_key = APIKey.create(user_id=regular_user.id, key_type=APIKeyType.MCP)
+    plaintext = api_key.key
+    db_session.add(api_key)
+    db_session.commit()
+
+    row = db_session.execute(
+        text("SELECT * FROM api_keys WHERE id = :id"), {"id": api_key.id}
+    ).mappings().one()
+    assert not any(plaintext in str(value) for value in row.values())
+    assert row["key_hash"] == hashlib.sha256(plaintext.encode()).hexdigest()
+    assert row["key_preview"] == f"mcp_...{plaintext[-4:]}"
+
+    db_session.expunge_all()
+    with pytest.raises(AttributeError):
+        db_session.get(APIKey, api_key.id).key
 
 
 def test_api_key_uniqueness(db_session):

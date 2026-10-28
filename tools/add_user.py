@@ -2,9 +2,8 @@
 
 import argparse
 import os
-import secrets
 from memory.common.db.connection import make_session
-from memory.common.db.models.users import HumanUser, BotUser, User
+from memory.common.db.models.users import APIKey, HumanUser, BotUser, User
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import MULTI_USER
 from memory.common.people import find_person_by_email
@@ -40,9 +39,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-api-key",
         action="store_true",
-        help="Don't generate an API key for human users",
+        help="Don't create an API key",
     )
     args = parser.parse_args()
+    # Only a hash is stored, which is safe only for a key too long to guess.
+    if args.api_key is not None and len(args.api_key) < 32:
+        raise SystemExit("--api-key must be at least 32 characters")
     single_user = MULTI_USER not in enabled_modules()
 
     with make_session() as session:
@@ -50,10 +52,7 @@ if __name__ == "__main__":
             print(f"User {args.email} already exists")
             raise SystemExit(0)
         if args.bot:
-            user = BotUser.create_with_api_key(
-                name=args.name, email=args.email, api_key=args.api_key
-            )
-            print(f"Bot user {args.email} created with API key: {user.api_key}")
+            user = BotUser(name=args.name, email=args.email)
         else:
             if single_user and session.query(HumanUser).count():
                 raise SystemExit(
@@ -64,12 +63,6 @@ if __name__ == "__main__":
             user = HumanUser.create_with_password(
                 email=args.email, password=args.password, name=args.name
             )
-            # Set API key for human users too (unless --no-api-key)
-            if not args.no_api_key:
-                user.api_key = args.api_key or f"user_{secrets.token_hex(32)}"
-                print(f"Human user {args.email} created with API key: {user.api_key}")
-            else:
-                print(f"Human user {args.email} created (no API key)")
 
         # A single-user install has nobody else to grant the rest of the scopes.
         if args.admin or (single_user and not args.bot):
@@ -77,6 +70,15 @@ if __name__ == "__main__":
         session.add(user)
         session.commit()
         session.refresh(user)
+        if args.no_api_key:
+            print(f"User {args.email} created (no API key)")
+        else:
+            api_key = APIKey.create(user_id=user.id)
+            if args.api_key:
+                api_key.key = args.api_key
+            session.add(api_key)
+            session.commit()
+            print(f"User {args.email} created with API key: {api_key.key}")
 
         # Email only: names and aliases are free text whoever created the Person chose.
         person = find_person_by_email(session, args.email)

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
@@ -254,10 +254,7 @@ def create_user(
         )
         new_user.scopes = data.scopes
     else:
-        new_user = BotUser.create_with_api_key(
-            email=data.email,
-            name=data.name,
-        )
+        new_user = BotUser(email=data.email, name=data.name)
         new_user.scopes = data.scopes
 
     db.add(new_user)
@@ -549,7 +546,7 @@ class APIKeyResponse(BaseModel):
     expires_at: str | None
     last_used_at: str | None
     revoked: bool
-    key_preview: str | None
+    key_preview: str
     agent_max_run_cost_usd: str | None = None
     agent_max_daily_cost_usd: str | None = None
 
@@ -647,27 +644,6 @@ def create_user_api_key(
     response_data = api_key.serialize()
     response_data["key"] = api_key.key
     return APIKeyCreateResponse(**response_data)
-
-
-@router.post("/{user_id}/api-keys/{key_id}/reveal")
-def reveal_user_api_key(
-    user_id: int,
-    key_id: int,
-    response: Response,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> dict[str, str]:
-    """Return one of the caller's own live API keys in full. Admins can't reveal other users' keys."""
-    if user_id != user.id:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    api_key = db.get(APIKey, key_id)
-    if not api_key or api_key.user_id != user_id or not api_key.is_valid():
-        raise HTTPException(status_code=404, detail="API key not found")
-
-    logger.info("API key %s revealed by user %s", key_id, user.id)
-    response.headers["Cache-Control"] = "no-store"
-    return {"key": api_key.key}
 
 
 @router.delete("/{user_id}/api-keys/{key_id}")

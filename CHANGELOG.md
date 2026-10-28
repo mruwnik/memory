@@ -101,6 +101,16 @@ on those that had a write token, so they keep their write access through the
 owner's saved write token. Owners without a saved token have to save one
 before their schedules can clone or push.
 
+API keys are stored as SHA-256 hashes. Existing keys keep working, but no key
+can be shown again: a key is visible only when it is created, and the key
+list shows its type prefix (only for a known key type) and last four
+characters. The per-key Show button and
+`POST /users/{id}/api-keys/{key_id}/reveal` are removed; lose a key and you
+revoke it and create a new one. Bot users no longer get an unused key on the
+`users` row; give a bot a key with Generate key in User management.
+`tools/add_user.py` now creates a real API key (it printed one that never
+authenticated), and refuses an `--api-key` shorter than 32 characters.
+
 ### Migrations
 
 `20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
@@ -115,6 +125,11 @@ tables (seeded with the previous defaults) and two columns on `forum_post`. Fast
 `20261114_drop_secrets` drops the `secrets` table and removes the token fields
 from scheduled Claude sessions as above. Downgrading recreates an empty table;
 neither the secrets nor the schedules' token fields come back.
+
+`20261115_hash_api_keys` replaces `api_keys.key` with `key_hash` and
+`key_preview`, and drops `users.api_key` and the `user_has_auth_method` check.
+Fast. Downgrading can't restore the keys: it revokes every API key, and each
+has to be reissued.
 
 ### Post-deploy commands
 

@@ -105,7 +105,7 @@ def test_request_for_unknown_email_looks_the_same(client, mail_configured, reset
 
 
 def test_passwordless_users_get_no_link(client, db_session, mail_configured, no_celery_dispatch):
-    keyless = HumanUser(name="Keys Only", email="keys@example.com", password_hash=None, api_key="key_only")
+    keyless = HumanUser(name="Keys Only", email="keys@example.com", password_hash=None)
     db_session.add(keyless)
     db_session.commit()
 

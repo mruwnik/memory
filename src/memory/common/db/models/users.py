@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -11,7 +12,6 @@ import bcrypt
 from sqlalchemy import (
     ARRAY,
     Boolean,
-    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -65,12 +65,6 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 class User(Base):
     __tablename__ = "users"
-    __table_args__ = (
-        CheckConstraint(
-            "password_hash IS NOT NULL OR api_key IS NOT NULL",
-            name="user_has_auth_method",
-        ),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
@@ -81,7 +75,6 @@ class User(Base):
 
     # Make these nullable since subclasses will use them selectively
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
-    api_key: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
 
     # MCP tool scopes - controls which tools this user can access
     # Example: ["read", "observe", "github"] or ["*"] for full access
@@ -189,20 +182,6 @@ class BotUser(User):
         "polymorphic_identity": "bot",
     }
 
-    @classmethod
-    def create_with_api_key(
-        cls, name: str, email: str, api_key: str | None = None
-    ) -> BotUser:
-        """Create a new bot user with an API key"""
-        if api_key is None:
-            api_key = f"bot_{secrets.token_hex(32)}"
-        return cls(
-            name=name,
-            email=email,
-            api_key=api_key,
-            user_type=cls.__mapper_args__["polymorphic_identity"],
-        )
-
 
 class APIKeyType(str):
     """API key type constants for categorization.
@@ -229,10 +208,37 @@ class APIKeyType(str):
     ALL_TYPES = (INTERNAL, DISCORD, GOOGLE, GITHUB, MCP)
 
 
+# "bot" and "user" prefixed keys made before key types existed.
+KNOWN_KEY_PREFIXES = (*APIKeyType.ALL_TYPES, "bot", "user")
+
+
+def hash_api_key(key: str) -> str:
+    """The stored lookup hash of an API key.
+
+    Keys are 256-bit random tokens, so an unsalted SHA-256 can't be brute-forced
+    and needs no server secret: rotating secrets or restoring a backup elsewhere
+    leaves keys working.
+    """
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def api_key_preview(key: str) -> str:
+    """The key's type prefix and last four characters, for telling keys apart.
+
+    Only a known prefix is kept: a key chosen by hand may have any text before its first "_".
+    """
+    prefix = key.split("_", 1)[0]
+    if "_" in key and prefix in KNOWN_KEY_PREFIXES:
+        return f"{prefix}_...{key[-4:]}"
+    return f"...{key[-4:]}"
+
+
 class APIKey(Base):
     """API key for authenticating users and services.
 
-    Supports multiple keys per user with different types and expiration.
+    Supports multiple keys per user with different types and expiration. Only a
+    hash of the key is stored; the plaintext is readable as ``key`` on the
+    instance that minted it, and nowhere afterwards.
     """
 
     __tablename__ = "api_keys"
@@ -241,7 +247,8 @@ class APIKey(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    key_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    key_preview: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     key_type: Mapped[str] = mapped_column(
         String, nullable=False, default=APIKeyType.INTERNAL
@@ -264,6 +271,18 @@ class APIKey(Base):
 
     # Relationship to user
     user: Mapped[User] = relationship("User", back_populates="api_keys")
+
+    @property
+    def key(self) -> str:
+        if (plaintext := vars(self).get("minted_key")) is None:
+            raise AttributeError("API keys are stored hashed; the plaintext exists only at creation")
+        return plaintext
+
+    @key.setter
+    def key(self, plaintext: str) -> None:
+        vars(self)["minted_key"] = plaintext
+        self.key_hash = hash_api_key(plaintext)
+        self.key_preview = api_key_preview(plaintext)
 
     @classmethod
     def generate_key(cls, prefix: str = "key") -> str:
@@ -308,7 +327,7 @@ class APIKey(Base):
         return True
 
     def serialize(self) -> dict[str, Any]:
-        """Serialize the API key for API responses (excluding the key itself)."""
+        """Serialize the API key for API responses."""
         return {
             "id": self.id,
             "name": self.name,
@@ -320,7 +339,7 @@ class APIKey(Base):
                 self.last_used_at.isoformat() if self.last_used_at else None
             ),
             "revoked": self.revoked,
-            "key_preview": f"{self.key[:8]}...{self.key[-4:]}" if self.key else None,
+            "key_preview": self.key_preview,
             "agent_max_run_cost_usd": money(self.agent_max_run_cost_usd),
             "agent_max_daily_cost_usd": money(self.agent_max_daily_cost_usd),
         }

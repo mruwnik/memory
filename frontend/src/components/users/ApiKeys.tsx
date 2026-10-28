@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useUsers, type ApiKey, type User } from '../../hooks/useUsers'
 import {
-  Badge, Button, ConfirmButton, CopyButton, EmptyState, Field, FormActions, Input, LoadingState, Modal,
+  Badge, Button, ConfirmButton, EmptyState, Field, FormActions, Input, LoadingState, Modal,
   MultiSelect, Notice, Section, Select, Table, useActionNotice, type MultiSelectOption,
 } from '@/components/shared/ui'
 import { NewApiKey } from './NewApiKey'
@@ -75,33 +75,12 @@ const NewKeyForm = ({ user, onCreated, onCancel }: { user: User; onCreated: (key
   )
 }
 
-const KeyCell = ({ apiKey, revealed, onShow, onHide }: { apiKey: ApiKey; revealed?: string; onShow: () => void; onHide: () => void }) => {
-  if (!revealed) {
-    return (
-      <div className="flex items-center gap-2">
-        <code className="text-xs text-slate-700 whitespace-nowrap">{apiKey.key_preview}</code>
-        {!isExpired(apiKey) && <Button size="sm" variant="ghost" onClick={onShow}>Show</Button>}
-      </div>
-    )
-  }
-  return (
-    <div className="space-y-1">
-      <code className="block text-xs text-slate-800 break-all">{revealed}</code>
-      <div className="flex gap-2">
-        <CopyButton text={revealed} variant="ghost" />
-        <Button size="sm" variant="ghost" onClick={onHide}>Hide</Button>
-      </div>
-    </div>
-  )
-}
-
-/** The user's live API keys, with create, reveal and revoke. */
+/** The user's live API keys, with create and revoke. */
 export const ApiKeys = ({ user }: { user: User }) => {
-  const { listApiKeys, revealApiKey, revokeApiKey } = useUsers()
+  const { listApiKeys, revokeApiKey } = useUsers()
   const { run, notice } = useActionNotice()
   const [keys, setKeys] = useState<ApiKey[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [revealed, setRevealed] = useState<Record<number, string>>({})
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
 
@@ -116,14 +95,8 @@ export const ApiKeys = ({ user }: { user: User }) => {
 
   useEffect(() => { load() }, [load])
 
-  const show = (id: number) => run(async () => {
-    const key = await revealApiKey(user.id, id)
-    setRevealed((r) => ({ ...r, [id]: key }))
-  })
-  const hide = (id: number) => setRevealed(({ [id]: _, ...rest }) => rest)
   const revoke = (id: number) => run(async () => {
     await revokeApiKey(user.id, id)
-    hide(id)
     await load()
   }, 'API key revoked')
 
@@ -160,7 +133,7 @@ export const ApiKeys = ({ user }: { user: User }) => {
                   ? <span className="text-slate-600 whitespace-nowrap">All your scopes</span>
                   : <div className="flex flex-wrap gap-1">{key.scopes.map((s) => <Badge key={s}>{scopeLabel(s)}</Badge>)}</div>}
               </td>
-              <td><KeyCell apiKey={key} revealed={revealed[key.id]} onShow={() => show(key.id)} onHide={() => hide(key.id)} /></td>
+              <td><code className="text-xs text-slate-700 whitespace-nowrap">{key.key_preview}</code></td>
               <td className="whitespace-nowrap text-slate-600">{formatDate(key.created_at, '')}</td>
               <td className="whitespace-nowrap text-slate-600">{formatDate(key.last_used_at, 'Never')}</td>
               <td className="whitespace-nowrap text-slate-600">

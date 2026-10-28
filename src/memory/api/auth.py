@@ -28,6 +28,7 @@ from memory.common.access_control import (
     has_admin_scope,
 )
 from memory.common.db.models.base import Base
+from memory.common.db.models.users import hash_api_key
 from memory.common.scopes import has_scope
 
 T = TypeVar("T", bound=Base)
@@ -249,23 +250,8 @@ def get_user_session(request: Request, db: DBSession) -> UserSession | None:
 
 
 def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
-    """Look up an API key in the database using indexed lookup.
-
-    Uses direct database query with unique index on APIKey.key for O(1) lookup
-    instead of loading all keys. This prevents memory exhaustion with many keys.
-
-    Note: This has a minor timing side-channel (attacker could learn if
-    a key exists by response time), but the DoS risk from loading all
-    keys is more significant for this use case.
-
-    Args:
-        api_key: The API key string to look up.
-        db: Database session.
-
-    Returns:
-        The matching APIKey record, or None if not found.
-    """
-    return db.query(APIKey).filter(APIKey.key == api_key).first()
+    """The APIKey row for a plaintext key, found by its indexed hash."""
+    return db.query(APIKey).filter(APIKey.key_hash == hash_api_key(api_key)).first()
 
 
 def authenticate_by_api_key(

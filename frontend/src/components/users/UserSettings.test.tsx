@@ -261,9 +261,10 @@ describe('UserSettings API keys', () => {
     expect(within(rows[0]).getByText('All your scopes')).toBeInTheDocument()
     expect(within(rows[0]).getByText('Never')).toBeInTheDocument()
     expect(within(rows[1]).getByText('read')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()
   })
 
-  it('offers no Show for an expired key', async () => {
+  it('marks an expired key', async () => {
     install(me(), authMe(), {
       '/users/1/api-keys': (init) => init?.method ? undefined : mockResponse({
         json: [apiKey({ expires_at: '2020-01-01T00:00:00' })],
@@ -271,29 +272,6 @@ describe('UserSettings API keys', () => {
     })
     renderWithRouter(<UserSettings />)
     expect(await screen.findByText('Expired')).toBeInTheDocument()
-    expect(screen.getByText('mcp_abcd...wxyz')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Show' })).not.toBeInTheDocument()
-  })
-
-  it('shows a key in full only on request, then hides it again', async () => {
-    const reveals: string[] = []
-    install(me(), authMe(), {
-      '/reveal': (init) => {
-        reveals.push(init?.method ?? 'GET')
-        return mockResponse({ json: { key: 'FAKE-full-key' } })
-      },
-      '/users/1/api-keys': (init) => init?.method ? undefined : mockResponse({ json: [apiKey()] }),
-    })
-    const { user } = renderWithRouter(<UserSettings />)
-    await screen.findByText('mcp_abcd...wxyz')
-    expect(screen.queryByText('FAKE-full-key')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Show' }))
-    expect(await screen.findByText('FAKE-full-key')).toBeInTheDocument()
-    expect(reveals).toEqual(['POST'])
-
-    await user.click(screen.getByRole('button', { name: 'Hide' }))
-    expect(screen.queryByText('FAKE-full-key')).not.toBeInTheDocument()
     expect(screen.getByText('mcp_abcd...wxyz')).toBeInTheDocument()
   })
 
@@ -344,6 +322,7 @@ describe('UserSettings API keys', () => {
     await user.click(within(modal).getByRole('button', { name: 'Create key' }))
 
     expect(await screen.findByText('FAKE-new-key')).toBeInTheDocument()
+    expect(screen.getByText(/won't be shown again/)).toBeInTheDocument()
     expect(posted).toEqual([{ name: 'Laptop CLI', key_type: 'mcp', scopes: ['read'], expires_in_days: 30 }])
 
     // user-event stubs the clipboard, so read it back rather than spying on writeText.

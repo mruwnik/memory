@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+from memory.api.auth import lookup_api_key
 from memory.common import module_settings
 from memory.common.db.models.users import BotUser, HumanUser
 from memory.common.modules import MULTI_USER
@@ -79,3 +80,23 @@ def test_multi_user_install_allows_a_second_human_with_read_scope(db_session, mo
 
     humans = db_session.query(HumanUser).all()
     assert [h.scopes for h in humans] == [["read"], ["read"]]
+
+
+@pytest.mark.parametrize("flags", [["--bot"], [], ["--api-key", "internal_" + "c" * 32]])
+def test_printed_api_key_authenticates(db_session, monkeypatch, capsys, flags):
+    monkeypatch.setenv("ADD_USER_PASSWORD", "pw")
+
+    run_add_user(monkeypatch, "--email", "k@example.com", "--name", "K", *flags)
+
+    printed = capsys.readouterr().out.split("API key: ")[1].split()[0]
+    found = lookup_api_key(printed, db_session)
+    assert found is not None and found.user.email == "k@example.com"
+
+
+def test_short_chosen_api_key_is_refused(db_session, monkeypatch):
+    monkeypatch.setenv("ADD_USER_PASSWORD", "pw")
+
+    with pytest.raises(SystemExit, match="32"):
+        run_add_user(monkeypatch, "--email", "s@example.com", "--name", "S", "--api-key", "internal_short")
+
+    assert db_session.query(HumanUser).filter_by(email="s@example.com").count() == 0

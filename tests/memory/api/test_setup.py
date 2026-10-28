@@ -44,7 +44,7 @@ def bearer(session_id: str) -> dict:
 
 
 def test_status_reveals_only_whether_an_account_is_needed(setup_client, db_session):
-    db_session.add(BotUser.create_with_api_key(name="bot", email="bot@example.com"))
+    db_session.add(BotUser(name="bot", email="bot@example.com"))
     db_session.commit()
     assert setup_client.get("/setup/status").json() == {"needs_account": True}
 
