@@ -3,16 +3,22 @@ children stay inside its depth, budget, scopes and tools."""
 
 import json
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
 from memory.agents.caps import children_cost, daily_pools
+from memory.agents import cancel
+from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.mcp_client import memory_tools
-from memory.agents.runner import execute_run
+from memory.agents.runner import execute_run, mint_session
+from memory.agents.spec import AgentSpec
 from memory.common import settings
 from memory.common.db.connection import make_session
+from memory.api.MCP.servers import agent
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey
-from tests.memory.agents.fakes import FakeHub, calls, reply
+from tests.conftest import mcp_auth_context
+from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, FakeHub, calls, reply
 
 D = Decimal
 PARENT_TOOLS = ["agent_run", "agent_wait", "agent_cancel", "meta_get_user"]
@@ -57,19 +63,34 @@ async def submit(token: str, parent_id: str, agent=CHILD) -> AgentRun:
 
 @pytest.mark.asyncio
 async def test_a_child_records_its_lineage_and_narrower_credentials(
-    db_session, admin_user, admin_session, admin_keys, no_celery_dispatch
+    db_session, admin_user, admin_keys, no_celery_dispatch
 ):
     key = APIKey.create(user_id=admin_user.id, name="k")
     db_session.add(key)
     db_session.commit()
     parent = add_run(db_session, admin_user, scopes=["read", "agents"], api_key_id=key.id)
+    # The session the runner mints for a run is bound to the run's API key.
+    token = mint_session(admin_user.id, 600, key.id)
 
-    child = await submit(admin_session.id, parent.id)
+    child = await submit(token, parent.id)
 
     assert (child.parent_run_id, child.depth, child.trigger_kind, child.api_key_id) == (
         parent.id, 1, "agent", key.id,
     )
     assert set(child.scopes) <= {"read", "agents"}
+
+
+@pytest.mark.asyncio
+async def test_a_call_from_a_run_that_no_longer_exists_is_refused(
+    db_session, admin_user, admin_session, admin_keys, no_celery_dispatch
+):
+    text, is_error = await call_as_run(
+        admin_session.token, "gone", "agent_run", {"input": "go", "agent": CHILD}
+    )
+
+    assert is_error
+    assert "no longer exists" in text
+    assert db_session.query(AgentRun).count() == 0
 
 
 @pytest.mark.asyncio
@@ -80,7 +101,7 @@ async def test_children_stop_at_the_depth_limit(
     parent = add_run(db_session, admin_user, depth=2)
 
     text, is_error = await call_as_run(
-        admin_session.id, parent.id, "agent_run", {"input": "go", "agent": CHILD}
+        admin_session.token, parent.id, "agent_run", {"input": "go", "agent": CHILD}
     )
 
     assert is_error
@@ -95,7 +116,7 @@ async def test_a_child_cannot_use_tools_its_parent_lacks(
     parent = add_run(db_session, admin_user, tools=["agent_run"])
 
     text, is_error = await call_as_run(
-        admin_session.id, parent.id, "agent_run", {"input": "go", "agent": CHILD | {"tools": ["web_fetch"]}}
+        admin_session.token, parent.id, "agent_run", {"input": "go", "agent": CHILD | {"tools": ["web_fetch"]}}
     )
 
     assert is_error
@@ -106,8 +127,11 @@ async def test_a_child_cannot_use_tools_its_parent_lacks(
 @pytest.mark.parametrize(
     "child_cap,expected",
     [
-        (None, D("0.3")),  # what the parent has left: 1 - 0.4 spent - 0.3 held by a live child
+        # The parent has 1 - 0.4 spent - 0.3 held by a live child = 0.3 left; a child
+        # without its own cap gets half, so the parent can still afford to wait for it.
+        (None, D("0.15")),
         ("0.1", D("0.1")),
+        ("0.5", D("0.3")),
     ],
 )
 async def test_a_child_is_capped_by_what_its_parent_has_left(
@@ -116,7 +140,7 @@ async def test_a_child_is_capped_by_what_its_parent_has_left(
     parent = add_run(db_session, admin_user, cost_usd=D("0.4"))
     add_run(db_session, admin_user, parent_run_id=parent.id, depth=1, max_cost_usd=D("0.3"))
 
-    child = await submit(admin_session.id, parent.id, CHILD | {"max_cost_usd": child_cap})
+    child = await submit(admin_session.token, parent.id, CHILD | {"max_cost_usd": child_cap})
 
     assert child.max_cost_usd == expected
 
@@ -128,7 +152,7 @@ async def test_a_parent_with_nothing_left_starts_no_child(
     parent = add_run(db_session, admin_user, cost_usd=D("1"))
 
     text, is_error = await call_as_run(
-        admin_session.id, parent.id, "agent_run", {"input": "go", "agent": CHILD}
+        admin_session.token, parent.id, "agent_run", {"input": "go", "agent": CHILD}
     )
 
     assert is_error
@@ -144,12 +168,39 @@ async def test_a_run_reaches_only_its_own_children(
     child = add_run(db_session, admin_user, parent_run_id=parent.id, depth=1, status="done")
     other = add_run(db_session, admin_user, status="done")
 
-    own_text, own_error = await call_as_run(admin_session.id, parent.id, tool, {"run_id": child.id})
-    other_text, other_error = await call_as_run(admin_session.id, parent.id, tool, {"run_id": other.id})
+    own_text, own_error = await call_as_run(admin_session.token, parent.id, tool, {"run_id": child.id})
+    other_text, other_error = await call_as_run(admin_session.token, parent.id, tool, {"run_id": other.id})
 
     assert not own_error, own_text
     assert other_error
     assert f"unknown run {other.id}" in other_text
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_run_cancels_its_live_descendants(
+    db_session, admin_user, admin_session, no_celery_dispatch
+):
+    parent = add_run(db_session, admin_user)
+    child = add_run(db_session, admin_user, parent_run_id=parent.id, depth=1)
+    grandchild = add_run(db_session, admin_user, parent_run_id=child.id, depth=2, status="pending")
+    finished = add_run(db_session, admin_user, parent_run_id=parent.id, depth=1, status="done")
+
+    with patch.object(cancel.app.control, "revoke") as revoke:
+        with mcp_auth_context(admin_session.token):
+            await agent.cancel.fn(run_id=parent.id)
+
+    db_session.expire_all()
+    states = {
+        r.id: (r.status, r.cancel_requested_at is not None)
+        for r in db_session.query(AgentRun)
+    }
+    assert states == {
+        parent.id: ("running", True),
+        child.id: ("running", True),
+        grandchild.id: ("cancelled", True),
+        finished.id: ("done", False),
+    }
+    revoke.assert_called_once_with(grandchild.id)
 
 
 @pytest.mark.parametrize(
@@ -204,30 +255,40 @@ def test_a_definitions_daily_pool_counts_its_runs_descendants(db_session, regula
 
 
 @pytest.mark.asyncio
-async def test_a_parent_stops_once_its_children_hold_its_budget(
-    db_session, regular_user, fake_providers
+async def test_a_parent_can_wait_for_its_child_and_ending_cancels_it(
+    db_session, regular_user, fake_providers, no_celery_dispatch
 ):
-    parent = add_run(db_session, regular_user, status="pending", scopes=[])
+    parent = add_run(db_session, regular_user, status="pending", scopes=["*"])
     parent.provider_key_id = fake_providers.keys["anthropic"].id
     db_session.commit()
+    started = []
 
     def spawn(_):
         with make_session() as db:
-            db.add(
-                AgentRun(
-                    user_id=regular_user.id, spec={}, input="x", trigger_kind="agent",
-                    max_cost_usd=D("1"), parent_run_id=parent.id, depth=1,
-                )
+            found = db.get(AgentRun, parent.id)
+            assert found is not None
+            child = enqueue_run(
+                db, user_id=regular_user.id, spec=AgentSpec.model_validate(CHILD),
+                input="go", trigger=TriggerInfo(kind="agent"), parent=found,
             )
-            db.commit()
+            started.append(child.id)
         return "started", False
 
-    fake_providers.script = [calls(("t1", "spawn", {})), reply("never")]
+    fake_providers.script = [
+        calls(("t1", "spawn", {})),
+        calls(("t2", "wait", {})),
+        reply("done"),
+    ]
 
-    await execute_run(parent.id, FakeHub({"spawn": spawn}).factory())
+    hub = FakeHub({"spawn": spawn, "wait": lambda _: ("still running", False)})
+    with patch.object(cancel.app.control, "revoke") as revoke:
+        await execute_run(parent.id, hub.factory())
 
     db_session.expire_all()
-    stopped = db_session.get(AgentRun, parent.id)
-    assert stopped is not None
-    assert stopped.status == "budget_exceeded"
-    assert len(fake_providers.requests) == 1
+    finished = db_session.get(AgentRun, parent.id)
+    child = db_session.get(AgentRun, started[0])
+    assert finished is not None and child is not None
+    assert (finished.status, len(fake_providers.requests)) == ("done", 3)
+    # Half of what the parent had left after its first turn.
+    assert (child.status, child.max_cost_usd) == ("cancelled", (1 - PRICING.cost(DEFAULT_USAGE)) / 2)
+    revoke.assert_called_once_with(child.id)

@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 
+from memory.agents.cancel import cancel_tree
 from memory.agents.caps import CapExceeded
 from memory.agents.external import (
     AuthInput,
@@ -77,7 +78,6 @@ from memory.api.MCP.servers.scheduler import (
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
-from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentDefinition,
@@ -89,7 +89,7 @@ from memory.common.db.models import (
     AgentTrigger,
     ScheduledTask,
 )
-from memory.common.db.models.agents import TERMINAL_STATUSES, RunStatus
+from memory.common.db.models.agents import TERMINAL_STATUSES
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
@@ -422,7 +422,11 @@ def named_definition(db: DBSession, user_id: int, name: str) -> AgentDefinition 
 def resolve_agent(
     db: DBSession, user_id: int, agent: int | str | dict
 ) -> tuple[AgentSpec, AgentDefinition | None, str | None]:
-    """The spec to run for `agent`, with the definition or slug it came from."""
+    """The spec to run for `agent`, with the definition or slug it came from.
+
+    A name that is both your definition's and a prebuilt agent's slug runs your
+    definition; "system:" slugs always mean the system agent.
+    """
     if isinstance(agent, dict):
         return keyed_spec(db, user_id, agent), None, None
     if isinstance(agent, int):
@@ -493,7 +497,8 @@ async def wait(
     """A run plus up to `limit` of its transcript steps with seq > after_seq.
 
     With wait > 0, blocks (up to AGENT_MAX_WAIT_SEC) until new steps appear or the
-    run finishes; call again with the last seq you saw to follow a live run.
+    run finishes; call again with the last seq you saw to follow a live run. Called by
+    a run, it reaches only that run's children.
     """
     user_id, is_admin = caller()
     deadline = time.monotonic() + min(max(wait, 0), settings.AGENT_MAX_WAIT_SEC)
@@ -557,20 +562,12 @@ async def list_runs(
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def cancel(run_id: str) -> dict:
-    """Cancel a run. Pending runs stop at once; running ones stop before their next model or tool call."""
+    """Cancel a run and the runs it started. Pending runs stop at once; running ones
+    stop before their next model or tool call."""
     user_id, is_admin = caller()
     with make_session() as db:
         found = readable_run(db, run_id, user_id, is_admin, lock=True)
-        now = datetime.now(timezone.utc)
-        if found.status == RunStatus.PENDING:
-            celery_app.control.revoke(run_id)
-            # Also flagged, so a worker that already claimed it stops at its first check.
-            found.cancel_requested_at = now
-            found.status = RunStatus.CANCELLED.value
-            found.error = "cancelled by user before it started"
-            found.finished_at = now
-        elif found.status not in TERMINAL_STATUSES:
-            found.cancel_requested_at = now
+        cancel_tree(db, found, datetime.now(timezone.utc))
         db.flush()
         return found.serialize()
 

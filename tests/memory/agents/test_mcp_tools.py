@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from memory.agents import cancel
 from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.spec import AgentSpec
 from memory.api.MCP.servers import agent
@@ -329,7 +330,7 @@ async def test_cancel_pending_revokes_and_cancels_immediately(
 ):
     r = seeded_run(db_session, regular_user, status="pending")
 
-    with patch.object(agent.celery_app.control, "revoke") as revoke:
+    with patch.object(cancel.app.control, "revoke") as revoke:
         with mcp_auth_context(user_session.token):
             result = await agent.cancel.fn(run_id=r.id)
 

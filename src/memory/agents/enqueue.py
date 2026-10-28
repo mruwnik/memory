@@ -184,7 +184,8 @@ def enqueue_run(
     (definition_id, dedupe_key) remains the backstop.
 
     A `parent` run's child gets at most its scopes and tools, one more level of
-    depth, and a cap no larger than what the parent has left, which it then holds.
+    depth, and a cap no larger than what the parent has left (half of it, unless the
+    child's spec sets max_cost_usd), which it holds until it finishes.
     """
     if len(input) > MAX_TEXT_CHARS:
         raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
@@ -229,7 +230,9 @@ def enqueue_run(
         provider_key=provider_key,
     )
     if parent is not None:
-        max_cost = min(max_cost, parent_left(db, parent))
+        left = parent_left(db, parent)
+        # Without its own cap a child gets half, so its parent can still afford to wait for it.
+        max_cost = min(max_cost, left if spec.max_cost_usd is not None else left / 2)
     output_tokens = resolve_max_output_tokens(spec, model_info(spec.model), max_cost)
     if output_tokens < 1:
         raise CapExceeded(

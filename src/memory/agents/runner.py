@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import func
 
 from memory.agents.call import SUBMIT_RESULT, submit_result_tool
+from memory.agents.cancel import cancel_tree
 from memory.agents.caps import children_cost
 from memory.agents.provider_keys import (
     KeyUnavailable,
@@ -247,7 +248,9 @@ def finish(
         run.status = status.value
         run.error = error
         run.result = result
-        run.finished_at = now()
+        ended = run.finished_at = now()
+        # Children outliving their parent would spend a budget nobody is following.
+        cancel_tree(db, run, ended)
         db.commit()
 
 

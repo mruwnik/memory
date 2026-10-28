@@ -130,6 +130,29 @@ token now also ends the access token issued with it, and logging out revokes
 the refresh tokens issued alongside the session, as intended: they were never
 linked before.
 
+Agent runs now expire: a finished run that isn't starred is deleted, with its
+transcript, after its agent's `retention_days`, else `AGENT_RUN_RETENTION_DAYS`
+(default 14; at most 3650), and runs started by a starred run are kept with it.
+A scheduled agent run whose run was deleted shows "run expired" in its history.
+This replaces `AGENT_STEP_RETENTION_DAYS`, which is no longer read
+(it deleted only transcripts, after 90 days, and kept run rows forever). The
+first nightly purge after the update deletes every unstarred run that finished
+more than 14 days ago; star the ones you want to keep before updating.
+
+`agent_run` takes the agent to run as a single `agent` argument: a definition's
+id or name, a prebuilt agent's slug (`fact-check`), a system agent's slug
+(`system:summarise`, ...) or an inline spec. Its `definition_id` and `spec`
+arguments are gone; MCP clients passing them must switch to `agent`.
+`agent_upsert` and inline specs accept `provider_key` as a key name as well as
+an id.
+
+Agents can start runs: a spec that lists `agent_run` (and `agent_wait`,
+`agent_cancel` to follow and stop its children) may submit runs. A child gets at
+most its parent's scopes and tools and is capped by what the parent has left of
+its budget (half of it, unless the child sets `max_cost_usd`), and runs nest at
+most `AGENT_MAX_SPAWN_DEPTH` (default 2) deep. Cancelling a run, or the run
+ending, cancels the runs it started that are still going.
+
 ### Migrations
 
 `20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
@@ -158,6 +181,10 @@ token, `oauth_refresh_tokens.token` with `token_hash`, and
 `poll_responses.edit_token` with `edit_token_hash`. Fast. Downgrading can't
 restore the tokens: everyone is logged out, MCP clients have to authorize again
 and poll edit links stop working.
+
+`20261118_run_ledger` adds `agent` and `executor` to `agent_runs`, moves the
+prebuilt agent slug out of `trigger_ref`, indexes `parent_run_id` and
+`finished_at`, and drops `steps_purged_at`. Fast.
 
 ### Post-deploy commands
 
