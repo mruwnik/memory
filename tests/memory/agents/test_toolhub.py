@@ -24,7 +24,7 @@ def hub(spec, session, scopes, caps=RICH.capabilities):
         spec=spec,
         user_id=session.user_id,
         scopes=scopes,
-        session_token=session.id,
+        session_token=session.token,
         capabilities=caps,
     )
 

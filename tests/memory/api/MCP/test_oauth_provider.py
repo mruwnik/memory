@@ -8,13 +8,16 @@ from unittest.mock import MagicMock, patch
 from mcp.server.auth.provider import TokenError
 from mcp.shared.auth import OAuthClientInformationFull
 from sqlalchemy.pool import QueuePool
+from starlette.requests import Request
 
 from memory.api import auth
+from memory.api.users import revoke_user_credentials
 from memory.common.access_control import credential_scopes
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
     resolve_session_scopes,
     make_token,
+    make_token_from_data,
     now_naive_utc,
 )
 from memory.common import settings as common_settings
@@ -27,6 +30,7 @@ from memory.common.db.models.users import (
     OAuthRefreshToken,
     User,
     UserSession,
+    hash_token,
 )
 
 
@@ -61,6 +65,62 @@ def create_oauth_client(db_session, client_id="test-client"):
     return client
 
 
+# --- ending an OAuth access session ---
+
+
+def issue_token(db_session, user):
+    return make_token_from_data(db_session, None, user.id, "test-client", ["read"])
+
+
+def refresh_row(db_session, token):
+    db_session.expire_all()
+    return db_session.query(OAuthRefreshToken).filter(
+        OAuthRefreshToken.token_hash == hash_token(token.refresh_token)
+    ).one()
+
+
+def test_logout_ends_access_session_and_revokes_its_refresh_token(db_session):
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+    token = issue_token(db_session, user)
+    headers = [(b"authorization", f"Bearer {token.access_token}".encode())]
+
+    auth.logout(Request({"type": "http", "headers": headers}), db_session)
+
+    assert db_session.get(UserSession, hash_token(token.access_token)) is None
+    assert refresh_row(db_session, token).revoked is True
+
+
+@pytest.mark.parametrize("keep_current", [True, False])
+def test_revoke_user_credentials_ends_oauth_sessions(db_session, keep_current):
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+    other, current = issue_token(db_session, user), issue_token(db_session, user)
+
+    revoke_user_credentials(
+        db_session, user.id, keep_session_token=current.access_token if keep_current else None
+    )
+    db_session.commit()
+
+    remaining = {s.id for s in db_session.query(UserSession).filter(UserSession.user_id == user.id)}
+    assert remaining == ({hash_token(current.access_token)} if keep_current else set())
+    assert refresh_row(db_session, other).revoked is True
+    assert refresh_row(db_session, current).revoked is True
+
+
+@pytest.mark.asyncio
+async def test_revoke_token_ends_access_session(db_session):
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+    token = issue_token(db_session, user)
+
+    await SimpleOAuthProvider().revoke_token(token.access_token, "access_token")
+
+    db_session.expire_all()
+    assert db_session.get(UserSession, hash_token(token.access_token)) is None
+    assert refresh_row(db_session, token).access_token_session_id is None
+
+
 # --- make_token tests ---
 
 
@@ -85,11 +145,15 @@ def test_make_token_from_oauth_state_sets_oauth_state_id(db_session):
     token = make_token(db_session, oauth_state, ["read"])
 
     session = db_session.query(UserSession).filter(
-        UserSession.id == token.access_token
+        UserSession.id == hash_token(token.access_token)
     ).first()
     assert session is not None
     assert session.oauth_state_id == oauth_state.id
     assert session.user_id == user.id
+    refresh = db_session.query(OAuthRefreshToken).filter(
+        OAuthRefreshToken.token_hash == hash_token(token.refresh_token)
+    ).one()
+    assert refresh.access_token_session_id == session.id
 
 
 def test_make_token_from_refresh_token_does_not_set_oauth_state_id(db_session):
@@ -110,7 +174,7 @@ def test_make_token_from_refresh_token_does_not_set_oauth_state_id(db_session):
     token = make_token(db_session, refresh_token, ["read"])
 
     session = db_session.query(UserSession).filter(
-        UserSession.id == token.access_token
+        UserSession.id == hash_token(token.access_token)
     ).first()
     assert session is not None
     assert session.oauth_state_id is None
@@ -131,7 +195,7 @@ async def test_verify_token_expands_wildcard_scopes(db_session):
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(session_id)
@@ -153,7 +217,7 @@ async def test_verify_token_combines_user_scopes_with_oauth_scopes(db_session):
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(session_id)
@@ -203,7 +267,7 @@ async def test_verify_token_uses_user_scopes_not_oauth_state_scopes(db_session):
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(session_id)
@@ -233,7 +297,7 @@ async def test_verify_token_returns_none_for_expired_session(db_session):
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(session_id)
@@ -262,7 +326,7 @@ async def test_verify_token_uses_frontend_client_id_without_oauth_state(db_sessi
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(session_id)
@@ -289,7 +353,7 @@ async def test_verify_token_defaults_to_read_for_user_without_scopes(db_session)
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.verify_token(session_id)
@@ -503,7 +567,7 @@ async def test_verify_token_handles_tz_aware_expires_at(db_session):
     )
     db_session.add(user_session)
     db_session.commit()
-    token = str(user_session.id)
+    token = str(user_session.token)
 
     provider = SimpleOAuthProvider()
     # Must not raise TypeError on aware-vs-naive comparison.
@@ -685,7 +749,7 @@ async def test_load_access_token_does_not_grant_user_scopes_to_oauth_session(db_
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     result = await provider.load_access_token(session_id)
@@ -756,7 +820,7 @@ async def test_verify_token_session_path_does_not_leak(db_session):
     )
     db_session.add(session)
     db_session.commit()
-    session_id = str(session.id)
+    session_id = session.token
 
     provider = SimpleOAuthProvider()
     engine = get_engine()
@@ -1488,7 +1552,7 @@ async def test_exchange_refresh_token_rotates_and_revokes_old(db_session):
 
     # New session exists
     new_session = db_session.query(UserSession).filter(
-        UserSession.id == new_token.access_token
+        UserSession.id == hash_token(new_token.access_token)
     ).first()
     assert new_session is not None
     assert new_session.user_id == user.id

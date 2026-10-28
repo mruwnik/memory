@@ -1,5 +1,4 @@
 import functools
-import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -33,6 +32,7 @@ from memory.common.db.models.users import (
 )
 from memory.common.db.models.users import (
     OAuthToken as TokenBase,
+    hash_token,
 )
 from memory.api.auth import (
     is_expired,
@@ -49,7 +49,7 @@ def token_id(token: str) -> str:
 
     Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
     """
-    return hashlib.sha256(token.encode()).hexdigest()[:8]
+    return hash_token(token)[:8]
 
 
 def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
@@ -153,11 +153,6 @@ def create_expiration(lifetime_seconds: int) -> datetime:
     )
 
 
-def generate_refresh_token() -> str:
-    """Generate a new refresh token."""
-    return f"rt_{secrets.token_hex(32)}"
-
-
 def resolve_session_scopes(user_session: UserSession) -> tuple[str, list[str]]:
     """Return ``(client_id, scopes)`` for a UserSession.
 
@@ -184,7 +179,6 @@ def create_refresh_token_record(
 ) -> OAuthRefreshToken:
     """Create a new refresh token record."""
     return OAuthRefreshToken(
-        token=generate_refresh_token(),
         client_id=client_id,
         user_id=user_id,
         scopes=scopes,
@@ -249,19 +243,10 @@ def revoke_refresh_token_family(
     )
 
     # Delete every paired access-token UserSession so the access tokens
-    # they minted die immediately too. Detach the FK from refresh tokens
-    # first — the constraint has no ondelete behaviour, so a direct
-    # delete trips the FK on the very tokens we just revoked.
-    if paired_session_ids:
-        db.execute(
-            update(OAuthRefreshToken)
-            .where(OAuthRefreshToken.access_token_session_id.in_(paired_session_ids))
-            .values(access_token_session_id=None)
-        )
-    for sid in paired_session_ids:
-        sess = db.get(UserSession, sid)
-        if sess is not None:
-            db.delete(sess)
+    # they minted die immediately too.
+    db.query(UserSession).filter(UserSession.id.in_(paired_session_ids)).delete(
+        synchronize_session=False
+    )
 
     return len(family)
 
@@ -274,7 +259,7 @@ def validate_refresh_token(db_refresh_token: OAuthRefreshToken) -> None:
     properly converted instead of silently relabeled.
     """
     if is_expired(db_refresh_token.expires_at):
-        logger.error(f"Refresh token expired: id={token_id(db_refresh_token.token)}")
+        logger.error(f"Refresh token expired: id={db_refresh_token.token_hash[:8]}")
         db_refresh_token.revoked = True  # type: ignore
         raise GrantError("invalid_grant", "Refresh token expired")
 
@@ -311,18 +296,14 @@ def make_token_from_data(
         client_id,
         user_id,
         scopes,
-        cast(str, new_session.id),
+        new_session.id,
     )
 
     db.add(new_session)
     db.add(refresh_token)
     db.commit()
 
-    return create_oauth_token(
-        str(new_session.id),
-        scopes,
-        cast(str, refresh_token.token),
-    )
+    return create_oauth_token(new_session.token, scopes, refresh_token.token)
 
 
 def make_token(
@@ -868,7 +849,7 @@ class SimpleOAuthProvider(OAuthProvider):
             db_refresh_token = (
                 session.query(OAuthRefreshToken)
                 .filter(
-                    OAuthRefreshToken.token == refresh_token,
+                    OAuthRefreshToken.token_hash == hash_token(refresh_token),
                     OAuthRefreshToken.client_id == client.client_id,
                     OAuthRefreshToken.revoked == False,  # noqa: E712
                     OAuthRefreshToken.expires_at > now,
@@ -923,7 +904,7 @@ class SimpleOAuthProvider(OAuthProvider):
             db_refresh_token = (
                 session.query(OAuthRefreshToken)
                 .filter(
-                    OAuthRefreshToken.token == refresh_token.token,
+                    OAuthRefreshToken.token_hash == hash_token(refresh_token.token),
                     OAuthRefreshToken.client_id == client.client_id,
                 )
                 .first()
@@ -1001,21 +982,9 @@ class SimpleOAuthProvider(OAuthProvider):
             # an attacker who already has a copy of the access token can
             # keep using it for up to ACCESS_TOKEN_LIFETIME after the user
             # legitimately rotates.
-            paired_session_id = db_refresh_token.access_token_session_id
-            if paired_session_id is not None:
-                old_session = session.get(UserSession, paired_session_id)
-                if old_session is not None:
-                    # Detach any refresh tokens that reference this session
-                    # (NOT NULL ondelete missing on the FK, so deleting the
-                    # session would otherwise blow up on a constraint
-                    # violation from the very token we're rotating).
-                    session.query(OAuthRefreshToken).filter(
-                        OAuthRefreshToken.access_token_session_id == paired_session_id
-                    ).update(
-                        {OAuthRefreshToken.access_token_session_id: None},
-                        synchronize_session=False,
-                    )
-                    session.delete(old_session)
+            session.query(UserSession).filter(
+                UserSession.id == db_refresh_token.access_token_session_id
+            ).delete(synchronize_session=False)
 
             return make_token(session, db_refresh_token, scopes)
 
@@ -1028,7 +997,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             # Try to revoke as access token (UserSession)
             if not token_type_hint or token_type_hint == "access_token":
-                user_session = session.get(UserSession, token)
+                user_session = session.get(UserSession, hash_token(token))
                 if user_session:
                     session.delete(user_session)
                     revoked = True
@@ -1040,7 +1009,7 @@ class SimpleOAuthProvider(OAuthProvider):
             ):
                 refresh_token = (
                     session.query(OAuthRefreshToken)
-                    .filter(OAuthRefreshToken.token == token)
+                    .filter(OAuthRefreshToken.token_hash == hash_token(token))
                     .first()
                 )
                 if refresh_token:

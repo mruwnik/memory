@@ -125,7 +125,7 @@ def dumped(*values) -> str:
 async def test_a_saved_key_is_checked_with_its_provider_and_never_returned(
     db_session, regular_user, user_session, provider_api, provider, url, header, value
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         saved = await agent.key_upsert.fn(provider=provider, label="main", key=SECRET)
         listed = await agent.key_list.fn()
         catalog = await agent.catalog.fn()
@@ -153,7 +153,7 @@ async def test_a_key_the_provider_does_not_accept_is_not_stored(
     provider_api.status = status
     caplog.set_level(logging.DEBUG)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.key_upsert.fn(provider="anthropic", label="main", key=SECRET)
 
@@ -167,7 +167,7 @@ async def test_a_key_refused_a_permission_is_still_accepted(
 ):
     provider_api.status = 403
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         saved = await agent.key_upsert.fn(provider="anthropic", label="main", key=SECRET)
 
     assert saved["status"] == "ok"
@@ -177,7 +177,7 @@ async def test_a_key_refused_a_permission_is_still_accepted(
 async def test_keys_are_not_format_checked(
     db_session, regular_user, user_session, provider_api
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         saved = await agent.key_upsert.fn(provider="anthropic", label="odd", key="whatever")
 
     assert saved["key_hint"] == "ever"
@@ -187,7 +187,7 @@ async def test_keys_are_not_format_checked(
 async def test_updates_without_a_key_do_not_recheck(
     db_session, regular_user, user_session, provider_api
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         saved = await agent.key_upsert.fn(provider="anthropic", label="main", key=SECRET)
         updated = await agent.key_upsert.fn(
             key_ref=saved["id"], label="renamed", max_cost_usd_per_day="2.5"
@@ -205,7 +205,7 @@ async def test_replacing_a_key_rechecks_it_and_clears_invalid(
 ):
     old = add_key(db_session, regular_user, status="invalid", status_detail="rejected")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         saved = await agent.key_upsert.fn(key_ref=old.id, key="sk-new-5678")
 
     assert len(provider_api.requests) == 1
@@ -214,7 +214,7 @@ async def test_replacing_a_key_rechecks_it_and_clears_invalid(
 
 @pytest.mark.asyncio
 async def test_one_default_per_provider(db_session, regular_user, user_session, provider_api):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         first = await agent.key_upsert.fn(provider="anthropic", label="a", key=SECRET)
         second = await agent.key_upsert.fn(provider="anthropic", label="b", key=SECRET)
         await agent.key_upsert.fn(key_ref=second["id"], is_default=True)
@@ -244,7 +244,7 @@ async def test_bad_upserts_are_refused(
 ):
     add_key(db_session, regular_user, "main")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.key_upsert.fn(**args)
 
@@ -255,7 +255,7 @@ async def test_other_users_keys_are_unknown(
 ):
     theirs = add_key(db_session, admin_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         listed = await agent.key_list.fn()
         with pytest.raises(ValueError, match=f"unknown API key {theirs.id}"):
             await agent.key_delete.fn(key_ref=theirs.id)
@@ -277,7 +277,7 @@ async def test_deleting_a_pinned_key_names_the_agents_that_pinned_it(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.key_delete.fn(key_ref=key.id)
 
     assert result == {"deleted": key.id, "pinned_by": ["digest"], "new_default": None}
@@ -289,7 +289,7 @@ async def test_deleting_a_pinned_key_names_the_agents_that_pinned_it(
 
 @pytest.mark.asyncio
 async def test_catalog_lists_your_keys(db_session, regular_user, user_session):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         catalog = await agent.catalog.fn()
 
     assert catalog["provider_keys"] == []
@@ -306,7 +306,7 @@ async def test_catalog_lists_your_keys(db_session, regular_user, user_session):
 async def test_agents_without_a_usable_key_are_refused_at_save(
     db_session, regular_user, user_session, fields, expected
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.upsert.fn(name="d", spec={"system_prompt": "x", "model": MODEL} | fields)
 
@@ -317,7 +317,7 @@ async def test_an_agent_on_your_own_key_records_it_on_the_run(
 ):
     key = add_key(db_session, regular_user, is_default=True)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         started = await agent.run.fn(input="hi", spec={"system_prompt": "x", "model": MODEL})
         listed = await agent.key_list.fn()
 
@@ -355,7 +355,7 @@ async def test_losing_the_default_promotes_the_most_recently_used_key(
         add_key(db_session, regular_user, label, last_used_at=last_used.get(label))
     add_key(db_session, regular_user, "gpt", provider="openai", is_default=True)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await drop(default.id)
         listed = await agent.key_list.fn()
 
@@ -385,7 +385,7 @@ async def test_names_are_unique_across_providers(
 ):
     add_key(db_session, regular_user, "personal", provider="anthropic")
 
-    with mcp_auth_context(user_session.id, scopes=["teams"]):
+    with mcp_auth_context(user_session.token, scopes=["teams"]):
         with pytest.raises(ValueError, match="you already have a key named 'personal'"):
             await agent.key_upsert.fn(provider="openai", label="personal", key="sk-openai")
 
@@ -419,13 +419,13 @@ async def test_admin_can_select_replace_and_clear_system_default(
 
     first = add_key(db_session, admin_user, "shared")
     second = add_key(db_session, admin_user, "replacement")
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         saved = await agent.key_upsert.fn(key_ref=first.id, is_system_default=True)
         assert saved["is_system_default"] is True
     db_session.expire_all()
     selected = provider_keys.system_key(db_session, regular_user.id, SUMMARISE)
     assert selected is not None and selected.id == first.id
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         listed = await agent.key_list.fn()
         assert listed["providers"]["anthropic"] == []
         system_agents = await agent.system_list.fn()
@@ -433,13 +433,13 @@ async def test_admin_can_select_replace_and_clear_system_default(
     # Sharing funds system agents only, not arbitrary user agents.
     with pytest.raises(KeyUnavailable):
         choose_key(db_session, regular_user.id, MODEL, None)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await agent.key_upsert.fn(key_ref=second.id, is_system_default=True)
     db_session.expire_all()
     assert not first.is_system_default
     selected = provider_keys.system_key(db_session, regular_user.id, SUMMARISE)
     assert selected is not None and selected.id == second.id
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await agent.key_upsert.fn(key_ref=second.id, is_system_default=False)
     db_session.expire_all()
     assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE) is None
@@ -451,7 +451,7 @@ async def test_regular_user_cannot_change_system_default(
     db_session, regular_user, user_session, selected
 ):
     row = add_key(db_session, regular_user)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="only admins"):
             await agent.key_upsert.fn(key_ref=row.id, is_system_default=selected)
     db_session.expire_all()
@@ -466,7 +466,7 @@ async def test_deleting_system_default_does_not_promote_shared_successor(
 
     shared = add_key(db_session, admin_user, "shared", is_system_default=True)
     add_key(db_session, admin_user, "other")
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await agent.key_delete.fn(key_ref=shared.id)
     db_session.expire_all()
     assert provider_keys.system_key(db_session, regular_user.id, SUMMARISE) is None

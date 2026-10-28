@@ -5,7 +5,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import bcrypt
@@ -212,14 +212,45 @@ class APIKeyType(str):
 KNOWN_KEY_PREFIXES = (*APIKeyType.ALL_TYPES, "bot", "user")
 
 
-def hash_api_key(key: str) -> str:
-    """The stored lookup hash of an API key.
+def hash_token(token: str) -> str:
+    """The stored lookup hash of a bearer token (API key, session, refresh token).
 
-    Keys are 256-bit random tokens, so an unsalted SHA-256 can't be brute-forced
-    and needs no server secret: rotating secrets or restoring a backup elsewhere
-    leaves keys working.
+    Tokens are at least 122 bits of randomness, so an unsalted SHA-256 can't be
+    brute-forced and needs no server secret: rotating secrets or restoring a
+    backup elsewhere leaves tokens working.
     """
-    return hashlib.sha256(key.encode()).hexdigest()
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+class HashedToken:
+    """A bearer token stored only as its ``hash_token`` in the ``hash_attr`` column.
+
+    The plaintext is readable on the instance that minted it, to hand to the
+    client once; a row loaded from the database has only the hash.
+    """
+
+    def __init__(self, hash_attr: str):
+        self.hash_attr = hash_attr
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    @overload
+    def __get__(self, obj: None, owner: type) -> HashedToken: ...
+    @overload
+    def __get__(self, obj: object, owner: type) -> str: ...
+    def __get__(self, obj: object | None, owner: type) -> HashedToken | str:
+        if obj is None:
+            return self
+        if (plaintext := obj.__dict__.get(f"minted_{self.name}")) is None:
+            raise AttributeError(
+                f"{owner.__name__}.{self.name} is stored hashed; the plaintext exists only at creation"
+            )
+        return plaintext
+
+    def __set__(self, obj: object, plaintext: str) -> None:
+        obj.__dict__[f"minted_{self.name}"] = plaintext
+        setattr(obj, self.hash_attr, hash_token(plaintext))
 
 
 def api_key_preview(key: str) -> str:
@@ -281,7 +312,7 @@ class APIKey(Base):
     @key.setter
     def key(self, plaintext: str) -> None:
         vars(self)["minted_key"] = plaintext
-        self.key_hash = hash_api_key(plaintext)
+        self.key_hash = hash_token(plaintext)
         self.key_preview = api_key_preview(plaintext)
 
     @classmethod
@@ -346,11 +377,12 @@ class APIKey(Base):
 
 
 class UserSession(Base):
+    """A login session or OAuth access token. ``id`` is the hash of the bearer token."""
+
     __tablename__ = "user_sessions"
 
-    id: Mapped[str] = mapped_column(
-        String, primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    token = HashedToken("id")
     oauth_state_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("oauth_states.id"), nullable=True
     )
@@ -373,6 +405,10 @@ class UserSession(Base):
     oauth_state: Mapped[OAuthState | None] = relationship(
         "OAuthState", back_populates="session"
     )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("token", str(uuid.uuid4()))
+        super().__init__(**kwargs)
 
 
 class OAuthClientInformation(Base):
@@ -482,14 +518,13 @@ class OAuthState(Base, OAuthToken):
 class OAuthRefreshToken(Base, OAuthToken):
     __tablename__ = "oauth_refresh_tokens"
 
-    token: Mapped[str] = mapped_column(
-        String, nullable=False, default=lambda: f"rt_{secrets.token_hex(32)}"
-    )
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    token = HashedToken("token_hash")
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Optional: link to the access token session that was created with this refresh token
     access_token_session_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("user_sessions.id"), nullable=True
+        String, ForeignKey("user_sessions.id", ondelete="SET NULL"), nullable=True
     )
 
     # Relationships
@@ -497,12 +532,9 @@ class OAuthRefreshToken(Base, OAuthToken):
     user: Mapped[User | None] = relationship("User", back_populates="oauth_refresh_tokens")
     access_token_session: Mapped[UserSession | None] = relationship("UserSession")
 
-    def serialize(self) -> dict[str, Any]:
-        return {
-            "token": self.token,
-            "expires_at": self.expires_at.timestamp(),
-            "revoked": self.revoked,
-        } | super().serialize()
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("token", f"rt_{secrets.token_hex(32)}")
+        super().__init__(**kwargs)
 
 
 class OAuthClientState(Base):

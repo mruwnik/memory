@@ -8,6 +8,7 @@ import pytest
 from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
 
 from memory.common.db.models import Person, Team, HumanUser, UserSession
+from memory.common.db.models.users import hash_token
 from memory.common.db.models.sources import GithubRepo, Project, team_members, project_teams
 from memory.common.db import connection as db_connection
 
@@ -54,7 +55,7 @@ def regular_user(db_session):
 def user_session(db_session, regular_user):
     """Create a user session for the regular user."""
     session = UserSession(
-        id="test-session-token",
+        token="test-session-token",
         user_id=regular_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -67,7 +68,7 @@ def user_session(db_session, regular_user):
 def admin_session(db_session, admin_user):
     """Create a user session for the admin user."""
     session = UserSession(
-        id="admin-session-token",
+        token="admin-session-token",
         user_id=admin_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -154,7 +155,7 @@ def make_mock_access_token(session_id: str | None):
     if session_id is None:
         return None
     with db_connection.make_session() as session:
-        user_session = session.get(UserSession, session_id)
+        user_session = session.get(UserSession, hash_token(session_id))
         scopes = list(user_session.user.scopes or []) if user_session else []
     return AccessToken(token=session_id, client_id="test-client", scopes=scopes)
 
@@ -184,7 +185,7 @@ async def test_project_list_access_control(
     """Test that project_list respects access control."""
     from memory.api.MCP.servers.projects import list_all
 
-    session_id = admin_session.id if use_admin else user_session.id
+    session_id = admin_session.token if use_admin else user_session.token
     mock_token = make_mock_access_token(session_id)
 
     with (
@@ -207,7 +208,7 @@ async def test_project_list_filter_by_state(db_session, user_session, teams_and_
     """Test filtering projects by state."""
     from memory.api.MCP.servers.projects import list_all
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -227,7 +228,7 @@ async def test_project_list_filter_by_parent(db_session, user_session, teams_and
     """Test filtering projects by parent_id."""
     from memory.api.MCP.servers.projects import list_all
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -278,7 +279,7 @@ async def test_project_get_access_control_success(
     """Test that project_get grants access to authorized projects."""
     from memory.api.MCP.servers.projects import fetch
 
-    session_id = admin_session.id if use_admin else user_session.id
+    session_id = admin_session.token if use_admin else user_session.token
     mock_token = make_mock_access_token(session_id)
 
     with (
@@ -299,7 +300,7 @@ async def test_project_get_access_control_denied(
     """Test that project_get denies access to projects the user cannot see."""
     from memory.api.MCP.servers.projects import fetch
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -317,7 +318,7 @@ async def test_project_get_includes_teams(db_session, user_session, teams_and_pr
     """project_get should include teams when include_teams=True."""
     from memory.api.MCP.servers.projects import fetch
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -337,7 +338,7 @@ async def test_project_get_children_count(db_session, user_session, teams_and_pr
     """project_get should return children_count."""
     from memory.api.MCP.servers.projects import fetch
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -360,7 +361,7 @@ async def test_project_create_requires_non_empty_team_ids(db_session, user_sessi
     """project_create should require a non-empty team_ids list."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -378,7 +379,7 @@ async def test_project_create_validates_team_ids(db_session, user_session, teams
     """project_create should validate that team_ids exist."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -398,7 +399,7 @@ async def test_project_create_requires_team_access_for_non_admin(
     """Non-admin users can only create projects with teams they belong to."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
     team_gamma_id = teams_and_projects["team_gamma"].id
 
     with (
@@ -417,7 +418,7 @@ async def test_project_create_success(db_session, user_session, teams_and_projec
     """Successful project creation with valid team_ids."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
     team_beta_id = teams_and_projects["team_beta"].id
 
@@ -445,7 +446,7 @@ async def test_project_create_admin_can_use_any_team(db_session, admin_session, 
     """Admin can create projects with any team."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(admin_session.id)
+    mock_token = make_mock_access_token(admin_session.token)
     team_gamma_id = teams_and_projects["team_gamma"].id
 
     with (
@@ -473,7 +474,7 @@ async def test_project_update_access_control(
     """Test that project_update respects access control."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -492,7 +493,7 @@ async def test_project_update_success(db_session, user_session, teams_and_projec
     """Successful project update."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -511,7 +512,7 @@ async def test_project_update_clear_parent(db_session, user_session, teams_and_p
     """project_update with clear_parent=True removes the parent."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -529,7 +530,7 @@ async def test_project_update_prevents_circular_parent(db_session, user_session,
     """project_update should prevent circular parent references."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -623,7 +624,7 @@ async def test_project_update_detects_orphan_cycle_in_existing_data(
 
     # Project -1 has no parent yet. Try to attach it to C (which is in the
     # cycle). Pre-fix this hung forever; now it must surface a clean error.
-    mock_token = make_mock_access_token(admin_session.id)
+    mock_token = make_mock_access_token(admin_session.token)
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
@@ -650,7 +651,7 @@ async def test_project_delete_access_control(db_session, user_session, teams_and
     """Test that project_delete respects access control."""
     from memory.api.MCP.servers.projects import delete
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -668,7 +669,7 @@ async def test_project_delete_success(db_session, user_session, teams_and_projec
     """Successful project deletion."""
     from memory.api.MCP.servers.projects import delete
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -696,7 +697,7 @@ async def test_project_delete_rejects_bare_member(
 
     # regular_user is a `member` on team_alpha which owns project_one (-1).
     # That gives read access but not authority to delete.
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
@@ -720,7 +721,7 @@ async def test_project_delete_allowed_for_admin_scope(
     """Global admin scope must keep the bypass — admins can delete any project."""
     from memory.api.MCP.servers.projects import delete
 
-    mock_token = make_mock_access_token(admin_session.id)
+    mock_token = make_mock_access_token(admin_session.token)
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
@@ -748,7 +749,7 @@ async def test_project_upsert_rejects_team_replacement_by_bare_member(
     # — read access yes, administer authority no.
     team_alpha_id = teams_and_projects["team_alpha"].id
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
@@ -782,7 +783,7 @@ async def test_project_upsert_team_replacement_allowed_for_lead(
 
     team_beta_id = teams_and_projects["team_beta"].id
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
@@ -845,7 +846,7 @@ async def test_project_tree_access_control(
     """Test that project_tree respects access control."""
     from memory.api.MCP.servers.projects import list_all as project_list_all
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -874,7 +875,7 @@ async def test_project_tree_nesting(db_session, user_session, teams_and_projects
     """Test that project_tree correctly nests children."""
     from memory.api.MCP.servers.projects import list_all as project_list_all
 
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -916,7 +917,7 @@ def github_user_session(db_session, github_user):
     """Create a session for the GitHub test user."""
     unique_id = uuid.uuid4().hex[:8]
     session = UserSession(
-        id=f"github-test-session-{unique_id}",
+        token=f"github-test-session-{unique_id}",
         user_id=github_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -968,7 +969,7 @@ async def test_repo_project_create_with_existing_repo(
     """Creating a repo-level project with an existing tracked repo."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
 
     mock_client = MagicMock()
@@ -1001,7 +1002,7 @@ async def test_repo_project_create_with_title_override(
     """Creating a repo-level project with a custom title."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
 
     mock_client = MagicMock()
@@ -1031,7 +1032,7 @@ async def test_repo_project_requires_create_repo_flag_for_untracked(
     """Repo must exist or create_repo=True must be set."""
     from memory.api.MCP.servers.projects import upsert
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
 
     mock_client = MagicMock()
@@ -1069,7 +1070,7 @@ async def test_repo_project_with_create_repo_flag(
     from memory.api.MCP.servers.projects import upsert
     from memory.common.db.models.sources import GithubRepo
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
 
     mock_client = MagicMock()
@@ -1117,7 +1118,7 @@ async def test_repo_project_idempotent_update(
     from memory.api.MCP.servers.projects import upsert
     from memory.common.db.models.sources import Project, project_teams
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
     team_beta_id = teams_and_projects["team_beta"].id
 
@@ -1177,7 +1178,7 @@ async def test_milestone_project_with_create_repo(
     from memory.api.MCP.servers.projects import upsert
     from memory.common.db.models.sources import GithubRepo
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
     team_alpha_id = teams_and_projects["team_alpha"].id
 
     mock_client = MagicMock()
@@ -1504,7 +1505,7 @@ def github_milestone_project(db_session):
 
     # Create isolated session for this fixture
     session = UserSession(
-        id=f"milestone-test-session-{unique_id}",
+        token=f"milestone-test-session-{unique_id}",
         user_id=user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -1568,7 +1569,7 @@ def github_milestone_project(db_session):
     db_session.commit()
 
     # Attach session_id to the project so tests can use it for auth
-    project._test_session_id = session.id  # type: ignore[attr-defined]
+    project._test_session_id = session.token  # type: ignore[attr-defined]
     project._test_repo = repo  # type: ignore[attr-defined]
 
     return project
@@ -1896,7 +1897,7 @@ async def test_update_rejects_clear_repo_and_repo_together(
     db_session.add(project)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -1932,7 +1933,7 @@ async def test_update_rejects_clear_milestone_and_milestone_together(
     db_session.add(project)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -1959,7 +1960,7 @@ async def test_detach_standalone_project_is_noop(
 
     project = teams_and_projects["project_one"]
     assert project.repo_id is None
-    mock_token = make_mock_access_token(user_session.id)
+    mock_token = make_mock_access_token(user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -1996,7 +1997,7 @@ async def test_detach_github_project_no_items_succeeds(
     db_session.commit()
     project_id = project.id
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2057,7 +2058,7 @@ async def test_detach_with_linked_items_refused_without_force(
     db_session.add(item)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2116,7 +2117,7 @@ async def test_detach_with_linked_items_succeeds_with_force(
     db_session.add(item)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2155,7 +2156,7 @@ async def test_clear_milestone_demotes_to_repo_level(
     db_session.add(project)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2195,7 +2196,7 @@ async def test_clear_milestone_on_repo_level_is_noop(
     db_session.add(project)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2254,7 +2255,7 @@ async def test_clear_milestone_with_linked_items_refused_without_force(
     db_session.add(item)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2463,7 +2464,7 @@ async def test_update_github_project_refreshes_state_first(
         "closed_at": None,
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2514,7 +2515,7 @@ async def test_update_archived_repo_returns_error_and_deactivates(
         "name": "testrepo",
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2561,7 +2562,7 @@ async def test_detach_skips_sync_on_mutate(
     # Even if GitHub says repo is gone, detach should succeed
     mock_client.get_repo.return_value = None
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2611,7 +2612,7 @@ async def test_attach_standalone_project_to_existing_repo(
         "name": "testrepo",
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2680,7 +2681,7 @@ async def test_attach_with_invalid_due_on_does_not_persist_attach(
             db_session.rollback()
             raise
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     mock_client = MagicMock()
     mock_client.get_repo.return_value = {
@@ -2753,7 +2754,7 @@ async def test_attach_rejects_repo_when_already_attached_to_different_repo(
         "name": "testrepo",
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2804,7 +2805,7 @@ async def test_attach_with_same_repo_is_noop_for_link(
         "name": "testrepo",
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2852,7 +2853,7 @@ async def test_attach_creates_repo_if_missing_with_create_repo_true(
         True,
     )
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2900,7 +2901,7 @@ async def test_attach_refuses_when_repo_missing_and_create_repo_false(
     mock_client = MagicMock()
     mock_client.fetch_repository_info.return_value = None
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -2976,7 +2977,7 @@ async def test_promote_repo_level_to_milestone(
         "closed_at": None,
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -3050,7 +3051,7 @@ async def test_attach_with_milestone_in_one_step(
         "closed_at": None,
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -3097,7 +3098,7 @@ async def test_milestone_without_repo_on_standalone_errors(
     db_session.add(project)
     db_session.commit()
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -3150,7 +3151,7 @@ async def test_attach_failed_refresh_leaves_project_standalone(
         "name": github_repo.name,
     }
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -3232,7 +3233,7 @@ async def test_promote_failed_refresh_leaves_project_at_repo_level(
     # the refresh.
     mock_client.get_repo.return_value = None
 
-    mock_token = make_mock_access_token(github_user_session.id)
+    mock_token = make_mock_access_token(github_user_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),

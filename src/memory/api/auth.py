@@ -28,7 +28,7 @@ from memory.common.access_control import (
     has_admin_scope,
 )
 from memory.common.db.models.base import Base
-from memory.common.db.models.users import hash_api_key
+from memory.common.db.models.users import hash_token
 from memory.common.scopes import has_scope
 
 T = TypeVar("T", bound=Base)
@@ -207,7 +207,7 @@ def create_user_session(
     db.add(session)
     db.commit()
 
-    return str(session.id)
+    return session.token
 
 
 def is_expired(expires_at: datetime | None) -> bool:
@@ -240,7 +240,7 @@ def get_user_session(request: Request, db: DBSession) -> UserSession | None:
     if not session_id:
         return None
 
-    session = db.get(UserSession, session_id)
+    session = db.get(UserSession, hash_token(session_id))
     if not session:
         return None
 
@@ -259,7 +259,7 @@ def session_key_is_valid(session: UserSession) -> bool:
 
 def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
     """The APIKey row for a plaintext key, found by its indexed hash."""
-    return db.query(APIKey).filter(APIKey.key_hash == hash_api_key(api_key)).first()
+    return db.query(APIKey).filter(APIKey.key_hash == hash_token(api_key)).first()
 
 
 def authenticate_by_api_key(
@@ -350,7 +350,7 @@ def lookup_principal(
       cascade-delete race from turning into a 500 — and lets downstream
       ``principal.user.id`` be a non-Optional access without comment.)
     """
-    user_session = session.get(UserSession, token)
+    user_session = session.get(UserSession, hash_token(token))
     if user_session is not None:
         if is_expired(user_session.expires_at):
             return None
@@ -422,7 +422,7 @@ def get_session_user(
     """Get user from session ID or API key if valid.
 
     Supports two authentication methods:
-    - Session tokens (UUIDs from UserSession table)
+    - Session tokens (UserSession, looked up by hash)
     - API keys (from api_keys table)
 
     Args:

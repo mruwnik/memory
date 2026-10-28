@@ -58,7 +58,7 @@ def admin_user_with_session(db_session):
     db_session.flush()
 
     session = UserSession(
-        id="discord-test-session",
+        token="discord-test-session",
         user_id=user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -94,7 +94,7 @@ async def test_has_discord_bots_resolves_both_token_kinds(
     """
     user, session = admin_user_with_session
     if token_kind == "session":
-        token = session.id
+        token = session.token
     else:
         api_key = APIKey.create(user_id=user.id, key_type="mcp")
         db_session.add(api_key)

@@ -16,7 +16,7 @@ def _build_session(sessions_deleted: int, refresh_revoked: int):
     """Build a SQLAlchemy session double whose chained .query().filter()*.delete()
     and .update() return the requested row counts. Tracks how many filter()
     calls happened on the session-query path so we can assert on the
-    keep_session_id behaviour."""
+    keep_session_token behaviour."""
     db = MagicMock()
 
     session_query = MagicMock()
@@ -44,18 +44,18 @@ def test_revoke_credentials_no_keep_session_uses_one_filter():
     """Admin reset path: only one filter() (user_id), no exclude-current-session."""
     db, session_query, _ = _build_session(sessions_deleted=5, refresh_revoked=0)
 
-    revoke_user_credentials(db, user_id=42, keep_session_id=None)
+    revoke_user_credentials(db, user_id=42, keep_session_token=None)
 
     # One filter call on the UserSession query: user_id == 42
     assert session_query.filter.call_count == 1
     session_query.delete.assert_called_once_with(synchronize_session=False)
 
 
-def test_revoke_credentials_with_keep_session_id_excludes_current():
+def test_revoke_credentials_with_keep_session_token_excludes_current():
     """Self-change path: a second filter excludes the user's current session."""
     db, session_query, _ = _build_session(sessions_deleted=2, refresh_revoked=1)
 
-    revoke_user_credentials(db, user_id=42, keep_session_id="sess-keep")
+    revoke_user_credentials(db, user_id=42, keep_session_token="sess-keep")
 
     # Two filter calls: user_id == 42, then id != "sess-keep"
     assert session_query.filter.call_count == 2

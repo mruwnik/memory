@@ -26,7 +26,7 @@ from memory.common.db.models import (
     UserSession,
     compute_next_cron,
 )
-from memory.common.db.models.users import check_timezone, hash_password, verify_password
+from memory.common.db.models.users import check_timezone, hash_password, hash_token, verify_password
 from memory.common.rate_limit import check_rate_limit_spec
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import MULTI_USER, scopes_hidden
@@ -406,12 +406,12 @@ def delete_user(
 
 
 def revoke_user_credentials(
-    db: Session, user_id: int, keep_session_id: str | None = None
+    db: Session, user_id: int, keep_session_token: str | None = None
 ) -> tuple[int, int]:
     """Invalidate a user's other sessions and OAuth refresh tokens.
 
     Called after a password change or admin reset so a stolen
-    cookie/refresh token can't outlive the rotation. ``keep_session_id``
+    cookie/refresh token can't outlive the rotation. ``keep_session_token``
     optionally preserves a single session row (used by the self-change
     flow so the user isn't logged out of the tab they're using to change
     their password).
@@ -425,8 +425,8 @@ def revoke_user_credentials(
     reset should use the API-key endpoints explicitly.
     """
     session_query = db.query(UserSession).filter(UserSession.user_id == user_id)
-    if keep_session_id is not None:
-        session_query = session_query.filter(UserSession.id != keep_session_id)
+    if keep_session_token is not None:
+        session_query = session_query.filter(UserSession.id != hash_token(keep_session_token))
     sessions_deleted = session_query.delete(synchronize_session=False)
 
     refresh_revoked = (
@@ -478,7 +478,7 @@ def change_password(
     # survive the rotation. Keep the *current* session (the tab the user is
     # actively using to change their password); they'll keep working.
     current_session_token = get_token(request)
-    revoke_user_credentials(db, cast(int, user.id), keep_session_id=current_session_token)
+    revoke_user_credentials(db, cast(int, user.id), keep_session_token=current_session_token)
     db.commit()
 
     return {"status": "password_changed"}
@@ -501,7 +501,7 @@ def reset_password(
     human_user.password_hash = hash_password(data.new_password)
 
     # Admin reset is the "lock the account" path — revoke EVERY session and
-    # refresh token (no keep_session_id). The target user will need to log
+    # refresh token (no keep_session_token). The target user will need to log
     # back in everywhere with the new password.
     revoke_user_credentials(db, user_id)
     db.commit()

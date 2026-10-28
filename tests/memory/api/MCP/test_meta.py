@@ -155,7 +155,7 @@ async def test_get_search_defaults_reports_server_settings(
 ):
     monkeypatch.setattr(f"memory.common.settings.{setting}", value)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         assert (await get_search_defaults.fn())[key] is value
 
 
@@ -176,7 +176,7 @@ async def test_search_defaults_say_when_search_is_keyword_only(
     for setting in ("ENABLE_HYDE_EXPANSION", "ENABLE_RERANKING"):
         monkeypatch.setattr(f"memory.common.settings.{setting}", True)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         defaults = await get_search_defaults.fn()
 
     assert {k: defaults[k] for k in expected} == expected
@@ -193,7 +193,7 @@ def llm_search_steps_on(monkeypatch):
 async def test_llm_search_steps_need_a_key_of_yours(
     db_session, user_session, llm_search_steps_on, key
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         assert (await get_search_defaults.fn())[key] is False
 
 
@@ -202,7 +202,7 @@ async def test_llm_search_steps_need_a_key_of_yours(
 async def test_llm_search_steps_run_on_your_default_key(
     db_session, user_session, llm_key, llm_search_steps_on, key
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         assert (await get_search_defaults.fn())[key] is True
 
 
@@ -215,7 +215,7 @@ async def test_get_tags_admin_sees_searchable_tags(db_session, admin_session):
     make_source_item(db_session, 5, tags=["tombstoned"], sensitivity="hidden")
     make_source_item(db_session, 6, tags=["unembedded"], embed_status="FAILED")
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_tags.fn()
 
     assert result == ["common", "rare"]
@@ -226,7 +226,7 @@ async def test_get_tags_respects_access(db_session, user_session, admin_user):
     make_source_item(db_session, 1, tags=["mine"], creator_id=user_session.user_id)
     make_source_item(db_session, 2, tags=["theirs"], creator_id=admin_user.id)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_tags.fn()
 
     assert result == ["mine"]
@@ -281,7 +281,7 @@ async def test_get_user_returns_user_info(db_session, admin_session):
     db_session.add(email_acct)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
@@ -319,7 +319,7 @@ async def test_get_user_no_email_accounts_uses_fallback(db_session, admin_sessio
     """Get user falls back to user email when no EmailAccount records exist."""
     # admin_user has email="admin@example.com" but no EmailAccount records
     # The fallback should create a synthetic entry from user.email
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
@@ -357,7 +357,7 @@ async def test_get_user_returns_ssh_public_key(
     db_session.add(key)
     db_session.flush()
     admin_user.default_ssh_key_id = key.id
-    token = admin_session.id
+    token = admin_session.token
     if key_scopes != "session":
         api_key = APIKey.create(user_id=admin_user.id, scopes=key_scopes)
         db_session.add(api_key)
@@ -377,7 +377,7 @@ async def test_get_user_returns_none_when_no_ssh_key(db_session, admin_user, adm
     admin_user.default_ssh_key_id = None
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
@@ -403,7 +403,7 @@ async def test_get_user_slack_credentials(db_session, admin_session):
     db_session.add(cred)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
@@ -429,7 +429,7 @@ async def test_get_user_discord_accounts_come_from_person(db_session, admin_user
     admin_user.person = person
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
@@ -457,7 +457,7 @@ async def test_get_user_person_slack_from_contact_info(db_session, admin_user, a
     admin_user.person = person
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
@@ -497,7 +497,7 @@ async def test_get_user_slack_credentials_take_precedence(db_session, admin_user
     admin_user.person = person
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True

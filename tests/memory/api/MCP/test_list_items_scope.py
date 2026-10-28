@@ -158,18 +158,18 @@ async def listed(session_id, **kwargs):
     ],
 )
 async def test_list_items_scopes(db_session, admin_session, corpus, kwargs, expected):
-    got = await listed(admin_session.id, **kwargs)
+    got = await listed(admin_session.token, **kwargs)
 
     assert got == {corpus[name].id for name in expected}
 
 
 @pytest.mark.asyncio
 async def test_scoping_never_widens_access(db_session, user_session, corpus):
-    assert await listed(user_session.id, channel="general") == set()
+    assert await listed(user_session.token, channel="general") == set()
 
 
 @pytest.mark.asyncio
 async def test_bad_dates_are_refused(db_session, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="since"):
             await list_items.fn(since="last tuesday")

@@ -22,7 +22,7 @@ async def test_schedule_creates_lists_updates_and_deletes(
 ):
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.schedule.fn(
             definition_id=d.id, input="digest", cron_expression="0 9 * * *"
         )
@@ -64,7 +64,7 @@ async def test_schedule_validates(
 ):
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.schedule.fn(definition_id=d.id, **({"input": "x"} | kwargs))
 
@@ -76,7 +76,7 @@ async def test_schedule_counts_toward_the_task_cap(
     monkeypatch.setattr(settings, "MAX_SCHEDULED_TASKS_PER_USER", 1)
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await agent.schedule.fn(definition_id=d.id, input="a", cron_expression="0 9 * * *")
         with pytest.raises(ValueError, match="Maximum"):
             await agent.schedule.fn(
@@ -98,7 +98,7 @@ async def test_other_users_definitions_and_schedules_are_unknown(
     db_session.add(task)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="unknown agent definition"):
             await agent.schedule.fn(
                 definition_id=theirs.id, input="x", cron_expression="0 9 * * *"
@@ -115,7 +115,7 @@ async def test_schedules_are_paused_and_resumed_without_restating_input(
 ):
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.schedule.fn(
             definition_id=d.id, input="digest", cron_expression="0 9 * * *"
         )
@@ -135,14 +135,14 @@ async def test_resuming_respects_the_task_cap(
     db_session, regular_user, user_session, fake_providers, monkeypatch
 ):
     d = definition(db_session, regular_user)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         paused = await agent.schedule.fn(
             definition_id=d.id, input="a", cron_expression="0 9 * * *", enabled=False
         )
         await agent.schedule.fn(definition_id=d.id, input="b", cron_expression="0 10 * * *")
     monkeypatch.setattr(settings, "MAX_SCHEDULED_TASKS_PER_USER", 1)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="Maximum"):
             await agent.schedule.fn(definition_id=d.id, task_id=paused["id"], enabled=True)
 
@@ -152,7 +152,7 @@ async def test_renaming_the_definition_refreshes_the_topic_on_update(
     db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.schedule.fn(
             definition_id=d.id, input="a", cron_expression="0 9 * * *"
         )
@@ -168,7 +168,7 @@ async def test_deleting_a_definition_deletes_its_schedules(
     db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await agent.schedule.fn(definition_id=d.id, input="a", cron_expression="0 9 * * *")
         await agent.delete.fn(definition_id=d.id)
 

@@ -136,7 +136,7 @@ def regular_user_other_creator_item(db_session):
 
 @pytest.mark.asyncio
 async def test_create(db_session, admin_user, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(create)(
             title="Grant: NSF #1234",
             date="2026-06-30",
@@ -156,7 +156,7 @@ async def test_create(db_session, admin_user, admin_session):
 async def test_create_invalid_date_rejected(
     db_session, admin_user, admin_session
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="Invalid date"):
             await get_fn(create)(title="bad", date="not-a-date")
 
@@ -165,7 +165,7 @@ async def test_create_invalid_date_rejected(
 async def test_create_with_attachments(
     db_session, admin_user, admin_session, two_source_items
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(create)(
             title="Trip",
             date="2026-08-25",
@@ -204,7 +204,7 @@ async def test_create_reports_denied_attachments(
     accessible_id = own_item.id
     inaccessible_id = regular_user_other_creator_item.id
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(create)(
             title="mixed",
             date="2026-08-25",
@@ -221,7 +221,7 @@ async def test_create_reports_denied_attachments(
 async def test_fetch_returns_deadline(
     db_session, admin_user, admin_session
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(title="t", date="2026-09-01")
         result = await get_fn(fetch)(deadline_id=created["id"])
 
@@ -232,14 +232,14 @@ async def test_fetch_returns_deadline(
 
 @pytest.mark.asyncio
 async def test_fetch_missing_returns_error(db_session, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(fetch)(deadline_id=99999)
     assert "error" in result
 
 
 @pytest.mark.asyncio
 async def test_update_changes_fields(db_session, admin_user, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(title="orig", date="2026-09-01")
         updated = await get_fn(update)(
             deadline_id=created["id"],
@@ -257,7 +257,7 @@ async def test_update_changes_fields(db_session, admin_user, admin_session):
 async def test_delete_removes_deadline(
     db_session, admin_user, admin_session
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(title="bye", date="2026-09-01")
         result = await get_fn(delete)(deadline_id=created["id"])
 
@@ -269,7 +269,7 @@ async def test_delete_removes_deadline(
 
 @pytest.mark.asyncio
 async def test_delete_nonexistent_raises(db_session, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(delete)(deadline_id=99999)
 
@@ -278,7 +278,7 @@ async def test_delete_nonexistent_raises(db_session, admin_session):
 async def test_attach_idempotent(
     db_session, admin_user, admin_session, two_source_items
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(title="att", date="2026-09-01")
         first = await get_fn(attach)(
             deadline_id=created["id"],
@@ -302,7 +302,7 @@ async def test_attach_idempotent(
 async def test_detach_removes_links(
     db_session, admin_user, admin_session, two_source_items
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="d",
             date="2026-09-01",
@@ -323,7 +323,7 @@ async def test_list_upcoming_orders_by_date_asc(
     db_session, admin_user, admin_session
 ):
     today = date.today()
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="far", date=(today + timedelta(days=10)).isoformat())
         await get_fn(create)(title="near", date=(today + timedelta(days=2)).isoformat())
         result = await get_fn(list_upcoming)(days=14)
@@ -337,7 +337,7 @@ async def test_list_upcoming_excludes_past(
     db_session, admin_user, admin_session
 ):
     today = date.today()
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="past", date=(today - timedelta(days=3)).isoformat())
         await get_fn(create)(title="future", date=(today + timedelta(days=3)).isoformat())
         no_past = await get_fn(list_upcoming)(days=14)
@@ -355,7 +355,7 @@ async def test_list_upcoming_window_horizon(
     db_session, admin_user, admin_session
 ):
     today = date.today()
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="soon", date=(today + timedelta(days=3)).isoformat())
         await get_fn(create)(title="later", date=(today + timedelta(days=30)).isoformat())
         result = await get_fn(list_upcoming)(days=7)
@@ -370,14 +370,14 @@ async def test_regular_user_cannot_see_admin_deadline(
     db_session, admin_session, user_session
 ):
     """Confidential deadline created by admin (no project) is invisible to regular user."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(
             title="admin-only",
             date=(date.today() + timedelta(days=2)).isoformat(),
             sensitivity="confidential",
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_upcoming)(days=14)
 
     assert all(d["title"] != "admin-only" for d in result)
@@ -388,7 +388,7 @@ async def test_regular_user_can_see_own_deadline(
     db_session, regular_user, user_session
 ):
     """A regular user always sees deadlines they created (creator override)."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await get_fn(create)(
             title="mine",
             date=(date.today() + timedelta(days=2)).isoformat(),
@@ -411,14 +411,14 @@ async def test_public_deadline_not_broadcast_to_non_creators(
     foot-gun where a non-admin could globally expose a deadline by setting
     sensitivity=public + project_id=None.
     """
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(
             title="public-broadcast",
             date=(date.today() + timedelta(days=2)).isoformat(),
             sensitivity="public",
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_upcoming)(days=14)
 
     titles = [d["title"] for d in result]
@@ -432,13 +432,13 @@ async def test_update_other_users_deadline_forbidden(
     """A regular user cannot update a deadline created by someone else.
     The error collapses not-found and not-permitted into the same ValueError
     so the LLM can't probe existence by reading the message text."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="admin-owned",
             date=(date.today() + timedelta(days=5)).isoformat(),
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(update)(
                 deadline_id=created["id"], title="hijacked"
@@ -453,13 +453,13 @@ async def test_delete_other_users_deadline_forbidden(
     not-found ValueError as a genuinely missing row. Matches the
     update/attach/detach convention; the message intentionally doesn't
     distinguish missing from forbidden."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="not-mine",
             date=(date.today() + timedelta(days=5)).isoformat(),
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(delete)(deadline_id=created["id"])
 
@@ -481,13 +481,13 @@ async def test_attach_other_users_deadline_forbidden(
     The error collapses not-found and not-permitted into the same ValueError
     so the LLM can't probe existence by reading the message text. Mirrors
     the convention enforced on update / delete / detach."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="admin-owned-attach",
             date=(date.today() + timedelta(days=5)).isoformat(),
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(attach)(
                 deadline_id=created["id"],
@@ -506,14 +506,14 @@ async def test_detach_other_users_deadline_forbidden(
 ):
     """A regular user cannot detach from a deadline created by someone else.
     Same not-found-or-forbidden collapse as the other mutators."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="admin-owned-detach",
             date=(date.today() + timedelta(days=5)).isoformat(),
             attachment_ids=[two_source_items[0].id],
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(detach)(
                 deadline_id=created["id"],
@@ -582,7 +582,7 @@ async def test_list_upcoming_visible_via_team_project_access(
     .person, so the project-roles lookup must go through user_id."""
     _, project = user_with_project_access
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(
             title="team-visible",
             date=(date.today() + timedelta(days=3)).isoformat(),
@@ -590,7 +590,7 @@ async def test_list_upcoming_visible_via_team_project_access(
             sensitivity="basic",
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_upcoming)(days=14)
 
     titles = [d["title"] for d in result]
@@ -604,7 +604,7 @@ async def test_list_upcoming_priority_orders_high_above_low(
     """Same date — `high` priority should sort above `low`. Lexical sort on
     text would put `low` above `high`, which was the bug."""
     same_date = (date.today() + timedelta(days=4)).isoformat()
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="low-pri", date=same_date, priority="low")
         await get_fn(create)(title="high-pri", date=same_date, priority="high")
         result = await get_fn(list_upcoming)(days=14)
@@ -618,7 +618,7 @@ async def test_list_upcoming_priority_orders_high_above_low(
 async def test_update_clear_priority(db_session, admin_user, admin_session):
     """`clear=["priority"]` should reset the field to NULL — the regular
     `priority=None` arg can't distinguish "leave alone" from "clear"."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="x",
             date=(date.today() + timedelta(days=2)).isoformat(),
@@ -639,7 +639,7 @@ async def test_update_clear_unknown_field_raises(
 ):
     """`clear=["title"]` is rejected — title isn't nullable and we don't want
     to encourage drive-by NULLing."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="x", date=(date.today() + timedelta(days=2)).isoformat()
         )
@@ -657,7 +657,7 @@ async def test_update_set_and_clear_same_field_raises(
     contradiction must be rejected loudly. Without the guard the explicit
     value is assigned, then the clear loop overwrites it to NULL — and the
     caller gets back a payload that silently discarded their input."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="x", date=(date.today() + timedelta(days=2)).isoformat()
         )
@@ -693,7 +693,7 @@ async def test_attach_drops_inaccessible_items(
     visible = visible_item.id
     hidden = regular_user_other_creator_item.id
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         deadline = await get_fn(create)(
             title="x",
             date=(date.today() + timedelta(days=2)).isoformat(),
@@ -727,7 +727,7 @@ async def test_create_no_project_confidential_allowed_for_regular_user(
     can see (list_upcoming runs with include_public=False, no project to
     bypass via).
     """
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(create)(
             title="private-confidential",
             date=(date.today() + timedelta(days=2)).isoformat(),
@@ -742,7 +742,7 @@ async def test_create_no_project_basic_allowed_for_regular_user(
     db_session, regular_user, user_session
 ):
     """basic and public are still fine without a project."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(create)(
             title="ok",
             date=(date.today() + timedelta(days=2)).isoformat(),
@@ -756,7 +756,7 @@ async def test_create_no_project_confidential_allowed_for_admin(
     db_session, admin_session
 ):
     """Admins keep the carve-out — project_id=None + confidential is fine."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(create)(
             title="ok",
             date=(date.today() + timedelta(days=2)).isoformat(),
@@ -804,7 +804,7 @@ async def test_list_upcoming_role_sensitivity_grid(
     )
 
     title = f"d-{team_role}-{deadline_sensitivity}"
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(create)(
             title=title,
             date=(date.today() + timedelta(days=3)).isoformat(),
@@ -812,7 +812,7 @@ async def test_list_upcoming_role_sensitivity_grid(
             sensitivity=deadline_sensitivity,
         )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_upcoming)(days=14)
 
     titles = [d["title"] for d in result]
@@ -835,7 +835,7 @@ async def test_update_clear_project_id_allowed_for_non_admin_at_high_sensitivity
         db_session, regular_user, team_role="lead"
     )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await get_fn(create)(
             title="hidden-in-project",
             date=(date.today() + timedelta(days=4)).isoformat(),
@@ -859,7 +859,7 @@ async def test_update_clear_project_id_allowed_for_non_admin_at_basic(
     public can still drop their project_id."""
     _, project = user_with_project_access
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await get_fn(create)(
             title="reassignable",
             date=(date.today() + timedelta(days=4)).isoformat(),
@@ -889,7 +889,7 @@ async def test_update_clear_project_id_allowed_for_admin_at_high_sensitivity(
     db_session.commit()
     db_session.refresh(project)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(
             title="admin-park",
             date=(date.today() + timedelta(days=4)).isoformat(),
@@ -921,7 +921,7 @@ async def test_update_move_to_foreign_project_forbidden_for_non_admin(
     db_session.refresh(project_b)
     foreign_project_id = project_b.id
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await get_fn(create)(
             title="moveable",
             date=(date.today() + timedelta(days=3)).isoformat(),
@@ -945,7 +945,7 @@ async def test_update_elevate_sensitivity_in_project_forbidden_for_non_admin(
     ladder must reject the elevation (covers BLOCKING exploit path 2)."""
     _, project = user_with_project_access
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await get_fn(create)(
             title="elevate-me",
             date=(date.today() + timedelta(days=3)).isoformat(),
@@ -970,7 +970,7 @@ async def test_update_elevate_sensitivity_on_null_project_allowed_for_non_admin(
     other non-admins via list_upcoming(include_public=False) plus the
     NULL-project invariant.
     """
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await get_fn(create)(
             title="park-and-elevate",
             date=(date.today() + timedelta(days=3)).isoformat(),
@@ -1003,7 +1003,7 @@ async def test_update_no_op_after_demotion_allowed(
         db_session, regular_user, team_role="lead"
     )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await get_fn(create)(
             title="lead-authored",
             date=(date.today() + timedelta(days=3)).isoformat(),
@@ -1023,7 +1023,7 @@ async def test_update_no_op_after_demotion_allowed(
     db_session.commit()
 
     # Title-only update: AC tuple unchanged. Should succeed.
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         updated = await get_fn(update)(
             deadline_id=created["id"], title="typo-fixed"
         )
@@ -1036,7 +1036,7 @@ async def test_update_no_op_after_demotion_allowed(
     # Sanity: trying to actually mutate the AC tuple should still be
     # rejected — the guard didn't disable the ladder, just made it
     # conditional.
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError, match="(?:not a member|does not permit)"):
             await get_fn(update)(
                 deadline_id=created["id"], sensitivity="confidential"

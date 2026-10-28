@@ -18,7 +18,7 @@ depends_on = None
 def upgrade():
     op.add_column("api_keys", sa.Column("key_hash", sa.String(), nullable=True))
     op.add_column("api_keys", sa.Column("key_preview", sa.String(), nullable=True))
-    # Must match memory.common.db.models.users.hash_api_key and api_key_preview.
+    # Must match memory.common.db.models.users.hash_token and api_key_preview.
     op.execute(
         "UPDATE api_keys SET "
         "key_hash = encode(sha256(convert_to(key, 'UTF8')), 'hex'), "

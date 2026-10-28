@@ -68,9 +68,9 @@ def viewers(db_session, admin_user, regular_user, other_user, admin_session, use
     db_session.add(api_key)
     db_session.commit()
     auth = {
-        "admin": lambda: mcp_auth_context(admin_session.id),
+        "admin": lambda: mcp_auth_context(admin_session.token),
         "admin read-only API key": lambda: mcp_auth_context(api_key.key, ["read"]),
-        "regular": lambda: mcp_auth_context(user_session.id),
+        "regular": lambda: mcp_auth_context(user_session.token),
         "unknown token": lambda: mcp_auth_context("no-such-token", ["read"]),
         "no token": nullcontext,
     }
@@ -178,7 +178,7 @@ async def test_list_and_fetch_return_only_accessible_sections_in_order(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         listed = await list_books.fn(sections=True)
         fetched = fetch.fn(book_id=book.id)
 
@@ -207,7 +207,7 @@ async def test_list_books_filters(db_session, admin_session, filters, expected):
         add_section(db_session, add_book(db_session, title, author=author, tags=tags))
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_books.fn(**filters)
 
     assert [b["title"] for b in result] == expected
@@ -221,7 +221,7 @@ def test_fetch_returns_leaf_sections(db_session, admin_session):
     other_part = add_section(db_session, book, "Part 2")
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = fetch.fn(book_id=book.id)
         only = fetch.fn(book_id=book.id, sections=[leaf.id])
 
@@ -242,7 +242,7 @@ def test_fetch_with_include_journal(db_session, admin_user, admin_session):
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = fetch.fn(book_id=book.id, include_journal=True)
 
     assert [s["section_title"] for s in result["sections"]] == ["Chapter 1"]

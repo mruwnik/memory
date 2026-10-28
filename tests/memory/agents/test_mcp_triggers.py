@@ -26,7 +26,7 @@ async def test_triggers_are_created_listed_updated_and_deleted(
 ):
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
         updated = await agent.trigger_upsert.fn(
             definition_id=d.id,
@@ -66,7 +66,7 @@ async def test_invalid_configs_are_refused_with_reasons(
 ):
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.trigger_upsert.fn(definition_id=d.id, config=config)
 
@@ -86,7 +86,7 @@ async def test_re_enabling_clears_a_tripped_breaker(
     db_session.add(t)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         enabled = await agent.trigger_upsert.fn(
             definition_id=d.id, trigger_id=t.id, config=CONFIG, enabled=True
         )
@@ -133,7 +133,7 @@ async def test_other_users_triggers_are_unknown(
     db_session.add(t)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="unknown agent definition"):
             await agent.triggers.fn(definition_id=theirs.id)
         with pytest.raises(ValueError, match=f"unknown trigger {t.id}"):
@@ -163,7 +163,7 @@ async def test_list_all_summarises_triggers(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         listed = await agent.list_all.fn()
 
     [entry] = listed["definitions"]
@@ -177,7 +177,7 @@ async def test_enabled_triggers_are_capped_per_user(
     monkeypatch.setattr(settings, "AGENT_MAX_TRIGGERS_PER_USER", 1)
     d = definition(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         first = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
         paused = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG, enabled=False)
         edited = await agent.trigger_upsert.fn(
@@ -203,7 +203,7 @@ async def test_write_and_egress_tools_are_flagged(
 ):
     d = definition(db_session, admin_user, SPEC | {"tools": tools})
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
 
     assert [w for w in warned if any(w in x for x in created["warnings"])] == warned
@@ -222,12 +222,12 @@ async def test_pausing_works_after_access_is_lost(
     db_session, regular_user, user_session, fake_providers, dropped
 ):
     d = definition(db_session, regular_user)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
     d.spec = SPEC | {"tools": ["meta_get_user"]}
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         paused = await agent.trigger_upsert.fn(
             definition_id=d.id, trigger_id=created["id"], enabled=False
         )
@@ -242,7 +242,7 @@ async def test_switching_off_batch_drops_the_buffer(
 ):
     d = definition(db_session, regular_user)
     batched = CONFIG | {"delivery": {"mode": "batch", "window_sec": 600}}
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=batched)
         await agent.trigger_upsert.fn(
             definition_id=d.id, trigger_id=created["id"], config=batched | {"template": "x"}
@@ -268,7 +268,7 @@ async def test_re_enabling_moves_active_since_forward(
     db_session.add(t)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         enabled = await agent.trigger_upsert.fn(
             definition_id=d.id, trigger_id=t.id, enabled=True
         )

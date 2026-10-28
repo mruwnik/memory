@@ -30,7 +30,7 @@ def ceilings(monkeypatch):
 async def test_upsert_creates_then_updates(
     db_session, regular_user, user_session, fake_providers
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.upsert.fn(name="digest", spec=SPEC)
         updated = await agent.upsert.fn(
             name="digest2", spec=SPEC | {"max_turns": 5}, definition_id=created["id"]
@@ -55,7 +55,7 @@ async def test_upsert_creates_then_updates(
 async def test_upsert_rejects_with_reasons(
     db_session, regular_user, user_session, fake_providers, spec, expected
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.upsert.fn(name="bad", spec=spec)
 
@@ -68,7 +68,7 @@ async def test_upsert_rejects_with_reasons(
 async def test_upsert_checks_the_name(
     db_session, regular_user, user_session, fake_providers, name, expected
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
             await agent.upsert.fn(name=name, spec=SPEC)
 
@@ -77,7 +77,7 @@ async def test_upsert_checks_the_name(
 async def test_upsert_strips_the_name(
     db_session, regular_user, user_session, fake_providers
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await agent.upsert.fn(name="  digest  ", spec=SPEC)
 
     assert created["name"] == "digest"
@@ -87,14 +87,14 @@ async def test_upsert_strips_the_name(
 async def test_run_input_is_capped(
     db_session, regular_user, user_session, fake_providers
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="input is longer than 200000 characters"):
             await agent.run.fn(input="x" * 200_001, spec=SPEC)
 
 
 @pytest.mark.asyncio
 async def test_catalog_lists_only_your_external_servers(db_session, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         catalog = await agent.catalog.fn()
 
     assert catalog["mcp_servers"] == []
@@ -104,7 +104,7 @@ async def test_catalog_lists_only_your_external_servers(db_session, admin_sessio
 async def test_duplicate_names_are_refused(
     db_session, regular_user, user_session, fake_providers
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await agent.upsert.fn(name="digest", spec=SPEC)
         with pytest.raises(ValueError, match="already have an agent named 'digest'"):
             await agent.upsert.fn(name="digest", spec=SPEC)
@@ -118,7 +118,7 @@ async def test_other_users_definitions_are_unknown(
     db_session.add(d)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=f"unknown agent definition {d.id}"):
             await agent.fetch.fn(definition_id=d.id)
         with pytest.raises(ValueError, match=f"unknown agent definition {d.id}"):
@@ -129,7 +129,7 @@ async def test_other_users_definitions_are_unknown(
 async def test_run_a_definition_and_an_ad_hoc_spec(
     db_session, regular_user, user_session, fake_providers, no_celery_dispatch
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         d = await agent.upsert.fn(name="digest", spec=SPEC)
         by_definition = await agent.run.fn(input="hi", definition_id=d["id"])
         ad_hoc = await agent.run.fn(input="hi", spec=SPEC)
@@ -153,7 +153,7 @@ async def test_run_a_definition_and_an_ad_hoc_spec(
 async def test_run_needs_exactly_one_source(
     db_session, user_session, fake_providers, kwargs
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(
             ValueError, match="exactly one of definition_id, spec or agent"
         ):
@@ -188,7 +188,7 @@ async def test_run_a_prebuilt_agent_on_the_callers_key(
 ):
     keys = provider_keys(db_session, regular_user, statuses)
 
-    with mcp_auth_context(user_session.id, scopes=["agents"]):
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
         started = await agent.run.fn(input="Is the sky green?", agent="fact-check")
 
     run = db_session.get(AgentRun, started["run_id"])
@@ -207,14 +207,14 @@ async def test_a_prebuilt_agent_blames_the_key_the_caller_has(
 ):
     provider_keys(db_session, regular_user, {"openai": "invalid"})
 
-    with mcp_auth_context(user_session.id, scopes=["agents"]):
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
         with pytest.raises(ValueError, match="openai"):
             await agent.run.fn(input="Is the sky green?", agent="fact-check")
 
 
 @pytest.mark.asyncio
 async def test_unknown_prebuilt_agents_are_refused(db_session, user_session, fake_providers):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="unknown agent 'nope'"):
             await agent.run.fn(input="hi", agent="nope")
 
@@ -253,7 +253,7 @@ async def test_cap_refusals_surface_as_errors(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="provider key pool"):
             await agent.run.fn(input="hi", spec=SPEC)
 
@@ -291,7 +291,7 @@ async def test_wait_returns_steps_after_seq(
 ):
     r = seeded_run(db_session, regular_user, status="done")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.wait.fn(run_id=r.id, after_seq=after_seq)
 
     assert [s["seq"] for s in result["steps"]] == expected
@@ -305,7 +305,7 @@ async def test_wait_pages_long_transcripts(
 ):
     r = seeded_run(db_session, regular_user, status="done")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.wait.fn(run_id=r.id, after_seq=after_seq, limit=2)
 
     assert [s["seq"] for s in result["steps"]] == expected
@@ -315,7 +315,7 @@ async def test_wait_pages_long_transcripts(
 async def test_other_users_runs_are_unknown(db_session, admin_user, user_session):
     r = seeded_run(db_session, admin_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=f"unknown run {r.id}"):
             await agent.wait.fn(run_id=r.id)
 
@@ -327,7 +327,7 @@ async def test_cancel_pending_revokes_and_cancels_immediately(
     r = seeded_run(db_session, regular_user, status="pending")
 
     with patch.object(agent.celery_app.control, "revoke") as revoke:
-        with mcp_auth_context(user_session.id):
+        with mcp_auth_context(user_session.token):
             result = await agent.cancel.fn(run_id=r.id)
 
     db_session.expire_all()
@@ -343,7 +343,7 @@ async def test_cancel_pending_revokes_and_cancels_immediately(
 async def test_cancel_running_sets_the_flag(db_session, regular_user, user_session):
     r = seeded_run(db_session, regular_user, status="running")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.cancel.fn(run_id=r.id)
 
     db_session.expire_all()
@@ -357,7 +357,7 @@ async def test_cancel_running_sets_the_flag(db_session, regular_user, user_sessi
 async def test_star_toggles(db_session, regular_user, user_session):
     r = seeded_run(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         assert (await agent.star.fn(run_id=r.id, starred=True))["starred"] is True
         assert (await agent.star.fn(run_id=r.id, starred=False))["starred"] is False
 
@@ -369,7 +369,7 @@ async def test_list_runs_shows_only_your_own(
     mine = seeded_run(db_session, regular_user)
     seeded_run(db_session, admin_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.list_runs.fn()
 
     assert [r["id"] for r in result["runs"]] == [mine.id]
@@ -382,7 +382,7 @@ async def test_list_runs_filters_by_prebuilt_agent(db_session, regular_user, use
     fact_check.trigger_ref = {"agent": "fact-check"}
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.list_runs.fn(agent="fact-check")
 
     assert [r["id"] for r in result["runs"]] == [fact_check.id]
@@ -400,7 +400,7 @@ async def test_list_runs_pages_through_runs_sharing_a_created_at(
 
     seen: list[str] = []
     cursor: dict = {}
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         for _ in range(5):
             page = (await agent.list_runs.fn(limit=2, **cursor))["runs"]
             if not page:
@@ -416,7 +416,7 @@ async def test_list_runs_pages_through_runs_sharing_a_created_at(
 async def test_catalog_lists_visible_tools_models_and_ceilings(
     db_session, admin_session
 ):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         catalog = await agent.catalog.fn()
 
     names = {t["name"] for t in catalog["tools"]}
@@ -458,7 +458,7 @@ async def test_system_agents_are_listed_with_the_model_the_viewers_keys_run(
         db_session.add(row)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id, scopes=["agents"]):
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
         listed = (await agent.system_list.fn())["agents"]
 
     entry = next(a for a in listed if a["slug"] == "system:summarise")
@@ -469,7 +469,7 @@ async def test_system_agents_are_listed_with_the_model_the_viewers_keys_run(
 async def test_system_agents_without_a_default_key_show_the_fix(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id, scopes=["agents"]):
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
         listed = (await agent.system_list.fn())["agents"]
 
     assert {a["problem"] for a in listed} == {
@@ -491,7 +491,7 @@ async def test_listed_definitions_carry_their_problems(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id, scopes=["agents"]):
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
         (definition,) = (await agent.list_all.fn())["definitions"]
 
     assert definition["problems"] == [
@@ -516,7 +516,7 @@ async def test_tools_missing_from_the_cache_are_flagged_but_do_not_stop_runs(
         trigger=TriggerInfo(kind="cron"),
         definition=definition,
     )
-    with mcp_auth_context(user_session.id, scopes=["agents"]):
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
         (listed,) = (await agent.list_all.fn())["definitions"]
 
     assert run.status == "pending"

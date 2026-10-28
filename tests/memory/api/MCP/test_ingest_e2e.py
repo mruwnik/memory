@@ -31,7 +31,7 @@ async def test_add_content_inline_creates_miscdoc(db_session, admin_session, adm
         result.id = "fake-task-id"
         return result
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with patch(
             "memory.common.jobs.celery_app.send_task", side_effect=fake_send_task
         ):

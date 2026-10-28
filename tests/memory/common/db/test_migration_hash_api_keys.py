@@ -6,7 +6,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import text
 
-from memory.common.db.models.users import api_key_preview, hash_api_key
+from memory.common.db.models.users import api_key_preview, hash_token
 
 # key -> the preview it must get: only a known type prefix survives, never custom text.
 PREVIEWS = {
@@ -46,7 +46,7 @@ def test_hash_api_keys_leaves_no_plaintext_key(db_session):
         module.upgrade()
 
     assert db.execute(text("SELECT key_hash, key_preview FROM api_keys ORDER BY id")).all() == [
-        (hash_api_key(key), PREVIEWS[key]) for key in KEYS
+        (hash_token(key), PREVIEWS[key]) for key in KEYS
     ]
     assert [api_key_preview(key) for key in KEYS] == list(PREVIEWS.values())
     columns = db.execute(text(
@@ -62,6 +62,6 @@ def test_hash_api_keys_leaves_no_plaintext_key(db_session):
 
     # A downgrade must not turn a stored hash into a working key.
     assert db.execute(text("SELECT revoked, key FROM api_keys ORDER BY id")).all() == [
-        (True, f"revoked:{hash_api_key(key)}") for key in KEYS
+        (True, f"revoked:{hash_token(key)}") for key in KEYS
     ]
     db_session.rollback()

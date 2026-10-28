@@ -20,7 +20,7 @@ from memory.common.db.models import (
     Person,
     UserSession,
 )
-from memory.common.db.models.users import verify_password
+from memory.common.db.models.users import hash_token, verify_password
 from tests.conftest import unique_sha256
 
 ACCOUNT = {"name": "Owner", "email": "owner@example.com", "password": "longenough1"}
@@ -72,7 +72,7 @@ def test_claiming_creates_a_signed_in_admin(setup_client, db_session):
     assert user.scopes == ["*"]
     assert verify_password(ACCOUNT["password"], user.password_hash or "")
     assert db_session.query(Person).filter_by(user_id=user.id).count() == 1
-    session = db_session.get(UserSession, response.json()["session_id"])
+    session = db_session.get(UserSession, hash_token(response.json()["session_id"]))
     assert session is not None and session.user_id == user.id
 
 

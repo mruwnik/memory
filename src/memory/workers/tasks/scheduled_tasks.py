@@ -368,11 +368,11 @@ def session_token(db, user_id: int, api_key_id: int | None):
         # so the caller can record the failure.
         db.rollback()
         raise ValueError(f"the API key {api_key_id} this session acts through is gone")
-    token = user_session.id
+    token = user_session.token
     try:
         yield token
     finally:
-        db.query(UserSession).filter(UserSession.id == token).delete()
+        db.query(UserSession).filter(UserSession.id == user_session.id).delete()
         db.commit()
 
 

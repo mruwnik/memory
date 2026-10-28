@@ -945,7 +945,7 @@ def test_fetch_file_round_trip_for_note(db_session, admin_user, admin_session):
     db_session.add(note)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = fetch_file.fn(filename=f"/{db_filename}")
 
     assert result["content"][0]["data"] == "hello from a note"
@@ -967,13 +967,13 @@ def test_fetch_file_note_missing_on_disk(db_session, admin_user, admin_session):
     db_session.add(note)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(FileNotFoundError, match="missing from storage"):
             fetch_file.fn(filename="/notes/tests/orphan.md")
 
 
 def test_fetch_file_unknown_file_not_found(db_session, admin_session):
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(FileNotFoundError, match="File not found"):
             fetch_file.fn(filename="/notes/nonexistent.md")
 
@@ -1097,7 +1097,7 @@ async def test_search_prefilter_only_matches_visible_items(
 ):
     item = make_source_item(db_session, 1, tags=["secret"], creator_id=admin_user.id)
     mock_search_base.return_value = []
-    token = {"admin": admin_session, "user": user_session}[caller].id
+    token = {"admin": admin_session, "user": user_session}[caller].token
 
     with mcp_auth_context(token):
         await search.fn(query="test", filters={"tags": ["secret"]})
@@ -1366,7 +1366,7 @@ async def test_fetch_bulk_returns_list(db_session, admin_session):
     item_a = make_source_item(db_session, 1)
     item_b = make_source_item(db_session, 2)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch.fn(ids=[item_a.id, item_b.id])
 
     assert isinstance(result, list)
@@ -1381,7 +1381,7 @@ async def test_fetch_returns_content_not_a_separate_summary(db_session, admin_se
     db_session.add(Chunk(source_id=item.id, content="the summary", is_summary=True))
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch.fn(id=item.id)
 
     assert (result["content"], "summary" in result) == (item.content, False)
@@ -1394,7 +1394,7 @@ async def test_fetch_bulk_preserves_order(db_session, admin_session):
 
     # Request in reverse order
     requested_ids = [items[2].id, items[0].id, items[1].id]
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch.fn(ids=requested_ids)
 
     assert [r["id"] for r in result] == requested_ids
@@ -1406,7 +1406,7 @@ async def test_fetch_bulk_skips_missing_items(db_session, admin_session):
     item = make_source_item(db_session, 1)
     missing_id = item.id + 9999
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch.fn(ids=[item.id, missing_id])
 
     assert isinstance(result, list)
@@ -1425,7 +1425,7 @@ async def test_fetch_excludes_hidden_even_for_admin(db_session, admin_session):
     visible = make_source_item(db_session, 1, sensitivity="basic")
     hidden = make_source_item(db_session, 2, sensitivity="hidden")
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         bulk = await fetch.fn(ids=[visible.id, hidden.id])
         with pytest.raises(ValueError, match="not found"):
             await fetch.fn(id=hidden.id)
@@ -1482,7 +1482,7 @@ async def test_fetch_bulk_skips_inaccessible_items(db_session, user_session, adm
     inaccessible_item = make_source_item(db_session, 2, project_id=None)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await fetch.fn(ids=[accessible_item.id, inaccessible_item.id])
 
     assert isinstance(result, list)
@@ -1508,7 +1508,7 @@ async def test_person_linked_item_is_visible_on_every_core_path(
     unlinked = make_source_item(db_session, 2, **access)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         listed = await list_items.fn()
         counted = await count_items.fn()
         fetched = await fetch.fn(ids=[linked.id, unlinked.id])
@@ -1538,7 +1538,7 @@ async def test_fetch_journal_follows_the_token_scopes(
     key = APIKey.create(user_id=admin_user.id, name="read-only", scopes=["read"])
     db_session.add(key)
     db_session.commit()
-    tokens = {"session": (admin_session.id,), "read-only key": (key.key, ["read"])}
+    tokens = {"session": (admin_session.token,), "read-only key": (key.key, ["read"])}
 
     with mcp_auth_context(*tokens[viewer]):
         result = await fetch.fn(id=item.id, include_journal=True)
@@ -1551,7 +1551,7 @@ async def test_fetch_bulk_deduplicates_ids(db_session, admin_session):
     """Bulk fetch deduplicates repeated IDs in the input."""
     item = make_source_item(db_session, 1)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch.fn(ids=[item.id, item.id, item.id])
 
     assert isinstance(result, list)
@@ -2076,7 +2076,7 @@ def seed_mail(db_session):
 async def test_list_and_count_agree_on_total(db_session, admin_session, filters):
     """list_items total and count_items total never diverge for the same filters."""
     seed_mail(db_session)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         listed = await list_items.fn(modalities={"mail"}, filters=filters)
         counted = await count_items.fn(modalities={"mail"}, filters=filters)
     assert listed["total"] == counted["total"]
@@ -2099,7 +2099,7 @@ async def test_mail_filters_discriminate_on_both_tools(
 ):
     """recipients/subject/sent_at actually filter, identically, on list and count."""
     seed_mail(db_session)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         listed = await list_items.fn(modalities={"mail"}, filters=filters)
         counted = await count_items.fn(modalities={"mail"}, filters=filters)
 
@@ -2113,7 +2113,7 @@ async def test_mail_filters_discriminate_on_both_tools(
 @pytest.mark.parametrize("tool", [list_items, count_items])
 async def test_unsupported_filter_raises_value_error(db_session, admin_session, tool):
     """A filter key only meaningful for observation search is rejected, not ignored."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="Unsupported filter"):
             await tool.fn(filters={"observation_types": ["belief"]})
 
@@ -2139,7 +2139,7 @@ async def test_recipients_substring_unifies_display_name_variants(
     db_session.add_all([bare, named, other])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_items.fn(
             modalities={"mail"}, filters={"recipients": ["github@ahiru.pl"]}
         )
@@ -2168,7 +2168,7 @@ async def test_sender_substring_matches_mime_encoded_display_name(
     db_session.add_all([match, nomatch])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_items.fn(
             modalities={"mail"}, filters={"sender": "notifications@github.com"}
         )
@@ -2191,7 +2191,7 @@ async def test_folder_filter_exact_match(db_session, admin_session):
     db_session.add_all([inbox, sent])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_items.fn(
             modalities={"mail"}, filters={"folder": "INBOX"}
         )
@@ -2239,7 +2239,7 @@ async def test_account_filter_groups_aliases_and_both_directions(
     db_session.add_all([incoming, sent, foreign])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         # Mixed-case address still resolves the account.
         result = await list_items.fn(
             modalities={"mail"}, filters={"account": "ME@Ahiru.PL"}
@@ -2287,7 +2287,7 @@ async def test_account_filter_unknown_address_returns_nothing(
     db_session.add(m)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_items.fn(
             modalities={"mail"}, filters={"account": "nobody@nowhere.test"}
         )
@@ -2329,7 +2329,7 @@ async def test_admin_oauth_client_granted_read_write_is_still_admin(db_session, 
     db_session.add(oauth_session)
     db_session.commit()
 
-    token = await SimpleOAuthProvider().verify_token(str(oauth_session.id))
+    token = await SimpleOAuthProvider().verify_token(oauth_session.token)
     assert token is not None
     reset = auth_context_var.set(AuthenticatedUser(token))
     try:

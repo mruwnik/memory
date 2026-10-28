@@ -42,7 +42,7 @@ def mock_celery():
 
 @pytest.fixture
 def as_user(user_session):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         yield
 
 
@@ -131,7 +131,7 @@ async def test_create_note_passes_the_writer_to_the_task(
 ):
     user_session = request.getfixturevalue(session_fixture)
 
-    with mcp_auth_context(user_session.id, scopes=scopes):
+    with mcp_auth_context(user_session.token, scopes=scopes):
         await upsert.fn(subject="s", content="c", filename="n.md")
 
     kwargs = mock_celery.send_task.call_args.kwargs["kwargs"]
@@ -231,7 +231,7 @@ async def test_note_files_handles_absolute_paths(
 
     make_note(db_session, admin_user.id, "notes/note.md")
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await note_files.fn(path="/")
 
     assert any("note.md" in f for f in result)
@@ -248,7 +248,7 @@ async def test_note_files_lists_markdown_files(
     make_note(db_session, admin_user.id, "notes/note2.md", "content2")
     make_note(db_session, admin_user.id, "notes/subdir/nested.md", "nested")
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await note_files.fn(path="/")
 
     assert len(result) == 3
@@ -313,7 +313,7 @@ async def test_note_files_visible_via_team_project_access(
     has no `.person`, crashing the query. The fix routes via
     `get_project_roles_by_user_id(user.id, session)`, mirroring deadlines.
     """
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await note_files.fn(path="/")
 
     # The team-visible note must be in the listing — which it can only be if
@@ -361,7 +361,7 @@ async def test_note_files_follows_the_token_scopes(
     key = APIKey.create(user_id=admin_user.id, name="narrow", scopes=["read", "notes"])
     db_session.add(key)
     db_session.commit()
-    tokens = {False: (admin_session.id,), True: (key.key, ["read", "notes"])}
+    tokens = {False: (admin_session.token,), True: (key.key, ["read", "notes"])}
 
     with mcp_auth_context(*tokens[narrowed]):
         result = await note_files.fn(path="/")

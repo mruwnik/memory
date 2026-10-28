@@ -165,7 +165,7 @@ async def test_upsert_create_success(db_session, admin_session):
     mock_task = Mock()
     mock_task.id = "task-123"
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with patch("memory.api.MCP.servers.people.celery_app") as mock_celery:
             mock_celery.send_task.return_value = mock_task
             result = await upsert_fn(
@@ -207,7 +207,7 @@ async def test_upsert_returns_discord_ids_as_strings(db_session, admin_session):
     db_session.commit()
 
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await upsert_fn(
             identifier="honor",
             display_name="Honor",
@@ -222,7 +222,7 @@ async def test_upsert_returns_discord_ids_as_strings(db_session, admin_session):
 async def test_upsert_existing_updates(db_session, admin_session, sample_people):
     """Test that upserting an existing person updates instead of erroring."""
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         # Upserting existing person should update, not error
         result = await upsert_fn(
             identifier="alice_chen",  # Already exists
@@ -242,7 +242,7 @@ async def test_upsert_existing_updates(db_session, admin_session, sample_people)
 async def test_upsert_create_minimal(db_session, admin_session):
     """Test creating a person with minimal required fields."""
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await upsert_fn(
             identifier="minimal_person",
             display_name="Minimal Person",
@@ -259,7 +259,7 @@ async def test_upsert_create_minimal(db_session, admin_session):
 async def test_upsert_update_success(db_session, admin_session, sample_people):
     """Test updating an existing person."""
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await upsert_fn(
             identifier="alice_chen",
             display_name="Alice Chen Updated",
@@ -295,7 +295,7 @@ async def test_upsert_null_contact_value_is_not_stored(
     db_session, admin_session, sample_people, identifier, update, expected
 ):
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert_fn(identifier=identifier, display_name="Someone", contact_info=update)
 
     db_session.expire_all()
@@ -307,7 +307,7 @@ async def test_upsert_null_contact_value_is_not_stored(
 async def test_upsert_create_requires_display_name(db_session, admin_session):
     """Test that creating a new person requires display_name."""
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="display_name is required"):
             await upsert_fn(
                 identifier="new_person_no_name",
@@ -327,7 +327,7 @@ async def test_upsert_create_requires_display_name(db_session, admin_session):
 )
 async def test_upsert_omitted_fields_are_unchanged(db_session, admin_session, sample_people, kwargs):
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert_fn(identifier="alice_chen", **kwargs)
 
     db_session.expire_all()
@@ -350,7 +350,7 @@ async def test_upsert_aliases_only_removed_by_null(
     db_session, admin_session, sample_people, aliases, expected
 ):
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert_fn(identifier="alice_chen", aliases=aliases)
 
     db_session.expire_all()
@@ -378,7 +378,7 @@ async def test_upsert_contact_list_entries_only_removed_by_null(
     db_session, admin_session, update, expected
 ):
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert_fn(
             identifier="list_person",
             display_name="List Person",
@@ -419,7 +419,7 @@ async def test_upsert_contact_list_entries_only_removed_by_null(
 )
 async def test_upsert_contact_lists_of_dicts(db_session, admin_session, initial, update, expected):
     upsert_fn = get_fn(upsert)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert_fn(identifier="dict_list_person", display_name="Dicts", contact_info=initial)
         await upsert_fn(identifier="dict_list_person", contact_info=update)
 
@@ -443,7 +443,7 @@ async def test_upsert_contact_update_that_would_drop_data_is_refused(
 ):
     upsert_fn = get_fn(upsert)
     initial = {"email": "e", "github": {"work": "w"}, "discord": ["a"]}
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert_fn(identifier="typed_person", display_name="Typed", contact_info=initial)
         with pytest.raises(ValueError, match=f"contact_info.{field}"):
             await upsert_fn(identifier="typed_person", contact_info=update)
@@ -462,7 +462,7 @@ async def test_upsert_contact_update_that_would_drop_data_is_refused(
 async def test_fetch_found(db_session, admin_session, sample_people):
     """Test fetching a person that exists."""
     fetch_fn = get_fn(fetch)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch_fn(identifier="alice_chen")
 
     assert result is not None
@@ -479,7 +479,7 @@ async def test_fetch_found(db_session, admin_session, sample_people):
 async def test_fetch_not_found(db_session, admin_session, sample_people):
     """Test fetching a person that doesn't exist."""
     fetch_fn = get_fn(fetch)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch_fn(identifier="nonexistent_person")
 
     assert result is None
@@ -501,7 +501,7 @@ async def test_fetch_include_teams(db_session, admin_session, sample_people):
     db_session.commit()
 
     fetch_fn = get_fn(fetch)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch_fn(identifier="alice_chen", include_teams=True)
 
     assert result is not None
@@ -530,7 +530,7 @@ async def test_fetch_include_projects(db_session, admin_session, sample_people):
     db_session.commit()
 
     fetch_fn = get_fn(fetch)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch_fn(identifier="alice_chen", include_projects=True)
 
     assert result is not None
@@ -543,7 +543,7 @@ async def test_fetch_include_projects(db_session, admin_session, sample_people):
 async def test_fetch_include_teams_no_teams(db_session, admin_session, sample_people):
     """Test fetching a person with include_teams when they have no teams."""
     fetch_fn = get_fn(fetch)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await fetch_fn(identifier="carol_jones", include_teams=True)
 
     assert result is not None
@@ -559,7 +559,7 @@ async def test_fetch_include_teams_no_teams(db_session, admin_session, sample_pe
 async def test_list_all_no_filters(db_session, admin_session, sample_people):
     """Test listing all people without filters."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn()
 
     assert len(result) == 3  # alice, bob, carol
@@ -569,7 +569,7 @@ async def test_list_all_no_filters(db_session, admin_session, sample_people):
 async def test_list_all_filter_by_search(db_session, admin_session, sample_people):
     """Test searching people by name."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn(search="Alice")
 
     assert len(result) == 1
@@ -580,7 +580,7 @@ async def test_list_all_filter_by_search(db_session, admin_session, sample_peopl
 async def test_list_all_limit(db_session, admin_session, sample_people):
     """Test limiting results."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn(limit=2)
 
     assert len(result) == 2
@@ -590,7 +590,7 @@ async def test_list_all_limit(db_session, admin_session, sample_people):
 async def test_list_all_limit_max_enforced(db_session, admin_session, sample_people):
     """Test that limit is capped at 200."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         # Request more than max, should be capped
         result = await list_fn(limit=500)
 
@@ -602,7 +602,7 @@ async def test_list_all_limit_max_enforced(db_session, admin_session, sample_peo
 async def test_list_all_filter_by_tags(db_session, admin_session, sample_people):
     """Test filtering by tags (via tidbits)."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn(tags=["engineering"])
 
     # Only alice has engineering tag
@@ -614,7 +614,7 @@ async def test_list_all_filter_by_tags(db_session, admin_session, sample_people)
 async def test_list_all_filter_by_multiple_tags(db_session, admin_session, sample_people):
     """Test filtering by multiple tags (OR logic)."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn(tags=["engineering", "design"])
 
     # alice has engineering, carol has design
@@ -627,7 +627,7 @@ async def test_list_all_filter_by_multiple_tags(db_session, admin_session, sampl
 async def test_list_all_filter_by_unique_tag(db_session, admin_session, sample_people):
     """Test filtering by a tag that only one person has."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn(tags=["freelance"])
 
     assert len(result) == 1
@@ -638,7 +638,7 @@ async def test_list_all_filter_by_unique_tag(db_session, admin_session, sample_p
 async def test_list_all_search_tidbit_content(db_session, admin_session, sample_people):
     """Test that search also matches tidbit content."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         # Search for content in Bob's tidbit
         result = await list_fn(search="mobile team")
 
@@ -660,7 +660,7 @@ async def test_delete_person_success(db_session, admin_session, sample_people):
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     assert alice is not None
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await delete_fn(identifier="alice_chen")
 
     assert result["deleted"] is True
@@ -677,7 +677,7 @@ async def test_delete_person_not_admin(db_session, user_session, sample_people):
     """Test that non-admin cannot delete people."""
     delete_fn = get_fn(delete)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError, match="Only admins can delete"):
             await delete_fn(identifier="alice_chen")
 
@@ -691,7 +691,7 @@ async def test_delete_person_not_found(db_session, admin_session, sample_people)
     """Test deleting a person that doesn't exist."""
     delete_fn = get_fn(delete)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await delete_fn(identifier="nonexistent_person")
 
@@ -720,7 +720,7 @@ async def test_list_all_various_searches(
 ):
     """Test various search patterns."""
     list_fn = get_fn(list_all)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await list_fn(search=search_term)
 
     found_identifiers = [p["identifier"] for p in result]
@@ -731,7 +731,7 @@ async def test_list_all_various_searches(
 async def test_fetch_by_alias(db_session, admin_session, sample_people):
     """Test that fetch can find a person by alias."""
     fetch_fn = get_fn(fetch)
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         # Try to fetch by alias - note: this depends on implementation
         # The current implementation uses identifier directly, not aliases
         result = await fetch_fn(identifier="alice_chen")
@@ -752,7 +752,7 @@ async def test_tidbit_add_success(db_session, admin_session, sample_people):
     mock_task = Mock()
     mock_task.id = "tidbit-task-456"
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with patch("memory.api.MCP.servers.people.celery_app") as mock_celery:
             mock_celery.send_task.return_value = mock_task
             result = await tidbit_add_fn(
@@ -771,7 +771,7 @@ async def test_tidbit_add_person_not_found(db_session, admin_session, sample_peo
     """Test adding a tidbit to a non-existent person."""
     tidbit_add_fn = get_fn(tidbit_add)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await tidbit_add_fn(
                 identifier="nonexistent",
@@ -789,7 +789,7 @@ async def test_tidbit_list_for_person(db_session, admin_session, sample_people):
     """Test listing tidbits for a person."""
     tidbit_list_fn = get_fn(tidbit_list)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await tidbit_list_fn(identifier="alice_chen")
 
     # Alice has 2 tidbits
@@ -811,7 +811,7 @@ async def test_tidbit_update_as_creator(db_session, admin_session, sample_people
     tidbit = alice.tidbits[0]
     tidbit_id = tidbit.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await tidbit_update_fn(
             tidbit_id=tidbit_id,
             content="Updated content",
@@ -838,7 +838,7 @@ async def test_tidbit_update_as_admin(db_session, admin_session, sample_people):
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     tidbit = alice.tidbits[0]
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await tidbit_update_fn(
             tidbit_id=tidbit.id,
             content="Admin updated this",
@@ -858,7 +858,7 @@ async def test_tidbit_update_permission_denied(
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     tidbit = alice.tidbits[0]
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError, match="only edit tidbits you created"):
             await tidbit_update_fn(
                 tidbit_id=tidbit.id,
@@ -871,7 +871,7 @@ async def test_tidbit_update_not_found(db_session, admin_session, sample_people)
     """Test updating a non-existent tidbit."""
     tidbit_update_fn = get_fn(tidbit_update)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await tidbit_update_fn(
                 tidbit_id=999999,
@@ -893,7 +893,7 @@ async def test_tidbit_delete_as_creator(db_session, admin_session, sample_people
     tidbit = alice.tidbits[0]
     tidbit_id = tidbit.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await tidbit_delete_fn(tidbit_id=tidbit_id)
 
     assert result["deleted"] is True
@@ -912,7 +912,7 @@ async def test_tidbit_delete_as_admin(db_session, admin_session, sample_people):
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     tidbit = alice.tidbits[0]
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await tidbit_delete_fn(tidbit_id=tidbit.id)
 
     assert result["deleted"] is True
@@ -928,7 +928,7 @@ async def test_tidbit_delete_permission_denied(
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     tidbit = alice.tidbits[0]
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError, match="only delete tidbits you created"):
             await tidbit_delete_fn(tidbit_id=tidbit.id)
 
@@ -938,7 +938,7 @@ async def test_tidbit_delete_not_found(db_session, admin_session, sample_people)
     """Test deleting a non-existent tidbit."""
     tidbit_delete_fn = get_fn(tidbit_delete)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await tidbit_delete_fn(tidbit_id=999999)
 
@@ -974,7 +974,7 @@ async def test_merge_people(db_session, admin_session, sample_people):
     db_session.add(dup_tidbit)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_duplicate"],
             primary_identifier="alice_chen",
@@ -1002,7 +1002,7 @@ async def test_merge_people_requires_admin(db_session, user_session, sample_peop
     """Test that only admins can merge people."""
     merge_fn = get_fn(merge)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError, match="Only admins"):
             await merge_fn(
                 identifiers=["alice_chen", "bob_smith"],
@@ -1014,7 +1014,7 @@ async def test_merge_people_minimum_two(db_session, admin_session, sample_people
     """Test that at least 2 identifiers are required."""
     merge_fn = get_fn(merge)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="At least 2"):
             await merge_fn(identifiers=["alice_chen"])
 
@@ -1024,7 +1024,7 @@ async def test_merge_people_not_found(db_session, admin_session, sample_people):
     """Test merging with non-existent person."""
     merge_fn = get_fn(merge)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await merge_fn(identifiers=["alice_chen", "nonexistent_person"])
 
@@ -1034,7 +1034,7 @@ async def test_merge_people_primary_not_in_list(db_session, admin_session, sampl
     """Test that primary_identifier must be in identifiers list."""
     merge_fn = get_fn(merge)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="must be in the identifiers list"):
             await merge_fn(
                 identifiers=["alice_chen", "bob_smith"],
@@ -1057,7 +1057,7 @@ async def test_merge_people_default_primary(db_session, admin_session, sample_pe
     db_session.add(duplicate)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_dup"],
             # No primary_identifier specified - should use first one
@@ -1105,7 +1105,7 @@ async def test_merge_people_contact_info_keeps_both(
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(merge)(
             identifiers=["merge_primary", "merge_secondary"],
             primary_identifier="merge_primary",
@@ -1138,7 +1138,7 @@ async def test_merged_people_found_and_notified_by_each_identity(
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await get_fn(merge)(
             identifiers=["merge_primary", "merge_secondary"],
             primary_identifier="merge_primary",
@@ -1168,7 +1168,7 @@ async def test_merge_people_alias_deduplication(db_session, admin_session, sampl
     db_session.add(duplicate)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_dup3"],
             primary_identifier="alice_chen",
@@ -1229,7 +1229,7 @@ async def test_merge_people_team_membership_role_priority(
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_admin"],
             primary_identifier="alice_chen",
@@ -1282,7 +1282,7 @@ async def test_merge_people_team_membership_new_team(db_session, admin_session, 
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     alice_id = alice.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_team_only"],
             primary_identifier="alice_chen",
@@ -1330,7 +1330,7 @@ async def test_merge_people_discord_users(db_session, admin_session, sample_peop
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     alice_id = alice.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_discord"],
             primary_identifier="alice_chen",
@@ -1375,7 +1375,7 @@ async def test_merge_people_github_users(db_session, admin_session, sample_peopl
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     alice_id = alice.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_github"],
             primary_identifier="alice_chen",
@@ -1433,7 +1433,7 @@ async def test_merge_people_poll_responses(db_session, admin_session, sample_peo
     alice = db_session.query(Person).filter(Person.identifier == "alice_chen").first()
     alice_id = alice.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_poll"],
             primary_identifier="alice_chen",
@@ -1481,7 +1481,7 @@ async def test_merge_people_user_link_moved(db_session, admin_session, sample_pe
     # Ensure alice has no user link
     assert alice.user_id is None
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_with_user"],
             primary_identifier="alice_chen",
@@ -1541,7 +1541,7 @@ async def test_merge_three_people(db_session, admin_session, sample_people):
     db_session.add(tidbit2)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await merge_fn(
             identifiers=["alice_chen", "alice_dup_one", "alice_dup_two"],
             primary_identifier="alice_chen",
@@ -1673,7 +1673,7 @@ async def test_tidbit_add_rejects_contributor_setting_confidential(
     )
 
     sess = UserSession(
-        id="reg-session",
+        token="reg-session",
         user_id=regular_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -1681,7 +1681,7 @@ async def test_tidbit_add_rejects_contributor_setting_confidential(
     db_session.commit()
 
     tidbit_add_fn = get_fn(tidbit_add)
-    with mcp_auth_context(sess.id):
+    with mcp_auth_context(sess.token):
         with pytest.raises(PermissionError, match="confidential"):
             await tidbit_add_fn(
                 identifier="alice_chen",
@@ -1710,7 +1710,7 @@ def unlinked_person_with_secret(db_session):
 async def test_upsert_cannot_claim_someone_elses_person(
     db_session, regular_user, user_session, unlinked_person_with_secret, change
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError):
             await upsert.fn(identifier="client_bob", **change)
         visible = await list_items.fn()
@@ -1742,7 +1742,7 @@ async def test_upsert_owner_cannot_change_what_ingest_matches_people_on(
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError):
             await upsert.fn(identifier="me", **change)
 
@@ -1753,7 +1753,7 @@ async def test_upsert_owner_may_change_other_contact_info(db_session, regular_us
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await upsert.fn(identifier="me", contact_info={"phone": "555"})
 
     db_session.refresh(person)
@@ -1767,7 +1767,7 @@ async def test_upsert_admin_may_change_identity_fields(db_session, admin_session
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await upsert.fn(identifier="them", **change)
 
     assert result["status"] == "updated"
@@ -1782,7 +1782,7 @@ async def test_upsert_update_never_links_a_non_admin(
     regular_user.email = "bob@client.com"
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await upsert.fn(identifier="client_bob", contact_info={"phone": "555"})
         visible = await list_items.fn()
 
@@ -1798,7 +1798,7 @@ async def test_upsert_admin_sets_and_clears_the_user_link(db_session, admin_sess
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert.fn(identifier="them", user_id=regular_user.id)
         db_session.refresh(person)
         linked = person.user_id
@@ -1816,7 +1816,7 @@ async def test_upsert_user_link_is_admin_only(db_session, regular_user, user_ses
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError):
             await upsert.fn(identifier="me", **change)
 
@@ -1831,7 +1831,7 @@ async def test_upsert_user_link_keeps_one_person_per_user(db_session, admin_sess
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="already linked to 'regular'"):
             await upsert.fn(identifier="them", user_id=regular_user.id)
 
@@ -1848,7 +1848,7 @@ async def test_upsert_create_never_links_by_email(
     db_session.commit()
     sessions = {"admin": admin_session, "regular": user_session}
 
-    with mcp_auth_context(sessions[viewer].id):
+    with mcp_auth_context(sessions[viewer].token):
         result = await upsert.fn(
             identifier="claim", display_name="Client Ceo", contact_info={"email": "ceo@client.com"}
         )
@@ -1864,7 +1864,7 @@ async def test_admin_update_never_links_by_email(
     regular_user.email = "bob@client.com"
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert.fn(identifier="client_bob", contact_info={"phone": "123"})
 
     db_session.refresh(unlinked_person_with_secret)
@@ -1880,7 +1880,7 @@ async def test_upsert_create_attaches_discord_users_for_admins_only(
     db_session.commit()
     sessions = {"admin": admin_session, "regular": user_session}
 
-    with mcp_auth_context(sessions[viewer].id):
+    with mcp_auth_context(sessions[viewer].token):
         if not attached:
             with pytest.raises(PermissionError):
                 await upsert.fn(identifier="claim", display_name="Claim", contact_info={"discord": "123456789"})
@@ -1903,7 +1903,7 @@ async def test_upsert_attaches_discord_users_by_username_not_display_name(
     db_session.add(DiscordUser(id=123456789, username="ceo", display_name="The CEO"))
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await upsert.fn(
             identifier="claim", display_name="Claim", contact_info={"discord": named_as}
         )
@@ -1915,7 +1915,7 @@ async def test_upsert_attaches_discord_users_by_username_not_display_name(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["email", "discord", "github", "slack"])
 async def test_non_admin_cannot_precreate_identity_contacts(db_session, user_session, field):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(PermissionError, match="Only an admin"):
             await upsert.fn(identifier="preclaimed", display_name="Victim", contact_info={field: "victim"})
     assert db_session.query(Person).filter_by(identifier="preclaimed").count() == 0

@@ -85,7 +85,7 @@ async def test_session_fetch_owner_only(
 
     other_session = make_coding_session(db_session, admin_user, sessions_dir, events=[])
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(Exception, match="Session not found"):
             await session_fetch.fn(session_id=str(other_session.id))
 
@@ -103,7 +103,7 @@ async def test_session_fetch_pagination(
         db_session, regular_user, sessions_dir, events=events, directory="/code/memory"
     )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         page1 = await session_fetch.fn(session_id=str(session.id), limit=4)
 
     assert page1["project"] == "/code/memory"
@@ -113,7 +113,7 @@ async def test_session_fetch_pagination(
     assert page1["messages"][0]["text"] == "question number 0"
     assert page1["next_index"] == 4
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         page2 = await session_fetch.fn(
             session_id=str(session.id), start_index=page1["next_index"], limit=4
         )
@@ -133,7 +133,7 @@ async def test_session_fetch_around_time(
     ]
     session = make_coding_session(db_session, regular_user, sessions_dir, events=events)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await session_fetch.fn(
             session_id=str(session.id),
             around_time="2026-07-01T12:05:00Z",
@@ -155,7 +155,7 @@ async def test_session_fetch_no_transcript(
 
     session = make_coding_session(db_session, regular_user, sessions_dir)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await session_fetch.fn(session_id=str(session.id))
 
     assert result["messages"] == []
@@ -207,7 +207,7 @@ async def test_session_search_no_sessions_skips_search(
     from memory.api.MCP.servers import claude
 
     with patch.object(claude, "search_base", new=AsyncMock()) as mock_search:
-        with mcp_auth_context(user_session.id):
+        with mcp_auth_context(user_session.token):
             result = await claude.session_search.fn(query="anything")
 
     assert result == []
@@ -235,7 +235,7 @@ async def test_session_search_formats_hits(
     with patch.object(
         claude, "search_base", new=AsyncMock(return_value=[fake_result])
     ) as mock_search:
-        with mcp_auth_context(user_session.id):
+        with mcp_auth_context(user_session.token):
             hits = await claude.session_search.fn(query="rrf fusion")
 
     mock_search.assert_called_once()
@@ -266,7 +266,7 @@ async def test_generic_tools_never_expose_session_segments(
     session = make_coding_session(db_session, admin_user, sessions_dir)
     segment = make_segment(db_session, session)
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         listed = await list_items.fn(modalities={"session"})
         counted = await count_items.fn(modalities={"session"})
         fetched = await fetch.fn(ids=[segment.id])

@@ -44,6 +44,7 @@ from memory.common.db.models import (
     UserSession,
 )
 from memory.common.db.models.agents import RunStatus
+from memory.common.db.models.users import hash_token
 from memory.common.llms.neutral import (
     MTOK,
     AgentUsage,
@@ -134,12 +135,12 @@ def mint_session(user_id: int, timeout_sec: int, api_key_id: int | None) -> str:
         )
         db.add(session)
         db.commit()
-        return session.id
+        return session.token
 
 
 def delete_session(token: str) -> None:
     with make_session() as db:
-        db.query(UserSession).filter(UserSession.id == token).delete()
+        db.query(UserSession).filter(UserSession.id == hash_token(token)).delete()
         db.commit()
 
 

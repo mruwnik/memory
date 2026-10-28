@@ -82,7 +82,7 @@ async def test_list_sessions_returns_only_user_owned(db_session, admin_user, adm
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_orch_sessions),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result = await get_fn(list_sessions)()
 
     ids = [s["session_id"] for s in result]
@@ -111,7 +111,7 @@ async def test_pull_url_mints_read_token(db_session, admin_user, admin_session):
     from memory.claude_containers.containers import pull_url
 
     sid = f"u{admin_user.id}-e6-deadbeefdeadbeefdeadbeefdeadbeef"
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(pull_url)(
             session_id=sid, path="/workspace/report.md"
         )
@@ -133,7 +133,7 @@ async def test_pull_url_rejects_other_users_session(
     from memory.claude_containers.containers import pull_url
 
     foreign = "u9999-e6-aaaaaaaa"
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(pull_url)(
                 session_id=foreign, path="/workspace/x"
@@ -150,7 +150,7 @@ async def test_push_url_mints_write_token_separate_field(
     from memory.claude_containers.containers import push_url
 
     sid = f"u{admin_user.id}-e6-feedfacefeedfacefeedfacefeedface"
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(push_url)(
             session_id=sid, path="/workspace"
         )
@@ -185,7 +185,7 @@ async def test_pull_url_resolves_latest(
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_sessions),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result = await get_fn(pull_url)(
                 session_id="latest", path="/workspace/report.md"
             )
@@ -223,7 +223,7 @@ async def test_pull_url_latest_sorts_deterministically(
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_sessions),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result = await get_fn(pull_url)(
                 session_id="latest", path="/workspace/report.md"
             )
@@ -239,7 +239,7 @@ async def test_pull_url_latest_sorts_deterministically(
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=reshuffled),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result2 = await get_fn(pull_url)(
                 session_id="latest", path="/workspace/report.md"
             )
@@ -278,7 +278,7 @@ async def test_pull_url_latest_cross_source_uses_random_suffix(
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=fake_sessions),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result = await get_fn(pull_url)(
                 session_id="latest", path="/workspace/report.md"
             )
@@ -298,7 +298,7 @@ async def test_pull_url_latest_with_no_sessions(
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_containers",
         new=AsyncMock(return_value=[]),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             with pytest.raises(ValueError, match="No active session"):
                 await get_fn(pull_url)(
                     session_id="latest", path="/workspace/x"
@@ -327,7 +327,7 @@ async def test_list_dir_proxies_to_orchestrator(
         "memory.claude_containers.orchestrator_client.OrchestratorClient.list_dir",
         new=AsyncMock(return_value=fake_manifest),
     ):
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result = await get_fn(list_dir)(
                 session_id=sid, path="/workspace"
             )
@@ -341,7 +341,7 @@ async def test_list_dir_rejects_foreign_session(
 ):
     from memory.claude_containers.containers import list_dir
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(list_dir)(
                 session_id="u9999-e6-zzzzzzzz", path="/workspace"
@@ -372,7 +372,7 @@ async def test_pull_url_rejects_bad_path(
     from memory.claude_containers.containers import pull_url
 
     sid = f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111"
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError):
             await get_fn(pull_url)(session_id=sid, path=bad_path)
 
@@ -384,7 +384,7 @@ async def test_push_url_rejects_traversal(
     from memory.claude_containers.containers import push_url
 
     sid = f"u{admin_user.id}-e6-aaaa1111aaaa1111aaaa1111aaaa1111"
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError):
             await get_fn(push_url)(
                 session_id=sid, path="/workspace/../../etc"

@@ -24,6 +24,7 @@ from memory.common.db.models import (
     AvailabilityLevel,
     SlotAggregation,
 )
+from memory.common.db.models.users import hash_token
 from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
 
 router = APIRouter(prefix="/polls", tags=["polls"])
@@ -395,7 +396,7 @@ def get_response_by_token(
     
     response = (
         db.query(PollResponse)
-        .filter(PollResponse.poll_id == poll.id, PollResponse.edit_token == x_edit_token)
+        .filter(PollResponse.poll_id == poll.id, PollResponse.edit_token_hash == hash_token(x_edit_token))
         .first()
     )
     
@@ -437,12 +438,7 @@ def update_response(
     if not response or response.poll_id != poll.id:
         raise HTTPException(status_code=404, detail="Response not found")
 
-    # Defensive: secrets.compare_digest raises TypeError on None inputs.
-    # response.edit_token shouldn't be None (set on creation) but guarding
-    # avoids a 500 if a row was created by a code path that skipped it.
-    if response.edit_token is None or not secrets.compare_digest(
-        response.edit_token, x_edit_token
-    ):
+    if not secrets.compare_digest(response.edit_token_hash, hash_token(x_edit_token)):
         raise HTTPException(status_code=403, detail="Invalid edit token")
 
     if not poll.is_open:

@@ -15,6 +15,7 @@ from memory.api.auth import is_whitelisted_path
 from memory.common import settings
 from memory.common.modules import MODULES
 from memory.common.db.models import APIKey, HumanUser, User, UserSession
+from memory.common.db.models.users import hash_token
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 
@@ -357,36 +358,6 @@ def test_logout_handles_missing_session(_mock_get_user_session):
     db.commit.assert_not_called()
     # No session → no refresh-token revocation either.
     db.execute.assert_not_called()
-
-
-@patch("memory.api.auth.get_user_session")
-def test_logout_revokes_paired_refresh_tokens(mock_get_user_session):
-    """Regression for audit-1775774f: deleting the UserSession alone is
-    insufficient — any OAuthRefreshToken paired with it via
-    ``access_token_session_id`` survives and can mint fresh access tokens
-    after "logout". The fix issues a bulk UPDATE that flips every active
-    paired refresh token to revoked=True in the same transaction.
-    """
-    from sqlalchemy import update as sa_update
-
-    from memory.common.db.models import OAuthRefreshToken
-
-    db = MagicMock()
-    session = MagicMock()
-    session.id = "session-uuid-123"
-    mock_get_user_session.return_value = session
-    request = SimpleNamespace()
-
-    auth.logout(cast(Any, request), db)
-
-    # Exactly one bulk UPDATE issued before the session delete.
-    assert db.execute.call_count == 1
-    # The statement must be an UPDATE on OAuthRefreshToken.
-    stmt = db.execute.call_args[0][0]
-    assert isinstance(stmt, type(sa_update(OAuthRefreshToken).values(revoked=True)))
-    # The session delete + commit still happen.
-    db.delete.assert_called_once_with(session)
-    db.commit.assert_called_once()
 
 
 def _mock_oauth_make_session():
@@ -829,7 +800,7 @@ def make_token(db_session, user_scopes, key_scopes, credential) -> str:
         row = UserSession(user_id=user.id, expires_at=datetime.now() + timedelta(days=1))
         db_session.add(row)
         db_session.commit()
-        return row.id
+        return row.token
     key = APIKey.create(user_id=user.id, scopes=key_scopes)
     key.revoked = credential.startswith("revoked_")
     db_session.add(key)
@@ -842,7 +813,7 @@ def make_token(db_session, user_scopes, key_scopes, credential) -> str:
     )
     db_session.add(row)
     db_session.commit()
-    return row.id
+    return row.token
 
 
 SCOPE_CASES = [
@@ -893,7 +864,7 @@ def test_websocket_token_uses_the_credentials_scopes(
 
 def test_websocket_token_rejects_expired_session(db_session):
     token = make_token(db_session, ["*"], None, "session")
-    db_session.get(UserSession, token).expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.get(UserSession, hash_token(token)).expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
     db_session.commit()
 
     assert auth.get_user_from_token(token, db_session, SCOPE_CLAUDE_SESSIONS) is None

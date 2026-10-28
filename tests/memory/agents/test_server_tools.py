@@ -33,7 +33,7 @@ def callback_request(query: str, session_token: str | None) -> Request:
 async def test_an_open_server_connects_and_appears_in_the_catalog(
     db_session, regular_user, user_session, fake_mcp
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_upsert.fn(name="tools", url=fake_mcp.url)
         catalog = await agent.catalog.fn()
 
@@ -48,12 +48,12 @@ async def test_an_open_server_connects_and_appears_in_the_catalog(
 async def test_oauth_servers_connect_through_the_callback(
     db_session, regular_user, user_session, fake_mcp
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_upsert.fn(name="linear", url=fake_mcp.url)
     params = await fake_mcp.approve(result["authorize_url"])
 
     response = await mcp_servers.mcp_oauth_callback(
-        callback_request(f"code={params['code']}&state={params['state']}", user_session.id)
+        callback_request(f"code={params['code']}&state={params['state']}", user_session.token)
     )
 
     server_id = result["server"]["id"]
@@ -75,10 +75,10 @@ async def test_oauth_servers_connect_through_the_callback(
 async def test_the_callback_refuses_what_it_cannot_complete(
     db_session, regular_user, user_session, admin_session, fake_mcp, token, query, status
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_upsert.fn(name="linear", url=fake_mcp.url)
     params = await fake_mcp.approve(result["authorize_url"])
-    sessions = {"owner": user_session.id, "other": admin_session.id, None: None}
+    sessions = {"owner": user_session.token, "other": admin_session.token, None: None}
     query = query.replace("state=s", f"state={params['state']}")
 
     response = await mcp_servers.mcp_oauth_callback(callback_request(query, sessions[token]))
@@ -93,7 +93,7 @@ async def test_disconnect_revokes_and_clears_the_tokens(
 ):
     server = await connect_oauth(db_session, regular_user, fake_mcp)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_disconnect.fn(server_id=server.id)
 
     assert (result["status"], result["has_token"]) == ("pending_auth", False)
@@ -107,7 +107,7 @@ async def test_editing_without_auth_keeps_the_credentials(
 ):
     server = await connect_oauth(db_session, regular_user, fake_mcp)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_upsert.fn(
             name="renamed", url=server.url, transport=server.transport, server_id=server.id
         )
@@ -125,7 +125,7 @@ async def test_refresh_tools_reports_the_diff(
     server.tools = [t for t in server.tools if t["name"] == "lookup"]
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_refresh_tools.fn(server_id=server.id)
 
     assert result["diff"]["added"] == ["post"]
@@ -139,7 +139,7 @@ async def test_a_server_in_use_cannot_be_deleted(
     server = add_server(db_session, regular_user, "https://mcp.example.com/mcp")
     spec = SPEC | {"mcp_servers": [{"server_id": server.id, "tools": ["lookup"]}]}
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await agent.upsert.fn(name="digest", spec=spec)
         with pytest.raises(ValueError, match="used by digest"):
             await agent.server_delete.fn(server_id=server.id)
@@ -156,7 +156,7 @@ async def test_definitions_cannot_use_another_users_server(
     server = add_server(db_session, admin_user, "https://mcp.example.com/mcp")
     spec = SPEC | {"mcp_servers": [{"server_id": server.id, "tools": ["lookup"]}]}
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=f"MCP server {server.id} is not yours"):
             await agent.upsert.fn(name="digest", spec=spec)
 
@@ -177,7 +177,7 @@ async def test_another_users_server_is_unknown(
 ):
     server = add_server(db_session, admin_user, "https://mcp.example.com/mcp")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="unknown MCP server"):
             await getattr(agent, tool).fn(server_id=server.id, **kwargs)
 
@@ -189,7 +189,7 @@ async def test_the_per_user_server_cap_holds(
     monkeypatch.setattr(settings, "MCP_MAX_SERVERS_PER_USER", 1)
     add_server(db_session, regular_user, "https://mcp.example.com/mcp")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="MCP_MAX_SERVERS_PER_USER"):
             await agent.server_upsert.fn(name="second", url="https://mcp.example.com/b")
 
@@ -202,7 +202,7 @@ async def test_server_changes_are_rate_limited(
     monkeypatch.setattr(settings, "MCP_SERVER_CHANGES_PER_HOUR", 1)
     server = add_server(db_session, regular_user, "https://mcp.example.com/mcp")
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="isn.t set up for OAuth"):
             await agent.server_authorize.fn(server_id=server.id)
         with pytest.raises(ValueError, match="too many"):
@@ -213,7 +213,7 @@ async def test_server_changes_are_rate_limited(
 async def test_a_failed_setup_returns_the_row_with_the_generic_error(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await agent.server_upsert.fn(name="lan", url="http://127.0.0.1:1/mcp")
 
     assert result["error"] == "couldn't reach an MCP server at that URL"
@@ -226,13 +226,13 @@ async def test_definitions_flag_tools_that_changed_since_they_were_saved(
 ):
     server = await connect_oauth(db_session, regular_user, fake_mcp)
     spec = SPEC | {"mcp_servers": [{"server_id": server.id, "tools": ["lookup", "post"]}]}
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         saved = await agent.upsert.fn(name="digest", spec=spec)
     changed_at = {"lookup": "2000-01-01T00:00:00+00:00", "post": "2999-01-01T00:00:00+00:00"}
     server.tools = [t | {"changed_at": changed_at[t["name"]]} for t in server.tools]
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         fetched = await agent.fetch.fn(definition_id=saved["id"])
         listed = (await agent.list_all.fn())["definitions"]
 
@@ -249,7 +249,7 @@ async def test_trigger_warnings_name_external_tools_that_write(
         SPEC | {"mcp_servers": [{"server_id": server.id, "tools": ["lookup", "post"]}]}
     )
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         [warning] = await agent.exposure_warnings(spec)
 
     assert f"mcp_{server.id}_post" in warning
@@ -271,7 +271,7 @@ async def test_a_token_rotated_during_a_tool_refresh_survives_it(
 
     monkeypatch.setattr(agent, "refresh_tool_cache", rotate_meanwhile)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await agent.server_refresh_tools.fn(server_id=server.id)
 
     rotated = reload(db_session, server.id)
@@ -300,7 +300,7 @@ async def test_invalid_auth_errors_do_not_echo_their_values(
 ):
     auth = {"type": "headers", "client_secrt": "leaked-SECRET"}
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError) as raised:
             await agent.server_upsert.fn(name="x", url="https://mcp.example.com/mcp", auth=auth)
 

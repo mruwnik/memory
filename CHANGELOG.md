@@ -124,6 +124,12 @@ revoke it and create a new one. Bot users no longer get an unused key on the
 `tools/add_user.py` now creates a real API key (it printed one that never
 authenticated), and refuses an `--api-key` shorter than 32 characters.
 
+Login sessions, OAuth access and refresh tokens and poll edit tokens are stored
+as SHA-256 hashes too; existing ones keep working. Rotating an MCP OAuth refresh
+token now also ends the access token issued with it, and logging out revokes
+the refresh tokens issued alongside the session, as intended: they were never
+linked before.
+
 ### Migrations
 
 `20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
@@ -145,6 +151,13 @@ Fast. Downgrading can't restore the keys: it revokes every API key, and each
 has to be reissued.
 
 `20261116_session_api_key` adds a nullable, indexed `api_key_id` to `user_sessions`. Fast.
+
+`20261117_hash_session_tokens` replaces `user_sessions.id` (and
+`oauth_refresh_tokens.access_token_session_id`) with the hash of the session
+token, `oauth_refresh_tokens.token` with `token_hash`, and
+`poll_responses.edit_token` with `edit_token_hash`. Fast. Downgrading can't
+restore the tokens: everyone is logged out, MCP clients have to authorize again
+and poll edit links stop working.
 
 ### Post-deploy commands
 

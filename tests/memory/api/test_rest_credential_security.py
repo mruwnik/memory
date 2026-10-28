@@ -31,7 +31,7 @@ def identity(db, admin=True, key_scopes=None, session=False):
         credential = APIKey.create(user_id=user.id, scopes=key_scopes)
     db.add(credential)
     db.commit()
-    return user, {"Authorization": f"Bearer {credential.id if isinstance(credential, UserSession) else credential.key}"}
+    return user, {"Authorization": f"Bearer {credential.token if isinstance(credential, UserSession) else credential.key}"}
 
 
 @pytest.mark.parametrize("admin", [True, False])

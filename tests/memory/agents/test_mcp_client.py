@@ -16,7 +16,7 @@ async def listed(token: str, scopes: list[str]) -> set[str]:
 
 @pytest.mark.asyncio
 async def test_call_runs_as_the_given_user(db_session, admin_session):
-    async with memory_tools(admin_session.id, ["*"]) as tools:
+    async with memory_tools(admin_session.token, ["*"]) as tools:
         text, is_error = await tools.call("meta_get_user", {})
 
     assert not is_error
@@ -25,7 +25,7 @@ async def test_call_runs_as_the_given_user(db_session, admin_session):
 
 @pytest.mark.asyncio
 async def test_requested_scopes_narrow_the_users_tools(db_session, user_session):
-    names = await listed(user_session.id, ["teams"])
+    names = await listed(user_session.token, ["teams"])
 
     assert "teams_list_all" in names
     assert "meta_get_user" not in names
@@ -34,7 +34,7 @@ async def test_requested_scopes_narrow_the_users_tools(db_session, user_session)
 @pytest.mark.asyncio
 async def test_requested_scopes_cannot_widen_the_users_tools(db_session, user_session):
     # regular_user has scopes ["teams"]; people_tidbit_list needs "people"
-    names = await listed(user_session.id, ["*", "people"])
+    names = await listed(user_session.token, ["*", "people"])
 
     assert "teams_list_all" in names
     assert "people_tidbit_list" not in names
@@ -57,7 +57,7 @@ async def test_api_key_is_limited_to_its_own_scopes(db_session, admin_user):
 async def test_no_effective_scopes_leaves_only_unscoped_tools(
     db_session, user_session, scopes
 ):
-    assert await listed(user_session.id, scopes) == {"meta_get_current_time"}
+    assert await listed(user_session.token, scopes) == {"meta_get_current_time"}
 
 
 @pytest.mark.asyncio
@@ -68,8 +68,8 @@ async def test_unknown_token_is_refused(db_session):
 
 @pytest.mark.asyncio
 async def test_identity_is_pinned_per_client(db_session, admin_session, user_session):
-    async with memory_tools(admin_session.id, ["*"]) as admin_tools:
-        async with memory_tools(user_session.id, ["teams"]) as user_tools:
+    async with memory_tools(admin_session.token, ["*"]) as admin_tools:
+        async with memory_tools(user_session.token, ["teams"]) as user_tools:
             user_text, _ = await user_tools.call("meta_get_user", {})
             admin_text, _ = await admin_tools.call("meta_get_user", {})
 
@@ -80,7 +80,7 @@ async def test_identity_is_pinned_per_client(db_session, admin_session, user_ses
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["meta_get_user", "no_such_tool"])
 async def test_denied_call_is_an_error_result(db_session, user_session, name):
-    async with memory_tools(user_session.id, ["teams"]) as tools:
+    async with memory_tools(user_session.token, ["teams"]) as tools:
         text, is_error = await tools.call(name, {})
 
     assert is_error
@@ -89,14 +89,14 @@ async def test_denied_call_is_an_error_result(db_session, user_session, name):
 
 @pytest.mark.asyncio
 async def test_a_server_disabled_in_the_ui_is_gone_from_the_next_run(db_session, admin_session):
-    assert "people_list_all" in await listed(admin_session.id, ["*"])
+    assert "people_list_all" in await listed(admin_session.token, ["*"])
 
     db_session.add(InstanceSetting(key="disabled_mcp_servers", value=["people"]))
     db_session.commit()
     instance_settings.invalidate_cache()
 
-    names = await listed(admin_session.id, ["*"])
-    async with memory_tools(admin_session.id, ["*"]) as tools:
+    names = await listed(admin_session.token, ["*"])
+    async with memory_tools(admin_session.token, ["*"]) as tools:
         text, is_error = await tools.call("people_list_all", {})
 
     assert ("people_list_all" in names, "meta_get_user" in names) == (False, True)

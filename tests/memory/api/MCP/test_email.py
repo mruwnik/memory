@@ -163,7 +163,7 @@ def user_session(db_session, test_user):
     from datetime import datetime, timedelta, timezone
 
     session = UserSession(
-        id="test-access-token-123",
+        token="test-access-token-123",
         user_id=test_user.id,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
@@ -175,7 +175,7 @@ def user_session(db_session, test_user):
 @pytest.fixture
 def mock_access_token(user_session):
     """The real fastmcp is mocked out here, so patch the token where access.py reads it."""
-    mock_token = Mock(token=user_session.id, scopes=["read", "write"])
+    mock_token = Mock(token=user_session.token, scopes=["read", "write"])
     with patch("memory.api.MCP.access.get_access_token", return_value=mock_token):
         yield mock_token
 

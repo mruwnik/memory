@@ -12,6 +12,9 @@ from memory.common.db.models.users import (
     BotUser,
     APIKey,
     APIKeyType,
+    OAuthClientInformation,
+    OAuthRefreshToken,
+    UserSession,
 )
 
 
@@ -393,6 +396,46 @@ def test_api_key_is_stored_hashed(db_session, regular_user):
     db_session.expunge_all()
     with pytest.raises(AttributeError):
         db_session.get(APIKey, api_key.id).key
+
+
+def make_user_session(db_session, user):
+    return UserSession(user_id=user.id, expires_at=datetime.now() + timedelta(days=1))
+
+
+def make_refresh_token(db_session, user):
+    db_session.add(OAuthClientInformation(
+        client_id="hash-client", client_id_issued_at=0, redirect_uris=[],
+        token_endpoint_auth_method="none", grant_types=[], response_types=[],
+        scope="read", client_name="Hash Client",
+    ))
+    return OAuthRefreshToken(
+        client_id="hash-client", user_id=user.id, scopes=["read"],
+        expires_at=datetime.now() + timedelta(days=1),
+    )
+
+
+@pytest.mark.parametrize(
+    "make, table, hash_column",
+    [
+        (make_user_session, "user_sessions", "id"),
+        (make_refresh_token, "oauth_refresh_tokens", "token_hash"),
+    ],
+)
+def test_bearer_token_is_stored_hashed(db_session, regular_user, make, table, hash_column):
+    row = make(db_session, regular_user)
+    plaintext = row.token
+    db_session.add(row)
+    db_session.commit()
+
+    stored = db_session.execute(
+        text(f"SELECT * FROM {table} WHERE {hash_column} = :hash"),
+        {"hash": hashlib.sha256(plaintext.encode()).hexdigest()},
+    ).mappings().one()
+    assert not any(plaintext in str(value) for value in stored.values())
+
+    db_session.expunge_all()
+    with pytest.raises(AttributeError):
+        db_session.get(type(row), stored["id"]).token
 
 
 def test_api_key_uniqueness(db_session):

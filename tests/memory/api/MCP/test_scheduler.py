@@ -38,7 +38,7 @@ async def test_cancel_clears_next_scheduled_time(
     db_session.add(task)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await scheduler.cancel.fn(task_id=task.id)
 
     assert result["task"]["enabled"] is False
@@ -60,7 +60,7 @@ async def test_upsert_enable_recurring_recomputes(
     db_session.add(task)
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await scheduler.upsert.fn(task_id=task.id, enabled=True)
 
     assert result["enabled"] is True
@@ -71,7 +71,7 @@ async def test_upsert_enable_recurring_recomputes(
 async def test_create_notification_recurring(db_session, regular_user, user_session):
     regular_user.timezone = "Asia/Kolkata"
     db_session.commit()
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await scheduler.upsert.fn(
             task_type="notification",
             topic="Daily ping",
@@ -100,7 +100,7 @@ async def test_create_notification_one_time(
 ):
     regular_user.timezone = "Asia/Kolkata"
     db_session.commit()
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await scheduler.upsert.fn(
             task_type="notification",
             topic="Once",
@@ -117,7 +117,7 @@ async def test_create_notification_one_time(
 async def test_create_rejects_bad_target_without_persisting(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="No email address found"):
             await scheduler.upsert.fn(
                 task_type="notification",
@@ -136,7 +136,7 @@ async def test_update_channel_change_revalidates_target(
     db_session, regular_user, user_session
 ):
     """Changing channel without a new target must re-validate the existing one."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await scheduler.upsert.fn(
             task_type="notification",
             message="hi",
@@ -168,7 +168,7 @@ async def test_update_channel_change_revalidates_target(
 async def test_create_claude_session(
     db_session, regular_user, user_session, spawn_config
 ):
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         result = await scheduler.upsert.fn(
             task_type="claude_session",
             message="Run the digest",
@@ -198,7 +198,7 @@ async def test_create_claude_session_with_own_ssh_key(
     db_session, regular_user, user_session
 ):
     key = make_ssh_key(db_session, regular_user.id)
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         result = await scheduler.upsert.fn(
             task_type="claude_session",
             message="Run the digest",
@@ -213,7 +213,7 @@ async def test_create_claude_session_rejects_someone_elses_ssh_key(
     db_session, regular_user, admin_user, user_session
 ):
     key = make_ssh_key(db_session, admin_user.id)
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         with pytest.raises(ValueError, match="SSH key"):
             await scheduler.upsert.fn(
                 **SESSION_TASK | {"spawn_config": {"environment_id": 1, "ssh_key_id": key.id}}
@@ -233,7 +233,7 @@ async def test_update_claude_session_validates_spawn_config(
     db_session, regular_user, admin_user, user_session, make_config, match
 ):
     key = make_ssh_key(db_session, admin_user.id)
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         created = await scheduler.upsert.fn(**SESSION_TASK)
         with pytest.raises(ValueError, match=match):
             await scheduler.upsert.fn(
@@ -250,7 +250,7 @@ async def test_update_ignores_a_stale_stored_ssh_key(
     db_session, regular_user, user_session
 ):
     key = make_ssh_key(db_session, regular_user.id)
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         created = await scheduler.upsert.fn(
             **SESSION_TASK | {"spawn_config": {"environment_id": 1, "ssh_key_id": key.id}}
         )
@@ -287,7 +287,7 @@ async def test_shared_ssh_key_is_admin_only(
     token = (
         admin_key_token(db_session, admin_user)
         if credential == "admin_key"
-        else request.getfixturevalue(credential).id
+        else request.getfixturevalue(credential).token
     )
     key = make_ssh_key(db_session, None)
     with mcp_auth_context(token), expectation:
@@ -411,7 +411,7 @@ async def test_shared_ssh_key_is_admin_only(
 async def test_create_validation_errors(
     db_session, regular_user, user_session, kwargs, match
 ):
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         with pytest.raises(ValueError, match=match):
             await scheduler.upsert.fn(**kwargs)
 
@@ -439,7 +439,7 @@ async def test_agent_schedules_can_only_be_paused_here(
 ):
     task = agent_run_task(db_session, regular_user, enabled=False)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="agent_schedule"):
             await scheduler.upsert.fn(task_id=task.id, **kwargs)
 
@@ -450,7 +450,7 @@ async def test_agent_schedules_can_be_paused_here(
 ):
     task = agent_run_task(db_session, regular_user)
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         paused = await scheduler.upsert.fn(task_id=task.id, enabled=False)
 
     assert paused["enabled"] is False
@@ -461,7 +461,7 @@ async def test_create_enforces_per_user_cap(
     db_session, regular_user, user_session, monkeypatch
 ):
     monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         await scheduler.upsert.fn(
             task_type="notification",
             message="a",
@@ -485,7 +485,7 @@ async def test_upsert_reenable_respects_cap(
 ):
     """create-disabled-then-enable must not bypass the active-task cap."""
     monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         # One active recurring task — fills the cap.
         await scheduler.upsert.fn(
             task_type="notification",
@@ -518,7 +518,7 @@ async def test_upsert_reenable_respects_cap(
 async def test_upsert_create_rejects_unknown_channel(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="Unknown notification_channel"):
             await scheduler.upsert.fn(
                 task_type="notification",
@@ -535,7 +535,7 @@ async def test_upsert_create_one_time_disabled_rejected(
 ):
     """A one-time task can't be created disabled — the hybrid setter would clear
     its next_scheduled_time, silently discarding the requested time."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(
             ValueError, match="one-time task cannot be created disabled"
         ):
@@ -565,7 +565,7 @@ async def test_a_shared_default_ssh_key_needs_an_admin_credential(
     token = (
         admin_key_token(db_session, admin_user)
         if credential == "admin_key"
-        else request.getfixturevalue(credential).id
+        else request.getfixturevalue(credential).token
     )
     admin_user.default_ssh_key_id = make_ssh_key(db_session, None).id
     db_session.commit()
@@ -588,7 +588,7 @@ async def test_notification_targets_are_judged_by_the_credential(
     token = (
         admin_key_token(db_session, admin_user)
         if credential == "admin_key"
-        else request.getfixturevalue(credential).id
+        else request.getfixturevalue(credential).token
     )
     with mcp_auth_context(token), expectation:
         await scheduler.upsert.fn(
@@ -614,7 +614,7 @@ async def test_upsert_update_rejects_scheduled_time(
     )
     db_session.add(task)
     db_session.commit()
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(
             ValueError, match="scheduled_time can only be set when creating"
         ):
@@ -629,7 +629,7 @@ async def test_upsert_create_then_update_in_place(
 ):
     """A second upsert with the same (existing) id updates, not duplicates."""
     fixed_id = str(uuid.uuid4())
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         created = await scheduler.upsert.fn(
             task_id=fixed_id,
             task_type="notification",
@@ -657,7 +657,7 @@ SESSION_TASK = dict(
 async def test_scheduling_a_session_needs_the_claude_sessions_scope(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id, scopes=["schedule:write", "read", "write"]):
+    with mcp_auth_context(user_session.token, scopes=["schedule:write", "read", "write"]):
         with pytest.raises(ValueError, match="claude_sessions"):
             await scheduler.upsert.fn(**SESSION_TASK)
 
@@ -669,7 +669,7 @@ async def test_sessions_cannot_be_scheduled_without_claude_containers(
     db_session, regular_user, user_session, set_modules
 ):
     set_modules([])
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         with pytest.raises(ValueError, match="claude_containers"):
             await scheduler.upsert.fn(**SESSION_TASK)
 
@@ -694,7 +694,7 @@ async def test_scheduled_work_records_the_key_it_will_act_through(
     key = APIKey.create(user_id=regular_user.id, scopes=["schedule:write", "claude_sessions"])
     db_session.add(key)
     db_session.commit()
-    token = key.key if via_key else user_session.id
+    token = key.key if via_key else user_session.token
 
     with mcp_auth_context(token, scopes=["schedule:write", "claude_sessions"]):
         result = await scheduler.upsert.fn(**task)
@@ -712,7 +712,7 @@ async def test_changing_a_session_schedule_restamps_its_key(
     with mcp_auth_context(key.key, scopes=["claude_sessions"]):
         created = await scheduler.upsert.fn(**SESSION_TASK)
 
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         updated = await scheduler.upsert.fn(task_id=created["id"], message="New prompt")
 
     assert updated["data"]["api_key_id"] is None
@@ -722,10 +722,10 @@ async def test_changing_a_session_schedule_restamps_its_key(
 async def test_pausing_a_session_schedule_needs_no_claude_scope(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         created = await scheduler.upsert.fn(**SESSION_TASK)
 
-    with mcp_auth_context(user_session.id, scopes=["schedule:write"]):
+    with mcp_auth_context(user_session.token, scopes=["schedule:write"]):
         paused = await scheduler.upsert.fn(task_id=created["id"], enabled=False)
 
     assert paused["enabled"] is False
@@ -735,9 +735,9 @@ async def test_pausing_a_session_schedule_needs_no_claude_scope(
 async def test_changing_a_session_schedule_needs_the_scope(
     db_session, regular_user, user_session
 ):
-    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+    with mcp_auth_context(user_session.token, scopes=["claude_sessions"]):
         created = await scheduler.upsert.fn(**SESSION_TASK)
 
-    with mcp_auth_context(user_session.id, scopes=["schedule:write"]):
+    with mcp_auth_context(user_session.token, scopes=["schedule:write"]):
         with pytest.raises(ValueError, match="claude_sessions"):
             await scheduler.upsert.fn(task_id=created["id"], message="New prompt")

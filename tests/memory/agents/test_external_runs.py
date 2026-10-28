@@ -38,7 +38,7 @@ def hub(server, session, saved_at=None):
         spec=AgentSpec.model_validate({"system_prompt": "x"} | external_spec(server.id)),
         user_id=session.user_id,
         scopes=["teams"],
-        session_token=session.id,
+        session_token=session.token,
         capabilities=RICH.capabilities,
         saved_at=saved_at,
     )

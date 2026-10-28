@@ -49,7 +49,7 @@ async def test_notify_user_immediate_creates_no_rows(
 ):
     mock_channel.return_value = ("discord", "123456789", {"discord_bot_id": 7})
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await meta.notify_user.fn(subject="Hi", message="body")
 
     assert result["scheduled"] is False
@@ -93,7 +93,7 @@ async def test_notify_user_reads_a_naive_time_in_the_users_timezone(
     regular_user.timezone = "Asia/Kolkata"
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await meta.notify_user.fn(subject="Hi", message="body", scheduled_time=scheduled_time)
 
     assert result["scheduled_time"] == stored

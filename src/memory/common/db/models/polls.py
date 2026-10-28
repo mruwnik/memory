@@ -23,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
+from memory.common.db.models.users import HashedToken
 
 if TYPE_CHECKING:
     from memory.common.db.models.sources import Person
@@ -168,8 +169,9 @@ class PollResponse(Base):
         nullable=True,
     )
 
-    # Edit token for updating responses without auth
-    edit_token: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Lets a respondent edit their response without an account
+    edit_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    edit_token = HashedToken("edit_token_hash")
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -198,7 +200,7 @@ class PollResponse(Base):
 
     __table_args__ = (
         Index("idx_poll_responses_poll_id", "poll_id"),
-        Index("idx_poll_responses_edit_token", "edit_token"),
+        Index("idx_poll_responses_edit_token", "edit_token_hash"),
         Index("idx_poll_responses_person_id", "person_id"),
     )
 

@@ -617,7 +617,7 @@ def mcp_auth_context(session_token: str, scopes: list[str] | None = None):
     key's token.
 
     Usage:
-        with mcp_auth_context(admin_session.id):
+        with mcp_auth_context(admin_session.token):
             result = await some_mcp_tool(...)
     """
     from fastmcp.server.auth.auth import AccessToken  # type: ignore[reportPrivateImportUsage]
@@ -722,7 +722,7 @@ def admin_session(db_session, admin_user):
     from memory.common.db.models import UserSession
 
     session = UserSession(
-        id="admin-session-token",
+        token="admin-session-token",
         user_id=admin_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -737,7 +737,7 @@ def user_session(db_session, regular_user):
     from memory.common.db.models import UserSession
 
     session = UserSession(
-        id="test-session-token",
+        token="test-session-token",
         user_id=regular_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )

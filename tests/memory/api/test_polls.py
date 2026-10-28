@@ -3,6 +3,7 @@
 Authenticated poll management is done via MCP tools and tested separately.
 """
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -419,17 +420,17 @@ def test_poll_is_open_property(db_session, user):
     assert expired_poll.is_open is False
 
 
-def test_poll_response_edit_token_generated(db_session, sample_poll):
-    """Test that edit tokens are automatically generated."""
-    response = PollResponse(
-        poll_id=sample_poll.id,
-        respondent_name="Alice",
-    )
+def test_poll_response_edit_token_is_stored_hashed(db_session, sample_poll):
+    response = PollResponse(poll_id=sample_poll.id, respondent_name="Alice")
+    plaintext = response.edit_token
     db_session.add(response)
     db_session.commit()
-    
-    assert response.edit_token is not None
-    assert len(response.edit_token) == 32  # 16 bytes hex = 32 chars
+
+    assert len(plaintext) == 32
+    assert response.edit_token_hash == hashlib.sha256(plaintext.encode()).hexdigest()
+    db_session.expunge_all()
+    with pytest.raises(AttributeError):
+        db_session.get(PollResponse, response.id).edit_token
 
 
 def test_submit_response_tz_naive_datetime(client: TestClient, sample_poll):

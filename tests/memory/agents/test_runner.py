@@ -19,6 +19,7 @@ from memory.common.db.models import (
     LLMProviderKey,
     UserSession,
 )
+from memory.common.db.models.users import hash_token
 from memory.common.llms.neutral import (
     AgentUsage,
     Completion,
@@ -513,7 +514,7 @@ async def test_run_session_is_minted_for_the_owner_and_removed(
     assert h.opened_with["user_id"] == regular_user.id
     assert h.opened_with["scopes"] == ["teams"]
     token = h.opened_with["session_token"]
-    assert db_session.query(UserSession).filter(UserSession.id == token).count() == 0
+    assert db_session.query(UserSession).filter(UserSession.id == hash_token(token)).count() == 0
 
 
 def enqueued(db, user, api_key=None, **spec) -> str:

@@ -71,7 +71,7 @@ def regular_user(db_session):
 def user_session(db_session, regular_user):
     """Create a user session for the regular user."""
     session = UserSession(
-        id="test-session-token",
+        token="test-session-token",
         user_id=regular_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -84,7 +84,7 @@ def user_session(db_session, regular_user):
 def admin_session(db_session, admin_user):
     """Create a user session for the admin user."""
     session = UserSession(
-        id="admin-session-token",
+        token="admin-session-token",
         user_id=admin_user.id,
         expires_at=datetime.now() + timedelta(days=1),
     )
@@ -193,7 +193,7 @@ async def test_list_all_access_control(
 ):
     """Test that list_all respects access control."""
 
-    session_id = admin_session.id if use_admin else user_session.id
+    session_id = admin_session.token if use_admin else user_session.token
 
     with mcp_auth_context(session_id):
         result = await get_fn(list_all)()
@@ -235,7 +235,7 @@ async def test_fetch_access_control_success(
 ):
     """Test that fetch grants access to authorized teams."""
 
-    session_id = admin_session.id if use_admin else user_session.id
+    session_id = admin_session.token if use_admin else user_session.token
     with mcp_auth_context(session_id):
         result = await get_fn(fetch)(team_slug)
 
@@ -248,7 +248,7 @@ async def test_fetch_access_control_denied(
     db_session, user_session, teams_and_projects
 ):
     """Test that fetch denies access to teams the user is not a member of."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(fetch)("team-gamma")
 
     assert "error" in result
@@ -266,7 +266,7 @@ async def test_list_all_includes_projects_when_requested(
 ):
     """list_all should include projects when include_projects=True."""
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_all)(include_projects=True)
 
     assert "teams" in result
@@ -297,7 +297,7 @@ async def test_team_add_member_access_control_success(
 ):
     """Test that team_add_member grants access for authorized users."""
 
-    session_id = admin_session.id if use_admin else user_session.id
+    session_id = admin_session.token if use_admin else user_session.token
     with mcp_auth_context(session_id):
         result = await get_fn(team_add_member)(team_slug, "person2")
 
@@ -309,7 +309,7 @@ async def test_team_add_member_access_control_denied(
     db_session, user_session, teams_and_projects
 ):
     """Test that team_add_member denies access for non-members."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(team_add_member)("team-gamma", "person2")
 
     assert "error" in result
@@ -552,7 +552,7 @@ def test_set_team_members_dedup_identifier_and_display_name(db_session, admin_se
 async def test_upsert_creates_new_team(db_session, admin_session):
     """Test upsert creates a new team."""
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="New Test Team",
             slug="new-test-team",
@@ -577,7 +577,7 @@ async def test_upsert_updates_existing_team(db_session, admin_session):
     db_session.add(team)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Updated Name",
             slug="update-me",
@@ -594,7 +594,7 @@ async def test_upsert_updates_existing_team(db_session, admin_session):
 async def test_upsert_auto_generates_slug(db_session, admin_session):
     """Test upsert generates slug from name if not provided."""
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(name="Auto Slug Team")
 
     assert result["success"] is True
@@ -611,7 +611,7 @@ async def test_upsert_with_members_list(db_session, admin_session):
     db_session.add_all([person1, person2])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Members Test Team",
             members=["member_one", "member_two"],
@@ -627,7 +627,7 @@ async def test_upsert_with_members_list(db_session, admin_session):
 async def test_upsert_creates_missing_person(db_session, admin_session):
     """Test upsert creates Person for unknown member identifier."""
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Create Person Team",
             members=["new_person"],
@@ -650,7 +650,7 @@ async def test_upsert_clears_members_with_empty_list(db_session, admin_session):
     team.members.append(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Clear Me",
             slug="clear-me",
@@ -676,7 +676,7 @@ async def test_upsert_archive_team(db_session, admin_session):
     db_session.add(team)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Archive Me",
             slug="upsert-archive-test",
@@ -706,7 +706,7 @@ async def test_upsert_reactivate_team(db_session, admin_session):
     db_session.add(team)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Reactivate Me",
             slug="upsert-reactivate-test",
@@ -737,7 +737,7 @@ async def test_team_remove_member_success(db_session, admin_session):
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(team_remove_member)(
             team="remove-member-test",
             person="removable",
@@ -756,7 +756,7 @@ async def test_team_remove_member_not_a_member(db_session, admin_session):
     db_session.add_all([team, person])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(team_remove_member)(
             team="remove-test-2",
             person="not_member",
@@ -788,7 +788,7 @@ async def test_fetch_with_include_members(db_session, admin_session):
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(fetch)("fetch-members-test", include_members=True)
 
     assert "team" in result
@@ -812,7 +812,7 @@ async def test_fetch_without_include_members(db_session, admin_session):
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         # Explicitly set include_members=False (default is True)
         result = await get_fn(fetch)("fetch-no-members-test", include_members=False)
 
@@ -834,7 +834,7 @@ async def test_fetch_with_include_projects(db_session, admin_session):
     db_session.execute(project_teams.insert().values(project_id=-201, team_id=team.id))
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(fetch)("fetch-projects-test", include_projects=True)
 
     assert "team" in result
@@ -871,7 +871,7 @@ async def test_project_list_access_success(db_session, admin_session):
     db_session.execute(project_teams.insert().values(project_id=project.id, team_id=team2.id))
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(project_list_access)(project=-102)
 
     assert result["total_people_count"] == 3
@@ -895,7 +895,7 @@ async def test_list_all_filter_by_tags_match_all(db_session, admin_session):
     db_session.add_all([team1, team2, team3])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(tags=["engineering", "frontend"], match_any_tag=False)
 
     slugs = {t["slug"] for t in result["teams"]}
@@ -914,7 +914,7 @@ async def test_list_all_filter_by_tags_match_any(db_session, admin_session):
     db_session.add_all([team1, team2, team3])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(tags=["design", "marketing"], match_any_tag=True)
 
     slugs = {t["slug"] for t in result["teams"]}
@@ -937,7 +937,7 @@ async def test_team_add_member_invalid_role(db_session, admin_session):
     db_session.add_all([team, person])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(team_add_member)(
             team="role-test",
             person="role_person",
@@ -956,7 +956,7 @@ async def test_team_add_member_by_display_name(db_session, admin_session):
     db_session.add_all([team, person])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(team_add_member)(
             team="add-fuzzy",
             person="Fuzzy Add Person",
@@ -976,7 +976,7 @@ async def test_team_add_member_by_alias(db_session, admin_session):
     db_session.add_all([team, person])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(team_add_member)(
             team="add-alias",
             person="Ally",
@@ -998,7 +998,7 @@ async def test_team_remove_member_by_display_name(db_session, admin_session):
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(team_remove_member)(
             team="remove-fuzzy",
             person="Fuzzy Remove Person",
@@ -1020,7 +1020,7 @@ async def test_upsert_create_with_owner(db_session, admin_session):
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Owned Team",
             slug="owned-team",
@@ -1040,7 +1040,7 @@ async def test_upsert_create_with_owner_by_id(db_session, admin_session):
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Owned By ID Team",
             owner=person.id,
@@ -1053,7 +1053,7 @@ async def test_upsert_create_with_owner_by_id(db_session, admin_session):
 @pytest.mark.asyncio
 async def test_upsert_create_without_owner(db_session, admin_session):
     """Test creating a team without setting an owner."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="No Owner Team",
             slug="no-owner-team",
@@ -1072,7 +1072,7 @@ async def test_upsert_set_owner_on_existing_team(db_session, admin_session):
     db_session.add_all([team, person])
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Ownerless Team",
             slug="ownerless-team",
@@ -1098,7 +1098,7 @@ async def test_upsert_clear_owner(db_session, admin_session):
     # Verify owner is set
     assert team.owner_id == person.id
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Has Owner",
             slug="has-owner",
@@ -1121,7 +1121,7 @@ async def test_upsert_change_owner(db_session, admin_session):
     db_session.add(team)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Change Owner",
             slug="change-owner",
@@ -1143,7 +1143,7 @@ async def test_upsert_owner_not_provided_preserves_existing(db_session, admin_se
     db_session.add(team)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Preserve Owner",
             slug="preserve-owner",
@@ -1158,7 +1158,7 @@ async def test_upsert_owner_not_provided_preserves_existing(db_session, admin_se
 @pytest.mark.asyncio
 async def test_upsert_owner_not_found_warns(db_session, admin_session):
     """Test that a non-existent owner identifier produces a warning."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Bad Owner Team",
             owner="nonexistent_person",
@@ -1176,7 +1176,7 @@ async def test_upsert_owner_by_display_name(db_session, admin_session):
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Owner Display Test",
             owner="Display Owner",
@@ -1198,7 +1198,7 @@ async def test_upsert_owner_by_alias(db_session, admin_session):
     db_session.add(person)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(upsert)(
             name="Owner Alias Test",
             owner="AO",

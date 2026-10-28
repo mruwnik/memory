@@ -17,6 +17,7 @@ from fastmcp.server.dependencies import get_access_token
 from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import make_session
 from memory.common.db.models import UserSession, WatchedMarket
+from memory.common.db.models.users import hash_token
 from memory.common.markets import (
     MarketSource,
     cache_key,
@@ -58,7 +59,7 @@ def _get_user_session_from_token(session) -> "UserSession | None":
     access_token = get_access_token()
     if not access_token:
         return None
-    user_session = session.get(UserSession, access_token.token)
+    user_session = session.get(UserSession, hash_token(access_token.token))
     if not user_session or not user_session.user:
         return None
     return user_session

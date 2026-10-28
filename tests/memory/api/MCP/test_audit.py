@@ -15,7 +15,7 @@ async def test_audit_call_logs_call(db_session, admin_session):
     async def upsert(name: str, password: str | None = None):
         return {"ok": name}
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await upsert(name="Acme", password="hunter2")
     assert result == {"ok": "Acme"}
 
@@ -30,7 +30,7 @@ async def test_audit_call_redacts_and_truncates(db_session, admin_session):
     async def upsert(name: str, password: str | None = None):
         return None
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert(name="ABCDEFGHIJ", password="hunter2")
 
     row = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").one()
@@ -57,7 +57,7 @@ async def test_audit_call_default_redact_backstop(db_session, admin_session, arg
     async def upsert(name: str, token: str | None = None, key: str | None = None):
         return None
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         await upsert(name="x", **{arg: "sekret"})
 
     row = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").one()
@@ -97,5 +97,5 @@ async def test_audit_call_failure_does_not_break_tool(db_session, admin_session,
     async def upsert(name: str):
         return {"ok": True}
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         assert await upsert(name="x") == {"ok": True}

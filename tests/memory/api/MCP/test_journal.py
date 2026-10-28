@@ -107,7 +107,7 @@ def user_with_project_access(db_session, regular_user, sample_project):
 @pytest.mark.asyncio
 async def test_add(db_session, admin_user, admin_session, sample_item):
     """Test adding a journal entry."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(add)(
             target_id=sample_item.id,
             content="First journal entry",
@@ -122,7 +122,7 @@ async def test_add(db_session, admin_user, admin_session, sample_item):
 @pytest.mark.asyncio
 async def test_add_private(db_session, admin_user, admin_session, sample_item):
     """Test adding a private journal entry."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(add)(
             target_id=sample_item.id,
             content="Private thought",
@@ -135,7 +135,7 @@ async def test_add_private(db_session, admin_user, admin_session, sample_item):
 @pytest.mark.asyncio
 async def test_add_nonexistent_item(db_session, admin_user, admin_session):
     """Test adding a journal entry to a non-existent item."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(add)(
                 target_id=999999,
@@ -160,7 +160,7 @@ async def test_list_all(db_session, admin_user, admin_session, sample_item):
     db_session.add_all(entries)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 3
@@ -202,7 +202,7 @@ async def test_list_all_denies_hidden_item_for_admin(
     db_session.add(entry)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found or access denied"):
             await get_fn(list_all)(target_id=hidden_item.id)
 
@@ -212,7 +212,7 @@ async def test_add_denies_hidden_item_for_admin(
     db_session, admin_user, admin_session, hidden_item
 ):
     """Admins can't plant journal entries on a "hidden" source_item either."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found or access denied"):
             await get_fn(add)(target_id=hidden_item.id, content="nope")
 
@@ -220,7 +220,7 @@ async def test_add_denies_hidden_item_for_admin(
 @pytest.mark.asyncio
 async def test_list_all_empty(db_session, admin_user, admin_session, sample_item):
     """Test listing journal entries when there are none."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 0
@@ -244,7 +244,7 @@ async def test_list_all_pagination(db_session, admin_user, admin_session, sample
     db_session.add_all(entries)
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(target_id=sample_item.id, limit=3, offset=2)
 
     assert len(result["entries"]) == 3
@@ -282,7 +282,7 @@ async def test_list_all_excludes_private(
     db_session.commit()
 
     # Regular user (with project access) should only see shared entry
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 1
@@ -307,7 +307,7 @@ async def test_list_all_shows_own_private(
     db_session.commit()
 
     # Regular user should see their own private entry
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 1
@@ -341,7 +341,7 @@ async def test_list_all_admin_sees_all(
     db_session.commit()
 
     # Admin should see both entries
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(target_id=sample_item.id)
 
     assert len(result["entries"]) == 2
@@ -350,7 +350,7 @@ async def test_list_all_admin_sees_all(
 @pytest.mark.asyncio
 async def test_list_all_nonexistent_item(db_session, admin_user, admin_session):
     """Test listing journal entries for a non-existent item."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="not found"):
             await get_fn(list_all)(target_id=999999)
 
@@ -358,7 +358,7 @@ async def test_list_all_nonexistent_item(db_session, admin_user, admin_session):
 @pytest.mark.asyncio
 async def test_add_inherits_project(db_session, admin_user, admin_session, sample_item):
     """Test that journal entries inherit project_id from target item."""
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(add)(
             target_id=sample_item.id,
             content="Test entry",
@@ -390,7 +390,7 @@ async def test_list_all_blocks_non_member_on_project(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found or access denied"):
             await get_fn(list_all)(
                 target_id=sample_project.id,
@@ -415,7 +415,7 @@ async def test_list_all_allows_member_on_project(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         result = await get_fn(list_all)(
             target_id=sample_project.id,
             target_type="project",
@@ -430,7 +430,7 @@ async def test_add_blocks_non_member_on_project(
     db_session, regular_user, user_session, sample_project
 ):
     """A user without team membership cannot plant journal entries on a project."""
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found or access denied"):
             await get_fn(add)(
                 target_id=sample_project.id,
@@ -469,7 +469,7 @@ async def test_list_all_blocks_non_member_on_team(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found or access denied"):
             await get_fn(list_all)(
                 target_id=other_team.id,
@@ -506,7 +506,7 @@ async def test_list_all_blocks_non_creator_on_poll(
     )
     db_session.commit()
 
-    with mcp_auth_context(user_session.id):
+    with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="not found or access denied"):
             await get_fn(list_all)(
                 target_id=poll.id,
@@ -531,7 +531,7 @@ async def test_admin_bypasses_per_type_gate(
     )
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         result = await get_fn(list_all)(
             target_id=sample_project.id,
             target_type="project",
@@ -573,7 +573,7 @@ async def test_admin_session_reads_and_adds_any_team_or_project_journal(
     db_session, admin_session, team_and_project_targets, target_type
 ):
     target_id = team_and_project_targets[target_type]
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(admin_session.token):
         listed = await get_fn(list_all)(target_id=target_id, target_type=target_type)
         await get_fn(add)(target_id=target_id, target_type=target_type, content="mine")
 
