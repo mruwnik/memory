@@ -14,7 +14,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
-from memory.agents.call import LLMError, Record, run_agent_sync
+from memory.agents.call import LLMError, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, system_key
 from memory.agents.system import SESSION_SUMMARY
 from memory.common import settings
@@ -101,9 +101,7 @@ def generate_summary(conversation: str, key: Credential) -> str:
         result = run_agent_sync(
             SESSION_SUMMARY.slug,
             f"Summarize this coding session:\n\n{conversation}",
-            user=key.user_id,
             key=key,
-            record=Record.COST,
         )
     except (LLMError, *PROVIDER_ERRORS) as e:
         logger.warning(f"Failed to generate summary: {type(e).__name__}")

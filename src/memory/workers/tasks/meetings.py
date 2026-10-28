@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
 
-from memory.agents.call import LLMError, Record, run_agent_sync
+from memory.agents.call import LLMError, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, ingest_key
 from memory.agents.system import MEETING_EXTRACT
 from memory.common import jobs as job_utils
@@ -52,9 +52,7 @@ def call_extraction_llm(transcript: str, key: Credential) -> dict:
     result = run_agent_sync(
         MEETING_EXTRACT.slug,
         f"Meeting transcript:\n{transcript}",
-        user=key.user_id,
         key=key,
-        record=Record.COST,
     )
     return result.data or {}
 

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from memory.agents.call import Record, run_agent
+from memory.agents.call import run_agent
 from memory.agents.provider_keys import Credential
 from memory.agents.system import CHUNK_SCORE
 from memory.api.search.types import chunk_score
@@ -39,9 +39,7 @@ async def score_chunk(query: str, chunk: Chunk, key: Credential) -> float | None
     result = await run_agent(
         CHUNK_SCORE.slug,
         SCORE_CHUNK_PROMPT.format(query=query, chunk=chunk_text),
-        user=key.user_id,
         key=key,
-        record=Record.COST,
     )
     assert result.data is not None  # an agent with a result schema returns data or raises
     return float(result.data["score"])

@@ -694,7 +694,7 @@ def serial_llm_charges(monkeypatch):
     """For tests that run system agents concurrently: every make_session() in a test
     shares one connection, which two threads can't use at once."""
     lock = threading.Lock()
-    for name in ("allowance", "charge"):
+    for name in ("check_allowance", "charge"):
         real = getattr(call, name)
 
         def serialized(*args, real=real, **kwargs):

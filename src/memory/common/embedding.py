@@ -9,7 +9,7 @@ import voyageai.error
 from PIL import Image
 from sqlalchemy.orm import object_session
 
-from memory.agents.call import LLMError, Record, run_agent_sync
+from memory.agents.call import LLMError, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, ingest_key
 from memory.agents.system import SUMMARISE
 from memory.common import extract, instance_settings, settings, summarizer
@@ -288,7 +288,7 @@ def summariser(key: Credential) -> summarizer.Summarise:
     def summarise(prompt: str) -> dict[str, Any] | None:
         try:
             return run_agent_sync(
-                SUMMARISE.slug, prompt, user=key.user_id, key=key, record=Record.COST
+                SUMMARISE.slug, prompt, key=key
             ).data
         # A summary is optional: a provider outage shouldn't fail the item's ingest.
         except (LLMError, *PROVIDER_ERRORS) as e:

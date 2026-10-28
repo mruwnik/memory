@@ -5,10 +5,10 @@ from decimal import Decimal
 import pytest
 
 from memory.agents import call, caps, provider_keys
-from memory.agents.call import LLMError, Record, run_agent, run_agent_sync
+from memory.agents.call import LLMError, run_agent, run_agent_sync
 from memory.agents.provider_keys import Credential, credential
 from memory.agents.system import SUMMARISE
-from memory.common.db.models import AgentRun, AgentRunStep, LLMProviderKey, LLMSpend
+from memory.common.db.models import AgentRun, LLMProviderKey, LLMSpend
 from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, key_rejected, model_unavailable, reply, submitted
 
 SUMMARY = {"summary": "short", "tags": ["a"]}
@@ -23,10 +23,10 @@ async def detached_calls_finish():
 async def test_a_schema_agent_answers_through_submit_result(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [submitted(SUMMARY)]
 
-    result = await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+    result = await run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
 
     request = scripted_llm.requests[0]
-    assert (result.data, result.run_id) == (SUMMARY, None)
+    assert result.data == SUMMARY
     assert (request["api_key"], request["system"], request["tool_choice"]) == ("sk-test-default", SUMMARISE.system_prompt, "required")
     assert [t.name for t in request["tools"]] == ["submit_result"]
 
@@ -35,7 +35,7 @@ async def test_a_schema_agent_answers_through_submit_result(db_session, regular_
 async def test_cost_calls_charge_the_key_counter_without_a_run(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [submitted(SUMMARY)]
 
-    await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+    await run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
 
     (bucket,) = db_session.query(LLMSpend).all()
     assert (bucket.provider_key_id, bucket.agent, bucket.cost_usd, bucket.calls) == (
@@ -45,26 +45,11 @@ async def test_cost_calls_charge_the_key_counter_without_a_run(db_session, regul
 
 
 @pytest.mark.asyncio
-async def test_full_calls_keep_the_turn_as_a_run(db_session, regular_user, llm_key, scripted_llm):
-    scripted_llm.script = [submitted(SUMMARY)]
-
-    result = await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.FULL)
-
-    run = db_session.get(AgentRun, result.run_id)
-    steps = db_session.query(AgentRunStep).filter(AgentRunStep.run_id == run.id).order_by(AgentRunStep.seq).all()
-    assert (run.status, run.result, run.trigger_kind, run.trigger_ref, run.provider_key_id) == (
-        "done", {"data": SUMMARY}, "system", {"agent": SUMMARISE.slug}, llm_key.id,
-    )
-    assert [s.kind for s in steps] == ["user", "assistant"]
-    assert db_session.query(LLMSpend).count() == 0
-
-
-@pytest.mark.asyncio
 async def test_a_schema_agent_that_does_not_submit_fails_but_is_still_charged(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [reply("no tool call")]
 
     with pytest.raises(LLMError, match="answered without submitting a result"):
-        await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+        await run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
 
     assert db_session.query(LLMSpend).one().calls == 1
 
@@ -82,7 +67,7 @@ async def test_a_call_its_caller_gave_up_on_is_still_charged(db_session, regular
     scripted_llm.script = [slow]
 
     caller = asyncio.create_task(
-        run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+        run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
     )
     try:
         await started.wait()
@@ -117,7 +102,7 @@ async def test_a_detached_call_that_fails_unexpectedly_is_logged(
     monkeypatch.setattr(call, "charge", broken_charge)
 
     caller = asyncio.create_task(
-        run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+        run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
     )
     try:
         await started.wait()
@@ -144,7 +129,7 @@ async def test_a_rejected_key_is_marked_invalid_and_its_owner_told_once(db_sessi
 
     for _ in range(2):
         with pytest.raises(LLMError, match="API key 'default' was rejected by anthropic"):
-            await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+            await run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
 
     db_session.refresh(llm_key)
     assert (llm_key.status, sent) == ("invalid", [regular_user.id])
@@ -157,7 +142,7 @@ async def test_a_spent_key_is_refused_before_calling(db_session, regular_user, l
     db_session.commit()
 
     with pytest.raises(LLMError, match="provider key pool: spent"):
-        await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+        await run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
     assert scripted_llm.requests == []
 
 
@@ -173,10 +158,9 @@ async def test_the_keys_provider_picks_the_agents_model(db_session, regular_user
     db_session.commit()
     scripted_llm.script = [submitted(SUMMARY)]
 
-    result = await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(key), record=Record.FULL)
+    await run_agent(SUMMARISE.slug, "text", key=credential(key))
 
     assert scripted_llm.requests[0]["model"] == model
-    assert db_session.get(AgentRun, result.run_id).spec["model"] == model
 
 
 @pytest.mark.asyncio
@@ -184,7 +168,7 @@ async def test_a_key_of_a_provider_the_agent_does_not_run_on_is_refused(regular_
     other = Credential(1, regular_user.id, "other", "k", "sk-k")
 
     with pytest.raises(LLMError, match="needs an anthropic or openai key"):
-        await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=other, record=Record.COST)
+        await run_agent(SUMMARISE.slug, "text", key=other)
     assert scripted_llm.requests == []
 
 
@@ -194,14 +178,14 @@ async def test_an_invalid_key_is_refused_before_calling(db_session, regular_user
     db_session.commit()
 
     with pytest.raises(LLMError, match="was rejected by anthropic"):
-        await run_agent(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+        await run_agent(SUMMARISE.slug, "text", key=credential(llm_key))
     assert scripted_llm.requests == []
 
 
 def test_sync_callers_get_the_same_call(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [submitted(SUMMARY)]
 
-    result = run_agent_sync(SUMMARISE.slug, "text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+    result = run_agent_sync(SUMMARISE.slug, "text", key=credential(llm_key))
 
     assert result.data == SUMMARY
 
@@ -215,7 +199,7 @@ async def test_an_unavailable_model_is_reported_once_per_key_at_error_without_th
 
     for _ in range(2):
         with pytest.raises(LLMError, match="unavailable to this"):
-            await run_agent(SUMMARISE.slug, "secret item text", user=regular_user.id, key=credential(llm_key), record=Record.COST)
+            await run_agent(SUMMARISE.slug, "secret item text", key=credential(llm_key))
 
     (record,) = [r for r in caplog.records if r.levelname == "ERROR"]
     assert f"key {llm_key.id}" in record.getMessage()

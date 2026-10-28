@@ -18,7 +18,7 @@ Reference: https://arxiv.org/abs/2212.10496
 import asyncio
 import logging
 
-from memory.agents.call import Record, run_agent
+from memory.agents.call import run_agent
 from memory.agents.provider_keys import Credential
 from memory.agents.system import HYDE
 
@@ -38,7 +38,7 @@ async def expand_query_hyde(query: str, key: Credential | None, timeout: float =
         return _hyde_cache[cache_key]
     try:
         result = await asyncio.wait_for(
-            run_agent(HYDE.slug, f"Search query: {query}", user=key.user_id, key=key, record=Record.COST),
+            run_agent(HYDE.slug, f"Search query: {query}", key=key),
             timeout=timeout,
         )
     except asyncio.TimeoutError:

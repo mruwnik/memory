@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from memory.agents.call import Record, run_agent
+from memory.agents.call import run_agent
 from memory.agents.provider_keys import credential
 from memory.agents.runner import execute_run
 from memory.agents.system import SYSTEM_AGENTS
@@ -132,11 +132,9 @@ async def test_every_system_agent_answers_on_an_openai_key(db_session, regular_u
     db_session.commit()
 
     result = await run_agent(
-        slug, SYSTEM_PROMPTS[slug], user=regular_user.id, key=credential(key), record=Record.FULL
+        slug, SYSTEM_PROMPTS[slug], key=credential(key)
     )
 
-    run = db_session.get(AgentRun, result.run_id)
     print(f"\n{slug}: ${result.cost} {result.data or result.text!r}")
-    assert run.spec["model"] == "openai/gpt-6-luna"
     assert (result.data is not None) == (SYSTEM_AGENTS[slug].result_schema is not None)
     assert result.text or result.data

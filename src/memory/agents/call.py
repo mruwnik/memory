@@ -9,9 +9,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from decimal import Decimal
-from enum import StrEnum
 from functools import partial
 from typing import Any
 
@@ -24,14 +22,7 @@ from memory.agents.provider_keys import (
 )
 from memory.agents.system import SystemAgent, system_agent
 from memory.common.db.connection import make_session
-from memory.common.db.models import (
-    AgentRun,
-    AgentRunStep,
-    KeyStatus,
-    LLMProviderKey,
-    SummaryRequest,
-)
-from memory.common.db.models.agents import RunStatus
+from memory.common.db.models import KeyStatus, LLMProviderKey, SummaryRequest
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.llms.neutral import Completion, NeutralMessage, Text, ToolCall
 from memory.common.llms.registry import get_provider, split_model
@@ -43,11 +34,6 @@ SUBMIT_RESULT = "submit_result"
 UNUSABLE_STOPS = {"max_output_tokens", "context_exceeded", "refused", "paused"}
 
 
-class Record(StrEnum):
-    FULL = "full"  # a run with its steps, which the user can open
-    COST = "cost"  # only the spend, on the key's daily counter
-
-
 class LLMError(Exception):
     """The call produced no result; the message is safe to show the key's owner."""
 
@@ -57,7 +43,6 @@ class Result:
     text: str
     data: dict[str, Any] | None
     cost: Decimal
-    run_id: str | None = None
 
 
 def submit_result_tool(schema: dict[str, Any]) -> ToolDefinition:
@@ -103,7 +88,7 @@ def parse_result(
     return text, submitted.input
 
 
-def allowance(key: Credential) -> Decimal:
+def check_allowance(key: Credential) -> None:
     with make_session() as db:
         row = db.get(LLMProviderKey, key.id)
         if row is None:
@@ -111,7 +96,7 @@ def allowance(key: Credential) -> Decimal:
         if row.status != KeyStatus.OK:
             raise LLMError(rejected_message(row))
         try:
-            return caps.key_allowance(db, row)
+            caps.key_allowance(db, row)
         except caps.CapExceeded as e:
             raise LLMError(str(e)) from e
 
@@ -125,71 +110,6 @@ def charge(key: Credential, agent: SystemAgent, cost: Decimal) -> None:
     with make_session() as db:
         caps.record_spend(db, key_id=key.id, agent=agent.slug, cost=cost)
         db.commit()
-
-
-def record_run(
-    *,
-    user: int,
-    key: Credential,
-    agent: SystemAgent,
-    model: str,
-    prompt: str,
-    completion: Completion,
-    data: dict[str, Any] | None,
-    error: str | None,
-    max_cost: Decimal,
-    started: datetime,
-) -> str:
-    """Keep the turn as a finished run, which the key's daily pool already counts."""
-    if error:
-        result = None
-    elif data is not None:
-        result = {"data": data}
-    else:
-        result = {"text": completion.message.text()}
-    with make_session() as db:
-        run = AgentRun(
-            user_id=user,
-            definition_id=None,
-            spec=agent.spec_dict(model),
-            input=prompt,
-            status=(RunStatus.FAILED if error else RunStatus.DONE).value,
-            result=result,
-            error=error,
-            usage=completion.usage.to_dict(),
-            cost_usd=completion.cost,
-            max_cost_usd=max_cost,
-            num_turns=1,
-            trigger_kind="system",
-            trigger_ref={"agent": agent.slug},
-            provider_key_id=key.id,
-            scopes=[],
-            started_at=started,
-            finished_at=datetime.now(timezone.utc),
-        )
-        db.add(run)
-        db.flush()
-        db.add(
-            AgentRunStep(
-                run_id=run.id,
-                seq=0,
-                kind="user",
-                content=[Text(text=prompt).model_dump(mode="json")],
-            )
-        )
-        db.add(
-            AgentRunStep(
-                run_id=run.id,
-                seq=1,
-                kind="assistant",
-                content=[b.model_dump(mode="json") for b in completion.message.content],
-                replay=completion.replay,
-                usage=completion.usage.to_dict(),
-                cost_usd=completion.cost,
-            )
-        )
-        db.commit()
-        return run.id
 
 
 # When each (provider, model, key) was last logged. The log reaches the operator,
@@ -240,14 +160,14 @@ def log_unexpected_failure(agent: str, key_id: int, call: asyncio.Task) -> None:
         logger.error(f"{agent} call on key {key_id} failed after it was sent", exc_info=e)
 
 
-async def run_agent(
-    agent: str, prompt: str, *, user: int, key: Credential, record: Record
-) -> Result:
-    """One turn of system agent `agent` on `prompt` for `user`, paid with their `key`.
+async def run_agent(agent: str, prompt: str, *, key: Credential) -> Result:
+    """One turn of system agent `agent` on `prompt`, paid with `key`.
 
+    The spend goes on the key's hourly bucket, not the run ledger: these calls are
+    memory's own (summaries, search steps), too many and too small to keep.
     Raises LLMError when the key can't pay (another provider, deleted, rejected,
     its daily pool spent) or the model gave no usable answer; a turn that was
-    billed is recorded either way, even when the caller gives up on it first (while
+    billed is charged either way, even when the caller gives up on it first (while
     the event loop lives on: `run_agent_sync`'s loop cancels it on exit).
     Transient provider errors (rate limits, 5xx, connection errors, timeouts)
     propagate unchanged.
@@ -256,10 +176,8 @@ async def run_agent(
     model = found.model_for(key.provider)
     if model is None:
         raise LLMError(f"{found.slug} needs an {' or '.join(found.providers)} key")
-    max_cost = await asyncio.to_thread(allowance, key)
-    call = asyncio.ensure_future(
-        complete(found, model, prompt, user=user, key=key, record=record, max_cost=max_cost)
-    )
+    await asyncio.to_thread(check_allowance, key)
+    call = asyncio.ensure_future(complete(found, model, prompt, key=key))
     _detached.add(call)
     call.add_done_callback(_detached.discard)
     call.add_done_callback(partial(log_unexpected_failure, found.slug, key.id))
@@ -267,18 +185,8 @@ async def run_agent(
     return await asyncio.shield(call)
 
 
-async def complete(
-    found: SystemAgent,
-    model: str,
-    prompt: str,
-    *,
-    user: int,
-    key: Credential,
-    record: Record,
-    max_cost: Decimal,
-) -> Result:
+async def complete(found: SystemAgent, model: str, prompt: str, *, key: Credential) -> Result:
     provider = get_provider(model, api_key=key.key)
-    started = datetime.now(timezone.utc)
     try:
         completion = await provider.acomplete(**request_args(found, prompt))
     except provider.KEY_REJECTED as e:
@@ -298,30 +206,12 @@ async def complete(
         error = None
     except LLMError as e:
         text, data, error = "", None, str(e)
-    run_id = None
-    if record == Record.FULL:
-        run_id = await asyncio.to_thread(
-            record_run,
-            user=user,
-            key=key,
-            agent=found,
-            model=model,
-            prompt=prompt,
-            completion=completion,
-            data=data,
-            error=error,
-            max_cost=max_cost,
-            started=started,
-        )
-    else:
-        await asyncio.to_thread(charge, key, found, completion.cost)
+    await asyncio.to_thread(charge, key, found, completion.cost)
     if error:
         raise LLMError(error)
-    return Result(text=text, data=data, cost=completion.cost, run_id=run_id)
+    return Result(text=text, data=data, cost=completion.cost)
 
 
-def run_agent_sync(
-    agent: str, prompt: str, *, user: int, key: Credential, record: Record
-) -> Result:
+def run_agent_sync(agent: str, prompt: str, *, key: Credential) -> Result:
     """`run_agent` for sync worker code, which never runs inside an event loop."""
-    return asyncio.run(run_agent(agent, prompt, user=user, key=key, record=record))
+    return asyncio.run(run_agent(agent, prompt, key=key))

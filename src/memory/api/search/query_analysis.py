@@ -21,7 +21,7 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from memory.agents.call import Record, run_agent
+from memory.agents.call import run_agent
 from memory.agents.provider_keys import Credential
 from memory.agents.system import QUERY_ANALYSIS
 from memory.common.db.connection import make_session
@@ -138,9 +138,7 @@ async def analyze_query(
             run_agent(
                 QUERY_ANALYSIS.slug,
                 analysis_prompt(query, now, modalities),
-                user=key.user_id,
                 key=key,
-                record=Record.COST,
             ),
             timeout=timeout,
         )
