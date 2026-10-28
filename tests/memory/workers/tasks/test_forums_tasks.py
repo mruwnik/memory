@@ -804,7 +804,12 @@ def test_sync_lesswrong_comments_inherits_post_access(
     db_session, qdrant, admin_user, frozen_now, lw_comments_api
 ):
     post = make_post(
-        db_session, "p1", comments=2, sensitivity="confidential", creator_id=admin_user.id
+        db_session,
+        "p1",
+        comments=2,
+        sensitivity="confidential",
+        creator_id=admin_user.id,
+        tags=["ai"],
     )
     lw_comments_api.comments.return_value = ([lw_comment("c1"), lw_comment("c2", parent="c1")], ALL_LIVE)
 
@@ -823,6 +828,9 @@ def test_sync_lesswrong_comments_inherits_post_access(
     }
     assert {c.embed_status for c in comments} == {"STORED"}
     assert comments[0].posted_at == datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+    assert {tuple(sorted(c.tags)) for c in comments} == {("ai", "comment")}
+    points, _ = qdrant.scroll(collection_name="forum", with_payload=True)
+    assert {tuple(sorted(p.payload["tags"])) for p in points} == {("ai", "comment")}
     post = db_session.get(ForumPost, post.id)
     assert (post.synced_comment_count, post.comments_checked_at) == (2, NOW)
 

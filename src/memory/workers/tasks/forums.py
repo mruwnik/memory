@@ -39,6 +39,8 @@ ENGAGEMENT_FIELDS = ("karma", "votes", "score", "comments")
 # Beat ticks drift by a few seconds, so a sync that is due "now" may look just short of due.
 DUE_SLACK = timedelta(minutes=5)
 COUNT_BATCH_SIZE = 50
+# Comments share the posts' collection; the tag lets a search filter on them.
+COMMENT_TAG = "comment"
 # Bounds the comment-count requests one run spends on the older-post recheck backlog.
 MAX_COUNT_CHECKS_PER_RUN = 2000
 
@@ -148,7 +150,7 @@ def upsert_comment(
         modality="forum",
         mime_type="text/markdown",
         embed_status="RAW",
-        tags=post.tags,
+        tags=[*post.tags, COMMENT_TAG],
     )
     try:
         process_content_item(comment_item, session)

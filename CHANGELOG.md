@@ -26,6 +26,7 @@ None.
 
 LessWrong comments are now ingested and searchable, and the LessWrong sync is
 configured from the Forums tab (admin only) instead of code defaults.
+Comments carry their post's tags plus `comment`, so a tag filter can find them.
 
 `LESSWRONG_SYNC_INTERVAL` is no longer read. The migration copies it into the
 new settings row (`0` there leaves the scheduled sync off), so keep it set until
