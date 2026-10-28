@@ -73,25 +73,44 @@ async def test_create_note_blocks_path_traversal(
 
 
 @pytest.mark.asyncio
-async def test_create_note_handles_absolute_paths(mock_settings, mock_celery, as_user):
-    """Absolute paths are converted to relative paths within notes dir."""
-
-    # /etc/passwd becomes etc/passwd inside notes dir - this is correct behavior
-    # The path validator strips leading slashes
-    result = await upsert.fn(
-        subject="Test Note",
-        content="Test content",
-        filename="/subdir/note.md",  # Becomes subdir/note.md
+async def test_create_note_relativises_absolute_paths_inside_the_notes_dir(
+    mock_settings, mock_celery, as_user
+):
+    await upsert.fn(
+        subject="s", content="c", filename=str(mock_settings.NOTES_STORAGE_DIR / "sub/note.md")
     )
 
-    # Task should be queued (path is valid after normalization)
-    assert result["status"] == "queued"
+    assert mock_celery.send_task.call_args.kwargs["kwargs"]["filename"] == "notes/sub/note.md"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "/subdir/note.md",
+        "/notes/note.md",
+        "/app/memory_files/notes/note.md",
+        "note",
+        "main.js",
+        ".gitignore",
+        ".obsidian/workspace.json",
+        ".obsidian/plugins/obsidian-git/main.js",
+        ".obsidian/note.md",
+        "sub/.memory/note.md",
+    ],
+)
+async def test_create_note_rejects_non_markdown_hidden_or_absolute_filenames(
+    filename, mock_settings, mock_celery, as_user
+):
+    with pytest.raises(ValueError, match="Invalid filename"):
+        await upsert.fn(subject="s", content="c", filename=filename)
+    mock_celery.send_task.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "subject, filename",
-    [("s", "taken.md"), ("s", "/taken.md"), ("s", "taken"), ("s", "sub/../taken.md"), ("taken", None)],
+    [("s", "taken.md"), ("s", "sub/../taken.md"), ("taken", None)],
 )
 async def test_create_note_create_only_rejects_own_existing_filename(
     subject, filename, mock_settings, mock_celery, as_user, db_session, regular_user
@@ -257,6 +276,22 @@ async def test_note_files_lists_markdown_files(
     assert any("nested.md" in f for f in result)
     assert not any("not_a_note.txt" in f for f in result)
 
+
+
+@pytest.mark.asyncio
+async def test_note_files_skips_hidden_paths(mock_settings, db_session, admin_user, admin_session):
+    for filename in [
+        "notes/note.md",
+        "notes/.obsidian/workspace.json.md",
+        "notes/.gitignore.md",
+        "notes/sub/.notes-critic/review.md",
+    ]:
+        make_note(db_session, admin_user.id, filename)
+
+    with mcp_auth_context(admin_session.token):
+        result = await note_files.fn(path="/")
+
+    assert result == ["/notes/note.md"]
 
 @pytest.fixture
 def team_visible_note(db_session, regular_user):

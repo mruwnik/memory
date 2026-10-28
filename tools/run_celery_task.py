@@ -51,6 +51,7 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     RECONCILE_ACCESS_CONTROL,
     CLEAN_MAIL_HEADERS,
+    CLEANUP_JUNK_NOTES,
     TRACK_GIT_CHANGES,
     BACKUP_PATH,
     BACKUP_ALL,
@@ -79,6 +80,7 @@ TASK_MAPPINGS = {
         "update_metadata_for_source_items": UPDATE_METADATA_FOR_SOURCE_ITEMS,
         "reconcile_access_control": RECONCILE_ACCESS_CONTROL,
         "clean_mail_headers": CLEAN_MAIL_HEADERS,
+        "cleanup_junk_notes": CLEANUP_JUNK_NOTES,
     },
     "blogs": {
         "sync_webpage": SYNC_WEBPAGE,
@@ -381,6 +383,14 @@ def maintenance_reconcile_access_control(ctx, rewrite_payloads):
     execute_task(
         ctx, "maintenance", "reconcile_access_control", rewrite_payloads=rewrite_payloads
     )
+
+
+@maintenance.command("cleanup-junk-notes")
+@click.option("--dry-run", is_flag=True, help="Only count what would be removed")
+@click.pass_context
+def maintenance_cleanup_junk_notes(ctx, dry_run):
+    """Remove junk notes (hidden paths, non-markdown copies) and notes whose file is gone."""
+    execute_task(ctx, "maintenance", "cleanup_junk_notes", dry_run=dry_run)
 
 
 @maintenance.command("reingest-chunk")

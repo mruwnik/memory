@@ -59,6 +59,7 @@ REINDEX_NOTE = f"{NOTES_ROOT}.reindex_note"
 SETUP_GIT_NOTES = f"{NOTES_ROOT}.setup_git_notes"
 TRACK_GIT_CHANGES = f"{NOTES_ROOT}.track_git_changes"
 SYNC_NOTES_WHEN_DUE = f"{NOTES_ROOT}.sync_notes_when_due"
+CLEANUP_JUNK_NOTES = f"{NOTES_ROOT}.cleanup_junk_notes"
 SYNC_OBSERVATION = f"{OBSERVATIONS_ROOT}.sync_observation"
 SYNC_ALL_COMICS = f"{COMIC_ROOT}.sync_all_comics"
 SYNC_SMBC = f"{COMIC_ROOT}.sync_smbc"
@@ -328,6 +329,7 @@ app.conf.update(
         f"{MAINTENANCE_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
+        CLEANUP_JUNK_NOTES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
         f"{NOTES_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{OBSERVATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{PHOTO_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-photos"},

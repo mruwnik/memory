@@ -29,6 +29,12 @@ not `=?UTF-8?Q?...?=`). Email attachments are no longer tagged with their
 sender, and mail Qdrant payloads no longer copy the sender and recipients into
 `tags`: filter by `sender`/`recipients` instead.
 
+`notes_upsert` refuses filenames that don't end in `.md`, that have a hidden
+(dot-prefixed) segment, or that are absolute paths outside the notes folder; it
+no longer appends `.md` or re-roots absolute paths under the notes folder. Vault
+syncs skip hidden folders such as `.obsidian/`, and `notes_note_files` no longer
+lists them.
+
 ### Migrations
 
 `20261119_email_sender_tags` removes sender and raw-header tags from email
@@ -42,6 +48,18 @@ every mail message and is safe to re-run:
 
 ```bash
 docker compose exec -T worker python - maintenance clean-mail-headers < tools/run_celery_task.py
+```
+
+Delete notes indexed from hidden vault folders, Memory's `.md` copies of
+non-markdown vault files (`*.json.md`, `*.js.md`, `*.css.md`, `.gitignore.md`),
+and the `notes/app/memory_files/` tree created from absolute filenames, with
+their vectors; it lists, but keeps, notes whose file is gone. The copies and the `app/memory_files/`
+tree are also removed from the vault (and committed if it's a git repo); files
+in hidden folders stay. Check the counts with `--dry-run` first. Safe to re-run:
+
+```bash
+docker compose exec -T worker python - --wait maintenance cleanup-junk-notes --dry-run < tools/run_celery_task.py
+docker compose exec -T worker python - --wait maintenance cleanup-junk-notes < tools/run_celery_task.py
 ```
 
 ## v0.4.0 (2026-10-28)
