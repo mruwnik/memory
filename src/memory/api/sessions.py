@@ -253,19 +253,19 @@ def get_or_create_session(
     return session
 
 
-def append_events_to_transcript(session: Session, events: list[SessionEvent]) -> int:
+def append_events_to_transcript(session: Session, events: list[SessionEvent]) -> list[SessionEvent]:
     """Append events to the session's JSONL transcript file.
 
     Uses file locking to prevent concurrent write races.
 
-    Returns the number of events appended (excluding duplicates).
+    Returns the events appended (excluding duplicates).
 
     Note: Uses fcntl for file locking which is Unix-only. This is intentional
     as the application runs in Linux Docker containers. If Windows support is
     needed, consider using the 'filelock' library instead.
     """
     if not session.transcript_path:
-        return 0
+        return []
 
     transcript_file = settings.SESSIONS_STORAGE_DIR / session.transcript_path
     transcript_file.parent.mkdir(parents=True, exist_ok=True)
@@ -291,20 +291,15 @@ def append_events_to_transcript(session: Session, events: list[SessionEvent]) ->
                         except json.JSONDecodeError:
                             pass
 
-            # Filter out duplicates and write new events
-            items = [
-                json.dumps(event.model_dump(), default=str)
-                for event in events
-                if event.uuid not in existing_uuids
-            ]
-
-            if items:
-                # Seek to end and append
+            new_events = [event for event in events if event.uuid not in existing_uuids]
+            if new_events:
                 f.seek(0, 2)  # Seek to end
-                f.write("\n".join(items) + "\n")
+                f.write(
+                    "\n".join(json.dumps(e.model_dump(), default=str) for e in new_events) + "\n"
+                )
                 f.flush()
 
-            return len(items)
+            return new_events
         finally:
             # Release lock
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -377,15 +372,15 @@ def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
 
         accepted = append_events_to_transcript(session, events)
 
-        # Extract and save tool usage telemetry
-        for event in events:
+        # Only newly appended events: hooks resend events the server already has.
+        for event in accepted:
             telemetry_events = extract_tool_usage_telemetry(event, user_id, session_id)
             for te in telemetry_events:
                 db_session.add(te)
 
         db_session.commit()
 
-    return accepted
+    return len(accepted)
 
 
 @router.post("/ingest/batch", response_model=BatchIngestResponse)

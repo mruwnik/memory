@@ -1,6 +1,7 @@
 """Tests for sessions API endpoints."""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
@@ -197,6 +198,21 @@ def test_ingest_batch_creates_session(client, db_session, user, sessions_storage
     row = db_session.get(Session, UUID(session_id))
     assert row is not None
     assert row.user_id == user.id
+
+
+def test_ingest_batch_records_tool_usage_once_per_event(client, db_session, user, sessions_storage_dir):
+    session_id = str(uuid4())
+    tool_call = event(
+        type="assistant",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        message={"content": [{"type": "tool_use", "name": "Bash"}], "usage": {"input_tokens": 7}},
+    )
+
+    ingest(client, session_id, [tool_call])
+    ingest(client, session_id, [tool_call])
+    response = client.get("/sessions/stats/tool-usage")
+
+    assert [(t["tool_name"], t["call_count"], t["input_tokens"]) for t in response.json()["tools"]] == [("Bash", 1, 7)]
 
 
 def test_ingest_batch_appends_to_transcript_and_skips_duplicates(

@@ -30,6 +30,8 @@ The Telemetry page's "Token usage by tool" chart reads only `tool.token.usage`
 telemetry, like the rest of the page. It no longer falls back to re-parsing every
 stored session transcript when that window has no such events, which made the
 page slow and showed tool data while every other panel was empty.
+Session uploads that resend events the server already has no longer count
+their tool calls again; tool totals recorded before this release may be inflated.
 
 LessWrong comments are now ingested and searchable, and the LessWrong sync is
 configured from the Forums tab (admin only) instead of code defaults.
