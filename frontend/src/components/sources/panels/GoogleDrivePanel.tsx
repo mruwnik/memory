@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, GoogleAccount, GoogleFolder, DriveItem, LLMKeyChoice } from '@/hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { ProjectField, IntervalInput, PauseButton, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
+import { ProjectField, PauseButton, SyncScheduleFields, SensitivitySelect, Sensitivity, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, TagsInput, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, useSubmit, NewTabLink } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField } from '../LLMKeyField'
@@ -659,11 +659,7 @@ const GoogleFolderForm = ({ folder, projects, onSubmit, onCancel }: GoogleFolder
           </div>
         </Field>
 
-        <IntervalInput
-          value={formData.check_interval}
-          onChange={check_interval => setFormData({ ...formData, check_interval })}
-          label="Check interval"
-        />
+        <SyncScheduleFields value={formData} onChange={setFormData} />
 
         <Field label="Tags">
           <TagsInput

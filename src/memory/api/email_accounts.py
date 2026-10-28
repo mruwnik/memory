@@ -106,6 +106,7 @@ class EmailAccountCreate(BaseModel):
     # Common fields
     folders: list[str] = []
     tags: list[str] = []
+    check_interval: int = Field(60, ge=1, description="Minutes between syncs")
     send_enabled: bool = True
     # Access control
     project_id: int | None = None
@@ -148,6 +149,7 @@ class EmailAccountUpdate(BaseModel):
     # Common fields
     folders: list[str] | None = None
     tags: list[str] | None = None
+    check_interval: int | None = Field(None, ge=1)
     active: bool | None = None  # sync enabled
     send_enabled: bool | None = None
     # Access control
@@ -213,6 +215,7 @@ class EmailAccountResponse(SyncStatusResponse):
     # Common fields
     folders: list[str]
     tags: list[str]
+    check_interval: int
     last_sync_at: str | None
     active: bool  # sync enabled
     send_enabled: bool
@@ -253,6 +256,7 @@ def account_to_response(
         google_account=google_account_info,
         folders=list(account.folders or []),
         tags=list(account.tags or []),
+        check_interval=account.check_interval,
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         **sync_status_fields(account),
         active=cast(bool, account.active),
@@ -332,6 +336,7 @@ def create_account(
         google_account_id=data.google_account_id,
         folders=data.folders,
         tags=data.tags,
+        check_interval=data.check_interval,
         send_enabled=data.send_enabled,
         project_id=data.project_id,
         sensitivity=data.sensitivity,
@@ -389,6 +394,8 @@ def update_account(
         account.folders = updates.folders
     if updates.tags is not None:
         account.tags = updates.tags
+    if updates.check_interval is not None:
+        account.check_interval = updates.check_interval
     if updates.active is not None:
         account.active = updates.active
     if updates.send_enabled is not None:

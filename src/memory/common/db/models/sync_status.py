@@ -1,7 +1,7 @@
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Text
+from sqlalchemy import Boolean, DateTime, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 SYNC_ERROR_MAX_LEN = 1000
@@ -61,3 +61,19 @@ class SyncStatusMixin:
         self.sync_error = redact_secrets(str(error))[:SYNC_ERROR_MAX_LEN]
         self.sync_failing_since = self.sync_failing_since or datetime.now(timezone.utc)
 
+
+
+class PolledSource:
+    """A source fetched on a schedule.
+
+    While active, `sync_due_sources` queues its sync once ``check_interval`` minutes have passed since
+    it last did (``sync_queued_at``). ``last_sync_at`` is the source's own record of its last sync.
+    Sources add ``days_back``, ``max_items`` and ``ingest_delay`` (minutes) under these names where they apply.
+    """
+
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    check_interval: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60, server_default="60", doc="Minutes between syncs"
+    )
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sync_queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

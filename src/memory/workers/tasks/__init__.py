@@ -27,6 +27,7 @@ from memory.workers.tasks import (
     scheduled_tasks,
     sessions,
     slack,
+    sync_schedule,
     transcripts,
     verification,
 )  # noqa
@@ -56,6 +57,7 @@ __all__ = [
     "scheduled_tasks",
     "sessions",
     "slack",
+    "sync_schedule",
     "transcripts",
     "verification",
 ]

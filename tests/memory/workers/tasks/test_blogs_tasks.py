@@ -2,7 +2,8 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from memory.common.db.models import ArticleFeed, BlogPost
+from memory.common.db.models import ArticleFeed, BlogPost, DelayedFeedItem
+from memory.parsers.feeds import FeedItem
 from memory.workers.tasks import blogs
 from memory.parsers.blogs import Article
 
@@ -41,7 +42,7 @@ def sample_article_feed(db_session):
         tags=["test", "blog"],
         check_interval=3600,
         active=True,
-        last_checked_at=None,  # Avoid timezone issues
+        last_sync_at=None,  # Avoid timezone issues
     )
     db_session.add(feed)
     db_session.commit()
@@ -218,9 +219,9 @@ def test_sync_article_feed_success(
             "https://example.com/article/1", ["test", "blog"], sample_article_feed.id
         )
 
-    # Verify last_checked_at was updated
+    # Verify last_sync_at was updated
     db_session.refresh(sample_article_feed)
-    assert sample_article_feed.last_checked_at is not None
+    assert sample_article_feed.last_sync_at is not None
 
 
 def test_sync_article_feed_not_found(db_session):
@@ -309,41 +310,6 @@ def test_sync_article_feed_parser_error(
     db_session.refresh(sample_article_feed)
     assert sample_article_feed.sync_error == "Parser error"
     assert sample_article_feed.sync_failing_since is not None
-
-
-@patch("memory.workers.tasks.blogs.sync_article_feed")
-def test_sync_all_article_feeds(mock_sync_delay, db_session):
-    """Test synchronization of all active feeds."""
-    # Create multiple feeds
-    feed1 = ArticleFeed(
-        url="https://example.com/feed1.xml",
-        title="Feed 1",
-        active=True,
-        check_interval=3600,
-    )
-    feed2 = ArticleFeed(
-        url="https://example.com/feed2.xml",
-        title="Feed 2",
-        active=True,
-        check_interval=3600,
-    )
-    feed3 = ArticleFeed(
-        url="https://example.com/feed3.xml",
-        title="Feed 3",
-        active=False,  # Inactive
-        check_interval=3600,
-    )
-
-    db_session.add_all([feed1, feed2, feed3])
-    db_session.commit()
-
-    mock_sync_delay.delay.side_effect = [Mock(id="task-1"), Mock(id="task-2")]
-
-    result = blogs.sync_all_article_feeds()
-
-    # The query has no ORDER BY, so compare without relying on row order.
-    assert sorted(r["feed_id"] for r in result) == sorted([feed1.id, feed2.id])
-    assert sorted(r["task_id"] for r in result) == ["task-1", "task-2"]
 
 
 @patch("memory.workers.tasks.blogs.get_archive_fetcher")
@@ -554,7 +520,7 @@ def test_sync_article_feed_tags_handling(
         tags=feed_tags,
         check_interval=3600,
         active=True,
-        last_checked_at=None,  # Avoid timezone issues
+        last_sync_at=None,  # Avoid timezone issues
     )
     db_session.add(feed)
     db_session.commit()
@@ -574,23 +540,6 @@ def test_sync_article_feed_tags_handling(
         mock_sync_webpage.delay.assert_called_once_with(
             "https://example.com/article/1", expected_tags, feed.id
         )
-
-
-def test_sync_all_article_feeds_no_active_feeds(db_session):
-    """Test sync_all_article_feeds when no active feeds exist."""
-    # Create only inactive feeds
-    inactive_feed = ArticleFeed(
-        url="https://example.com/inactive.xml",
-        title="Inactive Feed",
-        active=False,
-        check_interval=3600,
-    )
-    db_session.add(inactive_feed)
-    db_session.commit()
-
-    result = blogs.sync_all_article_feeds()
-
-    assert result == []
 
 
 @patch("memory.workers.tasks.blogs.sync_webpage")
@@ -628,63 +577,65 @@ def test_sync_website_archive_empty_results(
     assert result["task_ids"] == []
 
 
+def sync_feed(feed_id, *entries):
+    """Sync the feed with a parser listing ``entries``; returns the urls queued for ingest."""
+    parser = Mock()
+    parser.parse_feed.return_value = list(entries)
+    with (
+        patch("memory.workers.tasks.blogs.get_feed_parser", return_value=parser),
+        patch("memory.workers.tasks.blogs.sync_webpage") as sync_webpage,
+    ):
+        sync_webpage.delay.return_value = Mock(id="task")
+        blogs.sync_article_feed(feed_id)
+    return [c.args[0] for c in sync_webpage.delay.call_args_list]
+
+
+def entry(url, hours_ago):
+    return FeedItem(title="Post", url=url, published_date=datetime.now(timezone.utc) - timedelta(hours=hours_ago))
+
+
+@pytest.fixture
+def delayed_feed(db_session):
+    feed = ArticleFeed(url="https://example.com/paywalled.xml", ingest_delay=24 * 60)
+    db_session.add(feed)
+    db_session.commit()
+    return feed
+
+
 @pytest.mark.parametrize(
-    "check_interval_minutes,seconds_since_check,should_skip",
+    "ingest_delay, published_hours_ago, ingested",
     [
-        (60, 30, True),  # 60min interval, checked 30s ago -> skip
-        (60, 3000, True),  # 60min interval, checked 50min ago -> skip
-        (60, 4000, False),  # 60min interval, checked 66min ago -> don't skip
-        (30, 1000, True),  # 30min interval, checked 16min ago -> skip
-        (30, 2000, False),  # 30min interval, checked 33min ago -> don't skip
+        (0, 1, True),
+        (24 * 60, 1, False),
+        (24 * 60, 25, True),
     ],
 )
-@patch("memory.workers.tasks.blogs.get_feed_parser")
-def test_sync_article_feed_check_interval(
-    mock_get_parser,
-    check_interval_minutes,
-    seconds_since_check,
-    should_skip,
-    db_session,
+def test_new_entries_wait_out_the_ingest_delay(
+    db_session, ingest_delay, published_hours_ago, ingested
 ):
-    """Test sync respects check interval with various timing scenarios."""
-    from sqlalchemy import text
-
-    # Mock parser to return None (no parser available) for non-skipped cases
-    mock_get_parser.return_value = None
-
-    # Create feed with specific check interval
-    feed = ArticleFeed(
-        url="https://example.com/interval-test.xml",
-        title="Interval Test Feed",
-        description="Feed for testing check intervals",
-        tags=["test"],
-        check_interval=check_interval_minutes,
-        active=True,
-    )
+    feed = ArticleFeed(url="https://example.com/feed.xml", ingest_delay=ingest_delay)
     db_session.add(feed)
-    db_session.flush()
-
-    # Set last_checked_at to specific time in the past
-    last_checked_time = datetime.now(timezone.utc) - timedelta(
-        seconds=seconds_since_check
-    )
-    db_session.execute(
-        text(
-            "UPDATE article_feeds SET last_checked_at = :timestamp WHERE id = :feed_id"
-        ),
-        {"timestamp": last_checked_time, "feed_id": feed.id},
-    )
     db_session.commit()
 
-    result = blogs.sync_article_feed(feed.id)
+    queued = sync_feed(feed.id, entry("https://example.com/a", published_hours_ago))
 
-    if should_skip:
-        assert result == {"status": "skipped_recent_check", "feed_id": feed.id}
-        # get_feed_parser should not be called when skipping
-        mock_get_parser.assert_not_called()
-    else:
-        # Should proceed with sync, but will fail due to no parser - that's expected
-        assert result["status"] == "error"
-        assert result["error"] == "No parser available for feed"
-        # get_feed_parser should be called when not skipping
-        mock_get_parser.assert_called_once()
+    assert (queued == ["https://example.com/a"]) is ingested
+
+
+def test_a_waiting_entry_is_fetched_once_due_even_after_the_feed_drops_it(db_session, delayed_feed):
+    assert sync_feed(delayed_feed.id, entry("https://example.com/a", 1)) == []
+    db_session.query(DelayedFeedItem).update({"due_at": datetime.now(timezone.utc)})
+    db_session.commit()
+
+    assert sync_feed(delayed_feed.id) == ["https://example.com/a"]
+    assert sync_feed(delayed_feed.id) == []
+    assert db_session.query(DelayedFeedItem).count() == 0
+
+
+def test_an_entry_seen_again_while_waiting_keeps_its_first_due_time(db_session, delayed_feed):
+    sync_feed(delayed_feed.id, entry("https://example.com/a", 1))
+    first_due = db_session.query(DelayedFeedItem).one().due_at
+
+    assert sync_feed(delayed_feed.id, entry("https://example.com/a", 1)) == []
+    db_session.expire_all()
+    assert db_session.query(DelayedFeedItem).one().due_at == first_due

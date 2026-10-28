@@ -597,6 +597,7 @@ class ForumSettings(BaseModel):
     check_interval: int = Field(ge=60, description="Minutes between syncs")
     days_back: int = Field(ge=1, le=365)
     max_items: int = Field(ge=1, le=10_000)
+    ingest_delay: int = Field(ge=0, description="Minutes after posting before a post is listed")
     min_karma: int
     af: bool
     comments_enabled: bool

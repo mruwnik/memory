@@ -17,7 +17,7 @@ const caldavAccount = {
   calendar_ids: [],
   tags: [],
   check_interval: 15,
-  sync_past_days: 30,
+  days_back: 30,
   sync_future_days: 90,
   last_sync_at: null,
   sync_error: null,
@@ -115,8 +115,8 @@ describe('CalendarPanel create flow', () => {
     await user.type(field(dialog, 'CalDAV server URL'), 'https://dav.home/cal/')
     await user.type(field(dialog, 'Username'), 'homeuser')
     await user.type(field(dialog, /Password/), 'pw')
-    await user.clear(field(dialog, 'Sync past days'))
-    await user.type(field(dialog, 'Sync past days'), '0')
+    await user.clear(field(dialog, 'Look back (days)'))
+    await user.type(field(dialog, 'Look back (days)'), '0')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => {
       const post = mock.mock.calls.find(
@@ -133,7 +133,7 @@ describe('CalendarPanel create flow', () => {
       caldav_url: 'https://dav.home/cal/',
       caldav_username: 'homeuser',
       caldav_password: 'pw',
-      sync_past_days: 0,
+      days_back: 0,
     })
   })
 

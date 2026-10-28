@@ -169,6 +169,7 @@ def test_update_feed_title(client, db_session, user):
         ("description", "New description"),
         ("tags", ["new", "tags"]),
         ("check_interval", 360),
+        ("ingest_delay", 3 * 24 * 60),
         ("active", False),
     ],
 )
@@ -368,7 +369,7 @@ def test_feed_to_response_with_all_fields(db_session, user):
         description="A test",
         tags=["tech", "news"],
         check_interval=720,
-        last_checked_at=now,
+        last_sync_at=now,
         active=True,
         sync_error="404 Not Found",
         sync_failing_since=now,
@@ -386,7 +387,7 @@ def test_feed_to_response_with_all_fields(db_session, user):
     assert response.description == "A test"
     assert response.tags == ["tech", "news"]
     assert response.check_interval == 720
-    assert response.last_checked_at == now.isoformat()
+    assert response.last_sync_at == now.isoformat()
     assert response.active is True
     assert response.created_at == now.isoformat()
     assert response.updated_at == now.isoformat()
@@ -404,7 +405,7 @@ def test_feed_to_response_with_minimal_fields(db_session, user):
         url="https://example.com/feed.xml",
         title="Minimal Feed",
         tags=None,
-        last_checked_at=None,
+        last_sync_at=None,
         created_at=now,
         updated_at=now,
     )
@@ -418,7 +419,7 @@ def test_feed_to_response_with_minimal_fields(db_session, user):
     assert response.title == "Minimal Feed"
     assert response.description is None
     assert response.tags == []
-    assert response.last_checked_at is None
+    assert response.last_sync_at is None
 
 
 # ====== SSRF gate tests ======

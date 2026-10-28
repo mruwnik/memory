@@ -36,6 +36,7 @@ METRICS_ROOT = "memory.workers.tasks.metrics"
 MISC_ROOT = "memory.workers.tasks.misc"
 VERIFICATION_ROOT = "memory.workers.tasks.verification"
 AGENTS_ROOT = "memory.workers.tasks.agents"
+SYNC_SCHEDULE_ROOT = "memory.workers.tasks.sync_schedule"
 ADD_DISCORD_MESSAGE = f"{DISCORD_ROOT}.add_discord_message"
 EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 UPDATE_REACTIONS = f"{DISCORD_ROOT}.update_reactions"
@@ -69,11 +70,9 @@ SYNC_PHOTO = f"{PHOTO_ROOT}.sync_photo"
 REPROCESS_PHOTO = f"{PHOTO_ROOT}.reprocess_photo"
 PROCESS_EMAIL = f"{EMAIL_ROOT}.process_message"
 SYNC_ACCOUNT = f"{EMAIL_ROOT}.sync_account"
-SYNC_ALL_ACCOUNTS = f"{EMAIL_ROOT}.sync_all_accounts"
 SYNC_LESSWRONG = f"{FORUMS_ROOT}.sync_lesswrong"
 SYNC_LESSWRONG_POST = f"{FORUMS_ROOT}.sync_lesswrong_post"
 SYNC_LESSWRONG_COMMENTS = f"{FORUMS_ROOT}.sync_lesswrong_comments"
-SYNC_LESSWRONG_IF_DUE = f"{FORUMS_ROOT}.sync_lesswrong_if_due"
 CLEAN_ALL_COLLECTIONS = f"{MAINTENANCE_ROOT}.clean_all_collections"
 CLEAN_COLLECTION = f"{MAINTENANCE_ROOT}.clean_collection"
 REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
@@ -99,7 +98,6 @@ CLEANUP_OLD_PENDING_JOBS = f"{MAINTENANCE_ROOT}.cleanup_old_pending_jobs"
 CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
-SYNC_ALL_ARTICLE_FEEDS = f"{BLOGS_ROOT}.sync_all_article_feeds"
 ADD_ARTICLE_FEED = f"{BLOGS_ROOT}.add_article_feed"
 SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 
@@ -114,7 +112,6 @@ BACKUP_ALL = f"{BACKUP_ROOT}.backup_all"
 
 # GitHub tasks
 SYNC_GITHUB_REPO = f"{GITHUB_ROOT}.sync_github_repo"
-SYNC_ALL_GITHUB_REPOS = f"{GITHUB_ROOT}.sync_all_github_repos"
 SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
 SYNC_GITHUB_PROJECTS = f"{GITHUB_ROOT}.sync_github_projects"
 
@@ -124,12 +121,10 @@ SYNC_PERSON_TIDBIT = f"{PEOPLE_ROOT}.sync_person_tidbit"
 # Google Drive tasks
 SYNC_GOOGLE_FOLDER = f"{GOOGLE_ROOT}.sync_google_folder"
 SYNC_GOOGLE_DOC = f"{GOOGLE_ROOT}.sync_google_doc"
-SYNC_ALL_GOOGLE_ACCOUNTS = f"{GOOGLE_ROOT}.sync_all_google_accounts"
 
 # Calendar tasks
 SYNC_CALENDAR_ACCOUNT = f"{CALENDAR_ROOT}.sync_calendar_account"
 SYNC_CALENDAR_EVENT = f"{CALENDAR_ROOT}.sync_calendar_event"
-SYNC_ALL_CALENDARS = f"{CALENDAR_ROOT}.sync_all_calendars"
 
 # Meeting tasks
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
@@ -157,6 +152,8 @@ REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
 # Verification tasks
 VERIFY_ORPHANS = f"{VERIFICATION_ROOT}.verify_orphans"
 VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
+
+SYNC_DUE_SOURCES = f"{SYNC_SCHEDULE_ROOT}.sync_due_sources"
 
 RUN_AGENT = f"{AGENTS_ROOT}.run_agent"
 START_CRON_RUN = f"{AGENTS_ROOT}.start_cron_run"
@@ -336,6 +333,7 @@ app.conf.update(
         f"{SCHEDULED_TASKS_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"
         },
+        f"{SYNC_SCHEDULE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
         f"{PEOPLE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-people"},
@@ -412,17 +410,11 @@ def build_beat_schedule() -> dict:
             "task": COLLECT_SUMMARY_BATCHES,
             "schedule": settings.SUMMARIZER_BATCH_POLL_INTERVAL,
         },
-        "sync-mail-all": {
-            "task": SYNC_ALL_ACCOUNTS,
-            "schedule": settings.EMAIL_SYNC_INTERVAL,
-        },
+        # Each source's cadence is its own check_interval, so beat only asks what is due.
+        "sync-due-sources": {"task": SYNC_DUE_SOURCES, "schedule": 60},
         "sync-all-comics": {
             "task": SYNC_ALL_COMICS,
             "schedule": settings.COMIC_SYNC_INTERVAL,
-        },
-        "sync-all-article-feeds": {
-            "task": SYNC_ALL_ARTICLE_FEEDS,
-            "schedule": settings.ARTICLE_FEED_SYNC_INTERVAL,
         },
         # The interval is a server setting, so the task checks it: beat's own intervals are fixed.
         "sync-notes-when-due": {"task": SYNC_NOTES_WHEN_DUE, "schedule": 60},
@@ -433,18 +425,6 @@ def build_beat_schedule() -> dict:
         "backup-all": {
             "task": BACKUP_ALL,
             "schedule": settings.S3_BACKUP_INTERVAL,
-        },
-        "sync-github-repos": {
-            "task": SYNC_ALL_GITHUB_REPOS,
-            "schedule": settings.GITHUB_SYNC_INTERVAL,
-        },
-        "sync-google-drive": {
-            "task": SYNC_ALL_GOOGLE_ACCOUNTS,
-            "schedule": settings.GOOGLE_DRIVE_SYNC_INTERVAL,
-        },
-        "sync-calendars": {
-            "task": SYNC_ALL_CALENDARS,
-            "schedule": settings.CALENDAR_SYNC_INTERVAL,
         },
         "sync-slack-workspaces": {
             "task": SYNC_ALL_SLACK_WORKSPACES,
@@ -512,11 +492,6 @@ def build_beat_schedule() -> dict:
             "schedule": crontab(minute="50"),
         },
     }
-    if settings.LESSWRONG_SYNC_CHECK_INTERVAL > 0:
-        schedule["sync-lesswrong"] = {
-            "task": SYNC_LESSWRONG_IF_DUE,
-            "schedule": settings.LESSWRONG_SYNC_CHECK_INTERVAL,
-        }
     return schedule
 
 

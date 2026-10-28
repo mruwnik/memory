@@ -10,6 +10,7 @@ const SETTINGS = {
   active: true,
   check_interval: 1440,
   days_back: 30,
+  ingest_delay: 480,
   max_items: 1000,
   min_karma: 10,
   af: false,
@@ -87,8 +88,9 @@ describe('ForumsPanel', () => {
     const { user } = renderWithUser(<ForumsPanel />)
     await screen.findByRole('form', { name: 'Scheduled sync settings' })
 
-    await user.clear(form('Scheduled sync settings').getByLabelText('Hours'))
-    await user.type(form('Scheduled sync settings').getByLabelText('Minutes'), '30')
+    const every = within(form('Scheduled sync settings').getByRole('group', { name: 'Sync every' }))
+    await user.clear(every.getByLabelText('Hours'))
+    await user.type(every.getByLabelText('Minutes'), '30')
 
     expect(screen.getByText('Sync at most once an hour.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save settings' })).toBeDisabled()

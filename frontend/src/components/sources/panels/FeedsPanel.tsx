@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, ArticleFeed, LLMKeyChoice } from '@/hooks/useSources'
-import { SourceRow, TagsInput, IntervalInput } from '../shared'
+import { SourceRow, SyncScheduleFields, TagsInput } from '../shared'
 import { Button, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Section, Textarea, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { ApiError } from '@/hooks/apiError'
@@ -81,7 +81,7 @@ export const FeedsPanel = () => {
               title={feed.title || feed.url}
               subtitle={feed.url}
               active={feed.active}
-              lastSyncAt={feed.last_checked_at}
+              lastSyncAt={feed.last_sync_at}
               lastSyncLabel="Last checked"
               sync={feed}
               meta={[`LLM: ${llmKeyLabel(feed.llm_key)}`]}
@@ -129,6 +129,7 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
     description: feed?.description || '',
     tags: feed?.tags || [],
     check_interval: feed?.check_interval || 1440,
+    ingest_delay: feed?.ingest_delay ?? 0,
     active: feed?.active ?? true,
     llm_key: undefined as LLMKeyChoice | undefined,
   })
@@ -188,11 +189,7 @@ const FeedForm = ({ feed, onSubmit, onCancel }: FeedFormProps) => {
           />
         </Field>
 
-        <IntervalInput
-          value={formData.check_interval}
-          onChange={check_interval => setFormData({ ...formData, check_interval })}
-          label="Check interval"
-        />
+        <SyncScheduleFields value={formData} onChange={setFormData} />
 
         <Field label="Tags">
           <TagsInput

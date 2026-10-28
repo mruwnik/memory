@@ -3,15 +3,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, cast
 
 from memory.common.db.connection import make_session
-from memory.common.db.models import ArticleFeed, BlogPost
+from sqlalchemy import delete
+from sqlalchemy.dialects.postgresql import insert
+
+from memory.common.db.models import ArticleFeed, BlogPost, DelayedFeedItem
 from memory.parsers.blogs import parse_webpage
-from memory.parsers.feeds import get_feed_parser
+from memory.parsers.feeds import FeedItem, get_feed_parser
 from memory.parsers.archives import get_archive_fetcher
 from memory.common.celery_app import (
     app,
     SYNC_WEBPAGE,
     SYNC_ARTICLE_FEED,
-    SYNC_ALL_ARTICLE_FEEDS,
     ADD_ARTICLE_FEED,
     SYNC_WEBSITE_ARCHIVE,
 )
@@ -82,6 +84,34 @@ def sync_webpage(
         return process_content_item(blog_post, session)
 
 
+def delay_entry(session, feed: ArticleFeed, item: FeedItem, now: datetime) -> None:
+    """Park a new entry until its feed's ingest_delay has passed since it was published.
+
+    Parked rather than skipped: the feed may 304 or drop the entry before then. An entry
+    already waiting keeps its first due time.
+    """
+    published = item.published_date if isinstance(item.published_date, datetime) else now
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    due_at = min(published, now) + timedelta(minutes=feed.ingest_delay)
+    session.execute(
+        insert(DelayedFeedItem)
+        .values(url=item.url, feed_id=feed.id, due_at=due_at)
+        .on_conflict_do_nothing()
+    )
+
+
+def pop_due_entries(session, feed_id: int, now: datetime) -> list[str]:
+    """Remove and return the feed's parked entries that are now due."""
+    return list(
+        session.execute(
+            delete(DelayedFeedItem)
+            .where(DelayedFeedItem.feed_id == feed_id, DelayedFeedItem.due_at <= now)
+            .returning(DelayedFeedItem.url)
+        ).scalars()
+    )
+
+
 @app.task(name=SYNC_ARTICLE_FEED)
 @tracked_task
 def sync_article_feed(feed_id: int) -> dict:
@@ -102,13 +132,6 @@ def sync_article_feed(feed_id: int) -> dict:
             logger.warning(f"Feed {feed_id} not found or inactive")
             return {"status": "error", "error": "Feed not found or inactive"}
 
-        last_checked_at = cast(datetime | None, feed.last_checked_at)
-        if last_checked_at and datetime.now(timezone.utc) - last_checked_at < timedelta(
-            minutes=cast(int, feed.check_interval)
-        ):
-            logger.info(f"Feed {feed_id} checked too recently, skipping")
-            return {"status": "skipped_recent_check", "feed_id": feed_id}
-
         # Defense in depth: re-validate at fetch time. Even if the URL
         # passed the gate at create_feed/sync time, DNS could have been
         # rebound to a private range, or a row could have been written
@@ -123,7 +146,7 @@ def sync_article_feed(feed_id: int) -> dict:
 
         logger.info(f"Syncing feed: {feed.title} ({feed.url})")
 
-        parser = get_feed_parser(cast(str, feed.url), last_checked_at)
+        parser = get_feed_parser(feed.url, feed.last_sync_at)
         if not parser:
             logger.error(f"No parser available for feed: {feed.url}")
             feed.record_sync("No parser available for feed")
@@ -131,10 +154,10 @@ def sync_article_feed(feed_id: int) -> dict:
             return {"status": "error", "error": "No parser available for feed"}
 
         articles_found = 0
-        new_articles = 0
+        new_urls: list[str] = []
         errors = 0
-        task_ids = []
         error: Exception | None = None
+        now = datetime.now(timezone.utc)
 
         try:
             for feed_item in parser.parse_feed():
@@ -143,22 +166,24 @@ def sync_article_feed(feed_id: int) -> dict:
 
                 articles_found += 1
 
-                existing = check_content_exists(session, BlogPost, url=feed_item.url)
-                if existing:
+                if check_content_exists(session, BlogPost, url=feed_item.url):
                     continue
 
-                feed_tags = cast(list[str] | None, feed.tags) or []
-                task_ids.append(sync_webpage.delay(feed_item.url, feed_tags, feed.id).id)  # type: ignore[attr-defined]
-                new_articles += 1
-
-                logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")
+                if feed.ingest_delay:
+                    delay_entry(session, feed, feed_item, now)
+                else:
+                    new_urls.append(feed_item.url)
 
         except Exception as e:
             logger.error(f"Error parsing feed {feed.url}: {e}")
             errors += 1
             error = e
 
-        feed.last_checked_at = datetime.now(timezone.utc)  # type: ignore
+        new_urls += pop_due_entries(session, feed.id, now)
+        feed_tags = list(feed.tags or [])
+        task_ids = [sync_webpage.delay(url, feed_tags, feed.id).id for url in new_urls]  # type: ignore[attr-defined]
+
+        feed.last_sync_at = now
         feed.record_sync(error)
         session.commit()
 
@@ -168,35 +193,10 @@ def sync_article_feed(feed_id: int) -> dict:
             "feed_title": feed.title,
             "feed_url": feed.url,
             "articles_found": articles_found,
-            "new_articles": new_articles,
+            "new_articles": len(new_urls),
             "errors": errors,
             "task_ids": task_ids,
         }
-
-
-@app.task(name=SYNC_ALL_ARTICLE_FEEDS)
-@tracked_task
-def sync_all_article_feeds() -> list[dict]:
-    """
-    Trigger sync for all active ArticleFeeds.
-
-    Returns:
-        List of task results for each feed sync
-    """
-    with make_session() as session:
-        active_feeds = session.query(ArticleFeed).filter(ArticleFeed.active).all()
-
-        results = [
-            {
-                "feed_id": feed.id,
-                "feed_title": feed.title,
-                "feed_url": feed.url,
-                "task_id": sync_article_feed.delay(feed.id).id,  # type: ignore[attr-defined]
-            }
-            for feed in active_feeds
-        ]
-        logger.info(f"Scheduled sync for {len(results)} active feeds")
-        return results
 
 
 @app.task(name=ADD_ARTICLE_FEED)

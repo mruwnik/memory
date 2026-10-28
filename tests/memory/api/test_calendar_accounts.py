@@ -47,7 +47,7 @@ def test_list_accounts_returns_all_accounts(client, db_session, user):
         calendar_ids=["work"],
         tags=["work"],
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     account2 = CalendarAccount(
@@ -58,7 +58,7 @@ def test_list_accounts_returns_all_accounts(client, db_session, user):
         calendar_ids=["primary"],
         tags=["personal"],
         check_interval=30,
-        sync_past_days=60,
+        days_back=60,
         sync_future_days=180,
     )
     db_session.add(account1)
@@ -96,7 +96,7 @@ def test_create_caldav_account_success(client, db_session, user):
         "calendar_ids": ["cal1", "cal2"],
         "tags": ["work"],
         "check_interval": 20,
-        "sync_past_days": 45,
+        "days_back": 45,
         "sync_future_days": 120,
     }
 
@@ -234,7 +234,7 @@ def test_get_account_caldav_success(client, db_session, user):
         caldav_username="user",
         caldav_password="pass",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -265,7 +265,7 @@ def test_get_account_google_with_google_account_info(client, db_session, user):
         calendar_type="google",
         google_account_id=google_account.id,
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -299,7 +299,7 @@ def test_update_account_name(client, db_session, user):
         caldav_username="user",
         caldav_password="pass",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -328,7 +328,7 @@ def test_update_account_name(client, db_session, user):
         ("calendar_ids", ["cal1", "cal2"]),
         ("tags", ["new", "tags"]),
         ("check_interval", 30),
-        ("sync_past_days", 60),
+        ("days_back", 60),
         ("sync_future_days", 180),
         ("active", False),
     ],
@@ -344,7 +344,7 @@ def test_update_account_fields(client, db_session, user, field, value):
         calendar_ids=["old"],
         tags=["old"],
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
         active=True,
     )
@@ -378,7 +378,7 @@ def test_update_account_google_account_id(client, db_session, user):
         calendar_type="google",
         google_account_id=None,
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -402,7 +402,7 @@ def test_update_account_invalid_google_account_id_fails(client, db_session, user
         name="Test Account",
         calendar_type="google",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -439,7 +439,7 @@ def test_delete_account_success(client, db_session, user):
         caldav_username="user",
         caldav_password="pass",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -476,7 +476,7 @@ def test_trigger_sync_success(mock_app, client, db_session, user):
         caldav_username="user",
         caldav_password="pass",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -510,7 +510,7 @@ def test_trigger_sync_with_force_full(mock_app, client, db_session, user):
         caldav_username="user",
         caldav_password="pass",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -556,7 +556,7 @@ def test_account_to_response_caldav(db_session, user):
         calendar_ids=["cal1"],
         tags=["work"],
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
         last_sync_at=now,
         sync_error="Test error",
@@ -602,7 +602,7 @@ def test_account_to_response_google_with_account(db_session, user):
         calendar_ids=["primary"],
         tags=["personal"],
         check_interval=30,
-        sync_past_days=60,
+        days_back=60,
         sync_future_days=180,
         active=True,
         created_at=now,
@@ -649,7 +649,7 @@ def _make_account(db_session, owner_id: int, name: str = "Other CalDAV") -> Cale
         caldav_username="otheruser",
         caldav_password="otherpass",
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)
@@ -873,7 +873,7 @@ def test_update_caldav_account_rejects_crlf_in_credentials(
         calendar_ids=["c1"],
         tags=[],
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
     )
     db_session.add(account)

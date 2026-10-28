@@ -2,7 +2,7 @@ import { useState, type ComponentProps, type RefObject } from 'react'
 import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { formatUserDate, formatUserDateTime } from '@/utils/timezones'
-import { Badge, Button, ConfirmButton, Field, Input, Notice, Row, RowError, Select, Fieldset, NewTabLink } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Field, FieldRow, FormActions, Input, Modal, Notice, Row, RowError, Select, Fieldset, NewTabLink } from '@/components/shared/ui'
 
 /** A number input's state: '' while cleared, so editing never snaps back to a default. */
 export const numberValue = (value: string): number | '' => value === '' ? '' : Number(value)
@@ -256,9 +256,10 @@ interface IntervalInputProps {
   value: number
   onChange: (value: number) => void
   label?: string
+  hint?: string
 }
 
-export const IntervalInput = ({ value, onChange, label = 'Check interval' }: IntervalInputProps) => {
+export const IntervalInput = ({ value, onChange, label = 'Check interval', hint }: IntervalInputProps) => {
   const hours = Math.floor(value / 60)
   const minutes = value % 60
 
@@ -266,7 +267,7 @@ export const IntervalInput = ({ value, onChange, label = 'Check interval' }: Int
   const setMinutes = (m: number) => onChange(hours * 60 + m)
 
   return (
-    <Fieldset legend={label}>
+    <Fieldset legend={label} hint={hint}>
       <div className="flex items-center gap-2">
         <Input
           type="number"
@@ -289,6 +290,86 @@ export const IntervalInput = ({ value, onChange, label = 'Check interval' }: Int
         <span aria-hidden="true" className="text-slate-500">m</span>
       </div>
     </Fieldset>
+  )
+}
+
+/** How often and how much a polled source is fetched. Only the knobs present in the value are shown. */
+export interface SyncSchedule {
+  check_interval: number
+  ingest_delay?: number
+  days_back?: number | ''
+  max_items?: number | ''
+}
+
+export const SyncScheduleFields = <T extends SyncSchedule>({ value, onChange }: { value: T; onChange: (value: T) => void }) => {
+  const set = (patch: Partial<SyncSchedule>) => onChange({ ...value, ...patch })
+  return (
+    <>
+      <IntervalInput label="Sync every" value={value.check_interval} onChange={check_interval => set({ check_interval })} />
+      {value.ingest_delay !== undefined && (
+        <IntervalInput
+          label="Wait before ingesting"
+          hint="Time after publication before a new item is fetched, e.g. until a paywall lifts. 0 fetches it right away."
+          value={value.ingest_delay}
+          onChange={ingest_delay => set({ ingest_delay })}
+        />
+      )}
+      {(value.days_back !== undefined || value.max_items !== undefined) && (
+        <FieldRow>
+          {value.days_back !== undefined && (
+            <Field label="Look back (days)">
+              <Input type="number" min={0} required value={value.days_back} onChange={e => set({ days_back: numberValue(e.target.value) })} />
+            </Field>
+          )}
+          {value.max_items !== undefined && (
+            <Field label="Max items per sync">
+              <Input type="number" min={1} required value={value.max_items} onChange={e => set({ max_items: numberValue(e.target.value) })} />
+            </Field>
+          )}
+        </FieldRow>
+      )}
+    </>
+  )
+}
+
+/** A row action that edits a source's sync schedule, for sources without an edit form. */
+export const ScheduleButton = <T extends SyncSchedule>({ schedule, onSave }: { schedule: T; onSave: (schedule: T) => Promise<unknown> }) => {
+  const [draft, setDraft] = useState<T | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const close = () => { setDraft(null); setError(null) }
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!draft) return
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave(draft)
+      close()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <Button size="sm" onClick={() => setDraft(schedule)}>Schedule</Button>
+      {draft && (
+        <Modal title="Sync schedule" onClose={close} size="sm">
+          <form onSubmit={submit} className="space-y-4">
+            {error && <Notice tone="error">{error}</Notice>}
+            <SyncScheduleFields value={draft} onChange={setDraft} />
+            <FormActions>
+              <Button type="button" onClick={close}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+            </FormActions>
+          </form>
+        </Modal>
+      )}
+    </>
   )
 }
 

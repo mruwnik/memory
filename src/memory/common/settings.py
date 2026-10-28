@@ -232,9 +232,7 @@ QDRANT_SEARCH_TIMEOUT = int(os.getenv("QDRANT_SEARCH_TIMEOUT", "5"))
 
 # Worker settings
 # Intervals are in seconds
-EMAIL_SYNC_INTERVAL = int(os.getenv("EMAIL_SYNC_INTERVAL", 60 * 60))
 COMIC_SYNC_INTERVAL = int(os.getenv("COMIC_SYNC_INTERVAL", 60 * 60 * 24))
-ARTICLE_FEED_SYNC_INTERVAL = int(os.getenv("ARTICLE_FEED_SYNC_INTERVAL", 30 * 60))
 CLEAN_COLLECTION_INTERVAL = int(os.getenv("CLEAN_COLLECTION_INTERVAL", 24 * 60 * 60))
 CHUNK_REINGEST_INTERVAL = int(os.getenv("CHUNK_REINGEST_INTERVAL", 60 * 60))
 NOTES_SYNC_INTERVAL = optional_int_env("NOTES_SYNC_INTERVAL")
@@ -247,14 +245,7 @@ SSH_PUBLIC_KEY_FILE = pathlib.Path(os.getenv("SSH_PUBLIC_KEY_FILE", "/run/secret
 ACCESS_CONTROL_RECONCILE_INTERVAL = int(
     os.getenv("ACCESS_CONTROL_RECONCILE_INTERVAL", 30 * 60)
 )
-# How often beat asks whether a LessWrong sync is due; the sync interval itself is in forum_sync_configs.
-LESSWRONG_SYNC_CHECK_INTERVAL = int(os.getenv("LESSWRONG_SYNC_CHECK_INTERVAL", 60 * 60))
 SCHEDULED_CALL_RUN_INTERVAL = int(os.getenv("SCHEDULED_CALL_RUN_INTERVAL", 60))
-GITHUB_SYNC_INTERVAL = int(os.getenv("GITHUB_SYNC_INTERVAL", 60 * 60))  # 1 hour
-GOOGLE_DRIVE_SYNC_INTERVAL = int(
-    os.getenv("GOOGLE_DRIVE_SYNC_INTERVAL", 60 * 60)
-)  # 1 hour
-CALENDAR_SYNC_INTERVAL = int(os.getenv("CALENDAR_SYNC_INTERVAL", 60 * 60))  # 1 hour
 TRANSCRIPTS_SYNC_INTERVAL = int(
     os.getenv("TRANSCRIPTS_SYNC_INTERVAL", 2 * 60 * 60)
 )  # 2 hours
@@ -546,11 +537,6 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google"
 )
-
-# Google Drive sync interval is configured at GOOGLE_DRIVE_SYNC_INTERVAL
-# (see "Source-syncing intervals" near the top of the file). The
-# previously-defined GOOGLE_SYNC_INTERVAL and GOOGLE_DRIVE_STORAGE_DIR
-# were never read from anywhere; deleted.
 
 # Orphan verification settings
 VERIFICATION_BATCH_SIZE = int(os.getenv("VERIFICATION_BATCH_SIZE", 100))

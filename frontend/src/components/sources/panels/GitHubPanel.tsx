@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import { TagsInput, IntervalInput, PauseButton, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
+import { TagsInput, PauseButton, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../context'
@@ -136,6 +136,10 @@ export const GitHubPanel = () => {
                       meta={[`Last sync: ${formatRelativeTime(repo.last_sync_at)}`]}
                       actions={<>
                         <SyncButton onSync={() => handleSyncRepo(account.id, repo.id)} disabled={!repo.active || !account.active} label="Sync" />
+                        <ScheduleButton
+                          schedule={{ check_interval: repo.check_interval }}
+                          onSave={async ({ check_interval }) => { await updateGithubRepo(account.id, repo.id, { check_interval }); loadData() }}
+                        />
                         <PauseButton active={repo.active} onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)} />
                         <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => run(async () => { await handleDeleteRepo(account.id, repo.id); loadData() })}>Remove</ConfirmButton>
                       </>}
@@ -640,11 +644,7 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
               </div>
             </Fieldset>
 
-            <IntervalInput
-              value={formData.check_interval}
-              onChange={check_interval => setFormData({ ...formData, check_interval })}
-              label="Check interval (new repos)"
-            />
+            <SyncScheduleFields value={formData} onChange={setFormData} />
 
             <Field label="Tags (new repos)">
               <TagsInput

@@ -8,7 +8,6 @@ from memory.common import qdrant
 from memory.common.celery_app import (
     app,
     SYNC_GITHUB_REPO,
-    SYNC_ALL_GITHUB_REPOS,
     SYNC_GITHUB_ITEM,
     SYNC_GITHUB_PROJECTS,
 )
@@ -615,12 +614,6 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
             elif now - last_full_sync >= timedelta(minutes=full_sync_interval):
                 needs_full_sync = True
 
-        # Check if sync is needed based on interval
-        if last_sync and not force_full and not needs_full_sync:
-            check_interval = cast(int, repo.check_interval)
-            if now - last_sync < timedelta(minutes=check_interval):
-                return {"status": "skipped_recent_check", "repo_id": repo_id}
-
         # Create GitHub client
         credentials = GithubCredentials(
             auth_type=cast(str, account.auth_type),
@@ -734,36 +727,6 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
             "prs_synced": prs_synced,
             "task_ids": task_ids,
         }
-
-
-@app.task(name=SYNC_ALL_GITHUB_REPOS)
-@tracked_task
-def sync_all_github_repos(force_full: bool = False) -> list[dict[str, Any]]:
-    """Trigger sync for all active GitHub repos.
-
-    Args:
-        force_full: If True, re-sync all items instead of incremental sync.
-    """
-    with make_session() as session:
-        active_repos = (
-            session.query(GithubRepo)
-            .join(GithubAccount)
-            .filter(GithubRepo.active, GithubAccount.active)
-            .all()
-        )
-
-        results = [
-            {
-                "repo_id": repo.id,
-                "repo_path": repo.repo_path,
-                "task_id": sync_github_repo.delay(repo.id, force_full=force_full).id,  # type: ignore[attr-defined]
-            }
-            for repo in active_repos
-        ]
-        logger.info(
-            f"Scheduled {'full' if force_full else 'incremental'} sync for {len(results)} active GitHub repos"
-        )
-        return results
 
 
 def _sync_project(

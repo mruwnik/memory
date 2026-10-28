@@ -3,16 +3,14 @@ import { useAuth } from '@/hooks/useAuth'
 import { useSources, type ForumSettings, type ForumSummary } from '@/hooks/useSources'
 import { Button, Card, Checkbox, DetailList, ErrorState, Field, FieldRow, FormActions, Input, LoadingState, NewTabLink, Notice, Section, Stat, StatGrid, useActionNotice } from '@/components/shared/ui'
 import { formatUserDate } from '@/utils/timezones'
-import { IntervalInput, formatRelativeTime, numberValue } from '../shared'
+import { SyncScheduleFields, formatRelativeTime, numberValue } from '../shared'
 import { useSourcesContext } from '../context'
 
 type NumberSetting = { [K in keyof ForumSettings]: ForumSettings[K] extends number ? K : never }[keyof ForumSettings]
 type Draft = { [K in keyof ForumSettings]: ForumSettings[K] extends number ? number | '' : ForumSettings[K] }
 
 const NUMBER_FIELDS: { key: NumberSetting; label: string; hint?: string; min: number }[] = [
-  { key: 'days_back', label: 'Look back (days)', hint: 'How far back each sync lists posts', min: 1 },
   { key: 'min_karma', label: 'Min post karma', min: -100 },
-  { key: 'max_items', label: 'Max posts per sync', min: 1 },
 ]
 
 const COMMENT_FIELDS: { key: NumberSetting; label: string; hint?: string; min: number }[] = [
@@ -29,11 +27,11 @@ const syncSummary = (result: Record<string, unknown> | null) => {
   return `${n('new_posts')} new posts · ${n('updated_posts')} updated · comments fetched for ${n('comment_fetches')} posts`
 }
 
-const every = (minutes: number) => minutes % 60 === 0 ? `every ${minutes / 60}h` : `every ${minutes} min`
+const duration = (minutes: number) => minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes} min`
 
 const settingsFacts = (s: ForumSettings): [string, string][] => [
-  ['Schedule', s.active ? every(s.check_interval) : 'Off'],
-  ['Posts', `last ${s.days_back} days, karma ≥ ${s.min_karma}, up to ${s.max_items} per sync${s.af ? ', Alignment Forum only' : ''}`],
+  ['Schedule', s.active ? `every ${duration(s.check_interval)}` : 'Off'],
+  ['Posts', `last ${s.days_back} days, at least ${duration(s.ingest_delay)} old, karma ≥ ${s.min_karma}, up to ${s.max_items} per sync${s.af ? ', Alignment Forum only' : ''}`],
   ['Comments', s.comments_enabled
     ? `karma ≥ ${s.min_comment_karma}, up to ${s.max_comment_fetches} posts per sync, rechecked every age ÷ ${s.comment_recheck_divisor} (at most ${s.comment_recheck_max_days} days) until ${s.comment_max_age_days} days old`
     : 'Off'],
@@ -64,7 +62,10 @@ const SettingsForm = ({ settings, onSaved }: { settings: ForumSettings; onSaved:
     <Card title="Scheduled sync" description="How often LessWrong is synced, and how much each sync fetches.">
       <form onSubmit={submit} aria-label="Scheduled sync settings" className="space-y-4">
         <Checkbox label="Sync on a schedule" checked={draft.active} onChange={e => set('active', e.target.checked)} />
-        <IntervalInput label="Sync every" value={Number(draft.check_interval)} onChange={v => set('check_interval', v)} />
+        <SyncScheduleFields
+          value={{ check_interval: Number(draft.check_interval), ingest_delay: Number(draft.ingest_delay), days_back: draft.days_back, max_items: draft.max_items }}
+          onChange={schedule => setDraft(d => ({ ...d, ...schedule }))}
+        />
         {tooOften && <Notice tone="warning">Sync at most once an hour.</Notice>}
         <FieldRow className="md:grid-cols-3">{NUMBER_FIELDS.map(numberField)}</FieldRow>
         <Checkbox label="Alignment Forum only" checked={draft.af} onChange={e => set('af', e.target.checked)} />

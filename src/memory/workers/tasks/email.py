@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from memory.agents.triggers import queue_trigger_match
 from memory.common import settings
-from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, SYNC_ALL_ACCOUNTS, app
+from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import EmailAccount, MailMessage
 from memory.common.db.models.source_item import clean_filename
@@ -531,25 +531,3 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 "since_date": cutoff_date.isoformat(),
                 **stats,
             }
-
-
-@app.task(name=SYNC_ALL_ACCOUNTS)
-@tracked_task
-def sync_all_accounts() -> list[dict]:
-    """
-    Synchronize all active email accounts.
-
-    Returns:
-        List of task IDs that were scheduled
-    """
-    with make_session() as db:
-        active_accounts = db.query(EmailAccount).filter(EmailAccount.active).all()
-
-        return [
-            {
-                "account_id": account.id,
-                "email": account.email_address,
-                "task_id": sync_account.delay(account.id).id,  # type: ignore
-            }
-            for account in active_accounts
-        ]

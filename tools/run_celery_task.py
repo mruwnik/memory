@@ -27,7 +27,6 @@ import click
 from celery import Celery
 from memory.common import settings
 from memory.common.celery_app import (
-    SYNC_ALL_ARTICLE_FEEDS,
     SYNC_ARTICLE_FEED,
     ADD_ARTICLE_FEED,
     SYNC_WEBPAGE,
@@ -39,7 +38,6 @@ from memory.common.celery_app import (
     SYNC_BOOK,
     PROCESS_EMAIL,
     SYNC_ACCOUNT,
-    SYNC_ALL_ACCOUNTS,
     SYNC_LESSWRONG,
     SYNC_LESSWRONG_POST,
     CLEAN_ALL_COLLECTIONS,
@@ -56,14 +54,12 @@ from memory.common.celery_app import (
     BACKUP_PATH,
     BACKUP_ALL,
     SYNC_GITHUB_REPO,
-    SYNC_ALL_GITHUB_REPOS,
     app,
 )
 
 
 TASK_MAPPINGS = {
     "email": {
-        "sync_all_accounts": SYNC_ALL_ACCOUNTS,
         "sync_account": SYNC_ACCOUNT,
         "process_message": PROCESS_EMAIL,
     },
@@ -85,7 +81,6 @@ TASK_MAPPINGS = {
     "blogs": {
         "sync_webpage": SYNC_WEBPAGE,
         "sync_article_feed": SYNC_ARTICLE_FEED,
-        "sync_all_article_feeds": SYNC_ALL_ARTICLE_FEEDS,
         "sync_website_archive": SYNC_WEBSITE_ARCHIVE,
         "add_article_feed": ADD_ARTICLE_FEED,
     },
@@ -108,7 +103,6 @@ TASK_MAPPINGS = {
         "backup_all": BACKUP_ALL,
     },
     "github": {
-        "sync_all_repos": SYNC_ALL_GITHUB_REPOS,
         "sync_repo": SYNC_GITHUB_REPO,
     },
 }
@@ -218,14 +212,6 @@ def backup_path_cmd(ctx, path):
 def email(ctx):
     """Email-related tasks."""
     pass
-
-
-@email.command("sync-all-accounts")
-@click.option("--since-date", help="Sync items since this date (ISO format)")
-@click.pass_context
-def email_sync_all_accounts(ctx, since_date):
-    """Sync all email accounts."""
-    execute_task(ctx, "email", "sync_all_accounts", since_date=since_date)
 
 
 @email.command("sync-account")
@@ -426,13 +412,6 @@ def blogs_sync_article_feed(ctx, feed_id):
     execute_task(ctx, "blogs", "sync_article_feed", feed_id=feed_id)
 
 
-@blogs.command("sync-all-article-feeds")
-@click.pass_context
-def blogs_sync_all_article_feeds(ctx):
-    """Sync all article feeds."""
-    execute_task(ctx, "blogs", "sync_all_article_feeds")
-
-
 @blogs.command("sync-website-archive")
 @click.option("--url", required=True, help="URL to sync")
 @click.pass_context
@@ -564,14 +543,6 @@ def forums_sync_lesswrong_post(ctx, url):
 def github(ctx):
     """GitHub-related tasks."""
     pass
-
-
-@github.command("sync-all-repos")
-@click.option("--force-full", is_flag=True, help="Force a full sync instead of incremental")
-@click.pass_context
-def github_sync_all_repos(ctx, force_full):
-    """Sync all active GitHub repos."""
-    execute_task(ctx, "github", "sync_all_repos", force_full=force_full)
 
 
 @github.command("sync-repo")

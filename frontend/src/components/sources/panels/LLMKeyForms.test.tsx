@@ -19,10 +19,10 @@ const emailAccount = {
   ...common, id: 1, name: 'Work IMAP', email_address: 'work@example.com', account_type: 'imap', imap_server: 'imap.example.com',
   imap_port: 993, username: 'work', use_ssl: true, smtp_server: null, smtp_port: null, google_account_id: null, folders: [], send_enabled: true,
 }
-const feed = { ...common, id: 7, url: 'https://blog.example.com/feed.xml', title: 'Example Blog', description: null, check_interval: 1440, last_checked_at: null }
+const feed = { ...common, id: 7, url: 'https://blog.example.com/feed.xml', title: 'Example Blog', description: null, check_interval: 1440, ingest_delay: 0, last_sync_at: null }
 const calendarAccount = {
   ...common, id: 2, name: 'My CalDAV', calendar_type: 'caldav', caldav_url: 'https://dav.example.com/cal/', caldav_username: 'me',
-  google_account_id: null, google_account: null, calendar_ids: [], check_interval: 15, sync_past_days: 30, sync_future_days: 90,
+  google_account_id: null, google_account: null, calendar_ids: [], check_interval: 15, days_back: 30, sync_future_days: 90,
 }
 const transcriptAccount = { ...common, id: 3, name: 'My Fireflies', provider: 'fireflies', has_api_key: true, has_webhook_secret: false }
 const githubAccount = {

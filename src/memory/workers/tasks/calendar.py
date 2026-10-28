@@ -10,7 +10,6 @@ from caldav.davclient import DAVClient
 from googleapiclient.discovery import build
 
 from memory.common.celery_app import (
-    SYNC_ALL_CALENDARS,
     SYNC_CALENDAR_ACCOUNT,
     SYNC_CALENDAR_EVENT,
     app,
@@ -465,16 +464,9 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
             return {"status": "error", "error": "Account not found or inactive"}
 
         now = datetime.now(timezone.utc)
-        last_sync = cast(datetime | None, account.last_sync_at)
-
-        # Skip if recently synced (unless force_full)
-        if last_sync and not force_full:
-            check_interval = cast(int, account.check_interval)
-            if now - last_sync < timedelta(minutes=check_interval):
-                return {"status": "skipped_recent_check", "account_id": account_id}
 
         # Calculate sync window
-        sync_past = cast(int, account.sync_past_days)
+        sync_past = account.days_back
         sync_future = cast(int, account.sync_future_days)
         since = now - timedelta(days=sync_past)
         until = now + timedelta(days=sync_future)
@@ -542,31 +534,3 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
             "events_synced": len(task_ids),
             "task_ids": task_ids,
         }
-
-
-@app.task(name=SYNC_ALL_CALENDARS)
-@tracked_task
-def sync_all_calendars(force_full: bool = False) -> list[dict[str, Any]]:
-    """Trigger sync for all active calendar accounts."""
-    with make_session() as session:
-        active_accounts = (
-            session.query(CalendarAccount).filter(CalendarAccount.active).all()
-        )
-
-        results = [
-            {
-                "account_id": account.id,
-                "account_name": account.name,
-                "calendar_type": account.calendar_type,
-                "task_id": sync_calendar_account.delay(  # type: ignore[attr-defined]
-                    account.id, force_full=force_full
-                ).id,
-            }
-            for account in active_accounts
-        ]
-
-        logger.info(
-            f"Scheduled {'full' if force_full else 'incremental'} sync "
-            f"for {len(results)} active calendar accounts"
-        )
-        return results

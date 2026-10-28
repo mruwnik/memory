@@ -3,7 +3,7 @@
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy.orm import Session
 
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
@@ -60,6 +60,7 @@ class ArticleFeedCreate(BaseModel):
     description: str | None = None
     tags: list[str] = []
     check_interval: int = 1440  # 24 hours in minutes
+    ingest_delay: int = Field(0, ge=0, description="Minutes after publication before an entry is fetched")
     active: bool = True
     llm_key: LLMKeyInput | None = None
 
@@ -69,6 +70,7 @@ class ArticleFeedUpdate(BaseModel):
     description: str | None = None
     tags: list[str] | None = None
     check_interval: int | None = None
+    ingest_delay: int | None = Field(None, ge=0)
     active: bool | None = None
     llm_key: LLMKeyInput | None = None
 
@@ -80,7 +82,8 @@ class ArticleFeedResponse(SyncStatusResponse):
     description: str | None
     tags: list[str]
     check_interval: int
-    last_checked_at: str | None
+    ingest_delay: int
+    last_sync_at: str | None
     active: bool
     created_at: str
     updated_at: str
@@ -102,9 +105,8 @@ def feed_to_response(feed: ArticleFeed, db: Session, user: User) -> ArticleFeedR
         description=cast(str | None, feed.description),
         tags=list(feed.tags or []),
         check_interval=cast(int, feed.check_interval),
-        last_checked_at=feed.last_checked_at.isoformat()
-        if feed.last_checked_at
-        else None,
+        ingest_delay=feed.ingest_delay,
+        last_sync_at=feed.last_sync_at.isoformat() if feed.last_sync_at else None,
         active=cast(bool, feed.active),
         created_at=feed.created_at.isoformat() if feed.created_at else "",
         updated_at=feed.updated_at.isoformat() if feed.updated_at else "",
@@ -149,6 +151,7 @@ def create_feed(
         description=data.description,
         tags=data.tags,
         check_interval=data.check_interval,
+        ingest_delay=data.ingest_delay,
         active=data.active,
     )
     apply_llm_key(db, user, feed, data.llm_key)
@@ -177,6 +180,8 @@ def update_feed(
         feed.tags = updates.tags
     if updates.check_interval is not None:
         feed.check_interval = updates.check_interval
+    if updates.ingest_delay is not None:
+        feed.ingest_delay = updates.ingest_delay
     if updates.active is not None:
         feed.active = updates.active
     apply_llm_key(db, user, feed, updates.llm_key)

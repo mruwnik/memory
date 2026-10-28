@@ -42,6 +42,7 @@ export interface EmailAccount extends SyncStatus {
   // Common fields
   folders: string[]
   tags: string[]
+  check_interval: number
   last_sync_at: string | null
   active: boolean  // sync enabled
   send_enabled: boolean
@@ -73,6 +74,7 @@ export interface EmailAccountCreate {
   // Common fields
   folders?: string[]
   tags?: string[]
+  check_interval?: number
   send_enabled?: boolean
   // Access control
   project_id?: number
@@ -97,6 +99,7 @@ export interface EmailAccountUpdate {
   // Common fields
   folders?: string[]
   tags?: string[]
+  check_interval?: number
   active?: boolean  // sync enabled
   send_enabled?: boolean
   // Access control
@@ -134,7 +137,8 @@ export interface ArticleFeed extends SyncStatus {
   description: string | null
   tags: string[]
   check_interval: number
-  last_checked_at: string | null
+  ingest_delay: number
+  last_sync_at: string | null
   active: boolean
   created_at: string
   updated_at: string
@@ -147,6 +151,7 @@ export interface ArticleFeedCreate {
   description?: string
   tags?: string[]
   check_interval?: number
+  ingest_delay?: number
   active?: boolean
   llm_key?: LLMKeyChoice
 }
@@ -156,6 +161,7 @@ export interface ArticleFeedUpdate {
   description?: string
   tags?: string[]
   check_interval?: number
+  ingest_delay?: number
   active?: boolean
   llm_key?: LLMKeyChoice
 }
@@ -408,7 +414,7 @@ export interface CalendarAccount extends SyncStatus {
   calendar_ids: string[]
   tags: string[]
   check_interval: number
-  sync_past_days: number
+  days_back: number
   sync_future_days: number
   last_sync_at: string | null
   active: boolean
@@ -430,7 +436,7 @@ export interface CalendarAccountCreate {
   calendar_ids?: string[]
   tags?: string[]
   check_interval?: number
-  sync_past_days?: number
+  days_back?: number
   sync_future_days?: number
   // Access control
   project_id?: number
@@ -447,7 +453,7 @@ export interface CalendarAccountUpdate {
   calendar_ids?: string[]
   tags?: string[]
   check_interval?: number
-  sync_past_days?: number
+  days_back?: number
   sync_future_days?: number
   active?: boolean
   // Access control
@@ -516,6 +522,7 @@ export interface ForumSettings {
   check_interval: number
   days_back: number
   max_items: number
+  ingest_delay: number
   min_karma: number
   af: boolean
   comments_enabled: boolean

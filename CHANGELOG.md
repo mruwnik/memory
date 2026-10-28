@@ -55,8 +55,25 @@ the migration has run, then remove it. The migration reads it from the container
 that runs migrations, so check the Forums tab afterwards if you set it only on
 the workers. Afterwards change the schedule with
 "Sync every" and "Sync on a schedule" on the Forums tab.
-`LESSWRONG_SYNC_CHECK_INTERVAL` (default 3600s) sets how often beat checks
-whether a sync is due; `0` disables the scheduled sync entirely.
+
+Polled sources (RSS feeds, email accounts, GitHub repos, Google Drive folders,
+calendar accounts, LessWrong) are now each synced on their own "Sync every"
+interval, edited on their Sources tab; beat checks every minute what is due.
+These env vars are no longer read: `EMAIL_SYNC_INTERVAL`,
+`ARTICLE_FEED_SYNC_INTERVAL`, `GITHUB_SYNC_INTERVAL`,
+`GOOGLE_DRIVE_SYNC_INTERVAL`, `CALENDAR_SYNC_INTERVAL`. The migration raises each
+row's interval to the env value (it used to be the floor), and gives email
+accounts the `EMAIL_SYNC_INTERVAL` value, so keep them set until the migration
+has run in the container that runs migrations, then remove them. Calendar
+accounts set to sync every 15 minutes under the default 1-hour
+`CALENDAR_SYNC_INTERVAL` become 60; lower them on the Calendar tab if wanted.
+Turn a source's scheduled sync off with its pause button (the Forums tab's
+"Sync on a schedule" for LessWrong).
+
+RSS feeds have a "Wait before ingesting" delay (default 0): a new entry is
+fetched once that long has passed since it was published, e.g. for blogs whose
+paywall lifts after a few days. LessWrong has the same setting, seeded with the
+8 hours it previously waited.
 
 The first syncs fetch the comments with karma 5 or more on each post from the
 last year that has any, 200 posts per run by default, so expect extra LessWrong
@@ -70,6 +87,12 @@ every comment and refetch only when a post's comment count changes.
 
 `20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
 tables (seeded with the previous defaults) and two columns on `forum_post`. Fast.
+
+`20261113_sync_schedule`: adds `sync_queued_at` to each polled source table,
+`check_interval` to `email_accounts`, `ingest_delay` to `article_feeds` and
+`forum_sync_configs`, and the `delayed_feed_items` table; renames
+`article_feeds.last_checked_at` to `last_sync_at` and
+`calendar_accounts.sync_past_days` to `days_back`. Fast.
 
 ### Post-deploy commands
 

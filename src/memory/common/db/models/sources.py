@@ -32,7 +32,7 @@ from sqlalchemy.orm import Mapped, Session, backref, mapped_column, relationship
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
-from memory.common.db.models.sync_status import SyncStatusMixin
+from memory.common.db.models.sync_status import PolledSource, SyncStatusMixin
 from memory.common.scopes import SCOPE_ADMIN, STORABLE_SENSITIVITY_CHECK_SQL
 
 if TYPE_CHECKING:
@@ -99,7 +99,7 @@ class Book(Base):
         }
 
 
-class ArticleFeed(SyncStatusMixin, LLMKeyChoice, Base):
+class ArticleFeed(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     __tablename__ = "article_feeds"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "article_feed"
@@ -124,11 +124,13 @@ class ArticleFeed(SyncStatusMixin, LLMKeyChoice, Base):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
-    check_interval: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="60", doc="Minutes between checks"
+    ingest_delay: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        doc="Minutes after publication before an entry is fetched, e.g. to wait out a paywall",
     )
-    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -160,11 +162,23 @@ class ArticleFeed(SyncStatusMixin, LLMKeyChoice, Base):
             "sensitivity IN ('public', 'basic', 'internal', 'confidential')",
             name="valid_article_feed_sensitivity",
         ),
-        Index("article_feeds_active_idx", "active", "last_checked_at"),
+        Index("article_feeds_active_idx", "active", "last_sync_at"),
         Index("article_feeds_tags_idx", "tags", postgresql_using="gin"),
         Index("article_feeds_project_idx", "project_id"),
         Index("article_feeds_user_idx", "user_id"),
     )
+
+
+class DelayedFeedItem(Base):
+    """A feed entry waiting out its feed's ingest_delay; it is fetched fresh once due."""
+
+    __tablename__ = "delayed_feed_items"
+
+    url: Mapped[str] = mapped_column(Text, primary_key=True)
+    feed_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("article_feeds.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 def setting(type_: Any, default: Any, doc: str | None = None) -> Any:
@@ -176,24 +190,19 @@ def setting(type_: Any, default: Any, doc: str | None = None) -> Any:
 LESSWRONG = "lesswrong"
 
 
-class ForumSyncConfig(SyncStatusMixin, Base):
-    """How often and how much one forum is fetched.
-
-    Keyed by forum so further forums get their own row. The scheduling fields
-    (active, check_interval, last_sync_*, days_back, max_items) are the ones any
-    polled source needs; the rest are forum specific.
-    """
+class ForumSyncConfig(PolledSource, SyncStatusMixin, Base):
+    """How often and how much one forum is fetched, keyed by forum."""
 
     __tablename__ = "forum_sync_configs"
 
     forum: Mapped[str] = mapped_column(Text, primary_key=True)
-    active: Mapped[bool] = setting(Boolean, True)
     check_interval: Mapped[int] = setting(Integer, 60 * 24, "Minutes between syncs")
-    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_result: Mapped[dict | None] = mapped_column(JSONB)
 
     days_back: Mapped[int] = setting(Integer, 30, "How far back each sync lists posts")
     max_items: Mapped[int] = setting(Integer, 1000, "Most posts listed per sync")
+    # Posts are listed once their karma has had time to settle.
+    ingest_delay: Mapped[int] = setting(Integer, 8 * 60, "Minutes after posting before a post is listed")
     min_karma: Mapped[int] = setting(Integer, 10)
     af: Mapped[bool] = setting(Boolean, False, "Alignment Forum posts only")
 
@@ -223,7 +232,7 @@ class ForumSyncConfig(SyncStatusMixin, Base):
         return config
 
 
-class EmailAccount(SyncStatusMixin, LLMKeyChoice, Base):
+class EmailAccount(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     __tablename__ = "email_accounts"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "email_account"
@@ -283,10 +292,6 @@ class EmailAccount(SyncStatusMixin, LLMKeyChoice, Base):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
-    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="true"
-    )  # sync enabled
     send_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )
@@ -448,7 +453,7 @@ class GithubAccount(LLMKeyChoice, Base):
     )
 
 
-class GithubRepo(SyncStatusMixin, Base):
+class GithubRepo(PolledSource, SyncStatusMixin, Base):
     """Tracked GitHub repository configuration."""
 
     __tablename__ = "github_repos"
@@ -492,13 +497,6 @@ class GithubRepo(SyncStatusMixin, Base):
         ARRAY(Text), nullable=False, server_default="{}"
     )
 
-    # Sync configuration
-    check_interval: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="60"
-    )  # Minutes
-    last_sync_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     # Full sync interval for catching project field changes (minutes, 0 = disabled)
     full_sync_interval: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="1440"
@@ -507,8 +505,6 @@ class GithubRepo(SyncStatusMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
-    # Status
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -956,7 +952,7 @@ class GoogleAccount(SyncStatusMixin, Base):
     )
 
 
-class GoogleFolder(SyncStatusMixin, LLMKeyChoice, Base):
+class GoogleFolder(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     """Tracked Google Drive folder configuration."""
 
     __tablename__ = "google_folders"
@@ -1005,16 +1001,6 @@ class GoogleFolder(SyncStatusMixin, LLMKeyChoice, Base):
         ARRAY(Text), nullable=False, server_default="{}"
     )
 
-    # Sync configuration
-    check_interval: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="60"
-    )  # Minutes
-    last_sync_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    # Status
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1052,7 +1038,7 @@ class GoogleFolder(SyncStatusMixin, LLMKeyChoice, Base):
     )
 
 
-class CalendarAccount(SyncStatusMixin, LLMKeyChoice, Base):
+class CalendarAccount(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     """Calendar source for syncing events (CalDAV, Google Calendar, etc.)."""
 
     __tablename__ = "calendar_accounts"
@@ -1120,20 +1106,12 @@ class CalendarAccount(SyncStatusMixin, LLMKeyChoice, Base):
 
     # Sync configuration
     check_interval: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="15"
-    )  # Minutes
-    sync_past_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="30"
-    )  # How far back
+        Integer, nullable=False, default=15, server_default="15", doc="Minutes between syncs"
+    )
+    days_back: Mapped[int] = mapped_column(Integer, nullable=False, server_default="30")
     sync_future_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="90"
     )  # How far ahead
-    last_sync_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    # Status
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

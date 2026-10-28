@@ -79,6 +79,7 @@ from memory.common.db.models.people import (
 from memory.common.db.models.sources import (
     Book,
     ArticleFeed,
+    DelayedFeedItem,
     ForumSyncConfig,
     EmailAccount,
     GithubAccount,
@@ -264,6 +265,7 @@ __all__ = [
     # Sources
     "Book",
     "ArticleFeed",
+    "DelayedFeedItem",
     "ForumSyncConfig",
     "EmailAccount",
     "GithubAccount",

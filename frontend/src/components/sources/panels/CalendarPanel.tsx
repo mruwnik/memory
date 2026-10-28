@@ -3,7 +3,7 @@ import { useSources, CalendarAccount, GoogleAccount, LLMKeyChoice } from '@/hook
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
-import { ProjectField, IntervalInput, SensitivitySelect, SourceRow, TagsInput, numberValue } from '../shared'
+import { ProjectField, SensitivitySelect, SourceRow, SyncScheduleFields, TagsInput, numberValue } from '../shared'
 import { Badge, Button, Disclosure, EmptyState, List, Row, Section, ErrorState, Field, FieldRow, FormActions, Hint, Input, LoadingState, Modal, Notice, Select, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
@@ -213,7 +213,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
     google_account_id: account?.google_account_id || undefined as number | undefined,
     tags: account?.tags || [],
     check_interval: account?.check_interval || 15,
-    sync_past_days: (account?.sync_past_days ?? 30) as number | '',
+    days_back: (account?.days_back ?? 30) as number | '',
     sync_future_days: (account?.sync_future_days ?? 90) as number | '',
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
@@ -232,7 +232,7 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
         calendar_type: formData.calendar_type,
         tags: formData.tags,
         check_interval: formData.check_interval,
-        sync_past_days: formData.sync_past_days,
+        days_back: formData.days_back,
         sync_future_days: formData.sync_future_days,
         project_id: formData.project_id,
         sensitivity: formData.sensitivity,
@@ -335,34 +335,18 @@ const CalendarForm = ({ account, googleAccounts, projects, onSubmit, onCancel }:
           )
         )}
 
-        <FieldRow>
-          <Field label="Sync past days">
-            <Input
-              type="number"
-              value={formData.sync_past_days}
-              onChange={e => setFormData({ ...formData, sync_past_days: numberValue(e.target.value) })}
-              required
-              min={0}
-              max={365}
-            />
-          </Field>
-          <Field label="Sync future days">
-            <Input
-              type="number"
-              value={formData.sync_future_days}
-              onChange={e => setFormData({ ...formData, sync_future_days: numberValue(e.target.value) })}
-              required
-              min={0}
-              max={365}
-            />
-          </Field>
-        </FieldRow>
+        <SyncScheduleFields value={formData} onChange={setFormData} />
 
-        <IntervalInput
-          value={formData.check_interval}
-          onChange={check_interval => setFormData({ ...formData, check_interval })}
-          label="Check interval"
-        />
+        <Field label="Sync future days">
+          <Input
+            type="number"
+            value={formData.sync_future_days}
+            onChange={e => setFormData({ ...formData, sync_future_days: numberValue(e.target.value) })}
+            required
+            min={0}
+            max={365}
+          />
+        </Field>
 
         <Field label="Tags">
           <TagsInput

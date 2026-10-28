@@ -21,7 +21,6 @@ from memory.common.celery_app import (
     app,
     SYNC_LESSWRONG,
     SYNC_LESSWRONG_COMMENTS,
-    SYNC_LESSWRONG_IF_DUE,
     SYNC_LESSWRONG_POST,
 )
 from memory.common.content_processing import (
@@ -36,8 +35,6 @@ from memory.common.jobs import tracked_task
 logger = logging.getLogger(__name__)
 
 ENGAGEMENT_FIELDS = ("karma", "votes", "score", "comments")
-# Beat ticks drift by a few seconds, so a sync that is due "now" may look just short of due.
-DUE_SLACK = timedelta(minutes=5)
 COUNT_BATCH_SIZE = 50
 # Comments share the posts' collection; the tag lets a search filter on them.
 COMMENT_TAG = "comment"
@@ -337,7 +334,7 @@ def run_sync(
     max_items = config.max_items if max_items is None else max_items
     af = config.af if af is None else af
 
-    end_date = naive_utc(datetime.fromisoformat(until) if until else utcnow() - timedelta(hours=8))
+    end_date = naive_utc(datetime.fromisoformat(until) if until else utcnow() - timedelta(minutes=config.ingest_delay))
     if since:
         start_date = naive_utc(datetime.fromisoformat(since))
     else:
@@ -410,30 +407,3 @@ def run_sync(
     queue_comment_fetches(to_fetch, config.min_comment_karma, cooldown)
     result["comment_fetches"] = len(to_fetch)
     return result
-
-
-@app.task(name=SYNC_LESSWRONG_IF_DUE)
-def sync_lesswrong_if_due():
-    """Beat entry point: runs the sync when the forum config says it is due."""
-    with make_session() as session:
-        ForumSyncConfig.load(session, LESSWRONG)
-        session.commit()
-        # Locked and stamped before running, so a later tick doesn't start a second sync alongside this one.
-        config = (
-            session.query(ForumSyncConfig)
-            .filter_by(forum=LESSWRONG)
-            .with_for_update()
-            .populate_existing()
-            .one()
-        )
-        now = utcnow()
-        due = config.active and (
-            config.last_sync_at is None
-            or now - config.last_sync_at >= timedelta(minutes=config.check_interval) - DUE_SLACK
-        )
-        if due:
-            config.last_sync_at = now
-        session.commit()
-    if not due:
-        return {"status": "not_due"}
-    return sync_lesswrong()

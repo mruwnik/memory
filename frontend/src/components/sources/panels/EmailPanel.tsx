@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSources, EmailAccount, LLMKeyChoice, GoogleAccount, ImapFolder, EmailAccountTestResult } from '@/hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { ProjectField, SensitivitySelect, SourceRow, TagsInput, TestConnectionButton, numberValue } from '../shared'
+import { ProjectField, SensitivitySelect, SourceRow, SyncScheduleFields, TagsInput, TestConnectionButton, numberValue } from '../shared'
 import { Button, Checkbox, EmptyState, ErrorState, Field, FieldRow, FormActions, Hint, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, Fieldset } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
@@ -201,6 +201,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
     google_account_id: account?.google_account_id || undefined as number | undefined,
     folders: account?.folders || [],
     tags: account?.tags || [],
+    check_interval: account?.check_interval ?? 60,
     send_enabled: account?.send_enabled ?? true,
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential' | 'hidden',
@@ -252,6 +253,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
         account_type: formData.account_type,
         folders: formData.folders,
         tags: formData.tags,
+        check_interval: formData.check_interval,
         send_enabled: formData.send_enabled,
         project_id: formData.project_id,
         sensitivity: formData.sensitivity,
@@ -445,6 +447,8 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             <Hint>Gmail folders are labels. Messages in any selected label are synced once. Previously ingested messages outside the selection are removed from Memory on the next sync.</Hint>
           </>
         )}
+
+        <SyncScheduleFields value={formData} onChange={setFormData} />
 
         <Field label="Tags">
           <TagsInput

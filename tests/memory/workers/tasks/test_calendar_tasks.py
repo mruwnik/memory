@@ -92,7 +92,7 @@ def caldav_account(db_session) -> CalendarAccount:
         calendar_ids=[],
         tags=["calendar", "test"],
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
         active=True,
     )
@@ -139,7 +139,7 @@ def google_calendar_account(db_session, google_account) -> CalendarAccount:
         calendar_ids=[],
         tags=["calendar", "google"],
         check_interval=15,
-        sync_past_days=30,
+        days_back=30,
         sync_future_days=90,
         active=True,
     )
@@ -504,92 +504,6 @@ def test_sync_calendar_account_inactive(inactive_account, db_session):
     assert "Account not found or inactive" in result["error"]
 
 
-@pytest.mark.parametrize(
-    "check_interval_minutes,seconds_since_check,should_skip",
-    [
-        (15, 60, True),  # 15min interval, checked 1min ago -> skip
-        (15, 800, True),  # 15min interval, checked 13min ago -> skip
-        (15, 1000, False),  # 15min interval, checked 16min ago -> don't skip
-        (30, 1000, True),  # 30min interval, checked 16min ago -> skip
-        (30, 2000, False),  # 30min interval, checked 33min ago -> don't skip
-    ],
-)
-@patch("memory.workers.tasks.calendar.fetch_caldav_events", return_value=[])
-def test_sync_calendar_account_check_interval(
-    mock_fetch,
-    check_interval_minutes,
-    seconds_since_check,
-    should_skip,
-    db_session,
-):
-    """Test sync respects check interval."""
-    from sqlalchemy import text
-
-    account = CalendarAccount(
-        name="Interval Test",
-        calendar_type="caldav",
-        caldav_url="https://caldav.example.com",
-        caldav_username="user",
-        caldav_password="pass",
-        check_interval=check_interval_minutes,
-        active=True,
-    )
-    db_session.add(account)
-    db_session.flush()
-
-    # Set last_sync_at
-    last_sync_time = datetime.now(timezone.utc) - timedelta(seconds=seconds_since_check)
-    db_session.execute(
-        text(
-            "UPDATE calendar_accounts SET last_sync_at = :timestamp WHERE id = :account_id"
-        ),
-        {"timestamp": last_sync_time, "account_id": account.id},
-    )
-    db_session.commit()
-
-    result = calendar.sync_calendar_account(account.id)
-
-    if should_skip:
-        assert result["status"] == "skipped_recent_check"
-    else:
-        # Would fail with incomplete caldav credentials error, but that's expected
-        assert "status" in result
-
-
-@patch("memory.workers.tasks.calendar.fetch_caldav_events", return_value=[])
-def test_sync_calendar_account_force_full_bypasses_interval(mock_fetch, db_session):
-    """Test force_full bypasses check interval."""
-    from sqlalchemy import text
-
-    account = CalendarAccount(
-        name="Force Test",
-        calendar_type="caldav",
-        caldav_url="https://caldav.example.com",
-        caldav_username="user",
-        caldav_password="pass",
-        check_interval=60,
-        active=True,
-    )
-    db_session.add(account)
-    db_session.flush()
-
-    # Set recent last_sync_at
-    last_sync_time = datetime.now(timezone.utc) - timedelta(seconds=30)
-    db_session.execute(
-        text(
-            "UPDATE calendar_accounts SET last_sync_at = :timestamp WHERE id = :account_id"
-        ),
-        {"timestamp": last_sync_time, "account_id": account.id},
-    )
-    db_session.commit()
-
-    # Even with recent sync, force_full should proceed
-    # (It will fail due to fake caldav URL, but won't be skipped)
-    result = calendar.sync_calendar_account(account.id, force_full=True)
-
-    assert result["status"] != "skipped_recent_check"
-
-
 def test_sync_calendar_account_incomplete_caldav_credentials(db_session):
     """Test sync fails gracefully with incomplete CalDAV credentials."""
     account = CalendarAccount(
@@ -681,81 +595,6 @@ def test_sync_calendar_account_updates_timestamp(caldav_account, db_session):
 
         db_session.refresh(caldav_account)
         assert caldav_account.last_sync_at is not None
-
-
-# =============================================================================
-# Tests for sync_all_calendars
-# =============================================================================
-
-
-@patch("memory.workers.tasks.calendar.sync_calendar_account")
-def test_sync_all_calendars(mock_sync_account, db_session):
-    """Test syncing all active calendar accounts."""
-    account1 = CalendarAccount(
-        name="Account 1",
-        calendar_type="caldav",
-        caldav_url="https://caldav1.example.com",
-        caldav_username="user1",
-        caldav_password="pass1",
-        active=True,
-    )
-    account2 = CalendarAccount(
-        name="Account 2",
-        calendar_type="caldav",
-        caldav_url="https://caldav2.example.com",
-        caldav_username="user2",
-        caldav_password="pass2",
-        active=True,
-    )
-    inactive = CalendarAccount(
-        name="Inactive",
-        calendar_type="caldav",
-        caldav_url="https://caldav3.example.com",
-        caldav_username="user3",
-        caldav_password="pass3",
-        active=False,
-    )
-    db_session.add_all([account1, account2, inactive])
-    db_session.commit()
-
-    mock_sync_account.delay.side_effect = [Mock(id="task-1"), Mock(id="task-2")]
-
-    result = calendar.sync_all_calendars()
-
-    # Should only sync active accounts
-    assert len(result) == 2
-    assert result[0]["task_id"] == "task-1"
-    assert result[1]["task_id"] == "task-2"
-
-
-def test_sync_all_calendars_no_active(db_session):
-    """Test sync_all when no active accounts exist."""
-    inactive = CalendarAccount(
-        name="Inactive",
-        calendar_type="caldav",
-        caldav_url="https://caldav.example.com",
-        caldav_username="user",
-        caldav_password="pass",
-        active=False,
-    )
-    db_session.add(inactive)
-    db_session.commit()
-
-    result = calendar.sync_all_calendars()
-
-    assert result == []
-
-
-@patch("memory.workers.tasks.calendar.sync_calendar_account")
-def test_sync_all_calendars_force_full(mock_sync_account, caldav_account, db_session):
-    """Test force_full is passed through to individual syncs."""
-    mock_sync_account.delay.return_value = Mock(id="task-123")
-
-    calendar.sync_all_calendars(force_full=True)
-
-    mock_sync_account.delay.assert_called_once_with(
-        caldav_account.id, force_full=True
-    )
 
 
 # =============================================================================

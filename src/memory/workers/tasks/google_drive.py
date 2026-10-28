@@ -1,7 +1,7 @@
 """Celery tasks for Google Drive document syncing."""
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from memory.common import qdrant
@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 GOOGLE_ROOT = "memory.workers.tasks.google_drive"
 SYNC_GOOGLE_FOLDER = f"{GOOGLE_ROOT}.sync_google_folder"
 SYNC_GOOGLE_DOC = f"{GOOGLE_ROOT}.sync_google_doc"
-SYNC_ALL_GOOGLE_ACCOUNTS = f"{GOOGLE_ROOT}.sync_all_google_accounts"
 
 
 def _build_credentials(account: GoogleAccount, session) -> GoogleCredentials:
@@ -234,12 +233,6 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
         now = datetime.now(timezone.utc)
         last_sync = cast(datetime | None, folder.last_sync_at)
 
-        # Check if sync is needed based on interval
-        if last_sync and not force_full:
-            check_interval = cast(int, folder.check_interval)
-            if now - last_sync < timedelta(minutes=check_interval):
-                return {"status": "skipped_recent_check", "folder_id": folder_id}
-
         # Build credentials (refresh if needed)
         try:
             credentials = _build_credentials(account, session)
@@ -354,31 +347,3 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
             "task_ids": task_ids,
             "is_single_doc": is_single_doc,
         }
-
-
-@app.task(name=SYNC_ALL_GOOGLE_ACCOUNTS)
-@tracked_task
-def sync_all_google_accounts(force_full: bool = False) -> list[dict[str, Any]]:
-    """Trigger sync for all active Google Drive folders."""
-    with make_session() as session:
-        active_folders = (
-            session.query(GoogleFolder)
-            .join(GoogleAccount)
-            .filter(GoogleFolder.active, GoogleAccount.active)
-            .all()
-        )
-
-        results = [
-            {
-                "folder_id": folder.id,
-                "folder_name": folder.folder_name,
-                "task_id": sync_google_folder.delay(folder.id, force_full=force_full).id,  # type: ignore[attr-defined]
-            }
-            for folder in active_folders
-        ]
-
-        logger.info(
-            f"Scheduled {'full' if force_full else 'incremental'} sync "
-            f"for {len(results)} active Google folders"
-        )
-        return results

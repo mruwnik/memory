@@ -395,6 +395,7 @@ def test_update_account_name(client, user, db_session):
         ("smtp_port", 25),
         ("folders", ["INBOX", "Archive"]),
         ("tags", ["work", "important"]),
+        ("check_interval", 15),
         ("active", False),
         ("send_enabled", False),
     ],

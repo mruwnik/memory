@@ -110,7 +110,7 @@ class CalendarAccountCreate(BaseModel):
     calendar_ids: list[str] = []
     tags: list[str] = []
     check_interval: int = 15  # Minutes
-    sync_past_days: int = 30
+    days_back: int = 30
     sync_future_days: int = 90
     # Access control
     project_id: int | None = None
@@ -127,7 +127,7 @@ class CalendarAccountUpdate(BaseModel):
     calendar_ids: list[str] | None = None
     tags: list[str] | None = None
     check_interval: int | None = None
-    sync_past_days: int | None = None
+    days_back: int | None = None
     sync_future_days: int | None = None
     active: bool | None = None
     # Access control
@@ -153,7 +153,7 @@ class CalendarAccountResponse(SyncStatusResponse):
     calendar_ids: list[str]
     tags: list[str]
     check_interval: int
-    sync_past_days: int
+    days_back: int
     sync_future_days: int
     last_sync_at: str | None
     active: bool
@@ -188,7 +188,7 @@ def account_to_response(
         calendar_ids=list(account.calendar_ids or []),
         tags=list(account.tags or []),
         check_interval=cast(int, account.check_interval),
-        sync_past_days=cast(int, account.sync_past_days),
+        days_back=cast(int, account.days_back),
         sync_future_days=cast(int, account.sync_future_days),
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         **sync_status_fields(account),
@@ -264,7 +264,7 @@ def create_account(
         calendar_ids=data.calendar_ids,
         tags=data.tags,
         check_interval=data.check_interval,
-        sync_past_days=data.sync_past_days,
+        days_back=data.days_back,
         sync_future_days=data.sync_future_days,
         project_id=data.project_id,
         sensitivity=data.sensitivity,
@@ -325,8 +325,8 @@ def update_account(
         account.tags = updates.tags
     if updates.check_interval is not None:
         account.check_interval = updates.check_interval
-    if updates.sync_past_days is not None:
-        account.sync_past_days = updates.sync_past_days
+    if updates.days_back is not None:
+        account.days_back = updates.days_back
     if updates.sync_future_days is not None:
         account.sync_future_days = updates.sync_future_days
     if updates.active is not None:

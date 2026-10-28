@@ -14,7 +14,8 @@ const feed = {
   description: 'A blog',
   tags: [],
   check_interval: 1440,
-  last_checked_at: null,
+  ingest_delay: 0,
+  last_sync_at: null,
   active: true,
   created_at: '',
   updated_at: '',
@@ -70,18 +71,22 @@ describe('FeedsPanel load states', () => {
 })
 
 describe('FeedsPanel create flow', () => {
-  it('submits a create with the entered url and default interval', async () => {
+  it('submits a create with the entered url, default interval and ingest delay', async () => {
     const mock = mockFetchRoutes({ '/article-feeds': { json: [] }, '/auth/me': authMe, __default: { json: {} } })
     const { user } = renderWithRouter(<FeedsPanel />)
     await waitFor(() => expect(screen.getByText('No RSS feeds configured')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'Add feed' }))
     const dialog = await screen.findByRole('dialog')
     await user.type(field(dialog, 'Feed URL'), 'https://new.example.com/rss')
+    const delayHours = within(within(dialog).getByRole('group', { name: 'Wait before ingesting' })).getByLabelText('Hours')
+    await user.clear(delayHours)
+    await user.type(delayHours, '72')
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(postBody(mock, '/article-feeds', 'POST')).toBeTruthy())
     expect(postBody(mock, '/article-feeds', 'POST')).toMatchObject({
       url: 'https://new.example.com/rss',
       check_interval: 1440,
+      ingest_delay: 72 * 60,
       active: true,
     })
   })
@@ -125,7 +130,7 @@ describe('FeedsPanel form labels', () => {
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByLabelText('Tags'), 'news{Enter}')
     expect(within(dialog).getByRole('button', { name: 'Remove tag news' })).toBeInTheDocument()
-    const interval = within(dialog).getByRole('group', { name: 'Check interval' })
+    const interval = within(dialog).getByRole('group', { name: 'Sync every' })
     expect(within(interval).getByLabelText('Hours')).toHaveValue(24)
     expect(within(interval).getByLabelText('Minutes')).toHaveValue(0)
   })

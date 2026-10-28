@@ -1062,38 +1062,13 @@ def test_sync_records_a_failed_run(mock_fetch, db_session, frozen_now):
     assert (config.last_sync_at, config.sync_error) == (NOW, "LW down")
 
 
-@pytest.mark.parametrize(
-    "active, last_sync_hours_ago, expected_run",
-    [
-        (True, None, True),
-        (True, 25, True),
-        (True, 23.99, True),  # within the slack of a beat tick
-        (True, 12, False),
-        (False, None, False),
-    ],
-)
-def test_sync_lesswrong_if_due(db_session, frozen_now, active, last_sync_hours_ago, expected_run):
-    set_config(
-        db_session,
-        active=active,
-        check_interval=24 * 60,
-        last_sync_at=(
-            None if last_sync_hours_ago is None else NOW - timedelta(hours=last_sync_hours_ago)
-        ),
-    )
+@pytest.mark.parametrize("ingest_delay", [0, 8 * 60, 3 * 24 * 60])
+@patch("memory.workers.tasks.forums.fetch_lesswrong_posts")
+def test_sync_leaves_posts_younger_than_the_ingest_delay(mock_fetch, db_session, frozen_now, ingest_delay):
+    set_config(db_session, ingest_delay=ingest_delay)
+    mock_fetch.return_value = []
 
-    with patch("memory.workers.tasks.forums.sync_lesswrong") as sync:
-        forums.sync_lesswrong_if_due()
+    forums.sync_lesswrong()
 
-    assert sync.called is expected_run
-
-
-def test_a_due_sync_is_claimed_before_it_runs(db_session, frozen_now):
-    """A tick during a long sync must not start a second one."""
-    set_config(db_session, last_sync_at=NOW - timedelta(days=2))
-
-    with patch("memory.workers.tasks.forums.sync_lesswrong") as sync:
-        forums.sync_lesswrong_if_due()
-        forums.sync_lesswrong_if_due()
-
-    assert sync.call_count == 1
+    until = mock_fetch.call_args.kwargs["until"]
+    assert until == (NOW - timedelta(minutes=ingest_delay)).replace(tzinfo=None)
