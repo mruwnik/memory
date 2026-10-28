@@ -39,7 +39,6 @@ from memory.api.auth import (
     lookup_principal,
     system_scopes,
 )
-from memory.common.access_control import resolve_api_key_scopes
 from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
 
 logger = logging.getLogger(__name__)
@@ -425,33 +424,9 @@ class SimpleOAuthProvider(OAuthProvider):
                     scopes=scopes,
                 )
 
-            # API key path. ``scopes is None`` inherits user scopes;
-            # ``scopes == []`` is treated as "no override privileges"
-            # (read-only), NOT silent fallback to user.scopes —
-            # see resolve_api_key_scopes.
-            #
-            # Deliberate asymmetry with the session path above: API key
-            # scopes are NOT unioned with {SCOPE_READ, SCOPE_WRITE}. The
-            # session path adds the OAuth-gate primer because OAuth
-            # clients negotiate scopes at registration time and may pick
-            # something narrower than ``required_scopes`` (BASE_SCOPES =
-            # [read]) — so the gate would fail any session that didn't
-            # carry ``read``, even if the user is an admin. We keep them
-            # working by primed-default.
-            #
-            # API keys are minted by an admin with intentional scope
-            # selection (e.g. ``scopes=["github"]`` for a GitHub-only
-            # service key). Auto-adding {read, write} would override the
-            # admin's choice and force every API key to also be capable
-            # of generic read/write — defeating the point of a narrowly-
-            # scoped service key. The trade-off: an admin who wants the
-            # key to work through MCP must explicitly include ``read``
-            # in the scope list (``scopes=["github", "read"]``); the
-            # OAuth gate's ``required_scopes=[read]`` will reject any
-            # key that omits it. This is the documented contract — the
-            # ``resolve_api_key_scopes`` floor of ``[SCOPE_READ]`` for
-            # ``None``/``[]`` keeps the common case working without
-            # silently elevating an admin-minted single-scope key.
+            # API key path: a key with its own scopes gets them as listed
+            # (capped by its user's), not primed with read/write, so a
+            # narrowly scoped key must list ``read`` to pass the MCP gate.
             scopes = system_scopes(principal)
             logger.info(
                 f"User {principal.user.name} (id={principal.user.id}) "
@@ -863,10 +838,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             # API key path — same scope source as verify_token, just
             # different return type.
-            assert principal.api_key_record is not None
-            scopes = resolve_api_key_scopes(
-                principal.api_key_record, principal.user
-            )
+            scopes = system_scopes(principal)
             logger.info(
                 f"User {principal.user.name} (id={principal.user.id}) "
                 f"authenticated via API key"

@@ -262,20 +262,35 @@ async def test_update_ignores_a_stale_stored_ssh_key(
     assert updated["data"]["spawn_config"]["repo_url"] == "https://github.com/x/y"
 
 
+def admin_key_token(db_session, admin_user) -> str:
+    key = APIKey.create(
+        user_id=admin_user.id, scopes=["read", "schedule:write", "claude_sessions"]
+    )
+    db_session.add(key)
+    db_session.commit()
+    return key.key
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "session_fixture,expectation,created",
+    "credential,expectation,created",
     [
         ("user_session", pytest.raises(ValueError, match="SSH key"), 0),
         ("admin_session", nullcontext(), 1),
+        # An admin's API key without the admin scope is not admin.
+        ("admin_key", pytest.raises(ValueError, match="SSH key"), 0),
     ],
 )
 async def test_shared_ssh_key_is_admin_only(
-    request, db_session, session_fixture, expectation, created
+    request, db_session, admin_user, credential, expectation, created
 ):
-    session = request.getfixturevalue(session_fixture)
+    token = (
+        admin_key_token(db_session, admin_user)
+        if credential == "admin_key"
+        else request.getfixturevalue(credential).id
+    )
     key = make_ssh_key(db_session, None)
-    with mcp_auth_context(session.id, scopes=["claude_sessions"]), expectation:
+    with mcp_auth_context(token), expectation:
         await scheduler.upsert.fn(
             **SESSION_TASK | {"spawn_config": {"environment_id": 1, "ssh_key_id": key.id}}
         )
@@ -535,6 +550,57 @@ async def test_upsert_create_one_time_disabled_rejected(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential,spawn_config,expectation",
+    [
+        ("admin_session", {"environment_id": 1}, nullcontext()),
+        ("admin_key", {"environment_id": 1, "use_ssh_key": False}, nullcontext()),
+        # The fire would use the owner's shared default key, which the key may not.
+        ("admin_key", {"environment_id": 1}, pytest.raises(ValueError, match="SSH key")),
+    ],
+)
+async def test_a_shared_default_ssh_key_needs_an_admin_credential(
+    request, db_session, admin_user, credential, spawn_config, expectation
+):
+    token = (
+        admin_key_token(db_session, admin_user)
+        if credential == "admin_key"
+        else request.getfixturevalue(credential).id
+    )
+    admin_user.default_ssh_key_id = make_ssh_key(db_session, None).id
+    db_session.commit()
+    with mcp_auth_context(token), expectation:
+        await scheduler.upsert.fn(**SESSION_TASK | {"spawn_config": spawn_config})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential,expectation",
+    [
+        ("admin_session", nullcontext()),
+        # Only an admin credential may DM a Discord user no bot of theirs has seen.
+        ("admin_key", pytest.raises(ValueError, match="not found or not accessible")),
+    ],
+)
+async def test_notification_targets_are_judged_by_the_credential(
+    request, db_session, admin_user, credential, expectation
+):
+    token = (
+        admin_key_token(db_session, admin_user)
+        if credential == "admin_key"
+        else request.getfixturevalue(credential).id
+    )
+    with mcp_auth_context(token), expectation:
+        await scheduler.upsert.fn(
+            task_type="notification",
+            message="x",
+            cron_expression="0 9 * * *",
+            notification_channel="discord",
+            notification_target="424242",
+        )
+
+
+@pytest.mark.asyncio
 async def test_upsert_update_rejects_scheduled_time(
     db_session, regular_user, user_session
 ):
@@ -610,10 +676,20 @@ async def test_sessions_cannot_be_scheduled_without_claude_containers(
     assert db_session.query(ScheduledTask).count() == 0
 
 
+NOTIFICATION_TASK = dict(
+    task_type="notification",
+    message="hi",
+    cron_expression="0 9 * * *",
+    notification_channel="email",
+    notification_target="a@example.com",
+)
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task", [SESSION_TASK, NOTIFICATION_TASK])
 @pytest.mark.parametrize("via_key", [True, False])
-async def test_scheduled_session_records_the_key_it_will_act_through(
-    db_session, regular_user, user_session, via_key
+async def test_scheduled_work_records_the_key_it_will_act_through(
+    db_session, regular_user, user_session, via_key, task
 ):
     key = APIKey.create(user_id=regular_user.id, scopes=["schedule:write", "claude_sessions"])
     db_session.add(key)
@@ -621,7 +697,7 @@ async def test_scheduled_session_records_the_key_it_will_act_through(
     token = key.key if via_key else user_session.id
 
     with mcp_auth_context(token, scopes=["schedule:write", "claude_sessions"]):
-        result = await scheduler.upsert.fn(**SESSION_TASK)
+        result = await scheduler.upsert.fn(**task)
 
     assert result["data"]["api_key_id"] == (key.id if via_key else None)
 

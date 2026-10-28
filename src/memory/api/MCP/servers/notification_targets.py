@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session as DBSession
 from memory.common import people as people_mod
 from memory.common.db.models.slack import SlackChannel, SlackUserCredentials
 from memory.common.db.models.sources import Person
-from memory.common.db.models.users import User
+from memory.common.access_control import UserLike
 from memory.common.discord_data import (
     caller_can_see_discord_channel,
     caller_can_see_discord_user,
@@ -31,21 +31,17 @@ from memory.common.slack import (
 
 
 def resolve_and_validate_target(
-    session: DBSession, user_id: int, channel: str, target: str | None
+    session: DBSession, user: UserLike, channel: str, target: str | None
 ) -> str:
     """Resolve ``target`` to a concrete id/address for ``channel``.
 
     Raises ValueError (with a message safe to show the caller) when the target
     is empty, malformed, references an unknown person, or names an entity the
-    caller may not address.
+    caller may not address. ``user`` carries the caller's credential scopes.
     """
     value = (target or "").strip()
     if not value:
         raise ValueError("notification_target is required")
-
-    user = session.get(User, user_id)
-    if user is None:
-        raise ValueError("User not found")
 
     # One person lookup for all channels; the helpers branch on the result.
     person = people_mod.find_person(session, value)
@@ -73,7 +69,7 @@ def resolve_email_target(target: str, person: Person | None) -> str:
 
 
 def resolve_discord_target(
-    session: DBSession, user: User, target: str, person: Person | None
+    session: DBSession, user: UserLike, target: str, person: Person | None
 ) -> str:
     if person is not None:
         accounts = person.discord_accounts
@@ -104,7 +100,7 @@ def resolve_discord_target(
 
 
 def resolve_slack_target(
-    session: DBSession, user: User, target: str, person: Person | None
+    session: DBSession, user: UserLike, target: str, person: Person | None
 ) -> str:
     if person is not None:
         return resolve_person_slack_id(session, user, person)
@@ -129,7 +125,7 @@ def resolve_slack_target(
     )
 
 
-def resolve_person_slack_id(session: DBSession, user: User, person: Person) -> str:
+def resolve_person_slack_id(session: DBSession, user: UserLike, person: Person) -> str:
     """Resolve a person's Slack user id within a workspace the caller shares.
 
     DM resolution requires shared-workspace visibility — we never return a Slack
@@ -149,7 +145,7 @@ def resolve_person_slack_id(session: DBSession, user: User, person: Person) -> s
     )
 
 
-def user_has_any_slack_workspace(session: DBSession, user: User) -> bool:
+def user_has_any_slack_workspace(session: DBSession, user: UserLike) -> bool:
     return (
         session.query(SlackUserCredentials.id)
         .filter(SlackUserCredentials.user_id == user.id)

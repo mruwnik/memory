@@ -246,7 +246,15 @@ def get_user_session(request: Request, db: DBSession) -> UserSession | None:
 
     if is_expired(session.expires_at):
         return None
+    if session.api_key_id is not None and not session_key_is_valid(session):
+        return None
     return session
+
+
+def session_key_is_valid(session: UserSession) -> bool:
+    """A session acting through an API key dies with that key."""
+    key = session.api_key
+    return key is not None and key.is_valid() and key.user_id == session.user_id
 
 
 def lookup_api_key(api_key: str, db: DBSession) -> APIKey | None:
@@ -294,8 +302,9 @@ def handle_api_key_use(key_record: APIKey, db: DBSession) -> None:
 class TokenLookup:
     """Result of looking up a bearer token.
 
-    Exactly one of ``user_session`` / ``api_key_record`` is non-None — they
-    encode which credential matched. Both ``verify_token`` and
+    ``user_session`` is set when a session token matched and
+    ``api_key_record`` is the API key the credential acts through: the key
+    itself, or the key a session minted for unattended work is bound to. Both ``verify_token`` and
     ``load_access_token`` route on this distinction to project the right
     scope dimension; the lookup, expiry/validity check, and last-used bump
     are all shared via :func:`lookup_principal` so the two
@@ -347,7 +356,13 @@ def lookup_principal(
             return None
         if user_session.user is None:
             return None
-        return TokenLookup(user=user_session.user, user_session=user_session)
+        if user_session.api_key_id is not None and not session_key_is_valid(user_session):
+            return None
+        return TokenLookup(
+            user=user_session.user,
+            user_session=user_session,
+            api_key_record=user_session.api_key,
+        )
 
     api_key_record = lookup_api_key(token, session)
     if api_key_record is not None and api_key_record.is_valid():
@@ -363,6 +378,13 @@ def lookup_principal(
         return TokenLookup(user=api_key_record.user, api_key_record=api_key_record)
 
     return None
+
+
+def token_api_key(token: str, db: DBSession) -> APIKey | None:
+    """The API key a bearer token acts through: the key itself, or the key a
+    minted session is bound to. None for a login session or invalid token."""
+    principal = lookup_principal(token, db, record_use=False)
+    return principal.api_key_record if principal else None
 
 
 def system_scopes(principal: TokenLookup) -> list[str]:
@@ -390,7 +412,7 @@ def authenticate_request(
 
     # Otherwise treat as session token
     if session := get_user_session(request, db):
-        return session.user, None
+        return session.user, session.api_key
     return None, None
 
 
@@ -500,7 +522,8 @@ def request_api_key(request: Request, db: DBSession) -> APIKey | None:
     token = get_token(request)
     if token and any(token.startswith(prefix) for prefix in API_KEY_PREFIXES):
         return lookup_api_key(token, db)
-    return None
+    session = get_user_session(request, db)
+    return session.api_key if session else None
 
 
 def require_scope(scope: str):
@@ -523,54 +546,6 @@ def require_scope(scope: str):
         if has_scope(system_scopes(principal), scope):
             return user
         raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-    return Depends(checker)
-
-
-def require_key_types(*allowed_types: str):
-    """Dependency that restricts authentication to specific API key types.
-
-    By default, all key types are allowed. Use this to restrict endpoints
-    to only accept certain key types.
-
-    Usage:
-        @router.get("/discord-only")
-        def discord_endpoint(user: User = require_key_types("discord", "internal")):
-            # Only accepts discord or internal API keys (and session tokens)
-            ...
-
-    Args:
-        allowed_types: Key types to allow (e.g., "discord", "internal", "mcp").
-                      Session tokens (non-API-key auth) are always allowed since
-                      they represent interactive user sessions (logged in via
-                      username/password), which should have full access.
-    """
-    allowed_list = list(allowed_types)
-
-    def checker(request: Request, db: DBSession = Depends(get_session)) -> User:
-        # Check if middleware already authenticated this request
-        if hasattr(request.state, "authenticated_user_id"):
-            key_type = getattr(request.state, "authenticated_key_type", None)
-            # Session tokens (key_type=None) always bypass this check - they represent
-            # interactive user sessions with full access, not programmatic API keys
-            if key_type is None or key_type in allowed_list:
-                user = db.get(User, request.state.authenticated_user_id)
-                if user:
-                    return user
-            # Key type not in allowed list
-            raise HTTPException(
-                status_code=401,
-                detail=f"Authentication required with key type: {', '.join(allowed_list)}",
-            )
-
-        # Fall back to normal authentication (for whitelisted paths, etc.)
-        user = get_session_user(request, db, allowed_key_types=allowed_list)
-        if not user:
-            raise HTTPException(
-                status_code=401,
-                detail=f"Authentication required with key type: {', '.join(allowed_list)}",
-            )
-        return user
 
     return Depends(checker)
 
@@ -788,6 +763,8 @@ def setup_warnings(user: User) -> list[str]:
 def get_me(user: User = Depends(get_current_user)):
     """Get current user info, with the modules this instance runs."""
     return user.serialize() | {
+        # The credential's scopes; serialize() reads the account row's.
+        "scopes": user.scopes or [],
         "modules": sorted(enabled_modules()),
         "setup_warnings": setup_warnings(user),
     }

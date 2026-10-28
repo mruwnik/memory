@@ -15,12 +15,13 @@ from memory.api.MCP.servers.core import (
     get_current_user_access_filter,
 )
 from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
+from memory.api.auth import lookup_principal
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.api.search.search import searcher_keys
 from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
 from memory.api.search.types import MCPSearchFilters
-from memory.common.access_control import apply_access_filter_to_query
+from memory.common.access_control import UserProxy, apply_access_filter_to_query
 from memory.common import embedding, qdrant
 from memory.common.instance_settings import (
     ENABLE_BM25_SEARCH,
@@ -35,7 +36,7 @@ from memory.common.dates import parse_wall_clock_utc
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
-from memory.common.ssh_keys import container_key
+from memory.common.ssh_keys import can_use_key
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.notify import (
     format_notification_message,
@@ -46,7 +47,7 @@ from memory.common.version import db_revision, version_info
 from memory.common.db.models import (
     ScheduledTask,
     SourceItem,
-    UserSession,
+    SSHKey,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,39 +55,27 @@ logger = logging.getLogger(__name__)
 meta_mcp = FastMCP("memory-meta")
 
 
-def _get_user_session_from_token(session: DBSession) -> UserSession | None:
-    """Get the UserSession from the current access token.
-
-    Returns None if no token or user session found.
-    """
-    access_token = get_access_token()
-    if not access_token:
-        return None
-
-    user_session = session.get(UserSession, access_token.token)
-    if not user_session or not user_session.user:
-        return None
-    return user_session
-
-
 def _get_current_user(session: DBSession) -> dict:
     """Get the current authenticated user from the access token."""
-    user_session = _get_user_session_from_token(session)
-    if not user_session:
-        access_token = get_access_token()
-        if not access_token:
-            return {"authenticated": False}
+    access_token = get_access_token()
+    if not access_token:
+        return {"authenticated": False}
+    principal = lookup_principal(access_token.token, session, record_use=False)
+    if principal is None:
         return {"authenticated": False, "error": "User not found"}
 
-    user_info = user_info_for(session, user_session.user)
-    access_token = get_access_token()
+    user = principal.user
+    scopes = list(access_token.scopes or [])
+    key = session.get(SSHKey, user.default_ssh_key_id) if user.default_ssh_key_id else None
+    if key is not None and not can_use_key(key, UserProxy.from_user(user, scopes=scopes)):
+        key = None
     return {
         "authenticated": True,
         "token_type": "Bearer",
-        "scopes": access_token.scopes if access_token else [],
-        "client_id": access_token.client_id if access_token else None,
-        "user": user_info,
-        "public_key": key.public_key if (key := container_key(session, user_session.user)) else None,
+        "scopes": scopes,
+        "client_id": access_token.client_id,
+        "user": user_info_for(session, user),
+        "public_key": key.public_key if key else None,
     }
 
 

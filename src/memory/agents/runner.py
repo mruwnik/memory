@@ -87,6 +87,7 @@ class Claim:
     # When the run's definition was last saved; None for ad-hoc runs.
     saved_at: datetime | None = None
     provider_key_id: int | None = None
+    api_key_id: int | None = None
 
 
 def now() -> datetime:
@@ -116,15 +117,17 @@ def claim(run_id: str) -> Claim | None:
             run.max_cost_usd,
             definition.updated_at if definition else None,
             run.provider_key_id,
+            run.api_key_id,
         )
         db.commit()
         return claimed
 
 
-def mint_session(user_id: int, timeout_sec: int) -> str:
+def mint_session(user_id: int, timeout_sec: int, api_key_id: int | None) -> str:
     with make_session() as db:
         session = UserSession(
             user_id=user_id,
+            api_key_id=api_key_id,
             expires_at=(now() + timedelta(seconds=timeout_sec) + SESSION_GRACE).replace(
                 tzinfo=None
             ),
@@ -486,7 +489,7 @@ async def execute_run(run_id: str, hub_factory: HubFactory = open_toolhub) -> No
     try:
         spec = AgentSpec.model_validate(claimed.spec)
         timeout_sec = spec.timeout_sec
-        token = mint_session(claimed.user_id, spec.timeout_sec)
+        token = mint_session(claimed.user_id, spec.timeout_sec, claimed.api_key_id)
         async with asyncio.timeout(spec.timeout_sec):
             result = await run_loop(run_id, spec, claimed, token, hub_factory)
         status = RunStatus.DONE

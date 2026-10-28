@@ -38,7 +38,7 @@ from memory.common.scopes import (
 )
 from memory.api.auth import get_interactive_user, get_current_user, get_token, require_scope
 from memory.api.field_errors import field_error
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import credential_scopes, has_admin_scope, narrow_scopes
 from memory.common.people import make_identifier, people_with_email
 
 logger = logging.getLogger(__name__)
@@ -583,6 +583,12 @@ def list_user_api_keys(
     return [api_key_to_response(k) for k in keys]
 
 
+def scopes_beyond(holder: User, requested: list[str]) -> list[str]:
+    """The requested scopes ``holder`` does not have."""
+    allowed = narrow_scopes(credential_scopes(holder, None), requested)
+    return sorted(set(requested) - set(allowed))
+
+
 @router.post("/{user_id}/api-keys")
 def create_user_api_key(
     user_id: int,
@@ -604,18 +610,18 @@ def create_user_api_key(
                 detail=f"Invalid scopes: {', '.join(invalid_scopes)}",
             )
 
-        # Prevent scope escalation: API key scopes must be a subset of
-        # the requesting user's scopes (not the target user's scopes).
-        # This means admins can create keys for other users, but can only
-        # grant scopes they themselves possess.
-        granting_user_scopes = set(user.scopes or [])
-        if SCOPE_ADMIN not in granting_user_scopes:
-            disallowed = set(requested_scopes) - granting_user_scopes
-            if disallowed:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Cannot grant scopes you do not possess: {', '.join(sorted(disallowed))}",
-                )
+        # A key can't carry what its granter lacks, nor what its user lacks
+        # (credential_scopes would drop it at use anyway).
+        if disallowed := scopes_beyond(user, requested_scopes):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot grant scopes you do not possess: {', '.join(disallowed)}",
+            )
+        if disallowed := scopes_beyond(db.get_one(User, user_id), requested_scopes):
+            raise HTTPException(
+                status_code=400,
+                detail=f"The user does not have these scopes: {', '.join(disallowed)}",
+            )
 
     expires_at = None
     if data.expires_in_days:

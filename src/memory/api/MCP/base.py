@@ -21,7 +21,6 @@ from memory.api.auth import authenticate_user
 from memory.api.password_reset import sender_account
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
-from memory.api.MCP.access import fetch_user_by_token
 from memory.common.db.models import OAuthState
 from memory.common.module_settings import boot_modules
 from memory.common.qdrant import get_qdrant_client
@@ -67,11 +66,8 @@ SUBSERVER_PREFIXES = [s.value for s in MCPServer if s.value not in unmounted_ser
 
 
 def _get_user_info_for_middleware() -> dict:
-    """Get the current user's info for visibility middleware.
-
-    This is a lightweight version that doesn't do DB lookups - it uses
-    the access token directly. For full user info, use get_current_user().
-    """
+    """The caller's token and credential scopes for the visibility middleware,
+    without DB lookups."""
     access_token = get_access_token()
     logger.debug(f"_get_user_info_for_middleware: access_token={access_token}")
     if not access_token:
@@ -84,9 +80,6 @@ def _get_user_info_for_middleware() -> dict:
         "scopes": scopes,
         "client_id": access_token.client_id,
         "token": access_token.token,
-        # Note: user details are fetched lazily by get_current_user() if needed
-        # For visibility checks, scopes are usually sufficient
-        # Checkers needing user_id can look up UserSession via token
     }
 
 
@@ -202,29 +195,6 @@ async def handle_login(request: Request):
         if redirect_url.startswith("http://anysphere.cursor-retrieval"):
             redirect_url = redirect_url.replace("http://", "cursor://")
         return RedirectResponse(url=redirect_url, status_code=302)
-
-
-def get_current_user() -> dict:
-    access_token = get_access_token()
-
-    if not access_token:
-        return {"authenticated": False}
-
-    with make_session() as session:
-        user = fetch_user_by_token(session, access_token.token)
-
-        if user is None:
-            return {"authenticated": False}
-
-        user_info = user.serialize()
-
-    return {
-        "authenticated": True,
-        "token_type": "Bearer",
-        "scopes": access_token.scopes,
-        "client_id": access_token.client_id,
-        "user": user_info,
-    }
 
 
 @mcp.custom_route("/health", methods=["GET"])

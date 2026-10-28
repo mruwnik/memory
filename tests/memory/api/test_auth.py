@@ -831,10 +831,18 @@ def make_token(db_session, user_scopes, key_scopes, credential) -> str:
         db_session.commit()
         return row.id
     key = APIKey.create(user_id=user.id, scopes=key_scopes)
-    key.revoked = credential == "revoked_key"
+    key.revoked = credential.startswith("revoked_")
     db_session.add(key)
     db_session.commit()
-    return key.key
+    if credential.endswith("key"):
+        return key.key
+    # A session minted for unattended work acts through the key.
+    row = UserSession(
+        user_id=user.id, api_key_id=key.id, expires_at=datetime.now() + timedelta(days=1)
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row.id
 
 
 SCOPE_CASES = [
@@ -847,6 +855,12 @@ SCOPE_CASES = [
     (["*"], ["read"], "key", 403),
     ([SCOPE_CLAUDE_SESSIONS], ["read"], "key", 403),
     ([SCOPE_CLAUDE_SESSIONS], None, "revoked_key", 401),
+    # A key must never exceed its owner.
+    (["read"], [SCOPE_CLAUDE_SESSIONS], "key", 403),
+    (["read"], ["*"], "key", 403),
+    (["*"], ["read"], "key_session", 403),
+    (["*"], [SCOPE_CLAUDE_SESSIONS], "key_session", 200),
+    ([SCOPE_CLAUDE_SESSIONS], None, "revoked_key_session", 401),
 ]
 
 
@@ -890,3 +904,35 @@ def test_me_lists_the_enabled_modules(client):
 
     assert response.status_code == 200
     assert response.json()["modules"] == sorted(MODULES)
+
+
+@pytest.mark.parametrize(
+    "credential,has_key",
+    [("session", False), ("key", True), ("key_session", True), ("revoked_key", False)],
+)
+def test_token_api_key_is_the_key_a_token_acts_through(db_session, credential, has_key):
+    token = make_token(db_session, ["*"], ["read"], credential)
+
+    key = auth.token_api_key(token, db_session)
+
+    assert (key is not None) is has_key
+
+
+@pytest.mark.parametrize(
+    "credential,key_scopes,expected",
+    [
+        ("session", None, ["*"]),
+        ("key", ["read", "notes"], ["notes", "read"]),
+        ("key", None, ["*", "read", "write"]),
+    ],
+)
+def test_me_shows_the_credentials_scopes(db_session, monkeypatch, credential, key_scopes, expected):
+    monkeypatch.setattr(settings, "DISABLE_AUTH", False)
+    token = make_token(db_session, ["*"], key_scopes, credential)
+    app = FastAPI()
+    app.include_router(auth.router)
+    app.add_middleware(auth.AuthenticationMiddleware)
+
+    response = TestClient(app).get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert sorted(response.json()["scopes"]) == expected

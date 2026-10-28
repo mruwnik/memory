@@ -9,6 +9,7 @@ from memory.api.users import check_single_user
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import (
+    APIKey,
     ArticleFeed,
     BotUser,
     EmailAccount,
@@ -51,6 +52,16 @@ def test_status_reveals_only_whether_an_account_is_needed(setup_client, db_sessi
 
 def test_status_for_a_stranger_once_an_account_exists(setup_client, admin_user):
     assert setup_client.get("/setup/status").json() == {"needs_account": False}
+
+
+def test_status_details_are_for_login_sessions_only(setup_client, db_session, admin_user):
+    key = APIKey.create(user_id=admin_user.id, scopes=["read"])
+    db_session.add(key)
+    db_session.commit()
+
+    assert setup_client.get("/setup/status", headers=bearer(key.key)).json() == {
+        "needs_account": False
+    }
 
 
 def test_claiming_creates_a_signed_in_admin(setup_client, db_session):

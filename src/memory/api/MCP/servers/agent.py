@@ -66,7 +66,7 @@ from memory.agents.spec import (
     is_denied,
     spec_errors,
 )
-from memory.api.auth import lookup_api_key
+from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.scheduler import (
     build_scheduled_task,
@@ -423,7 +423,7 @@ async def run(
         else:
             parsed, ref = parse_spec(spec or {}), {}
         await check_spec(parsed)
-        api_key = lookup_api_key(token, db)
+        api_key = token_api_key(token, db)
         trigger = TriggerInfo(kind="mcp" if api_key else "manual", ref=ref)
         try:
             started = enqueue_run(
@@ -692,7 +692,7 @@ async def trigger_upsert(
             raise ValueError(f"invalid trigger config: {e}") from e
         spec = parse_spec(definition.spec)
         await check_spec(spec)
-        key = lookup_api_key(token, db)
+        key = token_api_key(token, db)
         was_enabled = existing is not None and existing.enabled
         will_be_enabled = was_enabled if enabled is None and existing else enabled is not False
         if will_be_enabled and not was_enabled:
@@ -815,7 +815,7 @@ async def schedule(
     with make_session() as db:
         definition = owned_definition(db, definition_id, user_id)
         await check_spec(parse_spec(definition.spec))
-        key = lookup_api_key(token, db)
+        key = token_api_key(token, db)
         stamp = {"definition_id": definition.id, "api_key_id": key.id if key else None}
         topic = f"agent: {definition.name}"
         if task_id is None:

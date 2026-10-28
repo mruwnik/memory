@@ -10,15 +10,16 @@ from fastmcp.server.dependencies import get_access_token
 from sqlalchemy import nullslast
 from sqlalchemy.exc import IntegrityError
 
-from memory.api.auth import lookup_api_key
+from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
+from memory.common.access_control import UserProxy
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
 from memory.common.claude_spawn import check_dev_channels_server
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledTask, TaskExecution, User
+from memory.common.db.models import ScheduledTask, SSHKey, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import CLAUDE_CONTAINERS
@@ -28,7 +29,7 @@ from memory.common.scopes import (
     SCOPE_SCHEDULE_WRITE,
     has_scope,
 )
-from memory.common.ssh_keys import container_key
+from memory.common.ssh_keys import can_use_key
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,14 @@ def get_authenticated_user_id() -> int:
     if user_id is None:
         raise ValueError("User not found")
     return user_id
+
+
+def current_caller(session) -> UserProxy:
+    """The caller, with the scopes of the credential they called with."""
+    caller = get_mcp_current_user(session)
+    if caller is None:
+        raise ValueError("Not authenticated")
+    return caller
 
 
 def get_owned_task(session, task_id: str, user_id: int) -> ScheduledTask:
@@ -145,18 +154,35 @@ def validate_spawn_config_keys(spawn_config: dict[str, Any]) -> None:
         raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
 
 
-def validate_spawn_choices(session, user_id: int, spawn_config: dict[str, Any]) -> None:
+def validate_spawn_choices(session, spawn_config: dict[str, Any]) -> None:
     """Fail at scheduling time rather than on every fire; /claude/spawn
-    re-checks both as the owner when the schedule fires."""
+    re-checks both with the scheduling credential when the schedule fires."""
     key_id = spawn_config.get("ssh_key_id")
     if key_id is not None:
         if type(key_id) is not int:
             raise ValueError("ssh_key_id must be an integer")
-        container_key(session, session.get(User, user_id), key_id)
+        key = session.get(SSHKey, key_id)
+        if key is None or not can_use_key(key, current_caller(session)):
+            raise ValueError("SSH key is not available")
     dev_channels_server = spawn_config.get("dev_channels_server")
     if dev_channels_server is not None and not isinstance(dev_channels_server, str):
         raise ValueError("dev_channels_server must be a string")
     check_dev_channels_server(dev_channels_server)
+
+
+def check_default_ssh_key(session, spawn_config: dict[str, Any]) -> None:
+    """A fire without ssh_key_id uses the owner's default key, so the
+    scheduling credential must be allowed it too."""
+    if spawn_config.get("use_ssh_key") is False or spawn_config.get("ssh_key_id") is not None:
+        return
+    caller = current_caller(session)
+    default_id = session.get_one(User, caller.id).default_ssh_key_id
+    key = session.get(SSHKey, default_id) if default_id is not None else None
+    if key is not None and not can_use_key(key, caller):
+        raise ValueError(
+            "Your default SSH key is not available to this credential; "
+            "pass ssh_key_id or set use_ssh_key to false"
+        )
 
 
 def session_principal(session) -> int | None:
@@ -165,7 +191,14 @@ def session_principal(session) -> int | None:
     token = get_access_token()
     if token is None or not has_scope(list(token.scopes or []), SCOPE_CLAUDE_SESSIONS):
         raise ValueError(f"scheduling Claude sessions needs the '{SCOPE_CLAUDE_SESSIONS}' scope")
-    key = lookup_api_key(token.token, session)
+    return scheduling_key_id(session)
+
+
+def scheduling_key_id(session) -> int | None:
+    """The API key the caller schedules through (None: a login session), which
+    the work acts with when it fires."""
+    token = get_access_token()
+    key = token_api_key(token.token, session) if token else None
     return key.id if key else None
 
 
@@ -275,9 +308,13 @@ def build_scheduled_task(
         task.message = message
         task.notification_channel = notification_channel
         task.notification_target = resolve_and_validate_target(
-            session, user_id, notification_channel, notification_target
+            session, current_caller(session), notification_channel, notification_target
         )
-        task.data = {"notification_type": "notify_user", "subject": topic}
+        task.data = {
+            "notification_type": "notify_user",
+            "subject": topic,
+            "api_key_id": scheduling_key_id(session),
+        }
     elif task_type == TaskType.AGENT_RUN:
         if not agent_run:
             raise ValueError("agent_run tasks require a definition and input")
@@ -290,7 +327,8 @@ def build_scheduled_task(
                 "claude_session tasks require message (the initial prompt)"
             )
         validate_spawn_config_keys(spawn_config)
-        validate_spawn_choices(session, user_id, spawn_config)
+        validate_spawn_choices(session, spawn_config)
+        check_default_ssh_key(session, spawn_config)
         task.message = message
         task.topic = topic or message[:100]
         task.data = {"spawn_config": spawn_config}
@@ -452,24 +490,26 @@ async def upsert(
             if not task.notification_channel:
                 raise ValueError("notification_target requires a notification_channel")
             task.notification_target = resolve_and_validate_target(
-                session, user_id, task.notification_channel, notification_target
+                session, current_caller(session), task.notification_channel, notification_target
             )
         elif channel_changed and task.notification_target and task.notification_channel:
             # The stored target was validated for the OLD channel; a channel
             # change must re-resolve it (or surface a clear error) rather than
             # leave a target that silently breaks at dispatch.
             task.notification_target = resolve_and_validate_target(
-                session, user_id, task.notification_channel, task.notification_target
+                session, current_caller(session), task.notification_channel, task.notification_target
             )
 
         if task.task_type == TaskType.CLAUDE_SESSION and changes:
             task.data = {**(task.data or {}), "api_key_id": session_principal(session)}
+        if task.task_type == TaskType.NOTIFICATION and changes:
+            task.data = {**(task.data or {}), "api_key_id": scheduling_key_id(session)}
 
         if spawn_config is not None:
             if task.task_type != "claude_session":
                 raise ValueError("spawn_config can only be set on claude_session tasks")
             validate_spawn_config_keys(spawn_config)
-            validate_spawn_choices(session, user_id, spawn_config)
+            validate_spawn_choices(session, spawn_config)
 
             data = dict(task.data or {})
             existing = dict(data.get("spawn_config") or {})
@@ -480,6 +520,9 @@ async def upsert(
                     existing[key] = value
             data["spawn_config"] = existing
             task.data = data
+
+        if task.task_type == TaskType.CLAUDE_SESSION and changes:
+            check_default_ssh_key(session, (task.data or {}).get("spawn_config") or {})
 
         if task.enabled and not was_active:
             # This update re-activated a previously-inactive task — enforce the

@@ -18,9 +18,11 @@ from typing import Any
 
 import requests
 from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError
 
 from memory.agents.principal import PrincipalRevoked, standing_key
 from memory.common import discord as discord_utils
+from memory.common.access_control import UserProxy, credential_scopes
 from memory.common import settings
 from memory.common.celery_app import (
     EXECUTE_SCHEDULED_TASK,
@@ -31,6 +33,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
+    APIKey,
     DiscordBot,
     EmailAccount,
     ScheduledTask,
@@ -44,7 +47,12 @@ from memory.common.db.models.scheduled_tasks import (
     compute_next_cron,
 )
 from memory.common.db.models.slack import SlackUserCredentials
-from memory.common.discord_data import discord_target_is_channel
+from memory.common.discord_data import (
+    caller_can_see_discord_channel,
+    caller_can_see_discord_user,
+    discord_channel_for_target,
+    discord_target_is_channel,
+)
 from memory.common.email_sender import (
     PASSWORD_RESET_HEADER,
     get_account_by_address,
@@ -334,12 +342,13 @@ def sanitize_slug(text: str, max_length: int = 30) -> str:
 
 
 @contextmanager
-def session_token(db, user_id: int):
-    """Create a short-lived session token that is cleaned up on exit.
+def session_token(db, user_id: int, api_key_id: int | None):
+    """Create a short-lived session token, acting through ``api_key_id`` when
+    set, that is cleaned up on exit.
 
     Usage::
 
-        with session_token(db_session, user_id) as token:
+        with session_token(db_session, user_id, api_key_id) as token:
             requests.post(url, headers={"Authorization": f"Bearer {token}"})
 
     The token row is deleted in the ``finally`` block regardless of success or
@@ -347,11 +356,18 @@ def session_token(db, user_id: int):
     """
     user_session = UserSession(
         user_id=user_id,
+        api_key_id=api_key_id,
         expires_at=datetime.now(timezone.utc).replace(tzinfo=None)
         + timedelta(minutes=5),
     )
     db.add(user_session)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # The key was deleted since it was checked; leave the session usable
+        # so the caller can record the failure.
+        db.rollback()
+        raise ValueError(f"the API key {api_key_id} this session acts through is gone")
     token = user_session.id
     try:
         yield token
@@ -360,7 +376,7 @@ def session_token(db, user_id: int):
         db.commit()
 
 
-def spawn_claude_session(task: ScheduledTask, db) -> str:
+def spawn_claude_session(task: ScheduledTask, db, api_key_id: int | None) -> str:
     """Spawn a Claude Code session by calling the API's /claude/spawn endpoint.
 
     The worker cannot talk to the orchestrator socket directly (only the API
@@ -370,6 +386,7 @@ def spawn_claude_session(task: ScheduledTask, db) -> str:
     Args:
         task: The ScheduledTask containing spawn_config in its data.
         db: SQLAlchemy session for creating/cleaning up the auth token.
+        api_key_id: The API key the session acts through (None: the owner).
 
     Returns the session_id of the spawned container.
     """
@@ -411,7 +428,7 @@ def spawn_claude_session(task: ScheduledTask, db) -> str:
     # Pointing this at an external hostname would leak the token in transit.
     url = f"{settings.INTERNAL_API_URL}/claude/spawn"
 
-    with session_token(db, task.user_id) as token:
+    with session_token(db, task.user_id, api_key_id) as token:
         resp = requests.post(
             url,
             json=spawn_config,
@@ -436,7 +453,33 @@ def check_session_principal(db, task: ScheduledTask) -> int | None:
     return key.id if key else None
 
 
-def revoke_session_schedule(db, task: ScheduledTask, error: PrincipalRevoked) -> None:
+def check_notification_principal(db, task: ScheduledTask) -> None:
+    """Re-check, at fire time, that the API key a notification was scheduled
+    through is still valid and may still address its target. Only Discord
+    targets depend on scopes: admins may DM anyone, others whom their bots have seen."""
+    key_id = (task.data or {}).get("api_key_id")
+    if key_id is None:
+        return
+    user = db.get(User, task.user_id)
+    if user is None:
+        raise PrincipalRevoked(f"user {task.user_id} no longer exists")
+    key = db.get(APIKey, key_id)
+    if key is None or not key.is_valid():
+        raise PrincipalRevoked(f"the API key that set this up ({key_id}) is no longer valid")
+    if task.notification_channel != "discord" or not task.notification_target:
+        return
+    caller = UserProxy.from_user(user, scopes=credential_scopes(user, key))
+    channel = discord_channel_for_target(db, task.notification_target)
+    visible = (
+        caller_can_see_discord_channel(db, caller, channel)
+        if channel is not None
+        else caller_can_see_discord_user(db, caller, int(task.notification_target))
+    )
+    if not visible:
+        raise PrincipalRevoked("the API key that set this up may not message its target")
+
+
+def revoke_schedule(db, task: ScheduledTask, error: PrincipalRevoked) -> None:
     """Disable the schedule, so its owner is told once rather than every tick."""
     task.enabled = False
     db.commit()
@@ -447,7 +490,7 @@ def revoke_session_schedule(db, task: ScheduledTask, error: PrincipalRevoked) ->
         notify_user_now(
             db,
             user,
-            subject=f"Scheduled Claude session paused: {task.topic or task.id}",
+            subject=f"Scheduled task paused: {task.topic or task.id}",
             message=f"Scheduled task {task.id} was disabled: {error}",
         )
     except Exception:
@@ -519,6 +562,11 @@ def execute_scheduled_task(self, execution_id: str):
                     raise ValueError(
                         "Missing notification_channel or notification_target"
                     )
+                try:
+                    check_notification_principal(session, task)
+                except PrincipalRevoked as e:
+                    revoke_schedule(session, task, e)
+                    raise
 
                 sent = deliver_notification(params)
                 if sent:
@@ -530,9 +578,9 @@ def execute_scheduled_task(self, execution_id: str):
                 try:
                     api_key_id = check_session_principal(session, task)
                 except PrincipalRevoked as e:
-                    revoke_session_schedule(session, task, e)
+                    revoke_schedule(session, task, e)
                     raise
-                session_id = spawn_claude_session(task, session)
+                session_id = spawn_claude_session(task, session, api_key_id)
                 # The API's container reconciler finishes it once the container exits.
                 final_status = ExecutionStatus.RUNNING
                 execution_data = {"session_id": session_id, "api_key_id": api_key_id}

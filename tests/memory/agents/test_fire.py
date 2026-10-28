@@ -48,7 +48,7 @@ def setup(db, user, spec=SPEC, enabled=True, config=CONFIG):
     return t
 
 
-def post(db, title="Post", project_id=None):
+def post(db, title="Post", project_id=None, creator_id=None):
     p = BlogPost(
         sha256=unique_sha256("p"),
         modality="blog",
@@ -57,6 +57,7 @@ def post(db, title="Post", project_id=None):
         tags=["ai"],
         embed_status="STORED",
         project_id=project_id,
+        creator_id=creator_id,
     )
     db.add(p)
     db.commit()
@@ -184,10 +185,31 @@ def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_provi
     trigger.api_key_id, trigger.via_api_key = key.id, True
     db_session.commit()
 
-    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(post(db_session))))
+    item = post(db_session, creator_id=admin_user.id)
+
+    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(item)))
 
     assert run is not None
     assert (run.api_key_id, sorted(run.scopes)) == (key.id, scopes)
+
+
+@pytest.mark.parametrize("key_scopes,runs", [(["*"], 1), (["agents", "read"], 0)])
+def test_a_trigger_reads_items_with_its_keys_scopes(
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, key_scopes, runs
+):
+    key = APIKey.create(user_id=admin_user.id, name="k", scopes=key_scopes)
+    db_session.add(key)
+    db_session.commit()
+    trigger = setup(db_session, admin_user)
+    trigger.api_key_id, trigger.via_api_key = key.id, True
+    db_session.commit()
+    admin_only = post(db_session)
+
+    fire_trigger(trigger.id, claimed(admin_only))
+    matched = triggers.match_ingest_triggers(admin_only.id, fakeredis.FakeRedis())
+
+    assert db_session.query(AgentRun).count() == runs
+    assert matched == [trigger.id] * runs
 
 
 def test_a_deleted_pinned_provider_key_trips_the_breaker(

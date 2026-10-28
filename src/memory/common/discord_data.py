@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import desc
 
 from memory.common import discord as discord_client
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
@@ -45,7 +45,7 @@ def discord_target_is_channel(session: DBSession, target: str | int) -> bool:
 
 
 def caller_can_see_discord_user(
-    db: DBSession, caller: User, discord_user_id: int
+    db: DBSession, caller: UserLike, discord_user_id: int
 ) -> bool:
     """Return True if ``caller`` is allowed to read a particular DiscordUser row.
 
@@ -71,7 +71,7 @@ def caller_can_see_discord_user(
 
 
 def caller_can_see_discord_channel(
-    db: DBSession, caller: User, channel: DiscordChannel
+    db: DBSession, caller: UserLike, channel: DiscordChannel
 ) -> bool:
     """A channel is visible iff its server belongs to one of the caller's bots.
 

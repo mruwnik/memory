@@ -14,7 +14,7 @@ import httpx
 
 from memory.common.db.connection import DBSession
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
-from memory.common.db.models.users import User
+from memory.common.access_control import UserLike
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def slack_target_is_dm(target: str) -> bool:
     return target[:1].upper() in SLACK_USER_PREFIXES
 
 
-def user_has_workspace_membership(db: DBSession, workspace_id: str, user: User) -> bool:
+def user_has_workspace_membership(db: DBSession, workspace_id: str, user: UserLike) -> bool:
     """Cheap any-app membership probe used to gate workspace-level views.
 
     Returns True if the user has at least one credential for this

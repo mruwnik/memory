@@ -17,7 +17,7 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
 from memory.api.auth import lookup_principal, system_scopes
 from memory.common.db.connection import make_session
-from memory.common.scopes import SCOPE_ADMIN
+from memory.common.access_control import narrow_scopes
 
 
 @dataclass(frozen=True)
@@ -26,14 +26,6 @@ class ToolInfo:
     description: str
     input_schema: dict[str, Any]
     read_only: bool
-
-
-def narrow(granted: list[str], requested: list[str]) -> list[str]:
-    if SCOPE_ADMIN in granted:
-        return list(requested)
-    if SCOPE_ADMIN in requested:
-        return list(granted)
-    return [scope for scope in requested if scope in granted]
 
 
 def granted_scopes(token: str) -> list[str]:
@@ -84,7 +76,7 @@ async def memory_tools(token: str, scopes: list[str]) -> AsyncIterator[MemoryToo
     from memory.api.MCP.base import mcp
 
     access = AccessToken(
-        token=token, client_id="agent-run", scopes=narrow(granted_scopes(token), scopes)
+        token=token, client_id="agent-run", scopes=narrow_scopes(granted_scopes(token), scopes)
     )
     # Set before the client spawns the in-memory server task, which copies the
     # current context, so each client's identity is fixed at creation.

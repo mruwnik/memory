@@ -211,37 +211,26 @@ def has_admin_scope(user: UserLike) -> bool:
     return SCOPE_ADMIN in scopes
 
 
-def resolve_api_key_scopes(api_key_record: APIKey, user: User) -> list[str]:
-    """Resolve effective scopes for a request authenticated by API key.
-
-    Distinguishes "no override declared" from "explicit empty override"
-    so an admin-minted low-privilege key (``scopes=[]``) cannot collapse
-    back to the user's full system scopes via a truthiness fallback:
-
-    * ``scopes is None`` → inherit user scopes (or ``[SCOPE_READ]`` if
-      the user themselves has none).
-    * Non-empty list → use as-is.
-    * Explicit empty list → fail closed to ``[SCOPE_READ]`` only, never
-      the user's system scopes. This is the safe default for "this key
-      has no privileges beyond read."
-    """
-    override = api_key_record.scopes
-    if override is None:
-        # Intentional inherit-from-user. Default to [SCOPE_READ] if the
-        # user themselves has no scopes set (matches prior behaviour).
-        return list(user.scopes or []) or [SCOPE_READ]
-    # Explicit list — empty list means "no privileges beyond read",
-    # NOT "fall back to user.scopes". This is the security-critical
-    # distinction.
-    return list(override) or [SCOPE_READ]
+def narrow_scopes(granted: list[str], requested: list[str]) -> list[str]:
+    """``requested`` limited to what ``granted`` allows, ``*`` being everything."""
+    if SCOPE_ADMIN in granted:
+        return list(requested)
+    if SCOPE_ADMIN in requested:
+        return list(granted)
+    return [scope for scope in requested if scope in granted]
 
 
 def credential_scopes(user: User, api_key: APIKey | None) -> list[str]:
-    """The system scopes a credential carries: an API key's own (see
-    ``resolve_api_key_scopes``), or a session's user scopes plus read/write."""
-    if api_key is not None:
-        return resolve_api_key_scopes(api_key, user)
-    return sorted(set(user.scopes or []) | {SCOPE_READ, SCOPE_WRITE})
+    """The system scopes a credential carries. A login session has its user's
+    scopes plus read/write. An API key has its own scopes capped by that, or
+    exactly that when it has none of its own; an explicit empty list is
+    read-only rather than a fallback to the user's."""
+    session_scopes = sorted(set(user.scopes or []) | {SCOPE_READ, SCOPE_WRITE})
+    if api_key is None or api_key.scopes is None:
+        return session_scopes
+    if api_key.scopes == []:
+        return [SCOPE_READ]
+    return narrow_scopes(session_scopes, list(api_key.scopes))
 
 
 def get_user_project_roles(db: "Session | scoped_session[Session]", user: UserLike) -> dict[int, str]:

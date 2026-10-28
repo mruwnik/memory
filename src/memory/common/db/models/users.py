@@ -253,8 +253,8 @@ class APIKey(Base):
     key_type: Mapped[str] = mapped_column(
         String, nullable=False, default=APIKeyType.INTERNAL
     )
-    # Scopes override - if set, these scopes are used instead of the user's scopes.
-    # If None, authentication falls back to the user's default scopes.
+    # The key's own scopes, capped by its user's; None acts as the user, [] is
+    # read-only. See access_control.credential_scopes.
     scopes: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
@@ -361,9 +361,15 @@ class UserSession(Base):
         DateTime, server_default=func.now()
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # Set on sessions minted for unattended work, which then act with this
+    # key's scopes rather than the user's.
+    api_key_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     # Relationship to user
     user: Mapped[User] = relationship("User", back_populates="sessions")
+    api_key: Mapped["APIKey | None"] = relationship("APIKey")
     oauth_state: Mapped[OAuthState | None] = relationship(
         "OAuthState", back_populates="session"
     )

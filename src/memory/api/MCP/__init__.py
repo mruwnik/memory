@@ -17,6 +17,6 @@ Subservers are mounted with prefixes. Tool names after mounting:
 """
 
 # Import base to trigger subserver mounting
-from memory.api.MCP.base import mcp, get_current_user
+from memory.api.MCP.base import mcp
 
-__all__ = ["mcp", "get_current_user"]
+__all__ = ["mcp"]

@@ -4,7 +4,6 @@ import logging
 from datetime import datetime, timezone
 
 from memory.agents.enqueue import TriggerInfo, enqueue_run
-from memory.agents.principal import PrincipalRevoked, standing_key
 from memory.agents.spec import MAX_TEXT_CHARS, AgentSpec
 from memory.agents.triggers import (
     INGEST,
@@ -14,11 +13,11 @@ from memory.agents.triggers import (
     dedupe_key,
     edited_ids,
     render_input,
+    trigger_key,
 )
 from memory.common.notify import notify_user_now
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import AgentTrigger, SourceItem, User
-from memory.common.scopes import SCOPE_AGENTS
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +65,14 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
         owner = db.get(User, definition.user_id)
         if owner is None:
             return None
-        allowed = accessible_ids(db, owner, [d.item_id for d in claimed])
-        if not allowed:
-            return None
-        delivered = [d for d in claimed if d.item_id in allowed]
-        items = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).order_by(SourceItem.id).all()
         config = IngestConfig.model_validate(trigger.config)
         try:
-            if trigger.via_api_key and trigger.api_key_id is None:
-                raise PrincipalRevoked("the API key that set up this trigger was deleted")
-            key = standing_key(db, owner, trigger.api_key_id, SCOPE_AGENTS)
+            key = trigger_key(db, trigger, owner)
+            allowed = accessible_ids(db, owner, key, [d.item_id for d in claimed])
+            if not allowed:
+                return None
+            delivered = [d for d in claimed if d.item_id in allowed]
+            items = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).order_by(SourceItem.id).all()
             run = enqueue_run(
                 db,
                 user_id=owner.id,

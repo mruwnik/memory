@@ -68,20 +68,8 @@ def get_current_user_access_filter() -> AccessFilter | None:
         AccessFilter with user's project access conditions,
         or None if the principal is effectively superadmin.
 
-    Scope source: the *access token's* scopes, which are the resolved
-    set already produced by ``SimpleOAuthProvider.verify_token`` /
-    ``load_access_token``:
-
-      - For UserSession tokens: ``user.scopes ∪ {read, write}`` —
-        admin users keep their ``*``, so admin-via-session still
-        bypasses the filter.
-      - For APIKey tokens: ``api_key.scopes`` if the override is set,
-        else ``user.scopes``. An admin who mints a ``[\"read\"]``-scoped
-        integration key therefore gets a non-None AccessFilter for
-        that key — the ``APIKey.scopes`` override is honoured at the
-        data layer (not just at the visibility / OAuth-gate layer), so
-        a leaked least-privilege integration key cannot inherit the
-        underlying user's full data access.
+    Scope source: the access token's scopes (``credential_scopes``), so an
+    admin's narrowly scoped API key gets a filter rather than admin access.
     """
     with make_session() as session:
         user = get_mcp_current_user(session)

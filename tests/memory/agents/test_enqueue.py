@@ -243,7 +243,7 @@ def test_session_runs_snapshot_the_scopes_sessions_get_over_http(
 @pytest.mark.parametrize(
     "key_scopes,expected",
     [
-        (None, ["teams"]),  # a key without its own scopes inherits the user's
+        (None, ["read", "teams", "write"]),  # a key without its own scopes acts as its user
         (["read"], ["read"]),
     ],
 )

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.auth import handle_api_key_use, is_expired, lookup_api_key, lookup_principal
+from memory.api.auth import lookup_principal
 from memory.common.access_control import (
     AccessFilter,
     SensitivityLevel,
@@ -26,7 +26,7 @@ from memory.common.access_control import (
     user_can_create_in_project,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import SourceItem, User, UserSession
+from memory.common.db.models import SourceItem, User
 from memory.common.db.models.access import log_access
 
 logger = logging.getLogger(__name__)
@@ -152,44 +152,13 @@ def build_user_access_filter(user: "User") -> AccessFilter | None:
     return build_access_filter(user, project_roles)
 
 
-def is_session_expired(user_session: UserSession) -> bool:
-    """Return True if the session's expires_at is in the past.
-
-    Thin wrapper around :func:`memory.api.auth.is_expired` — the
-    naive/aware normalization logic was previously duplicated here, with
-    even this docstring citing auth.py as the reference implementation.
-    Two security-critical session-expiry checks side-by-side are a
-    drift hazard, so we delegate to the canonical helper.
-
-    A session with no expires_at is treated as expired (fail-closed) by
-    is_expired().
-    """
-    return is_expired(user_session.expires_at)
-
-
 def fetch_user_by_token(
     session: "Session | scoped_session[Session]", token: str
 ) -> User | None:
-    """Look up a user by token (session token or API key).
-
-    For API keys, validates expiry via is_valid() and records use via
-    handle_api_key_use() to mirror the REST auth path.
-    """
-    user_session = session.get(UserSession, token)
-    if user_session and user_session.user and not is_session_expired(user_session):
-        return user_session.user
-
-    api_key_record = lookup_api_key(token, session)
-    if api_key_record is None or not api_key_record.is_valid():
-        return None
-
-    # Eagerly load user before handle_api_key_use, which commits. This
-    # prevents DetachedInstanceError on lazy load.
-    user = api_key_record.user
-    if user is None:
-        return None
-    handle_api_key_use(api_key_record, session)
-    return user
+    """The user a session token or API key authenticates as; identity only,
+    since a raw ``User`` carries the account's scopes, not the credential's."""
+    principal = lookup_principal(token, session)
+    return principal.user if principal else None
 
 
 def get_mcp_current_user(

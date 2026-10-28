@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from memory.api.auth import create_user, create_user_session, get_session_user
+from memory.api.auth import authenticate_request, create_user, create_user_session
 from memory.api.password_reset import require_rate_limit
 from memory.api.users import link_person_to_user, validate_password_strength
 from memory.common import settings
@@ -133,12 +133,13 @@ def mcp_clients(db: Session, user_id: int) -> list[str]:
 
 @router.get("/status")
 def status(request: Request, db: Session = Depends(get_session)) -> dict:
-    """Unauthenticated callers learn only whether the instance still needs its first account."""
+    """Callers without a login session (strangers, API keys) learn only whether
+    the instance still needs its first account."""
     unclaimed = needs_account(db)
     if unclaimed:
         setup_token()
-    user = get_session_user(request, db)
-    if user is None:
+    user, key = authenticate_request(request, db)
+    if user is None or key is not None:
         return {"needs_account": unclaimed}
     return {
         "needs_account": unclaimed,

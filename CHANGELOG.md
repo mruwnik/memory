@@ -46,6 +46,19 @@ LessWrong comments are now ingested and searchable, and the LessWrong sync is
 configured from the Forums tab (admin only) instead of code defaults.
 Comments carry their post's tags plus `comment`, so a tag filter can find them.
 
+An API key's scopes are now capped by its user's: a key never carries a scope
+its user lacks (e.g. `*` minted for a non-admin, or kept after a demotion). A key
+without its own scopes now acts exactly as its user's login session does,
+including `read` and `write`. Creating a key with scopes its user lacks is
+refused. Scheduled Claude sessions, scheduled notifications and agent runs set
+up through an API key act with that key's scopes when they fire (a notification
+whose key is gone pauses like a Claude session), and ingest triggers only see
+items that key may read. Scheduled Claude sessions set up through a key without
+`*` whose owner's default SSH key is a shared one now fail every fire: re-save
+them with `ssh_key_id` set to a key of the owner's, or with `use_ssh_key` false.
+`/auth/me` reports the credential's scopes, and `/setup/status` gives source
+counts and MCP clients only to a login session.
+
 Search takes an `exclude_tags` filter (MCP `search` and the search page's
 "Exclude tags" picker) that leaves out items carrying any of those tags, e.g.
 `["comment"]` for LessWrong posts without their comments.
@@ -130,6 +143,8 @@ neither the secrets nor the schedules' token fields come back.
 `key_preview`, and drops `users.api_key` and the `user_has_auth_method` check.
 Fast. Downgrading can't restore the keys: it revokes every API key, and each
 has to be reissued.
+
+`20261116_session_api_key` adds a nullable, indexed `api_key_id` to `user_sessions`. Fast.
 
 ### Post-deploy commands
 

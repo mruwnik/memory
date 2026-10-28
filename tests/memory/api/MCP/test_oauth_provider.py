@@ -10,7 +10,7 @@ from mcp.shared.auth import OAuthClientInformationFull
 from sqlalchemy.pool import QueuePool
 
 from memory.api import auth
-from memory.common.access_control import resolve_api_key_scopes
+from memory.common.access_control import credential_scopes
 from memory.api.MCP.oauth_provider import (
     SimpleOAuthProvider,
     resolve_session_scopes,
@@ -350,65 +350,33 @@ async def test_verify_token_with_api_key_uses_key_scopes_when_set(db_session):
     assert "*" not in result.scopes
 
 
-# --- resolve_api_key_scopes — empty-list privilege-escalation regression ---
-#
-# Pre-fix bug: ``api_key.scopes or list(user.scopes or [])`` collapsed
-# ``None`` and ``[]`` to the same fallback. An admin who passes
-# ``scopes=[]`` to "make a low-privilege key" got a key carrying
-# ``user.scopes`` — including ``["*"]``. Now ``[]`` is treated as
-# "no override privileges" and falls through to ``[SCOPE_READ]``.
-
-
-def test_resolve_api_key_scopes_none_inherits_user_scopes():
-    """``scopes=None`` is the documented inherit-from-user case (hermetic)."""
-    user = MagicMock(spec=User)
-    user.scopes = ["organizer", "github"]
-    key = MagicMock(spec=APIKey)
-    key.scopes = None
-    assert sorted(resolve_api_key_scopes(key, user)) == ["github", "organizer"]
-
-
-def test_resolve_api_key_scopes_empty_list_does_not_inherit_user_scopes():
-    """REGRESSION: ``scopes=[]`` must NOT silently grant user.scopes.
-
-    A key with explicit empty scopes should be the most-restricted state,
-    not the most-permissive.
-    """
-    user = MagicMock(spec=User)
-    user.scopes = ["*"]
-    key = MagicMock(spec=APIKey)
-    key.scopes = []
-    resolved = resolve_api_key_scopes(key, user)
-    assert "*" not in resolved, "Empty-list override silently granted admin"
-    # Falls back to read-only (which is the safe default).
-    assert resolved == ["read"]
-
-
-def test_resolve_api_key_scopes_explicit_list_used_verbatim():
-    """Non-empty explicit override is used as-is, ignoring user.scopes."""
-    user = MagicMock(spec=User)
-    user.scopes = ["*"]
-    key = MagicMock(spec=APIKey)
-    key.scopes = ["read", "organizer"]
-    assert sorted(resolve_api_key_scopes(key, user)) == ["organizer", "read"]
-
-
-def test_resolve_api_key_scopes_inherit_with_no_user_scopes_defaults_to_read():
-    """If we inherit from a user with no scopes, default to [SCOPE_READ]."""
-    user = MagicMock(spec=User)
-    user.scopes = []
-    key = MagicMock(spec=APIKey)
-    key.scopes = None
-    assert resolve_api_key_scopes(key, user) == ["read"]
-
-
-def test_resolve_api_key_scopes_inherit_with_user_scopes_none():
-    """``user.scopes`` itself is None (uninitialised) — fall back to read."""
-    user = MagicMock(spec=User)
-    user.scopes = None
-    key = MagicMock(spec=APIKey)
-    key.scopes = None
-    assert resolve_api_key_scopes(key, user) == ["read"]
+@pytest.mark.parametrize(
+    "user_scopes, key_scopes, expected",
+    [
+        # No key: a login session, which always reads and writes.
+        (["organizer"], "session", ["organizer", "read", "write"]),
+        (["*"], "session", ["*", "read", "write"]),
+        # A key without its own scopes follows its user's session scopes.
+        (["organizer", "github"], None, ["github", "organizer", "read", "write"]),
+        ([], None, ["read", "write"]),
+        (None, None, ["read", "write"]),
+        (["*"], None, ["*", "read", "write"]),
+        # An explicit empty list is read-only, never the user's scopes.
+        (["*"], [], ["read"]),
+        # A key's own scopes, capped by its user's.
+        (["*"], ["read", "organizer"], ["organizer", "read"]),
+        (["organizer"], ["read", "github", "organizer"], ["organizer", "read"]),
+        (["organizer"], ["*"], ["organizer", "read", "write"]),
+        ([], ["write"], ["write"]),
+        (["github"], ["*", "github"], ["github", "read", "write"]),
+        # Nothing in common grants nothing, not even read.
+        (["organizer"], ["github"], []),
+    ],
+)
+def test_credential_scopes(user_scopes, key_scopes, expected):
+    user = User(scopes=user_scopes)
+    key = None if key_scopes == "session" else APIKey(scopes=key_scopes)
+    assert sorted(credential_scopes(user, key)) == expected
 
 
 @pytest.mark.asyncio

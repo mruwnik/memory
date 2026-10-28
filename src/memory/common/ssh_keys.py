@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 from memory.common.db.connection import DBSession
 
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.models import User
 from memory.common.db.models.ssh_keys import SSHKey
 from memory.common.encryption import decrypt_value, encrypt_value
@@ -50,7 +50,7 @@ def import_key(value: str, passphrase: str | None = None) -> tuple[bytes, str, s
     return encode_key(loader(data, password=password))
 
 
-def can_use_key(key: SSHKey, user: User) -> bool:
+def can_use_key(key: SSHKey, user: UserLike) -> bool:
     return key.user_id == user.id or (key.user_id is None and has_admin_scope(user))
 
 

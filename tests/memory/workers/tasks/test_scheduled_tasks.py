@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from memory.api.auth import lookup_principal, system_scopes
 from memory.common import module_settings
 from memory.common.celery_app import START_CRON_RUN
 from memory.common.db.models import APIKey, InstanceSetting, ScheduledTask, TaskExecution
@@ -281,6 +282,51 @@ def test_execute_scheduled_task_success(
     # Verify database was updated
     db_session.refresh(pending_execution)
     assert pending_execution.status == "completed"
+
+
+@pytest.mark.parametrize(
+    "key_state,delivered",
+    [
+        ("none", True),
+        ("admin", True),
+        # Only an admin credential may DM a Discord user no bot of theirs has seen.
+        ("narrow", False),
+        ("revoked", False),
+        ("deleted", False),
+    ],
+)
+@patch("memory.workers.tasks.scheduled_tasks.notify_user_now")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
+def test_a_notification_is_sent_with_the_scheduling_keys_scopes(
+    mock_deliver, mock_notify, db_session, sample_user, key_state, delivered
+):
+    sample_user.scopes = ["*"]
+    key = APIKey.create(user_id=sample_user.id, scopes=["read"] if key_state == "narrow" else None)
+    key.revoked = key_state == "revoked"
+    db_session.add(key)
+    db_session.flush()
+    key_ids = {"none": None, "deleted": key.id + 1000}
+    task = ScheduledTask(
+        user_id=sample_user.id,
+        task_type="notification",
+        cron_expression="0 9 * * *",
+        message="hi",
+        notification_channel="discord",
+        notification_target="424242",
+        data={"api_key_id": key_ids.get(key_state, key.id)},
+    )
+    db_session.add(task)
+    db_session.flush()
+    execution = TaskExecution(task_id=task.id, scheduled_time=datetime(2026, 1, 1), status="pending")
+    db_session.add(execution)
+    db_session.commit()
+    mock_deliver.return_value = True
+
+    scheduled_tasks.execute_scheduled_task(execution.id)
+
+    db_session.refresh(execution)
+    assert execution.status == ("completed" if delivered else "failed")
+    assert mock_deliver.called is delivered
 
 
 def test_agent_run_execution_is_handed_to_the_agents_queue(
@@ -1082,7 +1128,7 @@ def test_spawn_claude_session_success(mock_post, claude_session_task, db_session
     mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
     mock_post.return_value = mock_response
 
-    result = scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session)
+    result = scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session, api_key_id=None)
 
     assert result == "u1-e1-abc123"
     mock_post.assert_called_once()
@@ -1105,7 +1151,7 @@ def test_spawn_claude_session_missing_config(db_session, sample_user):
     db_session.commit()
 
     with pytest.raises(ValueError, match="Missing spawn_config"):
-        scheduled_tasks.spawn_claude_session(task, db=db_session)
+        scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
 
 
 @patch("memory.workers.tasks.scheduled_tasks.requests.post")
@@ -1133,7 +1179,7 @@ def test_spawn_claude_session_run_id_suffixed(mock_post, db_session, sample_user
     mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
     mock_post.return_value = mock_response
 
-    scheduled_tasks.spawn_claude_session(task, db=db_session)
+    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
 
     posted_json = mock_post.call_args.kwargs["json"]
     assert posted_json["run_id"].startswith("daily-review-")
@@ -1173,7 +1219,7 @@ def test_spawn_claude_session_does_not_mutate_task_data(
     mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
     mock_post.return_value = mock_response
 
-    scheduled_tasks.spawn_claude_session(task, db=db_session)
+    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
 
     # The original task data must NOT have been mutated
     assert task.data is not None
@@ -1207,7 +1253,7 @@ def test_spawn_claude_session_passes_enable_playwright(
     mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
     mock_post.return_value = mock_response
 
-    scheduled_tasks.spawn_claude_session(task, db=db_session)
+    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
 
     posted_json = mock_post.call_args.kwargs["json"]
     assert posted_json["enable_playwright"] is True
@@ -1223,7 +1269,7 @@ def test_spawn_claude_session_api_failure(mock_post, claude_session_task, db_ses
     mock_post.return_value = mock_response
 
     with pytest.raises(ValueError, match="API returned 503"):
-        scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session)
+        scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session, api_key_id=None)
 
 
 # ----- run_id sanitization regression tests -----
@@ -1272,7 +1318,7 @@ def test_spawn_claude_session_sanitises_user_run_id(mock_post, db_session, sampl
     mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
     mock_post.return_value = mock_response
 
-    scheduled_tasks.spawn_claude_session(task, db=db_session)
+    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
 
     posted_run_id = mock_post.call_args.kwargs["json"]["run_id"]
     # Path-traversal characters must be gone.
@@ -1313,7 +1359,7 @@ def test_spawn_claude_session_run_id_falls_back_when_slug_empty(
     mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
     mock_post.return_value = mock_response
 
-    scheduled_tasks.spawn_claude_session(task, db=db_session)
+    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
 
     posted_run_id = mock_post.call_args.kwargs["json"]["run_id"]
     # Falls back to task-<task-id-stub>-<timestamp>
@@ -1422,6 +1468,53 @@ def test_scheduled_session_rechecks_the_principal_at_fire_time(
     assert task.enabled is allowed
     assert mock_post.called is allowed
     assert mock_notify.call_count == (0 if allowed else 1)
+
+
+@pytest.mark.parametrize(
+    "key_scopes,expected",
+    [
+        (["read", "claude_sessions"], ["claude_sessions", "read"]),
+        (None, ["*", "read", "write"]),
+    ],
+)
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_scheduled_session_spawns_with_the_scheduling_keys_scopes(
+    mock_post, db_session, sample_user, key_scopes, expected
+):
+    sample_user.scopes = ["*"]
+    key = APIKey.create(user_id=sample_user.id, scopes=key_scopes)
+    db_session.add(key)
+    db_session.flush()
+    _, execution = due_session_execution(db_session, sample_user, key.id)
+    seen = []
+
+    def spawn(url, headers, **kwargs):
+        token = headers["Authorization"].removeprefix("Bearer ")
+        principal = lookup_principal(token, db_session, record_use=False)
+        assert principal is not None
+        seen.append(sorted(system_scopes(principal)))
+        return spawn_ok()
+
+    mock_post.side_effect = spawn
+
+    scheduled_tasks.execute_scheduled_task(execution.id)
+
+    assert seen == [expected]
+
+
+@patch("memory.workers.tasks.scheduled_tasks.requests.post")
+def test_a_key_deleted_mid_fire_fails_the_execution(mock_post, db_session, sample_user):
+    sample_user.scopes = ["claude_sessions"]
+    _, execution = due_session_execution(db_session, sample_user)
+    mock_post.return_value = spawn_ok()
+
+    # The key vanishes between the principal check and minting the session.
+    with patch.object(scheduled_tasks, "check_session_principal", return_value=999999):
+        scheduled_tasks.execute_scheduled_task(execution.id)
+
+    db_session.expire_all()
+    assert db_session.get(TaskExecution, execution.id).status == "failed"
+    assert not mock_post.called
 
 
 @patch("memory.workers.tasks.scheduled_tasks.notify_user_now")

@@ -328,21 +328,47 @@ async def test_get_user_no_email_accounts_uses_fallback(db_session, admin_sessio
     assert result["user"]["email_accounts"][0]["email_address"] == "admin@example.com"
 
 
+PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
+
+
 @pytest.mark.asyncio
-async def test_get_user_returns_ssh_public_key(db_session, admin_user, admin_session):
-    """Get user returns the user's SSH public key as 'public_key'."""
-    from memory.common.db.models import SSHKey
-    key = SSHKey(user_id=admin_user.id, name="SSH", public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", private_key_encrypted=b"encrypted")
+@pytest.mark.parametrize(
+    "shared_key,key_scopes,expected",
+    [
+        (False, "session", PUBLIC_KEY),
+        (True, "session", PUBLIC_KEY),
+        (False, ["read"], PUBLIC_KEY),
+        (True, None, PUBLIC_KEY),
+        # The instance's shared key is only an admin credential's.
+        (True, ["read"], None),
+    ],
+)
+async def test_get_user_returns_ssh_public_key(
+    db_session, admin_user, admin_session, shared_key, key_scopes, expected
+):
+    from memory.common.db.models import APIKey, SSHKey
+
+    key = SSHKey(
+        user_id=None if shared_key else admin_user.id,
+        name="SSH",
+        public_key=PUBLIC_KEY,
+        private_key_encrypted=b"encrypted",
+    )
     db_session.add(key)
     db_session.flush()
     admin_user.default_ssh_key_id = key.id
+    token = admin_session.id
+    if key_scopes != "session":
+        api_key = APIKey.create(user_id=admin_user.id, scopes=key_scopes)
+        db_session.add(api_key)
+        token = api_key.key
     db_session.commit()
 
-    with mcp_auth_context(admin_session.id):
+    with mcp_auth_context(token):
         result = await get_user.fn()
 
     assert result["authenticated"] is True
-    assert result["public_key"] == "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"
+    assert result["public_key"] == expected
 
 
 @pytest.mark.asyncio

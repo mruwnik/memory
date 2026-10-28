@@ -26,17 +26,22 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
+from memory.agents.principal import PrincipalRevoked, standing_key
 from memory.common.access_control import (
+    UserProxy,
     apply_access_filter_to_query,
     build_access_filter,
+    credential_scopes,
     get_user_project_roles,
     has_admin_scope,
 )
 from memory.common.celery_app import FIRE_TRIGGER, MATCH_INGEST_TRIGGERS, app
 from memory.common.collections import SESSION_COLLECTIONS
+from memory.common.scopes import SCOPE_AGENTS
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentTrigger,
+    APIKey,
     AgentTriggerMatch,
     BlogPost,
     CalendarEvent,
@@ -304,12 +309,22 @@ def own_authors(db: DBSession, owner_id: int) -> frozenset[str]:
     return lowered([*bots, *slack])
 
 
-def accessible_ids(db: DBSession, user: User, item_ids: list[int]) -> list[int]:
-    """The subset of item_ids `user` may read, by the same filter search uses."""
+def trigger_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKey | None:
+    """The API key a trigger acts through; raises PrincipalRevoked once it can't."""
+    if trigger.via_api_key and trigger.api_key_id is None:
+        raise PrincipalRevoked("the API key that set up this trigger was deleted")
+    return standing_key(db, owner, trigger.api_key_id, SCOPE_AGENTS)
+
+
+def accessible_ids(
+    db: DBSession, owner: User, key: APIKey | None, item_ids: list[int]
+) -> list[int]:
+    """The subset of item_ids `owner` may read through `key`, by the same filter search uses."""
+    reader = UserProxy.from_user(owner, scopes=credential_scopes(owner, key))
     access_filter = (
         None
-        if has_admin_scope(user)
-        else build_access_filter(user, get_user_project_roles(db, user))
+        if has_admin_scope(reader)
+        else build_access_filter(reader, get_user_project_roles(db, reader))
     )
     query = db.query(SourceItem.id).filter(
         SourceItem.id.in_(item_ids), SourceItem.modality.notin_(SESSION_COLLECTIONS)
@@ -516,7 +531,9 @@ def match_ingest_triggers(item_id: int, client: redis.Redis | None = None) -> li
             owner = db.get(User, trigger.definition.user_id)
             if owner is None or facts.authors & own_authors(db, owner.id):
                 continue
-            if not accessible_ids(db, owner, [item_id]):
+            # Validity is left to the fire, which trips the breaker if the key is gone.
+            key = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id else None
+            if not accessible_ids(db, owner, key, [item_id]):
                 continue
             delivery = claim(db, trigger.id, item_id, version, fresh=fresh, on_edit=config.on_edit)
             if delivery is None:

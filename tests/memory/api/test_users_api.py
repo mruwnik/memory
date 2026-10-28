@@ -590,6 +590,25 @@ def test_create_api_key_admin_can_grant_full_scope(client: TestClient, admin_use
 
 
 @pytest.mark.parametrize(
+    "scopes,status,refused",
+    [
+        (["teams", "read"], 200, None),
+        (["teams", "github"], 400, "github"),
+        (["*"], 400, "*"),
+    ],
+)
+def test_create_api_key_cannot_exceed_the_target_users_scopes(
+    client: TestClient, regular_user, scopes, status, refused
+):
+    response = client.post(
+        f"/users/{regular_user.id}/api-keys", json={"name": "k", "scopes": scopes}
+    )
+
+    assert response.status_code == status
+    assert refused is None or refused in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
     "body,run_cap,daily_cap",
     [
         ({}, None, None),
