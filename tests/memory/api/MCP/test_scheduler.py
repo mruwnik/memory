@@ -2,6 +2,7 @@
 # pyright: reportFunctionMemberAccess=false
 
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from memory.api.MCP.servers import scheduler
 from memory.common import settings as settings_mod
 from memory.common.db import connection as db_connection
-from memory.common.db.models import APIKey, ScheduledTask
+from memory.common.db.models import APIKey, ScheduledTask, SSHKey
 from tests.conftest import mcp_auth_context
 
 
@@ -156,18 +157,129 @@ async def test_update_channel_change_revalidates_target(
 
 
 @pytest.mark.asyncio
-async def test_create_claude_session(db_session, regular_user, user_session):
+@pytest.mark.parametrize(
+    "spawn_config",
+    [
+        {"repo_url": "https://github.com/x/y"},
+        {"environment_id": 1, "use_ssh_key": False},
+        {"environment_id": 1, "dev_channels_server": "https://dev.example.com:8080/ch"},
+    ],
+)
+async def test_create_claude_session(
+    db_session, regular_user, user_session, spawn_config
+):
     with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
         result = await scheduler.upsert.fn(
             task_type="claude_session",
             message="Run the digest",
             cron_expression="0 9 * * *",
-            spawn_config={"repo_url": "https://github.com/x/y"},
+            spawn_config=spawn_config,
         )
     assert result["task_type"] == "claude_session"
     assert result["message"] == "Run the digest"
-    assert result["data"]["spawn_config"] == {"repo_url": "https://github.com/x/y"}
+    assert result["data"]["spawn_config"] == spawn_config
     assert result["topic"] == "Run the digest"
+
+
+def make_ssh_key(db_session, user_id: int | None) -> SSHKey:
+    key = SSHKey(
+        user_id=user_id,
+        name="deploy",
+        public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest",
+        private_key_encrypted=b"encrypted",
+    )
+    db_session.add(key)
+    db_session.commit()
+    return key
+
+
+@pytest.mark.asyncio
+async def test_create_claude_session_with_own_ssh_key(
+    db_session, regular_user, user_session
+):
+    key = make_ssh_key(db_session, regular_user.id)
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        result = await scheduler.upsert.fn(
+            task_type="claude_session",
+            message="Run the digest",
+            cron_expression="0 9 * * *",
+            spawn_config={"environment_id": 1, "ssh_key_id": key.id},
+        )
+    assert result["data"]["spawn_config"] == {"environment_id": 1, "ssh_key_id": key.id}
+
+
+@pytest.mark.asyncio
+async def test_create_claude_session_rejects_someone_elses_ssh_key(
+    db_session, regular_user, admin_user, user_session
+):
+    key = make_ssh_key(db_session, admin_user.id)
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        with pytest.raises(ValueError, match="SSH key"):
+            await scheduler.upsert.fn(
+                **SESSION_TASK | {"spawn_config": {"environment_id": 1, "ssh_key_id": key.id}}
+            )
+    assert db_session.query(ScheduledTask).count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_config,match",
+    [
+        (lambda key: {"ssh_key_id": key.id}, "SSH key"),
+        (lambda key: {"dev_channels_server": "-x"}, "may not start with"),
+    ],
+)
+async def test_update_claude_session_validates_spawn_config(
+    db_session, regular_user, admin_user, user_session, make_config, match
+):
+    key = make_ssh_key(db_session, admin_user.id)
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        created = await scheduler.upsert.fn(**SESSION_TASK)
+        with pytest.raises(ValueError, match=match):
+            await scheduler.upsert.fn(
+                task_id=created["id"],
+                spawn_config=make_config(key),
+            )
+    task = db_session.get(ScheduledTask, created["id"])
+    db_session.refresh(task)
+    assert task.data["spawn_config"] == {"environment_id": 1}
+
+
+@pytest.mark.asyncio
+async def test_update_ignores_a_stale_stored_ssh_key(
+    db_session, regular_user, user_session
+):
+    key = make_ssh_key(db_session, regular_user.id)
+    with mcp_auth_context(user_session.id, scopes=["claude_sessions"]):
+        created = await scheduler.upsert.fn(
+            **SESSION_TASK | {"spawn_config": {"environment_id": 1, "ssh_key_id": key.id}}
+        )
+        db_session.delete(key)
+        db_session.commit()
+        updated = await scheduler.upsert.fn(
+            task_id=created["id"], spawn_config={"repo_url": "https://github.com/x/y"}
+        )
+    assert updated["data"]["spawn_config"]["repo_url"] == "https://github.com/x/y"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_fixture,expectation,created",
+    [
+        ("user_session", pytest.raises(ValueError, match="SSH key"), 0),
+        ("admin_session", nullcontext(), 1),
+    ],
+)
+async def test_shared_ssh_key_is_admin_only(
+    request, db_session, session_fixture, expectation, created
+):
+    session = request.getfixturevalue(session_fixture)
+    key = make_ssh_key(db_session, None)
+    with mcp_auth_context(session.id, scopes=["claude_sessions"]), expectation:
+        await scheduler.upsert.fn(
+            **SESSION_TASK | {"spawn_config": {"environment_id": 1, "ssh_key_id": key.id}}
+        )
+    assert db_session.query(ScheduledTask).count() == created
 
 
 @pytest.mark.asyncio
@@ -251,6 +363,33 @@ async def test_create_claude_session(db_session, regular_user, user_session):
                 spawn_config={"github_token_write": None},
             ),
             "saved GitHub tokens",
+        ),
+        (
+            dict(
+                task_type="claude_session",
+                cron_expression="0 9 * * *",
+                message="p",
+                spawn_config={"environment_id": 1, "dev_channels_server": "a b"},
+            ),
+            "may only contain",
+        ),
+        (
+            dict(
+                task_type="claude_session",
+                cron_expression="0 9 * * *",
+                message="p",
+                spawn_config={"environment_id": 1, "ssh_key_id": "1"},
+            ),
+            "ssh_key_id must be an integer",
+        ),
+        (
+            dict(
+                task_type="claude_session",
+                cron_expression="0 9 * * *",
+                message="p",
+                spawn_config={"environment_id": 1, "dev_channels_server": 5},
+            ),
+            "dev_channels_server must be a string",
         ),
     ],
 )

@@ -15,6 +15,7 @@ from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
+from memory.common.claude_spawn import check_dev_channels_server
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution, User
@@ -27,6 +28,7 @@ from memory.common.scopes import (
     SCOPE_SCHEDULE_WRITE,
     has_scope,
 )
+from memory.common.ssh_keys import container_key
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,9 @@ SPAWN_CONFIG_FIELDS = {
     "environment_id",
     "snapshot_id",
     "use_saved_write_token",
+    "ssh_key_id",
+    "use_ssh_key",
+    "dev_channels_server",
 }
 
 
@@ -138,6 +143,20 @@ def validate_spawn_config_keys(spawn_config: dict[str, Any]) -> None:
     unknown = set(spawn_config) - SPAWN_CONFIG_FIELDS
     if unknown:
         raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
+
+
+def validate_spawn_choices(session, user_id: int, spawn_config: dict[str, Any]) -> None:
+    """Fail at scheduling time rather than on every fire; /claude/spawn
+    re-checks both as the owner when the schedule fires."""
+    key_id = spawn_config.get("ssh_key_id")
+    if key_id is not None:
+        if type(key_id) is not int:
+            raise ValueError("ssh_key_id must be an integer")
+        container_key(session, session.get(User, user_id), key_id)
+    dev_channels_server = spawn_config.get("dev_channels_server")
+    if dev_channels_server is not None and not isinstance(dev_channels_server, str):
+        raise ValueError("dev_channels_server must be a string")
+    check_dev_channels_server(dev_channels_server)
 
 
 def session_principal(session) -> int | None:
@@ -271,6 +290,7 @@ def build_scheduled_task(
                 "claude_session tasks require message (the initial prompt)"
             )
         validate_spawn_config_keys(spawn_config)
+        validate_spawn_choices(session, user_id, spawn_config)
         task.message = message
         task.topic = topic or message[:100]
         task.data = {"spawn_config": spawn_config}
@@ -449,6 +469,7 @@ async def upsert(
             if task.task_type != "claude_session":
                 raise ValueError("spawn_config can only be set on claude_session tasks")
             validate_spawn_config_keys(spawn_config)
+            validate_spawn_choices(session, user_id, spawn_config)
 
             data = dict(task.data or {})
             existing = dict(data.get("spawn_config") or {})

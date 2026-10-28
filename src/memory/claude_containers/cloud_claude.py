@@ -60,6 +60,7 @@ from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeEnvironment, User
 from memory.claude_containers.claude_environments import mark_environment_used
 from memory.claude_containers.github_tokens import github_token_env
+from memory.common.claude_spawn import check_dev_channels_server
 from memory.common.ssh_keys import container_private_key
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
@@ -434,23 +435,8 @@ class SpawnRequest(BaseModel):
 
     @field_validator("dev_channels_server")
     @classmethod
-    def check_dev_channels_server(cls, value: str | None) -> str | None:
-        """Restrict to characters valid for a hostname, host:port, or URL.
-
-        The value is passed verbatim to the orchestrator, which appends it to
-        the claude command line. Allow only an unambiguous charset so it can't
-        carry shell metacharacters or whitespace, and forbid a leading '-' so
-        it can never be mistaken for a flag (no hostname/host:port/URL starts
-        with one).
-        """
-        if value is None:
-            return None
-        if not re.fullmatch(r"[A-Za-z0-9._:/][A-Za-z0-9._:/-]*", value):
-            raise ValueError(
-                "dev_channels_server may only contain letters, digits, and "
-                ". _ : / - and may not start with '-'"
-            )
-        return value
+    def validate_dev_channels_server(cls, value: str | None) -> str | None:
+        return check_dev_channels_server(value)
 
     @model_validator(mode="after")
     def check_source_mutual_exclusivity(self) -> "SpawnRequest":
