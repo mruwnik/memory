@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.4.0 (2026-10-28)
 
 ### Required env vars
 
@@ -22,6 +22,9 @@ None.
 
 Stored secrets are deleted by this update, and the Secrets page can't show their
 values afterwards: before updating, copy any you still need from the Secrets page.
+
+The first nightly purge after the update deletes unstarred agent runs that
+finished more than 14 days ago: star the ones you want to keep before updating.
 
 ### Other changes for operators
 
@@ -119,7 +122,8 @@ can be shown again: a key is visible only when it is created, and the key
 list shows its type prefix (only for a known key type) and last four
 characters. The per-key Show button and
 `POST /users/{id}/api-keys/{key_id}/reveal` are removed; lose a key and you
-revoke it and create a new one. Bot users no longer get an unused key on the
+revoke it and create a new one. Users list, create (choosing the key type) and
+revoke their own keys in Settings. Bot users no longer get an unused key on the
 `users` row; give a bot a key with Generate key in User management.
 `tools/add_user.py` now creates a real API key (it printed one that never
 authenticated), and refuses an `--api-key` shorter than 32 characters.
@@ -157,6 +161,9 @@ ending, cancels the runs it started that are still going.
 
 `20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
 tables (seeded with the previous defaults) and two columns on `forum_post`. Fast.
+
+`20261113_person_creator` adds `creator_id` and `creator_trusted` to `people`;
+existing people count as trusted. Fast.
 
 `20261113_sync_schedule`: adds `sync_queued_at` to each polled source table,
 `check_interval` to `email_accounts`, `ingest_delay` to `article_feeds` and
