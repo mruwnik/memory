@@ -15,7 +15,7 @@ from sqlalchemy import Text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy import func as sql_func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Session, scoped_session
+from sqlalchemy.orm import Query, Session, scoped_session
 
 from memory.common.db.models import Person
 from memory.common.db.models.sources import GithubUser
@@ -95,24 +95,29 @@ def find_person_by_name(session: DBSession, name: str | None) -> Person | None:
     return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
+def people_with_email(session: DBSession, email: str) -> Query[Person]:
+    # Lowercasing the JSON text keeps it valid JSON, and @> matches a scalar
+    # string or any element of a list, so either shape of contact_info.email works.
+    stored_lower = sql_cast(sql_func.lower(sql_cast(Person.contact_info["email"], Text)), JSONB)
+    return session.query(Person).filter(stored_lower.contains(json_string(email.lower().strip())))
+
+
 def find_person_by_email(session: DBSession, email: str | None) -> Person | None:
-    """Find a Person by their email address.
+    """Find the one Person with this email address, else None.
 
-    Args:
-        session: Database session
-        email: Email address to search for
-
-    Returns:
-        Matching Person or None
+    Several Persons can share an email when a non-admin made one: then the one
+    linked to a user wins, else the one ingest or an admin made.
     """
     if not email:
         return None
 
-    # Lowercasing the JSON text keeps it valid JSON, and @> matches a scalar
-    # string or any element of a list, so either shape of contact_info.email works.
-    stored_lower = sql_cast(sql_func.lower(sql_cast(Person.contact_info["email"], Text)), JSONB)
-    matches = session.query(Person).filter(stored_lower.contains(json_string(email.lower().strip()))).limit(2).all()
-    return matches[0] if len(matches) == 1 else None
+    matches = people_with_email(session, email).all()
+    tiers = (
+        matches,
+        [p for p in matches if p.user_id is not None],
+        [p for p in matches if p.creator_trusted],
+    )
+    return next((tier[0] for tier in tiers if len(tier) == 1), None)
 
 
 def find_person_by_slack_id(
@@ -251,6 +256,7 @@ def find_or_create_person(
     name: str,
     email: str | None = None,
     create_if_missing: bool = True,
+    creator_id: int | None = None,
 ) -> tuple[Person | None, bool]:
     """Find existing person or optionally create new one.
 
@@ -287,6 +293,7 @@ def find_or_create_person(
         display_name=name,
         aliases=[name],
         contact_info={"email": email} if email else {},
+        creator_id=creator_id,
     )
     session.add(person)
     session.flush()

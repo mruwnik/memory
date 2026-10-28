@@ -790,6 +790,29 @@ def meeting_for(db, creator_id):
     return meeting
 
 
+@pytest.mark.parametrize(
+    "attendees",
+    [
+        {"attendee_pairs": [("new@example.com", "New Person")]},
+        {"attendee_emails": ["new@example.com"]},
+        {"attendee_names": ["New Person"]},
+    ],
+)
+@pytest.mark.parametrize("pushed", [False, True])
+def test_link_attendees_records_the_meetings_creator_on_new_people(db_session, regular_user, attendees, pushed):
+    """A pushed meeting has no creator of its own; its transcript account's owner brought it in."""
+    meeting = meeting_for(db_session, None if pushed else regular_user.id)
+    account = TranscriptAccount(user_id=regular_user.id, name="FF", provider="fireflies")
+    account.api_key = "k"
+    meeting.transcript_account = account
+    db_session.flush()
+
+    meetings.link_attendees(db_session, meeting, **attendees)
+    db_session.flush()
+
+    assert [(p.creator_id, p.creator_trusted) for p in meeting.attendees] == [(regular_user.id, False)]
+
+
 def test_extraction_runs_on_the_creators_key(db_session, regular_user, llm_key, scripted_llm):
     scripted_llm.script = [submitted(EXTRACTED)]
     meeting = meeting_for(db_session, regular_user.id)

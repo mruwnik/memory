@@ -21,6 +21,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
@@ -32,7 +33,7 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.db.models.secrets import decrypt_value, encrypt_value
 from memory.common.db.models.sync_status import SyncStatusMixin
-from memory.common.scopes import STORABLE_SENSITIVITY_CHECK_SQL
+from memory.common.scopes import SCOPE_ADMIN, STORABLE_SENSITIVITY_CHECK_SQL
 
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordUser
@@ -1312,7 +1313,22 @@ class Person(Base):
     user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    user: Mapped["User | None"] = relationship("User", back_populates="person")
+    user: Mapped["User | None"] = relationship(
+        "User", back_populates="person", foreign_keys=[user_id]
+    )
+
+    # Who made the record; NULL for ingest and records that predate the column.
+    creator_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    creator: Mapped["User | None"] = relationship("User", foreign_keys=[creator_id])
+    # Whether ingest or an admin made it, fixed at insert so deleting the
+    # creator or changing their scopes later doesn't change it. Only these
+    # Persons are trusted to match a new user's email: a non-admin could plant
+    # one with someone else's.
+    creator_trusted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
 
     # Timestamps
     created_at: Mapped[datetime | None] = mapped_column(
@@ -1377,6 +1393,19 @@ class Person(Base):
                 result["user_email"] = self.user.email
                 result["user_name"] = self.user.name
         return result
+
+
+@event.listens_for(Person, "before_insert")
+def snapshot_creator_trust(mapper, connection, target: Person) -> None:
+    scopes = (
+        connection.scalar(
+            text("SELECT scopes FROM users WHERE id = :id"), {"id": target.creator_id}
+        )
+        if target.creator_id is not None
+        else None
+    )
+    target.creator_trusted = target.creator_id is None or SCOPE_ADMIN in (scopes or [])
+
 
 # ============== Team Model ==============
 

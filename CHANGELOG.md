@@ -33,6 +33,14 @@ page slow and showed tool data while every other panel was empty.
 Session uploads that resend events the server already has no longer count
 their tool calls again; tool totals recorded before this release may be inflated.
 
+People now record who created them and whether that was ingest or an admin. A
+new user is linked to an existing Person with their email only if ingest or an
+admin made it; one a non-admin made is passed over, and when several Persons
+share an email, ingest prefers the one linked to a user, then one ingest or an
+admin made. People that existed before this release count as made by ingest, so
+if a non-admin may have planted one with someone's email, check it before
+creating that user.
+
 LessWrong comments are now ingested and searchable, and the LessWrong sync is
 configured from the Forums tab (admin only) instead of code defaults.
 Comments carry their post's tags plus `comment`, so a tag filter can find them.

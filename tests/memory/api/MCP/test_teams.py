@@ -453,7 +453,7 @@ def test_set_team_members_finds_by_display_name(db_session, admin_session):
     db_session.flush()
 
     # Use display name (not identifier) - should match the existing person
-    result = set_team_members(db_session, team, ["Alice Chen"])
+    result = set_team_members(db_session, team, ["Alice Chen"], admin_session.user_id)
 
     assert result["added"] == ["alice_chen"]
     assert result["created_people"] == []
@@ -471,7 +471,7 @@ def test_set_team_members_finds_by_alias(db_session, admin_session):
     db_session.flush()
 
     # Use alias - should match the existing person
-    result = set_team_members(db_session, team, ["Bob Smith"])
+    result = set_team_members(db_session, team, ["Bob Smith"], admin_session.user_id)
 
     assert result["added"] == ["bob_smith"]
     assert result["created_people"] == []
@@ -491,7 +491,7 @@ def test_set_team_members_finds_by_email(db_session, admin_session):
     db_session.flush()
 
     # Use email - should match the existing person
-    result = set_team_members(db_session, team, ["carol@example.com"])
+    result = set_team_members(db_session, team, ["carol@example.com"], admin_session.user_id)
 
     assert result["added"] == ["carol_jones"]
     assert result["created_people"] == []
@@ -506,7 +506,7 @@ def test_set_team_members_no_duplicate_from_display_name(db_session, admin_sessi
     db_session.flush()
 
     # Pass display_name — should find existing, not create a new "dedup_person" + "Dedup Person"
-    result = set_team_members(db_session, team, ["Dedup Person"])
+    result = set_team_members(db_session, team, ["Dedup Person"], admin_session.user_id)
 
     assert result["created_people"] == []
     assert len(team.members) == 1
@@ -519,6 +519,16 @@ def test_set_team_members_no_duplicate_from_display_name(db_session, admin_sessi
     assert len(all_people) == 1
 
 
+def test_set_team_members_records_the_caller_on_new_people(db_session, admin_session):
+    team = Team(name="New People", slug="new-people")
+    db_session.add(team)
+    db_session.flush()
+
+    set_team_members(db_session, team, ["Brand New"], admin_session.user_id)
+
+    assert [p.creator_id for p in team.members] == [admin_session.user_id]
+
+
 def test_set_team_members_dedup_identifier_and_display_name(db_session, admin_session):
     """Both identifier and display_name in member list should resolve to same person."""
     team = Team(name="Dedup Team 2", slug="dedup-team-2")
@@ -526,7 +536,7 @@ def test_set_team_members_dedup_identifier_and_display_name(db_session, admin_se
     db_session.add_all([team, person])
     db_session.flush()
 
-    result = set_team_members(db_session, team, ["same_person", "Same Person"])
+    result = set_team_members(db_session, team, ["same_person", "Same Person"], admin_session.user_id)
 
     assert len(team.members) == 1
     assert team.members[0].id == person.id

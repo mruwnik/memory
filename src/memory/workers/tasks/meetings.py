@@ -99,6 +99,7 @@ def find_or_create_paired_person(
     email: str,
     name: str,
     create_missing: bool,
+    creator_id: int | None,
 ) -> tuple[Person | None, bool]:
     """Email-authoritative variant of ``find_or_create_person`` for the paired path.
 
@@ -125,6 +126,7 @@ def find_or_create_paired_person(
         display_name=name,
         aliases=[name],
         contact_info={"email": email},
+        creator_id=creator_id,
     )
     session.add(person)
     session.flush()
@@ -191,6 +193,7 @@ def link_attendees(
     pair instead of fallback-to-independent-processing.
     """
     linked, created, skipped = 0, 0, []
+    creator_id = meeting.resolve_creator_id()
     seen_person_ids: set[int] = {p.id for p in meeting.attendees}
 
     normalized_emails = [
@@ -241,7 +244,11 @@ def link_attendees(
 
     for email, name in paired:
         person, was_created = find_or_create_paired_person(
-            session, email=email, name=name, create_missing=create_missing
+            session,
+            email=email,
+            name=name,
+            create_missing=create_missing,
+            creator_id=creator_id,
         )
         if person is None:
             logger.warning(
@@ -265,7 +272,11 @@ def link_attendees(
         if person is None and create_missing:
             display_name = prettify_email_localpart(email)
             person, was_created = find_or_create_person(
-                session, name=display_name, email=email, create_if_missing=True
+                session,
+                name=display_name,
+                email=email,
+                create_if_missing=True,
+                creator_id=creator_id,
             )
         if person is None:
             logger.warning(f"Could not find person for email '{email}'")
@@ -283,7 +294,7 @@ def link_attendees(
         )
     for name in leftover_names:
         person, was_created = find_or_create_person(
-            session, name, create_if_missing=create_missing
+            session, name, create_if_missing=create_missing, creator_id=creator_id
         )
         if person is None:
             logger.warning(f"Could not find person for attendee '{name}'")

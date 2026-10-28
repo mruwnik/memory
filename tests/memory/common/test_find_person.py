@@ -99,6 +99,19 @@ def test_name_lookup_refuses_ambiguous_people(db_session, identity):
     assert find_person_by_name(db_session, name) is None
 
 
+@pytest.mark.parametrize("rival", ["linked", "trusted"])
+def test_email_lookup_passes_over_a_planted_person(db_session, admin_user, regular_user, rival):
+    """A non-admin's Person sharing an email mustn't hide the real one from ingest."""
+    email = {"email": "victim@example.com"}
+    planted = Person(identifier="planted", display_name="P", contact_info=email, creator_id=regular_user.id)
+    real = Person(identifier="real", display_name="R", contact_info=email,
+                  user_id={"linked": regular_user.id, "trusted": None}[rival])
+    db_session.add_all([planted, real])
+    db_session.commit()
+
+    assert find_person_by_email(db_session, "victim@example.com") is real
+
+
 def test_email_lookup_refuses_ambiguous_people(db_session):
     for identifier in ["one", "two"]:
         db_session.add(Person(identifier=identifier, display_name=identifier, contact_info={"email": "same@example.com"}))

@@ -131,7 +131,9 @@ class User(Base):
     )
 
     # Link to Person record (for rich contact info about this user)
-    person: Mapped["Person | None"] = relationship("Person", back_populates="user")
+    person: Mapped["Person | None"] = relationship(
+        "Person", back_populates="user", foreign_keys="Person.user_id"
+    )
 
     __mapper_args__: dict[str, Any] = {
         "polymorphic_on": user_type,

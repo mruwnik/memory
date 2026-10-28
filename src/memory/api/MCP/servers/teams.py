@@ -252,7 +252,7 @@ async def upsert(
                 .first()
             )
             if team:
-                result["membership_changes"] = set_team_members(session, team, members)
+                result["membership_changes"] = set_team_members(session, team, members, user.id)
 
         session.commit()
 
@@ -273,6 +273,7 @@ def set_team_members(
     session: Session | scoped_session[Session],
     team: Team,
     member_identifiers: list[str],
+    creator_id: int | None,
 ) -> dict[str, Any]:
     """Set team to exactly these members.
 
@@ -291,7 +292,7 @@ def set_team_members(
     }
     for identifier in member_identifiers:
         person, was_created = find_or_create_person(
-            session, name=identifier, create_if_missing=True
+            session, name=identifier, create_if_missing=True, creator_id=creator_id
         )
         if not person:
             result["warnings"].append(f"Could not find or create person for '{identifier}'")

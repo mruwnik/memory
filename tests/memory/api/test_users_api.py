@@ -425,6 +425,87 @@ def test_create_user_links_an_existing_person_only_by_email(
     assert db_session.query(Person).filter(Person.user_id == user_id).count() == 1
 
 
+@pytest.mark.parametrize("creator, links_to_contact", [(None, True), ("admin", True), ("regular", False)])
+def test_create_user_links_only_a_person_no_other_non_admin_made(
+    client: TestClient, admin_user, regular_user, db_session, set_modules, creator, links_to_contact
+):
+    """A non-admin must not plant a Person with someone's email for their account to land on."""
+    set_modules(ALL_MODULES)
+    creators = {None: None, "admin": admin_user.id, "regular": regular_user.id}
+    contact = Person(
+        identifier="alice_smith",
+        display_name="Alice Smith",
+        contact_info={"email": "alice@example.com"},
+        creator_id=creators[creator],
+    )
+    db_session.add(contact)
+    db_session.commit()
+
+    response = client.post(
+        "/users",
+        json={"name": "Alice Smith", "email": "alice@example.com", "password": "testpass123"},
+    )
+
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+    db_session.expire_all()
+    assert (db_session.get(Person, contact.id).user_id == user_id) is links_to_contact
+    assert db_session.query(Person).filter(Person.user_id == user_id).one().creator_id == (
+        creators[creator] if links_to_contact else user_id
+    )
+
+
+def test_create_user_passes_over_a_planted_person_for_the_ingest_one(
+    client: TestClient, admin_user, regular_user, db_session, set_modules
+):
+    set_modules(ALL_MODULES)
+    email = {"email": "alice@example.com"}
+    planted = Person(identifier="planted", display_name="Alice", contact_info=email, creator_id=regular_user.id)
+    ingested = Person(identifier="ingested", display_name="Alice", contact_info=email)
+    db_session.add_all([planted, ingested])
+    db_session.commit()
+
+    response = client.post(
+        "/users", json={"name": "Alice", "email": "alice@example.com", "password": "testpass123"}
+    )
+
+    db_session.expire_all()
+    assert db_session.query(Person).filter(Person.user_id == response.json()["id"]).one().id == ingested.id
+
+
+@pytest.mark.parametrize(
+    "later, linked",
+    [("delete creator", False), ("promote creator", False), ("demote admin", True)],
+)
+def test_create_user_judges_a_person_by_its_creator_when_made(
+    client: TestClient, admin_user, db_session, set_modules, later, linked
+):
+    """Trust is fixed when the Person is made, not re-read from its creator later."""
+    set_modules(ALL_MODULES)
+    creator = HumanUser.create_with_password(email="c@example.com", name="C", password="pw123456")
+    creator.scopes = ["*"] if later == "demote admin" else ["read"]
+    db_session.add(creator)
+    db_session.flush()
+    contact = Person(
+        identifier="alice", display_name="Alice", contact_info={"email": "alice@example.com"}, creator_id=creator.id
+    )
+    db_session.add(contact)
+    db_session.commit()
+    {
+        "delete creator": lambda: db_session.delete(creator),
+        "promote creator": lambda: setattr(creator, "scopes", ["*"]),
+        "demote admin": lambda: setattr(creator, "scopes", ["read"]),
+    }[later]()
+    db_session.commit()
+
+    response = client.post(
+        "/users", json={"name": "Alice", "email": "alice@example.com", "password": "testpass123"}
+    )
+
+    db_session.expire_all()
+    assert (db_session.get(Person, contact.id).user_id == response.json()["id"]) is linked
+
+
 def test_create_user_points_a_taken_email_at_the_email_field(client: TestClient, admin_user):
     response = client.post(
         "/users",

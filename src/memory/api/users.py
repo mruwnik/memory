@@ -39,7 +39,7 @@ from memory.common.scopes import (
 from memory.api.auth import get_interactive_user, get_current_user, get_token, require_scope
 from memory.api.field_errors import field_error
 from memory.common.access_control import has_admin_scope
-from memory.common.people import find_person_by_email, make_identifier
+from memory.common.people import make_identifier, people_with_email
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +153,14 @@ def link_person_to_user(db: Session, user: User) -> Person | None:
     so every user has an identity for team/project membership.
 
     Only email matches: a Person's names and aliases are free text chosen by
-    whoever created it.
+    whoever created it. Only a Person that ingest or an admin made counts, so
+    a non-admin can't plant one carrying someone else's email.
 
     Returns the linked Person, or None when the email's Person belongs to
     another user.
     """
-    person = find_person_by_email(db, user.email)
+    matches = people_with_email(db, user.email).filter(Person.creator_trusted).limit(2).all()
+    person = matches[0] if len(matches) == 1 else None
     if person is None:
         name = user.name or user.email.split("@")[0]
         identifier = make_identifier(name)
@@ -169,6 +171,7 @@ def link_person_to_user(db: Session, user: User) -> Person | None:
             display_name=name,
             aliases=[name],
             contact_info={"email": user.email},
+            creator_id=user.id,
         )
         db.add(person)
     if person.user_id is not None:

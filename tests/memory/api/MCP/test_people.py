@@ -252,6 +252,7 @@ async def test_upsert_create_minimal(db_session, admin_session):
     assert result["identifier"] == "minimal_person"
     # No tidbit task since no content provided
     assert result.get("tidbit_task_id") is None
+    assert db_session.get(Person, result["person_id"]).creator_id == admin_session.user_id
 
 
 @pytest.mark.asyncio

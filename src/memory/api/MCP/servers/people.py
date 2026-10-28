@@ -393,6 +393,7 @@ async def upsert(
                 display_name=display_name,
                 aliases=merge_entries([], aliases or [], "aliases"),
                 contact_info=_deep_merge({}, contact_info or {}),
+                creator_id=creator_id,
             )
             session.add(person)
             status = "created"
