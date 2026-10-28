@@ -192,6 +192,14 @@ def parse_spec(spec: dict[str, Any]) -> AgentSpec:
         raise ValueError(f"invalid spec: {e}") from e
 
 
+def keyed_spec(db: DBSession, user_id: int, spec: dict[str, Any]) -> AgentSpec:
+    """`spec` parsed, with a provider_key given by name replaced by that key's id."""
+    ref = spec.get("provider_key")
+    if isinstance(ref, str):
+        spec = spec | {"provider_key": resolve_key_ref(db, user_id, ref).id}
+    return parse_spec(spec)
+
+
 async def invisible_tools(spec: AgentSpec) -> list[str]:
     names = [n for n in spec.tools if n not in BUILTIN_TOOLS]
     if not names:
@@ -254,8 +262,10 @@ async def upsert(
     temperature, provider_extras, tools (memory tool names and builtins web_search/web_fetch),
     mcp_servers ([{server_id, tools}]), finish ({"mode": "answer"} or
     {"mode": "tool", "tools": [...]}), result_schema, max_turns, max_cost_usd,
-    max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list ids; omit
-    for your default key for the model's provider). Errors name every problem at once.
+    max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list keys, by id
+    or name; stored as its id; omit for your default key for the model's provider),
+    retention_days (how long its finished runs are kept; omit for AGENT_RUN_RETENTION_DAYS).
+    Errors name every problem at once.
     """
     user_id, _ = caller()
     name = name.strip()
@@ -263,7 +273,8 @@ async def upsert(
         raise ValueError("name is required")
     if len(name) > MAX_NAME_CHARS:
         raise ValueError(f"name must be at most {MAX_NAME_CHARS} characters")
-    parsed = parse_spec(spec)
+    with make_session() as db:
+        parsed = keyed_spec(db, user_id, spec)
     await check_spec(parsed)
     with make_session() as db:
         if definition_id is None:
@@ -382,49 +393,59 @@ async def fetch(definition_id: int) -> dict:
         return definition.serialize() | {"changed_tools": changed_tools(db, definition)}
 
 
-def prebuilt_spec(db: DBSession, user_id: int, slug: str) -> AgentSpec:
-    """The prebuilt agent on the first of its models the caller has a usable default
-    key for; else on one they have any default key for, so a refusal names that key."""
-    prebuilt = PREBUILT_AGENTS.get(slug)
-    if prebuilt is None:
-        raise ValueError(f"unknown agent {slug!r}")
-    keys = {m: default_key(db, user_id, split_model(m)[0]) for m in prebuilt.models}
-    model = next(
-        (m for m in prebuilt.models if usable(keys[m]) is not None),
-        next((m for m in prebuilt.models if keys[m] is not None), prebuilt.models[0]),
+def caller_model(db: DBSession, user_id: int, models: tuple[str, ...]) -> str:
+    """The first of `models` the caller has a usable default key for; else one they
+    have any default key for, so a refusal names that key."""
+    keys = {m: default_key(db, user_id, split_model(m)[0]) for m in models}
+    return next(
+        (m for m in models if usable(keys[m]) is not None),
+        next((m for m in models if keys[m] is not None), models[0]),
     )
-    return prebuilt.spec(model)
+
+
+def named_definition(db: DBSession, user_id: int, name: str) -> AgentDefinition | None:
+    return (
+        db.query(AgentDefinition)
+        .filter(AgentDefinition.user_id == user_id, AgentDefinition.name == name)
+        .one_or_none()
+    )
+
+
+def resolve_agent(
+    db: DBSession, user_id: int, agent: int | str | dict
+) -> tuple[AgentSpec, AgentDefinition | None, str | None]:
+    """The spec to run for `agent`, with the definition or slug it came from."""
+    if isinstance(agent, dict):
+        return keyed_spec(db, user_id, agent), None, None
+    if isinstance(agent, int):
+        definition = owned_definition(db, agent, user_id)
+        return parse_spec(definition.spec), definition, None
+    if (system := SYSTEM_AGENTS.get(agent)) is not None:
+        model = caller_model(db, user_id, system.models)
+        return parse_spec(system.spec_dict(model)), None, agent
+    if (definition := named_definition(db, user_id, agent)) is not None:
+        return parse_spec(definition.spec), definition, None
+    if (prebuilt := PREBUILT_AGENTS.get(agent)) is not None:
+        return prebuilt.spec(caller_model(db, user_id, prebuilt.models)), None, agent
+    raise ValueError(f"unknown agent {agent!r}")
 
 
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
-async def run(
-    input: str,
-    definition_id: int | None = None,
-    spec: dict | None = None,
-    agent: str | None = None,
-) -> dict:
-    """Start a run of one of your definitions, an ad-hoc spec, or a prebuilt agent
-    by slug (listed by agent_catalog), paid with your key. Returns at once; use agent_wait."""
-    if [definition_id, spec, agent].count(None) != 2:
-        raise ValueError("pass exactly one of definition_id, spec or agent")
+async def run(input: str, agent: int | str | dict) -> dict:
+    """Start a run, paid with your key. Returns its run_id at once; follow it with agent_wait.
+
+    `agent` is one of your definitions (its id or name), a prebuilt agent's slug
+    (agent_catalog) or a system agent's (agent_system_list, "system:..."), or an
+    inline spec (the fields agent_upsert takes), which runs without being saved.
+    """
     user_id, _ = caller()
     token, _ = caller_token()
     with make_session() as db:
-        definition = (
-            owned_definition(db, definition_id, user_id)
-            if definition_id is not None
-            else None
-        )
-        if agent is not None:
-            parsed, ref = prebuilt_spec(db, user_id, agent), {"agent": agent}
-        elif definition is not None:
-            parsed, ref = parse_spec(definition.spec), {"definition_id": definition.id}
-        else:
-            parsed, ref = parse_spec(spec or {}), {}
+        parsed, definition, slug = resolve_agent(db, user_id, agent)
         await check_spec(parsed)
         api_key = token_api_key(token, db)
-        trigger = TriggerInfo(kind="mcp" if api_key else "manual", ref=ref)
+        trigger = TriggerInfo(kind="mcp" if api_key else "manual")
         try:
             started = enqueue_run(
                 db,
@@ -433,6 +454,7 @@ async def run(
                 input=input,
                 trigger=trigger,
                 definition=definition,
+                agent=slug,
                 api_key=api_key,
             )
         except (SpecInvalid, CapExceeded) as e:
@@ -482,14 +504,14 @@ async def list_runs(
     before: str | None = None,
     before_id: str | None = None,
 ) -> dict:
-    """Your runs, newest first, optionally only a definition's or a prebuilt agent's. To page, pass the last run's `created_at` as `before` and its `id` as `before_id`."""
+    """Your runs, newest first, optionally only a definition's or a prebuilt or system agent's (by slug). To page, pass the last run's `created_at` as `before` and its `id` as `before_id`."""
     user_id, _ = caller()
     with make_session() as db:
         query = db.query(AgentRun).filter(AgentRun.user_id == user_id)
         if definition_id is not None:
             query = query.filter(AgentRun.definition_id == definition_id)
         if agent is not None:
-            query = query.filter(AgentRun.trigger_ref["agent"].astext == agent)
+            query = query.filter(AgentRun.agent == agent)
         if status is not None:
             query = query.filter(AgentRun.status == status)
         if before is not None:

@@ -312,13 +312,42 @@ async def test_agents_without_a_usable_key_are_refused_at_save(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ref", [lambda key: key.id, lambda key: key.label])
+async def test_upsert_takes_the_key_by_id_or_name_and_stores_the_id(
+    db_session, regular_user, user_session, ref
+):
+    key = add_key(db_session, regular_user, label="work")
+    value = ref(key)
+
+    with mcp_auth_context(user_session.token):
+        saved = await agent.upsert.fn(
+            name="d", spec={"system_prompt": "x", "model": MODEL, "provider_key": value}
+        )
+        started = await agent.run.fn(
+            input="hi", agent={"system_prompt": "x", "model": MODEL, "provider_key": value}
+        )
+
+    assert saved["spec"]["provider_key"] == key.id
+    assert db_session.get(AgentRun, started["run_id"]).provider_key_id == key.id
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_key_name_is_refused(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="unknown API key 'nope'"):
+            await agent.upsert.fn(
+                name="d", spec={"system_prompt": "x", "model": MODEL, "provider_key": "nope"}
+            )
+
+
+@pytest.mark.asyncio
 async def test_an_agent_on_your_own_key_records_it_on_the_run(
     db_session, regular_user, user_session
 ):
     key = add_key(db_session, regular_user, is_default=True)
 
     with mcp_auth_context(user_session.token):
-        started = await agent.run.fn(input="hi", spec={"system_prompt": "x", "model": MODEL})
+        started = await agent.run.fn(input="hi", agent={"system_prompt": "x", "model": MODEL})
         listed = await agent.key_list.fn()
 
     stored = db_session.get(AgentRun, started["run_id"])

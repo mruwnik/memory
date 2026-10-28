@@ -138,6 +138,7 @@ def enqueue_run(
     input: str,
     trigger: TriggerInfo,
     definition: AgentDefinition | None = None,
+    agent: str | None = None,
     api_key: APIKey | None = None,
 ) -> AgentRun:
     """Validate, cap, insert a pending run and dispatch it.
@@ -195,6 +196,7 @@ def enqueue_run(
     run = AgentRun(
         user_id=user_id,
         definition_id=definition.id if definition else None,
+        agent=agent,
         spec=snapshot.model_dump(mode="json"),
         input=input,
         max_cost_usd=max_cost,

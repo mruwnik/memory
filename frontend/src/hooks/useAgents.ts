@@ -322,7 +322,7 @@ export const useAgents = () => {
     (body: { input: string; definitionId?: number; spec?: AgentSpec }) =>
       call<{ run_id: string; status: RunStatus }>('agent_run', {
         input: body.input,
-        ...(body.definitionId !== undefined ? { definition_id: body.definitionId } : { spec: body.spec }),
+        agent: body.definitionId ?? body.spec,
       }),
     [call],
   )

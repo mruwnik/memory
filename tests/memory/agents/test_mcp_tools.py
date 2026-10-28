@@ -89,7 +89,7 @@ async def test_run_input_is_capped(
 ):
     with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="input is longer than 200000 characters"):
-            await agent.run.fn(input="x" * 200_001, spec=SPEC)
+            await agent.run.fn(input="x" * 200_001, agent=SPEC)
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_other_users_definitions_are_unknown(
         with pytest.raises(ValueError, match=f"unknown agent definition {d.id}"):
             await agent.fetch.fn(definition_id=d.id)
         with pytest.raises(ValueError, match=f"unknown agent definition {d.id}"):
-            await agent.run.fn(input="hi", definition_id=d.id)
+            await agent.run.fn(input="hi", agent=d.id)
 
 
 @pytest.mark.asyncio
@@ -131,33 +131,16 @@ async def test_run_a_definition_and_an_ad_hoc_spec(
 ):
     with mcp_auth_context(user_session.token):
         d = await agent.upsert.fn(name="digest", spec=SPEC)
-        by_definition = await agent.run.fn(input="hi", definition_id=d["id"])
-        ad_hoc = await agent.run.fn(input="hi", spec=SPEC)
+        by_id = await agent.run.fn(input="hi", agent=d["id"])
+        by_name = await agent.run.fn(input="hi", agent="digest")
+        inline = await agent.run.fn(input="hi", agent=SPEC)
 
     runs = {r.id: r for r in db_session.query(AgentRun)}
-    assert runs[by_definition["run_id"]].definition_id == d["id"]
-    assert runs[ad_hoc["run_id"]].definition_id is None
+    refs = [(runs[r["run_id"]].definition_id, runs[r["run_id"]].agent) for r in (by_id, by_name, inline)]
+    assert refs == [(d["id"], None), (d["id"], None), (None, None)]
     assert {r.trigger_kind for r in runs.values()} == {"manual"}
-    assert no_celery_dispatch.call_count == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {},
-        {"definition_id": 1, "spec": SPEC},
-        {"spec": SPEC, "agent": "fact-check"},
-    ],
-)
-async def test_run_needs_exactly_one_source(
-    db_session, user_session, fake_providers, kwargs
-):
-    with mcp_auth_context(user_session.token):
-        with pytest.raises(
-            ValueError, match="exactly one of definition_id, spec or agent"
-        ):
-            await agent.run.fn(input="hi", **kwargs)
+    assert no_celery_dispatch.call_count == 3
+    assert db_session.query(AgentDefinition).count() == 1
 
 
 def provider_keys(db, user, statuses: dict[str, str]) -> dict[str, LLMProviderKey]:
@@ -193,10 +176,10 @@ async def test_run_a_prebuilt_agent_on_the_callers_key(
 
     run = db_session.get(AgentRun, started["run_id"])
     assert run is not None
-    assert (run.definition_id, run.provider_key_id, run.trigger_ref) == (
+    assert (run.definition_id, run.provider_key_id, run.agent) == (
         None,
         keys[payer].id,
-        {"agent": "fact-check"},
+        "fact-check",
     )
     assert (run.spec["model"], run.spec["tools"]) == (model, ["web_search", "web_fetch"])
 
@@ -220,6 +203,26 @@ async def test_unknown_prebuilt_agents_are_refused(db_session, user_session, fak
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,model",
+    [("anthropic", "anthropic/claude-haiku-5-5"), ("openai", "openai/gpt-6-luna")],
+)
+async def test_run_a_system_agent_on_the_callers_key(
+    db_session, regular_user, user_session, scripted_llm, no_celery_dispatch, provider, model
+):
+    keys = provider_keys(db_session, regular_user, {provider: "ok"})
+
+    with mcp_auth_context(user_session.token, scopes=["agents"]):
+        started = await agent.run.fn(input="some text", agent="system:summarise")
+
+    run = db_session.get(AgentRun, started["run_id"])
+    assert run is not None
+    assert (run.agent, run.provider_key_id, run.spec["model"], run.spec["max_turns"]) == (
+        "system:summarise", keys[provider].id, model, 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_runs_via_an_api_key_are_attributed_to_it(
     db_session, regular_user, fake_providers
 ):
@@ -228,7 +231,7 @@ async def test_runs_via_an_api_key_are_attributed_to_it(
     db_session.commit()
 
     with mcp_auth_context(key.key, scopes=["agents"]):
-        result = await agent.run.fn(input="hi", spec=SPEC)
+        result = await agent.run.fn(input="hi", agent=SPEC)
 
     run = db_session.get(AgentRun, result["run_id"])
     assert run is not None
@@ -255,7 +258,7 @@ async def test_cap_refusals_surface_as_errors(
 
     with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="provider key pool"):
-            await agent.run.fn(input="hi", spec=SPEC)
+            await agent.run.fn(input="hi", agent=SPEC)
 
 
 def seeded_run(db, user, status="running"):
@@ -379,7 +382,7 @@ async def test_list_runs_shows_only_your_own(
 async def test_list_runs_filters_by_prebuilt_agent(db_session, regular_user, user_session):
     seeded_run(db_session, regular_user)
     fact_check = seeded_run(db_session, regular_user)
-    fact_check.trigger_ref = {"agent": "fact-check"}
+    fact_check.agent = "fact-check"
     db_session.commit()
 
     with mcp_auth_context(user_session.token):
