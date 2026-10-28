@@ -146,13 +146,7 @@ def test_mail_message_as_payload(sent_at, expected_date):
         "recipient_emails": ["recipient1@example.com", "recipient2@example.com"],
         "email_account_id": None,
         "folder": "INBOX",
-        "tags": [
-            "tag1",
-            "tag2",
-            "sender@example.com",
-            "recipient1@example.com",
-            "recipient2@example.com",
-        ],
+        "tags": ["tag1", "tag2"],
         "date": expected_date,
     }
     assert payload == expected

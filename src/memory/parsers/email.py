@@ -1,5 +1,6 @@
 import email
 import email.message
+import email.policy
 import hashlib
 import logging
 import pathlib
@@ -53,6 +54,13 @@ def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     """
     headers = [value for field in ["To", "Cc", "Bcc"] if (value := msg.get(field))]
     return [addr for _name, addr in getaddresses(headers) if addr]
+
+
+def decode_mime_header(name: str, value: str) -> str:
+    """Header text with MIME encoded-words decoded; address headers come back
+    re-quoted (``"Doe, John" <j@x>``) so they still parse as addresses. A value
+    the parser can make nothing of is kept raw rather than lost."""
+    return str(email.policy.default.header_fetch_parse(name, value)) or value
 
 
 def extract_date(msg: email.message.Message) -> datetime | None:  # type: ignore
@@ -208,8 +216,8 @@ def parse_email_message(raw_email: str, message_id: str) -> EmailMessage:
     return EmailMessage(
         raw_email=raw_email,
         message_id=message_id,
-        subject=subject,
-        sender=from_,
+        subject=decode_mime_header("Subject", subject),
+        sender=decode_mime_header("From", from_),
         recipients=extract_recipients(msg),
         sent_at=extract_date(msg),
         body=body,

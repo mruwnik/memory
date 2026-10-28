@@ -7,6 +7,7 @@ from datetime import datetime
 from email.utils import formatdate
 from unittest.mock import ANY
 import pytest
+from memory.common.db.models.source_items import mail_addresses
 from memory.parsers.email import (
     compute_message_hash,
     extract_attachments,
@@ -290,6 +291,45 @@ def test_parse_simple_email():
         "hash": b"\xa8\x8c\xa9\x16\xae\xe7\x99\xca\xc9\xd1q\x8e\xcb\xfc5+ \x03aZLz\xea\xd2\x05\xb9B\xf1i\xde\xa6\xe2",
     }
     assert abs(result["sent_at"].timestamp() - test_date.timestamp()) < 86400  # type: ignore
+
+
+@pytest.mark.parametrize(
+    "raw_from, raw_subject, sender, subject, address",
+    [
+        (
+            "=?UTF-8?Q?Karolina_Wal=C4=99cik?= <Karolina@far.ai>",
+            "=?UTF-8?B?WmHFvMOzxYLEhyBnxJnFm2zEhSBqYcW6xYQ=?=",
+            "Karolina Walęcik <Karolina@far.ai>",
+            "Zażółć gęślą jaźń",
+            "karolina@far.ai",
+        ),
+        (
+            "=?UTF-8?Q?Doe=2C_John?= <j@example.com>",
+            "Plain =?ISO-8859-1?Q?caf=E9?= menu",
+            '"Doe, John" <j@example.com>',
+            "Plain café menu",
+            "j@example.com",
+        ),
+        ("sender@example.com", "Test Subject", "sender@example.com", "Test Subject", "sender@example.com"),
+        ("a@x.com", "=?UTF-8?B?!!!?=", "a@x.com", "=?UTF-8?B?!!!?=", "a@x.com"),
+    ],
+)
+def test_parse_email_decodes_mime_headers(raw_from, raw_subject, sender, subject, address):
+    raw = f"From: {raw_from}\nTo: r@example.com\nSubject: {raw_subject}\nMessage-ID: <m@x>\n\nbody"
+
+    result = parse_email_message(raw, "1")
+
+    assert (result["sender"], result["subject"]) == (sender, subject)
+    assert mail_addresses([result["sender"]]) == [address]
+
+
+def test_parse_email_hash_uses_raw_headers():
+    raw_from, raw_subject = "=?UTF-8?Q?Wal=C4=99cik?= <k@far.ai>", "=?UTF-8?Q?Cze=C5=9B=C4=87?="
+    raw = f"From: {raw_from}\nSubject: {raw_subject}\nMessage-ID: <m@x>\n\nbody"
+
+    result = parse_email_message(raw, "1")
+
+    assert result["hash"] == compute_message_hash("<m@x>", raw_subject, raw_from, "body")
 
 
 def test_parse_email_with_attachments():

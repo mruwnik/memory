@@ -168,7 +168,7 @@ def test_mail_message_with_attachments_embeddings(mock_voyage_client):
         """
     ).lstrip()
     metadata = cast(dict[str, Any], item.as_payload())
-    metadata["tags"] = {"bla", "john.doe@techcorp.com"} | set(email["recipients"])
+    metadata["tags"] = {"bla"}
     expected = [
         (email_header + CHUNKS[0].strip(), [], metadata),
         (email_header + CHUNKS[1].strip().replace("—", "\\\\u2014"), [], metadata),

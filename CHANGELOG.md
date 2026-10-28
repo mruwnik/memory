@@ -12,6 +12,38 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+Email senders and subjects are stored decoded (`Karolina Walęcik <k@far.ai>`,
+not `=?UTF-8?Q?...?=`). Email attachments are no longer tagged with their
+sender, and mail Qdrant payloads no longer copy the sender and recipients into
+`tags`: filter by `sender`/`recipients` instead.
+
+### Migrations
+
+`20261119_email_sender_tags` removes sender and raw-header tags from email
+attachment rows. One UPDATE over email attachments.
+
+### Post-deploy commands
+
+Decode the sender and subject of stored mail and drop the sender, recipient and
+raw-header tags from existing mail and attachment Qdrant payloads. It visits
+every mail message and is safe to re-run:
+
+```bash
+docker compose exec -T worker python - maintenance clean-mail-headers < tools/run_celery_task.py
+```
+
 ## v0.4.0 (2026-10-28)
 
 ### Required env vars

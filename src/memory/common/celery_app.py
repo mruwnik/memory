@@ -162,6 +162,7 @@ FIRE_TRIGGER = f"{AGENTS_ROOT}.fire_trigger"
 # Access control tasks
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
 RECONCILE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.reconcile_access_control"
+CLEAN_MAIL_HEADERS = f"{MAINTENANCE_ROOT}.clean_mail_headers"
 
 # Batched ingestion summaries
 SUBMIT_SUMMARY_BATCH = f"{MAINTENANCE_ROOT}.submit_summary_batch"
