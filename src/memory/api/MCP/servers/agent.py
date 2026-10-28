@@ -451,9 +451,10 @@ async def run(input: str, agent: int | str | dict) -> dict:
     (agent_catalog) or a system agent's (agent_system_list, "system:..."), or an
     inline spec (the fields agent_upsert takes), which runs without being saved.
 
-    Called by a run, this starts its child: it may use only the run's tools, is
-    capped by what the run has left of its budget (which the child holds until it
-    finishes), and nests at most AGENT_MAX_SPAWN_DEPTH deep.
+    Called by a run, this starts its child: it may use only the run's tools, nests
+    at most AGENT_MAX_SPAWN_DEPTH deep, and gets half of what the run has left of its
+    budget, which it holds until it finishes. A child spec's own max_cost_usd is
+    capped at what the run has left; taking all of it ends the run budget_exceeded.
     """
     user_id, _ = caller()
     token, _ = caller_token()

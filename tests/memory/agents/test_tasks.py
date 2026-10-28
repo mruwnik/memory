@@ -103,6 +103,7 @@ def test_sweep_fails_only_stuck_runs(
     now = datetime.now(timezone.utc)
     overrides = {key: now - value if isinstance(value, timedelta) else value for key, value in overrides.items()}
     r = run(db_session, regular_user, **overrides)
+    child = run(db_session, regular_user, status="running", started_at=now, parent_run_id=r.id, depth=1)
 
     sweep_agent_runs()
 
@@ -111,6 +112,8 @@ def test_sweep_fails_only_stuck_runs(
     assert swept is not None
     assert swept.status == expected_status
     assert expected_error in (swept.error or "")
+    # A swept run's children are told to stop, as when a run ends normally.
+    assert (db_session.get(AgentRun, child.id).cancel_requested_at is not None) is (expected_status == "failed")
 
 
 @pytest.mark.parametrize(

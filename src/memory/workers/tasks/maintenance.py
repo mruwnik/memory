@@ -20,6 +20,7 @@ from memory.common import (
     summary_batch,
 )
 from memory.agents import triggers
+from memory.agents.cancel import cancel_tree
 from memory.common.db.models.agents import MAX_RETENTION_DAYS, RunStatus
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
@@ -1370,6 +1371,9 @@ def sweep_agent_runs() -> dict[str, int]:
                 "never picked up: the agents queue is backed up, or no agents-worker "
                 "service is consuming it"
             )
+        # As when a run ends normally: its children would spend a budget nobody follows.
+        for r in stale + orphaned:
+            cancel_tree(db, r, now)
     if stale or orphaned:
         logger.warning("swept %d stale and %d orphaned agent runs", len(stale), len(orphaned))
     return {"stale": len(stale), "orphaned": len(orphaned)}
