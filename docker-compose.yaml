@@ -17,6 +17,7 @@ secrets:
 volumes:
   db_data: {} # Postgres
   qdrant_data: {} # Qdrant
+  qdrant_snapshots: {} # Qdrant snapshots; on disk because tmpfs counts against qdrant's memory limit
   redis_data: {} # Redis
 
 # ------------------------------ X-templates ----------------------------
@@ -184,10 +185,10 @@ services:
     networks: [kbnet]
     volumes:
       - qdrant_data:/qdrant/storage:rw
+      - qdrant_snapshots:/qdrant/snapshots:rw
     tmpfs:
       - /tmp
       - /var/tmp
-      - /qdrant/snapshots:rw
     healthcheck:
       test:
         [

@@ -12,6 +12,30 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## v0.3.3 (2026-10-28)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+Qdrant snapshots now go to the `qdrant_snapshots` volume instead of a tmpfs. The
+tmpfs counted against Qdrant's 2G memory limit, so the nightly full snapshot got
+Qdrant OOM-killed once the vectors grew past about 1.5 GB.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.3.2 (2026-10-26)
 
 ### Required env vars
