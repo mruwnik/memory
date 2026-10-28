@@ -8,24 +8,22 @@ from fastmcp import FastMCP
 from sqlalchemy import or_
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.MCP.access import fetch_user_by_token
+from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import discord as discord_client
+from memory.common.access_control import UserProxy
 from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import (
     SCOPE_DISCORD,
     SCOPE_DISCORD_WRITE,
 )
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import (
-    DiscordBot,
-    DiscordChannel,
-    DiscordUser,
-)
+from memory.common.db.models import DiscordBot, DiscordUser
 from memory.common.people import find_person, primary_contact
 from memory.common.discord_data import (
     fetch_channel_history,
     fetch_channels,
+    find_visible_channel,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +70,13 @@ def _get_default_bot(session: DBSession) -> DiscordBot:
     return bots[0]
 
 
+def require_caller(session: DBSession) -> UserProxy:
+    caller = get_mcp_current_user(session)
+    if caller is None:
+        raise ValueError("Not authenticated")
+    return caller
+
+
 def _to_snowflake(value: int | str) -> int:
     """Convert a snowflake ID (int or string) to int."""
     if isinstance(value, int):
@@ -104,18 +109,9 @@ async def send_to_channel(
     channel_id: str | None,
     channel_name: str | None,
 ) -> dict[str, Any]:
-    """Resolve channel and send message."""
-    if channel_id is not None:
-        target = channel_id
-    else:
-        channel = (
-            session.query(DiscordChannel)
-            .filter(DiscordChannel.name == channel_name)
-            .first()
-        )
-        if not channel:
-            raise ValueError(f"Channel '{channel_name}' not found")
-        target = str(channel.id)
+    """Resolve a channel the caller's bots can see and send to it."""
+    channel = find_visible_channel(session, require_caller(session), channel_id, channel_name)
+    target = str(channel.id)
 
     success = await asyncio.to_thread(
         discord_client.send_to_channel, bot_id, target, message
@@ -289,6 +285,7 @@ async def channel_history(
         return await asyncio.to_thread(
             fetch_channel_history,
             session,
+            require_caller(session),
             channel_id,
             channel_name,
             before_dt,
@@ -301,17 +298,33 @@ async def channel_history(
 @visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def list_channels(
     server: str | None = None,
+    name: str | None = None,
     include_dms: bool = False,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    List Discord channels the bot has access to.
+    List Discord channels in servers your bots are in (admins see all).
 
     Args:
-        server: Filter by server - can be numeric ID or server name
-        include_dms: Include DM channels (default False)
+        server: Filter by server - numeric ID or server name
+        name: Case-insensitive substring of the channel name
+        include_dms: Include DM channels (default False; DMs are admin-only)
+        fields: Fields to include for each channel.
+                Default: ["id", "name", "type", "server_id"]
+                Available fields:
+                - id: Channel ID (snowflake, as string)
+                - name: Channel name
+                - type: text, voice, dm, group_dm or thread
+                - server_id: Server (guild) ID
+                - category_id: Category ID
+                - collect_messages: Whether messages are collected (after server inheritance)
+                - project_id: Associated project ID for access control
+                - sensitivity: Sensitivity level (public, basic, internal, confidential)
 
     Returns:
-        Dict with channels list
+        Dict with channels list and count
     """
     with make_session() as session:
-        return await asyncio.to_thread(fetch_channels, session, server, include_dms)
+        return await asyncio.to_thread(
+            fetch_channels, session, require_caller(session), server, include_dms, name, fields
+        )
