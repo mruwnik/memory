@@ -7,7 +7,7 @@ from memory.common.db.models import MiscDoc
 from memory.workers.tasks.misc import sync_misc_doc
 
 
-def test_sync_misc_doc_ingests_text(db_session):
+def test_sync_misc_doc_ingests_text(db_session, qdrant):
     body = b"generic misc ingestion body, long enough to chunk.\n" * 3
     path = settings.MISC_STORAGE_DIR / "task_doc.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
