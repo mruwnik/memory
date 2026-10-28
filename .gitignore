@@ -41,6 +41,5 @@ local-secret.json
 .claude/*
 !.claude/skills/
 .claude/skills/*
-!.claude/skills/deploy/
 !.claude/skills/diagnose/
 !.claude/skills/fact-check/
