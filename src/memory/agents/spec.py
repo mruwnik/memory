@@ -32,7 +32,7 @@ DEFAULT_AGENT_MODEL = "anthropic/claude-sonnet-5-5"
 DEFAULT_MAX_OUTPUT_TOKENS = 16_000
 MAX_TEXT_CHARS = 200_000
 MAX_NAME_CHARS = 100
-# agent_* and the scheduler writes: a run must not start or manage runs or
+# agent_* and the scheduler writes: a run must not manage agents, runs or
 # sessions, which would escape its caps (scheduled sessions can also receive the
 # owner's saved GitHub tokens).
 DENIED_TOOL_PREFIXES = ("agent_",)
@@ -102,6 +102,15 @@ def is_denied(tool: str) -> bool:
     return tool.startswith(DENIED_TOOL_PREFIXES) or tool in DENIED_TOOLS
 
 
+# Memory's own child-run tools, which a spec may opt in to: they act only on the
+# calling run's children, within its depth, budget, scopes and tools.
+CHILD_RUN_TOOLS = frozenset({"agent_run", "agent_wait", "agent_cancel"})
+
+
+def memory_tool_denied(tool: str) -> bool:
+    return is_denied(tool) and tool not in CHILD_RUN_TOOLS
+
+
 def external_tool_name(server_id: int, tool: str) -> str:
     """How an external MCP tool is exposed to the model (unique across servers)."""
     return f"mcp_{server_id}_{tool}"
@@ -168,7 +177,9 @@ def result_errors(schema: dict[str, Any], data: Any) -> list[str]:
 def tool_errors(spec: AgentSpec) -> list[str]:
     exposed = exposed_tools(spec)
     errors = [
-        f"tool '{t}' can never be used inside a run" for t in spec.tools if is_denied(t)
+        f"tool '{t}' can never be used inside a run"
+        for t in spec.tools
+        if memory_tool_denied(t)
     ]
     errors += [
         f"tool '{t}' on MCP server {s.server_id} can never be used inside a run"

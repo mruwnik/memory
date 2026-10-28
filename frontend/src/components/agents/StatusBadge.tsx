@@ -25,6 +25,7 @@ export const TRIGGER_LABELS: Record<string, string> = {
   cron: 'Schedule',
   ingest: 'New items',
   system: 'System',
+  agent: 'Another run',
 }
 
 export function StatusBadge({ status }: { status: RunStatus }) {

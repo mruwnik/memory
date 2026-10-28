@@ -18,7 +18,13 @@ from mcp.types import Tool
 
 from memory.agents.builtins import BUILTIN_DEFS, search_backend, web_fetch
 from memory.agents.mcp_client import MemoryTools, memory_tools, render_content
-from memory.agents.spec import AgentSpec, ExternalMCP, external_tool_name, is_denied
+from memory.agents.spec import (
+    AgentSpec,
+    ExternalMCP,
+    external_tool_name,
+    is_denied,
+    memory_tool_denied,
+)
 from memory.agents.external import load_detached, tool_entry, unusable
 from memory.agents.run_auth import (
     RunSession,
@@ -138,8 +144,8 @@ async def local_web_fetch(arguments: dict[str, Any]) -> tuple[str, bool]:
 
 def denied_tools(spec: AgentSpec) -> list[str]:
     """The hard denylist, re-applied at run start for specs stored before a rule existed."""
-    raw = spec.tools + [t for s in spec.mcp_servers for t in s.tools]
-    return [t for t in raw if is_denied(t)]
+    external = [t for s in spec.mcp_servers for t in s.tools]
+    return [t for t in spec.tools if memory_tool_denied(t)] + [t for t in external if is_denied(t)]
 
 
 async def usable_server(user_id: int, external: ExternalMCP) -> ExternalMCPServer:
@@ -189,6 +195,7 @@ async def open_toolhub(
     session_token: str,
     capabilities: Capabilities,
     saved_at: datetime | None = None,
+    run_id: str | None = None,
 ) -> AsyncIterator[ToolHub]:
     """`saved_at`: when the run's definition was saved, to note external tools
     that changed since."""
@@ -202,7 +209,7 @@ async def open_toolhub(
         memory_names = [n for n in spec.tools if n not in BUILTIN_TOOLS]
         if memory_names:
             memory = await stack.enter_async_context(
-                memory_tools(session_token, scopes)
+                memory_tools(session_token, scopes, run_id)
             )
             visible = {t.name: t for t in await memory.list()}
             for name in memory_names:

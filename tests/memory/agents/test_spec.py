@@ -81,7 +81,7 @@ def test_defaults_are_valid_on_the_default_model():
 @pytest.mark.parametrize(
     "overrides,expected",
     [
-        ({"tools": ["agent_run"]}, "tool 'agent_run' can never be used inside a run"),
+        ({"tools": ["agent_list_runs"]}, "tool 'agent_list_runs' can never be used inside a run"),
         *[
             ({"tools": [tool]}, f"tool '{tool}' can never be used inside a run")
             for tool in ("scheduler_upsert", "scheduler_delete", "scheduler_cancel")
@@ -202,8 +202,12 @@ def test_spec_errors_name_the_problem(fake_providers, overrides, expected):
     assert any(expected in e for e in errors), errors
 
 
+def test_a_run_may_opt_in_to_starting_and_following_child_runs(fake_providers):
+    assert spec_errors(spec(tools=["agent_run", "agent_wait", "agent_cancel"])) == []
+
+
 def test_independent_problems_are_all_reported(fake_providers):
-    errors = spec_errors(spec(tools=["agent_run"], timeout_sec=99999))
+    errors = spec_errors(spec(tools=["agent_upsert"], timeout_sec=99999))
 
     assert len(errors) == 2
 

@@ -155,6 +155,7 @@ function RunView({ runId }: { runId: string }) {
         : run.input],
       ['Model', <span className="font-mono">{run.model}</span>],
       ['Trigger', TRIGGER_LABELS[run.trigger_kind] ?? run.trigger_kind],
+      ['Started by', run.parent_run_id && <Link to={`/ui/agents/runs/${run.parent_run_id}`} className="text-primary hover:underline">Parent run</Link>],
       ['Started', run.started_at && formatUserDateTime(run.started_at)],
       ['Duration', run.started_at && run.finished_at && formatDuration(run.started_at, run.finished_at)],
       ['Cost', `${formatCost(run.cost_usd)} of ${formatCost(run.max_cost_usd)}`],

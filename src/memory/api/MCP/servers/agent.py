@@ -2,7 +2,8 @@
 
 Every tool acts as the caller. A run always executes as the definition's owner
 (only owners may run a definition), with the caller's API-key scopes when one
-was used.
+was used. A run that calls agent_run, agent_wait or agent_cancel (opted in
+through its spec's tools) acts on its own children only.
 """
 
 import asyncio
@@ -37,7 +38,7 @@ from memory.agents.enqueue import (
     enqueue_run,
     stored_spec_problems,
 )
-from memory.agents.mcp_client import memory_tools
+from memory.agents.mcp_client import calling_run, memory_tools
 from memory.agents.prebuilt import PREBUILT_AGENTS
 from memory.agents.provider_keys import (
     KeyUnavailable,
@@ -63,7 +64,7 @@ from memory.agents.spec import (
     MAX_NAME_CHARS,
     MAX_TEXT_CHARS,
     AgentSpec,
-    is_denied,
+    memory_tool_denied,
     spec_errors,
 )
 from memory.api.auth import token_api_key
@@ -179,8 +180,15 @@ def trigger_summaries(db: DBSession, definition_ids: list[int]) -> dict[int, dic
 def readable_run(
     db: DBSession, run_id: str, user_id: int, is_admin: bool, lock: bool = False
 ) -> AgentRun:
+    """A run the caller may see: theirs (any, for admins), or, when the caller is a
+    run, only one of its children."""
     run = db.get(AgentRun, run_id, with_for_update=lock)
-    if run is None or (run.user_id != user_id and not is_admin):
+    parent = calling_run(get_access_token())
+    if (
+        run is None
+        or (run.user_id != user_id and not is_admin)
+        or (parent is not None and run.parent_run_id != parent)
+    ):
         raise ValueError(f"unknown run {run_id}")
     return run
 
@@ -438,14 +446,28 @@ async def run(input: str, agent: int | str | dict) -> dict:
     `agent` is one of your definitions (its id or name), a prebuilt agent's slug
     (agent_catalog) or a system agent's (agent_system_list, "system:..."), or an
     inline spec (the fields agent_upsert takes), which runs without being saved.
+
+    Called by a run, this starts its child: it may use only the run's tools, is
+    capped by what the run has left of its budget (which the child holds until it
+    finishes), and nests at most AGENT_MAX_SPAWN_DEPTH deep.
     """
     user_id, _ = caller()
     token, _ = caller_token()
+    parent_id = calling_run(get_access_token())
     with make_session() as db:
         parsed, definition, slug = resolve_agent(db, user_id, agent)
         await check_spec(parsed)
+        parent = None
+        if parent_id is not None:
+            parent = db.get(AgentRun, parent_id)
+            if parent is None:
+                raise ValueError(f"the calling run {parent_id} no longer exists")
+        # A run's session is bound to the run's API key, so its children act through it too.
         api_key = token_api_key(token, db)
-        trigger = TriggerInfo(kind="mcp" if api_key else "manual")
+        if parent is not None:
+            trigger = TriggerInfo(kind="agent")
+        else:
+            trigger = TriggerInfo(kind="mcp" if api_key else "manual")
         try:
             started = enqueue_run(
                 db,
@@ -456,6 +478,7 @@ async def run(input: str, agent: int | str | dict) -> dict:
                 definition=definition,
                 agent=slug,
                 api_key=api_key,
+                parent=parent,
             )
         except (SpecInvalid, CapExceeded) as e:
             raise ValueError(str(e)) from e
@@ -586,7 +609,7 @@ async def catalog() -> dict:
         "tools": [
             {"name": t.name, "description": t.description, "read_only": t.read_only}
             for t in listed
-            if not is_denied(t.name)
+            if not memory_tool_denied(t.name)
         ],
         "models": [
             {
@@ -602,6 +625,7 @@ async def catalog() -> dict:
             "max_timeout_sec": settings.AGENT_MAX_TIMEOUT_SEC,
             "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
             "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),
+            "max_spawn_depth": settings.AGENT_MAX_SPAWN_DEPTH,
         },
         "default_model": DEFAULT_AGENT_MODEL,
         "trigger_source_types": source_types(),

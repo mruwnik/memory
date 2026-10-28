@@ -13,12 +13,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from memory.common import settings
 from memory.common.db.connection import DBSession
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey, LLMProviderKey, LLMSpend
+from memory.common.db.models.agents import TERMINAL_STATUSES
 
 class CapExceeded(ValueError):
     pass
@@ -55,6 +56,31 @@ def spent_last_24h(db: DBSession, *conditions) -> Decimal:
         .scalar()
     )
     return Decimal(total)
+
+
+def tree_spent_last_24h(db: DBSession, *conditions) -> Decimal:
+    """`spent_last_24h` of the matching runs plus every run they started, at any depth."""
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    roots = select(AgentRun.id).where(AgentRun.created_at > since, *conditions)
+    tree = roots.cte("tree", recursive=True)
+    # UNION, not UNION ALL: a descendant that also matches is counted once.
+    tree = tree.union(select(AgentRun.id).where(AgentRun.parent_run_id == tree.c.id))
+    total = (
+        db.query(func.coalesce(func.sum(AgentRun.cost_usd), 0))
+        .filter(AgentRun.id.in_(select(tree.c.id)))
+        .scalar()
+    )
+    return Decimal(total)
+
+
+def children_cost(db: DBSession, run_id: str) -> Decimal:
+    """What `run_id`'s children count against its cap: a finished child what it and its
+    children spent, a live one at least its own cap, which it may still spend."""
+    total = Decimal(0)
+    for child in db.query(AgentRun).filter(AgentRun.parent_run_id == run_id):
+        spent = child.cost_usd + children_cost(db, child.id)
+        total += spent if child.status in TERMINAL_STATUSES else max(spent, child.max_cost_usd)
+    return total
 
 
 def hour_of(moment: datetime) -> datetime:
@@ -117,7 +143,8 @@ def daily_pools(
             Pool(
                 "definition pool",
                 spec_daily_cap,
-                spent_last_24h(db, AgentRun.definition_id == definition.id),
+                # Runs a definition's runs started are paid out of its pool too.
+                tree_spent_last_24h(db, AgentRun.definition_id == definition.id),
             )
         )
     key_cap = provider_key.max_cost_usd_per_day

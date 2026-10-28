@@ -44,7 +44,7 @@ async def test_upsert_creates_then_updates(
 @pytest.mark.parametrize(
     "spec,expected",
     [
-        (SPEC | {"tools": ["agent_run"]}, "can never be used inside a run"),
+        (SPEC | {"tools": ["agent_delete"]}, "can never be used inside a run"),
         (
             SPEC | {"tools": ["people_merge"]},
             "tool 'people_merge' is not visible to you",
@@ -424,7 +424,7 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
 
     names = {t["name"] for t in catalog["tools"]}
     assert "meta_get_user" in names
-    assert not any(n.startswith("agent_") for n in names)
+    assert {n for n in names if n.startswith("agent_")} == {"agent_run", "agent_wait", "agent_cancel"}
     assert catalog["builtins"] == ["web_fetch", "web_search"]
     assert [a["slug"] for a in catalog["agents"]] == ["fact-check"]
     sonnet = next(
@@ -440,6 +440,7 @@ async def test_catalog_lists_visible_tools_models_and_ceilings(
         "max_timeout_sec": 1800,
         "max_runs_per_hour": settings.AGENT_MAX_RUNS_PER_HOUR,
         "default_user_key_run_cost_usd": str(settings.AGENT_DEFAULT_USER_KEY_RUN_COST_USD),
+        "max_spawn_depth": settings.AGENT_MAX_SPAWN_DEPTH,
     }
 
 

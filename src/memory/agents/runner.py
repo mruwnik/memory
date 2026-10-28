@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import func
 
 from memory.agents.call import SUBMIT_RESULT, submit_result_tool
+from memory.agents.caps import children_cost
 from memory.agents.provider_keys import (
     KeyUnavailable,
     key_for_run,
@@ -152,7 +153,10 @@ def append_step(
     usage: AgentUsage | None = None,
     cost: Decimal | None = None,
 ) -> Decimal:
-    """Persist one step; model turns also roll usage and cost into the run. Returns the run's cost."""
+    """Persist one step; model turns also roll usage and cost into the run.
+
+    Returns what counts against the run's cap: its own cost plus its children's.
+    """
     with make_session() as db:
         run = db.get(AgentRun, run_id, with_for_update=True)
         assert run is not None
@@ -176,7 +180,7 @@ def append_step(
             run.usage = (AgentUsage.from_dict(run.usage) + usage).to_dict()
             run.cost_usd = run.cost_usd + cost
             run.num_turns += 1
-        total = run.cost_usd
+        total = run.cost_usd + children_cost(db, run_id)
         db.commit()
         return total
 
@@ -331,6 +335,7 @@ async def run_loop(
         session_token=token,
         capabilities=info.capabilities,
         saved_at=claimed.saved_at,
+        run_id=run_id,
     ) as hub:
         # Fixed for the whole run: the tool list is part of the cached prefix.
         submit = [submit_result_tool(spec.result_schema)] if spec.result_schema else []
@@ -470,7 +475,8 @@ async def run_loop(
                 # Persist whatever ran, even when cancellation stops the batch midway.
                 if results:
                     view.append(NeutralMessage(role="user", content=results))
-                    append_step(run_id, "tool_results", results)
+                    # A tool may have started a child, which holds part of the budget.
+                    cost = append_step(run_id, "tool_results", results)
             estimate += (
                 sum(len(r.text) for r in results if isinstance(r, ToolResult))
                 // CHARS_PER_TOKEN

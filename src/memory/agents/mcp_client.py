@@ -20,6 +20,16 @@ from memory.common.db.connection import make_session
 from memory.common.access_control import narrow_scopes
 
 
+# Only tokens built here carry claims: the ones verified for remote clients have
+# none, so a remote caller can't pose as a run.
+RUN_CLAIM = "run_id"
+
+
+def calling_run(access: AccessToken | None) -> str | None:
+    """The run calling a tool through `memory_tools`, if any."""
+    return (access.claims or {}).get(RUN_CLAIM) if access is not None else None
+
+
 @dataclass(frozen=True)
 class ToolInfo:
     name: str
@@ -66,17 +76,23 @@ class MemoryTools:
 
 
 @asynccontextmanager
-async def memory_tools(token: str, scopes: list[str]) -> AsyncIterator[MemoryTools]:
+async def memory_tools(
+    token: str, scopes: list[str], run_id: str | None = None
+) -> AsyncIterator[MemoryTools]:
     """Memory's tools as the token's principal, limited to `scopes`.
 
     `scopes` can only narrow what the principal is granted, never widen it.
+    `run_id` names the run calling them (see `calling_run`).
     """
     # Imported here, not at module top: base mounts every subserver, including
     # the agents subserver that imports this module, so a top-level import is a cycle.
     from memory.api.MCP.base import mcp
 
     access = AccessToken(
-        token=token, client_id="agent-run", scopes=narrow_scopes(granted_scopes(token), scopes)
+        token=token,
+        client_id="agent-run",
+        scopes=narrow_scopes(granted_scopes(token), scopes),
+        claims={RUN_CLAIM: run_id} if run_id else {},
     )
     # Set before the client spawns the in-memory server task, which copies the
     # current context, so each client's identity is fixed at creation.
