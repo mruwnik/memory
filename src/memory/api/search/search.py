@@ -46,6 +46,7 @@ from memory.api.search.constants import (
 )
 
 from memory.api.search.bm25 import search_bm25_chunks
+from memory.api.search.filters import apply_registry_filters_sql
 from memory.api.search.hyde import expand_query_hyde
 from memory.api.search.rerank import rerank_chunks, rerank_timeout
 from memory.api.search.query_analysis import analyze_query, QueryAnalysis
@@ -730,6 +731,9 @@ async def search_sources(
         with make_session() as db:
             query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
             query = apply_access_filter_to_query(query, filters["access_filter"])
+            # Title recall adds chunks that never passed the Qdrant/BM25 tag filters.
+            tag_filters = {k: filters.get(k) for k in ("tags", "exclude_tags")}
+            query = apply_registry_filters_sql(query, tag_filters)
             sources = query.all()
             summaries = item_summaries(db, [source.id for source in sources])
             return [

@@ -174,15 +174,19 @@ describe('SearchForm', () => {
     expect(onSearch.mock.calls[0][0].config.enhancements).toEqual(enhancementDefaults)
   })
 
-  it('offers the server tags and submits the chosen ones', async () => {
+  it.each([
+    ['Any tag', 'tags', 'exclude_tags'],
+    ['No excluded tags', 'exclude_tags', 'tags'],
+  ])('offers the server tags in "%s" and submits the chosen ones as %s', async (placeholder, chosen, other) => {
     installFetch()
     const onSearch = vi.fn()
     const { user } = renderWithUser(<SearchForm isLoading={false} onSearch={onSearch} />)
-    await user.click(await screen.findByPlaceholderText('Any tag'))
+    await user.click(await screen.findByPlaceholderText(placeholder))
     await user.click(await screen.findByRole('option', { name: 'work' }))
     await user.type(screen.getByPlaceholderText('Search your knowledge base...'), 'q')
     await user.click(screen.getByRole('button', { name: 'Search' }))
-    expect(onSearch.mock.calls[0][0].filters.tags).toEqual(['work'])
+    expect(onSearch.mock.calls[0][0].filters[chosen]).toEqual(['work'])
+    expect(onSearch.mock.calls[0][0].filters[other]).toEqual([])
   })
 
   it('updates Max Results limit', async () => {

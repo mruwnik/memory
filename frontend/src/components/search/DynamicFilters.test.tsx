@@ -15,11 +15,13 @@ const collection = (filters: CollectionMetadata['filters']): CollectionMetadata 
 const schemas = {
   mail: collection({
     tags: field('tags', 'list[str]'),
+    exclude_tags: field('excluded tags', 'list[str]'),
     min_size: field('minimum size', 'int'),
     sender: field('sender'),
   }),
   blog: collection({
     tags: field('tags', 'list[str]'),
+    exclude_tags: field('excluded tags', 'list[str]'),
     min_size: field('minimum size', 'int'),
     domain: field('domain'),
   }),
@@ -58,7 +60,7 @@ describe('DynamicFilters', () => {
     expect(screen.queryByText('Blog specific')).not.toBeInTheDocument()
   })
 
-  it.each([['Title'], ['Tags']])('does not render %s, which has no filter input here', (label) => {
+  it.each([['Title'], ['Tags'], ['Exclude tags']])('does not render %s, which has no filter input here', (label) => {
     renderFilters(['mail', 'blog'])
     expect(screen.queryByLabelText(label)).not.toBeInTheDocument()
   })

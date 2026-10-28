@@ -15,6 +15,7 @@ import uuid
 import pytest
 
 from memory.api.search.embeddings import build_access_qdrant_filter
+from memory.api.search.filters import build_registry_qdrant_filters
 from memory.common.access_control import AccessCondition, AccessFilter
 from memory.common.content_processing import process_content_item
 from memory.common.db.models import Note, Person
@@ -479,6 +480,37 @@ def test_qdrant_search_person_filter_excludes_others_items(
 
     # Alice should NOT see Bob and Charlie's note
     assert note_bob_charlie.id not in source_ids
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({"tags": ["lw"]}, {"post", "comment"}),
+        ({"exclude_tags": ["comment"]}, {"plain", "post"}),
+        ({"tags": ["lw"], "exclude_tags": ["comment"]}, {"post"}),
+    ],
+)
+def test_qdrant_tag_filters(db_session, qdrant, filters, expected):
+    tagged = {"plain": [], "post": ["lw"], "comment": ["lw", "comment"]}
+    names = {}
+    for name, tags in tagged.items():
+        note = Note(
+            content=f"Tagged note {name}",
+            modality="text",
+            sha256=unique_sha256(f"tags-{name}"),
+            tags=tags,
+        )
+        process_content_item(note, db_session)
+        names[note.id] = name
+
+    results = qdrant.scroll(
+        collection_name="text",
+        scroll_filter={"must": build_registry_qdrant_filters(filters)},
+        with_payload=True,
+        limit=100,
+    )[0]
+
+    assert {names[p.payload["source_id"]] for p in results} == expected
 
 
 # ============================================================================

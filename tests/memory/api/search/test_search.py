@@ -614,6 +614,30 @@ def test_search_sources_show_long_items_by_their_summary(db_session, monkeypatch
     }
 
 
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({}, {"post", "comment"}),
+        ({"exclude_tags": ["comment"]}, {"post"}),
+        ({"tags": ["comment"]}, {"comment"}),
+    ],
+)
+def test_search_sources_applies_tag_filters(db_session, filters, expected):
+    # Title recall adds chunks that skipped the Qdrant/BM25 tag filters.
+    items = {
+        "post": make_source_item(db_session, 1, tags=["lw"]),
+        "comment": make_source_item(db_session, 2, tags=["lw", "comment"]),
+    }
+    chunks = [Chunk(source_id=item.id, content="hit") for item in items.values()]
+    names = {item.id: name for name, item in items.items()}
+
+    results = asyncio.run(
+        search_module.search_sources(chunks, filters={"access_filter": None, **filters})
+    )
+
+    assert {names[r.id] for r in results} == expected
+
+
 def test_search_sources_empty_chunks_returns_empty():
     """Empty input must short-circuit before hitting the DB. The
     fail-closed filter check still happens (so callers must pass filters

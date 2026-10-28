@@ -7,9 +7,10 @@ type Fields = [string, SchemaArg][]
 const formatFieldLabel = (field: string): string =>
     field.replace(/_/g, ' ').replace(/^\w/, l => l.toUpperCase())
 
-// Tags have their own picker in the search form.
+// Tags have their own pickers in the search form.
+const TAG_FILTERS = new Set(['tags', 'exclude_tags'])
 const filtersOf = (metadata: CollectionMetadata): Fields =>
-    Object.entries(metadata.filters).filter(([name]) => name !== 'tags')
+    Object.entries(metadata.filters).filter(([name]) => !TAG_FILTERS.has(name))
 
 // With a single collection every filter is shared, which says nothing; keep them under that collection.
 const getCommonFields = (schemas: Record<string, CollectionMetadata>): Fields => {

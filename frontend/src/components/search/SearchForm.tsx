@@ -6,6 +6,7 @@ import { Button, Card, Checkbox, Disclosure, Field, Input, MultiSelect, Notice }
 
 type Filter = {
     tags?: string[]
+    exclude_tags?: string[]
     source_ids?: string[]
     [key: string]: any
 }
@@ -60,6 +61,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
     const [modalities, setModalities] = useState<Record<string, boolean>>({})
     const [schemas, setSchemas] = useState<Record<string, CollectionMetadata>>({})
     const [tags, setTags] = useState<Record<string, boolean>>({})
+    const [excludeTags, setExcludeTags] = useState<Record<string, boolean>>({})
     const [dynamicFilters, setDynamicFilters] = useState<Record<string, any>>({})
     const [limit, setLimit] = useState<number | ''>(DEFAULT_LIMIT)
     const [enhancements, setEnhancements] = useState<Record<string, boolean>>({})
@@ -81,6 +83,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
            setSchemas(schemas)
            setModalities(createFlags(Object.keys(schemas), true))
            setTags(createFlags(tags))
+           setExcludeTags(createFlags(tags))
            const { use_scores = false, semantic_search_unavailable = false, ...enhancementDefaults } = defaults
            setEnhancements(enhancementDefaults)
            setAvailableEnhancements(enhancementDefaults)
@@ -109,6 +112,7 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
             },
             filters: {
                 tags: getSelectedItems(tags),
+                exclude_tags: getSelectedItems(excludeTags),
                 ...cleanFilters(dynamicFilters)
             },
         })
@@ -195,6 +199,15 @@ export const SearchForm = ({ isLoading, onSearch, urlQuery = '' }: SearchFormPro
                         value={getSelectedItems(tags)}
                         onChange={selected => setTags(createFlags(Object.keys(tags), false, selected))}
                         placeholder="Any tag"
+                    />
+                </Field>
+
+                <Field label="Exclude tags">
+                    <MultiSelect
+                        options={Object.keys(excludeTags)}
+                        value={getSelectedItems(excludeTags)}
+                        onChange={selected => setExcludeTags(createFlags(Object.keys(excludeTags), false, selected))}
+                        placeholder="No excluded tags"
                     />
                 </Field>
 

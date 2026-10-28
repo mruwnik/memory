@@ -104,6 +104,7 @@ class MCPSearchFilters(TypedDict):
 
     # List filters (match any)
     tags: NotRequired[list[str]]
+    exclude_tags: NotRequired[list[str]]
     recipients: NotRequired[list[str]]
     authors: NotRequired[list[str]]
     observation_types: NotRequired[list[str] | None]

@@ -21,6 +21,7 @@ from memory.api.search.types import MCPSearchFilters, SearchFilters
 from memory.api.MCP.servers.core import apply_item_filters
 from memory.common.db.models import Chunk, SourceItem
 from memory.common.extract import DataChunk
+from tests.conftest import make_source_item
 
 
 def compile_sql(query) -> str:
@@ -185,6 +186,30 @@ def test_registry_sql_tags_array_overlap_cast_text():
     assert "AS TEXT[]" in sql
 
 
+TAGGED_ITEMS = {"plain": [], "post": ["lw"], "comment": ["lw", "comment"], "other": ["x"]}
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({"tags": ["lw"]}, {"post", "comment"}),
+        ({"exclude_tags": ["comment"]}, {"plain", "post", "other"}),
+        ({"exclude_tags": ["comment", "x"]}, {"plain", "post"}),
+        ({"tags": ["lw"], "exclude_tags": ["comment"]}, {"post"}),
+        ({"tags": ["comment"], "exclude_tags": ["comment"]}, set()),
+        ({"exclude_tags": []}, set(TAGGED_ITEMS)),
+    ],
+)
+def test_registry_sql_tag_filters(db_session, filters, expected):
+    names = {
+        make_source_item(db_session, n, tags=tags).id: name
+        for n, (name, tags) in enumerate(TAGGED_ITEMS.items())
+    }
+    query = db_session.query(SourceItem.id).filter(SourceItem.id.in_(names))
+    rows = F.apply_registry_filters_sql(query, filters).all()
+    assert {names[row.id] for row in rows} == expected
+
+
 def test_registry_sql_authors_uses_in():
     sql = compile_sql(registry_query({"authors": ["a", "b"]}))
     assert ".author IN" in sql
@@ -213,6 +238,10 @@ def test_registry_sql_empty_values_skipped():
     "filters, expected",
     [
         ({"tags": ["x"]}, {"key": "tags", "match": {"any": ["x"]}}),
+        (
+            {"exclude_tags": ["x", "y"]},
+            {"must_not": [{"key": "tags", "match": {"any": ["x", "y"]}}]},
+        ),
         # recipients/sender filter the derived clean-address payload keys.
         ({"recipients": ["a"]}, {"key": "recipient_emails", "match": {"any": ["a"]}}),
         ({"authors": ["a"]}, {"key": "authors", "match": {"any": ["a"]}}),

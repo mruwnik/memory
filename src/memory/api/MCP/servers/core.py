@@ -94,6 +94,7 @@ def get_current_user_access_filter() -> AccessFilter | None:
 # applicable_modalities is None for "all modalities"
 SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
     ("tags", "list of tags to filter by", None),
+    ("exclude_tags", "list of tags; items carrying any of them are left out", None),
     ("source_ids", "list of source ids to filter by", None),
     ("min_size", "minimum content size in bytes", None),
     ("max_size", "maximum content size in bytes", None),

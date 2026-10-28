@@ -52,6 +52,7 @@ class SqlOp(Enum):
     LTE = "lte"
     IN = "in"
     ARRAY_ANY = "array_any"  # Postgres ``&&`` overlap on an ARRAY column
+    ARRAY_NONE = "array_none"  # no overlap with an ARRAY column
     ILIKE_SUBSTR = "ilike_substr"  # case-insensitive substring match
     # case-insensitive substring against any element of an ARRAY column, via
     # array_to_string; matches if any of the (list-valued) filter values is a
@@ -64,6 +65,9 @@ class QdrantOp(Enum):
 
     MATCH_VALUE = "match_value"  # exact scalar match
     MATCH_ANY = "match_any"  # list membership (match.any)
+    # No element in the list. Not ``match.except``: on an array payload that
+    # matches when any one element is outside the list.
+    MATCH_NONE = "match_none"
     RANGE_GTE = "range_gte"
     RANGE_LTE = "range_lte"
 
@@ -143,6 +147,10 @@ class FilterSpec:
 # EXTRA_PAYLOAD_INDEXES) or be QDRANT_UNSUPPORTED.
 _SPECS: tuple[FilterSpec, ...] = (
     FilterSpec("tags", None, "tags", SqlOp.ARRAY_ANY, "tags", QdrantOp.MATCH_ANY, array_cast=True),
+    FilterSpec(
+        "exclude_tags", None, "tags", SqlOp.ARRAY_NONE, "tags", QdrantOp.MATCH_NONE,
+        array_cast=True,
+    ),
     FilterSpec("min_size", None, "size", SqlOp.GTE, "size", QdrantOp.RANGE_GTE),
     FilterSpec("max_size", None, "size", SqlOp.LTE, "size", QdrantOp.RANGE_LTE),
     # Mail.
@@ -344,7 +352,7 @@ def apply_spec_sql(query, spec: FilterSpec, value: Any, *, joined: set[type]):
         return query.filter(column <= value)
     if spec.sql_op is SqlOp.IN:
         return query.filter(column.in_(value))
-    if spec.sql_op is SqlOp.ARRAY_ANY:
+    if spec.sql_op in (SqlOp.ARRAY_ANY, SqlOp.ARRAY_NONE):
         # The Postgres `&&` overlap needs an array on both sides. A scalar here
         # (e.g. tags="foo" instead of ["foo"]) would cast to a malformed array
         # and fail at execution; reject it loudly at build time instead.
@@ -353,7 +361,8 @@ def apply_spec_sql(query, spec: FilterSpec, value: Any, *, joined: set[type]):
                 f"filter {spec.key!r} expects a list value, got {type(value).__name__}"
             )
         bound = sql_cast(value, ARRAY(Text)) if spec.array_cast else value
-        return query.filter(column.op("&&")(bound))
+        overlap = column.op("&&")(bound)
+        return query.filter(overlap if spec.sql_op is SqlOp.ARRAY_ANY else ~overlap)
     if spec.sql_op is SqlOp.ILIKE_SUBSTR:
         return query.filter(column.ilike(f"%{escape_like(value)}%", escape="\\"))
     if spec.sql_op is SqlOp.ARRAY_ILIKE_SUBSTR:
@@ -460,6 +469,9 @@ def build_registry_qdrant_filters(filters) -> list[dict[str, Any]]:
             result.append({"key": qkey, "match": {"value": value}})
         elif spec.qdrant_op is QdrantOp.MATCH_ANY:
             result.append({"key": qkey, "match": {"any": value}})
+        elif spec.qdrant_op is QdrantOp.MATCH_NONE:
+            # A nested filter, so callers can keep AND-ing everything under must.
+            result.append({"must_not": [{"key": qkey, "match": {"any": value}}]})
         elif spec.qdrant_op in (QdrantOp.RANGE_GTE, QdrantOp.RANGE_LTE):
             merge_range(result, qkey, spec.qdrant_op, value)
     return result

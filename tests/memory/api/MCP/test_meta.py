@@ -96,7 +96,9 @@ async def test_get_metadata_schemas_excludes_empty_collections(mock_qdrant, mock
     assert result == {}
 
 
-COMMON_FILTERS = {"tags", "min_size", "max_size", "min_created_at", "max_created_at"}
+COMMON_FILTERS = {
+    "tags", "exclude_tags", "min_size", "max_size", "min_created_at", "max_created_at"
+}
 
 
 @pytest.mark.asyncio
