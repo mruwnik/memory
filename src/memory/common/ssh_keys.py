@@ -10,7 +10,7 @@ from memory.common.db.connection import DBSession
 from memory.common.access_control import has_admin_scope
 from memory.common.db.models import User
 from memory.common.db.models.ssh_keys import SSHKey
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 
 
 def encode_key(private) -> tuple[bytes, str, str]:

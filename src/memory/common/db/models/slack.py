@@ -34,7 +34,7 @@ from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 from memory.common.db.models.sync_status import SyncStatusMixin
 
 if TYPE_CHECKING:

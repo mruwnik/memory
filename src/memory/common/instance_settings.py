@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import InstanceSetting
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
 

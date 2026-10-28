@@ -5,10 +5,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from memory.api import auth, jobs, secrets, users
+from memory.api import auth, jobs, users
 from memory.common import settings
 from memory.common.db.models import APIKey, HumanUser, PendingJob, UserSession
-from memory.common.db.models.secrets import Secret
 
 
 @pytest.fixture
@@ -16,7 +15,7 @@ def security_client(db_session, monkeypatch):
     monkeypatch.setattr(settings, "DISABLE_AUTH", False)
     app = FastAPI()
     app.add_middleware(auth.AuthenticationMiddleware)
-    for router in [users.router, secrets.router, jobs.router]:
+    for router in [users.router, jobs.router]:
         app.include_router(router)
     return TestClient(app)
 
@@ -49,21 +48,6 @@ def test_read_key_cannot_mint_keys_or_change_account(security_client, db_session
     db_session.refresh(user)
     assert user.email == "security@example.test"
     assert user.scopes == (["*"] if admin else ["read", "write"])
-
-
-@pytest.mark.parametrize("session", [True, False])
-@pytest.mark.parametrize("scopes", [["read"], [], None, ["*"]])
-def test_secret_export_and_management_require_session(security_client, db_session, session, scopes):
-    user, headers = identity(db_session, key_scopes=scopes, session=session)
-    secret = Secret(user_id=user.id, name="test-secret")
-    secret.value = "FAKE-TEST-VALUE"
-    db_session.add(secret)
-    db_session.commit()
-    for path in ["/secrets", f"/secrets/{secret.id}", f"/secrets/{secret.id}/value"]:
-        response = security_client.get(path, headers=headers)
-        assert response.status_code == (200 if session else 403)
-    response = security_client.patch(f"/secrets/{secret.id}", headers=headers, json={"value": "FAKE-NEW"})
-    assert response.status_code == (200 if session else 403)
 
 
 @pytest.mark.parametrize("scopes,expected", [(["read"], 404), (["*"], 200)])

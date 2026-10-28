@@ -13,7 +13,6 @@ from memory.api.auth import require_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import ClaudeGitHubToken, User
 from memory.common.db.models.claude_config import GITHUB_TOKEN_ENV_VARS
-from memory.common.db.models.secrets import extract as extract_secret
 from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 
 router = APIRouter(prefix="/claude/github-tokens", tags=["claude-github-tokens"])
@@ -41,10 +40,10 @@ def github_token_env(
 ) -> dict[str, str]:
     """Env vars for the GitHub tokens a spawned session gets.
 
-    A token named in the spawn request (a Secret's name or a literal, as scheduled
-    sessions and API callers pass) wins over the user's saved token of that kind.
-    The saved write token is opt-in because it can be a broad PAT, and unattended
-    sessions run prompts that may come from repo content.
+    A token passed in the spawn request wins over the user's saved token of that
+    kind; scheduled sessions never pass one. The saved write token is opt-in
+    because it can be a broad PAT, and unattended sessions run prompts that may
+    come from repo content.
     """
     stored = {
         t.kind: t.token
@@ -52,8 +51,8 @@ def github_token_env(
     }
     env = {}
     for kind, env_var in GITHUB_TOKEN_ENV_VARS.items():
-        if name := requested.get(kind):
-            env[env_var] = extract_secret(db, user_id, name)
+        if token := requested.get(kind):
+            env[env_var] = token
         elif kind in stored and (kind != "write" or use_saved_write_token):
             env[env_var] = stored[kind]
     return env

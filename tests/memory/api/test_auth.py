@@ -103,7 +103,6 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/users",
         "/auth/me",
         "/auth/password-resets",
-        "/secrets",
         "/teams/1",
         "/calendar-accounts",
         "/google-drive/config",  # admin-gated; must NOT be whitelisted

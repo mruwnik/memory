@@ -5,7 +5,6 @@ import pytest
 from memory.api.auth import get_current_user
 from memory.common import settings
 from memory.common.db.models import APIKey
-from memory.common.db.models.secrets import create_secret
 
 
 @pytest.fixture
@@ -26,14 +25,6 @@ def test_reject_key_escalation(client, restricted_auth, user):
     response = client.post(f"/users/{user.id}/api-keys", headers=restricted_auth,
                            json={"name": "audit-escalated", "scopes": ["*"]})
     assert response.status_code == 403
-
-
-def test_reject_secret_disclosure(client, restricted_auth, user, db_session):
-    secret = create_secret(db_session, user.id, "audit-secret", "FAKE-AUDIT-VALUE")
-    db_session.commit()
-    response = client.get(f"/secrets/{secret.id}/value", headers=restricted_auth)
-    assert response.status_code == 403
-    assert "FAKE-AUDIT-VALUE" not in response.text
 
 
 def test_reject_account_mutation(client, restricted_auth, user):

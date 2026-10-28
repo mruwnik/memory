@@ -28,7 +28,7 @@ from memory.claude_containers.orchestrator_client import OrchestratorError
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import ClaudeConfigSnapshot, ClaudeGitHubToken
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 from memory.common.db.models.users import UserSession
 
 
@@ -114,9 +114,8 @@ def test_spawn_request_repo_url_passes_through_any_string():
     """``repo_url`` is intentionally NOT validated by the API — see the
     module-level note in ``cloud_claude``. The value executes only
     inside the requester's own container with their own per-user
-    credentials (``extract_secret(db, user.id, …)``), so any
-    git-side footguns (``ext::``, ``--upload-pack``, ``git://`` MITM,
-    etc.) are self-harm rather than a boundary cross.
+    credentials, so any git-side footguns (``ext::``, ``--upload-pack``,
+    ``git://`` MITM, etc.) are self-harm rather than a boundary cross.
     """
     weird_url = "ext::sh -c whoami"
     req = SpawnRequest(snapshot_id=1, repo_url=weird_url)

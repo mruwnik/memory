@@ -27,7 +27,6 @@ from memory.common.db.models.base import Base
 if TYPE_CHECKING:
     from memory.common.db.models.discord import DiscordBot
     from memory.common.db.models.sources import Person
-    from memory.common.db.models.secrets import Secret
     from memory.common.db.models.slack import SlackUserCredentials
 
 
@@ -111,9 +110,6 @@ class User(Base):
     )
     oauth_refresh_tokens: Mapped[list[OAuthRefreshToken]] = relationship(
         "OAuthRefreshToken", back_populates="user", cascade="all, delete-orphan"
-    )
-    secrets: Mapped[list[Secret]] = relationship(
-        "Secret", back_populates="user", cascade="all, delete-orphan"
     )
     api_keys: Mapped[list[APIKey]] = relationship(
         "APIKey", back_populates="user", cascade="all, delete-orphan"

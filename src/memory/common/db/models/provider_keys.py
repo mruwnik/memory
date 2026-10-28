@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from memory.common.db.models.base import Base
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 
 KEY_PROVIDERS = ("anthropic", "openai")
 

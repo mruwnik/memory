@@ -45,7 +45,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/ui/server-settings', title: 'Server settings', description: 'Voyage key, modules, MCP servers and search limits for this server', scope: 'admin' },
       { to: '/ui/ssh-keys', title: 'SSH keys', description: 'Manage SSH identities for Notes and containers' },
-      { to: '/ui/secrets', title: 'Secrets', description: 'Manage encrypted tokens and other secrets' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],
   },

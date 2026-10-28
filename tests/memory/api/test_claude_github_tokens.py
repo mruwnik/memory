@@ -1,8 +1,7 @@
 import pytest
 
 from memory.claude_containers.github_tokens import github_token_env
-from memory.common.db.models import ClaudeGitHubToken, HumanUser, Secret
-from memory.common.db.models.secrets import encrypt_value
+from memory.common.db.models import ClaudeGitHubToken, HumanUser
 
 PAT = "ghp_abcdefghijklmnop1234"
 
@@ -121,16 +120,12 @@ def test_spawn_env_without_tokens_is_empty(db_session, user):
     assert github_token_env(db_session, user.id, {}) == {}
 
 
-def test_spawn_env_request_secret_name_overrides_stored(db_session, user):
+def test_spawn_env_request_token_overrides_stored(db_session, user):
     store(db_session, user.id, "clone", PAT)
     store(db_session, user.id, "write", "ghp_write_987654321098")
-    db_session.add(
-        Secret(user_id=user.id, name="ci-pat", encrypted_value=encrypt_value("ghp_ci_5555555555555555"))
-    )
-    db_session.commit()
 
     env = github_token_env(
-        db_session, user.id, {"clone": "ci-pat", "write": None}, use_saved_write_token=True
+        db_session, user.id, {"clone": "ghp_ci_5555555555555555", "write": None}, use_saved_write_token=True
     )
 
     assert env == {"GITHUB_TOKEN": "ghp_ci_5555555555555555", "GITHUB_TOKEN_WRITE": "ghp_write_987654321098"}

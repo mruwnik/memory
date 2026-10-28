@@ -417,7 +417,7 @@ class SpawnRequest(BaseModel):
     snapshot_id: int | None = None  # Static snapshot to extract
     environment_id: int | None = None  # Persistent environment to use
     repo_url: str | None = None  # Git remote URL to set up in workspace
-    # Secret name or literal; overrides the user's saved GitHub token of that kind
+    # Overrides the user's saved GitHub token of that kind
     github_token: str | None = None  # For HTTPS clone
     github_token_write: str | None = None  # For differ (push, PR creation)
     ssh_key_id: int | None = None  # Omitted: use the user's default key

@@ -30,7 +30,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Import encryption functions (only available at runtime)
-    from memory.common.db.models.secrets import encrypt_value
+    from memory.common.encryption import encrypt_value
 
     # === EMAIL ACCOUNTS ===
     # Add encrypted column
@@ -117,7 +117,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Import decryption functions (only available at runtime)
-    from memory.common.db.models.secrets import decrypt_value
+    from memory.common.encryption import decrypt_value
 
     connection = op.get_bind()
 

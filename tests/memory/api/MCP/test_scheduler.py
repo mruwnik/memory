@@ -66,19 +66,6 @@ async def test_upsert_enable_recurring_recomputes(
     assert result["next_scheduled_time"].endswith("T03:30:00Z")
 
 
-def test_validate_scheduled_secret_refs_rejects_unknown(db_session, regular_user):
-    with pytest.raises(ValueError, match="github_token"):
-        scheduler.validate_scheduled_secret_refs(
-            db_session, regular_user.id, {"github_token": "no-such-secret"}
-        )
-
-
-def test_validate_scheduled_secret_refs_allows_no_tokens(db_session, regular_user):
-    scheduler.validate_scheduled_secret_refs(
-        db_session, regular_user.id, {"repo_url": "x"}
-    )
-
-
 @pytest.mark.asyncio
 async def test_create_notification_recurring(db_session, regular_user, user_session):
     regular_user.timezone = "Asia/Kolkata"
@@ -252,9 +239,18 @@ async def test_create_claude_session(db_session, regular_user, user_session):
                 task_type="claude_session",
                 cron_expression="0 9 * * *",
                 message="p",
-                spawn_config={"github_token": "no-such"},
+                spawn_config={"github_token": "ghp_x"},
             ),
-            "Secret reference",
+            "saved GitHub tokens",
+        ),
+        (
+            dict(
+                task_type="claude_session",
+                cron_expression="0 9 * * *",
+                message="p",
+                spawn_config={"github_token_write": None},
+            ),
+            "saved GitHub tokens",
         ),
     ],
 )

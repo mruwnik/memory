@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from memory.common.db.models import SSHKey
-from memory.common.db.models.secrets import decrypt_value
+from memory.common.encryption import decrypt_value
 from memory.common.notes_ssh import ssh_command
 from memory.common.ssh_keys import container_private_key
 

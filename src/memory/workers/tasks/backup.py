@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 
 from memory.common import settings
 from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
-from memory.common.db.models.secrets import derive_encryption_key
+from memory.common.crypto import derive_encryption_key
 from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)

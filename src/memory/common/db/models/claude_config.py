@@ -23,7 +23,7 @@ from sqlalchemy.orm import backref, relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from memory.common.db.models.base import Base
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.users import User

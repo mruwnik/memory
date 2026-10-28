@@ -16,7 +16,6 @@ from memory.common.db.connection import get_session
 from memory.common.db.counts import count_rows
 from memory.common.db.models import BookSection, User
 from memory.common.db.models.discord import DiscordBot
-from memory.common.db.models.secrets import Secret
 from memory.common.db.models.slack import SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import ForumPost, Photo
 from memory.common.db.models.sources import (
@@ -57,7 +56,6 @@ class SourceTabs(BaseModel):
     notes: TabCounts
     discord: TabCounts
     slack: TabCounts
-    secrets: TabCounts
 
 
 def with_failures(db: Session, model: type[SyncStatusMixin], *criteria) -> TabCounts:
@@ -152,5 +150,4 @@ def source_tabs(
         notes=TabCounts(count=visible_notes(db, access), failing=int(sync_failing(user))),
         discord=TabCounts(count=discord_bots),
         slack=with_failures(db, SlackWorkspace, *slack_filter),
-        secrets=TabCounts(count=count_rows(db, Secret, Secret.user_id == user.id)),
     )

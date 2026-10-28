@@ -9,7 +9,6 @@ import redis
 from memory.common import settings
 from memory.common.db.models import Book, BookSection, HumanUser, Note, Person, Team
 from memory.common.db.models.discord import DiscordBot
-from memory.common.db.models.secrets import Secret
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import ForumPost, Photo
 from memory.common.db.models.sources import (
@@ -47,7 +46,6 @@ TABS = [
     "notes",
     "discord",
     "slack",
-    "secrets",
 ]
 
 
@@ -99,7 +97,6 @@ def seed_sources(db_session, user_id):
             CalendarAccount(user_id=user_id, name="cal", calendar_type="google", **FAILING),
             TranscriptAccount(user_id=user_id, name="t", provider="fireflies", **FAILING),
             bot,
-            Secret(user_id=user_id, name="s", encrypted_value=b"x"),
         ]
     )
     db_session.commit()
@@ -114,7 +111,6 @@ SEEDED = tabs(
     calendar=(1, 1),
     transcripts=(1, 1),
     discord=(1, 0),
-    secrets=(1, 0),
 )
 
 
@@ -135,7 +131,6 @@ def test_admin_can_scope_to_one_user(client, user, other, db_session):
     assert client.get(f"/source-tabs?user_id={other.id}").json() == tabs(
         email=(1, 1),
         feeds=(1, 1),  # admins see every feed in the tab whichever user is selected
-        secrets=(1, 0),  # the Secrets tab always lists the viewer's own
     )
 
 
@@ -145,7 +140,7 @@ def test_admin_sees_everyone_without_a_user_filter(client, user, other, db_sessi
 
     assert client.get("/source-tabs").json() == {
         tab: {"count": 2 * c["count"], "failing": 2 * c["failing"]} for tab, c in SEEDED.items()
-    } | {"secrets": {"count": 1, "failing": 0}}
+    }
 
 
 @pytest.mark.parametrize("query", ["", "?user_id=999"])

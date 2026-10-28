@@ -10,8 +10,6 @@ venv
 .env
 .DS_Store
 secrets/
-# The Secrets UI contains application code, not stored credentials.
-!frontend/src/components/secrets/
 backups/
 acme.json
 __pycache__/

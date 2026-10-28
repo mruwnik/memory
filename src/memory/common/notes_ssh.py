@@ -18,7 +18,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models.ssh_keys import SSHKey, NotesSSHConfig
 from memory.common.db.models import User
 from memory.common.ssh_keys import can_use_key
-from memory.common.db.models.secrets import decrypt_value
+from memory.common.encryption import decrypt_value
 from memory.common.notes_git import check_remote_url
 from memory.common.safe_http import default_policy, resolve, StackAddresses
 

@@ -20,7 +20,8 @@ None.
 
 ### Manual steps
 
-None.
+Stored secrets are deleted by this update, and the Secrets page can't show their
+values afterwards: before updating, copy any you still need from the Secrets page.
 
 ### Other changes for operators
 
@@ -84,6 +85,22 @@ the karma floor, every older post due a recheck has its comments refetched, so a
 comment that later reaches 5 gets in; set "Min comment karma" to 0 to store
 every comment and refetch only when a post's comment count changes.
 
+The Secrets page, the `/secrets` API and the `secrets` table are removed, and
+every stored secret is deleted. Claude sessions take their GitHub tokens from
+those saved in the Claude sessions form: users who kept their tokens as secrets
+must re-enter them there. `github_token` and `github_token_write` on
+`POST /claude/spawn` now take literal tokens only: a secret's name passed there
+is injected into the session as the token itself.
+
+Scheduled Claude sessions no longer accept `github_token` or
+`github_token_write` in `spawn_config`; creating or updating a schedule with
+either is rejected. Scheduled sessions get the owner's saved clone token, and
+their saved write token when `use_saved_write_token` is set. The migration
+removes both fields from existing schedules and sets `use_saved_write_token`
+on those that had a write token, so they keep their write access through the
+owner's saved write token. Owners without a saved token have to save one
+before their schedules can clone or push.
+
 ### Migrations
 
 `20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
@@ -94,6 +111,10 @@ tables (seeded with the previous defaults) and two columns on `forum_post`. Fast
 `forum_sync_configs`, and the `delayed_feed_items` table; renames
 `article_feeds.last_checked_at` to `last_sync_at` and
 `calendar_accounts.sync_past_days` to `days_back`. Fast.
+
+`20261114_drop_secrets` drops the `secrets` table and removes the token fields
+from scheduled Claude sessions as above. Downgrading recreates an empty table;
+neither the secrets nor the schedules' token fields come back.
 
 ### Post-deploy commands
 

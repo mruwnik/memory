@@ -8,6 +8,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from memory.common import settings
+from memory.common.crypto import derive_encryption_key
 from memory.workers.tasks import backup
 
 
@@ -200,8 +201,6 @@ def test_get_cipher_derived_key_differs_with_same_passphrase_as_secrets():
     Fernet key must still be different from the at-rest secrets Fernet
     key — i.e. the salt actually domain-separates the two primitives.
     """
-    from memory.common.db.models.secrets import derive_encryption_key
-
     passphrase = "shared-by-mistake-passphrase"
     backup_key = derive_encryption_key(passphrase, backup._BACKUP_KEY_SALT)
     secrets_key = derive_encryption_key(passphrase, settings.SECRETS_ENCRYPTION_SALT)
@@ -222,25 +221,6 @@ def test_get_cipher_is_deterministic():
     # Cipher_b must be able to decrypt cipher_a's output — proves the
     # derivations are equal even though Fernet objects are distinct.
     assert cipher_b.decrypt(ct_a) == b"test"
-
-
-def test_get_cipher_pbkdf2_actually_runs():
-    """REGRESSION GUARD: A 480k-iteration PBKDF2 derivation has a
-    measurable wall-clock cost (typically 100-300ms on commodity
-    hardware). If a future refactor accidentally drops the iteration
-    count or skips PBKDF2, this test would still pass — so we instead
-    pin the structural property: the derive_encryption_key helper from
-    secrets.py must be the import path. A grep reviewer can then
-    confirm the iterations parameter at the helper definition.
-    """
-    # Confirms the import wiring; the iterations are tested in the
-    # secrets module's test suite at the source.
-    from memory.common.db.models.secrets import (
-        derive_encryption_key as _imported,
-    )
-
-    # The helper is the same callable the backup module imports.
-    assert backup.derive_encryption_key is _imported
 
 
 def test_create_tarball_with_files(sample_files):

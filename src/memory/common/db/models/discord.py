@@ -30,7 +30,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
-from memory.common.db.models.secrets import decrypt_value, encrypt_value
+from memory.common.encryption import decrypt_value, encrypt_value
 
 if TYPE_CHECKING:
     from memory.common.db.models.sources import Person

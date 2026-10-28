@@ -1,12 +1,15 @@
 """Shared crypto primitives.
 
-Kept as a leaf module that depends on nothing in this codebase — both
-``settings`` and ``db.models.secrets`` can import from it without
-circularity.
+Kept as a leaf module that depends on nothing in this codebase, so
+``settings`` can import from it without circularity.
 """
+
+import base64
+import functools
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Domain-separating ``info`` includes ``v1`` so that rotating the
 # derivation scheme (e.g. switching to a different hash) cleanly
@@ -36,3 +39,19 @@ def derive_transfer_token_secret(master_key: str, salt: bytes) -> str:
         info=TRANSFER_TOKEN_SECRET_HKDF_INFO,
     ).derive(master_key.encode("utf-8"))
     return derived_bytes.hex()
+
+
+@functools.lru_cache(maxsize=4)
+def derive_encryption_key(secret: str, salt: bytes) -> bytes:
+    """Derive a Fernet-compatible key from a secret string.
+
+    Uses PBKDF2 with SHA256 and 480,000 iterations (OWASP recommendation).
+    Cached: every encrypt/decrypt derives the key, and PBKDF2 is deliberately slow.
+    """
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=480000,
+    )
+    return base64.urlsafe_b64encode(kdf.derive(secret.encode()))

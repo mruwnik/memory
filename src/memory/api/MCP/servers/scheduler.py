@@ -19,7 +19,6 @@ from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
 from memory.common.db.models import ScheduledTask, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
-from memory.common.db.models.secrets import find_secret
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.scopes import (
@@ -100,8 +99,6 @@ SPAWN_CONFIG_FIELDS = {
     "run_id",
     "environment_id",
     "snapshot_id",
-    "github_token",
-    "github_token_write",
     "use_saved_write_token",
 }
 
@@ -127,23 +124,20 @@ def validate_cron_interval(cron_expression: str) -> None:
         )
 
 
-def validate_scheduled_secret_refs(
-    session, user_id: int, spawn_config: dict[str, Any]
-) -> None:
-    """Reject scheduled-session token fields that don't resolve to a stored
-    Secret. Scheduled token values are persisted in ScheduledTask.data, so a
-    literal (or typo'd) value would be stored in plaintext and shipped to the
-    container later. The error must NOT echo the value (credential reflection).
-    """
-    for token_field in ("github_token", "github_token_write"):
-        token_value = spawn_config.get(token_field)
-        if token_value and find_secret(session, user_id, token_value) is None:
-            raise ValueError(
-                f"Secret reference for '{token_field}' not found. Scheduled "
-                "sessions require a stored-secret name (create one via "
-                "/secrets); literal tokens are not accepted because they would "
-                "be persisted in plaintext in the schedule's data column."
-            )
+def validate_spawn_config_keys(spawn_config: dict[str, Any]) -> None:
+    """Reject unknown keys, and per-schedule GitHub tokens: those would sit in
+    plaintext in ScheduledTask.data, so scheduled sessions use the owner's saved
+    tokens instead."""
+    tokens = sorted({"github_token", "github_token_write"} & set(spawn_config))
+    if tokens:
+        raise ValueError(
+            f"Scheduled sessions don't take {', '.join(tokens)}: they use your saved "
+            "GitHub tokens (set them in the Claude sessions form; set "
+            "use_saved_write_token to give the session the write token)."
+        )
+    unknown = set(spawn_config) - SPAWN_CONFIG_FIELDS
+    if unknown:
+        raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
 
 
 def session_principal(session) -> int | None:
@@ -276,10 +270,7 @@ def build_scheduled_task(
             raise ValueError(
                 "claude_session tasks require message (the initial prompt)"
             )
-        unknown = set(spawn_config) - SPAWN_CONFIG_FIELDS
-        if unknown:
-            raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
-        validate_scheduled_secret_refs(session, user_id, spawn_config)
+        validate_spawn_config_keys(spawn_config)
         task.message = message
         task.topic = topic or message[:100]
         task.data = {"spawn_config": spawn_config}
@@ -317,7 +308,7 @@ async def upsert(
     or scheduled_time (one-time ISO datetime — fires once, then the task is
     Done). notification tasks also require notification_channel,
     notification_target, and message; claude_session tasks require message (the
-    initial prompt) and spawn_config (token fields must name a stored secret).
+    initial prompt) and spawn_config.
     agent_run tasks are created and changed with agent_schedule; here they can
     only be paused (enabled=False).
 
@@ -341,9 +332,11 @@ async def upsert(
             (DM vs channel) is derived from the resolved id.
         spawn_config: Spawn config for claude_session tasks. Supported keys:
             allowed_tools, repo_url, custom_env, enable_playwright, run_id,
-            environment_id, snapshot_id, github_token, github_token_write.
-            On update, set a key to null to remove it. initial_prompt is stored
-            in the message field, not spawn_config.
+            environment_id, snapshot_id, use_saved_write_token. The session
+            gets the owner's saved GitHub clone token, and their saved write
+            token only with use_saved_write_token. On update, set a key to null
+            to remove it. initial_prompt is stored in the message field, not
+            spawn_config.
     """
     user_id = get_authenticated_user_id()
 
@@ -455,11 +448,7 @@ async def upsert(
         if spawn_config is not None:
             if task.task_type != "claude_session":
                 raise ValueError("spawn_config can only be set on claude_session tasks")
-            unknown = set(spawn_config.keys()) - SPAWN_CONFIG_FIELDS
-            if unknown:
-                raise ValueError(
-                    f"Unknown spawn_config keys: {', '.join(sorted(unknown))}"
-                )
+            validate_spawn_config_keys(spawn_config)
 
             data = dict(task.data or {})
             existing = dict(data.get("spawn_config") or {})

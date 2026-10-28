@@ -52,7 +52,6 @@ from memory.api.telemetry import router as telemetry_router
 from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.sessions import router as sessions_router
-from memory.api.secrets import router as secrets_router
 from memory.api.ssh_keys import router as ssh_keys_router
 from memory.api.instance_settings import router as instance_settings_router
 from memory.api.users import check_single_user, router as users_router
@@ -136,7 +135,6 @@ tags_metadata = [
     {"name": "claude-snapshots", "description": "Claude conversation snapshots"},
     {"name": "claude-environments", "description": "Claude environment management"},
     {"name": "cloud-claude", "description": "Cloud Claude integration"},
-    {"name": "secrets", "description": "Secret management"},
     {"name": "settings", "description": "Server settings (admin)"},
     {"name": "discord", "description": "Discord integration"},
     {"name": "slack", "description": "Slack integration"},
@@ -184,7 +182,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 
 
 # Field names whose values must never be logged or echoed in 422 responses.
-# Validation errors fire on auth, password change, secrets, API key creation,
+# Validation errors fire on auth, password change, settings, API key creation,
 # and account-credential endpoints — the offending value is exactly the secret
 # the user just typed, so Pydantic's default `input` echo is a credential leak.
 SENSITIVE_VALIDATION_FIELDS = frozenset({
@@ -200,7 +198,9 @@ SENSITIVE_VALIDATION_FIELDS = frozenset({
     "api_key",
     "client_secret",
     "secret",
-    "value",  # /secrets endpoint
+    "github_token",
+    "github_token_write",
+    "value",  # /settings/voyage_api_key/check
     "caldav_password",
     "webhook_secret",
 })
@@ -517,7 +517,6 @@ app.include_router(sessions_router)
 if CLAUDE_CONTAINERS in enabled_modules():
     for claude_router in claude_containers.routers:
         app.include_router(claude_router)
-app.include_router(secrets_router)
 app.include_router(ssh_keys_router)
 app.include_router(instance_settings_router)
 app.include_router(users_router)

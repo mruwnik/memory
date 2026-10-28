@@ -73,7 +73,6 @@ const Sources = () => {
   const userId = selectedUser.id || undefined
 
   if (tabParam === 'ssh-keys') return <Navigate to="/ui/ssh-keys" replace />
-  if (tabParam === 'secrets') return <Navigate to="/ui/secrets" replace />
 
   return (
     <SourcesContext.Provider value={{ selectedUser, userId, refreshCounts }}>

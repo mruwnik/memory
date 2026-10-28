@@ -899,7 +899,7 @@ export function Tabs<T extends string>({ options, value, onChange, label, childr
   const tabId = (v: T) => `${id}-tab-${v}`
   const panelId = children === undefined ? undefined : `${id}-panel`
   const selectedRef = useRef<HTMLButtonElement>(null)
-  // On phones the strip scrolls, so a tab opened by URL (Secrets from the nav) can start off-screen.
+  // On phones the strip scrolls, so a tab opened by URL can start off-screen.
   useEffect(() => { selectedRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }, [value])
 
   const onKeyDown = (e: ReactKeyboardEvent) => {

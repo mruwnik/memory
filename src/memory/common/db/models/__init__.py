@@ -117,15 +117,6 @@ from memory.common.db.models.users import (
     APIKey,
     APIKeyType,
 )
-from memory.common.db.models.secrets import (
-    Secret,
-    extract,
-    find_secret,
-    create_secret,
-    rekey_all_secrets,
-    encrypt_value,
-    decrypt_value,
-)
 from memory.common.db.models.scheduled_tasks import (
     ScheduledTask,
     TaskExecution,
@@ -341,14 +332,6 @@ __all__ = [
     "ClaudeGitHubToken",
     "SSHKey",
     "NotesSSHConfig",
-    # Secrets
-    "Secret",
-    "extract",
-    "find_secret",
-    "create_secret",
-    "rekey_all_secrets",
-    "encrypt_value",
-    "decrypt_value",
     # Payloads
     "Payload",
     # Watchlist
