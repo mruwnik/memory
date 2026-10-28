@@ -10,6 +10,7 @@ from dateutil import parser as date_parser
 from memory.agents.call import LLMError, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, ingest_key
 from memory.agents.system import MEETING_EXTRACT
+from memory.common import embedding
 from memory.common import jobs as job_utils
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.db.connection import DBSession, make_session
@@ -32,6 +33,8 @@ from memory.common.people import (
 logger = logging.getLogger(__name__)
 
 MAX_DUE_DATE_HORIZON = timedelta(days=2 * 365)
+# A UTC meeting time can be a day ahead of the local date the attendees named.
+DUE_DATE_SLACK = timedelta(days=1)
 
 
 def parse_date(date_str: str | None) -> datetime | None:
@@ -48,7 +51,7 @@ def parse_due_date(date_str: str | None, reference: datetime) -> datetime | None
     due = parse_date(date_str)
     if due is None:
         return None
-    if not reference.date() <= due.date() <= (reference + MAX_DUE_DATE_HORIZON).date():
+    if not (reference - DUE_DATE_SLACK).date() <= due.date() <= (reference + MAX_DUE_DATE_HORIZON).date():
         return None
     return due
 
@@ -561,7 +564,8 @@ def execute_meeting_processing(
         session.commit()
         session.refresh(meeting)
         embed_result = process_content_item(meeting, session)
-        if meeting.embed_status != "STORED":
+        # Without an embeddings key nothing gets embedded; that is setup, not this meeting failing.
+        if embed_result["status"] == "failed" and embedding.configured():
             raise RuntimeError(f"Meeting {meeting.id} was not stored")
 
         # Only mark complete after both extraction AND embedding succeed

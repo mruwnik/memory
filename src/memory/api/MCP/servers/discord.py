@@ -16,11 +16,14 @@ from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import (
     SCOPE_DISCORD,
     SCOPE_DISCORD_WRITE,
+    SCOPE_PEOPLE,
+    has_scope,
 )
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import DiscordBot, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordServer, DiscordUser
 from memory.common.people import find_person, primary_contact
 from memory.common.discord_data import (
+    caller_can_see_discord_user,
     fetch_channel_history,
     fetch_channels,
     find_visible_channel,
@@ -104,17 +107,26 @@ def resolve_bot(session: DBSession, bot_id: str | None) -> int:
 
 async def send_to_channel(
     session: DBSession,
-    bot_id: int,
+    bot_id: str | None,
     message: str,
     channel_id: str | None,
     channel_name: str | None,
 ) -> dict[str, Any]:
-    """Resolve a channel the caller's bots can see and send to it."""
+    """Send to a channel the caller can see, with the bot of the channel's server."""
     channel = find_visible_channel(session, require_caller(session), channel_id, channel_name)
     target = str(channel.id)
+    server = session.get(DiscordServer, channel.server_id) if channel.server_id else None
+    server_bot = server.bot_id if server else None
+
+    if bot_id is not None:
+        sender = resolve_bot(session, bot_id)
+        if server_bot is not None and sender != server_bot:
+            raise ValueError(f"Bot {bot_id} is not in this channel's server")
+    else:
+        sender = server_bot or resolve_bot(session, None)
 
     success = await asyncio.to_thread(
-        discord_client.send_to_channel, bot_id, target, message
+        discord_client.send_to_channel, sender, target, message
     )
     preview = message[:100] + "..." if len(message) > 100 else message
     return {"success": success, "type": "channel", "target": target, "message_preview": preview}
@@ -133,10 +145,11 @@ async def send_dm(
     when the Discord user is not found. This is intentional -- it lets MCP tool
     callers display suggestions to the end user rather than surfacing a raw error.
     """
-    target = resolve_discord_user(session, user_id, username)
+    caller = require_caller(session)
+    target = resolve_discord_user(session, caller, user_id, username)
     if target is None:
-        suggestions = suggest_people(session, username or "")
-        error = f"Discord user '{username}' not found"
+        suggestions = suggest_people(session, caller, username or "")
+        error = f"Discord user '{user_id or username}' not found"
         if suggestions:
             error += ", but found matching people"
         return {"success": False, "error": error, "suggestions": suggestions}
@@ -148,29 +161,32 @@ async def send_dm(
 
 def resolve_discord_user(
     session: DBSession,
+    caller: UserProxy,
     user_id: str | None,
     username: str | None,
 ) -> str | None:
-    """Resolve a Discord user ID from explicit ID or username. Returns None if not found."""
+    """The id of a Discord user the caller can see, by id or else username; None otherwise."""
     if user_id is not None:
-        return str(user_id)
+        discord_id = _to_snowflake(user_id)
+        return str(discord_id) if caller_can_see_discord_user(session, caller, discord_id) else None
 
-    discord_user = (
-        session.query(DiscordUser)
-        .filter(or_(DiscordUser.username == username, DiscordUser.display_name == username))
-        .first()
+    matches = session.query(DiscordUser.id).filter(
+        or_(DiscordUser.username == username, DiscordUser.display_name == username)
     )
-    if discord_user:
-        return str(discord_user.id)
+    return next(
+        (str(m.id) for m in matches if caller_can_see_discord_user(session, caller, m.id)),
+        None,
+    )
 
-    return None
 
-
-def suggest_people(session: DBSession, query: str) -> list[dict[str, str]]:
+def suggest_people(session: DBSession, caller: UserProxy, query: str) -> list[dict[str, str]]:
     """Find Person records that might match a failed username lookup.
 
-    Returns at most one suggestion (find_person returns a single match).
+    Returns at most one suggestion (find_person returns a single match), and
+    only of a person the caller may read whose Discord account they could DM.
     """
+    if not has_scope(caller.scopes, SCOPE_PEOPLE):
+        return []
     person = find_person(session, query)
     if not person:
         return []
@@ -184,7 +200,9 @@ def suggest_people(session: DBSession, query: str) -> list[dict[str, str]]:
         discord_id = primary_contact(person.contact_info.get("discord_id"))
         discord_username = primary_contact(person.contact_info.get("discord"))
 
-    if not discord_id:
+    if not discord_id or not str(discord_id).isdigit():
+        return []
+    if not caller_can_see_discord_user(session, caller, int(discord_id)):
         return []
 
     return [{
@@ -218,7 +236,7 @@ async def send_message(
         channel_name: Discord channel name to send to (will search for it)
         user_id: Discord user ID (snowflake) to DM
         username: Discord username to DM (will search for it)
-        bot_id: Optional specific bot ID to use (defaults to user's first bot)
+        bot_id: Optional bot ID to send with; a channel defaults to its server's bot, a DM to your first bot
 
     Returns:
         Dict with success status and details
@@ -235,12 +253,10 @@ async def send_message(
         raise ValueError("Cannot specify both channel and user destinations")
 
     with make_session() as session:
-        resolved_bot_id = resolve_bot(session, bot_id)
-
         if has_channel:
-            return await send_to_channel(session, resolved_bot_id, message, channel_id, channel_name)
+            return await send_to_channel(session, bot_id, message, channel_id, channel_name)
 
-        return await send_dm(session, resolved_bot_id, message, user_id, username)
+        return await send_dm(session, resolve_bot(session, bot_id), message, user_id, username)
 
 
 @discord_mcp.tool()

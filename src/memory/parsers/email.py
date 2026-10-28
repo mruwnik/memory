@@ -56,11 +56,27 @@ def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     return [addr for _name, addr in getaddresses(headers) if addr]
 
 
+def header_addresses(value: str) -> list[str]:
+    return [addr.lower() for _name, addr in getaddresses([value]) if "@" in addr]
+
+
 def decode_mime_header(name: str, value: str) -> str:
     """Header text with MIME encoded-words decoded; address headers come back
     re-quoted (``"Doe, John" <j@x>``) so they still parse as addresses. A value
-    the parser can make nothing of is kept raw rather than lost."""
-    return str(email.policy.default.header_fetch_parse(name, value)) or value
+    that doesn't decode cleanly is kept raw rather than lost."""
+    try:
+        decoded = str(email.policy.default.header_fetch_parse(name, value))
+    # The stdlib header parser has crash bugs on malformed input (AttributeError on "a@[1.2.3").
+    except Exception:
+        return value
+    if not decoded:
+        return value
+    if name.lower() != "from":
+        return decoded
+    # The parser can silently drop a mailbox it can't make sense of ("@" -> "<>").
+    if header_addresses(decoded) != header_addresses(value) or decoded.count("@") < value.count("@"):
+        return value
+    return decoded
 
 
 def extract_date(msg: email.message.Message) -> datetime | None:  # type: ignore

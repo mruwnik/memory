@@ -213,6 +213,9 @@ Test Body Content"""
 
     assert mail_message.body == "Test Body Content"
 
+    mail_message.content = email_content.replace("Test Body Content", "Edited body")
+    assert mail_message.body == "Edited body"
+
 
 def test_mail_message_display_contents():
     """Test MailMessage.display_contents property with actual email parsing"""

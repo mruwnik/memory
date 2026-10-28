@@ -5,6 +5,7 @@ snowflakes routinely exceed 2^53, so any code path that emits or accepts them
 as JSON integers risks silent precision loss on JS-based clients.
 """
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -21,8 +22,11 @@ from memory.common.db.models import (
     APIKey,
     DiscordBot,
     DiscordChannel,
+    DiscordMessage,
     DiscordServer,
+    DiscordUser,
     HumanUser,
+    Person,
     UserSession,
 )
 
@@ -296,3 +300,123 @@ async def test_send_message_rejects_inaccessible_channel(two_owners, kwargs):
     with mcp_auth_context(two_owners.token):
         with pytest.raises(ValueError, match="not found or not accessible"):
             await get_fn(send_message)(message="hi", **kwargs)
+
+
+@pytest.fixture
+def sent():
+    """The Discord collector calls, which leave the process."""
+    with (
+        patch("memory.api.MCP.servers.discord.discord_client.send_to_channel", return_value=True) as channel,
+        patch("memory.api.MCP.servers.discord.discord_client.send_dm", return_value=True) as dm,
+    ):
+        yield channel, dm
+
+
+@pytest.fixture
+def two_bot_owner(db_session, two_owners, regular_user):
+    """The caller also owns bot 103, alone in server 1003."""
+    bot = DiscordBot(id=103, name="extra bot", is_active=True)
+    regular_user.discord_bots.append(bot)
+    db_session.add(bot)
+    db_session.flush()
+    db_session.add(DiscordServer(id=1003, name="extra server", bot_id=103))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=10031, server_id=1003, name="extra-general", channel_type="text"))
+    db_session.commit()
+    return two_owners
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs, bot",
+    [
+        ({"channel_name": "mine-general"}, 101),
+        ({"channel_name": "extra-general"}, 103),
+        ({"channel_name": "extra-general", "bot_id": "103"}, 103),
+    ],
+)
+async def test_send_message_to_channel_uses_the_servers_bot(two_bot_owner, sent, kwargs, bot):
+    with mcp_auth_context(two_bot_owner.token):
+        result = await get_fn(send_message)(message="hi", **kwargs)
+
+    assert result["success"] is True
+    assert sent[0].call_args.args[0] == bot
+
+
+@pytest.mark.asyncio
+async def test_send_message_rejects_a_bot_outside_the_channels_server(two_bot_owner, sent):
+    with mcp_auth_context(two_bot_owner.token):
+        with pytest.raises(ValueError, match="not in"):
+            await get_fn(send_message)(message="hi", channel_name="mine-general", bot_id="103")
+
+    sent[0].assert_not_called()
+
+
+@pytest.fixture
+def discord_people(db_session, two_owners):
+    """"friend" wrote in the caller's server, "stranger" only in the other user's."""
+    for user_id, username, bot_id, server_id in [(500, "friend", 101, 1001), (600, "stranger", 102, 1002)]:
+        person = Person(identifier=f"{username}_person", display_name=f"{username.title()} Person")
+        db_session.add(person)
+        db_session.flush()
+        db_session.add(DiscordUser(id=user_id, username=username, person_id=person.id))
+        db_session.flush()
+        db_session.add(
+            DiscordMessage(
+                modality="message",
+                sha256=bytes([user_id % 256]) * 32,
+                content="hello",
+                message_id=user_id,
+                channel_id=server_id * 10 + 1,
+                server_id=server_id,
+                author_id=user_id,
+                bot_id=bot_id,
+                sent_at="2024-01-01T00:00:00+00:00",
+            )
+        )
+    db_session.commit()
+    return two_owners
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [{"user_id": "500"}, {"username": "friend"}])
+async def test_send_dm_to_a_visible_user(discord_people, sent, kwargs):
+    with mcp_auth_context(discord_people.token):
+        result = await get_fn(send_message)(message="hi", **kwargs)
+
+    assert (result["success"], result["target"]) == (True, "500")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"user_id": "600"}, {"username": "stranger"}, {"user_id": "424242"}, {"username": "nobody"}],
+)
+async def test_send_dm_hidden_and_unknown_users_look_the_same(discord_people, sent, kwargs):
+    with mcp_auth_context(discord_people.token):
+        result = await get_fn(send_message)(message="hi", **kwargs)
+
+    target = kwargs.get("user_id") or kwargs.get("username")
+    assert result == {"success": False, "error": f"Discord user '{target}' not found", "suggestions": []}
+    sent[1].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scopes, username, suggested",
+    [
+        (["discord"], "Friend Person", []),
+        (["discord", "people"], "Friend Person", ["friend_person"]),
+        (["discord", "people"], "Stranger Person", []),
+    ],
+)
+async def test_send_dm_suggests_only_people_the_caller_may_see(
+    db_session, discord_people, regular_user, sent, scopes, username, suggested
+):
+    regular_user.scopes = scopes
+    db_session.commit()
+
+    with mcp_auth_context(discord_people.token):
+        result = await get_fn(send_message)(message="hi", username=username)
+
+    assert [s["person"] for s in result["suggestions"]] == suggested

@@ -846,15 +846,30 @@ JUNK_NOTE_SUFFIXES = (".json.md", ".js.md", ".css.md", "/.gitignore.md")
 REROOTED_STORAGE_DIR = "app/memory_files/"
 
 
+def rerooted_original(filename: str) -> str | None:
+    """The filename a re-rooted note was meant to have, if it is one."""
+    prefix = f"{paths.to_db_filename(settings.NOTES_STORAGE_DIR)}/{REROOTED_STORAGE_DIR}"
+    return filename.removeprefix(prefix) if filename.startswith(prefix) else None
+
+
 def memory_made_junk(filename: str) -> bool:
-    notes_prefix = paths.to_db_filename(settings.NOTES_STORAGE_DIR)
-    return filename.endswith(JUNK_NOTE_SUFFIXES) or filename.startswith(
-        f"{notes_prefix}/{REROOTED_STORAGE_DIR}"
-    )
+    """A file Memory wrote that duplicates one still in the vault."""
+    if filename.endswith(JUNK_NOTE_SUFFIXES):
+        # "Node.js.md" is a real note; only a copy sits beside its original.
+        return (settings.FILE_STORAGE_DIR / filename.removesuffix(".md")).exists()
+    original = rerooted_original(filename)
+    return original is not None and (settings.FILE_STORAGE_DIR / original).exists()
 
 
 def junk_note(filename: str) -> bool:
     return paths.is_hidden(filename) or memory_made_junk(filename)
+
+
+def needs_review(note: Note) -> bool:
+    filename = str(note.filename)
+    if rerooted_original(filename) is not None:
+        return True
+    return note_file_missing(note) and not write_pending(filename)
 
 
 def removable_vault_file(path: pathlib.Path) -> bool:
@@ -885,13 +900,14 @@ def remove_vault_files(files: list[pathlib.Path]):
 @app.task(name=CLEANUP_JUNK_NOTES)
 @tracked_task
 def cleanup_junk_notes(dry_run: bool = False) -> dict:
-    """Delete junk notes with their chunks and vectors, and report notes whose file is gone.
+    """Delete junk notes with their chunks and vectors, and list notes a person should check.
 
-    Junk is a hidden path, Memory's copy of a non-markdown file, or the tree an
-    absolute filename was re-rooted into. Only the junk files Memory itself
-    wrote are removed from the vault: hidden folders may belong to the user's
-    tools. Notes missing their file are only listed: their text still lives in
-    the database. Safe to re-run.
+    Junk is a hidden path, or a file Memory wrote that duplicates one still in
+    the vault: a ".md" copy of a non-markdown file, or a note re-rooted from an
+    absolute filename whose original exists. Only those duplicates are removed
+    from the vault: hidden folders may belong to the user's tools. Re-rooted
+    notes without an original and notes missing their file are only listed:
+    they may be the only copy. Safe to re-run.
     """
     if not settings.NOTES_STORAGE_DIR.is_dir():
         # Otherwise every note would count as missing its file.
@@ -899,11 +915,8 @@ def cleanup_junk_notes(dry_run: bool = False) -> dict:
     with make_session() as session:
         rows = session.query(Note).filter(Note.filename.isnot(None)).all()
         junk = [n for n in rows if junk_note(str(n.filename))]
-        missing = [
-            n
-            for n in rows
-            if n not in junk and note_file_missing(n) and not write_pending(str(n.filename))
-        ]
+        junk_ids = {n.id for n in junk}
+        review = [n for n in rows if n.id not in junk_ids and needs_review(n)]
         files = [
             settings.FILE_STORAGE_DIR / str(n.filename)
             for n in junk
@@ -913,7 +926,7 @@ def cleanup_junk_notes(dry_run: bool = False) -> dict:
         result = {
             "dry_run": dry_run,
             "junk": len(junk),
-            "missing": sorted(str(n.filename) for n in missing),
+            "needs_review": sorted(str(n.filename) for n in review),
             "files_removed": len(files),
         }
         if dry_run:
@@ -923,5 +936,5 @@ def cleanup_junk_notes(dry_run: bool = False) -> dict:
         for note in junk:
             delete_orphaned_item(note, session)
         session.commit()
-    logger.info("Removed %s junk notes; %s notes miss their file", len(junk), len(missing))
+    logger.info("Removed %s junk notes; %s notes need review", len(junk), len(review))
     return result

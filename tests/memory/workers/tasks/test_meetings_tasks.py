@@ -12,6 +12,7 @@ import pytest
 
 from memory.agents import triggers
 from memory.agents.triggers import IngestConfig
+from memory.common import embedding, settings
 from memory.common.access_control import user_can_access
 from memory.common.db.models import (
     AgentDefinition,
@@ -207,11 +208,12 @@ def test_find_person_by_name_with_whitespace(mock_make_session, qdrant):
     "date_str, expected",
     [
         ("2026-10-22", datetime(2026, 10, 22)),
+        ("2026-10-21", datetime(2026, 10, 21)),
         ("2026-10-29T10:30:00", datetime(2026, 10, 29, 10, 30)),
         ("October 30, 2026", datetime(2026, 10, 30)),
         ("2028-10-21", datetime(2028, 10, 21)),
         ("2025-01-01", None),
-        ("2026-10-21", None),
+        ("2026-10-20", None),
         ("2028-10-23", None),
         ("not a date", None),
         ("", None),
@@ -861,6 +863,22 @@ def test_a_meeting_that_is_not_stored_keeps_no_tasks(
 
     tasks = mock_make_session.query(Task).filter(Task.source_item_id == meeting.id).all()
     assert (result["status"], meeting.extraction_status, tasks) == ("error", "extracted", [])
+
+
+def test_a_meeting_keeps_its_tasks_when_embeddings_are_not_configured(
+    regular_user, llm_key, scripted_llm, mock_make_session, qdrant
+):
+    scripted_llm.script = [submitted(EXTRACTED)]
+    meeting = meeting_for(mock_make_session, regular_user.id)
+
+    with (
+        patch.object(settings, "VOYAGE_API_KEY", ""),
+        patch("memory.common.embedding.embed_source_item", side_effect=embedding.EmbeddingsNotConfigured()),
+    ):
+        result = meetings.execute_meeting_processing(mock_make_session, meeting, None, None)
+
+    tasks = mock_make_session.query(Task).filter(Task.source_item_id == meeting.id).all()
+    assert (result["status"], meeting.extraction_status, len(tasks)) == ("success", "complete", 1)
 
 
 def test_keyless_meeting_is_embedded_with_extraction_skipped(

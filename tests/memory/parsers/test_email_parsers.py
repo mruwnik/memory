@@ -10,6 +10,7 @@ import pytest
 from memory.common.db.models.source_items import mail_addresses
 from memory.parsers.email import (
     compute_message_hash,
+    decode_mime_header,
     extract_attachments,
     extract_body,
     extract_date,
@@ -321,6 +322,25 @@ def test_parse_email_decodes_mime_headers(raw_from, raw_subject, sender, subject
 
     assert (result["sender"], result["subject"]) == (sender, subject)
     assert mail_addresses([result["sender"]]) == [address]
+
+
+@pytest.mark.parametrize(
+    "name, value, expected",
+    [
+        ("From", "a@[1.2.3", "a@[1.2.3"),
+        ("From", "@", "@"),
+        ("From", "Foo <a@b.com>, @", "Foo <a@b.com>, @"),
+        ("From", "", ""),
+        ("From", "undisclosed-recipients:;", "undisclosed-recipients:;"),
+        ("From", "=?UTF-8?Q?J=C3=B6rg?=", "Jörg"),
+        ("From", "=?UTF-8?Q?J=C3=B6rg?= <J@X.com>", "Jörg <J@X.com>"),
+        ("Subject", "=?UTF-8?Q?caf=C3=A9?=", "café"),
+        ("Subject", "=?UTF-8?B?!!!?=", "=?UTF-8?B?!!!?="),
+        ("Subject", "", ""),
+    ],
+)
+def test_decode_mime_header_never_raises_or_loses_addresses(name, value, expected):
+    assert decode_mime_header(name, value) == expected
 
 
 def test_parse_email_hash_uses_raw_headers():

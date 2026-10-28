@@ -51,11 +51,12 @@ docker compose exec -T worker python - maintenance clean-mail-headers < tools/ru
 ```
 
 Delete notes indexed from hidden vault folders, Memory's `.md` copies of
-non-markdown vault files (`*.json.md`, `*.js.md`, `*.css.md`, `.gitignore.md`),
-and the `notes/app/memory_files/` tree created from absolute filenames, with
-their vectors; it lists, but keeps, notes whose file is gone. The copies and the `app/memory_files/`
-tree are also removed from the vault (and committed if it's a git repo); files
-in hidden folders stay. Check the counts with `--dry-run` first. Safe to re-run:
+non-markdown vault files (`*.json.md`, `*.js.md`, `*.css.md`, `.gitignore.md`)
+whose original is still in the vault, and notes under `notes/app/memory_files/`
+(created from absolute filenames) whose original exists, with their vectors.
+Re-rooted notes without an original and notes whose file is gone are listed
+under `needs_review` and kept. The deleted copies are also removed from the
+vault (and committed if it's a git repo); files in hidden folders stay. Check the counts with `--dry-run` first. Safe to re-run:
 
 ```bash
 docker compose exec -T worker python - --wait maintenance cleanup-junk-notes --dry-run < tools/run_celery_task.py

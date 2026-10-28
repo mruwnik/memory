@@ -179,8 +179,14 @@ class MailMessage(SourceItem):
     def parsed_content(self) -> dict[str, Any]:
         from memory.parsers.email import parse_email_message
 
-        result = parse_email_message(self.content or "", self.message_id or "")
-        return dict(result) if result else {}
+        # A search hit reads the body several times; keyed on content so an edit reparses.
+        key = (self.content or "", self.message_id or "")
+        cached = getattr(self, "parsed_mail", None)
+        if cached is None or cached[0] != key:
+            result = parse_email_message(*key)
+            cached = (key, dict(result) if result else {})
+            setattr(self, "parsed_mail", cached)
+        return cached[1]
 
     @property
     def body(self) -> str:

@@ -1546,14 +1546,27 @@ JUNK_NOTES = {
     # filename: (row removed, file removed)
     "notes/good.md": (False, False),
     "notes/sub/version.1.2.md": (False, False),
+    "notes/tech/Node.js.md": (False, False),
+    "notes/config.json.md": (False, False),
     "notes/.obsidian/workspace.json.md": (True, True),
     "notes/.obsidian/plugins/obsidian-git/main.js.md": (True, True),
+    "notes/.obsidian/app.json.md": (True, False),
     "notes/.gitignore.md": (True, True),
     "notes/theme.css.md": (True, True),
+    "notes/profiles/peter.md": (False, False),
     "notes/app/memory_files/notes/profiles/peter.md": (True, True),
+    "notes/app/memory_files/notes/agent/only.md": (False, False),
     "notes/.memory/kept.md": (True, False),
     "notes/sub/.notes-critic/review.md": (True, False),
 }
+# The vault files Memory's ".md" copies were made from.
+JUNK_COUNTERPARTS = [
+    "notes/.obsidian/workspace.json",
+    "notes/.obsidian/plugins/obsidian-git/main.js",
+    "notes/.gitignore",
+    "notes/theme.css",
+]
+NEEDS_REVIEW = ["notes/app/memory_files/notes/agent/only.md", "notes/gone.md"]
 
 
 def add_raw_note(db_session, filename: str, on_disk: bool = True) -> Note:
@@ -1586,6 +1599,8 @@ def remaining_notes(db_session) -> set[str]:
 def junk_vault(mock_make_session):
     for filename in JUNK_NOTES:
         add_raw_note(mock_make_session, filename)
+    for filename in JUNK_COUNTERPARTS:
+        (settings.FILE_STORAGE_DIR / filename).write_text("x")
     add_raw_note(mock_make_session, "notes/gone.md", on_disk=False)
     add_raw_note(mock_make_session, "notes/pending.md", on_disk=False)
     notes.mark_pending_write("notes/pending.md", b"sha")
@@ -1599,9 +1614,9 @@ def test_cleanup_junk_notes_removes_junk_rows_and_the_files_memory_made(junk_vau
     assert remaining_notes(junk_vault) == kept | {"notes/gone.md", "notes/pending.md"}
     on_disk = {f for f in JUNK_NOTES if (settings.FILE_STORAGE_DIR / f).exists()}
     assert on_disk == {f for f, (_, file_removed) in JUNK_NOTES.items() if not file_removed}
-    assert not (settings.NOTES_STORAGE_DIR / "app").exists()
+    assert all((settings.FILE_STORAGE_DIR / f).exists() for f in JUNK_COUNTERPARTS)
     assert junk_vault.query(Chunk).count() == len(kept) + 2
-    assert result == {"dry_run": False, "junk": 7, "missing": ["notes/gone.md"], "files_removed": 5}
+    assert result == {"dry_run": False, "junk": 8, "needs_review": NEEDS_REVIEW, "files_removed": 5}
 
 
 def test_cleanup_junk_notes_dry_run_changes_nothing(junk_vault):
@@ -1611,18 +1626,19 @@ def test_cleanup_junk_notes_dry_run_changes_nothing(junk_vault):
 
     assert remaining_notes(junk_vault) == before
     assert all((settings.FILE_STORAGE_DIR / f).exists() for f in JUNK_NOTES)
-    assert result == {"dry_run": True, "junk": 7, "missing": ["notes/gone.md"], "files_removed": 5}
+    assert result == {"dry_run": True, "junk": 8, "needs_review": NEEDS_REVIEW, "files_removed": 5}
 
 
 def test_cleanup_junk_notes_commits_removed_files_in_the_vault(mock_make_session, qdrant, tmp_path):
     vault, remote = make_vault(tmp_path, "master")
+    commit_file(vault, ".gitignore", "*.tmp")
     commit_file(vault, ".gitignore.md", "junk")
     git(vault, "push", "-q")
     add_raw_note(mock_make_session, "notes/.gitignore.md", on_disk=False)
-    add_raw_note(mock_make_session, "notes/app/memory_files/notes/untracked.md")
+    add_raw_note(mock_make_session, "notes/app/memory_files/notes/existing.md")
 
     notes.cleanup_junk_notes()
 
     assert git(vault, "status", "--porcelain") == ""
-    assert remote_files(remote, "master") == {"existing.md"}
+    assert remote_files(remote, "master") == {".gitignore", "existing.md"}
     assert last_status()["ok"] is True
