@@ -248,7 +248,23 @@ describe('ClaudeSessions', () => {
     expect(screen.getByRole('button', { name: 'Daily 09:00 UTC' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
     await waitFor(() => expect(scheduleSession).toHaveBeenCalled())
+    expect(scheduleSession.mock.calls[0][0].spawn_config.use_saved_write_token).toBeUndefined()
     expect(screen.getByText('Schedule created')).toBeInTheDocument()
+  })
+
+  it('gives a scheduled session the saved write token only when opted in', async () => {
+    const user = userEvent.setup()
+    renderClaude('/ui/claude')
+    await waitFor(() => expect(screen.getByText('Fleet overview')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'New session' }))
+    await user.type(screen.getByPlaceholderText('Start Claude with this prompt...'), 'do work')
+    await user.click(screen.getByRole('button', { name: 'Daily 09:00 UTC' }))
+    const checkbox = screen.getByRole('checkbox', { name: 'Use my saved write token' })
+    expect(checkbox).not.toBeChecked()
+    await user.click(checkbox)
+    await user.click(screen.getByRole('button', { name: 'Schedule recurring session' }))
+    await waitFor(() => expect(scheduleSession).toHaveBeenCalled())
+    expect(scheduleSession.mock.calls[0][0].spawn_config.use_saved_write_token).toBe(true)
   })
 
   it('toggles pre-approved tools and persists to localStorage', async () => {

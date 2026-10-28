@@ -141,6 +141,7 @@ const ClaudeSessions = () => {
   const [runId, setRunId] = useState<string>('')
   const [cronExpression, setCronExpression] = useState<string>('')
   const [scheduling, setScheduling] = useState(false)
+  const [scheduleWithWriteToken, setScheduleWithWriteToken] = useState(false)
   const [scheduleSuccess, setScheduleSuccess] = useState<ScheduleResponse | null>(null)
 
   // Selecting a session goes through the URL so refresh preserves the
@@ -459,13 +460,14 @@ const ClaudeSessions = () => {
     try {
       const result = await scheduleSession({
         cron_expression: cronExpression,
-        spawn_config: buildSpawnConfig(),
+        spawn_config: { ...buildSpawnConfig(), use_saved_write_token: scheduleWithWriteToken || undefined },
       })
       setScheduleSuccess(result)
       // Reset form
       setInitialPrompt('')
       setRunId('')
       setCronExpression('')
+      setScheduleWithWriteToken(false)
     } catch (e) {
       setFormError(e instanceof Error ? e.message : 'Failed to schedule session')
     } finally {
@@ -707,6 +709,9 @@ const ClaudeSessions = () => {
                       <ToggleGroup label="Schedule presets" value={cronExpression} onChange={setCronExpression} options={CRON_PRESETS} />
                       {cronExpression && <Button size="sm" type="button" onClick={() => setCronExpression('')}>Clear</Button>}
                     </div>
+                    {cronExpression && (
+                      <Checkbox label="Use my saved write token" checked={scheduleWithWriteToken} onChange={e => setScheduleWithWriteToken(e.target.checked)} />
+                    )}
                   </div>
 
                   {/* Schedule success message */}
