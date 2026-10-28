@@ -1,6 +1,7 @@
 """Tests for content sources API endpoints."""
 
 import hashlib
+from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import patch
 
@@ -8,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.common.access_control import credential_scopes
-from memory.common.db.models import JobType
+from memory.common.db.models import ForumComment, ForumPost, ForumSyncConfig, JobType
 
 
 @pytest.fixture
@@ -288,3 +289,115 @@ def test_forum_sync_rate_limited(
     assert "rate limit" in second.json()["detail"].lower()
     # Only one task was actually enqueued.
     assert mock_celery.send_task.call_count == 1
+
+
+# ====== Forum summary and sync config ======
+
+
+def forum_post(db_session, guid, published, sensitivity="public", comment_karmas=()):
+    post = ForumPost(
+        url=f"https://www.lesswrong.com/posts/{guid}/slug",
+        title=f"Post {guid}",
+        sha256=guid.encode().ljust(32, b"\0"),
+        modality="forum",
+        sensitivity=sensitivity,
+        published_at=datetime.fromisoformat(published).replace(tzinfo=timezone.utc),
+    )
+    comments = [
+        ForumComment(
+            post=post,
+            comment_id=f"{guid}-c{i}",
+            sha256=f"{guid}-c{i}".encode().ljust(32, b"\0"),
+            modality="forum",
+            sensitivity=sensitivity,
+            karma=karma,
+        )
+        for i, karma in enumerate(comment_karmas)
+    ]
+    db_session.add_all([post, *comments])
+    db_session.commit()
+    return post
+
+
+def test_forum_summary_counts_only_what_the_caller_can_see(member_client, db_session):
+    forum_post(db_session, "old", "2026-01-01T00:00:00", comment_karmas=(5, 9))
+    forum_post(db_session, "hidden", "2026-10-01T00:00:00", "confidential", comment_karmas=(3,))
+    config = ForumSyncConfig.load(db_session, "lesswrong")
+    config.last_sync_at = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    config.last_sync_result = {"new_posts": 3}
+    config.record_sync("LW down")
+    db_session.commit()
+
+    response = member_client.get("/forums/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["posts"], body["comments"]) == (1, 2)
+    assert body["newest_post"] == {
+        "title": "Post old",
+        "url": "https://www.lesswrong.com/posts/old/slug",
+        "published_at": "2026-01-01T00:00:00Z",
+    }
+    assert body["last_sync_at"] == "2026-10-27T00:00:00Z"
+    assert body["last_sync_result"] == {"new_posts": 3}
+    assert body["sync_error"] is None  # members can't act on it
+    assert body["settings"]["min_karma"] == 10
+    assert body["settings"]["check_interval"] == 1440
+
+
+def test_admins_see_why_the_forum_sync_failed(client, db_session):
+    ForumSyncConfig.load(db_session, "lesswrong").record_sync("LW down")
+    db_session.commit()
+    assert client.get("/forums/summary").json()["sync_error"] == "LW down"
+
+
+def test_forum_summary_with_no_posts(client):
+    body = client.get("/forums/summary").json()
+    assert (body["posts"], body["comments"], body["newest_post"]) == (0, 0, None)
+
+
+FORUM_SETTINGS = {
+    "active": True,
+    "check_interval": 720,
+    "days_back": 14,
+    "max_items": 500,
+    "min_karma": 20,
+    "af": True,
+    "comments_enabled": False,
+    "min_comment_karma": 8,
+    "comment_recheck_divisor": 5,
+    "comment_recheck_max_days": 60,
+    "comment_max_age_days": 180,
+    "max_comment_fetches": 50,
+}
+
+
+def test_admin_updates_forum_settings(client, db_session):
+    response = client.put("/forums/settings", json=FORUM_SETTINGS)
+
+    assert response.status_code == 200
+    assert response.json() == FORUM_SETTINGS
+    db_session.expire_all()
+    config = db_session.get(ForumSyncConfig, "lesswrong")
+    assert {key: getattr(config, key) for key in FORUM_SETTINGS} == FORUM_SETTINGS
+
+
+def test_forum_settings_are_admin_only(regular_client):
+    response = regular_client.put("/forums/settings", json=FORUM_SETTINGS)
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("check_interval", 0),
+        ("days_back", 0),
+        ("comment_recheck_divisor", 0),
+        ("max_items", -1),
+        ("comment_recheck_max_days", 10**9),
+        ("comment_max_age_days", 10**9),
+    ],
+)
+def test_forum_settings_reject_out_of_range_values(client, field, value):
+    response = client.put("/forums/settings", json=FORUM_SETTINGS | {field: value})
+    assert response.status_code == 422

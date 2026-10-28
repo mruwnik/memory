@@ -1,14 +1,42 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
 import { ForumsPanel } from './ForumsPanel'
 
-const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
+const me = (scopes: string[]) => ({ json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes } })
+const admin = me(['*'])
 
-const numberInput = (labelText: string): HTMLInputElement => {
-  const label = screen.getByText(labelText, { selector: 'label' })
-  return (label.parentElement as HTMLElement).querySelector('input') as HTMLInputElement
+const SETTINGS = {
+  active: true,
+  check_interval: 1440,
+  days_back: 30,
+  max_items: 1000,
+  min_karma: 10,
+  af: false,
+  comments_enabled: true,
+  min_comment_karma: 5,
+  comment_recheck_divisor: 10,
+  comment_recheck_max_days: 30,
+  comment_max_age_days: 365,
+  max_comment_fetches: 200,
 }
+
+const summary = (overrides = {}) => ({
+  json: {
+    posts: 24123,
+    comments: 8,
+    newest_post: { title: 'A new post', url: 'https://www.lesswrong.com/posts/x/a-new-post', published_at: '2026-10-20T00:00:00Z' },
+    last_sync_at: null,
+    last_sync_result: { new_posts: 3, updated_posts: 40, comment_fetches: 7 },
+    sync_error: null,
+    settings: SETTINGS,
+    ...overrides,
+  },
+})
+
+const form = (name: string) => within(screen.getByRole('form', { name }))
+const numberInput = (formName: string, labelText: string): HTMLInputElement =>
+  form(formName).getByLabelText(labelText) as HTMLInputElement
 
 beforeEach(() => {
   clearCookies()
@@ -16,23 +44,71 @@ beforeEach(() => {
 })
 
 describe('ForumsPanel', () => {
-  it('renders the sync settings with their default values', () => {
-    mockFetchRoutes({ '/auth/me': authMe, __default: { json: {} } })
+  it('summarises what has been synced and how syncing is set up', async () => {
+    mockFetchRoutes({ '/forums/summary': summary(), '/auth/me': admin, __default: { json: {} } })
     renderWithUser(<ForumsPanel />)
-    expect(screen.getByText('Forums (LessWrong)')).toBeInTheDocument()
-    expect(numberInput('Days back')).toHaveValue(30)
-    expect(numberInput('Min karma')).toHaveValue(10)
-    expect(numberInput('Posts per request')).toHaveValue(50)
-    expect(numberInput('Max items')).toHaveValue(1000)
+
+    expect(await screen.findByText((24123).toLocaleString())).toBeInTheDocument()
+    expect(screen.getByText('8')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /A new post/ })).toHaveAttribute('href', 'https://www.lesswrong.com/posts/x/a-new-post')
+    expect(screen.getByText('Never')).toBeInTheDocument()
+    expect(screen.getByText(/3 new posts · 40 updated · comments fetched for 7 posts/)).toBeInTheDocument()
+    expect(screen.getByText('every 24h')).toBeInTheDocument()
   })
 
-  it('posts a sync with the edited settings and shows the success banner', async () => {
-    const mock = mockFetchRoutes({ '/forums/sync': { json: { task_id: 'abc', status: 'queued' } }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<ForumsPanel />)
+  it('shows why the last sync failed', async () => {
+    mockFetchRoutes({ '/forums/summary': summary({ sync_error: 'LW down' }), '/auth/me': admin, __default: { json: {} } })
+    renderWithUser(<ForumsPanel />)
+    expect(await screen.findByText('Last sync failed: LW down')).toBeInTheDocument()
+  })
 
-    await user.clear(numberInput('Min karma'))
-    await user.type(numberInput('Min karma'), '25')
-    await user.click(screen.getByLabelText('Alignment Forum only'))
+  it('saves edited sync settings', async () => {
+    const mock = mockFetchRoutes({
+      '/forums/settings': { json: { ...SETTINGS, min_comment_karma: 12, comments_enabled: true } },
+      '/forums/summary': summary(),
+      '/auth/me': admin,
+      __default: { json: {} },
+    })
+    const { user } = renderWithUser(<ForumsPanel />)
+    await screen.findByRole('form', { name: 'Scheduled sync settings' })
+
+    await user.clear(numberInput('Scheduled sync settings', 'Min comment karma'))
+    await user.type(numberInput('Scheduled sync settings', 'Min comment karma'), '12')
+    await user.click(screen.getByRole('button', { name: 'Save settings' }))
+
+    await waitFor(() => expect(screen.getByText('Forum sync settings saved.')).toBeInTheDocument())
+    const call = mock.mock.calls.find(([url]) => String(url).includes('/forums/settings'))!
+    expect((call[1] as RequestInit).method).toBe('PUT')
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ ...SETTINGS, min_comment_karma: 12 })
+  })
+
+  it('refuses a sync interval under an hour', async () => {
+    mockFetchRoutes({ '/forums/summary': summary(), '/auth/me': admin, __default: { json: {} } })
+    const { user } = renderWithUser(<ForumsPanel />)
+    await screen.findByRole('form', { name: 'Scheduled sync settings' })
+
+    await user.clear(form('Scheduled sync settings').getByLabelText('Hours'))
+    await user.type(form('Scheduled sync settings').getByLabelText('Minutes'), '30')
+
+    expect(screen.getByText('Sync at most once an hour.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save settings' })).toBeDisabled()
+  })
+
+  it('hides the settings and manual sync from non-admins', async () => {
+    mockFetchRoutes({ '/forums/summary': summary(), '/auth/me': me(['read']), __default: { json: {} } })
+    renderWithUser(<ForumsPanel />)
+    await screen.findByText((24123).toLocaleString())
+    await waitFor(() => expect(screen.queryByRole('form')).not.toBeInTheDocument())
+  })
+
+  it('posts a manual sync with the edited settings and shows the success banner', async () => {
+    const mock = mockFetchRoutes({ '/forums/sync': { json: { task_id: 'abc', status: 'queued' } }, '/forums/summary': summary(), '/auth/me': admin, __default: { json: {} } })
+    const { user } = renderWithUser(<ForumsPanel />)
+    await screen.findByRole('form', { name: 'Sync now' })
+
+    await user.clear(numberInput('Sync now', 'Min karma'))
+    await user.type(numberInput('Sync now', 'Min karma'), '25')
+    await user.click(form('Sync now').getByLabelText('Alignment Forum only'))
     await user.click(screen.getByRole('button', { name: 'Sync LessWrong' }))
 
     await waitFor(() => expect(screen.getByText(/LessWrong sync started/)).toBeInTheDocument())
@@ -42,22 +118,16 @@ describe('ForumsPanel', () => {
     expect(typeof body.since).toBe('string')
   })
 
-  it('shows the server error detail when the sync fails', async () => {
-    mockFetchRoutes({ '/forums/sync': { status: 500, json: { detail: 'rate limited' } }, '/auth/me': authMe, __default: { json: {} } })
+  it('shows the server error detail when the manual sync fails', async () => {
+    mockFetchRoutes({ '/forums/sync': { status: 500, json: { detail: 'rate limited' } }, '/forums/summary': summary(), '/auth/me': admin, __default: { json: {} } })
     const { user } = renderWithUser(<ForumsPanel />)
-    await user.click(screen.getByRole('button', { name: 'Sync LessWrong' }))
+    await user.click(await screen.findByRole('button', { name: 'Sync LessWrong' }))
     await waitFor(() => expect(screen.getByText('rate limited')).toBeInTheDocument())
   })
 
-  it('keeps a cleared number field empty for retyping and sends the typed value', async () => {
-    const mock = mockFetchRoutes({ '/forums/sync': { json: { task_id: 'x', status: 'queued' } }, '/auth/me': authMe, __default: { json: {} } })
-    const { user } = renderWithUser(<ForumsPanel />)
-    await user.clear(numberInput('Min karma'))
-    expect(numberInput('Min karma')).toHaveValue(null)
-    await user.type(numberInput('Min karma'), '0')
-    await user.click(screen.getByRole('button', { name: 'Sync LessWrong' }))
-    await waitFor(() => expect(screen.getByText(/LessWrong sync started/)).toBeInTheDocument())
-    const call = mock.mock.calls.find(([url]) => String(url).includes('/forums/sync'))!
-    expect(JSON.parse((call[1] as RequestInit).body as string).min_karma).toBe(0)
+  it('shows a retryable error when the summary fails to load', async () => {
+    mockFetchRoutes({ '/forums/summary': { status: 500, json: { detail: 'db down' } }, '/auth/me': admin, __default: { json: {} } })
+    renderWithUser(<ForumsPanel />)
+    expect(await screen.findByText('db down')).toBeInTheDocument()
   })
 })

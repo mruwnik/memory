@@ -12,6 +12,44 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+LessWrong comments are now ingested and searchable, and the LessWrong sync is
+configured from the Forums tab (admin only) instead of code defaults.
+
+`LESSWRONG_SYNC_INTERVAL` is no longer read. The migration copies it into the
+new settings row (`0` there leaves the scheduled sync off), so keep it set until
+the migration has run, then remove it. The migration reads it from the container
+that runs migrations, so check the Forums tab afterwards if you set it only on
+the workers. Afterwards change the schedule with
+"Sync every" and "Sync on a schedule" on the Forums tab.
+`LESSWRONG_SYNC_CHECK_INTERVAL` (default 3600s) sets how often beat checks
+whether a sync is due; `0` disables the scheduled sync entirely.
+
+The first syncs fetch every comment on each post from the last year that has
+any, 200 posts per run by default, so expect extra LessWrong traffic and
+embedding spend for the first few weeks. Lower "Max posts fetched per sync" on
+the Forums tab to spread it out, or turn comments off.
+
+### Migrations
+
+`20261112_forum_comments`: adds the `forum_comment` and `forum_sync_configs`
+tables (seeded with the previous defaults) and two columns on `forum_post`. Fast.
+
+### Post-deploy commands
+
+None.
+
 ## v0.3.3 (2026-10-28)
 
 ### Required env vars

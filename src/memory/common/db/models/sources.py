@@ -26,7 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import Mapped, backref, mapped_column, relationship, validates
+from sqlalchemy.orm import Mapped, Session, backref, mapped_column, relationship, validates
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
@@ -164,6 +164,62 @@ class ArticleFeed(SyncStatusMixin, LLMKeyChoice, Base):
         Index("article_feeds_project_idx", "project_id"),
         Index("article_feeds_user_idx", "user_id"),
     )
+
+
+def setting(type_: Any, default: Any, doc: str | None = None) -> Any:
+    return mapped_column(
+        type_, nullable=False, default=default, server_default=text(repr(default).lower()), doc=doc
+    )
+
+
+LESSWRONG = "lesswrong"
+
+
+class ForumSyncConfig(SyncStatusMixin, Base):
+    """How often and how much one forum is fetched.
+
+    Keyed by forum so further forums get their own row. The scheduling fields
+    (active, check_interval, last_sync_*, days_back, max_items) are the ones any
+    polled source needs; the rest are forum specific.
+    """
+
+    __tablename__ = "forum_sync_configs"
+
+    forum: Mapped[str] = mapped_column(Text, primary_key=True)
+    active: Mapped[bool] = setting(Boolean, True)
+    check_interval: Mapped[int] = setting(Integer, 60 * 24, "Minutes between syncs")
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_result: Mapped[dict | None] = mapped_column(JSONB)
+
+    days_back: Mapped[int] = setting(Integer, 30, "How far back each sync lists posts")
+    max_items: Mapped[int] = setting(Integer, 1000, "Most posts listed per sync")
+    min_karma: Mapped[int] = setting(Integer, 10)
+    af: Mapped[bool] = setting(Boolean, False, "Alignment Forum posts only")
+
+    comments_enabled: Mapped[bool] = setting(Boolean, True)
+    min_comment_karma: Mapped[int] = setting(Integer, 0)
+    comment_recheck_divisor: Mapped[int] = setting(
+        Integer, 10, "A post is rechecked for comments every age/divisor"
+    )
+    comment_recheck_max_days: Mapped[int] = setting(
+        Integer, 30, "Longest gap between comment rechecks"
+    )
+    comment_max_age_days: Mapped[int] = setting(
+        Integer, 365, "Posts older than this are no longer rechecked for comments"
+    )
+    max_comment_fetches: Mapped[int] = setting(
+        Integer, 200, "Most posts whose comments are fetched per sync"
+    )
+
+    @classmethod
+    def load(cls, session: Session, forum: str) -> ForumSyncConfig:
+        """The forum's config, created with the defaults if it has none."""
+        if config := session.get(cls, forum):
+            return config
+        config = cls(forum=forum)
+        session.add(config)
+        session.flush()
+        return config
 
 
 class EmailAccount(SyncStatusMixin, LLMKeyChoice, Base):

@@ -19,6 +19,8 @@ from memory.common.db.models import (
     SourceItem,
     MailMessage,
     EmailAttachment,
+    ForumComment,
+    ForumPost,
     BlogPost,
     EmailAccount,
     Meeting,
@@ -1489,6 +1491,21 @@ def email_account_with_attachment(db_session, owner, project):
     return account, attachment
 
 
+def forum_post_with_comment(db_session, owner, project):
+    post = ForumPost(
+        sha256=b"derived-post" + bytes(20),
+        modality="forum",
+        creator_id=owner.id,
+        project_id=project.id,
+        sensitivity="internal",
+    )
+    comment = ForumComment(
+        sha256=b"derived-comment" + bytes(17), modality="forum", comment_id="c1", post=post
+    )
+    db_session.add_all([post, comment])
+    return post, comment
+
+
 def transcript_account_with_task(db_session, owner, project):
     account = TranscriptAccount(
         user_id=owner.id,
@@ -1758,7 +1775,8 @@ def test_reconcile_access_control_rewrite_payloads_writes_unchanged_items(
 @pytest.mark.parametrize("rewrite_payloads", [False, True])
 @pytest.mark.parametrize("child_age", [timedelta(0), timedelta(hours=5)])
 @pytest.mark.parametrize(
-    "make_source", [email_account_with_attachment, transcript_account_with_task]
+    "make_source",
+    [email_account_with_attachment, transcript_account_with_task, forum_post_with_comment],
 )
 def test_reconcile_access_control_propagates_parent_override_to_derived_items(
     db_session, qdrant, test_user, make_source, child_age, rewrite_payloads

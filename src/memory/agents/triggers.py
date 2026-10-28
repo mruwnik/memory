@@ -43,6 +43,7 @@ from memory.common.db.models import (
     Comic,
     DiscordBot,
     DiscordMessage,
+    ForumComment,
     ForumPost,
     GithubItem,
     MailMessage,
@@ -200,7 +201,7 @@ def channel_and_authors(item: SourceItem) -> tuple[str | None, list[Any]]:
         return None, mail_authors(item.sender)
     if isinstance(item, ForumPost):
         return None, list(item.authors or [])
-    if isinstance(item, (GithubItem, BlogPost, Comic)):
+    if isinstance(item, (GithubItem, BlogPost, Comic, ForumComment)):
         return None, [item.author]
     return None, []
 

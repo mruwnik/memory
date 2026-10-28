@@ -11,9 +11,10 @@ from memory.common.db.models import Book, BookSection, HumanUser, Note, Person, 
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.secrets import Secret
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
-from memory.common.db.models.source_items import Photo
+from memory.common.db.models.source_items import ForumPost, Photo
 from memory.common.db.models.sources import (
     ArticleFeed,
+    ForumSyncConfig,
     CalendarAccount,
     EmailAccount,
     GithubAccount,
@@ -42,6 +43,7 @@ TABS = [
     "transcripts",
     "books",
     "photos",
+    "forums",
     "notes",
     "discord",
     "slack",
@@ -61,14 +63,6 @@ def other(db_session):
     db_session.add(other)
     db_session.flush()
     return other
-
-
-@pytest.fixture
-def member_client(client, user, db_session):
-    """The client, signed in as a real non-admin user: access checks need real project roles."""
-    user.scopes = ["read", "write"]
-    db_session.flush()
-    return client
 
 
 def email_account(user_id, address, **status):
@@ -282,3 +276,24 @@ def test_members_cant_fix_the_vault_so_its_failure_isnt_flagged_for_them(member_
     record_sync(False)
 
     assert member_client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": 0}
+
+
+def test_forums_count_only_posts_the_viewer_can_see(member_client, db_session):
+    db_session.add_all(
+        [
+            ForumPost(sha256=b"forum-1", modality="forum", url="u1", sensitivity="public"),
+            ForumPost(sha256=b"forum-2", modality="forum", url="u2", sensitivity="confidential"),
+        ]
+    )
+    db_session.commit()
+
+    assert member_client.get("/source-tabs").json()["forums"] == {"count": 1, "failing": 0}
+
+
+@pytest.mark.parametrize("scopes, failing", [(["*"], 1), (["read", "write"], 0)])
+def test_a_failing_forum_sync_flags_the_tab_for_admins(client, user, db_session, scopes, failing):
+    user.scopes = scopes
+    ForumSyncConfig.load(db_session, "lesswrong").sync_error = "LW down"
+    db_session.commit()
+
+    assert client.get("/source-tabs").json()["forums"] == {"count": 0, "failing": failing}

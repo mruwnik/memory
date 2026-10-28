@@ -19,6 +19,7 @@ from memory.common.db.models.source_items import (
     Comic,
     BookSection,
     ForumPost,
+    ForumComment,
     GithubItem,
     GithubPRData,
     GitCommit,
@@ -37,6 +38,7 @@ from memory.common.db.models.source_items import (
     BookSectionPayload,
     NotePayload,
     ForumPostPayload,
+    ForumCommentPayload,
     GoogleDocPayload,
     TaskPayload,
     CalendarEventPayload,
@@ -77,6 +79,7 @@ from memory.common.db.models.people import (
 from memory.common.db.models.sources import (
     Book,
     ArticleFeed,
+    ForumSyncConfig,
     EmailAccount,
     GithubAccount,
     GithubRepo,
@@ -187,6 +190,7 @@ Payload = (
     | ComicPayload
     | BookSectionPayload
     | ForumPostPayload
+    | ForumCommentPayload
     | EmailAttachmentPayload
     | MailMessagePayload
     | PersonPayload
@@ -223,6 +227,7 @@ __all__ = [
     "Comic",
     "BookSection",
     "ForumPost",
+    "ForumComment",
     "GithubItem",
     "GithubPRData",
     "GitCommit",
@@ -259,6 +264,7 @@ __all__ = [
     # Sources
     "Book",
     "ArticleFeed",
+    "ForumSyncConfig",
     "EmailAccount",
     "GithubAccount",
     "GithubRepo",

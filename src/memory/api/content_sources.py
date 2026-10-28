@@ -2,22 +2,27 @@
 
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import require_rest_access, request_api_key
 from memory.common.access_control import (
+    apply_access_filter_to_query,
+    build_access_filter,
     credential_scopes,
     get_user_project_roles,
     has_admin_scope,
     user_can_access,
 )
 from memory.common.db.connection import get_session
-from memory.common.db.models import User, JobType
+from memory.common.db.models import ForumComment, ForumPost, ForumSyncConfig, User, JobType
 from memory.common.db.models.source_items import Photo
+from memory.common.db.models.sources import LESSWRONG
 from memory.common import paths, settings
 from memory.common.celery_app import SYNC_BOOK, SYNC_LESSWRONG, SYNC_PHOTO, SYNC_REPORT
 from memory.common.celery_app import app as celery_app
@@ -585,3 +590,85 @@ def trigger_forum_sync(
         message="LessWrong sync started",
         task_id=task.id,
     )
+
+
+class ForumSettings(BaseModel):
+    active: bool
+    check_interval: int = Field(ge=60, description="Minutes between syncs")
+    days_back: int = Field(ge=1, le=365)
+    max_items: int = Field(ge=1, le=10_000)
+    min_karma: int
+    af: bool
+    comments_enabled: bool
+    min_comment_karma: int
+    comment_recheck_divisor: int = Field(ge=1)
+    comment_recheck_max_days: int = Field(ge=1, le=3650)
+    comment_max_age_days: int = Field(ge=0, le=36500)
+    max_comment_fetches: int = Field(ge=0, le=5_000)
+
+
+class NewestForumPost(BaseModel):
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+
+
+class ForumSummary(BaseModel):
+    posts: int
+    comments: int
+    newest_post: NewestForumPost | None
+    last_sync_at: datetime | None
+    last_sync_result: dict | None
+    sync_error: str | None
+    settings: ForumSettings
+
+
+def forum_settings(config: ForumSyncConfig) -> ForumSettings:
+    return ForumSettings(**{field: getattr(config, field) for field in ForumSettings.model_fields})
+
+
+@router.get("/forums/summary")
+def forum_summary(
+    user: User = Depends(require_rest_access),
+    db: DBSession = Depends(get_session),
+) -> ForumSummary:
+    """What has been synced from the forum that the caller can see, and how syncing is set up."""
+    access = build_access_filter(user, get_user_project_roles(db, user))
+
+    def visible(query, model):
+        return apply_access_filter_to_query(query.select_from(model), access)
+
+    newest = (
+        visible(db.query(ForumPost.title, ForumPost.url, ForumPost.published_at), ForumPost)
+        .filter(ForumPost.published_at.isnot(None))
+        .order_by(ForumPost.published_at.desc())
+        .first()
+    )
+    config = ForumSyncConfig.load(db, LESSWRONG)
+    db.commit()
+    return ForumSummary(
+        posts=visible(db.query(func.count(ForumPost.id)), ForumPost).scalar() or 0,
+        comments=visible(db.query(func.count(ForumComment.id)), ForumComment).scalar() or 0,
+        newest_post=newest and NewestForumPost(**newest._asdict()),
+        last_sync_at=config.last_sync_at,
+        last_sync_result=config.last_sync_result,
+        # Only admins can act on a failing sync, as on the Sources tab badges.
+        sync_error=config.sync_error if has_admin_scope(user) else None,
+        settings=forum_settings(config),
+    )
+
+
+@router.put("/forums/settings")
+def update_forum_settings(
+    settings_update: ForumSettings,
+    user: User = Depends(require_rest_access),
+    db: DBSession = Depends(get_session),
+) -> ForumSettings:
+    """Set how often and how much the scheduled forum sync fetches."""
+    if not has_admin_scope(user):
+        raise HTTPException(status_code=403, detail="Forum settings are restricted to admin users.")
+    config = ForumSyncConfig.load(db, LESSWRONG)
+    for field, value in settings_update.model_dump().items():
+        setattr(config, field, value)
+    db.commit()
+    return forum_settings(config)

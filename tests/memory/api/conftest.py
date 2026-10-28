@@ -121,6 +121,14 @@ def user(db_session):
 
 
 @pytest.fixture
+def member_client(client, user, db_session):
+    """The client, signed in as a real non-admin user: access checks need real project roles."""
+    user.scopes = ["read", "write"]
+    db_session.flush()
+    return client
+
+
+@pytest.fixture
 def regular_client(app_client, db_session, user):
     """Test client with non-admin (regular user) scope for access control tests."""
     from memory.api.auth import get_current_user

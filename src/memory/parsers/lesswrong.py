@@ -1,6 +1,7 @@
 import logging
+import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Generator, TypedDict, NotRequired
 
 from bs4 import BeautifulSoup
@@ -13,6 +14,13 @@ from markdownify import markdownify
 from memory.parsers.html import parse_date, process_images
 
 logger = logging.getLogger(__name__)
+
+LESSWRONG_GRAPHQL_URL = "https://www.lesswrong.com/graphql"
+# LW ids are interpolated into GraphQL queries, so anything else is rejected.
+LESSWRONG_ID = re.compile(r"^[A-Za-z0-9]+$")
+POST_URL_ID = re.compile(r"/posts/([A-Za-z0-9]+)")
+# High enough that a single request returns every comment on a post.
+MAX_COMMENTS_PER_POST = 5000
 
 
 class LessWrongPost(TypedDict):
@@ -36,6 +44,18 @@ class LessWrongPost(TypedDict):
     modified_at: NotRequired[str | None]
     slug: NotRequired[str | None]
     images: NotRequired[list[str]]
+
+
+class LessWrongComment(TypedDict):
+    comment_id: str
+    parent_comment_id: str | None
+    url: str
+    author: str
+    content: str
+    karma: int
+    votes: int
+    # ISO string rather than datetime: comments cross the Celery broker as JSON.
+    posted_at: str | None
 
 
 def make_graphql_query(
@@ -86,15 +106,14 @@ def make_graphql_query(
     """
 
 
-def fetch_posts_from_api(url: str, query: str) -> dict[str, Any]:
-    """Fetch posts from LessWrong GraphQL API.
+def graphql(url: str, query: str) -> dict[str, Any]:
+    """Run a query against a LessWrong GraphQL endpoint and return its data.
 
     URL is validated against SSRF policy and POST redirects are not
     followed (avoids redirect-bypass to internal services).
     """
-    # Validate the URL pre-flight. ``url`` is settings-controlled today
-    # but if a future code path lets users supply an alternate endpoint,
-    # the gate is already in place.
+    # ``url`` is settings-controlled today, but if a future code path lets
+    # users supply an alternate endpoint, the gate is already in place.
     validate_public_url(url)
     response = requests.post(
         url,
@@ -106,7 +125,99 @@ def fetch_posts_from_api(url: str, query: str) -> dict[str, Any]:
         allow_redirects=False,
     )
     response.raise_for_status()
-    return response.json()["data"]["posts"]
+    body = response.json()
+    if body.get("data") is None:
+        raise ValueError(f"LessWrong GraphQL returned no data: {body.get('errors')}")
+    return body["data"]
+
+
+def fetch_posts_from_api(url: str, query: str) -> dict[str, Any]:
+    """Fetch posts from LessWrong GraphQL API."""
+    return graphql(url, query)["posts"]
+
+
+def check_lesswrong_id(lw_id: str) -> str:
+    if not LESSWRONG_ID.match(lw_id):
+        raise ValueError(f"Invalid LessWrong id: {lw_id!r}")
+    return lw_id
+
+
+def post_guid_from_url(url: str) -> str | None:
+    match = POST_URL_ID.search(url)
+    return match and match.group(1)
+
+
+def format_comment(comment: dict[str, Any]) -> LessWrongComment:
+    posted_at = parse_lesswrong_date(comment.get("postedAt"))
+    return {
+        "comment_id": comment["_id"],
+        "parent_comment_id": comment.get("parentCommentId"),
+        "url": comment.get("pageUrl") or "",
+        "author": (comment.get("user") or {}).get("displayName") or "anonymous",
+        "content": markdownify(comment["htmlBody"]).strip(),
+        "karma": comment.get("baseScore") or 0,
+        "votes": comment.get("voteCount") or 0,
+        "posted_at": posted_at and posted_at.replace(tzinfo=timezone.utc).isoformat(),
+    }
+
+
+def fetch_post_comments(
+    post_guid: str, min_karma: int = 0, url: str = LESSWRONG_GRAPHQL_URL
+) -> tuple[list[LessWrongComment], set[str] | None]:
+    """The post's comments with at least ``min_karma``, oldest first, and the ids of all its live comments.
+
+    The ids are None when the thread is too long to fetch whole. Deleted comments
+    come back without a body and count as neither.
+    """
+    query = f"""
+    {{
+        comments(input: {{
+            terms: {{
+                view: "postCommentsOld"
+                postId: "{check_lesswrong_id(post_guid)}"
+                limit: {MAX_COMMENTS_PER_POST}
+            }}
+        }}) {{
+            results {{
+                _id
+                parentCommentId
+                postedAt
+                baseScore
+                voteCount
+                pageUrl
+                htmlBody
+                user {{
+                    displayName
+                }}
+            }}
+        }}
+    }}
+    """
+    results = graphql(url, query)["comments"]["results"]
+    live = [comment for comment in results if comment.get("htmlBody")]
+    comments = [
+        format_comment(comment) for comment in live if (comment.get("baseScore") or 0) >= min_karma
+    ]
+    if len(results) >= MAX_COMMENTS_PER_POST:
+        logger.warning(f"LessWrong post {post_guid} has more than {MAX_COMMENTS_PER_POST} comments")
+        return comments, None
+    return comments, {comment["_id"] for comment in live}
+
+
+def fetch_comment_counts(
+    post_guids: list[str], url: str = LESSWRONG_GRAPHQL_URL
+) -> dict[str, int]:
+    """Live comment counts of the given posts, in one request. Posts LW can't find are left out."""
+    lookups = "\n".join(
+        f'p{i}: post(input: {{selector: {{_id: "{check_lesswrong_id(guid)}"}}}}) {{ result {{ _id commentCount }} }}'
+        for i, guid in enumerate(post_guids)
+    )
+    data = graphql(url, f"{{\n{lookups}\n}}")
+    return {
+        found["result"]["_id"]: found["result"]["commentCount"] or 0
+        for found in data.values()
+        if found and found.get("result")
+    }
 
 
 def is_valid_post(post: dict[str, Any], min_karma: int = 10) -> bool:
@@ -252,7 +363,7 @@ def fetch_lesswrong_posts(
     cooldown: float = 0.5,
     max_items: int = 1000,
     af: bool = False,
-    url: str = "https://www.lesswrong.com/graphql",
+    url: str = LESSWRONG_GRAPHQL_URL,
 ) -> Generator[LessWrongPost, None, None]:
     """
     Fetch posts from LessWrong.

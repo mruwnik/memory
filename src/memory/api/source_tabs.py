@@ -18,11 +18,13 @@ from memory.common.db.models import BookSection, User
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.secrets import Secret
 from memory.common.db.models.slack import SlackUserCredentials, SlackWorkspace
-from memory.common.db.models.source_items import Photo
+from memory.common.db.models.source_items import ForumPost, Photo
 from memory.common.db.models.sources import (
     ArticleFeed,
+    LESSWRONG,
     CalendarAccount,
     EmailAccount,
+    ForumSyncConfig,
     GithubAccount,
     GithubRepo,
     GoogleAccount,
@@ -40,10 +42,7 @@ class TabCounts(BaseModel):
 
 
 class SourceTabs(BaseModel):
-    """What each Sources tab lists, keyed by the tab's value: keys must match the frontend's TABS.
-
-    Forums has no field because its tab is a sync form that lists nothing.
-    """
+    """What each Sources tab lists, keyed by the tab's value: keys must match the frontend's TABS."""
 
     accounts: TabCounts
     email: TabCounts
@@ -54,6 +53,7 @@ class SourceTabs(BaseModel):
     transcripts: TabCounts
     books: TabCounts
     photos: TabCounts
+    forums: TabCounts
     notes: TabCounts
     discord: TabCounts
     slack: TabCounts
@@ -74,6 +74,17 @@ def visible_photos(db: Session, access: AccessFilter | None) -> int:
     # The true accessible total, which can exceed the 100 photos the tab's list returns.
     query = db.query(func.count(Photo.id)).select_from(Photo)
     return apply_access_filter_to_query(query, access).scalar() or 0
+
+
+def visible_forum_posts(db: Session, access: AccessFilter | None) -> int:
+    query = db.query(func.count(ForumPost.id)).select_from(ForumPost)
+    return apply_access_filter_to_query(query, access).scalar() or 0
+
+
+def forum_sync_failing(db: Session, user: User) -> bool:
+    # Only admins can change the forum sync settings, so only they are shown its failures.
+    config = db.get(ForumSyncConfig, LESSWRONG)
+    return has_admin_scope(user) and bool(config and config.sync_error)
 
 
 def visible_books(db: Session, access: AccessFilter | None) -> int:
@@ -135,6 +146,9 @@ def source_tabs(
         transcripts=with_failures(db, TranscriptAccount, *owned(TranscriptAccount.user_id)),
         books=TabCounts(count=visible_books(db, access)),
         photos=TabCounts(count=visible_photos(db, access)),
+        forums=TabCounts(
+            count=visible_forum_posts(db, access), failing=int(forum_sync_failing(db, user))
+        ),
         notes=TabCounts(count=visible_notes(db, access), failing=int(sync_failing(user))),
         discord=TabCounts(count=discord_bots),
         slack=with_failures(db, SlackWorkspace, *slack_filter),

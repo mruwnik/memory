@@ -70,6 +70,7 @@ from memory.common.db.models.source_items import (
     CalendarEvent,
     DiscordMessage,
     EmailAttachment,
+    ForumComment,
     GoogleDoc,
     MailMessage,
     Meeting,
@@ -971,9 +972,10 @@ def update_source_access_control(
 
 
 def derived_items(session, parent_ids: list[int]) -> list[SourceItem]:
-    """Attachments and action-item tasks of the given items."""
+    """Attachments, forum comments and action-item tasks of the given items."""
     derived_ids = select(Task.id).where(Task.source_item_id.in_(parent_ids)).union(
-        select(EmailAttachment.id).where(EmailAttachment.mail_message_id.in_(parent_ids))
+        select(EmailAttachment.id).where(EmailAttachment.mail_message_id.in_(parent_ids)),
+        select(ForumComment.id).where(ForumComment.post_id.in_(parent_ids)),
     )
     return (
         session.query(SourceItem)

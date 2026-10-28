@@ -247,7 +247,8 @@ SSH_PUBLIC_KEY_FILE = pathlib.Path(os.getenv("SSH_PUBLIC_KEY_FILE", "/run/secret
 ACCESS_CONTROL_RECONCILE_INTERVAL = int(
     os.getenv("ACCESS_CONTROL_RECONCILE_INTERVAL", 30 * 60)
 )
-LESSWRONG_SYNC_INTERVAL = int(os.getenv("LESSWRONG_SYNC_INTERVAL", 60 * 60 * 24))
+# How often beat asks whether a LessWrong sync is due; the sync interval itself is in forum_sync_configs.
+LESSWRONG_SYNC_CHECK_INTERVAL = int(os.getenv("LESSWRONG_SYNC_CHECK_INTERVAL", 60 * 60))
 SCHEDULED_CALL_RUN_INTERVAL = int(os.getenv("SCHEDULED_CALL_RUN_INTERVAL", 60))
 GITHUB_SYNC_INTERVAL = int(os.getenv("GITHUB_SYNC_INTERVAL", 60 * 60))  # 1 hour
 GOOGLE_DRIVE_SYNC_INTERVAL = int(

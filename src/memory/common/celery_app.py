@@ -72,6 +72,8 @@ SYNC_ACCOUNT = f"{EMAIL_ROOT}.sync_account"
 SYNC_ALL_ACCOUNTS = f"{EMAIL_ROOT}.sync_all_accounts"
 SYNC_LESSWRONG = f"{FORUMS_ROOT}.sync_lesswrong"
 SYNC_LESSWRONG_POST = f"{FORUMS_ROOT}.sync_lesswrong_post"
+SYNC_LESSWRONG_COMMENTS = f"{FORUMS_ROOT}.sync_lesswrong_comments"
+SYNC_LESSWRONG_IF_DUE = f"{FORUMS_ROOT}.sync_lesswrong_if_due"
 CLEAN_ALL_COLLECTIONS = f"{MAINTENANCE_ROOT}.clean_all_collections"
 CLEAN_COLLECTION = f"{MAINTENANCE_ROOT}.clean_collection"
 REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
@@ -510,10 +512,10 @@ def build_beat_schedule() -> dict:
             "schedule": crontab(minute="50"),
         },
     }
-    if settings.LESSWRONG_SYNC_INTERVAL > 0:
+    if settings.LESSWRONG_SYNC_CHECK_INTERVAL > 0:
         schedule["sync-lesswrong"] = {
-            "task": SYNC_LESSWRONG,
-            "schedule": settings.LESSWRONG_SYNC_INTERVAL,
+            "task": SYNC_LESSWRONG_IF_DUE,
+            "schedule": settings.LESSWRONG_SYNC_CHECK_INTERVAL,
         }
     return schedule
 

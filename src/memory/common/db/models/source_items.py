@@ -980,6 +980,19 @@ class ForumPost(SourceItem):
     words: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    # `comments` tracks the live count; this is the count when comments were last fetched,
+    # so a difference between the two means there are comments to fetch.
+    synced_comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comments_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    forum_comments: Mapped[list[ForumComment]] = relationship(
+        "ForumComment",
+        back_populates="post",
+        foreign_keys="ForumComment.post_id",
+        cascade="all, delete-orphan",
+    )
 
     __mapper_args__ = {
         "polymorphic_identity": "forum_post",
@@ -1050,6 +1063,83 @@ class ForumPost(SourceItem):
             return max(0.5, 1.0 - abs(karma) / 100)
         # Positive karma: linear scale up to reference, then cap
         return min(2.5, 1.0 + karma / self.karma_reference)
+
+
+class ForumCommentPayload(SourceItemPayload):
+    url: Annotated[str, "URL of the comment"]
+    post_id: Annotated[int, "ID of the forum post the comment is on"]
+    post_title: Annotated[str | None, "Title of the forum post the comment is on"]
+    author: Annotated[str | None, "Author of the comment"]
+    published: Annotated[str | None, "Publication date in ISO format"]
+    karma: Annotated[int | None, "Karma score of the comment"]
+    parent_comment_id: Annotated[str | None, "Forum id of the comment this replies to"]
+
+
+class ForumComment(SourceItem):
+    __tablename__ = "forum_comment"
+
+    default_sensitivity = "public"
+    # Comment karma runs far lower than post karma; roughly the 90th percentile on LW.
+    KARMA_REFERENCE = 20
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    post_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("forum_post.id", ondelete="CASCADE"), nullable=False
+    )
+    comment_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    parent_comment_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(Text)
+    karma: Mapped[int | None] = mapped_column(Integer)
+    votes: Mapped[int | None] = mapped_column(Integer)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    post: Mapped[ForumPost] = relationship(
+        "ForumPost", back_populates="forum_comments", foreign_keys=[post_id]
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "forum_comment",
+    }
+
+    __table_args__ = (Index("forum_comment_post_idx", "post_id"),)
+
+    @property
+    def title(self) -> str | None:
+        return f"Comment by {self.author} on {self.post.title}"
+
+    def as_payload(self) -> ForumCommentPayload:
+        return ForumCommentPayload(
+            **super().as_payload(),
+            url=self.url or "",
+            post_id=self.post_id,
+            post_title=self.post.title,
+            author=self.author,
+            published=(self.posted_at and self.posted_at.isoformat() or None),
+            karma=self.karma,
+            parent_comment_id=self.parent_comment_id,
+        )
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        # A comment is rarely findable without knowing what it is replying to.
+        return chunk_mixed(f"{self.title}\n\n{self.content or ''}", [])
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["forum"]
+
+    def get_data_source(self) -> Any:
+        """Comments are visible exactly where their post is."""
+        return self.post
+
+    @property
+    def popularity(self) -> float:
+        karma = self.karma or 0
+        if karma <= 0:
+            return max(0.5, 1.0 - abs(karma) / 100)
+        return min(2.5, 1.0 + karma / self.KARMA_REFERENCE)
 
 
 class MiscDocPayload(SourceItemPayload):

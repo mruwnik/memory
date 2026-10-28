@@ -511,7 +511,31 @@ export interface CeleryTaskResponse {
   status: string
 }
 
-/** Failing sources per Sources tab, keyed by the tab's value. */
+export interface ForumSettings {
+  active: boolean
+  check_interval: number
+  days_back: number
+  max_items: number
+  min_karma: number
+  af: boolean
+  comments_enabled: boolean
+  min_comment_karma: number
+  comment_recheck_divisor: number
+  comment_recheck_max_days: number
+  comment_max_age_days: number
+  max_comment_fetches: number
+}
+
+export interface ForumSummary {
+  posts: number
+  comments: number
+  newest_post: { title: string | null; url: string | null; published_at: string | null } | null
+  last_sync_at: string | null
+  last_sync_result: Record<string, unknown> | null
+  sync_error: string | null
+  settings: ForumSettings
+}
+
 /** What each Sources tab lists, and how many of those are failing to sync, keyed by tab value. */
 export type SourceTabCounts = Partial<Record<string, { count: number; failing: number }>>
 
@@ -522,6 +546,24 @@ export const useSources = () => {
     const params = userId !== undefined ? `?user_id=${userId}` : ''
     const response = await apiCall(`/source-tabs${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch source counts')
+    return response.json()
+  }, [apiCall])
+
+  // === Forums ===
+
+  const getForumSummary = useCallback(async (): Promise<ForumSummary> => {
+    const response = await apiCall('/forums/summary')
+    if (!response.ok) throw await apiError(response, 'Failed to fetch forum summary')
+    return response.json()
+  }, [apiCall])
+
+  const updateForumSettings = useCallback(async (settings: ForumSettings): Promise<ForumSettings> => {
+    const response = await apiCall('/forums/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    })
+    if (!response.ok) throw await apiError(response, 'Failed to save forum settings')
     return response.json()
   }, [apiCall])
 
@@ -990,6 +1032,8 @@ export const useSources = () => {
 
   return {
     getSourceTabCounts,
+    getForumSummary,
+    updateForumSettings,
     // Email
     listEmailAccounts,
     createEmailAccount,

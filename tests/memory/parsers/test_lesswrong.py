@@ -15,6 +15,9 @@ from memory.parsers.lesswrong import (
     format_post,
     fetch_lesswrong,
     fetch_lesswrong_posts,
+    fetch_post_comments,
+    fetch_comment_counts,
+    post_guid_from_url,
 )
 
 
@@ -556,3 +559,123 @@ def test_lesswrong_post_type():
 
     # Should not raise any type errors
     assert post["title"] == "Test"
+
+
+def graphql_response(data):
+    response = Mock()
+    response.json.return_value = {"data": data}
+    return response
+
+
+def raw_comment(comment_id, score, html="<p>Hello there</p>", parent=None, user="Alice"):
+    return {
+        "_id": comment_id,
+        "postId": "post1",
+        "parentCommentId": parent,
+        "postedAt": "2026-10-01T12:00:00.000Z",
+        "baseScore": score,
+        "voteCount": 3,
+        "pageUrl": f"https://www.lesswrong.com/posts/post1/slug?commentId={comment_id}",
+        "htmlBody": html,
+        "user": user and {"displayName": user},
+    }
+
+
+@patch("memory.parsers.lesswrong.validate_public_url")
+@patch("memory.parsers.lesswrong.requests.post")
+def test_fetch_post_comments_formats_and_filters_by_karma(mock_post, _validate):
+    mock_post.return_value = graphql_response(
+        {
+            "comments": {
+                "results": [
+                    raw_comment("c1", 10),
+                    raw_comment("c2", 2),
+                    raw_comment("c3", 7, parent="c1", user=None),
+                    raw_comment("c4", 9, html=""),
+                ]
+            }
+        }
+    )
+
+    comments, live_ids = fetch_post_comments("post1", min_karma=5)
+
+    assert live_ids == {"c1", "c2", "c3"}
+    assert comments == [
+        {
+            "comment_id": "c1",
+            "parent_comment_id": None,
+            "url": "https://www.lesswrong.com/posts/post1/slug?commentId=c1",
+            "author": "Alice",
+            "content": "Hello there",
+            "karma": 10,
+            "votes": 3,
+            "posted_at": "2026-10-01T12:00:00+00:00",
+        },
+        {
+            "comment_id": "c3",
+            "parent_comment_id": "c1",
+            "url": "https://www.lesswrong.com/posts/post1/slug?commentId=c3",
+            "author": "anonymous",
+            "content": "Hello there",
+            "karma": 7,
+            "votes": 3,
+            "posted_at": "2026-10-01T12:00:00+00:00",
+        },
+    ]
+    assert 'postId: "post1"' in mock_post.call_args.kwargs["json"]["query"]
+
+
+@patch("memory.parsers.lesswrong.validate_public_url")
+@patch("memory.parsers.lesswrong.requests.post")
+def test_fetch_comment_counts_batches_posts_into_one_query(mock_post, _validate):
+    mock_post.return_value = graphql_response(
+        {
+            "p0": {"result": {"_id": "a", "commentCount": 4}},
+            "p1": {"result": None},
+            "p2": {"result": {"_id": "c", "commentCount": None}},
+        }
+    )
+
+    assert fetch_comment_counts(["a", "b", "c"]) == {"a": 4, "c": 0}
+    assert mock_post.call_count == 1
+
+
+@pytest.mark.parametrize("bad_id", ['a"b', "a b", "", "a}{"])
+@patch("memory.parsers.lesswrong.requests.post")
+def test_lesswrong_ids_are_validated_before_querying(mock_post, bad_id):
+    with pytest.raises(ValueError):
+        fetch_post_comments(bad_id)
+    with pytest.raises(ValueError):
+        fetch_comment_counts([bad_id])
+    mock_post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://www.lesswrong.com/posts/KrJfoZzpSDpnrv9va/draft-report", "KrJfoZzpSDpnrv9va"),
+        ("https://www.alignmentforum.org/posts/abc123/x", "abc123"),
+        ("https://www.lesswrong.com/s/sequence", None),
+        ("", None),
+    ],
+)
+def test_post_guid_from_url(url, expected):
+    assert post_guid_from_url(url) == expected
+
+
+@patch("memory.parsers.lesswrong.MAX_COMMENTS_PER_POST", 2)
+@patch("memory.parsers.lesswrong.validate_public_url")
+@patch("memory.parsers.lesswrong.requests.post")
+def test_fetch_post_comments_reports_a_truncated_thread(mock_post, _validate):
+    mock_post.return_value = graphql_response(
+        {"comments": {"results": [raw_comment("c1", 1), raw_comment("c2", 1)]}}
+    )
+    assert fetch_post_comments("post1")[1] is None
+
+
+@patch("memory.parsers.lesswrong.validate_public_url")
+@patch("memory.parsers.lesswrong.requests.post")
+def test_graphql_errors_without_data_raise(mock_post, _validate):
+    mock_post.return_value = Mock(json=Mock(return_value={"data": None, "errors": ["bad"]}))
+    with pytest.raises(ValueError, match="no data"):
+        fetch_comment_counts(["a"])
