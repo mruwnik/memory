@@ -34,6 +34,9 @@ class RunStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+# The longest an agent may keep its runs; also clamps older snapshots in the purge.
+MAX_RETENTION_DAYS = 3650
+
 TERMINAL_STATUSES = frozenset(
     {RunStatus.DONE, RunStatus.FAILED, RunStatus.BUDGET_EXCEEDED, RunStatus.CANCELLED}
 )
@@ -94,7 +97,14 @@ class AgentRun(Base):
     definition_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_definitions.id", ondelete="SET NULL")
     )
+    # The prebuilt or system agent's slug. With definition_id also None, an inline
+    # spec, which only the snapshot in `spec` keeps.
+    agent: Mapped[str | None] = mapped_column(Text)
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # Where the run executes: "server" (the agents worker).
+    executor: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="server", server_default="server"
+    )
     input: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20),
@@ -147,7 +157,6 @@ class AgentRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    steps_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(
@@ -167,6 +176,8 @@ class AgentRun(Base):
         ),
         Index("agent_runs_api_key_created_idx", "api_key_id", "created_at"),
         Index("agent_runs_provider_key_created_idx", "provider_key_id", "created_at"),
+        Index("agent_runs_parent_idx", "parent_run_id"),
+        Index("agent_runs_finished_idx", "finished_at"),
         Index(
             "agent_runs_definition_dedupe_key",
             "definition_id",
@@ -181,6 +192,10 @@ class AgentRun(Base):
             "id": self.id,
             "user_id": self.user_id,
             "definition_id": self.definition_id,
+            "agent": self.agent,
+            "executor": self.executor,
+            "parent_run_id": self.parent_run_id,
+            "depth": self.depth,
             "input": self.input,
             "status": self.status,
             "result": self.result,
@@ -197,7 +212,6 @@ class AgentRun(Base):
             "created_at": iso(self.created_at),
             "started_at": iso(self.started_at),
             "finished_at": iso(self.finished_at),
-            "steps_purged_at": iso(self.steps_purged_at),
         }
         return data | ({"spec": self.spec} if include_spec else {})
 

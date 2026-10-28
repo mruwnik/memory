@@ -1,9 +1,17 @@
 # pyright: reportFunctionMemberAccess=false
+from datetime import datetime
+
 import pytest
 
-from memory.api.MCP.servers import agent
+from memory.api.MCP.servers import agent, scheduler
 from memory.common import settings
-from memory.common.db.models import AgentDefinition, APIKey, ScheduledTask
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentRun,
+    APIKey,
+    ScheduledTask,
+    TaskExecution,
+)
 from tests.conftest import mcp_auth_context
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
@@ -209,3 +217,33 @@ async def test_a_schedule_remembers_the_key_that_made_it(
         )
 
     assert created["data"]["api_key_id"] == key.id
+
+
+@pytest.mark.asyncio
+async def test_executions_mark_runs_that_retention_deleted(
+    db_session, regular_user, user_session, fake_providers
+):
+    d = definition(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        task = await agent.schedule.fn(definition_id=d.id, input="x", cron_expression="0 9 * * *")
+    kept = AgentRun(
+        user_id=regular_user.id, spec=SPEC, input="x", max_cost_usd=1, trigger_kind="cron"
+    )
+    db_session.add(kept)
+    db_session.commit()
+    for run_id in (kept.id, "purged-run"):
+        db_session.add(
+            TaskExecution(
+                task_id=task["id"], scheduled_time=datetime.now(), status="completed",
+                data={"run_id": run_id},
+            )
+        )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        listed = await scheduler.executions.fn(task_id=task["id"])
+
+    assert {e["data"]["run_id"]: e["run_expired"] for e in listed} == {
+        kept.id: False,
+        "purged-run": True,
+    }

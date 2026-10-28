@@ -71,7 +71,7 @@ export default function AgentRuns() {
   }, [listDefinitions])
 
   const runTitle = (r: AgentRun) => r.definition_id === null
-    ? 'Ad-hoc run'
+    ? r.agent ?? 'Ad-hoc run'
     : agentNames.get(r.definition_id) ?? `Agent ${r.definition_id}`
 
   return (

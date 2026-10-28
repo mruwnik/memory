@@ -88,7 +88,7 @@ UPDATE_METADATA_FOR_SOURCE_ITEMS = (
 UPDATE_METADATA_FOR_ITEM = f"{MAINTENANCE_ROOT}.update_metadata_for_item"
 CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
 SWEEP_AGENT_RUNS = f"{MAINTENANCE_ROOT}.sweep_agent_runs"
-PURGE_AGENT_RUN_STEPS = f"{MAINTENANCE_ROOT}.purge_agent_run_steps"
+PURGE_AGENT_RUNS = f"{MAINTENANCE_ROOT}.purge_agent_runs"
 MATCH_INGEST_TRIGGERS = f"{MAINTENANCE_ROOT}.match_ingest_triggers"
 SWEEP_TRIGGER_BUFFERS = f"{MAINTENANCE_ROOT}.sweep_trigger_buffers"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
@@ -464,8 +464,8 @@ def build_beat_schedule() -> dict:
         },
         "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
         "sweep-trigger-buffers": {"task": SWEEP_TRIGGER_BUFFERS, "schedule": 60},
-        "purge-agent-run-steps": {
-            "task": PURGE_AGENT_RUN_STEPS,
+        "purge-agent-runs": {
+            "task": PURGE_AGENT_RUNS,
             "schedule": crontab(hour="4", minute="40"),
         },
         "cleanup-stuck-meetings": {

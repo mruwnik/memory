@@ -8,7 +8,7 @@ from celery.backends.database.models import Task as CeleryTaskMeta
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import CursorResult, and_, delete, func, inspect as sa_inspect, or_, update
 from sqlalchemy import select
-from sqlalchemy.orm import contains_eager, selectinload, with_polymorphic
+from sqlalchemy.orm import aliased, contains_eager, selectinload, with_polymorphic
 
 from memory.common import (
     collections,
@@ -20,7 +20,7 @@ from memory.common import (
     summary_batch,
 )
 from memory.agents import triggers
-from memory.common.db.models.agents import RunStatus
+from memory.common.db.models.agents import MAX_RETENTION_DAYS, RunStatus
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
 from memory.common.celery_app import (
@@ -28,7 +28,7 @@ from memory.common.celery_app import (
     CLEAN_ALL_COLLECTIONS,
     CLEAN_COLLECTION,
     CLEANUP_EXPIRED_SESSIONS,
-    PURGE_AGENT_RUN_STEPS,
+    PURGE_AGENT_RUNS,
     SWEEP_AGENT_RUNS,
     MATCH_INGEST_TRIGGERS,
     SWEEP_TRIGGER_BUFFERS,
@@ -55,7 +55,6 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
     AgentRun,
-    AgentRunStep,
     Chunk,
     CodingProject,
     JobStatus,
@@ -1376,19 +1375,28 @@ def sweep_agent_runs() -> dict[str, int]:
     return {"stale": len(stale), "orphaned": len(orphaned)}
 
 
-@app.task(name=PURGE_AGENT_RUN_STEPS)
-def purge_agent_run_steps() -> dict[str, int]:
-    """Delete transcripts past retention, and old trigger match claims.
-
-    Run rows (result, usage, cost) stay forever.
-    """
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=settings.AGENT_STEP_RETENTION_DAYS)
-    # Re-checked inside each statement, so a run starred mid-purge keeps its transcript.
+@app.task(name=PURGE_AGENT_RUNS)
+def purge_agent_runs() -> dict[str, int]:
+    """Delete runs (with their transcripts) past their agent's retention_days, else
+    AGENT_RUN_RETENTION_DAYS, unless they or a run that started them are starred;
+    and old trigger match claims."""
+    retention = func.least(
+        func.coalesce(
+            AgentRun.spec["retention_days"].as_integer(), settings.AGENT_RUN_RETENTION_DAYS
+        ),
+        MAX_RETENTION_DAYS,
+    )
+    starred = select(AgentRun.id).where(AgentRun.starred).cte("starred", recursive=True)
+    parent = aliased(AgentRun)
+    starred = starred.union(
+        select(parent.id).where(parent.parent_run_id == starred.c.id)
+    )
+    # Re-checked inside each statement, so a run starred mid-purge is kept.
     purgeable = (
-        AgentRun.finished_at < cutoff,
-        AgentRun.starred.is_(False),
-        AgentRun.steps_purged_at.is_(None),
+        # No retention is shorter: this lets the finished_at index narrow the scan.
+        AgentRun.finished_at < func.now() - timedelta(days=1),
+        AgentRun.finished_at + func.make_interval(0, 0, 0, retention) < func.now(),
+        AgentRun.id.not_in(select(starred.c.id)),
     )
     purged = 0
     while True:
@@ -1397,16 +1405,12 @@ def purge_agent_run_steps() -> dict[str, int]:
                 select(AgentRun.id).where(*purgeable).limit(PURGE_BATCH_SIZE).scalar_subquery()
             )
             ids = db.execute(
-                update(AgentRun)
-                .where(AgentRun.id.in_(batch), *purgeable)
-                .values(steps_purged_at=now)
-                .returning(AgentRun.id)
+                delete(AgentRun).where(AgentRun.id.in_(batch), *purgeable).returning(AgentRun.id)
             ).scalars().all()
-            if not ids:
-                break
-            db.execute(delete(AgentRunStep).where(AgentRunStep.run_id.in_(ids)))
+        if not ids:
+            break
         purged += len(ids)
-    logger.info("purged transcripts of %d agent runs", purged)
+    logger.info("purged %d agent runs", purged)
     with make_session() as db:
         claims = triggers.purge_matches(db, triggers.MATCH_RETENTION)
     return {"purged_runs": purged, "purged_trigger_matches": claims}

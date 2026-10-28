@@ -63,6 +63,17 @@ def spec(**overrides) -> AgentSpec:
     return AgentSpec.model_validate(BASE | overrides)
 
 
+@pytest.mark.parametrize("days", [1, 3650])
+def test_retention_days_within_ten_years_is_accepted(days):
+    assert AgentSpec.model_validate(BASE | {"retention_days": days}).retention_days == days
+
+
+@pytest.mark.parametrize("days", [0, 3651])
+def test_retention_days_outside_ten_years_is_refused(days):
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(BASE | {"retention_days": days})
+
+
 def test_defaults_are_valid_on_the_default_model():
     assert spec_errors(AgentSpec(system_prompt="hi")) == []
 

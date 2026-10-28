@@ -14,7 +14,7 @@ vi.mock('@/hooks/useAgents', async (orig) => ({
 const run = (o: Partial<AgentRun>): AgentRun => ({
   id: 'r1', definition_id: null, input: 'New report: - [report #5] summary', status: 'done', result: null, error: null,
   usage: {}, cost_usd: '0.000228', max_cost_usd: '1', num_turns: 1, trigger_kind: 'manual', starred: false,
-  model: 'anthropic/claude-haiku-5-5', created_at: null, started_at: null, finished_at: null, steps_purged_at: null,
+  model: 'anthropic/claude-haiku-5-5', created_at: null, started_at: null, finished_at: null, agent: null, executor: 'server', parent_run_id: null, depth: 0,
   ...o,
 })
 

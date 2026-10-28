@@ -29,6 +29,11 @@ export interface AgentSpec {
 export interface AgentRun {
   id: string
   definition_id: number | null
+  // A prebuilt or system agent's slug; null with definition_id for an inline spec.
+  agent: string | null
+  executor: string
+  parent_run_id: string | null
+  depth: number
   input: string
   status: RunStatus
   result: Record<string, unknown> | null
@@ -43,7 +48,6 @@ export interface AgentRun {
   created_at: string | null
   started_at: string | null
   finished_at: string | null
-  steps_purged_at: string | null
   spec?: AgentSpec
 }
 

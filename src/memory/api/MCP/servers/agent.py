@@ -533,7 +533,7 @@ async def cancel(run_id: str) -> dict:
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def star(run_id: str, starred: bool) -> dict:
-    """Star a run to keep its transcript past the retention window."""
+    """Star a run to keep it past its retention (its agent's retention_days, else AGENT_RUN_RETENTION_DAYS)."""
     user_id, is_admin = caller()
     with make_session() as db:
         found = readable_run(db, run_id, user_id, is_admin)

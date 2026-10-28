@@ -20,7 +20,7 @@ const run = (o = {}) => ({
   id: 'r1', definition_id: null, input: 'do it', status: 'running', result: null, error: null,
   usage: { input_tokens: 100, output_tokens: 10 }, cost_usd: '0.000120', max_cost_usd: '1.000000',
   num_turns: 1, trigger_kind: 'manual', starred: false, model: 'anthropic/claude-sonnet-5-5',
-  created_at: null, started_at: null, finished_at: null, steps_purged_at: null, ...o,
+  created_at: null, started_at: null, finished_at: null, agent: null, executor: 'server', parent_run_id: null, depth: 0, ...o,
 })
 
 const view = (path = '/ui/agents/runs/r1') => renderWithRouter(
@@ -105,13 +105,6 @@ describe('RunView', () => {
     await waitFor(() => expect(screen.getByText(/502/)).toBeInTheDocument())
     vi.advanceTimersByTime(4100)
     await waitFor(() => expect(screen.getByText('recovered')).toBeInTheDocument())
-  })
-
-  it('says when the transcript was deleted by retention', async () => {
-    waitRun.mockResolvedValueOnce({ run: run({ status: 'done', steps_purged_at: '2026-01-01T00:00:00Z', result: { text: 'kept' } }), steps: [] })
-    view()
-    await waitFor(() => expect(screen.getByText(/transcript deleted after 90 days/i)).toBeInTheDocument())
-    expect(screen.getByText('kept')).toBeInTheDocument()
   })
 
   it('names the agent and shows what was asked, when and how', async () => {

@@ -326,7 +326,8 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `AGENT_TOOL_RESULT_MAX_CHARS`     | `50000`              | Tool results longer than this are truncated                    |
 | `AGENT_CONTEXT_TRIM_AT_TOKENS`    | `100000`             | Context size at which old tool results are stubbed             |
 | `AGENT_CONTEXT_TRIM_TO_TOKENS`    | `60000`              | Context size trimming aims for                                 |
-| `AGENT_STEP_RETENTION_DAYS`       | `90`                 | Days before unstarred run transcripts are deleted              |
+| `AGENT_RUN_RETENTION_DAYS`        | `14`                 | Days a finished, unstarred run is kept when its agent sets no `retention_days` |
+| `AGENT_MAX_SPAWN_DEPTH`           | `2`                  | How deep runs may start runs (`agent_run` in an agent's tools); top-level runs are depth 0 |
 | `AGENT_MAX_RUNS_PER_HOUR`         | `60`                 | Most runs one agent definition may start per hour; definitions can only lower it |
 | `AGENT_MAX_TRIGGERS_PER_USER`     | `20`                 | Most ingest triggers a user may have enabled at once           |
 | `AGENT_WORKER_CONCURRENCY`        | `2`                  | Concurrent agent runs in `agents-worker` (~270MB each; raise its memory limit with it) |

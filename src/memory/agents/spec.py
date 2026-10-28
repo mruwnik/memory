@@ -17,6 +17,7 @@ from memory.agents.builtins import search_backend
 from memory.agents.call import SUBMIT_RESULT
 from memory.agents.caps import per_run_cap
 from memory.common import settings
+from memory.common.db.models.agents import MAX_RETENTION_DAYS
 from memory.common.llms.neutral import (
     BUILTIN_TOOLS,
     MTOK,
@@ -92,6 +93,8 @@ class AgentSpec(BaseModel):
     timeout_sec: int = Field(default=600, ge=1)
     # A key id of yours, or None for your default key for the model's provider.
     provider_key: Annotated[int, Field(ge=1)] | None = None
+    # Days a finished, unstarred run is kept; None: AGENT_RUN_RETENTION_DAYS.
+    retention_days: int | None = Field(default=None, ge=1, le=MAX_RETENTION_DAYS)
 
 
 def is_denied(tool: str) -> bool:

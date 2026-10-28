@@ -137,9 +137,9 @@ function RunView({ runId }: { runId: string }) {
   return (
     <Page
       back={back}
-      title={<>{agent ?? 'Ad-hoc run'} <StatusBadge status={run.status} /></>}
+      title={<>{agent ?? run.agent ?? 'Ad-hoc run'} <StatusBadge status={run.status} /></>}
       actions={<>
-        <Button aria-pressed={run.starred} onClick={() => act(async () => setRun(await starRun(run.id, !run.starred)))}>
+        <Button aria-pressed={run.starred} title="Starred runs are kept past retention" onClick={() => act(async () => setRun(await starRun(run.id, !run.starred)))}>
           <span aria-hidden="true">{run.starred ? '★' : '☆'}</span> Star
         </Button>
         {live && (
@@ -169,8 +169,7 @@ function RunView({ runId }: { runId: string }) {
         {typeof run.result.text === 'string' ? run.result.text : JSON.stringify(run.result, null, 2)}
       </Notice>
     )}
-    <Section title="Transcript"
-      description={run.steps_purged_at && 'Transcript deleted after 90 days (star a run to keep its transcript).'}>
+    <Section title="Transcript">
       {steps.length > 0 && (
         <List>
           {steps.map(step => (

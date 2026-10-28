@@ -584,7 +584,9 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
             meta={[
               formatDuration(ex.started_at, ex.finished_at),
               sessionId && <span className="font-mono" title={sessionId}>session: {sessionId.length > 20 ? `${sessionId.slice(0, 20)}...` : sessionId}</span>,
-              runId && <Link to={`/ui/agents/runs/${runId}`} className="text-primary">view run</Link>,
+              runId && (ex.run_expired
+                ? <span className="text-slate-500">run expired</span>
+                : <Link to={`/ui/agents/runs/${runId}`} className="text-primary">view run</Link>),
             ]}
           >
             {ex.error_message && <RowError>{ex.error_message}</RowError>}

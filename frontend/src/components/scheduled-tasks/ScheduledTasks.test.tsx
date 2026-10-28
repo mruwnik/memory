@@ -479,6 +479,23 @@ describe('ScheduledTasks formatting branches', () => {
     expect(screen.getByText((_t, el) => el?.textContent === 'session: sess-abcdefghijklmno...')).toBeInTheDocument()
     expect(screen.getByText('2.5s')).toBeInTheDocument()
   })
+
+  it('links agent runs that still exist and marks expired ones', async () => {
+    listTasks.mockResolvedValue([makeTask({ id: 'runs', topic: 'agent hist', task_type: 'agent_run' })])
+    const exec = (id: string, run_id: string, run_expired: boolean): TaskExecution => ({
+      id, task_id: 'runs', scheduled_time: new Date().toISOString(), started_at: null, finished_at: null,
+      status: 'completed', response: null, error_message: null, celery_task_id: null,
+      data: { run_id }, run_expired,
+    })
+    getExecutions.mockResolvedValue([exec('e1', 'r-live', false), exec('e2', 'r-gone', true)])
+    const user = userEvent.setup()
+    renderWithRouter(<ScheduledTasks />)
+    await waitFor(() => expect(screen.getByText('agent hist')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    await waitFor(() => expect(screen.getByRole('link', { name: 'view run' })).toHaveAttribute('href', '/ui/agents/runs/r-live'))
+    expect(screen.getAllByRole('link', { name: 'view run' })).toHaveLength(1)
+    expect(screen.getByText('run expired')).toBeInTheDocument()
+  })
 })
 
 describe('ScheduledTasks in the user timezone', () => {

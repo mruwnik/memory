@@ -7,7 +7,7 @@ from typing import Any
 from croniter import croniter
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from sqlalchemy import nullslast
+from sqlalchemy import nullslast, select
 from sqlalchemy.exc import IntegrityError
 
 from memory.api.auth import token_api_key
@@ -19,7 +19,7 @@ from memory.common import settings
 from memory.common.claude_spawn import check_dev_channels_server
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
-from memory.common.db.models import ScheduledTask, SSHKey, TaskExecution, User
+from memory.common.db.models import AgentRun, ScheduledTask, SSHKey, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import CLAUDE_CONTAINERS
@@ -594,5 +594,14 @@ async def executions(
             .limit(limit)
             .all()
         )
-
-        return [e.serialize() for e in results]
+        # An agent run's execution outlives the run, which retention deletes.
+        run_ids = {e.id: (e.data or {}).get("run_id") for e in results}
+        kept = set(
+            session.scalars(
+                select(AgentRun.id).where(AgentRun.id.in_([r for r in run_ids.values() if r]))
+            )
+        )
+        return [
+            e.serialize() | ({"run_expired": run_ids[e.id] not in kept} if run_ids[e.id] else {})
+            for e in results
+        ]

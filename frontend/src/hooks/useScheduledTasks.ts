@@ -28,6 +28,8 @@ export interface TaskExecution {
   error_message: string | null
   celery_task_id: string | null
   data: Record<string, unknown> | null
+  // Set for agent runs: retention deleted the run this execution started.
+  run_expired?: boolean
 }
 
 export interface UpdateTaskBody {
