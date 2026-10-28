@@ -10,10 +10,8 @@ Provides endpoints for:
 import fcntl
 import json
 import logging
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -103,30 +101,6 @@ class ToolUsageResponse(BaseModel):
     to_time: str
     session_count: int
     tools: list[ToolUsageStats]
-
-
-def iter_transcript_events(file: Path) -> Iterator[dict[str, Any]]:
-    """Stream parsed JSONL events from a transcript file, skipping blank lines.
-
-    Streaming keeps memory flat: a long Claude Code session can have hundreds
-    of megabytes of JSONL. Malformed lines are skipped and counted in one
-    warning at the end, so corruption doesn't silently shorten the result.
-    """
-    bad_lines = 0
-    with open(file) as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                bad_lines += 1
-    if bad_lines:
-        logger.warning(
-            "transcript %s: %d unparseable JSON line(s) skipped",
-            file,
-            bad_lines,
-        )
 
 
 @dataclass
@@ -441,186 +415,12 @@ async def ingest_session_events_batch(
     )
 
 
-def extract_tool_usage_from_transcript(
-    transcript_path: str,
-    from_time: datetime | None = None,
-    to_time: datetime | None = None,
-) -> dict[str, dict]:
-    """Extract tool usage from a session transcript.
-
-    Returns dict mapping tool_name -> {
-        call_count, input_tokens, output_tokens, ...,
-        per_call_totals: list[int]  # total tokens per individual call
-    }
-
-    Token attribution is the same as ``extract_tool_usage_telemetry``
-    (divmod with remainder distribution). Previously this path used
-    plain integer division so per-tool totals silently rounded down,
-    producing different numbers than the telemetry path for the same
-    underlying message.
-    """
-    transcript_file = settings.SESSIONS_STORAGE_DIR / transcript_path
-    if not transcript_file.exists():
-        return {}
-
-    tool_stats: dict[str, dict] = {}
-
-    # Stream events line-by-line: this function doesn't need random
-    # access, so materialising the whole transcript was wasted RAM
-    # on long-lived sessions.
-    for event in iter_transcript_events(transcript_file):
-        # Only process assistant messages with tool_use
-        if event.get("type") != "assistant":
-            continue
-
-        # Filter by timestamp if provided. Unparseable timestamps fall
-        # through to inclusion (matches prior behaviour: don't drop
-        # events because of a flaky clock).
-        if from_time or to_time:
-            event_time = parse_iso_datetime(event.get("timestamp"))
-            if event_time is not None:
-                if from_time and event_time < from_time:
-                    continue
-                if to_time and event_time > to_time:
-                    continue
-
-        for call in extract_tool_calls_from_message(event.get("message") or {}):
-            stats = tool_stats.setdefault(
-                call.tool_name,
-                {
-                    "call_count": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_read_tokens": 0,
-                    "cache_creation_tokens": 0,
-                    "per_call_totals": [],
-                },
-            )
-            stats["call_count"] += 1
-            stats["input_tokens"] += call.input_tokens
-            stats["output_tokens"] += call.output_tokens
-            stats["cache_read_tokens"] += call.cache_read_tokens
-            stats["cache_creation_tokens"] += call.cache_creation_tokens
-            stats["per_call_totals"].append(call.total_tokens)
-
-    return tool_stats
+def attr_tokens(key: str):
+    return func.coalesce(func.sum(TelemetryEvent.attributes[key].as_integer()), 0)
 
 
-def calculate_percentile(sorted_values: list[int], percentile: float) -> float:
-    """Calculate percentile from sorted values using linear interpolation."""
-    if not sorted_values:
-        return 0.0
-    n = len(sorted_values)
-    if n == 1:
-        return float(sorted_values[0])
-
-    # Use linear interpolation (same as numpy's default)
-    k = (n - 1) * percentile / 100
-    f = int(k)
-    c = f + 1 if f + 1 < n else f
-    return sorted_values[f] + (k - f) * (sorted_values[c] - sorted_values[f])
-
-
-def compute_call_stats(per_call_totals: list[int]) -> ToolCallStats | None:
-    """Compute per-call statistics from a list of token totals."""
-    if not per_call_totals:
-        return None
-
-    sorted_vals = sorted(per_call_totals)
-    return ToolCallStats(
-        median=calculate_percentile(sorted_vals, 50),
-        p75=calculate_percentile(sorted_vals, 75),
-        p90=calculate_percentile(sorted_vals, 90),
-        p99=calculate_percentile(sorted_vals, 99),
-        min=sorted_vals[0],
-        max=sorted_vals[-1],
-    )
-
-
-def get_tool_usage_stats_from_transcripts(
-    from_time: datetime,
-    to_time: datetime,
-    resolved_user_id: int | None,
-    db: DBSession,
-) -> ToolUsageResponse:
-    """
-    Fallback: Get tool usage by parsing transcript files.
-
-    Used during the transition period before telemetry backfill is complete.
-    """
-    from sqlalchemy import or_
-
-    # Get sessions that overlap with the time range
-    query = db.query(Session).filter(
-        Session.started_at <= to_time,
-        or_(
-            Session.ended_at.is_(None),
-            Session.ended_at >= from_time,
-        ),
-    )
-
-    if resolved_user_id is not None:
-        query = query.filter(Session.user_id == resolved_user_id)
-
-    sessions = query.all()
-
-    # Aggregate tool usage across all sessions
-    aggregated: dict[str, dict] = {}
-
-    for session in sessions:
-        if not session.transcript_path:
-            continue
-
-        session_stats = extract_tool_usage_from_transcript(
-            session.transcript_path, from_time, to_time
-        )
-
-        for tool_name, stats in session_stats.items():
-            if tool_name not in aggregated:
-                aggregated[tool_name] = {
-                    "call_count": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_read_tokens": 0,
-                    "cache_creation_tokens": 0,
-                    "per_call_totals": [],
-                }
-
-            aggregated[tool_name]["call_count"] += stats["call_count"]
-            aggregated[tool_name]["input_tokens"] += stats["input_tokens"]
-            aggregated[tool_name]["output_tokens"] += stats["output_tokens"]
-            aggregated[tool_name]["cache_read_tokens"] += stats["cache_read_tokens"]
-            aggregated[tool_name]["cache_creation_tokens"] += stats["cache_creation_tokens"]
-            aggregated[tool_name]["per_call_totals"].extend(stats.get("per_call_totals", []))
-
-    # Convert to response format
-    tools = [
-        ToolUsageStats(
-            tool_name=name,
-            call_count=stats["call_count"],
-            input_tokens=stats["input_tokens"],
-            output_tokens=stats["output_tokens"],
-            cache_read_tokens=stats["cache_read_tokens"],
-            cache_creation_tokens=stats["cache_creation_tokens"],
-            total_tokens=(
-                stats["input_tokens"]
-                + stats["output_tokens"]
-                + stats["cache_read_tokens"]
-                + stats["cache_creation_tokens"]
-            ),
-            per_call=compute_call_stats(stats["per_call_totals"]),
-        )
-        for name, stats in aggregated.items()
-    ]
-
-    tools.sort(key=lambda t: t.total_tokens, reverse=True)
-
-    return ToolUsageResponse(
-        from_time=from_time.isoformat(),
-        to_time=to_time.isoformat(),
-        session_count=len(sessions),
-        tools=tools,
-    )
+def per_call_percentile(fraction: float):
+    return func.percentile_cont(fraction).within_group(TelemetryEvent.value)
 
 
 @router.get("/stats/tool-usage", response_model=ToolUsageResponse)
@@ -632,99 +432,66 @@ def get_tool_usage_stats(
     db: DBSession = Depends(get_session),
 ) -> ToolUsageResponse:
     """
-    Get aggregated token usage statistics by tool.
-
-    Queries the telemetry_events table for tool.token.usage events.
+    Get aggregated token usage statistics by tool, from tool.token.usage telemetry events.
 
     Admins (users with '*' or 'admin' scope) can:
     - Omit user_id to see tool usage across all users
     - Specify user_id to filter to a specific user's sessions
     """
     resolved_user_id = resolve_user_filter(user_id, user, db)
+    to_time = to_time or datetime.now(timezone.utc)
+    from_time = from_time or to_time - timedelta(days=7)
 
-    # Default to last 7 days
-    if to_time is None:
-        to_time = datetime.now(timezone.utc)
-    if from_time is None:
-        from_time = to_time - timedelta(days=7)
-
-    # Query tool.token.usage events (one row per tool call)
-    # value = total tokens, attributes has breakdown
-    query = db.query(TelemetryEvent).filter(
+    filters = [
         TelemetryEvent.name == "tool.token.usage",
         TelemetryEvent.timestamp >= from_time,
         TelemetryEvent.timestamp <= to_time,
-    )
-
-    # Apply user filter
-    if resolved_user_id is not None:
-        query = query.filter(TelemetryEvent.user_id == resolved_user_id)
-
-    events = query.all()
-
-    # Aggregate by tool
-    aggregated: dict[str, dict] = {}
-    for event in events:
-        tool_name = event.tool_name or "unknown"
-        if tool_name not in aggregated:
-            aggregated[tool_name] = {
-                "call_count": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cache_read_tokens": 0,
-                "cache_creation_tokens": 0,
-                "per_call_totals": [],
-            }
-
-        attrs = event.attributes or {}
-        aggregated[tool_name]["call_count"] += 1
-        aggregated[tool_name]["input_tokens"] += attrs.get("input_tokens", 0)
-        aggregated[tool_name]["output_tokens"] += attrs.get("output_tokens", 0)
-        aggregated[tool_name]["cache_read_tokens"] += attrs.get("cache_read_input_tokens", 0)
-        aggregated[tool_name]["cache_creation_tokens"] += attrs.get("cache_creation_input_tokens", 0)
-        aggregated[tool_name]["per_call_totals"].append(int(event.value or 0))
-
-    # Get session count for the time range
-    session_count_query = db.query(func.count(func.distinct(TelemetryEvent.session_id))).filter(
-        TelemetryEvent.name == "tool.token.usage",
-        TelemetryEvent.timestamp >= from_time,
-        TelemetryEvent.timestamp <= to_time,
-    )
-    if resolved_user_id is not None:
-        session_count_query = session_count_query.filter(TelemetryEvent.user_id == resolved_user_id)
-    session_count = session_count_query.scalar() or 0
-
-    # If no tool.token.usage events yet, fall back to parsing transcripts
-    # This handles the transition period before backfill
-    if not aggregated:
-        return get_tool_usage_stats_from_transcripts(from_time, to_time, resolved_user_id, db)
-
-    # Convert to response format
-    tools = [
-        ToolUsageStats(
-            tool_name=name,
-            call_count=stats["call_count"],
-            input_tokens=stats["input_tokens"],
-            output_tokens=stats["output_tokens"],
-            cache_read_tokens=stats["cache_read_tokens"],
-            cache_creation_tokens=stats["cache_creation_tokens"],
-            total_tokens=(
-                stats["input_tokens"]
-                + stats["output_tokens"]
-                + stats["cache_read_tokens"]
-                + stats["cache_creation_tokens"]
-            ),
-            per_call=compute_call_stats(stats["per_call_totals"]),
-        )
-        for name, stats in aggregated.items()
     ]
+    if resolved_user_id is not None:
+        filters.append(TelemetryEvent.user_id == resolved_user_id)
 
-    # Sort by total tokens descending
-    tools.sort(key=lambda t: t.total_tokens, reverse=True)
+    tool_name = func.coalesce(TelemetryEvent.tool_name, "unknown")
+    rows = (
+        db.query(
+            tool_name.label("tool_name"),
+            func.count().label("call_count"),
+            attr_tokens("input_tokens").label("input_tokens"),
+            attr_tokens("output_tokens").label("output_tokens"),
+            attr_tokens("cache_read_input_tokens").label("cache_read_tokens"),
+            attr_tokens("cache_creation_input_tokens").label("cache_creation_tokens"),
+            per_call_percentile(0.5).label("median"),
+            per_call_percentile(0.75).label("p75"),
+            per_call_percentile(0.9).label("p90"),
+            per_call_percentile(0.99).label("p99"),
+            func.min(TelemetryEvent.value).label("min"),
+            func.max(TelemetryEvent.value).label("max"),
+        )
+        .filter(*filters)
+        .group_by(tool_name)
+        .all()
+    )
+    session_count = (
+        db.query(func.count(func.distinct(TelemetryEvent.session_id))).filter(*filters).scalar()
+    )
+
+    def stats(r) -> ToolUsageStats:
+        tokens = (r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens)
+        return ToolUsageStats(
+            tool_name=r.tool_name,
+            call_count=r.call_count,
+            input_tokens=r.input_tokens,
+            output_tokens=r.output_tokens,
+            cache_read_tokens=r.cache_read_tokens,
+            cache_creation_tokens=r.cache_creation_tokens,
+            total_tokens=sum(tokens),
+            per_call=ToolCallStats(
+                median=r.median, p75=r.p75, p90=r.p90, p99=r.p99, min=int(r.min or 0), max=int(r.max or 0)
+            ),
+        )
 
     return ToolUsageResponse(
         from_time=from_time.isoformat(),
         to_time=to_time.isoformat(),
-        session_count=session_count,
-        tools=tools,
+        session_count=session_count or 0,
+        tools=sorted(map(stats, rows), key=lambda t: t.total_tokens, reverse=True),
     )

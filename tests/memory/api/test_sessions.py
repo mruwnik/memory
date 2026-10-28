@@ -1,13 +1,11 @@
 """Tests for sessions API endpoints."""
 
 import json
-import logging
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
 
-from memory.api.sessions import iter_transcript_events
 from memory.common import settings
 from memory.common.db.models.sessions import CodingProject, Session
 
@@ -108,17 +106,10 @@ def test_extract_tool_calls_ignores_non_tool_blocks():
     assert call.input_tokens == 30
 
 
-def test_extract_tool_calls_telemetry_and_aggregate_paths_agree():
-    """The two callers (TelemetryEvent emission + aggregate stats) must
-    produce identical per-tool numbers for the same input — that was the
-    original bug: telemetry used divmod, aggregate used //, so 100 / 3
-    came out as (34,33,33) vs (33,33,33), losing 1 token in aggregate.
-    """
+def test_extract_tool_calls_split_sums_to_reported_usage():
+    """Per-tool splits must add up to the message's reported usage."""
     from memory.api.sessions import extract_tool_calls_from_message
 
-    # Re-derive what extract_tool_usage_from_transcript would tally
-    # (same helper). The aggregate's per-tool sum must equal the
-    # message's reported total.
     msg = {
         "content": [
             {"type": "tool_use", "name": "Read"},
@@ -167,24 +158,6 @@ def test_parse_iso_datetime_returns_none_on_invalid(raw):
     from memory.common.dates import parse_iso_datetime
 
     assert parse_iso_datetime(raw) is None
-
-
-# ====== iter_transcript_events ======
-
-
-def test_iter_transcript_events_skips_blank_and_warns_on_malformed_lines(tmp_path, caplog):
-    transcript = tmp_path / "t.jsonl"
-    transcript.write_text(
-        "\n".join([json.dumps({"i": 0}), "", "not json", json.dumps({"i": 1}), "nope"]) + "\n"
-    )
-
-    with caplog.at_level(logging.WARNING, logger="memory.api.sessions"):
-        events = list(iter_transcript_events(transcript))
-
-    assert [e["i"] for e in events] == [0, 1]
-    assert [r.getMessage() for r in caplog.records] == [
-        f"transcript {transcript}: 2 unparseable JSON line(s) skipped"
-    ]
 
 
 # ====== POST /sessions/ingest/batch ======

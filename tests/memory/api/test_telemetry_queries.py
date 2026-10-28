@@ -6,6 +6,7 @@ import pytest
 
 from memory.api import telemetry
 from memory.api.telemetry import session_label
+from memory.common import settings
 from memory.common.db.models import APIKey, CodingProject, HumanUser, Session, TelemetryEvent
 from memory.common.telemetry import ParsedTelemetryEvent, write_events_to_db
 
@@ -237,3 +238,57 @@ def test_write_events_survives_deleted_api_key(db_session, user):
     assert stored == 1
     db_session.expire_all()
     assert [e.api_key_id for e in db_session.query(TelemetryEvent).all()] == [None]
+
+
+def add_tool_call(db_session, user_id: int, tool: str, input_tokens: int, output_tokens: int, session_id: str = "s", minutes_ago: int = 5):
+    db_session.add(
+        TelemetryEvent(
+            timestamp=NOW - timedelta(minutes=minutes_ago),
+            user_id=user_id,
+            event_type="metric",
+            name="tool.token.usage",
+            value=input_tokens + output_tokens,
+            session_id=session_id,
+            tool_name=tool,
+            attributes={"input_tokens": input_tokens, "output_tokens": output_tokens, "cache_read_input_tokens": 1},
+        )
+    )
+    db_session.commit()
+
+
+def test_tool_usage_aggregates_tool_calls(client, db_session, user, other_user):
+    for tokens in (10, 20, 30, 40):
+        add_tool_call(db_session, user.id, "Bash", tokens, 1, session_id="a")
+    add_tool_call(db_session, user.id, "Read", 5, 0, session_id="b")
+    add_tool_call(db_session, user.id, "Bash", 1000, 0, minutes_ago=120)
+    add_tool_call(db_session, other_user.id, "Bash", 1000, 0)
+
+    response = client.get("/sessions/stats/tool-usage", params={**window(), "user_id": user.id})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["session_count"] == 2
+    assert [
+        (t["tool_name"], t["call_count"], t["input_tokens"], t["output_tokens"], t["cache_read_tokens"], t["total_tokens"])
+        for t in body["tools"]
+    ] == [("Bash", 4, 100, 4, 4, 108), ("Read", 1, 5, 0, 1, 6)]
+    assert body["tools"][0]["per_call"] == pytest.approx({"median": 26, "p75": 33.5, "p90": 38, "p99": 40.7, "min": 11, "max": 41})
+
+
+def test_tool_usage_does_not_read_transcripts(client, db_session, user, tmp_path, monkeypatch):
+    """The page's other panels read telemetry_events only; tool usage must agree with them."""
+    monkeypatch.setattr(settings, "SESSIONS_STORAGE_DIR", tmp_path)
+    session = Session(id=uuid4(), user_id=user.id, transcript_path="t.jsonl")
+    db_session.add(session)
+    db_session.commit()
+    event = {
+        "type": "assistant",
+        "timestamp": (NOW - timedelta(minutes=5)).isoformat(),
+        "message": {"content": [{"type": "tool_use", "name": "Bash"}], "usage": {"input_tokens": 100}},
+    }
+    (tmp_path / "t.jsonl").write_text(json.dumps(event) + "\n")
+
+    response = client.get("/sessions/stats/tool-usage", params=window())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tools"] == []
