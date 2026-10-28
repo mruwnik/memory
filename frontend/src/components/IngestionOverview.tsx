@@ -36,7 +36,7 @@ export default function IngestionOverview({ standalone = false }: { standalone?:
   useEffect(() => { void load() }, [load])
   const Container = standalone ? Page : Section
   return <Container title="Ingestion overview" description="Stored items you can access, including imported content and items created in Memory. Messages and book sections count individually; search chunks do not."
-    actions={<>{!standalone && <ButtonLink to="/ui/ingestion">View ingestion overview</ButtonLink>}<RefreshButton onClick={load} disabled={busy} /></>}>
+    actions={<>{!standalone && <ButtonLink to="/ui/ingestion">View ingestion overview</ButtonLink>}<RefreshButton onClick={load} loading={busy} /></>}>
     {error && <ErrorState message={error} onRetry={load} />}
     {!data && !error && <LoadingState message="Loading ingestion counts..." />}
     {data && <>

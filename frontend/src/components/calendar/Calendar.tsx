@@ -364,7 +364,7 @@ const Calendar = () => {
           <div className="flex gap-2">
             <Button size="icon" onClick={goToPreviousMonth} aria-label="Previous month">&lt;</Button>
             <Button onClick={goToToday}>Today</Button>
-            <RefreshButton onClick={refreshEvents} disabled={loading} />
+            <RefreshButton onClick={refreshEvents} loading={loading} />
             <Button size="icon" onClick={goToNextMonth} aria-label="Next month">&gt;</Button>
           </div>
         </div>
