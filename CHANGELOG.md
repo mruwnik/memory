@@ -36,10 +36,13 @@ the workers. Afterwards change the schedule with
 `LESSWRONG_SYNC_CHECK_INTERVAL` (default 3600s) sets how often beat checks
 whether a sync is due; `0` disables the scheduled sync entirely.
 
-The first syncs fetch every comment on each post from the last year that has
-any, 200 posts per run by default, so expect extra LessWrong traffic and
-embedding spend for the first few weeks. Lower "Max posts fetched per sync" on
-the Forums tab to spread it out, or turn comments off.
+The first syncs fetch the comments with karma 5 or more on each post from the
+last year that has any, 200 posts per run by default, so expect extra LessWrong
+traffic and embedding spend for the first few weeks. Lower "Max posts fetched
+per sync" on the Forums tab to spread it out, or turn comments off. Because of
+the karma floor, every older post due a recheck has its comments refetched, so a
+comment that later reaches 5 gets in; set "Min comment karma" to 0 to store
+every comment and refetch only when a post's comment count changes.
 
 ### Migrations
 

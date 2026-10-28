@@ -197,7 +197,7 @@ class ForumSyncConfig(SyncStatusMixin, Base):
     af: Mapped[bool] = setting(Boolean, False, "Alignment Forum posts only")
 
     comments_enabled: Mapped[bool] = setting(Boolean, True)
-    min_comment_karma: Mapped[int] = setting(Integer, 0)
+    min_comment_karma: Mapped[int] = setting(Integer, 5)
     comment_recheck_divisor: Mapped[int] = setting(
         Integer, 10, "A post is rechecked for comments every age/divisor"
     )

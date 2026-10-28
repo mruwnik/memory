@@ -51,7 +51,7 @@ def upgrade():
         setting("min_karma", sa.Integer(), "10"),
         setting("af", sa.Boolean(), "false"),
         setting("comments_enabled", sa.Boolean(), "true"),
-        setting("min_comment_karma", sa.Integer(), "0"),
+        setting("min_comment_karma", sa.Integer(), "5"),
         setting("comment_recheck_divisor", sa.Integer(), "10"),
         setting("comment_recheck_max_days", sa.Integer(), "30"),
         setting("comment_max_age_days", sa.Integer(), "365"),

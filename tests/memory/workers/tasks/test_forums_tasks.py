@@ -945,7 +945,7 @@ def test_comment_fetches_are_spaced_by_the_cooldown(mock_fetch, db_session, lw_c
 def test_sync_rechecks_older_posts_on_a_decaying_schedule(
     mock_fetch, db_session, lw_comments_api, frozen_now
 ):
-    set_config(db_session, days_back=30, comment_max_age_days=365)
+    set_config(db_session, days_back=30, comment_max_age_days=365, min_comment_karma=0)
     due_changed = make_post(db_session, "duechanged", published_days_ago=100, synced=1)
     due_same = make_post(db_session, "duesame", published_days_ago=100, synced=4, checked_days_ago=20)
     make_post(db_session, "recent", published_days_ago=100, synced=1, checked_days_ago=2)
@@ -991,7 +991,7 @@ def test_a_failed_count_request_skips_only_its_batch(
 
     forums.sync_lesswrong()
 
-    assert dispatched(lw_comments_api) == [[in_window.id, "inwindow", 2, 0]]
+    assert dispatched(lw_comments_api) == [[in_window.id, "inwindow", 2, 5]]
     db_session.expire_all()
     assert db_session.get(ForumPost, old.id).comments_checked_at is None
 
