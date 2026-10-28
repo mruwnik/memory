@@ -4,12 +4,13 @@ Shared data fetching functions for Discord.
 Used by both REST API and MCP endpoints to avoid duplication.
 """
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import desc
+from sqlalchemy.orm import Query
 
-from memory.common import discord as discord_client
 from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
@@ -70,22 +71,39 @@ def caller_can_see_discord_user(
     return seen is not None
 
 
+def visible_channels(db: DBSession, caller: UserLike) -> Query[DiscordChannel]:
+    """Channels in servers owned by one of the caller's bots; admins see all.
+
+    Mirrors the Discord user gate and the Slack shared-workspace requirement so
+    a caller can't address a server they have no bot in. Server-less channels
+    (DMs) and servers without a bot are admin-only.
+    """
+    query = db.query(DiscordChannel)
+    if has_admin_scope(caller):
+        return query
+    return query.join(DiscordServer, DiscordChannel.server_id == DiscordServer.id).join(
+        DiscordBot, DiscordServer.bot_id == DiscordBot.id
+    ).filter(DiscordBot.created_by_user_id == caller.id)
+
+
 def caller_can_see_discord_channel(
     db: DBSession, caller: UserLike, channel: DiscordChannel
 ) -> bool:
-    """A channel is visible iff its server belongs to one of the caller's bots.
+    return visible_channels(db, caller).filter(DiscordChannel.id == channel.id).first() is not None
 
-    Mirrors the Discord user gate and the Slack shared-workspace requirement so
-    a caller can't address a server they have no bot in. Admins see everything.
-    """
-    if has_admin_scope(caller):
-        return True
-    if channel.server_id is None:
-        return False
-    server = db.get(DiscordServer, channel.server_id)
-    if server is None or server.bot_id is None:
-        return False
-    return server.bot_id in {bot.id for bot in get_user_bots(db, caller.id)}
+
+def find_visible_channel(
+    db: DBSession, caller: UserLike, channel_id: str | None, channel_name: str | None
+) -> DiscordChannel:
+    """The caller-visible channel with this id (else name), or ValueError."""
+    query = visible_channels(db, caller)
+    if channel_id is not None:
+        channel = query.filter(DiscordChannel.id == int(channel_id)).first()
+    else:
+        channel = query.filter(DiscordChannel.name == channel_name).first()
+    if channel is None:
+        raise ValueError(f"Discord channel '{channel_id or channel_name}' not found or not accessible")
+    return channel
 
 
 def get_user_bots(session: DBSession, user_id: int) -> list[DiscordBot]:
@@ -107,6 +125,7 @@ def get_bot_for_user(session: DBSession, bot_id: int, user: User) -> DiscordBot 
 
 def fetch_channel_history(
     session: DBSession,
+    caller: UserLike,
     channel_id: str | None,
     channel_name: str | None,
     before_dt: datetime | None,
@@ -118,6 +137,7 @@ def fetch_channel_history(
 
     Args:
         session: Database session
+        caller: Whose bots decide which channels are readable
         channel_id: Discord channel ID (snowflake, can be string or int)
         channel_name: Discord channel name
         before_dt: Only get messages before this time
@@ -127,28 +147,12 @@ def fetch_channel_history(
     Returns:
         Dict with channel info, messages list, and metadata
     """
-    # Resolve channel
-    if channel_id is not None:
-        resolved_channel_id = int(channel_id)
-        channel = session.get(DiscordChannel, resolved_channel_id)
-        channel_info = {
-            "id": str(resolved_channel_id),
-            "name": channel.name if channel else "unknown",
-        }
-    else:
-        channel = (
-            session.query(DiscordChannel)
-            .filter(DiscordChannel.name == channel_name)
-            .first()
-        )
-        if not channel:
-            raise ValueError(f"Channel '{channel_name}' not found")
-        resolved_channel_id = channel.id
-        channel_info = {"id": str(channel.id), "name": channel.name}
+    channel = find_visible_channel(session, caller, channel_id, channel_name)
+    channel_info = {"id": str(channel.id), "name": channel.name}
 
     # Build query
     query = session.query(DiscordMessage).filter(
-        DiscordMessage.channel_id == resolved_channel_id
+        DiscordMessage.channel_id == channel.id
     )
 
     if before_dt:
@@ -202,52 +206,55 @@ def fetch_channel_history(
     }
 
 
+CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
+    # Snowflakes as strings to avoid JS precision loss
+    "id": lambda ch: str(ch.id),
+    "name": lambda ch: ch.name,
+    "type": lambda ch: ch.channel_type,
+    "server_id": lambda ch: str(ch.server_id) if ch.server_id else None,
+    "category_id": lambda ch: str(ch.category_id) if ch.category_id else None,
+    "collect_messages": lambda ch: ch.should_collect,
+    "project_id": lambda ch: ch.project_id,
+    "sensitivity": lambda ch: ch.sensitivity,
+}
+
+DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "server_id"]
+
+
 def fetch_channels(
     session: DBSession,
+    caller: UserLike,
     server: str | None,
     include_dms: bool,
+    name: str | None = None,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
+    """List the Discord channels visible to ``caller`` (see ``visible_channels``).
+
+    ``server`` is a numeric id or name, resolved only among visible servers so
+    another user's server reads as not found. ``name`` is a case-insensitive
+    substring match.
     """
-    List Discord channels the bot has access to.
+    fields = fields or DEFAULT_CHANNEL_FIELDS
+    invalid = set(fields) - CHANNEL_FIELDS.keys()
+    if invalid:
+        raise ValueError(f"Invalid fields: {sorted(invalid)}. Available: {sorted(CHANNEL_FIELDS)}")
 
-    Args:
-        session: Database session
-        server: Filter by server - can be numeric ID or server name
-        include_dms: Include DM channels
+    query = visible_channels(session, caller)
 
-    Returns:
-        Dict with channels list and count
-    """
-    query = session.query(DiscordChannel)
-
-    # Filter by server if specified
     if server is not None:
-        resolved_server_id = discord_client.resolve_guild(server, session)
-        if resolved_server_id is None:
+        servers = fetch_servers(session, user_id=None if has_admin_scope(caller) else caller.id)
+        match = next((s for s in servers if server in (str(s.id), s.name)), None)
+        if match is None:
             return {"channels": [], "count": 0, "error": f"Server '{server}' not found"}
-        query = query.filter(DiscordChannel.server_id == resolved_server_id)
+        query = query.filter(DiscordChannel.server_id == match.id)
 
-    # Filter out DMs unless requested
     if not include_dms:
         query = query.filter(DiscordChannel.channel_type != "dm")
+    if name:
+        query = query.filter(DiscordChannel.name.ilike(f"%{name}%"))
 
-    channels = query.all()
-
-    formatted = []
-    for ch in channels:
-        formatted.append(
-            {
-                "id": str(ch.id),  # String to avoid JS precision loss
-                "name": ch.name,
-                "type": ch.channel_type,
-                "server_id": str(ch.server_id) if ch.server_id else None,
-                "category_id": str(ch.category_id) if ch.category_id else None,
-                "collect_messages": ch.should_collect,
-                "project_id": ch.project_id,
-                "sensitivity": ch.sensitivity,
-            }
-        )
-
+    formatted = [{f: CHANNEL_FIELDS[f](ch) for f in fields} for ch in query.order_by(DiscordChannel.name)]
     return {"channels": formatted, "count": len(formatted)}
 
 
