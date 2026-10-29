@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
+from sqlalchemy.exc import IntegrityError
 
 from memory.agents.call import LLMError, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, ingest_key, ingest_user
@@ -398,8 +399,18 @@ def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
     return len(tasks)
 
 
-def delete_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
-    for task in session.query(Task).filter(Task.source_item_id == meeting.id):
+# Tasks nobody has started, finished or cancelled. Replacing a meeting deletes
+# these (extraction recreates them) and detaches the rest.
+UNTOUCHED_TASK_STATUSES = ("pending",)
+
+
+def delete_meeting_tasks(
+    session: DBSession, meeting: Meeting, statuses: Sequence[str] | None = None
+) -> None:
+    query = session.query(Task).filter(Task.source_item_id == meeting.id)
+    if statuses is not None:
+        query = query.filter(Task.status.in_(statuses))
+    for task in query:
         session.delete(task)
 
 
@@ -443,6 +454,23 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     }
 
 
+def meeting_content(
+    transcript: str,
+    attendee_names: list[str] | None,
+    attendee_emails: list[str] | None,
+    attendee_pairs: list[tuple[str, str]] | None,
+) -> str:
+    # Prepend attendee identifiers to transcript so the LLM has a hint about
+    # who's in the room. Names take precedence over emails for readability.
+    pair_labels = [name or email for email, name in attendee_pairs or []]
+    attendee_label = ", ".join(
+        v for v in (pair_labels + (attendee_names or []) + (attendee_emails or [])) if v
+    )
+    if attendee_label:
+        return f"Attendees: {attendee_label}\n\n{transcript}"
+    return transcript
+
+
 def create_meeting_record(
     session: DBSession,
     transcript: str,
@@ -459,27 +487,15 @@ def create_meeting_record(
     attendee_pairs: list[tuple[str, str]] | None = None,
 ) -> Meeting:
     """Create a new Meeting record from the provided data."""
-    parsed_date = parse_date(meeting_date)
-
-    # Prepend attendee identifiers to transcript so the LLM has a hint about
-    # who's in the room. Names take precedence over emails for readability.
-    full_transcript = transcript
-    pair_labels = [name or email for email, name in attendee_pairs or []]
-    attendee_label = ", ".join(
-        v for v in (pair_labels + (attendee_names or []) + (attendee_emails or [])) if v
-    )
-    if attendee_label:
-        full_transcript = f"Attendees: {attendee_label}\n\n{transcript}"
-
-    content_hash = hashlib.sha256(full_transcript.encode()).digest()
+    full_transcript = meeting_content(transcript, attendee_names, attendee_emails, attendee_pairs)
     meeting = Meeting(
         title=title,
-        meeting_date=parsed_date,
+        meeting_date=parse_date(meeting_date),
         duration_minutes=duration_minutes,
         source_tool=source_tool,
         external_id=external_id,
         content=full_transcript,
-        sha256=content_hash,
+        sha256=hashlib.sha256(full_transcript.encode()).digest(),
         tags=["meeting"] + (tags or []),
         extraction_status="processing",
         transcript_account_id=transcript_account_id,
@@ -608,6 +624,20 @@ def execute_meeting_processing(
         return {"status": "error", "error": str(e), "meeting_id": meeting.id}
 
 
+def find_meeting(session: DBSession, external_id: str | None) -> Meeting | None:
+    if not external_id:
+        return None
+    return session.query(Meeting).filter(Meeting.external_id == external_id).first()
+
+
+def meeting_exists(session: DBSession, existing: Meeting, job_id: int | None) -> dict:
+    logger.info(f"Meeting with external_id={existing.external_id} already exists")
+    if job_id:
+        job_utils.complete_job(session, job_id, result_id=existing.id, result_type="Meeting")
+        session.commit()
+    return {"status": "exists", "meeting_id": existing.id, "external_id": existing.external_id}
+
+
 @app.task(name=PROCESS_MEETING)
 @safe_task_execution
 def process_meeting(
@@ -624,6 +654,7 @@ def process_meeting(
     transcript_account_id: int | None = None,
     creator_id: int | None = None,
     attendee_pairs: list[tuple[str, str]] | None = None,
+    replace: bool = False,
 ):
     """
     Process a new meeting transcript.
@@ -643,6 +674,7 @@ def process_meeting(
         job_id: Optional job ID for status tracking
         creator_id: Uploader; synced meetings inherit their account's owner
         attendee_pairs: (email, name) pairs known to belong to one attendee
+        replace: Overwrite and reprocess a meeting already stored under external_id
     """
     logger.info(f"Processing new meeting (external_id={external_id}, job_id={job_id})")
 
@@ -651,41 +683,52 @@ def process_meeting(
             job_utils.start_job(session, job_id)
             session.commit()
 
-        # Idempotency check via external_id
-        if external_id:
-            existing = (
-                session.query(Meeting)
-                .filter(Meeting.external_id == external_id)
-                .first()
-            )
-            if existing:
-                logger.info(f"Meeting with external_id={external_id} already exists")
-                if job_id:
-                    job_utils.complete_job(
-                        session, job_id, result_id=existing.id, result_type="Meeting"
-                    )
-                    session.commit()
-                return {
-                    "status": "exists",
-                    "meeting_id": existing.id,
-                    "external_id": external_id,
-                }
-
-        meeting = create_meeting_record(
-            session,
-            transcript,
-            title,
-            meeting_date,
-            duration_minutes,
-            attendee_names,
-            source_tool,
-            external_id,
-            tags,
-            attendee_emails=attendee_emails,
-            transcript_account_id=transcript_account_id,
-            creator_id=creator_id,
-            attendee_pairs=attendee_pairs,
-        )
+        existing = find_meeting(session, external_id)
+        content = meeting_content(transcript, attendee_names, attendee_emails, attendee_pairs)
+        sha256 = hashlib.sha256(content.encode()).digest()
+        if (
+            existing
+            and replace
+            and existing.sha256 != sha256
+            and existing.transcript_account_id == transcript_account_id
+        ):
+            delete_meeting_tasks(session, existing, statuses=UNTOUCHED_TASK_STATUSES)
+            session.flush()
+            prepare_meeting_for_reingest(session, existing.id)
+            meeting = existing
+            meeting.content = content
+            meeting.sha256 = sha256
+            meeting.title = title
+            meeting.meeting_date = parse_date(meeting_date)
+            meeting.duration_minutes = duration_minutes
+            meeting.extraction_status = "processing"
+            session.flush()
+        elif existing:
+            return meeting_exists(session, existing, job_id)
+        else:
+            try:
+                meeting = create_meeting_record(
+                    session,
+                    transcript,
+                    title,
+                    meeting_date,
+                    duration_minutes,
+                    attendee_names,
+                    source_tool,
+                    external_id,
+                    tags,
+                    attendee_emails=attendee_emails,
+                    transcript_account_id=transcript_account_id,
+                    creator_id=creator_id,
+                    attendee_pairs=attendee_pairs,
+                )
+            except IntegrityError:
+                # Lost a race with another ingest of the same meeting (webhook
+                # vs. poll) between the check above and the insert.
+                session.rollback()
+                if not (winner := find_meeting(session, external_id)):
+                    raise
+                return meeting_exists(session, winner, job_id)
 
         return execute_meeting_processing(
             session,

@@ -29,6 +29,13 @@ about them:
 docker compose exec -T postgres psql -U kb -d kb -c "SELECT count(*) FROM chunk WHERE length(content) > 900000"
 ```
 
+Fireflies accounts now expect a webhook and poll only once a day. For each
+existing Fireflies account, open **Sources → Transcripts → Webhook**, generate a
+secret, and add it in Fireflies' Webhooks V2 settings for `meeting.transcribed`
+(README, "Fireflies transcripts"). Without it, meetings arrive up to a day
+late. A reverse proxy must pass `/transcripts/ingest/` through to the api
+unauthenticated.
+
 ### Other changes for operators
 
 Search runs the query-analysis LLM only for queries that mention a date or
@@ -59,6 +66,17 @@ copy behind each time; an email attachment already stored from an earlier
 email (a signature logo, say) also left one. A new daily `clean_chunk_images`
 task (04:35) deletes chunk images that no chunk references and that are over a
 day old. Existing referenced images are left as they are.
+
+`TRANSCRIPTS_SYNC_INTERVAL` is removed (it is ignored if still set): the
+Fireflies catch-up poll runs daily at 05:10 UTC and walks the last 14 days with
+pagination. The weekly 365-day rescan is gone; **Full rescan** on an account
+still runs it on demand. Adding a Fireflies account in the UI generates its
+webhook secret and shows the setup steps. A Fireflies resend (`reprocessed_at`
+on `meeting.transcribed` or `meeting.summarized`) with a changed transcript now
+replaces the stored meeting and reruns extraction instead of being ignored;
+its `pending` action items are recreated and the rest kept, detached. A webhook and the poll ingesting the same
+meeting at once no longer fails one of them, and a successful webhook fetch
+clears the account's earlier sync error.
 
 ### Migrations
 

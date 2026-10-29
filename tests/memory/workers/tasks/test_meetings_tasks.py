@@ -1091,6 +1091,111 @@ def test_process_meeting_idempotent(
     assert count == 1
 
 
+def test_process_meeting_losing_an_insert_race_returns_exists(
+    regular_user, sample_transcript, mock_make_session, qdrant
+):
+    """A concurrent ingest that commits between our existence check and our
+    insert must not fail this one on the external_id unique index."""
+    winner = Meeting(
+        content="Winner's transcript",
+        sha256=unique_sha256("race-winner"),
+        modality="meeting",
+        mime_type="text/plain",
+        size=19,
+        external_id="race-1",
+    )
+    mock_make_session.add(winner)
+    mock_make_session.commit()
+
+    with patch.object(meetings, "find_meeting", side_effect=[None, winner]):
+        result = meetings.process_meeting(
+            creator_id=regular_user.id, transcript=sample_transcript, external_id="race-1"
+        )
+
+    assert result == {"status": "exists", "meeting_id": winner.id, "external_id": "race-1"}
+    assert mock_make_session.query(Meeting).count() == 1
+
+
+def test_process_meeting_replace_updates_the_stored_meeting(
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+):
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+    first = meetings.process_meeting(
+        creator_id=regular_user.id, transcript=sample_transcript, title="Draft", external_id="ff-1"
+    )
+
+    second = meetings.process_meeting(
+        creator_id=regular_user.id,
+        transcript="Ann: The corrected transcript.",
+        title="Final",
+        duration_minutes=42,
+        external_id="ff-1",
+        replace=True,
+    )
+
+    assert second["status"] == "success"
+    assert second["meeting_id"] == first["meeting_id"]
+    meeting = mock_make_session.get(Meeting, first["meeting_id"])
+    assert (meeting.title, meeting.duration_minutes) == ("Final", 42)
+    assert meeting.content == "Ann: The corrected transcript."
+    assert meeting.sha256 == create_content_hash("Ann: The corrected transcript.")
+    assert mock_make_session.query(Meeting).count() == 1
+
+
+def test_process_meeting_replace_drops_untouched_action_items(
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+):
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+    first = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
+    old = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
+    old[0].status = "done"
+    mock_make_session.commit()
+    done_id, pending_ids = old[0].id, [t.id for t in old[1:]]
+
+    meetings.process_meeting(
+        creator_id=regular_user.id, transcript="Ann: Corrected.", external_id="ff-1", replace=True
+    )
+
+    remaining = {t.id: t.source_item_id for t in mock_make_session.query(Task).all()}
+    attached = {i for i, source in remaining.items() if source == first["meeting_id"]}
+    assert remaining[done_id] is None
+    assert not set(pending_ids) & set(remaining)
+    assert attached
+
+
+@pytest.mark.parametrize(
+    "transcript, account_offset",
+    [
+        ("same transcript", 0),  # identical resend
+        ("Ann: Corrected.", 1),  # another account's meeting
+    ],
+)
+def test_process_meeting_replace_keeps_meeting_when_not_needed(
+    scripted_llm, llm_key, regular_user, sample_extraction_response, mock_make_session, qdrant, transcript, account_offset
+):
+    accounts = [TranscriptAccount(user_id=regular_user.id, name=f"ff{i}", provider="fireflies") for i in range(2)]
+    mock_make_session.add_all(accounts)
+    mock_make_session.commit()
+    scripted_llm.script = [submitted(sample_extraction_response)]
+    first = meetings.process_meeting(
+        creator_id=regular_user.id,
+        transcript="same transcript",
+        external_id="ff-1",
+        transcript_account_id=accounts[0].id,
+    )
+
+    second = meetings.process_meeting(
+        creator_id=regular_user.id,
+        transcript=transcript,
+        external_id="ff-1",
+        transcript_account_id=accounts[account_offset].id,
+        replace=True,
+    )
+
+    assert second == {"status": "exists", "meeting_id": first["meeting_id"], "external_id": "ff-1"}
+    assert mock_make_session.get(Meeting, first["meeting_id"]).content == "same transcript"
+
+
 def test_process_meeting_minimal(
     scripted_llm, llm_key, regular_user, sample_transcript, mock_make_session, qdrant
 ):

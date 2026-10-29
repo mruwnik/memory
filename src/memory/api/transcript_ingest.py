@@ -7,7 +7,8 @@ can't sign. The path is whitelisted from the auth middleware for that reason.
 
 Two body shapes are accepted: a generic transcript, queued straight to
 process_meeting, and a Fireflies ``meeting.transcribed`` notification, which
-only names a meeting and so queues a one-meeting fetch.
+only names a meeting and so queues a one-meeting fetch. One carrying
+``reprocessed_at`` replaces the stored meeting.
 """
 
 import hashlib
@@ -48,6 +49,10 @@ FIREFLIES_TRANSCRIBED_EVENTS = {
     ("event", "meeting.transcribed"),
     ("eventType", "Transcription completed"),
 }
+# Fireflies resends this, with reprocessed_at, when a meeting's notes change,
+# which can come with a changed transcript. A first delivery adds nothing to
+# meeting.transcribed.
+FIREFLIES_RESENT_EVENTS = {("event", "meeting.summarized")}
 
 
 class Participant(BaseModel):
@@ -101,13 +106,15 @@ def secret_matches(secret: str, body: bytes, request: Request) -> bool:
 def queue_fireflies_meeting(account: TranscriptAccount, payload: dict) -> JSONResponse:
     if account.provider != "fireflies":
         raise HTTPException(status_code=422, detail="Fireflies notifications need a fireflies source")
-    if not any(payload.get(k) == v for k, v in FIREFLIES_TRANSCRIBED_EVENTS):
+    reprocessed = bool(payload.get("reprocessed_at"))
+    events = FIREFLIES_TRANSCRIBED_EVENTS | (FIREFLIES_RESENT_EVENTS if reprocessed else set())
+    if not any(payload.get(k) == v for k, v in events):
         return JSONResponse({"status": "ignored"}, status_code=200)
 
     meeting_id = payload.get("meeting_id") or payload.get("meetingId")
     if not isinstance(meeting_id, str) or not 0 < len(meeting_id) <= 200:
         raise HTTPException(status_code=422, detail="Invalid meeting id")
-    celery_app.send_task(INGEST_TRANSCRIPT_MEETING, args=[account.id, meeting_id])
+    celery_app.send_task(INGEST_TRANSCRIPT_MEETING, args=[account.id, meeting_id, reprocessed])
     return JSONResponse({"status": "queued"}, status_code=202)
 
 

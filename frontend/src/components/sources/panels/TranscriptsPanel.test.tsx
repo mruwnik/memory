@@ -145,7 +145,26 @@ describe('TranscriptsPanel - create flow', () => {
     )
   })
 
+  it('sets up the Fireflies webhook right after creating the account', async () => {
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText(/No transcript accounts configured/)
+
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
+    await user.type(screen.getByPlaceholderText('My Fireflies'), 'Acct')
+    await user.type(passwordInputs()[0], 'secret-key')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(generateTranscriptWebhookSecret).toHaveBeenCalledTimes(1))
+    expect(generateTranscriptWebhookSecret).toHaveBeenCalledWith(1)
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('https://mem.example/transcripts/ingest/1')).toBeInTheDocument()
+    expect(await within(dialog).findByText('fresh-secret-abcd')).toBeInTheDocument()
+    expect(within(dialog).getByText(/meeting\.transcribed/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/only sends webhooks for meetings you organize/)).toBeInTheDocument()
+  })
+
   it('creates a push-only account without an API key', async () => {
+    createTranscriptAccount.mockResolvedValue(account({ provider: 'generic', polls: false, has_api_key: false }))
     const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText(/No transcript accounts configured/)
 
@@ -159,6 +178,7 @@ describe('TranscriptsPanel - create flow', () => {
     const payload = createTranscriptAccount.mock.calls[0][0]
     expect(payload).toMatchObject({ name: 'Pushed', provider: 'generic' })
     expect(payload).not.toHaveProperty('api_key')
+    expect(generateTranscriptWebhookSecret).not.toHaveBeenCalled()
   })
 
   it('shows the "no providers" guard when provider list is empty', async () => {
@@ -274,8 +294,14 @@ describe('TranscriptsPanel - push ingest', () => {
     expect(screen.queryByText('No API key set')).not.toBeInTheDocument()
   })
 
-  it('generates a secret and shows it once with the URL and an example curl', async () => {
+  it('flags a Fireflies account whose webhook is not set up', async () => {
     listTranscriptAccounts.mockResolvedValue([account()])
+    renderWithRouter(<TranscriptsPanel />)
+    expect(await screen.findByText(/Webhook not set up/)).toBeInTheDocument()
+  })
+
+  it('generates a secret and shows it once with the URL and an example curl', async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ provider: 'generic', polls: false, has_api_key: false })])
     const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
@@ -294,7 +320,7 @@ describe('TranscriptsPanel - push ingest', () => {
     const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
-    await user.click(screen.getByRole('button', { name: 'Push' }))
+    await user.click(screen.getByRole('button', { name: 'Webhook' }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText(/wxyz/)).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Rotate secret' })).toBeInTheDocument()

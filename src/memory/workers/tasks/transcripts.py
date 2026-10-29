@@ -1,41 +1,25 @@
-"""Periodic poll for meeting transcripts from external providers.
+"""Catch-up poll for meeting transcripts from external providers.
 
-Iterates active polling TranscriptAccount rows, fetches new transcripts via the
-provider's API, and dispatches process_meeting for each. Provider-agnostic
-shell — provider-specific logic lives in dedicated parsers
-(e.g. memory.parsers.fireflies).
+Fireflies accounts get meetings by webhook (``ingest_transcript_meeting``),
+but Fireflies only sends webhooks for meetings the account holder organizes.
+The daily sync walks the last ``SYNC_LOOKBACK_DAYS`` newest-first and
+dispatches process_meeting for any transcript not yet stored, which covers
+other people's meetings and missed webhooks. The manual full rescan walks
+``TRANSCRIPTS_RESCAN_LOOKBACK_DAYS`` the same way.
 
-Sync model: a single "walk newest-first from now down to a floor" primitive
-serves both jobs. Stubs whose ``external_id`` already exists in the DB are
-skipped before the heavyweight ``get_transcript`` fetch (saves ~N wasted
-API calls per page on the steady-state where most stubs are already known).
-
-  - **Quick sync** (every 2h, cheap): floor = MIN(meeting_date for this
-    account) or now-N days if the DB is empty. Capped at a small number of
-    pages. Catches recent additions.
-
-  - **Full rescan** (weekly, bulletproof): floor = now - LOOKBACK_DAYS,
-    capped high enough to walk the whole window. Catches drift the cheap
-    sync may have missed (>page-size bursts, late-arriving uploads, etc.).
-
-The floor is computed from the Meeting table on every run rather than
-stored on the account, so a crash mid-sync leaves no inconsistency.
-
-``ingest_transcript_meeting`` is the push path's counterpart: a provider
-notification names one meeting, which is fetched and dispatched the same way.
+Stubs whose ``external_id`` already exists in the DB are skipped before the
+heavyweight ``get_transcript`` fetch, so a steady-state walk is mostly
+list-page calls.
 """
 
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
-
 from memory.common import settings
 from memory.common.celery_app import (
     INGEST_TRANSCRIPT_MEETING,
     PROCESS_MEETING,
-    RESCAN_ALL_TRANSCRIPT_ACCOUNTS,
     RESCAN_TRANSCRIPT_ACCOUNT,
     SYNC_ALL_TRANSCRIPT_ACCOUNTS,
     SYNC_TRANSCRIPT_ACCOUNT,
@@ -56,23 +40,13 @@ from memory.parsers.fireflies import (
 logger = logging.getLogger(__name__)
 
 
-# Quick sync: bootstrap window when DB is empty. Quick is single-page —
-# trusts that the workload is small enough for one page to cover it; the
-# weekly full rescan catches anything that overflowed.
-QUICK_BOOTSTRAP_LOOKBACK_DAYS = 7
+# Long enough that a worker outage of a week or a transcript Fireflies
+# finishes days late is still caught by the daily sync.
+SYNC_LOOKBACK_DAYS = 14
 
-# Full rescan page cap. With page=50 this allows up to 5000 transcripts per
-# run — far more than any user accumulates in the lookback window.
-RESCAN_MAX_PAGES = 100
-
-
-def meeting_min_date(db: DBSession, account_id: int) -> datetime | None:
-    """Return MIN(meeting_date) of Meetings synced for this account, or None."""
-    return (
-        db.query(func.min(Meeting.meeting_date))
-        .filter(Meeting.transcript_account_id == account_id)
-        .scalar()
-    )
+# Circuit breaker for one walk. With page=50 this allows up to 5000
+# transcripts per run, far more than any user accumulates in the lookback.
+MAX_PAGES = 100
 
 
 def known_external_ids(db: DBSession, stub_ids: list[str]) -> set[str]:
@@ -101,6 +75,7 @@ def known_external_ids(db: DBSession, stub_ids: list[str]) -> set[str]:
 def dispatch_transcript(
     transcript: dict,
     account: TranscriptAccount,
+    replace: bool = False,
 ) -> str | None:
     """Dispatch a single fetched transcript to process_meeting.
 
@@ -115,6 +90,7 @@ def dispatch_transcript(
         return None
 
     kwargs["transcript_account_id"] = account.id
+    kwargs["replace"] = replace
     if account.tags:
         kwargs["tags"] = list(account.tags)
 
@@ -125,14 +101,10 @@ def dispatch_transcript(
 def walk_window(
     client: FirefliesClient,
     from_date: datetime,
-    max_pages: int = 1,
+    max_pages: int = MAX_PAGES,
 ) -> list[dict]:
-    """Return every transcript stub in [from_date, now], paginating with skip.
-
-    Oldest-first ordering. Bounded by `max_pages` as a circuit breaker.
-    `max_pages=1` is the quick-sync case (single page); higher values are
-    used by the weekly rescan where the window may exceed one page.
-    """
+    """Return every transcript stub in [from_date, now], oldest-first,
+    paginating with skip up to `max_pages`."""
     pages: list[list[dict]] = []
     for page_idx in range(max_pages):
         page = client.list_transcripts(
@@ -180,30 +152,16 @@ def dispatch_unseen(
     return dispatched
 
 
-def fireflies_walk(
-    account: TranscriptAccount,
-    db: DBSession,
-    *,
-    floor: datetime,
-    max_pages: int = 1,
-) -> int:
-    """Walk-then-dispatch: fetch every stub in the [floor, now] window
-    (paginated up to `max_pages`), then dispatch the unseen ones.
-
-    Default `max_pages=1` matches the quick-sync path; the weekly rescan
-    explicitly passes RESCAN_MAX_PAGES.
-    """
+def fireflies_walk(account: TranscriptAccount, db: DBSession, *, floor: datetime) -> int:
+    """Fetch every stub in the [floor, now] window, then dispatch the unseen ones."""
     client = FirefliesClient(account.api_key)
-    stubs = walk_window(client, from_date=floor, max_pages=max_pages)
-    logger.info(
-        f"Fireflies walk (floor {floor.isoformat()}, max_pages={max_pages}): "
-        f"{len(stubs)} stubs"
-    )
+    stubs = walk_window(client, from_date=floor)
+    logger.info(f"Fireflies walk (floor {floor.isoformat()}): {len(stubs)} stubs")
     return dispatch_unseen(stubs, client, account, db)
 
 
 # Provider dispatch — one walk function per provider. Both task wrappers
-# (quick / full) use the same table; only the floor + max_pages differ.
+# (sync / rescan) use the same table; only the floor differs.
 PROVIDERS: dict[str, Callable[..., int]] = {
     "fireflies": fireflies_walk,
 }
@@ -219,55 +177,11 @@ assert set(PROVIDERS) == set(POLLING_PROVIDERS), (
 )
 
 
-def quick_floor(account: TranscriptAccount, db: DBSession) -> datetime:
-    """Quick-sync floor: ``max(min_date, now - QUICK_BOOTSTRAP_LOOKBACK_DAYS)``.
-
-    The floor is the *more recent* of those two values:
-
-    - When min_date is recent (DB has a meeting newer than the bootstrap
-      window), we walk back only as far as that meeting; the prefilter
-      handles overlap so we don't re-fetch known transcripts.
-
-    - When min_date is older than the bootstrap window (or the DB is
-      empty), we cap lookback at the bootstrap window. Older drift is the
-      weekly rescan's job — quick sync intentionally never walks further
-      back than ``QUICK_BOOTSTRAP_LOOKBACK_DAYS`` regardless of how old the
-      DB is.
-    """
-    bootstrap = datetime.now(timezone.utc) - timedelta(
-        days=QUICK_BOOTSTRAP_LOOKBACK_DAYS
-    )
-    min_date = meeting_min_date(db, account.id)
-    if min_date is None:
-        return bootstrap
-    return max(min_date, bootstrap)
-
-
-def full_floor(account: TranscriptAccount, db: DBSession) -> datetime:
-    """Walk back the configured rescan lookback, regardless of min_date.
-
-    Both parameters are ignored; the signature is kept symmetric with
-    :func:`quick_floor` so both can be passed as ``floor_fn`` to
-    :func:`run_walk` interchangeably (``Callable[[TranscriptAccount,
-    DBSession], datetime]``).
-    """
-    del account, db  # unused; signature is kept symmetric with quick_floor.
-    return datetime.now(timezone.utc) - timedelta(
-        days=settings.TRANSCRIPTS_RESCAN_LOOKBACK_DAYS
-    )
-
-
-def run_walk(
-    account_id: int,
-    *,
-    floor_fn: Callable[[TranscriptAccount, DBSession], datetime],
-    max_pages: int,
-    label: str,
-) -> dict:
-    """Shared shell for quick and full sync tasks. Loads the account,
-    dispatches to the provider walk with the right floor and page cap,
-    persists sync_error on FirefliesError, propagates retryable errors so
-    Celery's autoretry_for picks them up.
+def run_walk(account_id: int, *, lookback_days: int, label: str) -> dict:
+    """Shared shell for the sync and rescan tasks. Loads the account,
+    walks the provider back `lookback_days`, persists sync_error on
+    FirefliesError, propagates retryable errors so Celery's autoretry_for
+    picks them up.
     """
     with make_session() as db:
         account = db.get(TranscriptAccount, account_id)
@@ -283,8 +197,8 @@ def run_walk(
             return {"status": "error", "error": msg}
 
         try:
-            floor = floor_fn(account, db)
-            dispatched = walk(account, db, floor=floor, max_pages=max_pages)
+            floor = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+            dispatched = walk(account, db, floor=floor)
             account.last_sync_at = datetime.now(timezone.utc)
             account.record_sync(None)
             db.commit()
@@ -319,19 +233,9 @@ def run_walk(
     max_retries=3,
 )
 def sync_transcript_account(account_id: int) -> dict:
-    """Cheap quick sync (every TRANSCRIPTS_SYNC_INTERVAL).
-
-    Walks back to the account's MIN(meeting_date) (or the bootstrap window
-    if the DB is empty), capped at QUICK_MAX_PAGES. Pre-filters known
-    external_ids so steady-state polls do almost no get_transcript calls.
-    """
-    logger.info(f"Quick-syncing transcript account {account_id}")
-    return run_walk(
-        account_id,
-        floor_fn=quick_floor,
-        max_pages=1,
-        label="Quick sync",
-    )
+    """Daily catch-up: dispatch any transcript from the last SYNC_LOOKBACK_DAYS not yet stored."""
+    logger.info(f"Syncing transcript account {account_id}")
+    return run_walk(account_id, lookback_days=SYNC_LOOKBACK_DAYS, label="Sync")
 
 
 @app.task(
@@ -343,17 +247,11 @@ def sync_transcript_account(account_id: int) -> dict:
     max_retries=3,
 )
 def rescan_transcript_account(account_id: int) -> dict:
-    """Periodic deep rescan (weekly).
-
-    Walks the full TRANSCRIPTS_RESCAN_LOOKBACK_DAYS window. Same prefilter
-    applies, so a steady-state weekly rescan with no missed items is mostly
-    list-page calls + DB queries — no wasted get_transcript fetches.
-    """
+    """Manual deep rescan over TRANSCRIPTS_RESCAN_LOOKBACK_DAYS."""
     logger.info(f"Full-rescanning transcript account {account_id}")
     return run_walk(
         account_id,
-        floor_fn=full_floor,
-        max_pages=RESCAN_MAX_PAGES,
+        lookback_days=settings.TRANSCRIPTS_RESCAN_LOOKBACK_DAYS,
         label="Full rescan",
     )
 
@@ -377,13 +275,17 @@ def polled_accounts(db: DBSession) -> list[TranscriptAccount]:
     retry_jitter=True,
     max_retries=3,
 )
-def ingest_transcript_meeting(account_id: int, meeting_id: str) -> dict:
-    """Fetch and dispatch one meeting a provider pushed a notification for."""
+def ingest_transcript_meeting(account_id: int, meeting_id: str, reprocessed: bool = False) -> dict:
+    """Fetch and dispatch one meeting a provider pushed a notification for.
+
+    A ``reprocessed`` notification re-fetches a meeting already stored and
+    replaces its transcript.
+    """
     with make_session() as db:
         account = db.get(TranscriptAccount, account_id)
         if account is None or not account.active or account.provider != "fireflies":
             return {"status": "error", "error": "account not found, inactive or not fireflies"}
-        if known_external_ids(db, [meeting_id]):
+        if not reprocessed and known_external_ids(db, [meeting_id]):
             return {"status": "exists", "meeting_id": meeting_id}
 
         try:
@@ -395,16 +297,18 @@ def ingest_transcript_meeting(account_id: int, meeting_id: str) -> dict:
             if exc.retryable:
                 raise
             return {"status": "error", "error": str(exc)}
+        account.record_sync(None)
+        db.commit()
         if not transcript:
             return {"status": "error", "error": "transcript not found"}
-        task_id = dispatch_transcript(transcript, account)
+        task_id = dispatch_transcript(transcript, account, replace=reprocessed)
         return {"status": "queued" if task_id else "empty", "task_id": task_id}
 
 
 @app.task(name=SYNC_ALL_TRANSCRIPT_ACCOUNTS)
 @safe_task_execution
 def sync_all_transcript_accounts() -> list[dict]:
-    """Dispatch a quick sync for every active polling TranscriptAccount."""
+    """Dispatch a sync for every active polling TranscriptAccount."""
     with make_session() as db:
         accounts = polled_accounts(db)
         return [
@@ -412,22 +316,6 @@ def sync_all_transcript_accounts() -> list[dict]:
                 "account_id": account.id,
                 "provider": account.provider,
                 "task_id": sync_transcript_account.delay(account.id).id,  # type: ignore[attr-defined]
-            }
-            for account in accounts
-        ]
-
-
-@app.task(name=RESCAN_ALL_TRANSCRIPT_ACCOUNTS)
-@safe_task_execution
-def rescan_all_transcript_accounts() -> list[dict]:
-    """Dispatch a full rescan for every active polling TranscriptAccount."""
-    with make_session() as db:
-        accounts = polled_accounts(db)
-        return [
-            {
-                "account_id": account.id,
-                "provider": account.provider,
-                "task_id": rescan_transcript_account.delay(account.id).id,  # type: ignore[attr-defined]
             }
             for account in accounts
         ]

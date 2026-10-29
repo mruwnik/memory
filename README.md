@@ -227,6 +227,14 @@ Personal keys belong to their user. Admins can also create **Instance** keys. In
 
 In **System operations → SSH keys**, **Use for my containers** selects your default. The Claude session form can override this with another accessible key or **No SSH key**, including for scheduled sessions. Existing user keys migrate automatically into this table as their users’ defaults. Replacement and deletion affect future connections and containers; running containers retain their injected copy. A key selected for Notes cannot be deleted until the selection is changed or cleared.
 
+### Fireflies transcripts
+
+Add the account in **Sources → Transcripts** with a Fireflies API key (fireflies.ai → Settings → Developer settings). Saving it generates a webhook secret and shows it once with the account's ingest URL, `<SERVER_URL>/transcripts/ingest/<account id>`. In Fireflies' [Webhooks V2 settings](https://app.fireflies.ai/integrations/api/webhook), set that URL as the webhook URL and the secret as the signing secret, subscribe to `meeting.transcribed`, and turn on **Resend when a meeting's notes change** so corrected transcripts come through. **Webhook** on the account row shows the URL again and rotates the secret.
+
+Fireflies only sends webhooks for meetings you organize. Meetings other people organize, and any webhook that didn't arrive, come in through a daily check of the last 14 days at 05:10 UTC. **Full rescan** walks back `TRANSCRIPTS_RESCAN_LOOKBACK_DAYS` (365). A resend (`meeting.transcribed` or `meeting.summarized` carrying `reprocessed_at`) with a changed transcript replaces the stored meeting and reruns extraction: its action items still `pending` are recreated, and ones already started, done or cancelled are kept but detached.
+
+Behind a reverse proxy, `/transcripts/ingest/` must reach the api without a login: it authenticates with the webhook signature, not a session.
+
 ### Discord integration
 
 To get notifications in Discord, [create a bot](https://discord.com/developers/applications), then run:
