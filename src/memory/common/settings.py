@@ -246,12 +246,9 @@ ACCESS_CONTROL_RECONCILE_INTERVAL = int(
     os.getenv("ACCESS_CONTROL_RECONCILE_INTERVAL", 30 * 60)
 )
 SCHEDULED_CALL_RUN_INTERVAL = int(os.getenv("SCHEDULED_CALL_RUN_INTERVAL", 60))
-TRANSCRIPTS_SYNC_INTERVAL = int(
-    os.getenv("TRANSCRIPTS_SYNC_INTERVAL", 2 * 60 * 60)
-)  # 2 hours
 TRANSCRIPTS_RESCAN_LOOKBACK_DAYS = int(
     os.getenv("TRANSCRIPTS_RESCAN_LOOKBACK_DAYS", 365)
-)  # how far back the weekly safety-net rescan looks
+)  # how far back a manual full rescan looks
 
 # Metrics collection settings
 METRICS_COLLECTION_INTERVAL = int(

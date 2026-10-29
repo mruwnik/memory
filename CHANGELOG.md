@@ -12,6 +12,42 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+Fireflies accounts now expect a webhook and poll only once a day. For each
+existing Fireflies account, open **Sources → Transcripts → Webhook**, generate a
+secret, and add it in Fireflies' Webhooks V2 settings for `meeting.transcribed`
+(README, "Fireflies transcripts"). Without it, meetings arrive up to a day
+late. A reverse proxy must pass `/transcripts/ingest/` through to the api
+unauthenticated.
+
+### Other changes for operators
+
+`TRANSCRIPTS_SYNC_INTERVAL` is removed (it is ignored if still set): the
+Fireflies catch-up poll runs daily at 05:10 UTC and walks the last 14 days with
+pagination. The weekly 365-day rescan is gone; **Full rescan** on an account
+still runs it on demand. Adding a Fireflies account in the UI generates its
+webhook secret and shows the setup steps. A Fireflies resend (`reprocessed_at`
+on `meeting.transcribed` or `meeting.summarized`) with a changed transcript now
+replaces the stored meeting and reruns extraction instead of being ignored;
+its `pending` action items are recreated and the rest kept, detached. A webhook and the poll ingesting the same
+meeting at once no longer fails one of them, and a successful webhook fetch
+clears the account's earlier sync error.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.4.1 (2026-10-29)
 
 ### Required env vars

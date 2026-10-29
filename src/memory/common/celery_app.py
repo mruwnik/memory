@@ -136,7 +136,6 @@ CLEANUP_STUCK_MEETINGS = f"{MEETINGS_ROOT}.cleanup_stuck_meetings"
 # Transcript provider sync tasks (Fireflies, Granola, ...)
 SYNC_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.sync_all_transcript_accounts"
 SYNC_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.sync_transcript_account"
-RESCAN_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.rescan_all_transcript_accounts"
 RESCAN_TRANSCRIPT_ACCOUNT = f"{TRANSCRIPTS_ROOT}.rescan_transcript_account"
 INGEST_TRANSCRIPT_MEETING = f"{TRANSCRIPTS_ROOT}.ingest_transcript_meeting"
 
@@ -482,14 +481,9 @@ def build_beat_schedule() -> dict:
         },
         "sync-all-transcript-accounts": {
             "task": SYNC_ALL_TRANSCRIPT_ACCOUNTS,
-            "schedule": settings.TRANSCRIPTS_SYNC_INTERVAL,
-        },
-        "rescan-all-transcript-accounts": {
-            "task": RESCAN_ALL_TRANSCRIPT_ACCOUNTS,
-            # Weekly Sunday 03:13 UTC — keeps the steady-state polling cheap
-            # and uses the rescan as a backstop against missed meetings (e.g.
-            # >page-size bursts between polls, backdated uploads).
-            "schedule": crontab(day_of_week="sun", hour="3", minute="13"),
+            # On the clock, not an interval: beat's schedule file is lost when
+            # the container is recreated, so an interval restarts at each deploy.
+            "schedule": crontab(hour="5", minute="10"),
         },
         "summarize-stale-sessions": {
             "task": SUMMARIZE_STALE_SESSIONS,

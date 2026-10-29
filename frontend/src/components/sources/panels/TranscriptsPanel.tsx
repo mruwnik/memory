@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, TranscriptAccount, LLMKeyChoice } from '@/hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectField, SensitivitySelect, SourceRow, TagsInput } from '../shared'
-import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton } from '@/components/shared/ui'
+import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton, NewTabLink } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
 
@@ -28,7 +28,7 @@ export const TranscriptsPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<TranscriptAccount | null>(null)
-  const [pushAccount, setPushAccount] = useState<TranscriptAccount | null>(null)
+  const [pushAccount, setPushAccount] = useState<{ account: TranscriptAccount; generate: boolean } | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
@@ -54,9 +54,10 @@ export const TranscriptsPanel = () => {
   useEffect(() => { loadAccounts() }, [loadAccounts])
 
   const handleCreate = async (data: any) => {
-    await createTranscriptAccount(data)
+    const created = await createTranscriptAccount(data)
     setShowForm(false)
     loadAccounts()
+    if (created.provider === 'fireflies') setPushAccount({ account: created, generate: true })
   }
 
   const handleUpdate = async (data: any) => {
@@ -123,14 +124,15 @@ export const TranscriptsPanel = () => {
                     Full rescan
                   </Button>
                 )}
-                <Button size="sm" onClick={() => setPushAccount(account)} title="URL and secret for pushing transcripts to this account">
-                  Push
+                <Button size="sm" onClick={() => setPushAccount({ account, generate: false })} title="URL and secret for pushing transcripts to this account">
+                  {account.provider === 'fireflies' ? 'Webhook' : 'Push'}
                 </Button>
               </>}
               meta={[
                 !!account.tags?.length && `Tags: ${account.tags.join(', ')}`,
                 `Sensitivity: ${account.sensitivity}`,
                 account.webhook_secret_hint && 'Push enabled',
+                account.provider === 'fireflies' && !account.webhook_secret_hint && 'Webhook not set up: meetings arrive once a day',
                 `LLM: ${llmKeyLabel(account.llm_key)}`,
               ]}
             >
@@ -162,7 +164,7 @@ export const TranscriptsPanel = () => {
       )}
 
       {pushAccount && (
-        <PushModal account={pushAccount} onClose={() => { setPushAccount(null); loadAccounts() }} />
+        <PushModal account={pushAccount.account} generateOnOpen={pushAccount.generate} onClose={() => { setPushAccount(null); loadAccounts() }} />
       )}
     </Section>
   )
@@ -311,17 +313,48 @@ BODY='{"external_id":"demo-1","title":"Demo","segments":[{"speaker":"Ann","text"
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
 curl -X POST '${url}' -H 'Content-Type: application/json' -H "X-Hub-Signature: sha256=$SIG" -d "$BODY"`
 
-const PushModal = ({ account, onClose }: { account: TranscriptAccount; onClose: () => void }) => {
+const FirefliesWebhookSteps = () => (
+  <div className="space-y-2 text-sm text-slate-600">
+    <p>
+      Fireflies only sends webhooks for meetings you organize. Meetings other people organize, and any
+      webhook that doesn't arrive, come in with the daily check.
+    </p>
+    <ol className="list-decimal pl-5 space-y-1">
+      <li>Open Fireflies' <NewTabLink href="https://app.fireflies.ai/integrations/api/webhook">Webhooks V2 settings</NewTabLink>.</li>
+      <li>Paste the ingest URL below as the webhook URL and the secret as the signing secret.</li>
+      <li>Subscribe to <code>meeting.transcribed</code>, turn on "Resend when a meeting's notes change" to pick up corrected transcripts, and save.</li>
+    </ol>
+  </div>
+)
+
+interface PushModalProps {
+  account: TranscriptAccount
+  /** Generate a secret as soon as the modal opens: the setup step right after adding a Fireflies account. */
+  generateOnOpen?: boolean
+  onClose: () => void
+}
+
+const PushModal = ({ account, generateOnOpen = false, onClose }: PushModalProps) => {
   const { generateTranscriptWebhookSecret, deleteTranscriptWebhookSecret } = useSources()
   const [hint, setHint] = useState(account.webhook_secret_hint)
   const [secret, setSecret] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
+  const fireflies = account.provider === 'fireflies'
 
   const generate = () => run(async () => {
     const result = await generateTranscriptWebhookSecret(account.id)
     setSecret(result.secret)
     setHint(result.webhook_secret_hint)
   })
+
+  // A ref, not state: StrictMode's double effect run must not rotate the secret twice.
+  const generated = useRef(false)
+  useEffect(() => {
+    if (!generateOnOpen || generated.current) return
+    generated.current = true
+    generate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, on open
+  }, [])
 
   const remove = () => run(async () => {
     await deleteTranscriptWebhookSecret(account.id)
@@ -330,15 +363,16 @@ const PushModal = ({ account, onClose }: { account: TranscriptAccount; onClose: 
   })
 
   return (
-    <Modal title={`Push transcripts to ${account.name}`} onClose={onClose}>
+    <Modal title={fireflies ? `Fireflies webhook for ${account.name}` : `Push transcripts to ${account.name}`} onClose={onClose}>
       <div className="space-y-4">
         {notice}
-        <p className="text-sm text-slate-600">
-          POST transcripts as JSON to this URL, signed with the secret: an HMAC-SHA256 of the raw body in
-          {' '}<code>X-Hub-Signature: sha256=&lt;hex&gt;</code>, or <code>Authorization: Bearer &lt;secret&gt;</code>.
-          {' '}Each <code>external_id</code> is ingested once; re-sending it doesn't update the meeting.
-          {account.provider === 'fireflies' && ' Fireflies webhooks can use the same URL and secret.'}
-        </p>
+        {fireflies ? <FirefliesWebhookSteps /> : (
+          <p className="text-sm text-slate-600">
+            POST transcripts as JSON to this URL, signed with the secret: an HMAC-SHA256 of the raw body in
+            {' '}<code>X-Hub-Signature: sha256=&lt;hex&gt;</code>, or <code>Authorization: Bearer &lt;secret&gt;</code>.
+            {' '}Each <code>external_id</code> is ingested once; re-sending it doesn't update the meeting.
+          </p>
+        )}
         <DetailList items={[
           ['Ingest URL', <span className="flex items-center gap-2"><code className="break-all">{account.ingest_url}</code><CopyButton text={account.ingest_url} /></span>],
           ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (push is disabled)'],
@@ -353,10 +387,12 @@ const PushModal = ({ account, onClose }: { account: TranscriptAccount; onClose: 
           </Notice>
         )}
 
-        <div>
-          <p className="text-sm font-medium text-slate-700 mb-1">Example</p>
-          <pre className="bg-slate-100 p-3 rounded-lg text-xs overflow-x-auto"><code>{exampleCurl(account.ingest_url, secret)}</code></pre>
-        </div>
+        {!fireflies && (
+          <div>
+            <p className="text-sm font-medium text-slate-700 mb-1">Example</p>
+            <pre className="bg-slate-100 p-3 rounded-lg text-xs overflow-x-auto"><code>{exampleCurl(account.ingest_url, secret)}</code></pre>
+          </div>
+        )}
 
         <FormActions>
           {hint && <ConfirmButton size="md" confirm="Remove the secret? Pushes to this account will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}

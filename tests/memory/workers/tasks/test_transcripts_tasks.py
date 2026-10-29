@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from celery.schedules import crontab
 
+from memory.common.celery_app import build_beat_schedule
 from memory.common.db.models import Person, TranscriptAccount
 from memory.common.db.models.source_items import Meeting
 from memory.common.content_processing import create_content_hash
@@ -94,26 +96,6 @@ def _add_meeting(db_session, account_id: int, when: datetime, external: str) -> 
 
 
 # ---------------------------------------------------------------------------
-# meeting_min_date
-# ---------------------------------------------------------------------------
-
-
-def test_meeting_min_date_empty(db_session, transcript_account):
-    assert transcripts.meeting_min_date(db_session, transcript_account.id) is None
-
-
-def test_meeting_min_date_with_meetings(db_session, transcript_account):
-    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    newer = datetime(2026, 4, 1, tzinfo=timezone.utc)
-    _add_meeting(db_session, transcript_account.id, older, "old")
-    _add_meeting(db_session, transcript_account.id, newer, "new")
-
-    assert (
-        transcripts.meeting_min_date(db_session, transcript_account.id) == older
-    )
-
-
-# ---------------------------------------------------------------------------
 # dispatch_transcript
 # ---------------------------------------------------------------------------
 
@@ -190,38 +172,10 @@ def test_walk_window_respects_max_pages():
 # ---------------------------------------------------------------------------
 
 
-def test_fireflies_walk_quick_path_single_page(
-    db_session, transcript_account, patch_send_task
-):
-    """max_pages=1 → single API page, single skip=0 call."""
-    fake_client = MagicMock()
-    fake_client.list_transcripts.return_value = [
-        {"id": "01ABC", "dateString": "2026-04-15T00:00:00.000Z"}
-    ]
-    fake_client.get_transcript.return_value = _build_full_transcript(
-        "01ABC", "2026-04-15T00:00:00.000Z"
-    )
-
-    with patch(
-        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
-    ):
-        count = transcripts.fireflies_walk(
-            transcript_account,
-            db_session,
-            floor=datetime(2026, 4, 1, tzinfo=timezone.utc),
-            max_pages=1,
-        )
-
-    assert count == 1
-    assert fake_client.list_transcripts.call_count == 1
-    _, kwargs = fake_client.list_transcripts.call_args
-    assert kwargs.get("skip", 0) == 0
-
-
 def test_fireflies_walk_full_path_paginates(
     db_session, transcript_account, patch_send_task
 ):
-    """max_pages>1 → walk_window paginates until partial page or cap."""
+    """The walk paginates until a partial page."""
     page_size = transcripts.DEFAULT_PAGE_LIMIT
     pages = [
         [
@@ -246,7 +200,6 @@ def test_fireflies_walk_full_path_paginates(
             transcript_account,
             db_session,
             floor=datetime(2026, 4, 1, tzinfo=timezone.utc),
-            max_pages=10,
         )
 
     assert count == page_size + 5
@@ -276,7 +229,6 @@ def test_fireflies_walk_skips_known_external_ids(
             transcript_account,
             db_session,
             floor=datetime(2026, 3, 1, tzinfo=timezone.utc),
-            max_pages=1,
         )
 
     assert count == 1
@@ -314,85 +266,32 @@ def test_known_external_ids_is_global(
 
 
 # ---------------------------------------------------------------------------
-# quick_floor / full_floor (pure floor-computing helpers)
+# Task wrappers (sync_transcript_account / rescan_transcript_account)
 # ---------------------------------------------------------------------------
 
 
-def test_quick_floor_uses_min_date_when_recent(db_session, transcript_account):
-    """If min_date is more recent than the bootstrap window, it wins —
-    quick sync doesn't re-fetch data we already have."""
-    recent = datetime.now(timezone.utc) - timedelta(days=2)
-    _add_meeting(db_session, transcript_account.id, recent, "recent")
-    assert transcripts.quick_floor(transcript_account, db_session) == recent
-
-
-def test_quick_floor_uses_bootstrap_when_db_empty(db_session, transcript_account):
-    """Empty DB → bootstrap (now - QUICK_BOOTSTRAP_LOOKBACK_DAYS)."""
-    before = datetime.now(timezone.utc)
-    floor = transcripts.quick_floor(transcript_account, db_session)
-    after = datetime.now(timezone.utc)
-    expected_low = before - timedelta(days=transcripts.QUICK_BOOTSTRAP_LOOKBACK_DAYS)
-    expected_high = after - timedelta(days=transcripts.QUICK_BOOTSTRAP_LOOKBACK_DAYS)
-    assert expected_low <= floor <= expected_high
-
-
-def test_quick_floor_uses_bootstrap_when_min_date_is_old(
-    db_session, transcript_account
+@pytest.mark.parametrize(
+    "task, lookback_days",
+    [
+        ("sync_transcript_account", transcripts.SYNC_LOOKBACK_DAYS),
+        ("rescan_transcript_account", 30),
+    ],
+)
+def test_walk_tasks_walk_back_their_lookback(
+    db_session, transcript_account, patch_session, patch_send_task, monkeypatch, task, lookback_days
 ):
-    """If min_date is ancient (years ago), the bootstrap floor (more recent)
-    wins — don't waste calls walking through all of history every quick poll."""
-    very_old = datetime.now(timezone.utc) - timedelta(days=400)
-    _add_meeting(db_session, transcript_account.id, very_old, "very-old")
-    floor = transcripts.quick_floor(transcript_account, db_session)
-    expected_min = datetime.now(timezone.utc) - timedelta(
-        days=transcripts.QUICK_BOOTSTRAP_LOOKBACK_DAYS + 1
-    )
-    assert floor > expected_min
-
-
-def test_full_floor_uses_lookback_setting(
-    db_session, transcript_account, monkeypatch
-):
-    """Full floor = now - TRANSCRIPTS_RESCAN_LOOKBACK_DAYS, regardless of
-    min_date."""
-    recent = datetime.now(timezone.utc) - timedelta(days=2)
-    _add_meeting(db_session, transcript_account.id, recent, "recent")
-    monkeypatch.setattr(
-        transcripts.settings, "TRANSCRIPTS_RESCAN_LOOKBACK_DAYS", 30
-    )
-
-    floor = transcripts.full_floor(transcript_account, db_session)
-    expected_min = datetime.now(timezone.utc) - timedelta(days=31)
-    expected_max = datetime.now(timezone.utc) - timedelta(days=29)
-    assert expected_min <= floor <= expected_max
-
-
-def test_quick_sync_is_single_page(
-    db_session, transcript_account, patch_session, patch_send_task
-):
-    """Quick sync (sync_transcript_account) uses max_pages=1 — single API
-    call, no skip pagination."""
-    page_size = transcripts.DEFAULT_PAGE_LIMIT
+    monkeypatch.setattr(transcripts.settings, "TRANSCRIPTS_RESCAN_LOOKBACK_DAYS", 30)
     fake_client = MagicMock()
-    fake_client.list_transcripts.return_value = [
-        {"id": f"01-{i}", "dateString": "2026-04-15T00:00:00.000Z"}
-        for i in range(page_size)
-    ]
-    fake_client.get_transcript.side_effect = lambda mid: _build_full_transcript(
-        mid, "2026-04-15T00:00:00.000Z"
-    )
-
+    fake_client.list_transcripts.return_value = []
     with patch(
         "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
     ):
-        transcripts.sync_transcript_account(transcript_account.id)
+        result = getattr(transcripts, task)(transcript_account.id)
 
-    assert fake_client.list_transcripts.call_count == 1
-
-
-# ---------------------------------------------------------------------------
-# Task wrappers (sync_transcript_account / rescan_transcript_account)
-# ---------------------------------------------------------------------------
+    assert result["status"] == "completed"
+    floor = fake_client.list_transcripts.call_args.kwargs["from_date"]
+    expected = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    assert abs(floor - expected) < timedelta(minutes=1)
 
 
 def test_sync_transcript_account_skips_inactive(
@@ -452,21 +351,6 @@ def test_sync_transcript_account_propagates_unhandled_errors(
     assert "transient blip" in (transcript_account.sync_error or "")
 
 
-def test_rescan_transcript_account_uses_full_provider(
-    db_session, transcript_account, patch_session, patch_send_task
-):
-    """rescan_transcript_account dispatches via PROVIDERS with max_pages=RESCAN_MAX_PAGES."""
-    fake_client = MagicMock()
-    fake_client.list_transcripts.return_value = []  # one-call partial
-    with patch(
-        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
-    ):
-        result = transcripts.rescan_transcript_account(transcript_account.id)
-
-    assert result["status"] == "completed"
-    fake_client.list_transcripts.assert_called_once()
-
-
 @pytest.fixture
 def unpolled_accounts(db_session, regular_user):
     inactive = TranscriptAccount(
@@ -481,20 +365,21 @@ def unpolled_accounts(db_session, regular_user):
     return [inactive, push_only]
 
 
-@pytest.mark.parametrize(
-    "fan_out, per_account",
-    [
-        ("sync_all_transcript_accounts", "sync_transcript_account"),
-        ("rescan_all_transcript_accounts", "rescan_transcript_account"),
-    ],
-)
+def test_daily_sync_is_on_the_clock():
+    """An interval entry first fires one interval after beat starts, and beat's
+    schedule file doesn't survive a container recreate, so a daily interval
+    would slip with every deploy."""
+    entry = build_beat_schedule()["sync-all-transcript-accounts"]
+    assert isinstance(entry["schedule"], crontab)
+
+
 def test_fan_out_dispatches_only_active_polling_accounts(
-    db_session, transcript_account, unpolled_accounts, patch_session, fan_out, per_account
+    db_session, transcript_account, unpolled_accounts, patch_session
 ):
     with patch.object(
-        getattr(transcripts, per_account), "delay", return_value=MagicMock(id="t-1")
+        transcripts.sync_transcript_account, "delay", return_value=MagicMock(id="t-1")
     ) as delay:
-        result = getattr(transcripts, fan_out)()
+        result = transcripts.sync_all_transcript_accounts()
 
     assert [r["account_id"] for r in result] == [transcript_account.id]
     delay.assert_called_once_with(transcript_account.id)
@@ -537,6 +422,42 @@ def test_ingest_transcript_meeting_skips_known_meeting(
     assert result["status"] == "exists"
     fake_client.get_transcript.assert_not_called()
     assert patch_send_task == []
+
+
+def test_ingest_transcript_meeting_refetches_reprocessed_meeting(
+    db_session, transcript_account, patch_session, patch_send_task
+):
+    _add_meeting(db_session, transcript_account.id, datetime.now(timezone.utc), "KNOWN")
+    fake_client = MagicMock()
+    fake_client.get_transcript.return_value = {**SAMPLE_FULL_TRANSCRIPT, "id": "KNOWN"}
+    with patch(
+        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
+    ):
+        result = transcripts.ingest_transcript_meeting(
+            transcript_account.id, "KNOWN", reprocessed=True
+        )
+
+    assert result["status"] == "queued"
+    assert [(c["kwargs"]["external_id"], c["kwargs"]["replace"]) for c in patch_send_task] == [
+        ("KNOWN", True)
+    ]
+
+
+def test_ingest_transcript_meeting_clears_earlier_push_error(
+    db_session, transcript_account, patch_session, patch_send_task
+):
+    transcript_account.record_sync("bad key")
+    db_session.commit()
+    fake_client = MagicMock()
+    fake_client.get_transcript.return_value = SAMPLE_FULL_TRANSCRIPT
+    with patch(
+        "memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client
+    ):
+        transcripts.ingest_transcript_meeting(transcript_account.id, SAMPLE_FULL_TRANSCRIPT["id"])
+
+    db_session.refresh(transcript_account)
+    assert transcript_account.sync_error is None
+    assert transcript_account.sync_failing_since is None
 
 
 @pytest.mark.parametrize("field, value", [("active", False), ("provider", "generic")])

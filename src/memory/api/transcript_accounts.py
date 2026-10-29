@@ -327,7 +327,7 @@ def trigger_sync(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
-    """Manually trigger a quick sync for a transcript account."""
+    """Manually trigger a sync of the last two weeks for a transcript account."""
     get_polled_account(db, account_id, user)
     task = celery_app.send_task(SYNC_TRANSCRIPT_ACCOUNT, args=[account_id])
     return {"task_id": task.id, "status": "scheduled"}

@@ -136,20 +136,25 @@ def test_repeat_external_id_returns_existing_job(client, user, db_session, sent)
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "payload, reprocessed",
     [
-        {"event": "meeting.transcribed", "meeting_id": "FF123"},
-        {"eventType": "Transcription completed", "meetingId": "FF123"},
+        ({"event": "meeting.transcribed", "meeting_id": "FF123"}, False),
+        ({"eventType": "Transcription completed", "meetingId": "FF123"}, False),
+        ({"event": "meeting.transcribed", "meeting_id": "FF123", "reprocessed_at": 1761645600000}, True),
+        ({"event": "meeting.transcribed", "meeting_id": "FF123", "reprocessed_at": None}, False),
+        ({"event": "meeting.summarized", "meeting_id": "FF123", "reprocessed_at": 1761645600000}, True),
     ],
 )
-def test_fireflies_notification_queues_one_meeting_fetch(client, user, db_session, sent, payload):
+def test_fireflies_notification_queues_one_meeting_fetch(client, user, db_session, sent, payload, reprocessed):
     account = make_account(db_session, user.id, provider="fireflies")
     body = json.dumps(payload).encode()
 
     response = post(client, account.id, body, {"X-Hub-Signature": f"sha256={sign(body)}"})
 
     assert response.status_code == 202
-    assert sent == [{"name": INGEST_TRANSCRIPT_MEETING, "args": [account.id, "FF123"], "kwargs": None, "task_id": None}]
+    assert sent == [
+        {"name": INGEST_TRANSCRIPT_MEETING, "args": [account.id, "FF123", reprocessed], "kwargs": None, "task_id": None}
+    ]
 
 
 @pytest.mark.parametrize(
