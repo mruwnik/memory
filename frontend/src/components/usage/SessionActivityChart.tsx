@@ -8,7 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import { TelemetryMetricsResponse } from '@/hooks/useUsage'
 import { EmptyState } from '@/components/shared/ui'
 
 interface SessionActivityChartProps {

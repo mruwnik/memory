@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@/test/utils'
-import { TelemetrySummaryCards } from './TelemetrySummaryCards'
+import { UsageSummaryCards } from './UsageSummaryCards'
 
-describe('TelemetrySummaryCards', () => {
+describe('UsageSummaryCards', () => {
   it('renders all four card titles', () => {
     render(
-      <TelemetrySummaryCards totalTokens={0} totalCost={0} totalSessions={0} eventCount={0} />,
+      <UsageSummaryCards totalTokens={0} totalCost={0} totalSessions={0} eventCount={0} />,
     )
     expect(screen.getByText('Total tokens')).toBeInTheDocument()
     expect(screen.getByText('Total cost')).toBeInTheDocument()
     expect(screen.getByText('Sessions')).toBeInTheDocument()
     expect(screen.getByText('Events')).toBeInTheDocument()
-    expect(screen.getByText('Input + output')).toBeInTheDocument()
+    expect(screen.getByText('All sources')).toBeInTheDocument()
   })
 
   it.each([
@@ -24,7 +24,7 @@ describe('TelemetrySummaryCards', () => {
     [2_500_000, '2.5M'],
   ])('formats %i tokens as %s', (tokens, expected) => {
     render(
-      <TelemetrySummaryCards
+      <UsageSummaryCards
         totalTokens={tokens}
         totalCost={0}
         totalSessions={123456}
@@ -41,14 +41,14 @@ describe('TelemetrySummaryCards', () => {
     [12, '$12.00'],
   ])('formats cost %f as %s', (cost, expected) => {
     render(
-      <TelemetrySummaryCards totalTokens={0} totalCost={cost} totalSessions={0} eventCount={0} />,
+      <UsageSummaryCards totalTokens={0} totalCost={cost} totalSessions={0} eventCount={0} />,
     )
     expect(screen.getByText(expected)).toBeInTheDocument()
   })
 
   it('renders session and event counts as plain integers', () => {
     render(
-      <TelemetrySummaryCards
+      <UsageSummaryCards
         totalTokens={0}
         totalCost={0}
         totalSessions={42}

@@ -427,27 +427,6 @@ def get_aggregated_metrics(
     }
 
 
-class UsageUser(BaseModel):
-    id: int
-    name: str
-    email: str
-
-
-@router.get("/users", response_model=list[UsageUser])
-def get_users_with_usage(
-    user: User = Depends(require_rest_access),
-    db: DBSession = Depends(get_session),
-) -> list[UsageUser]:
-    """Users with usage you can see: spend attributed to them, runs, or telemetry."""
-    with_usage = union_all(
-        select(LLMSpend.user_id).where(visible(user, LLMSpend.user_id, LLMSpend.provider_key_id)),
-        select(AgentRun.user_id).where(visible(user, AgentRun.user_id, AgentRun.provider_key_id)),
-        select(TelemetryEvent.user_id).where(visible(user, TelemetryEvent.user_id)),
-    )
-    users = db.query(User).filter(User.id.in_(with_usage)).order_by(User.id)
-    return [UsageUser(id=u.id, name=u.name or "", email=u.email or "") for u in users]
-
-
 def session_label(
     session_id: str,
     summary: str | None,

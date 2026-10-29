@@ -39,7 +39,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'System operations',
     items: [
       { to: '/ui/metrics', title: 'Metrics', description: 'System health, task performance, and API usage' },
-      { to: '/ui/telemetry', title: 'Telemetry', description: 'Claude Code usage, tokens, costs, and sessions' },
+      { to: '/ui/usage', title: 'Usage', description: 'LLM cost and tokens by source, model, agent, key and user' },
       { to: '/ui/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and agent runs' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },

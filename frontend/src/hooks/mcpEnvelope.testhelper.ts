@@ -1,6 +1,6 @@
 import { mcpToolFromRequest, type MockResponseInit } from '@/test/utils'
 
-// `useMCP`'s `parseJsonResponse` (used by useTelemetry/useDiscord and others)
+// `useMCP`'s `parseJsonResponse` (used by useUsage/useDiscord and others)
 // throws unless the response advertises a JSON content-type, so every
 // envelope-bearing MockResponseInit declares it. `mcpCall` itself reads
 // `response.text()` regardless, so this header is harmless for the plain path.

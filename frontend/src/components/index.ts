@@ -16,4 +16,4 @@ export { CeleryOverview } from './celery'
 export { ScheduledTasks } from './scheduled-tasks'
 export { ReportsPage } from './reports'
 
-// Note: Metrics, Telemetry, ClaudeSessions are lazy-loaded in App.tsx
+// Note: Metrics, Usage, ClaudeSessions are lazy-loaded in App.tsx

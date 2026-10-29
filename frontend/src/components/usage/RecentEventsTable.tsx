@@ -1,5 +1,5 @@
 import React from 'react'
-import { TelemetryEvent } from '@/hooks/useTelemetry'
+import { TelemetryEvent } from '@/hooks/useUsage'
 import { Badge, EmptyState, Table, type Tone } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 import { formatUserDate, formatUserDateTime, formatUserTime } from '@/utils/timezones'

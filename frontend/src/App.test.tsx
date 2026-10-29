@@ -64,7 +64,7 @@ vi.mock('@/components/people', () => ({ PeopleManagement: () => <div>PEOPLE</div
 vi.mock('@/components/projects/Projects', () => ({ default: () => <div>PROJECTS</div> }))
 vi.mock('@/components/teams/Teams', () => ({ default: () => <div>TEAMS</div> }))
 vi.mock('@/components/metrics/Metrics', () => ({ default: () => <div>METRICS</div> }))
-vi.mock('@/components/telemetry/Telemetry', () => ({ default: () => <div>TELEMETRY</div> }))
+vi.mock('@/components/usage/Usage', () => ({ default: () => <div>USAGE</div> }))
 vi.mock('@/components/claude/ClaudeSessions', () => ({ default: () => <div>CLAUDE</div> }))
 
 import App from './App'

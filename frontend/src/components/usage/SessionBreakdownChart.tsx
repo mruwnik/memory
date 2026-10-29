@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts'
-import { SessionStatsResponse, SessionStats } from '@/hooks/useTelemetry'
+import { SessionStatsResponse, SessionStats } from '@/hooks/useUsage'
 import { Badge, Disclosure, EmptyState, Select, Table } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 

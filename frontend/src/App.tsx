@@ -23,7 +23,7 @@ import { LoadingState } from '@/components/shared/ui'
 
 // Lazy load heavy components (recharts ~300KB, xterm ~400KB)
 const Metrics = lazy(() => import('@/components/metrics/Metrics'))
-const Telemetry = lazy(() => import('@/components/telemetry/Telemetry'))
+const Usage = lazy(() => import('@/components/usage/Usage'))
 const ClaudeSessions = lazy(() => import('@/components/claude/ClaudeSessions'))
 
 // AuthWrapper handles redirects based on auth state
@@ -119,7 +119,7 @@ const AuthWrapper = () => {
     { path: '/ui/people', element: <PeopleManagement />, scope: 'people' },
     { path: '/ui/projects', element: <Projects />, module: 'teams' },
     { path: '/ui/teams', element: <Teams />, module: 'teams' },
-    { path: '/ui/telemetry', element: <Suspense fallback={<LoadingState />}><Telemetry /></Suspense> },
+    { path: '/ui/usage', element: <Suspense fallback={<LoadingState />}><Usage /></Suspense> },
     { path: '/ui/jobs', element: <Jobs /> },
     { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
     { path: '/ui/agents', element: <AgentsPage />, scope: 'agents' },

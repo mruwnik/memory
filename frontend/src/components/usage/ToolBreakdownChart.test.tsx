@@ -20,7 +20,7 @@ vi.mock('recharts', () => {
 })
 
 import { ToolBreakdownChart } from './ToolBreakdownChart'
-import type { ToolUsageResponse, ToolUsageStats } from '@/hooks/useTelemetry'
+import type { ToolUsageResponse, ToolUsageStats } from '@/hooks/useUsage'
 
 const readData = () =>
   JSON.parse(screen.getByTestId('chart').getAttribute('data-chart-data') ?? '[]')

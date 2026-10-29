@@ -578,18 +578,3 @@ def test_to_is_exclusive(client, db_session, user, path, params, event, rows):
 
     assert response.status_code == 200, response.text
     assert rows(response.json()) == []
-
-
-@pytest.mark.parametrize("client_fixture, expected", [("client", ["Other User", "Test User"]), ("member_client", ["Test User"])])
-def test_users_lists_whoever_has_usage_you_can_see(request, db_session, user, other_user, client_fixture, expected):
-    theirs = add_provider_key(db_session, other_user.id, "theirs")
-    add_spend(db_session, theirs.id, user.id, "1")
-    add_run(db_session, other_user.id, "1", theirs.id)
-    db_session.add(HumanUser(name="Idle", email="idle@example.com", password_hash="x"))
-    db_session.commit()
-    api = request.getfixturevalue(client_fixture)
-
-    response = api.get("/usage/users")
-
-    assert response.status_code == 200, response.text
-    assert sorted(u["name"] for u in response.json()) == expected

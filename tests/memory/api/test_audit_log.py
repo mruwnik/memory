@@ -42,6 +42,7 @@ def test_audit_log_is_admin_only(regular_client, audit_rows):
         ({"actor_id": 1}, 1, [("mcp.call", "upsert", "test@example.com")]),
         ({"limit": 1, "offset": 1}, 2, [("mcp.call", "upsert", "test@example.com")]),
         ({"from": (NOW - timedelta(seconds=90)).isoformat()}, 1, [("settings.restart", None, "gone@example.com")]),
+        ({"to": (NOW - timedelta(minutes=1)).isoformat()}, 1, [("mcp.call", "upsert", "test@example.com")]),
     ],
 )
 def test_audit_log_lists_newest_first(client, audit_rows, params, total, expected):

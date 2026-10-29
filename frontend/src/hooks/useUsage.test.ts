@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { useTelemetry } from './useTelemetry'
+import { useUsage } from './useUsage'
 import { setAuthCookies, clearCookies, mockFetch, mockResponse } from '@/test/utils'
 
 beforeEach(() => {
@@ -9,7 +9,7 @@ beforeEach(() => {
 })
 
 function setup() {
-  return renderHook(() => useTelemetry()).result.current
+  return renderHook(() => useUsage()).result.current
 }
 
 function callTo(fetchMock: ReturnType<typeof mockFetch>, substr: string) {
@@ -24,7 +24,27 @@ function mockJson(json: unknown, status = 200) {
   return mockFetch(async () => mockResponse({ status, json, headers: JSON_HEADERS }))
 }
 
-describe('useTelemetry getRawEvents', () => {
+describe('useUsage getUsage', () => {
+  it('serializes grouping, interval, window and user', async () => {
+    const fetchMock = mockJson({ data: [] })
+    const from = new Date('2026-10-01T00:00:00.000Z')
+    const to = new Date('2026-10-08T00:00:00.000Z')
+    await setup().getUsage({ groupBy: ['model', 'user'], interval: 'week', from, to, userId: 3 })
+    const url = new URL(callTo(fetchMock, '/usage?').url, 'http://x')
+    expect(url.searchParams.getAll('group_by')).toEqual(['model', 'user'])
+    expect(url.searchParams.get('interval')).toBe('week')
+    expect(url.searchParams.get('from')).toBe(from.toISOString())
+    expect(url.searchParams.get('to')).toBe(to.toISOString())
+    expect(url.searchParams.get('user_id')).toBe('3')
+  })
+
+  it('throws the server reason on non-ok', async () => {
+    mockJson({ detail: 'nope' }, 422)
+    await expect(setup().getUsage()).rejects.toThrow('nope')
+  })
+})
+
+describe('useUsage getRawEvents', () => {
   it('returns the parsed raw response with no filters', async () => {
     const payload = {
       total: 0,
@@ -89,7 +109,7 @@ describe('useTelemetry getRawEvents', () => {
   })
 })
 
-describe('useTelemetry getMetrics', () => {
+describe('useUsage getMetrics', () => {
   it('always sets the metric param and appends each group_by', async () => {
     const fetchMock = mockJson({ metric: 'token.usage', data: [] })
     await setup().getMetrics('token.usage', {
@@ -124,7 +144,7 @@ describe('useTelemetry getMetrics', () => {
   })
 })
 
-describe('useTelemetry getToolUsage', () => {
+describe('useUsage getToolUsage', () => {
   it('hits the tool-usage endpoint and returns the parsed response', async () => {
     const payload = { from_time: 'a', to_time: 'b', session_count: 2, tools: [] }
     const fetchMock = mockJson(payload)
@@ -140,24 +160,7 @@ describe('useTelemetry getToolUsage', () => {
   })
 })
 
-describe('useTelemetry getUsersWithTelemetry', () => {
-  it('returns the user list', async () => {
-    const users = [{ id: 1, name: 'A', email: 'a@x' }]
-    const fetchMock = mockJson(users)
-    const r = await setup().getUsersWithTelemetry()
-    expect(r).toEqual(users)
-    expect(callTo(fetchMock, '/usage/users').url).toContain('/usage/users')
-  })
-
-  it('throws a status-bearing error on non-ok', async () => {
-    mockJson({}, 403)
-    await expect(setup().getUsersWithTelemetry()).rejects.toThrow(
-      'Failed to fetch telemetry users (403)',
-    )
-  })
-})
-
-describe('useTelemetry getSessionStats', () => {
+describe('useUsage getSessionStats', () => {
   it('fetches server-aggregated sessions with every filter', async () => {
     const payload = { from_time: 'a', to_time: 'b', sessions: [] }
     const fetchMock = mockJson(payload)
@@ -174,7 +177,7 @@ describe('useTelemetry getSessionStats', () => {
   })
 })
 
-describe('useTelemetry getApiKeysWithTelemetry', () => {
+describe('useUsage getApiKeysWithTelemetry', () => {
   it('returns the keys for the selected user', async () => {
     const keys = [{ id: 4, name: 'laptop', key_type: 'internal', user_id: 9, revoked: false }]
     const fetchMock = mockJson(keys)

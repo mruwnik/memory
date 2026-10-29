@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { TelemetryMetricDataPoint, TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import { TelemetryMetricDataPoint, TelemetryMetricsResponse } from '@/hooks/useUsage'
 import { EmptyState } from '@/components/shared/ui'
 
 interface TokenUsageChartProps {

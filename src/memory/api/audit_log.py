@@ -18,7 +18,7 @@ def list_audit_events(
     action: str | None = Query(None),
     actor_id: int | None = Query(None),
     from_time: datetime | None = Query(None, alias="from"),
-    to_time: datetime | None = Query(None, alias="to"),
+    to_time: datetime | None = Query(None, alias="to", description="Exclusive"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     _user: User = require_scope(SCOPE_ADMIN),
@@ -33,7 +33,7 @@ def list_audit_events(
     if from_time:
         query = query.filter(AuditEvent.timestamp >= from_time)
     if to_time:
-        query = query.filter(AuditEvent.timestamp <= to_time)
+        query = query.filter(AuditEvent.timestamp < to_time)
 
     events = (
         query.order_by(AuditEvent.timestamp.desc(), AuditEvent.id.desc())

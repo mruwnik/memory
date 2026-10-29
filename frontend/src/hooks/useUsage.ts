@@ -100,10 +100,34 @@ export interface TelemetryApiKey {
   revoked: boolean
 }
 
-export interface TelemetryUser {
-  id: number
-  name: string
-  email: string
+export type UsageGroupBy = 'kind' | 'model' | 'agent' | 'key' | 'user'
+export type UsageInterval = 'hour' | 'day' | 'week' | 'month'
+
+export interface UsageRow {
+  timestamp: string
+  kind?: string | null
+  model?: string | null
+  agent?: string | null
+  key?: number | null
+  user?: number | null
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  tokens: number
+}
+
+export interface UsageResponse {
+  from: string
+  to: string
+  interval: UsageInterval
+  group_by: UsageGroupBy[]
+  data: UsageRow[]
+  /** User id (as a string: JSON object keys) to name. */
+  users: Record<string, string>
+  /** Key id to label; keys you don't own are labelled "shared key". */
+  keys: Record<string, string>
 }
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
@@ -115,8 +139,29 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   return response.json()
 }
 
-export const useTelemetry = () => {
+export const useUsage = () => {
   const { apiCall } = useAuth()
+
+  const getUsage = useCallback(async (
+    options: {
+      groupBy?: UsageGroupBy[]
+      interval?: UsageInterval
+      from?: Date
+      to?: Date
+      userId?: number
+    } = {}
+  ): Promise<UsageResponse> => {
+    const params = new URLSearchParams()
+    options.groupBy?.forEach(g => params.append('group_by', g))
+    if (options.interval) params.set('interval', options.interval)
+    if (options.from) params.set('from', options.from.toISOString())
+    if (options.to) params.set('to', options.to.toISOString())
+    if (options.userId !== undefined) params.set('user_id', options.userId.toString())
+
+    const response = await apiCall(`/usage?${params}`)
+    if (!response.ok) throw await apiError(response, 'Failed to fetch usage')
+    return parseJsonResponse<UsageResponse>(response)
+  }, [apiCall])
 
   const getRawEvents = useCallback(async (
     options: {
@@ -222,18 +267,12 @@ export const useTelemetry = () => {
     return parseJsonResponse<TelemetryApiKey[]>(response)
   }, [apiCall])
 
-  const getUsersWithTelemetry = useCallback(async (): Promise<TelemetryUser[]> => {
-    const response = await apiCall('/usage/users')
-    if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry users')
-    return parseJsonResponse<TelemetryUser[]>(response)
-  }, [apiCall])
-
   return {
+    getUsage,
     getRawEvents,
     getMetrics,
     getToolUsage,
     getSessionStats,
     getApiKeysWithTelemetry,
-    getUsersWithTelemetry,
   }
 }

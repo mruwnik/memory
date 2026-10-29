@@ -47,7 +47,7 @@ data looks like.
 | shows one thing | Detail | Agent run, MCP server, Poll results |
 | browses a list while reading one item beside it | Master–detail | Notes, Reports, Claude sessions |
 | edits settings or creates one thing | Form | User settings, Create poll, Forums sync |
-| watches numbers over time | Dashboard | Metrics, Telemetry, Celery |
+| watches numbers over time | Dashboard | Metrics, Usage, Celery |
 
 Specialised views (the calendar grid, poll availability grid, log viewer, terminal) sit inside these as a
 `Card`; they are the only place for one-off layout.

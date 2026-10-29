@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, within } from '@/test/utils'
 import { RecentEventsTable } from './RecentEventsTable'
-import type { TelemetryEvent } from '@/hooks/useTelemetry'
+import type { TelemetryEvent } from '@/hooks/useUsage'
 
 const makeEvent = (overrides: Partial<TelemetryEvent>): TelemetryEvent => ({
   api_key_id: null,

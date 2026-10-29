@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts'
-import { ToolUsageResponse, ToolCallStats } from '@/hooks/useTelemetry'
+import { ToolUsageResponse, ToolCallStats } from '@/hooks/useUsage'
 import { EmptyState, Select } from '@/components/shared/ui'
 
 type MetricType = 'total' | 'median' | 'p75' | 'p90' | 'p99' | 'min' | 'max'

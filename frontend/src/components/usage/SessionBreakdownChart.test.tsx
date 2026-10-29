@@ -24,7 +24,7 @@ vi.mock('recharts', () => {
 })
 
 import { SessionBreakdownChart } from './SessionBreakdownChart'
-import type { SessionStatsResponse, SessionStats } from '@/hooks/useTelemetry'
+import type { SessionStatsResponse, SessionStats } from '@/hooks/useUsage'
 
 const readData = () =>
   JSON.parse(screen.getByTestId('chart').getAttribute('data-chart-data') ?? '[]')

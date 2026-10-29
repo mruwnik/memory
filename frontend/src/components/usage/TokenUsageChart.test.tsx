@@ -22,7 +22,7 @@ vi.mock('recharts', () => {
 })
 
 import { TokenUsageChart } from './TokenUsageChart'
-import type { TelemetryMetricsResponse } from '@/hooks/useTelemetry'
+import type { TelemetryMetricsResponse } from '@/hooks/useUsage'
 
 const readData = () =>
   JSON.parse(screen.getByTestId('chart').getAttribute('data-chart-data') ?? '[]')

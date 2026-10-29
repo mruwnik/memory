@@ -46,16 +46,15 @@ tokens. Deleting a provider key or a user keeps that spend as history; spend on
 a deleted key no longer counts toward any daily cap.
 
 The telemetry read endpoints moved under `/usage`: `/telemetry/raw`,
-`/telemetry/metrics`, `/telemetry/sessions`, `/telemetry/users` and
-`/telemetry/api-keys` are now `/usage/raw`, `/usage/metrics`, `/usage/sessions`,
-`/usage/users` and `/usage/api-keys`, and `/sessions/stats/tool-usage` is
-`/usage/tools`. Scripts calling the old paths must switch. OTLP ingest is
+`/telemetry/metrics`, `/telemetry/sessions` and `/telemetry/api-keys` are now
+`/usage/raw`, `/usage/metrics`, `/usage/sessions` and `/usage/api-keys`,
+`/sessions/stats/tool-usage` is `/usage/tools`, and `/telemetry/users` is
+removed. Scripts calling the old paths must switch. OTLP ingest is
 unchanged (`/telemetry/ingest`, `/telemetry/v1/*`), so Claude Code's
 `OTEL_EXPORTER_OTLP_ENDPOINT` needs no change. New `GET /usage` returns LLM cost
 and tokens over time across memory's own calls, agent runs and Claude Code
-telemetry, grouped by user, key, agent, model or kind. `/usage/users` now lists
-everyone with usage you can see (spend, runs or telemetry), and every `/usage/*`
-endpoint treats `to` as exclusive.
+telemetry, grouped by user, key, agent, model or kind. Every `/usage/*`
+endpoint and `/audit` treat `to` as exclusive.
 
 Purging agent runs past their retention now first adds their cost and tokens to
 `llm_spend` (as `kind = 'run'`, bucketed by the hour the run was created), so

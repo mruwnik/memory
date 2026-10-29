@@ -15,7 +15,7 @@ interface UserSelectorProps {
   value: SelectedUser
   onChange: (user: SelectedUser) => void
   className?: string
-  // Optional: only show users that exist in this list (e.g., users with telemetry data)
+  // Optional: only show users that exist in this list
   filterToUsers?: FilterUser[]
   // Only show human users (excludes bots)
   onlyHumanUsers?: boolean
