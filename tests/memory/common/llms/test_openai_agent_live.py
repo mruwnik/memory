@@ -132,7 +132,7 @@ async def test_every_system_agent_answers_on_an_openai_key(db_session, regular_u
     db_session.commit()
 
     result = await run_agent(
-        slug, SYSTEM_PROMPTS[slug], key=credential(key)
+        slug, SYSTEM_PROMPTS[slug], key=credential(key, None)
     )
 
     print(f"\n{slug}: ${result.cost} {result.data or result.text!r}")

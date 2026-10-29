@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from memory.agents.provider_keys import ingest_key, personal_key
+from memory.agents.provider_keys import ingest_key, ingest_user, personal_key
 from memory.agents.system import SUMMARISE
 from memory.common.db.models import (
     ArticleFeed,
@@ -58,13 +58,15 @@ def test_the_owners_default_key_pays_for_items_from_a_source_left_on_default(db_
 @pytest.mark.parametrize("provider", ["anthropic", "openai"])
 @pytest.mark.parametrize("chooser", ["regular_user", "admin_user"])
 def test_a_sources_explicit_key_pays_whoever_owns_it(request, db_session, regular_user, chooser, provider):
-    """Anyone who can see a source may switch it to their own key, and then they pay."""
+    """Anyone who can see a source may switch it to their own key, and then they pay,
+    for the user who brought the item in."""
     key(db_session, regular_user, "default", is_default=True)
     explicit = key(db_session, request.getfixturevalue(chooser), "work", provider=provider)
     post = blog_post(db_session, feed_of(db_session, regular_user, llm_key_id=explicit.id))
     post.creator_id = regular_user.id
 
     assert ingest_key(db_session, post, SUMMARISE) == explicit
+    assert ingest_user(post) == regular_user.id
 
 
 @pytest.mark.parametrize("choice", ["disabled", "invalid"])
@@ -134,6 +136,7 @@ def test_slack_messages_use_the_app_registrants_default(db_session, regular_user
     db_session.commit()
 
     assert ingest_key(db_session, message, SUMMARISE) == default
+    assert ingest_user(message) == regular_user.id
 
 
 def discord_message(db, channel_id, server_id=None):

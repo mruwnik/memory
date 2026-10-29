@@ -159,7 +159,7 @@ def summarize_session(session_id: str) -> dict:
             logger.info(f"Session {session_id} has no conversation content")
             return {"status": "skipped", "message": "No conversation content"}
 
-        summary = generate_summary(conversation, credential(found))
+        summary = generate_summary(conversation, credential(found, session.user_id))
         if not summary:
             logger.warning(f"Failed to generate summary for session {session_id}")
             return {"status": "error", "message": "Summary generation failed"}

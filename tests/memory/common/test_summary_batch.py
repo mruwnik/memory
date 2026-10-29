@@ -22,6 +22,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import LLMProviderKey, LLMSpend, SourceItem, SummaryRequest
 from memory.common.llms.anthropic_provider import AnthropicProvider
 from memory.common.llms import batches as batch_apis
+from memory.common.llms.neutral import AgentUsage
 from tests.memory.agents import fakes
 
 LONG_TEXT = "Some interesting sentence about things. " * 200
@@ -507,7 +508,13 @@ def test_keys_that_cannot_pay_keep_their_requests_pending(
 ):
     llm_key.status, llm_key.max_cost_usd_per_day = status, cap
     summary_batch.caps.record_spend(
-        db_session, key_id=llm_key.id, agent="system:hyde", cost=Decimal("1")
+        db_session,
+        key_id=llm_key.id,
+        user_id=None,
+        agent="system:hyde",
+        model="anthropic/m",
+        cost=Decimal("1"),
+        usage=AgentUsage(),
     )
     db_session.commit()
     add_request(db_session, make_item(db_session), llm_key)
@@ -592,13 +599,15 @@ def test_collect_reads_each_batch_with_its_own_key(db_session, regular_user, llm
 
 
 def test_collected_results_are_applied_and_charged_at_the_batch_discount(
-    db_session, llm_key, batches, monkeypatch
+    db_session, admin_user, llm_key, batches, monkeypatch
 ):
     applied = []
     monkeypatch.setattr(
         summary_batch, "apply_summary", lambda session, request, data: applied.append(data)
     )
-    request = add_request(db_session, make_item(db_session), llm_key)
+    # Spent for whoever brought the item in, not the key's owner
+    item = make_item(db_session, creator_id=admin_user.id)
+    request = add_request(db_session, item, llm_key)
     (batch_id,) = summary_batch.submit_pending(db_session)
     batches.results[batch_id] = [batch_result(request.id)]
 
@@ -607,10 +616,22 @@ def test_collected_results_are_applied_and_charged_at_the_batch_discount(
     # haiku-5-5: 1000 x $0.10/MTok + 100 x $0.50/MTok = $0.00015, halved.
     spend = db_session.query(LLMSpend).one()
     assert applied == [SUMMARY]
-    assert (spend.provider_key_id, spend.agent, spend.cost_usd) == (
+    assert (
+        spend.provider_key_id,
+        spend.user_id,
+        spend.agent,
+        spend.model,
+        spend.cost_usd,
+        spend.input_tokens,
+        spend.output_tokens,
+    ) == (
         llm_key.id,
+        admin_user.id,
         SUMMARISE.slug,
+        SUMMARISE.model_for("anthropic"),
         Decimal("0.000075"),
+        1000,
+        100,
     )
 
 
@@ -920,7 +941,7 @@ def test_an_openai_batch_that_is_not_created_deletes_its_upload(
 
 
 def test_openai_results_are_applied_retried_and_their_files_deleted(
-    db_session, llm_key, openai_batches, monkeypatch
+    db_session, admin_user, llm_key, openai_batches, monkeypatch
 ):
     applied = []
 
@@ -929,7 +950,7 @@ def test_openai_results_are_applied_retried_and_their_files_deleted(
         session.delete(request)
 
     monkeypatch.setattr(summary_batch, "apply_summary", apply)
-    item = make_item(db_session)
+    item = make_item(db_session, creator_id=admin_user.id)
     answered, refused, unrun, missing = [add_request(db_session, item, llm_key) for _ in range(4)]
     (batch_id,) = summary_batch.submit_pending(db_session)
     openai_batches.end(
@@ -944,7 +965,8 @@ def test_openai_results_are_applied_retried_and_their_files_deleted(
     # gpt-6-luna: 1000 x $0.10/MTok + 100 x $0.50/MTok = $0.00015, halved.
     assert stats == {"applied": 1, "errored": 1, "expired": 1, "missing": 1}
     assert applied == [SUMMARY]
-    assert [s.cost_usd for s in db_session.query(LLMSpend)] == [Decimal("0.000075")]
+    spent = [(s.user_id, s.model, s.cost_usd, s.input_tokens) for s in db_session.query(LLMSpend)]
+    assert spent == [(admin_user.id, SUMMARISE.model_for("openai"), Decimal("0.000075"), 1000)]
     db_session.expire_all()
     assert [(r.status, r.batch_id) for r in (refused, unrun, missing)] == [("pending", None)] * 3
     assert sorted(openai_batches.deleted) == sorted(

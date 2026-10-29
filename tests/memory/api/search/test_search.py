@@ -17,7 +17,7 @@ from memory.api.search import hyde
 from memory.api.search.query_analysis import QueryAnalysis
 from memory.api.search.types import SearchConfig
 from memory.common import settings
-from memory.common.db.models import Chunk
+from memory.common.db.models import Chunk, LLMProviderKey
 from memory.common.extract import DataChunk
 from tests.conftest import make_source_item
 from tests.memory.agents.fakes import reply
@@ -898,7 +898,22 @@ async def test_apply_reranking_keeps_fused_order_when_rerank_stalls():
 
 
 def test_searcher_keys_are_the_searchers_usable_defaults(db_session, regular_user, llm_key):
-    assert set(search_module.searcher_keys(regular_user.id).values()) == {credential(llm_key)}
+    assert set(search_module.searcher_keys(regular_user.id).values()) == {
+        credential(llm_key, regular_user.id)
+    }
+
+
+def test_searches_on_the_shared_key_are_spent_for_the_searcher(db_session, regular_user, admin_user):
+    shared = LLMProviderKey(
+        user_id=admin_user.id, provider="anthropic", label="shared", is_system_default=True
+    )
+    shared.key = "sk-shared"
+    db_session.add(shared)
+    db_session.commit()
+
+    assert set(search_module.searcher_keys(regular_user.id).values()) == {
+        credential(shared, regular_user.id)
+    }
 
 
 def test_anonymous_searches_get_no_keys():

@@ -40,6 +40,11 @@ Audit records (MCP mutating calls, settings changes and restarts) moved from
 `GET /audit`. They no longer show in `/telemetry/raw`, survive deleting their
 user (the actor's email is kept), and OTLP ingest drops events with audit names.
 
+Spend on memory's own LLM calls (summaries, search steps, meeting extraction,
+session summaries) now records the user it was spent for, the model and the
+tokens. Deleting a provider key or a user keeps that spend as history; spend on
+a deleted key no longer counts toward any daily cap.
+
 ### Migrations
 
 `20261119_email_sender_tags` removes sender and raw-header tags from email
@@ -52,6 +57,10 @@ by name (indexed). Audit-named rows with an API key, session id or body were
 uploaded through OTLP, not written by the server: they are deleted, not moved.
 Downgrading moves the audit rows back, minus those whose user has since been
 deleted.
+
+`20261121_llm_spend_usage` adds those columns to `llm_spend`. Existing rows get no
+user or model and zero tokens. The table holds one row per key, agent and hour,
+so the migration is quick.
 
 ### Post-deploy commands
 

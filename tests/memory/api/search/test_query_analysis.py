@@ -53,7 +53,7 @@ async def test_analysis_keeps_only_known_modalities(db_session, llm_key, scripte
     monkeypatch.setattr(query_analysis, "_get_available_modalities", lambda: frozenset({"forum"}))
     scripted_llm.script = [submitted(ANSWER)]
 
-    result = await query_analysis.analyze_query("that thing about the bottom line", NOW, credential(llm_key))
+    result = await query_analysis.analyze_query("that thing about the bottom line", NOW, credential(llm_key, None))
 
     assert (result.success, result.modalities, result.cleaned_query) == (True, {"forum"}, "bottom line")
 
@@ -87,7 +87,7 @@ async def test_the_prompt_names_content_types_but_nothing_about_other_users_cont
     monkeypatch.setattr(query_analysis, "_get_available_modalities", load_modalities)
     scripted_llm.script = [submitted(ANSWER)]
 
-    await query_analysis.analyze_query("q", NOW, credential(llm_key))
+    await query_analysis.analyze_query("q", NOW, credential(llm_key, None))
 
     prompt = scripted_llm.requests[0]["messages"][0].content[0].text
     assert "  - blog\n" in prompt
@@ -110,7 +110,7 @@ async def test_a_failed_analysis_searches_the_query_as_typed(
     scripted_llm.script = [answer]
 
     with caplog.at_level(logging.DEBUG, logger=query_analysis.__name__):
-        result = await query_analysis.analyze_query("secret q", NOW, credential(llm_key), timeout=0.05)
+        result = await query_analysis.analyze_query("secret q", NOW, credential(llm_key, None), timeout=0.05)
 
     assert (result.success, result.cleaned_query, query_analysis._analysis_cache) == (False, "secret q", {})
     # The searcher's own failures aren't the operator's, and stay out of their logs.
@@ -134,7 +134,7 @@ async def test_a_failed_analysis_searches_the_query_as_typed(
 async def test_the_clock_goes_in_the_user_message(db_session, llm_key, scripted_llm, now, expected):
     scripted_llm.script = [submitted(ANSWER)]
 
-    await query_analysis.analyze_query("what happened yesterday", now, credential(llm_key))
+    await query_analysis.analyze_query("what happened yesterday", now, credential(llm_key, None))
 
     request = scripted_llm.requests[0]
     assert expected in request["messages"][0].content[0].text
@@ -160,7 +160,7 @@ async def test_analysis_parses_the_date_range(
 ):
     scripted_llm.script = [submitted(ANSWER | {"start_date": start, "end_date": end})]
 
-    result = await query_analysis.analyze_query("q", NOW, credential(llm_key))
+    result = await query_analysis.analyze_query("q", NOW, credential(llm_key, None))
 
     assert (result.success, result.start_date, result.end_date) == (True, expected_start, expected_end)
 
@@ -168,7 +168,7 @@ async def test_analysis_parses_the_date_range(
 @pytest.mark.asyncio
 async def test_the_analysis_cache_is_per_day(db_session, llm_key, scripted_llm):
     scripted_llm.script = [submitted(ANSWER), submitted(ANSWER)]
-    key = credential(llm_key)
+    key = credential(llm_key, None)
 
     await query_analysis.analyze_query("what happened today", NOW, key)
     await query_analysis.analyze_query("what happened today", NOW + timedelta(hours=1), key)
@@ -188,7 +188,7 @@ async def test_analysis_loads_modalities_off_the_event_loop(db_session, llm_key,
     monkeypatch.setattr(query_analysis, "_get_available_modalities", record_thread)
     scripted_llm.script = [submitted(ANSWER)]
 
-    await query_analysis.analyze_query("anything", NOW, credential(llm_key))
+    await query_analysis.analyze_query("anything", NOW, credential(llm_key, None))
 
     assert len(load_threads) == 1
     assert threading.get_ident() not in load_threads

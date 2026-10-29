@@ -155,23 +155,45 @@ class LLMProviderKey(Base):
 
 
 class LLMSpend(Base):
-    """What a provider key spent on calls kept without a run row, per agent and hour.
+    """What a provider key spent on calls kept without a run row, per user it was spent
+    for, agent, model and hour.
 
     Hourly buckets keep the search and ingest hot paths to one upsert per call
-    while the daily caps can still sum a rolling 24 hours.
+    while the daily caps can still sum a rolling 24 hours. A deleted key or user
+    leaves its buckets as history.
     """
 
     __tablename__ = "llm_spend"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    provider_key_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("llm_provider_keys.id", ondelete="CASCADE"), nullable=False
+    provider_key_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("llm_provider_keys.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     agent: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL only on buckets from before models were recorded
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
     hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, default=0)
     calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
     __table_args__ = (
-        UniqueConstraint("provider_key_id", "agent", "hour", name="llm_spend_bucket"),
+        # Keyed buckets only: buckets of deleted keys may collide once their key is NULL
+        Index(
+            "llm_spend_bucket",
+            "provider_key_id",
+            "user_id",
+            "agent",
+            "model",
+            "hour",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("provider_key_id IS NOT NULL"),
+        ),
     )

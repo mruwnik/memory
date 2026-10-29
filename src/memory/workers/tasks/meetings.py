@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil import parser as date_parser
 
 from memory.agents.call import LLMError, run_agent_sync
-from memory.agents.provider_keys import Credential, credential, ingest_key
+from memory.agents.provider_keys import Credential, credential, ingest_key, ingest_user
 from memory.agents.system import MEETING_EXTRACT
 from memory.common import embedding
 from memory.common import jobs as job_utils
@@ -419,7 +419,9 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     session.flush()
 
     try:
-        extracted = call_extraction_llm(meeting.content or "", meeting_time(meeting), credential(found))
+        extracted = call_extraction_llm(
+            meeting.content or "", meeting_time(meeting), credential(found, ingest_user(meeting))
+        )
     except (LLMError, *PROVIDER_ERRORS) as e:
         logger.warning(f"Failed to extract meeting {meeting.id}: {type(e).__name__}")
         meeting.extraction_status = "failed"

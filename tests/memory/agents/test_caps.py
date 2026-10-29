@@ -14,8 +14,10 @@ from memory.agents.caps import (
 )
 from memory.common import settings
 from memory.common.db.models import LLMProviderKey, LLMSpend
+from memory.common.llms.neutral import AgentUsage
 
 D = Decimal
+HAIKU = "anthropic/claude-haiku"
 
 
 @pytest.mark.parametrize(
@@ -44,23 +46,91 @@ def test_per_run_cap_is_the_agents_cap_or_the_user_key_default(monkeypatch, valu
     assert per_run_cap(*values) == expected
 
 
-def make_key(db, user, cap=None):
-    key = LLMProviderKey(user_id=user.id, provider="anthropic", label="k", max_cost_usd_per_day=cap)
+def make_key(db, user, cap=None, label="k"):
+    key = LLMProviderKey(
+        user_id=user.id, provider="anthropic", label=label, max_cost_usd_per_day=cap
+    )
     key.key = "sk-test"
     db.add(key)
     db.commit()
     return key
 
 
-def test_spend_accumulates_in_one_bucket_per_agent_and_hour(db_session, regular_user):
+def spend(db, key_id, agent, cost, user_id=None, model=HAIKU, usage=AgentUsage()):
+    record_spend(
+        db,
+        key_id=key_id,
+        user_id=user_id,
+        agent=agent,
+        model=model,
+        cost=cost,
+        usage=usage,
+    )
+
+
+def test_spend_accumulates_in_one_bucket_per_user_agent_model_and_hour(
+    db_session, regular_user, admin_user
+):
     key = make_key(db_session, regular_user)
-    for cost in ("0.10", "0.25"):
-        record_spend(db_session, key_id=key.id, agent="system:hyde", cost=D(cost))
-    record_spend(db_session, key_id=key.id, agent="system:summarise", cost=D("1"))
+    for user_id in (None, None, regular_user.id, admin_user.id):
+        spend(
+            db_session,
+            key.id,
+            "system:hyde",
+            D("0.10"),
+            user_id,
+            usage=AgentUsage(1, 2, 3, 4),
+        )
+    spend(db_session, key.id, "system:hyde", D("1"), model="openai/gpt-mini")
+    spend(db_session, key.id, "system:summarise", D("1"))
     db_session.commit()
 
-    buckets = {b.agent: (b.cost_usd, b.calls) for b in db_session.query(LLMSpend)}
-    assert buckets == {"system:hyde": (D("0.35"), 2), "system:summarise": (D("1"), 1)}
+    buckets = {
+        (b.user_id, b.agent, b.model): (
+            b.cost_usd,
+            b.calls,
+            b.input_tokens,
+            b.output_tokens,
+            b.cache_read_tokens,
+            b.cache_write_tokens,
+        )
+        for b in db_session.query(LLMSpend)
+    }
+    assert buckets == {
+        (None, "system:hyde", HAIKU): (D("0.2"), 2, 2, 4, 6, 8),
+        (regular_user.id, "system:hyde", HAIKU): (D("0.1"), 1, 1, 2, 3, 4),
+        (admin_user.id, "system:hyde", HAIKU): (D("0.1"), 1, 1, 2, 3, 4),
+        (None, "system:hyde", "openai/gpt-mini"): (D("1"), 1, 0, 0, 0, 0),
+        (None, "system:summarise", HAIKU): (D("1"), 1, 0, 0, 0, 0),
+    }
+
+
+def test_deleting_keys_keeps_their_spend_out_of_every_pool(db_session, regular_user):
+    first, second = (make_key(db_session, regular_user, label=n) for n in "ab")
+    # Identical buckets but for the key: both survive as history once it is gone.
+    for key_id in (first.id, second.id):
+        spend(db_session, key_id, "system:hyde", D("2"), regular_user.id)
+    db_session.commit()
+    first_id = first.id
+
+    db_session.delete(first)
+    db_session.delete(second)
+    db_session.commit()
+
+    orphans = db_session.query(LLMSpend.provider_key_id, LLMSpend.cost_usd).all()
+    assert orphans == [(None, D("2")), (None, D("2"))]
+    assert spend_last_24h(db_session, first_id) == D("0")
+
+
+def test_deleting_a_user_keeps_the_spend_made_for_them(db_session, regular_user, admin_user):
+    key = make_key(db_session, admin_user)
+    spend(db_session, key.id, "system:hyde", D("2"), regular_user.id)
+    db_session.commit()
+
+    db_session.delete(regular_user)
+    db_session.commit()
+
+    assert db_session.query(LLMSpend.user_id, LLMSpend.cost_usd).all() == [(None, D("2"))]
 
 
 @pytest.mark.parametrize("hours_ago,counted", [(0, D("2")), (23, D("2")), (26, D("0"))])
@@ -70,22 +140,26 @@ def test_spend_counts_for_a_rolling_day(db_session, regular_user, hours_ago, cou
         minute=0, second=0, microsecond=0
     )
     db_session.add(
-        LLMSpend(provider_key_id=key.id, agent="system:hyde", hour=hour, cost_usd=D("2"), calls=1)
+        LLMSpend(
+            provider_key_id=key.id,
+            agent="system:hyde",
+            hour=hour,
+            cost_usd=D("2"),
+            calls=1,
+        )
     )
     db_session.commit()
 
     assert spend_last_24h(db_session, key.id) == counted
 
 
-@pytest.mark.parametrize(
-    "cap,spent,left", [(D("5"), D("1.5"), D("3.5")), (None, D("1"), D("19"))]
-)
+@pytest.mark.parametrize("cap,spent,left", [(D("5"), D("1.5"), D("3.5")), (None, D("1"), D("19"))])
 def test_key_allowance_is_the_key_pool_less_todays_spend(
     db_session, regular_user, monkeypatch, cap, spent, left
 ):
     monkeypatch.setattr(settings, "AGENT_DEFAULT_USER_KEY_DAILY_COST_USD", D("20"))
     key = make_key(db_session, regular_user, cap)
-    record_spend(db_session, key_id=key.id, agent="system:summarise", cost=spent)
+    spend(db_session, key.id, "system:summarise", spent)
     db_session.commit()
 
     assert key_allowance(db_session, key) == left
@@ -93,7 +167,7 @@ def test_key_allowance_is_the_key_pool_less_todays_spend(
 
 def test_a_spent_key_pool_refuses_more_calls(db_session, regular_user):
     key = make_key(db_session, regular_user, D("1"))
-    record_spend(db_session, key_id=key.id, agent="system:summarise", cost=D("1"))
+    spend(db_session, key.id, "system:summarise", D("1"))
     db_session.commit()
 
     with pytest.raises(CapExceeded, match="provider key pool: spent \\$1.00 of \\$1.00"):
@@ -102,7 +176,7 @@ def test_a_spent_key_pool_refuses_more_calls(db_session, regular_user):
 
 def test_agent_runs_see_spend_outside_runs_in_the_key_pool(db_session, regular_user):
     key = make_key(db_session, regular_user, D("5"))
-    record_spend(db_session, key_id=key.id, agent="system:hyde", cost=D("2"))
+    spend(db_session, key.id, "system:hyde", D("2"))
     db_session.commit()
 
     (pool,) = daily_pools(

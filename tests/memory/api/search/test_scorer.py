@@ -42,7 +42,7 @@ async def test_chunks_are_scored_on_the_searchers_key(db_session, llm_key, scrip
     scripted_llm.script = [submitted({"score": 0.9}), submitted({"score": 0.1})]
     chunks = [chunk_with_text("relevant"), chunk_with_text("noise")]
 
-    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key), min_score=0.3)
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key, None), min_score=0.3)
 
     assert [c.relevance_score for c in ranked] == [0.9]
 
@@ -52,7 +52,7 @@ async def test_ranked_chunks_are_sorted_by_score(db_session, llm_key, scripted_l
     scripted_llm.script = [submitted({"score": s}) for s in (0.3, 0.9, 0.5)]
     chunks = [chunk_with_text(t) for t in ("a", "b", "c")]
 
-    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key))
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key, None))
 
     assert [c.relevance_score for c in ranked] == [0.9, 0.5, 0.3]
 
@@ -62,7 +62,7 @@ async def test_llm_score_ties_are_broken_by_the_chunks_boost(db_session, llm_key
     scripted_llm.script = [submitted({"score": 0.5}), submitted({"score": 0.5})]
     plain, boosted = chunk_with_text("a"), chunk_with_text("b", boost=0.1)
 
-    ranked = await scorer.rank_chunks("query", [plain, boosted], credential(llm_key))
+    ranked = await scorer.rank_chunks("query", [plain, boosted], credential(llm_key, None))
 
     assert ranked == [boosted, plain]
 
@@ -73,7 +73,7 @@ async def test_min_score_cuts_the_boosted_score(db_session, llm_key, scripted_ll
     scripted_llm.script = [submitted({"score": 0.29})]
     chunk = chunk_with_text("a", boost=boost)
 
-    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key), min_score=0.3)
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key, None), min_score=0.3)
 
     assert len(ranked) == kept
 
@@ -96,7 +96,7 @@ async def test_a_failed_score_keeps_the_rerankers_score(db_session, llm_key, scr
     scripted_llm.script = [answer]
     chunk = chunk_with_text("text", score=0.6)
 
-    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key), timeout=0.05)
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key, None), timeout=0.05)
 
     assert [(c, c.relevance_score) for c in ranked] == [(chunk, 0.6)]
 
@@ -112,7 +112,7 @@ async def test_failed_scores_log_one_warning_per_search_without_user_text(
     chunks = [chunk_with_text("private words") for _ in range(3)]
 
     with caplog.at_level(logging.DEBUG, logger=scorer.__name__):
-        await scorer.rank_chunks("secret query", chunks, credential(llm_key))
+        await scorer.rank_chunks("secret query", chunks, credential(llm_key, None))
 
     messages = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == scorer.__name__]
     assert messages == [(logging.WARNING, "Scoring failed for some of 3 chunks: LLMError")]
@@ -134,7 +134,7 @@ async def test_scoring_runs_a_bounded_number_of_calls_at_once(db_session, llm_ke
     scripted_llm.script = [answer] * chunk_count
     chunks = [chunk_with_text(str(i)) for i in range(chunk_count)]
 
-    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key))
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key, None))
 
     assert len(ranked) == chunk_count
     assert 1 < peak <= scorer.MAX_CONCURRENT_SCORES
@@ -159,7 +159,7 @@ async def test_a_slow_provider_bounds_both_the_wait_and_the_calls_in_flight(
     chunks = [chunk_with_text(str(i), score=0.4) for i in range(chunk_count)]
 
     started = time.monotonic()
-    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key), timeout=0.2)
+    ranked = await scorer.rank_chunks("query", chunks, credential(llm_key, None), timeout=0.2)
     elapsed = time.monotonic() - started
     await asyncio.sleep(0.6)  # let the calls already sent finish and be charged
 
@@ -172,7 +172,7 @@ async def test_a_slow_provider_bounds_both_the_wait_and_the_calls_in_flight(
 async def test_image_only_chunks_keep_their_score_unscored(db_session, llm_key, scripted_llm):
     chunk = MagicMock(data=[Image.new("RGB", (1, 1))], relevance_score=0.4, boost=0.0)
 
-    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key))
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key, None))
 
     assert ([c.relevance_score for c in ranked], scripted_llm.requests) == ([0.4], [])
 
@@ -182,6 +182,6 @@ async def test_unreadable_chunks_keep_their_score_unscored(db_session, llm_key, 
     chunk = MagicMock(relevance_score=0.2, boost=0.0)
     type(chunk).data = property(lambda self: (_ for _ in ()).throw(OSError("gone")))
 
-    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key))
+    ranked = await scorer.rank_chunks("query", [chunk], credential(llm_key, None))
 
     assert ([c.relevance_score for c in ranked], scripted_llm.requests) == ([0.2], [])

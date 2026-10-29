@@ -19,19 +19,26 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import partial
 from itertools import accumulate
 from typing import Any
 
 from sqlalchemy import ColumnElement, case, func, update
-from sqlalchemy.orm import Query, Session
+from sqlalchemy.orm import Query, Session, load_only
 
 from memory.agents import caps
 from memory.agents.call import parse_result, report_model_unavailable, request_args
-from memory.agents.provider_keys import Credential, credential, notify_key_rejected, reject_key
+from memory.agents.provider_keys import (
+    Credential,
+    credential,
+    ingest_user,
+    notify_key_rejected,
+    reject_key,
+)
 from memory.agents.system import SUMMARISE
 from memory.common import embedding, extract, qdrant, settings, summarizer
 from memory.common.content_processing import push_chunks_to_qdrant
-from memory.common.db.models import Chunk, KeyStatus, LLMProviderKey, SummaryRequest
+from memory.common.db.models import Chunk, KeyStatus, LLMProviderKey, SourceItem, SummaryRequest
 from memory.common.llms.batches import (
     BATCH_APIS,
     RESULTS_RETENTION,
@@ -91,7 +98,7 @@ def submit_for_key(session: Session, key_id: int) -> str | None:
     except caps.CapExceeded as e:
         logger.info("summary batch for key %s waits: %s", key_id, e)
         return None
-    cred = credential(key)
+    cred = credential(key, None)
     api = batch_api(cred)
     if api.ONE_AT_A_TIME and in_flight(session, key_id):
         return None
@@ -366,6 +373,18 @@ def apply_summary(session: Session, request: SummaryRequest, data: dict[str, Any
         logger.exception(f"Failed to merge summary tags of item {item.id} into Qdrant")
 
 
+def spenders(session: Session, batch_id: str) -> dict[int, int | None]:
+    """Who each of the batch's requests was made for, read in one query rather than one per
+    result; only an item without a creator walks its source chain."""
+    rows = (
+        session.query(SummaryRequest.id, SourceItem)
+        .join(SummaryRequest.source)
+        .options(load_only(SourceItem.id, SourceItem.creator_id))
+        .filter(SummaryRequest.batch_id == batch_id, SummaryRequest.status == "submitted")
+    )
+    return {request_id: ingest_user(item) for request_id, item in rows}
+
+
 def claim(session: Session, batch_id: str, custom_id: str) -> SummaryRequest | None:
     """Lock the request a result belongs to, unless it was already handled or is being handled."""
     return (
@@ -388,6 +407,8 @@ def collect_batch(
 ) -> Counter[str]:
     stats: Counter[str] = Counter()
     pricing = api.provider.model_info(api.provider.model).pricing
+    model = f"{key.provider}/{api.provider.model}"
+    spent_for = spenders(session, batch_id)
     for result in api.results(batch_id):
         request = claim(session, batch_id, result.custom_id)
         if request is None:
@@ -402,9 +423,19 @@ def collect_batch(
             continue
 
         cost = pricing.cost(result.usage) * BATCH_DISCOUNT
+        charge = partial(
+            caps.record_spend,
+            session,
+            key_id=key.id,
+            user_id=spent_for[request.id],
+            agent=SUMMARISE.slug,
+            model=model,
+            cost=cost,
+            usage=result.usage,
+        )
         # Committed with the apply: committing first would drop the claim's lock
         # and let a concurrent collector apply, and charge, the result again
-        caps.record_spend(session, key_id=key.id, agent=SUMMARISE.slug, cost=cost)
+        charge()
         try:
             _, data = parse_result(SUMMARISE, result.completion(cost))
             apply_summary(session, request, data or {})
@@ -418,7 +449,7 @@ def collect_batch(
             stats["apply_failed"] += 1
             # Re-fetch: the rollback expired it, and it may since have been claimed
             if request := claim(session, batch_id, result.custom_id):
-                caps.record_spend(session, key_id=key.id, agent=SUMMARISE.slug, cost=cost)
+                charge()
                 retry_or_fail(request)
                 session.commit()
 
@@ -477,7 +508,7 @@ def collect_from_key(session: Session, batch_id: str, key_id: int) -> Counter[st
     # one of the same project or workspace
     if row.status != KeyStatus.OK:
         return Counter()
-    key = credential(row)
+    key = credential(row, None)
     api = batch_api(key)
     try:
         state = api.state(batch_id)

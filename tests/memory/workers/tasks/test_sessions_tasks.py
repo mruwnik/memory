@@ -298,7 +298,7 @@ def test_summaries_use_the_session_owners_key(db_session, llm_key, scripted_llm)
     scripted_llm.script = [reply("Fixed the login loop.")]
 
     summary = sessions_tasks.generate_summary(
-        "user: fix it\nassistant: done", credential(llm_key)
+        "user: fix it\nassistant: done", credential(llm_key, None)
     )
 
     assert summary == "Fixed the login loop."

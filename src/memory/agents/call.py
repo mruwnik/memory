@@ -106,9 +106,17 @@ def refuse(key: Credential) -> None:
         notify_key_rejected(key)
 
 
-def charge(key: Credential, agent: SystemAgent, cost: Decimal) -> None:
+def charge(key: Credential, agent: SystemAgent, model: str, completion: Completion) -> None:
     with make_session() as db:
-        caps.record_spend(db, key_id=key.id, agent=agent.slug, cost=cost)
+        caps.record_spend(
+            db,
+            key_id=key.id,
+            user_id=key.spent_for,
+            agent=agent.slug,
+            model=model,
+            cost=completion.cost,
+            usage=completion.usage,
+        )
         db.commit()
 
 
@@ -206,7 +214,7 @@ async def complete(found: SystemAgent, model: str, prompt: str, *, key: Credenti
         error = None
     except LLMError as e:
         text, data, error = "", None, str(e)
-    await asyncio.to_thread(charge, key, found, completion.cost)
+    await asyncio.to_thread(charge, key, found, model, completion)
     if error:
         raise LLMError(error)
     return Result(text=text, data=data, cost=completion.cost)

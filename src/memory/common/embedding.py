@@ -10,7 +10,7 @@ from PIL import Image
 from sqlalchemy.orm import object_session
 
 from memory.agents.call import LLMError, run_agent_sync
-from memory.agents.provider_keys import Credential, credential, ingest_key
+from memory.agents.provider_keys import Credential, credential, ingest_key, ingest_user
 from memory.agents.system import SUMMARISE
 from memory.common import extract, instance_settings, settings, summarizer
 from memory.common.llms import PROVIDER_ERRORS
@@ -308,7 +308,7 @@ def embed_source_item(
         raise EmbeddingsNotConfigured()
     db = object_session(item)
     found = ingest_key(db, item, SUMMARISE) if db is not None else None
-    key = credential(found) if found is not None else None
+    key = credential(found, ingest_user(item)) if found is not None else None
     batching = key is not None and key.provider in BATCH_APIS and summarizer.batch_enabled()
     inline = summariser(key) if key is not None and not batching else None
     with summarizer.summarising(inline), summarizer.deferring(batching) as deferred:

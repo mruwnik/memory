@@ -64,7 +64,7 @@ def searcher_keys(searcher_id: int | None) -> dict[str, Credential | None]:
     agent_for = {a.providers: a for a in SEARCH_AGENTS}
     with make_session() as db:
         found = {p: system_key(db, searcher_id, a) for p, a in agent_for.items()}
-        creds = {p: credential(k) if k is not None else None for p, k in found.items()}
+        creds = {p: credential(k, searcher_id) if k is not None else None for p, k in found.items()}
     return {a.slug: creds[a.providers] for a in SEARCH_AGENTS}
 
 

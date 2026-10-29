@@ -20,6 +20,8 @@ from memory.common import settings
 from memory.common.db.connection import DBSession
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey, LLMProviderKey, LLMSpend
 from memory.common.db.models.agents import TERMINAL_STATUSES
+from memory.common.llms.neutral import AgentUsage
+
 
 class CapExceeded(ValueError):
     pass
@@ -87,22 +89,43 @@ def hour_of(moment: datetime) -> datetime:
     return moment.replace(minute=0, second=0, microsecond=0)
 
 
-def record_spend(db: DBSession, *, key_id: int, agent: str, cost: Decimal) -> None:
-    """Add one call's cost to its key's bucket for this hour; the caller commits."""
+def record_spend(
+    db: DBSession,
+    *,
+    key_id: int,
+    user_id: int | None,
+    agent: str,
+    model: str,
+    cost: Decimal,
+    usage: AgentUsage,
+) -> None:
+    """Add one call to its bucket for this hour; the caller commits. `user_id` is who the
+    call was made for, which on a shared system key is not the key's owner."""
+    tokens = {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
+    }
     stmt = insert(LLMSpend).values(
         provider_key_id=key_id,
+        user_id=user_id,
         agent=agent,
+        model=model,
         hour=hour_of(datetime.now(timezone.utc)),
         cost_usd=cost,
         calls=1,
+        **tokens,
     )
+    added = {
+        name: getattr(LLMSpend, name) + stmt.excluded[name]
+        for name in ["cost_usd", "calls", *tokens]
+    }
     db.execute(
         stmt.on_conflict_do_update(
-            constraint="llm_spend_bucket",
-            set_={
-                "cost_usd": LLMSpend.cost_usd + stmt.excluded.cost_usd,
-                "calls": LLMSpend.calls + stmt.excluded.calls,
-            },
+            index_elements=["provider_key_id", "user_id", "agent", "model", "hour"],
+            index_where=LLMSpend.provider_key_id.is_not(None),
+            set_=added,
         )
     )
 

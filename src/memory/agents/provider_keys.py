@@ -40,17 +40,20 @@ CHECKS: dict[str, tuple[str, Callable[[str], dict[str, str]]]] = {
 
 @dataclass(frozen=True)
 class Credential:
-    """A key read once inside a DB session, safe to carry across threads."""
+    """A key read once inside a DB session, safe to carry across threads. `spent_for`
+    is who its calls are made for, recorded with their spend: on a shared system key
+    that is not the key's owner."""
 
     id: int
     user_id: int
     provider: str
     label: str
     key: str = field(repr=False)
+    spent_for: int | None
 
 
-def credential(key: LLMProviderKey) -> Credential:
-    return Credential(key.id, key.user_id, key.provider, key.label, key.key)
+def credential(key: LLMProviderKey, spent_for: int | None) -> Credential:
+    return Credential(key.id, key.user_id, key.provider, key.label, key.key, spent_for)
 
 
 class KeyUnavailable(ValueError):
@@ -168,9 +171,16 @@ def ingest_key(db: DBSession, item: SourceItem, agent: SystemAgent) -> LLMProvid
     key = chosen_key(db, holder) if holder is not None else None
     if key is not None:
         return usable(key) if key.provider in agent.providers else None
-    registrant = (holder and holder.llm_registrant_id) or item.llm_registrant_id
-    owner = item.resolve_creator_id() or registrant
-    return system_key(db, owner, agent)
+    return system_key(db, ingest_user(item), agent)
+
+
+def ingest_user(item: SourceItem) -> int | None:
+    """Who brought `item` in: its creator, else whoever registered its app or bot."""
+    creator = item.resolve_creator_id()
+    if creator is not None:
+        return creator
+    holder = item.llm_key_holder
+    return (holder and holder.llm_registrant_id) or item.llm_registrant_id
 
 
 def choose_key(
