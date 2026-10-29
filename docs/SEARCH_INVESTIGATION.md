@@ -1,6 +1,6 @@
 # RAG Search Quality - Notes
 
-**Last verified:** 2026-10-23
+**Last verified:** 2026-10-29
 
 Working notes on search quality. Most issues from the Dec 2025 investigation have been
 addressed; what remains is mostly inherent retrieval-quality tradeoffs.
@@ -28,7 +28,11 @@ Implemented in `src/memory/api/search/`. Each stage is independently toggleable 
 `ENABLE_*` setting (see `src/memory/common/settings.py`).
 
 1. **Query analysis** (`query_analysis.py`, `ENABLE_QUERY_ANALYSIS`) — an LLM extracts
-   intent / structured hints from the raw query.
+   a date range, variants and recalled titles from the raw query. It runs only when
+   `mentions_date` matches: in the search eval its variants and recalled titles,
+   searched as extra queries, lowered nDCG on every other query type. Recalled titles
+   are also matched against item titles in SQL (`fetch_chunks_by_title`), so title
+   recall too only fires for date queries.
 2. **HyDE expansion** (`hyde.py`, `ENABLE_HYDE_EXPANSION`, off by default) — generate a
    hypothetical answer and embed that alongside the raw query.
 3. **Embedding** — Voyage `voyage-3-large` (1024d) for text, `voyage-multimodal-3` for
@@ -47,10 +51,12 @@ Implemented in `src/memory/api/search/`. Each stage is independently toggleable 
    (`score + |score| * boost`, `types.chunk_score`), kept apart from it so it applies
    to whichever score comes last; every cut and ordering below ranks by it.
 8. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2.5` cross-encoder
-   scores the candidates, which are then cut to `limit` by boosted score; past
-   `RERANK_TIMEOUT` the fused scores are kept.
+   scores the candidates, which are then cut to the chunks of the `limit` best
+   sources by boosted score, at most `MAX_CHUNKS_PER_SOURCE` each (`top_sources`), so
+   one long item can't fill the results; past `RERANK_TIMEOUT` the fused scores are kept.
 9. **LLM scoring** (`scorer.py`, `ENABLE_SEARCH_SCORING`, per request `useScores`) —
-   an LLM scores those `limit` chunks; chunks under `min_score` (boosted) are dropped.
+   an LLM scores each source's best chunk (`score_sources`); sources under `min_score`
+   (boosted) are dropped with their other chunks.
 
 Access-control filters are applied at the Qdrant, BM25, and final-merge layers (defense
 in depth).

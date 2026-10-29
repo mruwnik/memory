@@ -223,10 +223,18 @@ class AnthropicProvider(BaseLLMProvider):
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": params.max_output_tokens,
-            "system": system,
             "messages": [self.agent_message(m, r) for m, r in zip(messages, replay)],
-            "cache_control": {"type": "ephemeral"},
         }
+        # The breakpoint on the system prompt caches tools + system, the part every
+        # call of an agent shares. Automatic caching would also cache the tail, which
+        # only a later turn of the same conversation reads back: on a one-shot call it
+        # is a write surcharge on the per-call prompt.
+        if system:
+            kwargs["system"] = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
+        if len(messages) > 1:
+            kwargs["cache_control"] = {"type": "ephemeral"}
         if tools:
             kwargs["tools"] = [self.agent_tool(t, native) for t in tools]
         if tool_choice == "required":

@@ -210,3 +210,42 @@ def test_modality_cache_refreshes_when_stale_or_empty(monkeypatch, cache, age, r
         load_modalities()
 
     assert refresh.called == refreshes
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("Links For September 2014", True),
+        ("posts from 2024", True),
+        ("what happened yesterday", True),
+        ("meetings today", True),
+        ("emails since Monday", True),
+        ("posts from the last 3 weeks", True),
+        ("past month of notes", True),
+        ("this weekend's plans", True),
+        ("the essay I read in recent weeks", True),
+        ("calls tomorrow", True),
+        ("upcoming deadlines", True),
+        ("next week's sync", True),
+        ("three days ago", True),
+        ("AI forecasts from the 2020s", True),
+        ("music of the 90s", True),
+        ("music of the '90s", True),
+        ("notes from Sept", True),
+        ("board meeting dec 3", True),
+        ("Q3 planning", True),
+        ("summer reading list", True),
+        ("trip plans for next fall", True),
+        ("what we talked about last night", True),
+        ("tabooing your words", False),
+        ("why rents fall when supply rises", False),
+        ("the q-learning paper", False),
+        ("mar-a-lago coverage", False),
+        ("AI lying next-token predictor", False),
+        ("why people may still be progressing", False),
+        ("the 1000 genomes project", False),
+        ("a recent essay on priors", False),
+    ],
+)
+def test_mentions_date(query, expected):
+    assert query_analysis.mentions_date(query) is expected

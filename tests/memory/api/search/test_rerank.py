@@ -167,23 +167,6 @@ async def test_rerank_chunks_uses_default_model(mock_voyageai):
     assert call_kwargs["model"] == DEFAULT_RERANK_MODEL
 
 
-@pytest.mark.asyncio
-@patch("memory.api.search.rerank.voyageai")
-async def test_rerank_chunks_cut_to_top_k_after_boosting(mock_voyageai):
-    """Voyage scores every candidate; the top_k cut ranks by the boosted score."""
-    mock_client = MagicMock()
-    mock_voyageai.Client.return_value = mock_client
-    mock_client.rerank.side_effect = lambda query, documents, model, top_k: MockRerankResponse(
-        [MockRerankResult(index=0, relevance_score=0.60), MockRerankResult(index=1, relevance_score=0.59)][:top_k]
-    )
-    leader = _make_chunk("leader")
-    boosted = _make_chunk("boosted", boost=0.1)
-
-    result = await rerank_chunks("query", [leader, boosted], top_k=1)
-
-    assert result == [boosted]
-
-
 # ============================================================================
 # Content handling tests
 # ============================================================================
@@ -376,41 +359,19 @@ async def test_rerank_content_less_interleaves_by_score(mock_voyageai):
 
 @pytest.mark.asyncio
 @patch("memory.api.search.rerank.voyageai")
-async def test_rerank_top_k_truncates_merged_list(mock_voyageai):
-    """top_k should bound the merged (reranked + fallback) list."""
-    mock_client = MagicMock()
-    mock_voyageai.Client.return_value = mock_client
-    mock_client.rerank.return_value = MockRerankResponse([
-        MockRerankResult(index=0, relevance_score=0.9),
-    ])
-
-    text_chunk = _make_chunk("content", score=0.01)
-    image_chunk = _make_chunk(content=None, score=0.01, embedding_score=0.5)
-    image_chunk.data = None
-
-    result = await rerank_chunks("query", [text_chunk, image_chunk], top_k=1)
-
-    assert len(result) == 1
-    assert result[0] is text_chunk
-
-
-@pytest.mark.asyncio
-@patch("memory.api.search.rerank.voyageai")
-async def test_rerank_all_content_less_fallback_and_top_k(mock_voyageai):
+async def test_rerank_all_content_less_falls_back_to_embedding_scores(mock_voyageai):
     """When EVERY candidate is content-less, the early-return path must still
-    apply the embedding-score fallback and honour top_k (it previously returned
-    the chunks untouched on their RRF scale and ignored top_k)."""
+    apply the embedding-score fallback rather than keep their RRF scale."""
     low = _make_chunk(content=None, score=0.01, embedding_score=0.3)
     low.data = None
     high = _make_chunk(content=None, score=0.02, embedding_score=0.8)
     high.data = None
 
-    result = await rerank_chunks("query", [low, high], top_k=1)
+    result = await rerank_chunks("query", [low, high])
 
     # VoyageAI is never called (no text documents), but the fallback applies.
     mock_voyageai.Client.assert_not_called()
-    assert len(result) == 1
-    assert result[0] is high
+    assert result == [high, low]
     assert high.relevance_score == 0.8
 
 

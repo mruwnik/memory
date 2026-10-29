@@ -14,6 +14,7 @@ This runs in parallel with HyDE for maximum efficiency.
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Collection
 from dataclasses import dataclass, field
@@ -67,6 +68,29 @@ class QueryAnalysis:
     start_date: date | None = None
     end_date: date | None = None
     success: bool = False
+
+
+# "May" and "fall" are left out bare, being far more common as verbs; so is "mar"
+# before a hyphen (Mar-a-Lago).
+SEASONS = r"spring|summer|autumn|winter"
+DATE_WORDS = re.compile(
+    r"\b(19|20)\d\d\b|\b(19|20)?\d0s\b|'\d0s\b"
+    r"|\b(yesterday|today|tonight|tomorrow|upcoming|ago|since|last\s+night)\b"
+    r"|\b(last|this|past|previous|recent|next)\s+(\d+\s+)?"
+    rf"(weeks?|months?|years?|days?|weekend|decade|quarter|fall|{SEASONS})\b"
+    r"|\b(january|february|march|april|june|july|august|september|october|november|december)\b"
+    r"|\b(jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\b\.?(?!-)"
+    r"|\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"
+    rf"|\bq[1-4]\b|\b({SEASONS})\b",
+    re.IGNORECASE,
+)
+
+
+def mentions_date(query: str) -> bool:
+    """Whether `query` names a date or time window, the only queries analysis helps:
+    on the rest its variants and recalled titles, searched as extra queries, pull
+    the results away from what was asked."""
+    return DATE_WORDS.search(query) is not None
 
 
 def parse_date(value: str | None) -> date | None:

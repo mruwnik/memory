@@ -9,6 +9,8 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
+from sqlalchemy import Integer, Text, and_, func, or_, values
+from sqlalchemy import column as sql_column
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.orm.exc import DetachedInstanceError
 
@@ -25,7 +27,22 @@ from memory.common.instance_settings import (
 )
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import (
+    BlogPost,
+    BookSection,
+    CalendarEvent,
+    Chunk,
+    Comic,
+    ForumPost,
+    GithubItem,
+    GoogleDoc,
+    MailMessage,
+    Meeting,
+    Note,
+    Report,
+    SourceItem,
+    Task,
+)
 from memory.common.db.models.source_item import item_summaries
 from memory.common.collections import ALL_COLLECTIONS
 from memory.api.search.date_range import date_bounds, source_ids_in_range
@@ -35,6 +52,8 @@ from memory.api.search.constants import (
     RRF_K,
     CANDIDATE_MULTIPLIER,
     FINAL_CANDIDATE_MULTIPLIER,
+    MAX_CHUNKS_PER_SOURCE,
+    MAX_TITLE_CHUNKS_PER_SOURCE,
     QUERY_TERM_BOOST,
     TITLE_MATCH_BOOST,
     RECALLED_TITLE_BOOST,
@@ -49,7 +68,7 @@ from memory.api.search.bm25 import search_bm25_chunks
 from memory.api.search.filters import apply_registry_filters_sql
 from memory.api.search.hyde import expand_query_hyde
 from memory.api.search.rerank import rerank_chunks, rerank_timeout
-from memory.api.search.query_analysis import analyze_query, QueryAnalysis
+from memory.api.search.query_analysis import analyze_query, mentions_date, QueryAnalysis
 from memory.api.search.types import SearchConfig, SearchFilters, SearchResult, chunk_score
 
 logger = logging.getLogger(__name__)
@@ -215,7 +234,8 @@ async def _run_llm_analysis(
     keys: dict[str, Credential | None],
 ) -> tuple[QueryAnalysis | None, str | None]:
     """
-    Run LLM-based query analysis and/or HyDE expansion in parallel.
+    Run LLM-based query analysis (for queries that mention a date) and/or HyDE
+    expansion in parallel.
 
     Returns:
         (analysis_result, hyde_doc) tuple
@@ -228,7 +248,7 @@ async def _run_llm_analysis(
 
     tasks = []
 
-    if use_query_analysis:
+    if use_query_analysis and mentions_date(query_text):
         tasks.append(
             (
                 "analysis",
@@ -366,7 +386,81 @@ def _build_search_data(
     return search_data
 
 
-def _fetch_chunks_by_title(
+# Where each kind of item keeps the title a recalled essay or post would match.
+TITLE_COLUMNS = (
+    BlogPost.title,
+    ForumPost.title,
+    Comic.title,
+    BookSection.section_title,
+    GithubItem.title,
+    GoogleDoc.title,
+    Meeting.title,
+    MailMessage.subject,
+    Note.subject,
+    Report.report_title,
+    Task.task_title,
+    CalendarEvent.event_title,
+)
+
+# Shorter titles ("Hi", "Re: x") sit inside too many recalled titles to mean a match.
+MIN_CONTAINED_TITLE_LENGTH = 8
+
+
+def title_matches(title, recalled):
+    """Lowercased ``title`` contains ``recalled``, or ``recalled`` contains a long
+    enough ``title``."""
+    return or_(
+        func.strpos(title, recalled) > 0,
+        and_(func.length(title) >= MIN_CONTAINED_TITLE_LENGTH, func.strpos(recalled, title) > 0),
+    )
+
+
+def titled_sources(
+    db, titles: list[str], modalities: set[str], filters: SearchFilters, limit: int
+) -> list[int]:
+    """For each of ``titles``, the ``limit`` accessible sources whose titles match
+    it, closest in length first. One scan per title column covers every title."""
+    recalled = values(
+        sql_column("n", Integer), sql_column("title", Text), name="recalled"
+    ).data([(n, t.lower()) for n, t in enumerate(titles)])
+    found: list[tuple[int, int, int]] = []
+    for column in TITLE_COLUMNS:
+        model = column.class_
+        if modalities.isdisjoint(model.get_collections()):
+            continue
+        candidates = db.query(model.id, func.lower(column).label("title")).filter(
+            model.modality.in_(modalities), func.length(column) > 0
+        )
+        if source_ids := filters.get("source_ids"):
+            candidates = candidates.filter(model.id.in_(source_ids))
+        candidates = apply_access_filter_to_query(candidates, filters.get("access_filter"))
+        # Materialized so each title is lowercased once, not once per recalled title.
+        titled = candidates.cte("titled").prefix_with("MATERIALIZED")
+        distance = func.abs(func.length(titled.c.title) - func.length(recalled.c.title))
+        position = func.row_number().over(
+            partition_by=recalled.c.n, order_by=(distance, titled.c.id)
+        )
+        matches = (
+            db.query(
+                recalled.c.n,
+                distance.label("distance"),
+                titled.c.id,
+                position.label("position"),
+            )
+            .select_from(titled)
+            .join(recalled, title_matches(titled.c.title, recalled.c.title))
+            .subquery()
+        )
+        found += db.query(matches.c.n, matches.c.distance, matches.c.id).filter(
+            matches.c.position <= limit
+        ).all()
+    per_title: dict[int, list[int]] = defaultdict(list)
+    for n, _, source_id in sorted(found):
+        per_title[n].append(source_id)
+    return [i for ids in per_title.values() for i in ids[:limit]]
+
+
+def fetch_chunks_by_title(
     titles: list[str],
     modalities: set[str],
     filters: "SearchFilters | None" = None,
@@ -382,6 +476,8 @@ def _fetch_chunks_by_title(
     LLM prompt-injection cannot exfiltrate unauthorized content by injecting
     confidential document titles into the recalled_content array.
     """
+    # A blank title would match every row.
+    titles = [t for t in titles if t.strip()][:5]
     if not titles or not modalities:
         return {}
 
@@ -390,51 +486,29 @@ def _fetch_chunks_by_title(
     # an unfiltered SourceItem query (apply_access_filter_to_query treats
     # None as "no filter"), which is the exact prompt-injection
     # exfiltration path the docstring above describes.
-    filters = require_access_filter(filters, "_fetch_chunks_by_title")
-    access_filter = filters.get("access_filter")
-
-    titles_lower = [t.lower() for t in titles[:5]]
+    filters = require_access_filter(filters, "fetch_chunks_by_title")
 
     with make_session() as db:
-        # Query sources in requested modalities, applying access control
-        sources_query = db.query(SourceItem).filter(SourceItem.modality.in_(modalities))
-        if source_ids := filters.get("source_ids"):
-            sources_query = sources_query.filter(SourceItem.id.in_(source_ids))
-        sources_query = apply_access_filter_to_query(sources_query, access_filter)
-        sources = (
-            sources_query
-            .limit(200)  # Reduced from 500; access filter narrows the set
-            .all()
-        )
-
-        # Filter sources whose titles match any of the recalled titles
-        matching_source_ids = []
-        for source in sources:
-            try:
-                title = getattr(source, "title", None)
-            except (InvalidRequestError, DetachedInstanceError, ProgrammingError) as e:
-                # Polymorphic subclasses may have deferred/missing title columns
-                # (e.g. detached instance, schema drift). Anything broader was
-                # swallowing real DB errors.
-                logger.warning(
-                    "Could not load title for source %s: %s", source.id, e
-                )
-                title = None
-            if title:
-                title_lower = title.lower()
-                for recalled in titles_lower:
-                    if recalled in title_lower or title_lower in recalled:
-                        matching_source_ids.append(source.id)
-                        break
-
-        if not matching_source_ids:
+        source_ids = list(dict.fromkeys(
+            titled_sources(db, titles, modalities, filters, limit_per_title)
+        ))
+        if not source_ids:
             return {}
 
-        # Fetch chunks for matching sources
+        position = (
+            func.row_number()
+            .over(
+                partition_by=Chunk.source_id,
+                order_by=(Chunk.is_summary.desc(), Chunk.created_at, Chunk.id),
+            )
+            .label("position")
+        )
+        ranked = (
+            db.query(Chunk.id, position).filter(Chunk.source_id.in_(source_ids)).subquery()
+        )
         chunks = (
-            db.query(Chunk.id)
-            .filter(Chunk.source_id.in_(matching_source_ids[:limit_per_title * len(titles)]))
-            .limit(limit_per_title * len(matching_source_ids))
+            db.query(ranked.c.id)
+            .filter(ranked.c.position <= MAX_TITLE_CHUNKS_PER_SOURCE)
             .all()
         )
 
@@ -498,7 +572,7 @@ async def _run_searches(
     # Pass filters so access control prevents prompt-injection exfiltration.
     if recalled_titles:
         title_chunks = await asyncio.to_thread(
-            _fetch_chunks_by_title, recalled_titles, modalities, filters
+            fetch_chunks_by_title, recalled_titles, modalities, filters
         )
         for chunk_id, score in title_chunks.items():
             if chunk_id not in fused:
@@ -580,17 +654,54 @@ async def _apply_reranking(
     use_reranking: bool,
 ) -> list[Chunk]:
     """
-    The ``limit`` best chunks by boosted score, reranked by the cross-encoder if enabled.
+    The chunks of the ``limit`` best sources by boosted score, reranked by the
+    cross-encoder if enabled.
     """
     if use_reranking and chunks and query_text.strip():
         try:
             chunks = await asyncio.wait_for(
-                rerank_chunks(query_text, chunks, model=settings.RERANK_MODEL, top_k=limit),
+                rerank_chunks(query_text, chunks, model=settings.RERANK_MODEL),
                 rerank_timeout(len(chunks)),
             )
         except Exception as e:
             logger.warning(f"Reranking failed, using RRF order: {e!r}")
-    return sorted(chunks, key=chunk_score, reverse=True)[:limit]
+    return top_sources(chunks, limit)
+
+
+def top_sources(chunks: Sequence[Chunk], limit: int) -> list[Chunk]:
+    """The best ``MAX_CHUNKS_PER_SOURCE`` chunks of each of the ``limit`` sources
+    with the best chunks, best first.
+
+    Cut by source, not by chunk, so one long item's many matching chunks can't
+    crowd every other item out of the results.
+    """
+    kept: list[Chunk] = []
+    per_source: dict[int, int] = {}
+    for chunk in sorted(chunks, key=chunk_score, reverse=True):
+        count = per_source.get(chunk.source_id, 0)
+        if count == MAX_CHUNKS_PER_SOURCE or (count == 0 and len(per_source) == limit):
+            continue
+        per_source[chunk.source_id] = count + 1
+        kept.append(chunk)
+    return kept
+
+
+async def score_sources(query: str, chunks: Sequence[Chunk], key: Credential | None) -> list[Chunk]:
+    """LLM-score each source's best chunk, then keep the other chunks of the
+    sources that pass, so scoring costs a call per result rather than per chunk.
+
+    ``chunks`` must be best first, as ``top_sources`` returns them.
+    """
+    best: dict[int, Chunk] = {}
+    for chunk in chunks:
+        best.setdefault(chunk.source_id, chunk)
+    scored = await scorer.rank_chunks(query, list(best.values()), key, min_score=0.3)
+    passed = {c.source_id for c in scored}
+    siblings = [c for c in chunks if c.source_id in passed and best[c.source_id] is not c]
+    # A sibling's reranker score must not outrank the LLM's verdict on its source.
+    for chunk in siblings:
+        chunk.relevance_score = min(chunk.relevance_score, best[chunk.source_id].relevance_score)
+    return sorted(scored + siblings, key=chunk_score, reverse=True)
 
 
 async def search_chunks(
@@ -603,13 +714,13 @@ async def search_chunks(
     keys: dict[str, Credential | None] | None = None,
 ) -> list[Chunk]:
     """
-    Search chunks using embedding similarity and optionally BM25.
+    The best chunks (at most MAX_CHUNKS_PER_SOURCE each) of the ``limit`` best
+    sources, by embedding similarity and optionally BM25, fused by rank (RRF),
+    boosted, and reranked by a cross-encoder.
 
-    Combines results using weighted score fusion, giving bonus to documents
-    that match both semantically and lexically.
-
-    If HyDE is enabled, also generates a hypothetical document from the query
-    and includes it in the embedding search for better semantic matching.
+    Date queries are also analysed by an LLM, whose date range narrows the
+    search and whose variants and recalled titles are searched alongside the
+    query. With HyDE, a hypothetical answer to the query is embedded too.
 
     Enhancement flags in config can turn off an enhancement the settings enable:
     - useBm25: BM25 lexical search (ENABLE_BM25_SEARCH)
@@ -785,9 +896,7 @@ async def search(
     if setting(ENABLE_SEARCH_SCORING) and config.useScores and data and data[0].data:
         query_item = data[0].data[0]
         if isinstance(query_item, str):
-            chunks = await scorer.rank_chunks(
-                query_item, chunks, keys[CHUNK_SCORE.slug], min_score=0.3
-            )
+            chunks = await score_sources(query_item, chunks, keys[CHUNK_SCORE.slug])
         else:
             logger.debug(f"Skipping scoring: query is {type(query_item).__name__}, not str")
 

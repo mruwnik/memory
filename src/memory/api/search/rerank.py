@@ -8,7 +8,6 @@ sees query and document together, rather than comparing embeddings separately.
 import asyncio
 import logging
 from collections.abc import Sequence
-from typing import Optional
 
 import voyageai
 
@@ -30,9 +29,8 @@ def rerank_timeout(n_docs: int) -> float:
 def merge_no_content_chunks(
     reranked: list[Chunk],
     no_content_chunks: Sequence[Chunk],
-    top_k: Optional[int] = None,
 ) -> list[Chunk]:
-    """Merge content-less chunks into a reranked list, sort, and truncate.
+    """Merge content-less chunks into a reranked list and sort.
 
     Content-less chunks (e.g. rasterized PDF pages / images) can't be scored
     by the text cross-encoder. Don't strand them on the RRF scale — that's an
@@ -42,7 +40,7 @@ def merge_no_content_chunks(
     embedding similarity, which is on a comparable 0..1 scale, so they compete
     fairly with reranked text. The merged list is sorted by boosted score
     (``chunk_score``) so the fallback-scored chunks interleave instead of always
-    trailing, and truncated to ``top_k`` when set.
+    trailing.
     """
     merged = list(reranked)
     for chunk in no_content_chunks:
@@ -52,8 +50,6 @@ def merge_no_content_chunks(
         merged.append(chunk)
 
     merged.sort(key=chunk_score, reverse=True)
-    if top_k:
-        merged = merged[:top_k]
     return merged
 
 
@@ -61,7 +57,6 @@ async def rerank_chunks(
     query: str,
     chunks: Sequence[Chunk],
     model: str = DEFAULT_RERANK_MODEL,
-    top_k: Optional[int] = None,
 ) -> list[Chunk]:
     """
     Rerank chunks using VoyageAI's cross-encoder reranker.
@@ -73,7 +68,6 @@ async def rerank_chunks(
         query: The search query
         chunks: List of candidate chunks to rerank
         model: VoyageAI reranker model to use
-        top_k: If set, only return the top k results by boosted score
 
     Returns:
         Chunks sorted by boosted reranker score
@@ -108,8 +102,8 @@ async def rerank_chunks(
     if not documents:
         # Every candidate is content-less (pure image / PDF-page result set —
         # the exact case this fallback targets). Still apply the embedding-score
-        # fallback and top_k truncation rather than returning RRF-scale scores.
-        return merge_no_content_chunks([], no_content_chunks, top_k)
+        # fallback rather than returning RRF-scale scores.
+        return merge_no_content_chunks([], no_content_chunks)
 
     try:
         vo = voyageai.Client(  # type: ignore[reportPrivateImportUsage]
@@ -120,8 +114,6 @@ async def rerank_chunks(
             query=query,
             documents=documents,
             model=model,
-            # Every document's score, so the top_k cut can rank by boosted score.
-            top_k=len(documents),
         )
 
         # Map results back to chunks with updated scores
@@ -132,7 +124,7 @@ async def rerank_chunks(
                 chunk.relevance_score = item.relevance_score
                 reranked.append(chunk)
 
-        return merge_no_content_chunks(reranked, no_content_chunks, top_k)
+        return merge_no_content_chunks(reranked, no_content_chunks)
 
     except Exception as e:
         logger.warning(f"Reranking failed, returning original order: {e!r}")

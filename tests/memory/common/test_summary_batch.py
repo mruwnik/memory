@@ -361,7 +361,7 @@ def test_submit_pending_sends_the_summarise_agents_request(db_session, llm_key, 
     ((_, requests),) = batches.created
     assert [r["custom_id"] for r in requests] == [str(r.id) for r in pending]
     params = requests[0]["params"]
-    assert (params["model"], params["system"], params["max_tokens"]) == (
+    assert (params["model"], params["system"][0]["text"], params["max_tokens"]) == (
         "claude-haiku-5-5",
         SUMMARISE.system_prompt,
         SUMMARISE.max_output_tokens,

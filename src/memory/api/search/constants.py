@@ -16,6 +16,13 @@ CANDIDATE_MULTIPLIER = 5
 # before the cut to the limit. Higher = more accurate but slower and more expensive
 FINAL_CANDIDATE_MULTIPLIER = 3
 
+# A result shows at most this many of its item's best matching chunks
+MAX_CHUNKS_PER_SOURCE = 3
+
+# Chunks each title-recalled item adds to the candidates: enough to be reranked
+# on, without one long item filling the pool
+MAX_TITLE_CHUNKS_PER_SOURCE = 2
+
 # Boosts are fractions of a chunk's final score: score + |score| * (sum of boosts),
 # applied after reranking and LLM scoring (types.chunk_score), so they mean the same on
 # every score scale. They nudge near-ties; none should beat a clearly better match.

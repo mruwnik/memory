@@ -5,6 +5,7 @@ title boosting, and source deduplication.
 
 import asyncio
 import importlib
+import inspect
 import sys
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -17,11 +18,15 @@ from memory.api.search import hyde
 from memory.api.search.query_analysis import QueryAnalysis
 from memory.api.search.types import SearchConfig
 from memory.common import settings
-from memory.common.db.models import Chunk, LLMProviderKey
+from memory.common.access_control import AccessCondition, AccessFilter
+from memory.common.db.models import AgentObservation, BlogPost, Chunk, LLMProviderKey, SourceItem
+from memory.common.db.models.sources import Project
 from memory.common.extract import DataChunk
-from tests.conftest import make_source_item
+from tests.conftest import make_source_item, unique_sha256
 from tests.memory.agents.fakes import reply
 from memory.api.search.constants import (
+    MAX_CHUNKS_PER_SOURCE,
+    MAX_TITLE_CHUNKS_PER_SOURCE,
     POPULARITY_BOOST,
     QUERY_TERM_BOOST,
     RECENCY_BOOST_MAX,
@@ -34,6 +39,7 @@ from memory.api.search.constants import (
 from memory.api.search.search import (
     apply_query_term_boost,
     apply_source_boosts,
+    fetch_chunks_by_title,
     extract_query_terms,
     fuse_scores_rrf,
 )
@@ -660,7 +666,7 @@ def test_search_sources_empty_chunks_returns_empty():
 
 
 # ============================================================================
-# _fetch_chunks_by_title — fail-closed on missing access_filter
+# fetch_chunks_by_title — fail-closed on missing access_filter
 # ============================================================================
 #
 # The title-match fetch is the fourth reader of SourceItem/Chunk in this
@@ -673,17 +679,13 @@ def test_search_sources_empty_chunks_returns_empty():
 
 
 def test_fetch_chunks_by_title_raises_on_none_filters():
-    from memory.api.search.search import _fetch_chunks_by_title
-
     with pytest.raises(ValueError, match="`access_filter`"):
-        _fetch_chunks_by_title(["some title"], {"text"}, None)
+        fetch_chunks_by_title(["some title"], {"text"}, None)
 
 
 def test_fetch_chunks_by_title_raises_on_missing_key():
-    from memory.api.search.search import _fetch_chunks_by_title
-
     with pytest.raises(ValueError, match="`access_filter`"):
-        _fetch_chunks_by_title(["some title"], {"text"}, {"person_id": 5})  # type: ignore[arg-type]
+        fetch_chunks_by_title(["some title"], {"text"}, {"person_id": 5})  # type: ignore[arg-type]
 
 
 def test_fetch_chunks_by_title_early_returns_skip_gate():
@@ -693,27 +695,148 @@ def test_fetch_chunks_by_title_early_returns_skip_gate():
     no work to do — useful because callers in _run_searches always pass
     valid filters but may pass empty titles/modalities.
     """
-    from memory.api.search.search import _fetch_chunks_by_title
-
-    assert _fetch_chunks_by_title([], {"text"}, None) == {}
-    assert _fetch_chunks_by_title(["t"], set(), None) == {}
+    assert fetch_chunks_by_title([], {"text"}, None) == {}
+    assert fetch_chunks_by_title(["t"], set(), None) == {}
 
 
-def test_fetch_chunks_by_title_accepts_explicit_none():
-    """``access_filter=None`` is the explicit superadmin opt-in."""
-    from memory.api.search.search import _fetch_chunks_by_title
+def titled_post(db_session, title: str, n_chunks: int = 1, **overrides) -> BlogPost:
+    post = BlogPost(
+        sha256=unique_sha256(title), modality="blog", title=title,
+        content="body", tags=[], embed_status="STORED", **overrides,
+    )
+    db_session.add(post)
+    db_session.flush()
+    db_session.add_all(Chunk(source_id=post.id, content=f"{title} {i}") for i in range(n_chunks))
+    db_session.commit()
+    return post
 
-    with patch("memory.api.search.search.make_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.query.return_value.filter.return_value.limit.return_value.all.return_value = []
 
-        result = _fetch_chunks_by_title(
-            ["some title"], {"text"}, {"access_filter": None}
+def found_sources(db_session, found: dict[str, float]) -> set[int]:
+    return {c.source_id for c in db_session.query(Chunk).filter(Chunk.id.in_(found))}
+
+
+def test_fetch_chunks_by_title_finds_a_title_among_many_items(db_session):
+    db_session.add_all(
+        BlogPost(
+            sha256=unique_sha256(f"decoy-{i}"), modality="blog", title=f"Decoy {i}",
+            content="body", tags=[], embed_status="STORED",
         )
+        for i in range(250)
+    )
+    db_session.commit()
+    target = titled_post(db_session, "The Bottom Line")
 
-    assert result == {}
-    mock_session.assert_called_once()
+    found = fetch_chunks_by_title(["The Bottom Line"], {"blog"}, {"access_filter": None})
+
+    assert found_sources(db_session, found) == {target.id}
+    assert set(found.values()) == {0.5}
+
+
+@pytest.mark.parametrize("recalled", [[""], ["   "], ["", " \n"]])
+def test_fetch_chunks_by_title_ignores_blank_titles(db_session, recalled):
+    titled_post(db_session, "The Bottom Line")
+
+    assert fetch_chunks_by_title(recalled, {"blog"}, {"access_filter": None}) == {}
+
+
+@pytest.mark.parametrize(
+    "title, recalled, modalities, matches",
+    [
+        ("The Bottom Line", "the bottom line", {"blog"}, True),
+        ("The Bottom Line", "bottom line", {"blog"}, True),
+        # A recalled title with its author still matches the bare title
+        ("The Bottom Line", "The Bottom Line (Yudkowsky)", {"blog"}, True),
+        ("The Bottom Line", "the bottom line", {"forum"}, False),
+        ("100% Sure", "100% sure", {"blog"}, True),
+        ("1000 Sure", "100% sure", {"blog"}, False),
+        ("Line_Up", "line_up", {"blog"}, True),
+        ("LineXUp", "line_up", {"blog"}, False),
+        ("", "anything", {"blog"}, False),
+        # Short titles are inside too many recalled titles to mean anything there
+        ("Hi", "hi", {"blog"}, True),
+        ("Hi", "Hilbert's hotel paradox", {"blog"}, False),
+        ("Re: plans", "Re: plans for the meetup", {"blog"}, True),
+    ],
+)
+def test_fetch_chunks_by_title_matching(db_session, title, recalled, modalities, matches):
+    post = titled_post(db_session, title)
+
+    found = fetch_chunks_by_title([recalled], modalities, {"access_filter": None})
+
+    assert (post.id in found_sources(db_session, found)) is matches
+
+
+def test_fetch_chunks_by_title_keeps_the_closest_titles_per_recalled_title(db_session):
+    posts = [titled_post(db_session, "Bottom Line" + "!" * i) for i in range(8)]
+
+    found = fetch_chunks_by_title(
+        ["Bottom Line"], {"blog"}, {"access_filter": None}, limit_per_title=3
+    )
+
+    assert found_sources(db_session, found) == {p.id for p in posts[:3]}
+
+
+def test_fetch_chunks_by_title_takes_a_few_chunks_per_source(db_session):
+    titled_post(db_session, "The Bottom Line", n_chunks=6)
+
+    found = fetch_chunks_by_title(["The Bottom Line"], {"blog"}, {"access_filter": None})
+
+    assert len(found) == MAX_TITLE_CHUNKS_PER_SOURCE
+
+
+@pytest.mark.parametrize(
+    "grants, expected",
+    [(["a"], {"a"}), (["b"], {"b"}), ([], set())],
+)
+def test_fetch_chunks_by_title_applies_the_access_filter(db_session, grants, expected):
+    projects = {name: Project(title=name, state="open") for name in ("a", "b")}
+    db_session.add_all(projects.values())
+    db_session.commit()
+    posts = {
+        name: titled_post(
+            db_session, f"The Bottom Line {name}", project_id=p.id, sensitivity="basic"
+        )
+        for name, p in projects.items()
+    }
+    conditions = [
+        AccessCondition(project_id=projects[name].id, sensitivities=frozenset({"basic"}))
+        for name in grants
+    ]
+    access = AccessFilter(conditions=conditions, include_public=False)
+
+    found = fetch_chunks_by_title(["The Bottom Line"], {"blog"}, {"access_filter": access})
+
+    assert found_sources(db_session, found) == {posts[name].id for name in expected}
+
+
+def subclasses(cls: type) -> list[type]:
+    return [c for sub in cls.__subclasses__() for c in (sub, *subclasses(sub))]
+
+
+def column_backed_titles() -> set[tuple[type, str]]:
+    """(class, column) for each SourceItem subclass whose title is a column of its
+    own table: a ``title`` column, or the one attribute its ``title`` property
+    returns (``return self.subject``)."""
+    backed = set()
+    for cls in subclasses(SourceItem):
+        own = {c.key for c in cls.__table__.columns}
+        if "title" in own:
+            backed.add((cls, "title"))
+            continue
+        names = inspect.getattr_static(cls, "title").fget.__code__.co_names
+        if len(names) == 1 and names[0] in own:
+            backed.add((cls, names[0]))
+    return backed
+
+
+# Observation subjects are topics ("programming"), not titles anyone recalls.
+NOT_RECALLED_TITLES = {(AgentObservation, "subject")}
+
+
+def test_title_recall_covers_every_column_backed_title():
+    covered = {(c.class_, c.key) for c in search_module.TITLE_COLUMNS} | NOT_RECALLED_TITLES
+
+    assert column_backed_titles() <= covered
 
 
 # ============================================================================
@@ -883,6 +1006,88 @@ async def test_search_chunks_without_a_voyage_key_searches_keywords_only(monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, analysed",
+    [("what happened yesterday", True), ("tabooing your words", False)],
+)
+async def test_only_queries_that_mention_a_date_are_analysed(query, analysed):
+    analyze = AsyncMock(return_value=QueryAnalysis(cleaned_query=query, success=True))
+    with patch.object(search_module, "analyze_query", analyze):
+        result, _ = await search_module._run_llm_analysis(
+            query, FIXED_NOW, True, False, search_module.searcher_keys(None)
+        )
+
+    assert (analyze.called, result is not None) == (analysed, analysed)
+
+
+def scored_chunk(source_id: int, score: float) -> MagicMock:
+    return MagicMock(source_id=source_id, relevance_score=score, boost=0.0)
+
+
+def ranked(chunks) -> list[tuple[int, float]]:
+    return [(c.source_id, c.relevance_score) for c in chunks]
+
+
+@pytest.mark.parametrize(
+    "scores, limit, expected",
+    [
+        # One long post's many chunks can't crowd the other posts out
+        ([(1, 0.9), (2, 0.8), (3, 0.7), (1, 0.6)], 2, [(1, 0.9), (2, 0.8), (1, 0.6)]),
+        ([(1, 0.9), (1, 0.8), (1, 0.7), (2, 0.6), (3, 0.5)], 2, [(1, 0.9), (1, 0.8), (1, 0.7), (2, 0.6)]),
+        ([(2, 0.1), (1, 0.9)], 1, [(1, 0.9)]),
+        ([(1, 0.9)], 0, []),
+        ([], 5, []),
+    ],
+)
+def test_top_sources(scores, limit, expected):
+    assert ranked(search_module.top_sources([scored_chunk(s, x) for s, x in scores], limit)) == expected
+
+
+def test_top_sources_keeps_each_sources_best_chunks():
+    chunks = [scored_chunk(1, 1 - i / 10) for i in range(MAX_CHUNKS_PER_SOURCE + 2)]
+
+    assert ranked(search_module.top_sources(chunks, 5)) == ranked(chunks[:MAX_CHUNKS_PER_SOURCE])
+
+
+@pytest.mark.asyncio
+async def test_apply_reranking_returns_limit_distinct_sources():
+    chunks = [scored_chunk(s, x) for s, x in [(1, 0.9), (1, 0.8), (2, 0.6), (3, 0.5)]]
+
+    result = await search_module._apply_reranking(chunks, "query", 2, False)
+
+    assert ranked(result) == [(1, 0.9), (1, 0.8), (2, 0.6)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "llm_scores, expected",
+    [
+        # Source 1 fails scoring and takes its sibling with it
+        ({2: 0.85}, [(2, 0.85), (2, 0.6)]),
+        # A sibling can't outrank the LLM's verdict on its source
+        ({1: 0.35, 2: 0.85}, [(2, 0.85), (2, 0.6), (1, 0.35), (1, 0.35)]),
+    ],
+)
+async def test_scoring_scores_each_sources_best_chunk_and_keeps_survivors_siblings(
+    llm_scores, expected
+):
+    chunks = [scored_chunk(s, x) for s, x in [(1, 0.9), (2, 0.8), (1, 0.7), (2, 0.6)]]
+
+    async def rank(query, best, key, min_score):
+        for chunk in best:
+            chunk.relevance_score = llm_scores.get(chunk.source_id, 0.0)
+        return sorted(
+            (c for c in best if c.source_id in llm_scores),
+            key=lambda c: c.relevance_score, reverse=True,
+        )
+
+    with patch.object(search_module.scorer, "rank_chunks", rank):
+        result = await search_module.score_sources("query", chunks, None)
+
+    assert ranked(result) == expected
+
+
+@pytest.mark.asyncio
 async def test_apply_reranking_keeps_fused_order_when_rerank_stalls():
     async def stall(*args, **kwargs):
         await asyncio.sleep(60)
@@ -953,15 +1158,15 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=720)
 
 
 def fake_voyage(scores: dict[str, float]) -> MagicMock:
-    """A Voyage client whose reranker scores each document by its text, honouring top_k."""
+    """A Voyage client whose reranker scores each document by its text."""
 
-    def rerank(query, documents, model, top_k):
+    def rerank(query, documents, model):
         ranked = sorted(
             (SimpleNamespace(index=i, relevance_score=scores[d]) for i, d in enumerate(documents)),
             key=lambda r: r.relevance_score,
             reverse=True,
         )
-        return SimpleNamespace(results=ranked[:top_k])
+        return SimpleNamespace(results=ranked)
 
     voyage = MagicMock()
     voyage.Client.return_value.rerank.side_effect = rerank

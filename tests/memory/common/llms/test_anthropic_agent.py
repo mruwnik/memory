@@ -133,11 +133,45 @@ def test_tool_choice(tool_choice, expected):
     )
 
 
-def test_request_caches_and_never_sends_temperature_when_unset():
-    kwargs = request(provider())
+def test_request_never_sends_temperature_when_unset():
+    assert "temperature" not in request(provider())
 
-    assert kwargs["cache_control"] == {"type": "ephemeral"}
-    assert "temperature" not in kwargs
+
+USER = NeutralMessage(role="user", content=[Text(text="hi")])
+ASSISTANT = NeutralMessage(role="assistant", content=[Text(text="hello")])
+
+
+@pytest.mark.parametrize(
+    "messages,tail_cached",
+    [([USER], False), ([USER, ASSISTANT, USER], True)],
+)
+def test_the_static_system_prompt_is_the_cache_breakpoint(messages, tail_cached):
+    kwargs = provider().build_agent_request(
+        system="sys",
+        messages=messages,
+        replay=[None] * len(messages),
+        tools=[],
+        tool_choice="auto",
+        params=params(),
+    )
+
+    assert kwargs["system"] == [
+        {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert ("cache_control" in kwargs) is tail_cached
+
+
+def test_an_empty_system_prompt_is_not_sent():
+    kwargs = provider().build_agent_request(
+        system="",
+        messages=[USER],
+        replay=[None],
+        tools=[],
+        tool_choice="auto",
+        params=params(),
+    )
+
+    assert "system" not in kwargs
 
 
 def test_replay_is_sent_verbatim_for_assistant_turns():

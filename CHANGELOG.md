@@ -12,6 +12,39 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+Search runs the query-analysis LLM only for queries that mention a date or
+time (a year, month, weekday, "yesterday", "last 3 weeks", "upcoming"...);
+others are searched as typed, which is faster and ranks better. A search
+returns `limit` distinct items with up to 3 matching chunks each, so one long
+item no longer fills the results on its own; with `useScores` the LLM scores
+each item's best chunk only. Titles recalled by query analysis are matched in
+the database rather than among an arbitrary 200 items, and now also match
+reports, tasks, calendar events and observations.
+
+Memory's own LLM calls on Anthropic keys now cache the system prompt, so
+repeated search and summary calls read it from the cache instead of writing a
+new entry each time.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.4.1 (2026-10-29)
 
 ### Required env vars
