@@ -45,6 +45,29 @@ session summaries) now records the user it was spent for, the model and the
 tokens. Deleting a provider key or a user keeps that spend as history; spend on
 a deleted key no longer counts toward any daily cap.
 
+The telemetry read endpoints moved under `/usage`: `/telemetry/raw`,
+`/telemetry/metrics`, `/telemetry/sessions`, `/telemetry/users` and
+`/telemetry/api-keys` are now `/usage/raw`, `/usage/metrics`, `/usage/sessions`,
+`/usage/users` and `/usage/api-keys`, and `/sessions/stats/tool-usage` is
+`/usage/tools`. Scripts calling the old paths must switch. OTLP ingest is
+unchanged (`/telemetry/ingest`, `/telemetry/v1/*`), so Claude Code's
+`OTEL_EXPORTER_OTLP_ENDPOINT` needs no change. New `GET /usage` returns LLM cost
+and tokens over time across memory's own calls, agent runs and Claude Code
+telemetry, grouped by user, key, agent, model or kind. `/usage/users` now lists
+everyone with usage you can see (spend, runs or telemetry), and every `/usage/*`
+endpoint treats `to` as exclusive.
+
+Purging agent runs past their retention now first adds their cost and tokens to
+`llm_spend` (as `kind = 'run'`, bucketed by the hour the run was created), so
+usage history outlives `AGENT_RUN_RETENTION_DAYS`. These rows don't count toward
+daily caps. Runs purged before this release are not recovered.
+
+A daily maintenance task (`purge_old_usage`, 04:05) deletes `telemetry_events`
+and `llm_spend` rows older than `USAGE_RETENTION_DAYS` (default 365) and
+`audit_events` rows older than `AUDIT_RETENTION_DAYS` (default 730). Its first
+run deletes everything already past those windows; set the variables higher
+beforehand to keep more.
+
 ### Migrations
 
 `20261119_email_sender_tags` removes sender and raw-header tags from email
@@ -61,6 +84,10 @@ deleted.
 `20261121_llm_spend_usage` adds those columns to `llm_spend`. Existing rows get no
 user or model and zero tokens. The table holds one row per key, agent and hour,
 so the migration is quick.
+
+`20261122_llm_spend_run_kind` adds `llm_spend.kind`, puts it in the bucket index
+and indexes `hour`. Quick, for the same reason. Downgrading deletes the folded
+run rows.
 
 ### Post-deploy commands
 

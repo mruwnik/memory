@@ -11,20 +11,17 @@ import fcntl
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 
-from sqlalchemy.orm import Session as DBSession
-
-from memory.api.auth import require_rest_access, resolve_user_filter
+from memory.api.auth import require_rest_access
 from memory.common import settings
 from memory.common.dates import parse_iso_datetime
-from memory.common.db.connection import get_session, make_session
+from memory.common.db.connection import make_session
 from memory.common.db.models import CodingProject, Session, TelemetryEvent, User
 
 logger = logging.getLogger(__name__)
@@ -69,38 +66,6 @@ class BatchIngestResponse(BaseModel):
     accepted: int
     duplicates: int
 
-
-class ToolCallStats(BaseModel):
-    """Per-call statistics for token usage."""
-
-    median: float
-    p75: float
-    p90: float
-    p99: float
-    min: int
-    max: int
-
-
-class ToolUsageStats(BaseModel):
-    """Token usage statistics for a single tool."""
-
-    tool_name: str
-    call_count: int
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int
-    cache_creation_tokens: int
-    total_tokens: int
-    per_call: ToolCallStats | None = None
-
-
-class ToolUsageResponse(BaseModel):
-    """Aggregated tool usage statistics."""
-
-    from_time: str
-    to_time: str
-    session_count: int
-    tools: list[ToolUsageStats]
 
 
 @dataclass
@@ -407,86 +372,4 @@ async def ingest_session_events_batch(
         session_id=request.session_id,
         accepted=accepted,
         duplicates=len(request.events) - accepted,
-    )
-
-
-def attr_tokens(key: str):
-    return func.coalesce(func.sum(TelemetryEvent.attributes[key].as_integer()), 0)
-
-
-def per_call_percentile(fraction: float):
-    return func.percentile_cont(fraction).within_group(TelemetryEvent.value)
-
-
-@router.get("/stats/tool-usage", response_model=ToolUsageResponse)
-def get_tool_usage_stats(
-    from_time: datetime | None = Query(None, alias="from", description="Start time"),
-    to_time: datetime | None = Query(None, alias="to", description="End time"),
-    user_id: int | None = Query(None, description="Filter by user ID (admin only, omit for all users)"),
-    user: User = Depends(require_rest_access),
-    db: DBSession = Depends(get_session),
-) -> ToolUsageResponse:
-    """
-    Get aggregated token usage statistics by tool, from tool.token.usage telemetry events.
-
-    Admins (users with '*' or 'admin' scope) can:
-    - Omit user_id to see tool usage across all users
-    - Specify user_id to filter to a specific user's sessions
-    """
-    resolved_user_id = resolve_user_filter(user_id, user, db)
-    to_time = to_time or datetime.now(timezone.utc)
-    from_time = from_time or to_time - timedelta(days=7)
-
-    filters = [
-        TelemetryEvent.name == "tool.token.usage",
-        TelemetryEvent.timestamp >= from_time,
-        TelemetryEvent.timestamp <= to_time,
-    ]
-    if resolved_user_id is not None:
-        filters.append(TelemetryEvent.user_id == resolved_user_id)
-
-    tool_name = func.coalesce(TelemetryEvent.tool_name, "unknown")
-    rows = (
-        db.query(
-            tool_name.label("tool_name"),
-            func.count().label("call_count"),
-            attr_tokens("input_tokens").label("input_tokens"),
-            attr_tokens("output_tokens").label("output_tokens"),
-            attr_tokens("cache_read_input_tokens").label("cache_read_tokens"),
-            attr_tokens("cache_creation_input_tokens").label("cache_creation_tokens"),
-            per_call_percentile(0.5).label("median"),
-            per_call_percentile(0.75).label("p75"),
-            per_call_percentile(0.9).label("p90"),
-            per_call_percentile(0.99).label("p99"),
-            func.min(TelemetryEvent.value).label("min"),
-            func.max(TelemetryEvent.value).label("max"),
-        )
-        .filter(*filters)
-        .group_by(tool_name)
-        .all()
-    )
-    session_count = (
-        db.query(func.count(func.distinct(TelemetryEvent.session_id))).filter(*filters).scalar()
-    )
-
-    def stats(r) -> ToolUsageStats:
-        tokens = (r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens)
-        return ToolUsageStats(
-            tool_name=r.tool_name,
-            call_count=r.call_count,
-            input_tokens=r.input_tokens,
-            output_tokens=r.output_tokens,
-            cache_read_tokens=r.cache_read_tokens,
-            cache_creation_tokens=r.cache_creation_tokens,
-            total_tokens=sum(tokens),
-            per_call=ToolCallStats(
-                median=r.median, p75=r.p75, p90=r.p90, p99=r.p99, min=int(r.min or 0), max=int(r.max or 0)
-            ),
-        )
-
-    return ToolUsageResponse(
-        from_time=from_time.isoformat(),
-        to_time=to_time.isoformat(),
-        session_count=session_count or 0,
-        tools=sorted(map(stats, rows), key=lambda t: t.total_tokens, reverse=True),
     )

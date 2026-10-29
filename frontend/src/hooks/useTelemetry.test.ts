@@ -37,7 +37,7 @@ describe('useTelemetry getRawEvents', () => {
     const fetchMock = mockJson(payload)
     const r = await setup().getRawEvents()
     expect(r).toEqual(payload)
-    const { url } = callTo(fetchMock, '/telemetry/raw')
+    const { url } = callTo(fetchMock, '/usage/raw')
     expect(url).not.toContain('event_type')
   })
 
@@ -57,7 +57,7 @@ describe('useTelemetry getRawEvents', () => {
       apiKeyId: 4,
       userId: 7,
     })
-    const { url } = callTo(fetchMock, '/telemetry/raw')
+    const { url } = callTo(fetchMock, '/usage/raw')
     expect(url).toContain('event_type=tool')
     expect(url).toContain('name=Bash')
     expect(url).toContain('session_id=s1')
@@ -73,7 +73,7 @@ describe('useTelemetry getRawEvents', () => {
   it('includes user_id=0 because the check is undefined, not falsy', async () => {
     const fetchMock = mockJson({ events: [] })
     await setup().getRawEvents({ userId: 0 })
-    expect(callTo(fetchMock, '/telemetry/raw').url).toContain('user_id=0')
+    expect(callTo(fetchMock, '/usage/raw').url).toContain('user_id=0')
   })
 
   it('throws a status-bearing error on non-ok', async () => {
@@ -99,7 +99,7 @@ describe('useTelemetry getMetrics', () => {
       apiKeyId: 4,
       userId: 3,
     })
-    const { url } = callTo(fetchMock, '/telemetry/metrics')
+    const { url } = callTo(fetchMock, '/usage/metrics')
     expect(url).toContain('metric=token.usage')
     expect(url).toContain('granularity=60')
     expect(url).toContain('source=cli')
@@ -112,7 +112,7 @@ describe('useTelemetry getMetrics', () => {
   it('omits optional params when not supplied', async () => {
     const fetchMock = mockJson({ data: [] })
     await setup().getMetrics('cost.usage')
-    const { url } = callTo(fetchMock, '/telemetry/metrics')
+    const { url } = callTo(fetchMock, '/usage/metrics')
     expect(url).toContain('metric=cost.usage')
     expect(url).not.toContain('granularity')
     expect(url).not.toContain('group_by')
@@ -130,7 +130,7 @@ describe('useTelemetry getToolUsage', () => {
     const fetchMock = mockJson(payload)
     const r = await setup().getToolUsage({ userId: 9 })
     expect(r).toEqual(payload)
-    const { url } = callTo(fetchMock, '/sessions/stats/tool-usage')
+    const { url } = callTo(fetchMock, '/usage/tools')
     expect(url).toContain('user_id=9')
   })
 
@@ -146,7 +146,7 @@ describe('useTelemetry getUsersWithTelemetry', () => {
     const fetchMock = mockJson(users)
     const r = await setup().getUsersWithTelemetry()
     expect(r).toEqual(users)
-    expect(callTo(fetchMock, '/telemetry/users').url).toContain('/telemetry/users')
+    expect(callTo(fetchMock, '/usage/users').url).toContain('/usage/users')
   })
 
   it('throws a status-bearing error on non-ok', async () => {
@@ -163,7 +163,7 @@ describe('useTelemetry getSessionStats', () => {
     const fetchMock = mockJson(payload)
     const r = await setup().getSessionStats({ apiKeyId: 4, userId: 9 })
     expect(r).toEqual(payload)
-    const { url } = callTo(fetchMock, '/telemetry/sessions')
+    const { url } = callTo(fetchMock, '/usage/sessions')
     expect(url).toContain('api_key_id=4')
     expect(url).toContain('user_id=9')
   })
@@ -180,6 +180,6 @@ describe('useTelemetry getApiKeysWithTelemetry', () => {
     const fetchMock = mockJson(keys)
     const r = await setup().getApiKeysWithTelemetry(9)
     expect(r).toEqual(keys)
-    expect(callTo(fetchMock, '/telemetry/api-keys').url).toContain('user_id=9')
+    expect(callTo(fetchMock, '/usage/api-keys').url).toContain('user_id=9')
   })
 })

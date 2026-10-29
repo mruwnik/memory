@@ -210,7 +210,7 @@ def test_ingest_batch_records_tool_usage_once_per_event(client, db_session, user
 
     ingest(client, session_id, [tool_call])
     ingest(client, session_id, [tool_call])
-    response = client.get("/sessions/stats/tool-usage")
+    response = client.get("/usage/tools")
 
     assert [(t["tool_name"], t["call_count"], t["input_tokens"]) for t in response.json()["tools"]] == [("Bash", 1, 7)]
 

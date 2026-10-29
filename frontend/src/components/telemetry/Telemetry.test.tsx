@@ -124,11 +124,11 @@ const sessionsResponse = { from_time: 'a', to_time: 'b', sessions: [] }
 
 const laptopKey = { id: 4, name: 'laptop', key_type: 'internal', user_id: 2, revoked: false }
 
-// Routes: telemetry/users must be matched before telemetry/metrics since both
-// share the "/telemetry/" substring and the first include() match wins.
+// Routes: /usage/users must come before /users, which it contains, since the
+// first include() match wins.
 const baseRoutes = (me: typeof adminUser, apiKeys: unknown[] = []) => json({
   '/auth/me': { json: me },
-  '/telemetry/users': { json: [{ id: 1, name: 'Admin', email: 'admin@example.com' }, { id: 2, name: 'Other', email: 'other@example.com' }] },
+  '/usage/users': { json: [{ id: 1, name: 'Admin', email: 'admin@example.com' }, { id: 2, name: 'Other', email: 'other@example.com' }] },
   // Two users: the picker hides itself when there is only one.
   '/users': {
     json: [
@@ -136,11 +136,11 @@ const baseRoutes = (me: typeof adminUser, apiKeys: unknown[] = []) => json({
       { id: 2, name: 'Other', email: 'other@example.com', user_type: 'human', scopes: [], api_key_count: 0 },
     ],
   },
-  '/telemetry/api-keys': { json: apiKeys },
-  '/telemetry/sessions': { json: sessionsResponse },
-  '/telemetry/metrics': { json: metricsResponse(1500, 2) },
-  '/telemetry/raw': { json: rawResponse },
-  '/sessions/stats/tool-usage': { json: toolUsageResponse },
+  '/usage/api-keys': { json: apiKeys },
+  '/usage/sessions': { json: sessionsResponse },
+  '/usage/metrics': { json: metricsResponse(1500, 2) },
+  '/usage/raw': { json: rawResponse },
+  '/usage/tools': { json: toolUsageResponse },
 })
 
 describe('Telemetry container', () => {
@@ -178,12 +178,12 @@ describe('Telemetry container', () => {
     mockFetchRoutes(
       json({
         '/auth/me': { json: regularUser },
-        '/telemetry/users': { json: [] },
-        '/telemetry/api-keys': { json: [] },
-        '/telemetry/sessions': { json: sessionsResponse },
-        '/telemetry/metrics': { status: 500, json: { detail: 'boom' } },
-        '/telemetry/raw': { json: rawResponse },
-        '/sessions/stats/tool-usage': { json: toolUsageResponse },
+        '/usage/users': { json: [] },
+        '/usage/api-keys': { json: [] },
+        '/usage/sessions': { json: sessionsResponse },
+        '/usage/metrics': { status: 500, json: { detail: 'boom' } },
+        '/usage/raw': { json: rawResponse },
+        '/usage/tools': { json: toolUsageResponse },
       }),
     )
     renderWithRouter(<Telemetry />)
@@ -203,7 +203,7 @@ describe('Telemetry container', () => {
 
     const metricsUrl = () => {
       const calls = fetchMock.mock.calls.map((c) => String(c[0]))
-      return calls.filter((u) => u.includes('/telemetry/metrics'))
+      return calls.filter((u) => u.includes('/usage/metrics'))
     }
 
     // 24h is the default -> granularity 60 in the request
@@ -260,10 +260,10 @@ describe('Telemetry container', () => {
 
     const urls = () => fetchMock.mock.calls.map((c) => String(c[0]))
     await waitFor(() =>
-      expect(urls().filter((u) => u.includes('/telemetry/sessions')).at(-1)).toContain('api_key_id=4'),
+      expect(urls().filter((u) => u.includes('/usage/sessions')).at(-1)).toContain('api_key_id=4'),
     )
-    expect(urls().filter((u) => u.includes('/telemetry/metrics')).at(-1)).toContain('api_key_id=4')
-    expect(urls().filter((u) => u.includes('/telemetry/raw')).at(-1)).toContain('api_key_id=4')
+    expect(urls().filter((u) => u.includes('/usage/metrics')).at(-1)).toContain('api_key_id=4')
+    expect(urls().filter((u) => u.includes('/usage/raw')).at(-1)).toContain('api_key_id=4')
     expect(screen.queryByText('Token usage by API key')).not.toBeInTheDocument()
   })
 

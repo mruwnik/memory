@@ -45,7 +45,15 @@ from memory.workers.tasks.maintenance import (
 )
 import memory.workers.tasks.maintenance as maintenance_module
 
-from memory.common.db.models import JobStatus, PendingJob, ScheduledTask, TaskExecution
+from memory.common.db.models import (
+    AuditEvent,
+    JobStatus,
+    LLMSpend,
+    PendingJob,
+    ScheduledTask,
+    TaskExecution,
+    TelemetryEvent,
+)
 
 
 @pytest.fixture
@@ -1977,6 +1985,30 @@ def test_cleanup_old_task_results_deletes_across_batches(
 
     assert result["deleted"] == 5
     assert db_session.query(CeleryTaskMeta).count() == 0
+
+
+def test_purge_old_usage_keeps_each_table_to_its_window(db_session, regular_user, monkeypatch):
+    monkeypatch.setattr(settings, "USAGE_RETENTION_DAYS", 365)
+    monkeypatch.setattr(settings, "AUDIT_RETENTION_DAYS", 730)
+    now = datetime.now(timezone.utc)
+    for age in (300, 400, 800):
+        at = now - timedelta(days=age)
+        db_session.add_all(
+            [
+                TelemetryEvent(timestamp=at, user_id=regular_user.id, event_type="metric", name=f"t{age}"),
+                LLMSpend(agent=f"s{age}", hour=at, cost_usd=0, calls=1),
+                AuditEvent(timestamp=at, action=f"a{age}"),
+            ]
+        )
+    db_session.commit()
+
+    result = maintenance_module.purge_old_usage()
+
+    db_session.expire_all()
+    assert result == {"telemetry_events": 2, "llm_spend": 2, "audit_events": 1}
+    assert sorted(e.name for e in db_session.query(TelemetryEvent)) == ["t300"]
+    assert sorted(s.agent for s in db_session.query(LLMSpend)) == ["s300"]
+    assert sorted(a.action for a in db_session.query(AuditEvent)) == ["a300", "a400"]
 
 
 def make_job(status: str, age_days: int, **kwargs) -> PendingJob:

@@ -50,6 +50,7 @@ from memory.api.content_sources import router as content_sources_router
 from memory.api.metrics import router as metrics_router
 from memory.api.audit_log import router as audit_log_router
 from memory.api.telemetry import router as telemetry_router
+from memory.api.usage import router as usage_router
 from memory.api.jobs import router as jobs_router
 from memory.api.polls import router as polls_router
 from memory.api.sessions import router as sessions_router
@@ -131,7 +132,8 @@ tags_metadata = [
     {"name": "meetings", "description": "Meeting transcripts and summaries"},
     {"name": "content-sources", "description": "Content source configuration"},
     {"name": "metrics", "description": "System metrics and statistics"},
-    {"name": "telemetry", "description": "Usage telemetry"},
+    {"name": "telemetry", "description": "OpenTelemetry ingest"},
+    {"name": "usage", "description": "LLM usage and cost"},
     {"name": "polls", "description": "Create and manage polls"},
     {"name": "claude-snapshots", "description": "Claude conversation snapshots"},
     {"name": "claude-environments", "description": "Claude environment management"},
@@ -513,6 +515,7 @@ app.include_router(content_sources_router)
 app.include_router(metrics_router)
 app.include_router(audit_log_router)
 app.include_router(telemetry_router)
+app.include_router(usage_router)
 app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(sessions_router)

@@ -173,6 +173,8 @@ class LLMSpend(Base):
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     agent: Mapped[str] = mapped_column(Text, nullable=False)
+    # "run": purged agent runs folded in, which their caps already counted as runs
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="memory", server_default="memory")
     # NULL only on buckets from before models were recorded
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -192,8 +194,11 @@ class LLMSpend(Base):
             "agent",
             "model",
             "hour",
+            "kind",
             unique=True,
             postgresql_nulls_not_distinct=True,
             postgresql_where=text("provider_key_id IS NOT NULL"),
         ),
+        Index("llm_spend_hour", "hour"),
+        CheckConstraint("kind IN ('memory', 'run')", name="llm_spend_kind"),
     )

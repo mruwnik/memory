@@ -123,7 +123,7 @@ def record_spend(
     }
     db.execute(
         stmt.on_conflict_do_update(
-            index_elements=["provider_key_id", "user_id", "agent", "model", "hour"],
+            index_elements=["provider_key_id", "user_id", "agent", "model", "hour", "kind"],
             index_where=LLMSpend.provider_key_id.is_not(None),
             set_=added,
         )
@@ -131,11 +131,16 @@ def record_spend(
 
 
 def spend_last_24h(db: DBSession, key_id: int) -> Decimal:
-    """Spend outside runs; the bucket the window starts in counts whole."""
+    """Spend outside runs; the bucket the window starts in counts whole. Purged runs
+    folded into spend are left out: the run caps count runs from agent_runs."""
     since = hour_of(datetime.now(timezone.utc) - timedelta(hours=24))
     total = (
         db.query(func.coalesce(func.sum(LLMSpend.cost_usd), 0))
-        .filter(LLMSpend.provider_key_id == key_id, LLMSpend.hour >= since)
+        .filter(
+            LLMSpend.provider_key_id == key_id,
+            LLMSpend.kind == "memory",
+            LLMSpend.hour >= since,
+        )
         .scalar()
     )
     return Decimal(total)

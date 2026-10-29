@@ -8,7 +8,8 @@ from typing import Sequence, Any, cast
 from celery.backends.database.models import Task as CeleryTaskMeta
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import CursorResult, and_, delete, func, inspect as sa_inspect, or_, update
-from sqlalchemy import select
+from sqlalchemy import BigInteger, literal, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased, contains_eager, selectinload, with_polymorphic
 
 from memory.common import (
@@ -40,6 +41,7 @@ from memory.common.celery_app import (
     CLEANUP_OLD_TASK_EXECUTIONS,
     CLEANUP_OLD_TASK_RESULTS,
     CLEANUP_OLD_PENDING_JOBS,
+    PURGE_OLD_USAGE,
     REINGEST_MISSING_CHUNKS,
     REINGEST_CHUNK,
     REINGEST_ITEM,
@@ -57,15 +59,19 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
+    AgentDefinition,
     AgentRun,
+    AuditEvent,
     Chunk,
     CodingProject,
     JobStatus,
+    LLMSpend,
     PendingJob,
     ScheduledTask,
     Session,
     SourceItem,
     TaskExecution,
+    TelemetryEvent,
 )
 from memory.common.db.models.source_items import (
     BlogPost,
@@ -1312,6 +1318,26 @@ def cleanup_old_pending_jobs(retention_days: int | None = None) -> dict:
     return {"deleted": deleted, "failed_lost": failed_lost, "retention_days": retention_days}
 
 
+@app.task(name=PURGE_OLD_USAGE)
+@tracked_task
+def purge_old_usage() -> dict:
+    """Delete telemetry and spend rows past USAGE_RETENTION_DAYS, audit rows past AUDIT_RETENTION_DAYS."""
+    now = datetime.now(timezone.utc)
+    usage_cutoff = now - timedelta(days=settings.USAGE_RETENTION_DAYS)
+    audit_cutoff = now - timedelta(days=settings.AUDIT_RETENTION_DAYS)
+    deleted = {
+        "telemetry_events": apply_in_batches(
+            delete(TelemetryEvent), TelemetryEvent.id, TelemetryEvent.timestamp < usage_cutoff
+        ),
+        "llm_spend": apply_in_batches(delete(LLMSpend), LLMSpend.id, LLMSpend.hour < usage_cutoff),
+        "audit_events": apply_in_batches(
+            delete(AuditEvent), AuditEvent.id, AuditEvent.timestamp < audit_cutoff
+        ),
+    }
+    logger.info(f"Purged old usage rows: {deleted}")
+    return deleted
+
+
 @app.task(name=CLEANUP_OLD_DONE_ONEOFF_TASKS)
 @tracked_task
 def cleanup_old_done_oneoff_tasks(retention_days: int | None = None) -> dict:
@@ -1436,11 +1462,52 @@ def sweep_agent_runs() -> dict[str, int]:
     return {"stale": len(stale), "orphaned": len(orphaned)}
 
 
+RUN_TOKENS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+def fold_into_spend(runs):
+    """Upsert deleted runs' cost and tokens into llm_spend as kind "run", so usage
+    history outlives run retention.
+
+    Runs whose key is gone land in fresh rows: the bucket index covers keyed rows only.
+    """
+    hour = func.date_trunc("hour", runs.c.created_at, "UTC")
+    agent = func.coalesce(runs.c.agent, AgentDefinition.name, "inline")
+    model = runs.c.spec["model"].astext
+    tokens = [
+        func.sum(func.coalesce(runs.c.usage[name].astext.cast(BigInteger), 0))
+        for name in RUN_TOKENS
+    ]
+    rows = (
+        select(
+            runs.c.provider_key_id,
+            runs.c.user_id,
+            agent,
+            model,
+            hour,
+            literal("run"),
+            func.sum(runs.c.cost_usd),
+            func.count(),
+            *tokens,
+        )
+        .outerjoin(AgentDefinition, AgentDefinition.id == runs.c.definition_id)
+        .group_by(runs.c.provider_key_id, runs.c.user_id, agent, model, hour)
+    )
+    bucket = ["provider_key_id", "user_id", "agent", "model", "hour", "kind"]
+    summed = ["cost_usd", "calls", *RUN_TOKENS]
+    stmt = insert(LLMSpend).from_select([*bucket, *summed], rows)
+    return stmt.on_conflict_do_update(
+        index_elements=bucket,
+        index_where=LLMSpend.provider_key_id.is_not(None),
+        set_={name: getattr(LLMSpend, name) + stmt.excluded[name] for name in summed},
+    )
+
+
 @app.task(name=PURGE_AGENT_RUNS)
 def purge_agent_runs() -> dict[str, int]:
     """Delete runs (with their transcripts) past their agent's retention_days, else
-    AGENT_RUN_RETENTION_DAYS, unless they or a run that started them are starred;
-    and old trigger match claims."""
+    AGENT_RUN_RETENTION_DAYS, unless they or a run that started them are starred,
+    keeping their cost and tokens in llm_spend; and old trigger match claims."""
     retention = func.least(
         func.coalesce(
             AgentRun.spec["retention_days"].as_integer(), settings.AGENT_RUN_RETENTION_DAYS
@@ -1465,9 +1532,24 @@ def purge_agent_runs() -> dict[str, int]:
             batch = (
                 select(AgentRun.id).where(*purgeable).limit(PURGE_BATCH_SIZE).scalar_subquery()
             )
-            ids = db.execute(
-                delete(AgentRun).where(AgentRun.id.in_(batch), *purgeable).returning(AgentRun.id)
-            ).scalars().all()
+            deleted = (
+                delete(AgentRun)
+                .where(AgentRun.id.in_(batch), *purgeable)
+                .returning(
+                    AgentRun.id,
+                    AgentRun.created_at,
+                    AgentRun.user_id,
+                    AgentRun.provider_key_id,
+                    AgentRun.agent,
+                    AgentRun.definition_id,
+                    AgentRun.spec,
+                    AgentRun.cost_usd,
+                    AgentRun.usage,
+                )
+                .cte("deleted")
+            )
+            folded = fold_into_spend(deleted).cte("folded")
+            ids = db.execute(select(deleted.c.id).add_cte(folded)).scalars().all()
         if not ids:
             break
         purged += len(ids)

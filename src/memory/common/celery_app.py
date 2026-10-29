@@ -96,6 +96,7 @@ CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
 CLEANUP_OLD_TASK_RESULTS = f"{MAINTENANCE_ROOT}.cleanup_old_task_results"
 CLEANUP_OLD_PENDING_JOBS = f"{MAINTENANCE_ROOT}.cleanup_old_pending_jobs"
+PURGE_OLD_USAGE = f"{MAINTENANCE_ROOT}.purge_old_usage"
 CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
@@ -456,6 +457,10 @@ def build_beat_schedule() -> dict:
         "cleanup-old-pending-jobs": {
             "task": CLEANUP_OLD_PENDING_JOBS,
             "schedule": crontab(hour="4", minute="55"),
+        },
+        "purge-old-usage": {
+            "task": PURGE_OLD_USAGE,
+            "schedule": crontab(hour="4", minute="5"),
         },
         "cleanup-old-done-oneoff-tasks": {
             "task": CLEANUP_OLD_DONE_ONEOFF_TASKS,

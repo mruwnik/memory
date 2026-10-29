@@ -8,7 +8,7 @@ import pytest
 
 from memory.common import settings
 from memory.common.celery_app import AGENTS_ROOT, app
-from memory.common.db.models import AgentRun, AgentRunStep
+from memory.common.db.models import AgentDefinition, AgentRun, AgentRunStep, LLMProviderKey, LLMSpend
 from memory.workers.tasks import agents as agent_tasks
 from memory.workers.tasks import maintenance
 from memory.workers.tasks.maintenance import purge_agent_runs, sweep_agent_runs
@@ -181,3 +181,52 @@ def test_purge_works_through_every_batch(db_session, regular_user, monkeypatch):
     purge_agent_runs()
 
     assert db_session.query(AgentRun).count() == 0
+
+
+def test_purge_folds_runs_into_spend_by_key_user_agent_model_and_hour(db_session, regular_user, monkeypatch):
+    monkeypatch.setattr(maintenance, "PURGE_BATCH_SIZE", 1)
+    key = LLMProviderKey(user_id=regular_user.id, provider="anthropic", label="k")
+    key.key = "sk-k"
+    definition = AgentDefinition(user_id=regular_user.id, name="digest", spec={})
+    db_session.add_all([key, definition])
+    db_session.commit()
+    hour = datetime(2026, 3, 10, 12, tzinfo=timezone.utc)
+    usage = {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 3, "cache_write_tokens": 1}
+
+    def old_run(cost: str, created_at: datetime, **overrides):
+        run(
+            db_session,
+            regular_user,
+            status="done",
+            finished_at=created_at + timedelta(minutes=5),
+            created_at=created_at,
+            cost_usd=Decimal(cost),
+            usage=usage,
+            **overrides,
+        )
+
+    old_run("1", hour + timedelta(minutes=5), agent="prebuilt:research", provider_key_id=key.id, spec={"model": "anthropic/m"})
+    old_run("2", hour + timedelta(minutes=50), agent="prebuilt:research", provider_key_id=key.id, spec={"model": "anthropic/m"})
+    old_run("4", hour + timedelta(hours=1), definition_id=definition.id, spec={"model": "anthropic/m"})
+    old_run("8", hour, spec={})
+    run(db_session, regular_user, status="done", finished_at=ago(hours=1), cost_usd=Decimal("16"))
+    # Memory's own spend in the same bucket stays apart
+    db_session.add(LLMSpend(provider_key_id=key.id, user_id=regular_user.id, agent="prebuilt:research", model="anthropic/m", hour=hour, cost_usd=Decimal("32"), calls=1))
+    db_session.commit()
+
+    purge_agent_runs()
+
+    db_session.expire_all()
+    assert sorted((
+        (s.kind, s.provider_key_id, s.user_id, s.agent, s.model, s.hour, s.cost_usd, s.calls, s.input_tokens, s.cache_write_tokens)
+        for s in db_session.query(LLMSpend)
+    ), key=str) == sorted(
+        [
+            ("memory", key.id, regular_user.id, "prebuilt:research", "anthropic/m", hour, Decimal("32"), 1, 0, 0),
+            ("run", key.id, regular_user.id, "prebuilt:research", "anthropic/m", hour, Decimal("3"), 2, 200, 2),
+            ("run", None, regular_user.id, "digest", "anthropic/m", hour + timedelta(hours=1), Decimal("4"), 1, 100, 1),
+            ("run", None, regular_user.id, "inline", None, hour, Decimal("8"), 1, 100, 1),
+        ],
+        key=str,
+    )
+    assert [r.cost_usd for r in db_session.query(AgentRun)] == [Decimal("16")]

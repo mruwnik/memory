@@ -133,8 +133,17 @@ def test_deleting_a_user_keeps_the_spend_made_for_them(db_session, regular_user,
     assert db_session.query(LLMSpend.user_id, LLMSpend.cost_usd).all() == [(None, D("2"))]
 
 
-@pytest.mark.parametrize("hours_ago,counted", [(0, D("2")), (23, D("2")), (26, D("0"))])
-def test_spend_counts_for_a_rolling_day(db_session, regular_user, hours_ago, counted):
+@pytest.mark.parametrize(
+    "hours_ago,kind,counted",
+    [
+        (0, "memory", D("2")),
+        (23, "memory", D("2")),
+        (26, "memory", D("0")),
+        # Purged runs folded into spend already counted while they were runs
+        (23, "run", D("0")),
+    ],
+)
+def test_spend_counts_for_a_rolling_day(db_session, regular_user, hours_ago, kind, counted):
     key = make_key(db_session, regular_user)
     hour = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).replace(
         minute=0, second=0, microsecond=0
@@ -143,6 +152,7 @@ def test_spend_counts_for_a_rolling_day(db_session, regular_user, hours_ago, cou
         LLMSpend(
             provider_key_id=key.id,
             agent="system:hyde",
+            kind=kind,
             hour=hour,
             cost_usd=D("2"),
             calls=1,
