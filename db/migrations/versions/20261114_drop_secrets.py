@@ -26,7 +26,6 @@ def upgrade():
             f"UPDATE scheduled_tasks SET data = (data::jsonb #- '{{spawn_config,{field}}}')::json "
             f"WHERE task_type = 'claude_session' AND data::jsonb -> 'spawn_config' ? '{field}'"
         )
-    op.drop_index("ix_secrets_name", table_name="secrets")
     op.drop_table("secrets")
 
 

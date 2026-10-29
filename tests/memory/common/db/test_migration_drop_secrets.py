@@ -3,12 +3,15 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import text
 
 
-def test_drop_secrets_moves_schedules_onto_saved_tokens(db_session):
+# Instances older than the complete-schema baseline never had ix_secrets_name.
+@pytest.mark.parametrize("index_sql", [["CREATE INDEX ix_secrets_name ON secrets (name)"], []])
+def test_drop_secrets_moves_schedules_onto_saved_tokens(db_session, index_sql):
     path = Path(__file__).parents[4] / "db/migrations/versions/20261114_drop_secrets.py"
     spec = importlib.util.spec_from_file_location("drop_secrets_migration", path)
     assert spec is not None and spec.loader is not None
@@ -19,7 +22,8 @@ def test_drop_secrets_moves_schedules_onto_saved_tokens(db_session):
     db.execute(text("SET LOCAL search_path TO drop_secrets_migration_test"))
     db.execute(text("CREATE TABLE users (id integer PRIMARY KEY)"))
     db.execute(text("CREATE TABLE secrets (id integer PRIMARY KEY, name varchar)"))
-    db.execute(text("CREATE INDEX ix_secrets_name ON secrets (name)"))
+    for sql in index_sql:
+        db.execute(text(sql))
     db.execute(text("CREATE TABLE scheduled_tasks (id integer PRIMARY KEY, task_type varchar, data json)"))
     rows = [
         (1, "claude_session", {"spawn_config": {"repo_url": "r", "github_token": "clone-ref", "github_token_write": "write-ref"}}),

@@ -80,6 +80,8 @@ clears the account's earlier sync error.
 
 ### Migrations
 
+`20261114_drop_secrets` (since v0.4.0) no longer fails with `index "ix_secrets_name" does not exist` on databases created before the complete-schema baseline. An update that stopped there can simply be re-run.
+
 `20261123_chunk_search_vector` adds the trigger (waiting at most 10s for its
 lock on `chunk`) and builds the `chunk_search_vector_idx` GIN index
 `CONCURRENTLY`, so it takes no long lock. It is fast while `search_vector` is
