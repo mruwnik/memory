@@ -29,6 +29,7 @@ from memory.common.db.models import (
     TranscriptAccount,
 )
 from memory.workers.tasks.maintenance import (
+    backfill_search_vectors,
     clean_collection,
     clean_mail_headers,
     reingest_chunk,
@@ -2169,6 +2170,34 @@ def test_submit_summary_batch_reports_each_keys_batch(monkeypatch, use_batch, ex
     )
 
     assert maintenance_module.submit_summary_batch() == expected
+
+
+@pytest.mark.parametrize("batch_size", [1, 1000])
+def test_backfill_search_vectors_fills_only_missing(db_session, source, batch_size):
+    chunks = [
+        Chunk(source=source, content=f"zqxbackfill{i}", embedding_model="m", collection_name="text")
+        for i in range(3)
+    ]
+    files_only = Chunk(source=source, file_paths=["a.png"], embedding_model="m", collection_name="photo")
+    db_session.add_all([*chunks, files_only])
+    db_session.commit()
+    db_session.execute(
+        update(Chunk).where(Chunk.id.in_([chunks[0].id, chunks[1].id])).values(search_vector=None)
+    )
+    db_session.commit()
+
+    assert backfill_search_vectors(batch_size=batch_size) == {"status": "success", "updated": 2}
+    assert backfill_search_vectors(batch_size=batch_size) == {"status": "success", "updated": 0}
+
+    vectors = db_session.execute(
+        text("SELECT content, search_vector::text FROM chunk ORDER BY content NULLS LAST")
+    ).all()
+    assert vectors == [
+        ("zqxbackfill0", "'zqxbackfill0':1"),
+        ("zqxbackfill1", "'zqxbackfill1':1"),
+        ("zqxbackfill2", "'zqxbackfill2':1"),
+        (None, None),
+    ]
 
 
 def test_clean_mail_headers_decodes_rows_and_strips_address_tags(db_session, qdrant):

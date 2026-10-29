@@ -1,6 +1,7 @@
 import itertools
 import logging
 import re
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Sequence, Any, cast
@@ -28,6 +29,7 @@ from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
 from memory.common.celery_app import (
     app,
+    BACKFILL_SEARCH_VECTORS,
     CLEAN_ALL_COLLECTIONS,
     CLEAN_COLLECTION,
     CLEAN_MAIL_HEADERS,
@@ -1188,6 +1190,44 @@ def clean_mail_headers() -> dict[str, str | int]:
             messages += len(batch)
             session.commit()
     return {"status": "success", "messages": messages}
+
+
+@app.task(name=BACKFILL_SEARCH_VECTORS)
+@tracked_task
+def backfill_search_vectors(batch_size: int = 1000) -> dict[str, str | int]:
+    """Fill chunk.search_vector where it is missing, one committed batch at a time
+    so no long lock is held on chunk. Safe to re-run."""
+    updated = batches = 0
+    last_id = uuid.UUID(int=0)
+    with make_session() as session:
+        while ids := session.scalars(
+            select(Chunk.id)
+            .where(Chunk.id > last_id)
+            .order_by(Chunk.id)
+            .limit(batch_size)
+        ).all():
+            last_id = ids[-1]
+            # Rewriting content fires chunk_search_vector_trigger, so the
+            # tsvector is built by the one definition ingest also uses.
+            result = session.execute(
+                update(Chunk)
+                .where(
+                    Chunk.id.in_(ids),
+                    Chunk.search_vector.is_(None),
+                    Chunk.content.isnot(None),
+                )
+                .values(content=Chunk.content)
+                .execution_options(synchronize_session=False)
+            )
+            updated += cast(CursorResult, result).rowcount
+            session.commit()
+            batches += 1
+            if batches % 50 == 0:
+                logger.info(
+                    "backfill_search_vectors: %d batches, %d updated, at chunk %s",
+                    batches, updated, last_id,
+                )
+    return {"status": "success", "updated": updated}
 
 
 @app.task(name=CLEANUP_OLD_TASK_EXECUTIONS)

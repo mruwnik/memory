@@ -20,7 +20,14 @@ None.
 
 ### Manual steps
 
-None.
+Optional, before deploying: count the chunks longer than 900k characters:
+only their first 500k characters (200k for mostly multibyte text, such as
+Japanese) become searchable by keyword. Nothing needs doing
+about them:
+
+```bash
+docker compose exec -T postgres psql -U kb -d kb -c "SELECT count(*) FROM chunk WHERE length(content) > 900000"
+```
 
 ### Other changes for operators
 
@@ -33,17 +40,41 @@ each item's best chunk only. Titles recalled by query analysis are matched in
 the database rather than among an arbitrary 200 items, and now also match
 reports, tasks, calendar events and observations.
 
+Keyword (BM25) search works again: `chunk.search_vector` is filled from the
+first 500k characters of chunk content (200k when that would pass Postgres's
+1MB tsvector limit) by a trigger, and GIN-indexed. Until the
+backfill below finishes, keyword search only finds chunks written after the
+update.
+
 Memory's own LLM calls on Anthropic keys now cache the system prompt, so
 repeated search and summary calls read it from the cache instead of writing a
 new entry each time.
 
 ### Migrations
 
-None.
+`20261123_chunk_search_vector` adds the trigger (waiting at most 10s for its
+lock on `chunk`) and builds the `chunk_search_vector_idx` GIN index
+`CONCURRENTLY`, so it takes no long lock. It is fast while `search_vector` is
+empty. Over an already-filled column it took 111s for 250k chunks locally. If
+it fails, re-running it drops and rebuilds the index.
 
 ### Post-deploy commands
 
-None.
+Fill `search_vector` for existing chunks. It commits every 1000 chunks, so it
+doesn't lock the table, and skips chunks that already have one, so it is safe to
+re-run. It logs progress every 50 batches. Locally it took 564s for 250k chunks
+with the index in place, so expect about 16 minutes for 423k:
+
+```bash
+docker compose exec -T worker python - --wait --timeout 3600 maintenance backfill-search-vectors < tools/run_celery_task.py
+```
+
+Then reclaim the dead row versions the backfill leaves and refresh planner
+statistics. Safe to re-run:
+
+```bash
+docker compose exec -T postgres psql -U kb -d kb -c "VACUUM (ANALYZE) chunk"
+```
 
 ## v0.4.1 (2026-10-29)
 
