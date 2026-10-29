@@ -11,8 +11,9 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 
+from memory.common.audit import AUDIT_ACTIONS
 from memory.common.db.connection import make_session
 from memory.common.db.models import APIKey, TelemetryEvent
 
@@ -234,43 +235,6 @@ def parse_otlp_json(data: bytes | str) -> list[ParsedTelemetryEvent]:
     return events
 
 
-def record_event(
-    name: str,
-    *,
-    user_id: int,
-    event_type: Literal["metric", "log"] = "log",
-    value: float | None = None,
-    session_id: str | None = None,
-    source: str | None = None,
-    tool_name: str | None = None,
-    attributes: dict[str, Any] | None = None,
-    body: str | None = None,
-) -> None:
-    """Write a single telemetry event in its own committed transaction.
-
-    Used for forensic records (audit logging, pre-sync membership snapshots)
-    that must persist independently of the caller's transaction — e.g. so a
-    snapshot survives a crash between the DB write and a non-transactional
-    external API call.
-    """
-    with make_session() as session:
-        session.add(
-            TelemetryEvent(
-                timestamp=datetime.now(timezone.utc),
-                user_id=user_id,
-                event_type=event_type,
-                name=name,
-                value=value,
-                session_id=session_id,
-                source=source,
-                tool_name=tool_name,
-                attributes=attributes or {},
-                body=body,
-            )
-        )
-        session.commit()
-
-
 def write_events_to_db(
     events: list[ParsedTelemetryEvent], user_id: int, api_key_id: int | None = None
 ) -> int:
@@ -284,6 +248,8 @@ def write_events_to_db(
     Returns:
         Number of events written
     """
+    # Audit records live in audit_events; one forged through OTLP would pass for real.
+    events = [e for e in events if e.name not in AUDIT_ACTIONS]
     if not events:
         return 0
 

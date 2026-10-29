@@ -1,6 +1,6 @@
 """Audit logging for mutating MCP tool calls.
 
-`@audit_call` records a tool invocation (name + arguments) to telemetry_events
+`@audit_call` records a tool invocation (name + arguments) to audit_events
 so that destructive calls are recoverable post-hoc (issue #83). Recording is
 best-effort and never blocks the wrapped tool.
 
@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, ParamSpec, TypeVar
 
 from memory.api.MCP.access import get_mcp_current_user
-from memory.common.telemetry import record_event
+from memory.common.audit import record_audit
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def audit_call(
     redact: tuple[str, ...] = (),
     max_value_len: int = 2000,
 ) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
-    """Decorator: log a mutating MCP tool call to telemetry_events.
+    """Decorator: log a mutating MCP tool call to audit_events.
 
     Apply closest to the function (below @mcp.tool() / @visible_when):
 
@@ -127,12 +127,8 @@ def audit_call(
                 attributes = build_attributes(func, args, kwargs, redact_set, max_value_len)
                 actor = get_mcp_current_user()
                 if actor and actor.id is not None:
-                    record_event(
-                        name="mcp.call",
-                        user_id=actor.id,
-                        event_type="log",
-                        tool_name=func.__name__,
-                        attributes=attributes,
+                    record_audit(
+                        "mcp.call", actor_id=actor.id, target=func.__name__, attributes=attributes
                     )
                 if level is not None:
                     logger.log(level, "MCP call: %s args=%s", func.__name__, attributes)

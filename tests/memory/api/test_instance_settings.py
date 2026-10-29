@@ -5,7 +5,7 @@ from memory.api import instance_settings as settings_api
 from memory.api.auth import setup_warnings
 from memory.common import embedding, instance_settings, settings
 from memory.common.celery_app import REINGEST_ALL_EMPTY_SOURCE_ITEMS
-from memory.common.db.models import HumanUser, InstanceSetting, TelemetryEvent
+from memory.common.db.models import AuditEvent, HumanUser, InstanceSetting
 from memory.common.module_settings import RUNNING_MODULES_KEY
 
 
@@ -132,8 +132,8 @@ def test_setting_and_clearing_a_value_is_audited(client, db_session, user):
     cleared = rows(client.patch("/settings", json={"values": {"enable_reranking": None}}))
     assert (cleared["enable_reranking"]["source"], cleared["enable_reranking"]["value"]) == ("default", True)
 
-    events = db_session.query(TelemetryEvent).filter_by(name="settings.update").order_by(TelemetryEvent.id).all()
-    assert [(e.user_id, e.attributes) for e in events] == [
+    events = db_session.query(AuditEvent).filter_by(action="settings.update").order_by(AuditEvent.id).all()
+    assert [(e.actor_id, e.attributes) for e in events] == [
         (user.id, {"changes": {"enable_reranking": {"source": "default", "old": True, "new": False}}}),
         (user.id, {"changes": {"enable_reranking": {"source": "ui", "old": False, "new": True}}}),
     ]
@@ -153,7 +153,7 @@ def test_a_saved_voyage_key_is_checked_returned_as_a_hint_and_backfills(
     no_celery_dispatch.assert_called_once_with(
         REINGEST_ALL_EMPTY_SOURCE_ITEMS, countdown=settings_api.CACHE_TTL_SECONDS + 5
     )
-    event = db_session.query(TelemetryEvent).filter_by(name="settings.update").one()
+    event = db_session.query(AuditEvent).filter_by(action="settings.update").one()
     assert event.attributes == {
         "changes": {"voyage_api_key": {"source": "default", "changed": True, "key_hint": "9876"}}
     }
@@ -342,4 +342,4 @@ def test_restart_exits_after_responding_and_is_audited(client, db_session, user,
     response = client.post("/settings/restart")
 
     assert (response.status_code, exits) == (202, [True])
-    assert [e.user_id for e in db_session.query(TelemetryEvent).filter_by(name="settings.restart")] == [user.id]
+    assert [e.actor_id for e in db_session.query(AuditEvent).filter_by(action="settings.restart")] == [user.id]

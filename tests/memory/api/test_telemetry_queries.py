@@ -240,6 +240,22 @@ def test_write_events_survives_deleted_api_key(db_session, user):
     assert [e.api_key_id for e in db_session.query(TelemetryEvent).all()] == [None]
 
 
+@pytest.mark.parametrize(
+    "name", ["mcp.call", "settings.update", "settings.restart", "team.external_membership_snapshot"]
+)
+def test_ingest_drops_events_named_like_audit_records(db_session, user, name):
+    events = [
+        ParsedTelemetryEvent(event_type="log", name=name, timestamp=NOW),
+        ParsedTelemetryEvent(event_type="metric", name="token.usage", value=1.0, timestamp=NOW),
+    ]
+
+    stored = write_events_to_db(events, user.id)
+
+    assert stored == 1
+    db_session.expire_all()
+    assert [e.name for e in db_session.query(TelemetryEvent).all()] == ["token.usage"]
+
+
 def add_tool_call(db_session, user_id: int, tool: str, input_tokens: int, output_tokens: int, session_id: str = "s", minutes_ago: int = 5):
     db_session.add(
         TelemetryEvent(

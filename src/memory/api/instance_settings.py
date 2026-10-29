@@ -40,7 +40,7 @@ from memory.common.module_settings import (
 )
 from memory.common.modules import servers_disabled
 from memory.common.scopes import SCOPE_ADMIN
-from memory.common.telemetry import record_event
+from memory.common.audit import record_audit
 
 logger = logging.getLogger(__name__)
 
@@ -267,9 +267,7 @@ def update_settings(
     invalidate_cache()
 
     logger.info("User %s changed settings: %s", user.id, ", ".join(records))
-    record_event(
-        "settings.update", user_id=user.id, source="settings", attributes={"changes": records}
-    )
+    record_audit("settings.update", actor_id=user.id, attributes={"changes": records})
     if voyage_key is not None:
         # After the other processes' caches expire, so the workers embed with the new key.
         celery_app.send_task(REINGEST_ALL_EMPTY_SOURCE_ITEMS, countdown=CACHE_TTL_SECONDS + 5)
@@ -300,7 +298,7 @@ def restart_api(
             detail="this api can't restart itself: restart it by hand, or with tools/ops/restart.sh api",
         )
     logger.info("User %s restarted the api", user.id)
-    record_event("settings.restart", user_id=user.id, source="settings")
+    record_audit("settings.restart", actor_id=user.id)
     # A background task runs once the response has gone out.
     background.add_task(exit_api)
     return {"status": "restarting"}

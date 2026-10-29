@@ -128,6 +128,7 @@ from memory.common.db.models.metrics import (
 from memory.common.db.models.telemetry import (
     TelemetryEvent,
 )
+from memory.common.db.models.audit import AuditEvent
 from memory.common.db.models.sessions import (
     CodingProject,
     CodingProjectPayload,
@@ -305,6 +306,7 @@ __all__ = [
     "MetricEvent",
     # Telemetry
     "TelemetryEvent",
+    "AuditEvent",
     # Sessions (coding projects)
     "CodingProject",
     "CodingProjectPayload",

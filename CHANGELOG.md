@@ -35,10 +35,23 @@ no longer appends `.md` or re-roots absolute paths under the notes folder. Vault
 syncs skip hidden folders such as `.obsidian/`, and `notes_note_files` no longer
 lists them.
 
+Audit records (MCP mutating calls, settings changes and restarts) moved from
+`telemetry_events` to a new admin-only `audit_events` table, readable at
+`GET /audit`. They no longer show in `/telemetry/raw`, survive deleting their
+user (the actor's email is kept), and OTLP ingest drops events with audit names.
+
 ### Migrations
 
 `20261119_email_sender_tags` removes sender and raw-header tags from email
 attachment rows. One UPDATE over email attachments.
+
+`20261120_audit_events` creates `audit_events` and moves the `mcp.call`,
+`settings.*` and `team.external_membership_snapshot` rows out of
+`telemetry_events`: one INSERT and one DELETE over `telemetry_events` filtered
+by name (indexed). Audit-named rows with an API key, session id or body were
+uploaded through OTLP, not written by the server: they are deleted, not moved.
+Downgrading moves the audit rows back, minus those whose user has since been
+deleted.
 
 ### Post-deploy commands
 

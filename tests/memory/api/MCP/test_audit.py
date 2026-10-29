@@ -5,7 +5,7 @@ import inspect
 import pytest
 
 from memory.api.MCP.audit import MAX_DEPTH, audit_call, sanitize_value
-from memory.common.db.models import TelemetryEvent
+from memory.common.db.models import AuditEvent
 from tests.conftest import mcp_auth_context
 
 
@@ -19,8 +19,8 @@ async def test_audit_call_logs_call(db_session, admin_session):
         result = await upsert(name="Acme", password="hunter2")
     assert result == {"ok": "Acme"}
 
-    row = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").one()
-    assert row.tool_name == "upsert"
+    row = db_session.query(AuditEvent).filter(AuditEvent.action == "mcp.call").one()
+    assert (row.actor_id, row.target) == (admin_session.user_id, "upsert")
     assert row.attributes["name"] == "Acme"
 
 
@@ -33,7 +33,7 @@ async def test_audit_call_redacts_and_truncates(db_session, admin_session):
     with mcp_auth_context(admin_session.token):
         await upsert(name="ABCDEFGHIJ", password="hunter2")
 
-    row = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").one()
+    row = db_session.query(AuditEvent).filter(AuditEvent.action == "mcp.call").one()
     assert row.attributes["password"] == "***"
     assert row.attributes["name"].startswith("ABCDE")
     assert row.attributes["name"] != "ABCDEFGHIJ"
@@ -60,7 +60,7 @@ async def test_audit_call_default_redact_backstop(db_session, admin_session, arg
     with mcp_auth_context(admin_session.token):
         await upsert(name="x", **{arg: "sekret"})
 
-    row = db_session.query(TelemetryEvent).filter(TelemetryEvent.name == "mcp.call").one()
+    row = db_session.query(AuditEvent).filter(AuditEvent.action == "mcp.call").one()
     assert row.attributes[arg] == "***"
     assert row.attributes["name"] == "x"
 
@@ -89,7 +89,7 @@ def test_sanitize_value_redacts_nested_keys():
 @pytest.mark.asyncio
 async def test_audit_call_failure_does_not_break_tool(db_session, admin_session, monkeypatch):
     monkeypatch.setattr(
-        "memory.api.MCP.audit.record_event",
+        "memory.api.MCP.audit.record_audit",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
