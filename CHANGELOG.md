@@ -38,7 +38,9 @@ returns `limit` distinct items with up to 3 matching chunks each, so one long
 item no longer fills the results on its own; with `useScores` the LLM scores
 each item's best chunk only. Titles recalled by query analysis are matched in
 the database rather than among an arbitrary 200 items, and now also match
-reports, tasks, calendar events and observations.
+reports, tasks, calendar events and observations. The reranker sees each
+chunk's item title above its text (chunks rarely repeat it), which ranks
+slightly better.
 
 Keyword (BM25) search works again: `chunk.search_vector` is filled from the
 first 500k characters of chunk content (200k when that would pass Postgres's

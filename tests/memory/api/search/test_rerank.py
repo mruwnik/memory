@@ -5,7 +5,12 @@ Tests for the rerank module (VoyageAI cross-encoder reranking).
 import pytest
 from unittest.mock import MagicMock, patch
 
-from memory.api.search.rerank import rerank_chunks, rerank_timeout, DEFAULT_RERANK_MODEL
+from memory.api.search.rerank import (
+    DEFAULT_RERANK_MODEL,
+    MAX_RERANK_TITLE_LENGTH,
+    rerank_chunks,
+    rerank_timeout,
+)
 from memory.common import settings
 
 
@@ -29,10 +34,12 @@ def _make_chunk(
     score: float = 0.5,
     embedding_score: float = 0.0,
     boost: float = 0.0,
+    source_title: str | None = None,
 ):
     """Create a mock chunk."""
     chunk = MagicMock()
     chunk.content = content
+    chunk.source_title = source_title
     chunk.relevance_score = score
     chunk.embedding_score = embedding_score
     chunk.boost = boost
@@ -208,6 +215,45 @@ async def test_rerank_chunks_truncates_long_content(mock_voyageai):
 
     call_kwargs = mock_client.rerank.call_args[1]
     assert len(call_kwargs["documents"][0]) == 8000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_title, expected",
+    [
+        ("Why Habits Stick", "Why Habits Stick\n\nthe chunk"),
+        (None, "the chunk"),
+        ("", "the chunk"),
+    ],
+)
+@patch("memory.api.search.rerank.voyageai")
+async def test_rerank_chunks_shows_source_title(mock_voyageai, source_title, expected):
+    """The reranker sees the item's title above the chunk, as chunks rarely repeat it."""
+    mock_client = MagicMock()
+    mock_voyageai.Client.return_value = mock_client
+    mock_client.rerank.return_value = MockRerankResponse([
+        MockRerankResult(index=0, relevance_score=0.8),
+    ])
+
+    await rerank_chunks("query", [_make_chunk("the chunk", source_title=source_title)])
+
+    assert mock_client.rerank.call_args[1]["documents"] == [expected]
+
+
+@pytest.mark.asyncio
+@patch("memory.api.search.rerank.voyageai")
+async def test_rerank_chunks_caps_source_title(mock_voyageai):
+    """A title that is a whole chat message is cut, so it can't crowd out the chunk."""
+    mock_client = MagicMock()
+    mock_voyageai.Client.return_value = mock_client
+    mock_client.rerank.return_value = MockRerankResponse([
+        MockRerankResult(index=0, relevance_score=0.8),
+    ])
+
+    await rerank_chunks("query", [_make_chunk("the chunk", source_title="t" * 1000)])
+
+    document = mock_client.rerank.call_args[1]["documents"][0]
+    assert document == "t" * MAX_RERANK_TITLE_LENGTH + "\n\nthe chunk"
 
 
 @pytest.mark.asyncio

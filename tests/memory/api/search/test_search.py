@@ -205,6 +205,27 @@ def test_apply_source_boosts_title(mock_make_session, title, query_terms, expect
     assert chunks[0].relevance_score == 0.5
 
 
+@pytest.mark.parametrize("title", ["Machine Learning Tutorial", None])
+@patch("memory.api.search.search.make_session")
+def test_apply_source_boosts_keeps_source_title(mock_make_session, title):
+    """Each chunk carries its source's title, as written, for the reranker."""
+    mock_session = MagicMock()
+    mock_make_session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_make_session.return_value.__exit__ = MagicMock(return_value=None)
+
+    mock_source = MagicMock()
+    mock_source.id = 1
+    mock_source.title = title
+    mock_source.popularity = 1.0
+    mock_source.inserted_at = None
+    mock_session.query.return_value.filter.return_value.all.return_value = [mock_source]
+
+    chunks = [_make_boost_chunk(1)]
+    apply_source_boosts(chunks, set())
+
+    assert chunks[0].source_title == title
+
+
 @patch("memory.api.search.search.make_session")
 def test_apply_source_boosts_empty_inputs(mock_make_session):
     """Should not modify chunks if query_terms or chunks is empty."""

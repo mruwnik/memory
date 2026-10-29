@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_RERANK_MODEL = "rerank-2.5"
 
+# Chat messages' titles are the whole message.
+MAX_RERANK_TITLE_LENGTH = 200
+
 
 def rerank_timeout(n_docs: int) -> float:
     """RERANK_TIMEOUT covers up to 100 candidates; larger requests take
@@ -93,6 +96,9 @@ async def rerank_chunks(
                 pass
 
         if content:
+            # Chunks rarely repeat their item's title, which is often what the query names.
+            if title := (chunk.source_title or "")[:MAX_RERANK_TITLE_LENGTH]:
+                content = f"{title}\n\n{content}"
             documents.append(content[:8000])  # VoyageAI has length limits
             chunk_map[len(documents) - 1] = chunk
         else:

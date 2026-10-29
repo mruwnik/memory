@@ -140,7 +140,7 @@ def apply_source_boosts(
         source_map = {}
         for s in sources:
             try:
-                title = (getattr(s, "title", None) or "").lower()
+                title = getattr(s, "title", None) or ""
             except (InvalidRequestError, DetachedInstanceError, ProgrammingError) as e:
                 # Polymorphic subclasses may have deferred/missing title columns
                 # (e.g. detached instance, schema drift). Anything broader was
@@ -159,7 +159,8 @@ def apply_source_boosts(
         source_data = source_map.get(chunk.source_id, {})
         boost = 0.0
 
-        title = source_data.get("title", "")
+        chunk.source_title = source_data.get("title") or None
+        title = (chunk.source_title or "").lower()
         if query_terms and title:
             matches = sum(1 for term in query_terms if term in title)
             boost += TITLE_MATCH_BOOST * (matches / len(query_terms))

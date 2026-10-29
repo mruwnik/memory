@@ -51,7 +51,7 @@ Implemented in `src/memory/api/search/`. Each stage is independently toggleable 
    (`score + |score| * boost`, `types.chunk_score`), kept apart from it so it applies
    to whichever score comes last; every cut and ordering below ranks by it.
 8. **Reranking** (`rerank.py`, `ENABLE_RERANKING`) — Voyage `rerank-2.5` cross-encoder
-   scores the candidates, which are then cut to the chunks of the `limit` best
+   scores the candidates, each shown with its item's title above it, which are then cut to the chunks of the `limit` best
    sources by boosted score, at most `MAX_CHUNKS_PER_SOURCE` each (`top_sources`), so
    one long item can't fill the results; past `RERANK_TIMEOUT` the fused scores are kept.
 9. **LLM scoring** (`scorer.py`, `ENABLE_SEARCH_SCORING`, per request `useScores`) —
