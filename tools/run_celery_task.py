@@ -47,6 +47,7 @@ from memory.common.celery_app import (
     REINGEST_ALL_EMPTY_SOURCE_ITEMS,
     REINGEST_ITEM,
     REINGEST_MISSING_CHUNKS,
+    CLEAN_CHUNK_IMAGES,
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     RECONCILE_ACCESS_CONTROL,
@@ -73,6 +74,7 @@ TASK_MAPPINGS = {
         "clean_all_collections": CLEAN_ALL_COLLECTIONS,
         "clean_collection": CLEAN_COLLECTION,
         "reingest_missing_chunks": REINGEST_MISSING_CHUNKS,
+        "clean_chunk_images": CLEAN_CHUNK_IMAGES,
         "reingest_chunk": REINGEST_CHUNK,
         "reingest_item": REINGEST_ITEM,
         "reingest_empty_source_items": REINGEST_EMPTY_SOURCE_ITEMS,
@@ -305,6 +307,16 @@ def maintenance_clean_all_collections(ctx):
 def maintenance_clean_collection(ctx, collection):
     """Clean a specific collection."""
     execute_task(ctx, "maintenance", "clean_collection", collection=collection)
+
+
+@maintenance.command("clean-chunk-images")
+@click.option("--orphan-age-hours", type=int, default=24, show_default=True)
+@click.pass_context
+def maintenance_clean_chunk_images(ctx, orphan_age_hours):
+    """Delete chunk images no chunk references."""
+    execute_task(
+        ctx, "maintenance", "clean_chunk_images", orphan_age_hours=orphan_age_hours
+    )
 
 
 @maintenance.command("reingest-missing-chunks")

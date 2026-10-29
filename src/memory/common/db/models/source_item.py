@@ -5,6 +5,7 @@ Database models for the knowledge base system.
 from __future__ import annotations
 
 import logging
+import math
 import pathlib
 import re
 from datetime import datetime
@@ -151,12 +152,37 @@ def clean_filename(filename: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", filename).strip("_")[:30]
 
 
+# voyage-multimodal-3 downsamples every image to at most this many pixels
+# (multimodal_image_pixels_max in its client_config.json), so more is wasted.
+MAX_CHUNK_IMAGE_PIXELS = 2_000_000
+MAX_WEBP_SIDE = 16383
+CHUNK_IMAGE_QUALITY = 85
+
+
+def shrink_for_embedding(image: Image.Image) -> bool:
+    """Downscale `image` in place to fit Voyage's pixels and WebP's side; whether it was."""
+    width, height = image.size
+    scale = min(
+        math.sqrt(MAX_CHUNK_IMAGE_PIXELS / (width * height)),
+        MAX_WEBP_SIDE / max(width, height),
+    )
+    if scale >= 1:
+        return False
+    image.thumbnail((max(1, int(width * scale)), max(1, int(height * scale))))
+    return True
+
+
+def save_chunk_image(image: Image.Image, stem: str) -> pathlib.Path:
+    path = settings.CHUNK_STORAGE_DIR / f"{stem}.webp"
+    image.save(path, "WEBP", quality=CHUNK_IMAGE_QUALITY)
+    return path
+
+
 def image_filenames(chunk_id: str, images: Sequence[Image.Image]) -> list[str]:
     for i, image in enumerate(images):
-        if not getattr(image, "filename", None):  # type: ignore
-            filename = settings.CHUNK_STORAGE_DIR / f"{chunk_id}_{i}.{image.format}"  # type: ignore
-            image.save(filename)
-            image.filename = str(filename)  # type: ignore
+        # A shrunk image no longer matches the file it was read from.
+        if shrink_for_embedding(image) or not getattr(image, "filename", None):
+            image.filename = str(save_chunk_image(image, f"{chunk_id}_{i}"))  # type: ignore
 
     return [image.filename for image in images]  # type: ignore
 
@@ -298,7 +324,7 @@ class Chunk(Base):
         files = [path for path in paths if path.exists()]
 
         for file_path in files:
-            if file_path.suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+            if file_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                 if file_path.exists():
                     items.append(Image.open(file_path))
             elif file_path.suffix == ".bin":

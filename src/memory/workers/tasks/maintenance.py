@@ -1,6 +1,8 @@
 import itertools
 import logging
+import pathlib
 import re
+import stat
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -31,6 +33,7 @@ from memory.common.celery_app import (
     app,
     BACKFILL_SEARCH_VECTORS,
     CLEAN_ALL_COLLECTIONS,
+    CLEAN_CHUNK_IMAGES,
     CLEAN_COLLECTION,
     CLEAN_MAIL_HEADERS,
     CLEANUP_EXPIRED_SESSIONS,
@@ -93,6 +96,7 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
+from memory.common.redis_lock import distributed_lock
 from memory.parsers.email import decode_mime_header
 
 logger = logging.getLogger(__name__)
@@ -433,6 +437,62 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
         }
 
     return stats
+
+
+CLEAN_CHUNK_IMAGES_LOCK = "memory:lock:clean_chunk_images"
+
+
+def referenced_chunk_image_names() -> set[str]:
+    """Basenames of every chunk file path: stored paths spell the storage dir in
+    more than one way (container vs host, symlinks), so only the name is compared."""
+    with make_session() as session:
+        rows = session.execute(
+            select(Chunk.file_paths).where(func.cardinality(Chunk.file_paths) > 0)
+        ).scalars()
+        return {pathlib.Path(p).name for paths in rows for p in paths}
+
+
+@app.task(name=CLEAN_CHUNK_IMAGES)
+@tracked_task
+def clean_chunk_images(orphan_age_hours: int = 24) -> dict[str, Any]:
+    """Delete chunk images that no chunk references.
+
+    Orphans younger than orphan_age_hours are kept: their chunk may not be
+    committed yet.
+    """
+    with distributed_lock(CLEAN_CHUNK_IMAGES_LOCK, 3600) as lock:
+        if lock is None:
+            return {"status": "locked"}
+
+        cutoff = datetime.now().timestamp() - orphan_age_hours * 3600
+        referenced = referenced_chunk_image_names()
+        candidates = []
+        for path in settings.CHUNK_STORAGE_DIR.iterdir():
+            try:
+                info = path.lstat()
+            except OSError:
+                continue
+            if path.name in referenced or not stat.S_ISREG(info.st_mode):
+                continue
+            if info.st_mtime < cutoff:
+                candidates.append((path, info.st_size))
+
+        # Chunks written while the directory was listed.
+        referenced = referenced_chunk_image_names()
+        deleted, freed, failed = 0, 0, 0
+        for path, size in candidates:
+            if path.name in referenced:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                failed += 1
+                continue
+            deleted += 1
+            freed += size
+
+    logger.info(f"Deleted {deleted} orphaned chunk images ({freed} bytes), {failed} failed")
+    return {"deleted": deleted, "bytes": freed, "failed": failed}
 
 
 @app.task(name=REINGEST_MISSING_CHUNKS)

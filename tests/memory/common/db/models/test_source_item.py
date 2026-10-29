@@ -111,32 +111,50 @@ def test_image_filenames_with_existing_filenames(tmp_path):
     assert result == [str(image1_path), str(image2_path)]
 
 
-def test_image_filenames_without_existing_filenames():
-    """Test image_filenames when images don't have filenames"""
-    chunk_id = "test_chunk_456"
+@pytest.mark.parametrize(
+    "mode, image_format",
+    [("RGBA", "PNG"), ("RGB", "JPEG"), ("P", "GIF"), ("RGB", None), ("L", "TIFF")],
+)
+def test_image_filenames_saves_webp(mode, image_format):
+    image = Image.new(mode, (10, 10))
+    image.format = image_format
 
-    # Create actual test images without filenames
-    image1 = Image.new("RGB", (1, 1), color="red")
-    image1.format = "PNG"
-    # Manually set filename to None to simulate no filename
-    object.__setattr__(image1, "filename", None)
+    [path] = image_filenames("chunk", [image])
 
-    image2 = Image.new("RGB", (1, 1), color="blue")
-    image2.format = "JPEG"
-    object.__setattr__(image2, "filename", None)
+    assert path == str(settings.CHUNK_STORAGE_DIR / "chunk_0.webp")
+    assert Image.open(path).format == "WEBP"
 
-    images = [image1, image2]
 
-    result = image_filenames(chunk_id, images)
+@pytest.mark.parametrize(
+    "size, expected",
+    [
+        ((1000, 1000), (1000, 1000)),
+        ((4000, 1000), (2828, 707)),
+        ((200, 20000), (141, 14100)),
+        ((30000, 30), (16000, 16)),
+        ((1, 40000), (1, 16383)),
+        ((40000, 1), (16383, 1)),
+    ],
+)
+def test_image_filenames_caps_to_voyage_and_webp_limits(size, expected):
+    image = Image.new("RGB", size)
 
-    expected_filenames = [
-        str(settings.CHUNK_STORAGE_DIR / f"{chunk_id}_0.PNG"),
-        str(settings.CHUNK_STORAGE_DIR / f"{chunk_id}_1.JPEG"),
-    ]
-    assert result == expected_filenames
+    [path] = image_filenames("chunk", [image])
 
-    assert (settings.CHUNK_STORAGE_DIR / f"{chunk_id}_0.PNG").exists()
-    assert (settings.CHUNK_STORAGE_DIR / f"{chunk_id}_1.JPEG").exists()
+    assert Image.open(path).size == expected
+    assert image.size == expected
+
+
+def test_image_filenames_saves_shrunk_copy_of_large_stored_image(tmp_path):
+    original = tmp_path / "big.png"
+    Image.new("RGB", (4000, 1000)).save(original)
+    image = Image.open(original)
+
+    first = image_filenames("chunk", [image])
+    second = image_filenames("other", [image])
+
+    assert first == second == [str(settings.CHUNK_STORAGE_DIR / "chunk_0.webp")]
+    assert Image.open(original).size == (4000, 1000)
 
 
 def test_add_pics():
@@ -165,6 +183,18 @@ def test_chunk_data_property_content_only():
 
     result = chunk.data
     assert result == ["Test content"]
+
+
+@pytest.mark.parametrize("suffix", ["png", "PNG", "JPEG", "jpeg", "GIF", "webp"])
+def test_chunk_data_reads_images_whatever_the_suffix_case(tmp_path, suffix):
+    image_file = tmp_path / f"chunk_0.{suffix}"
+    Image.new("RGB", (1, 1)).save(image_file, format="PNG")
+    source = SourceItem(sha256=b"test123", content="test", modality="text")
+    chunk = Chunk(source=source, file_paths=[str(image_file)], embedding_model="m")
+
+    [image] = chunk.data
+
+    assert isinstance(image, Image.Image)
 
 
 def test_chunk_data_property_with_files(tmp_path):

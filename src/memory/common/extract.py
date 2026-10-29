@@ -160,9 +160,7 @@ def as_file(content: bytes | str | pathlib.Path) -> Generator[pathlib.Path, None
 
 def page_to_image(page: pymupdf.Page) -> Image.Image:
     pix = page.get_pixmap()  # type: ignore
-    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    image.format = "jpeg"
-    return image
+    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
 
 def page_image_chunk(page: pymupdf.Page, modality: str = "doc") -> DataChunk:

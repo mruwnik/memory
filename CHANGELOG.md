@@ -50,6 +50,14 @@ Memory's own LLM calls on Anthropic keys now cache the system prompt, so
 repeated search and summary calls read it from the cache instead of writing a
 new entry each time.
 
+New chunk images (`files/chunks/`) are saved as WebP, downscaled to at most 2
+megapixels (the most voyage-multimodal-3 uses) and 16383 pixels a side. Images
+larger than Voyage accepts used to fail to embed and were retried, leaving a
+copy behind each time; an email attachment already stored from an earlier
+email (a signature logo, say) also left one. A new daily `clean_chunk_images`
+task (04:35) deletes chunk images that no chunk references and that are over a
+day old. Existing referenced images are left as they are.
+
 ### Migrations
 
 `20261123_chunk_search_vector` adds the trigger (waiting at most 10s for its
@@ -74,6 +82,15 @@ statistics. Safe to re-run:
 
 ```bash
 docker compose exec -T postgres psql -U kb -d kb -c "VACUUM (ANALYZE) chunk"
+```
+
+Optionally, delete orphaned chunk images now rather than at the next 04:35 run.
+It only deletes files no chunk references and is safe to re-run. Unlinking
+25,000 small files took 3s locally; chris has about 23,000 orphans holding
+106 GB:
+
+```bash
+docker compose exec -T worker python - --wait maintenance clean-chunk-images < tools/run_celery_task.py
 ```
 
 ## v0.4.1 (2026-10-29)

@@ -1,8 +1,14 @@
+import base64
+import io
+import pathlib
+
 import pytest
 from typing import cast
+from PIL import Image
 from unittest.mock import patch, MagicMock
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
+    Chunk,
     EmailAccount,
     GoogleAccount,
     JobStatus,
@@ -694,3 +700,45 @@ def test_finalize_sync_error_rolls_back_before_commit():
 
     assert order == ["rollback", "commit"]
     assert account.sync_error == "boom"
+
+
+def email_with_image(n: int, image_b64: str) -> str:
+    return f"""From: eve@example.com
+To: bob@example.com
+Subject: Logo {n}
+Message-ID: <logo-{n}@example.com>
+Date: Tue, 7 May 2024 10:00:0{n} +0000
+Content-Type: multipart/mixed; boundary="b"
+
+--b
+Content-Type: text/plain
+
+Email number {n} with the same signature logo as the others
+
+--b
+Content-Type: image/png; name="logo.png"
+Content-Disposition: attachment; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+{image_b64}
+--b--"""
+
+
+def test_repeated_attachment_leaves_no_unreferenced_chunk_images(
+    db_session, test_email_account, qdrant
+):
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(buf, format="PNG")
+    logo = base64.b64encode(buf.getvalue()).decode()
+
+    for n in range(3):
+        run_process_message(test_email_account.id, str(900 + n), "INBOX", email_with_image(n, logo))
+
+    referenced = {
+        pathlib.Path(p).name
+        for (paths,) in db_session.query(Chunk.file_paths).filter(Chunk.file_paths.isnot(None))
+        for p in paths
+    }
+    on_disk = {p.name for p in settings.CHUNK_STORAGE_DIR.iterdir()}
+    assert len(on_disk) == 1
+    assert on_disk == referenced

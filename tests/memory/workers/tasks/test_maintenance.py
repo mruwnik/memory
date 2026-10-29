@@ -1,4 +1,5 @@
 # FIXME: Most of this was vibe-coded
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ from sqlalchemy import insert, text, update
 from sqlalchemy.orm import Session
 
 from memory.common import qdrant as qd
+from memory.common.redis_lock import distributed_lock
 from memory.common import settings
 from memory.common.db.models import (
     Chunk,
@@ -2244,3 +2246,98 @@ def test_clean_mail_headers_decodes_rows_and_strips_address_tags(db_session, qdr
         "subject": "Cześć",
     }
     assert qd.get_payloads(qdrant, "doc", [doc_chunk])[doc_chunk]["tags"] == ["email", "work"]
+
+
+def chunk_with_files(db_session, source, *paths):
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=source,
+        file_paths=[str(p) for p in paths],
+        embedding_model="test-model",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    return chunk
+
+
+def write_image(path, age_days=0):
+    Image.new("RGB", (4, 4)).save(path, format="PNG")
+    stamp = time.time() - age_days * 86400
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+@pytest.mark.parametrize(
+    "name, age_days, kept",
+    [
+        ("orphan_0.PNG", 2, False),
+        ("orphan_0.webp", 2, False),
+        ("orphan_0.PnG", 2, False),
+        ("fresh_0.webp", 0, True),
+    ],
+)
+def test_clean_chunk_images_deletes_old_orphans(db_session, name, age_days, kept):
+    path = write_image(settings.CHUNK_STORAGE_DIR / name, age_days=age_days)
+
+    maintenance_module.clean_chunk_images()
+
+    assert path.exists() == kept
+
+
+@pytest.mark.parametrize("name", ["a_0.webp", "b_0.PNG", "c_0.JPEG"])
+def test_clean_chunk_images_keeps_referenced_images(db_session, source, name):
+    path = write_image(settings.CHUNK_STORAGE_DIR / name, age_days=10)
+    chunk_with_files(db_session, source, path)
+
+    maintenance_module.clean_chunk_images()
+
+    assert path.exists()
+
+
+def test_clean_chunk_images_keeps_images_referenced_through_another_dir(
+    db_session, source, tmp_path
+):
+    path = write_image(settings.CHUNK_STORAGE_DIR / "a_0.webp", age_days=10)
+    linked = tmp_path / "linked_chunks"
+    linked.symlink_to(settings.CHUNK_STORAGE_DIR)
+    chunk_with_files(db_session, source, "/app/memory_files/chunks/a_0.webp")
+    other = write_image(settings.CHUNK_STORAGE_DIR / "b_0.webp", age_days=10)
+    chunk_with_files(db_session, source, linked / "b_0.webp")
+
+    maintenance_module.clean_chunk_images()
+
+    assert path.exists()
+    assert other.exists()
+
+
+def test_clean_chunk_images_keeps_images_shared_by_chunks(db_session, source):
+    shared = write_image(settings.CHUNK_STORAGE_DIR / "a_0.webp", age_days=10)
+    first = chunk_with_files(db_session, source, shared)
+    chunk_with_files(db_session, source, shared)
+    db_session.delete(first)
+    db_session.commit()
+
+    maintenance_module.clean_chunk_images()
+
+    assert shared.exists()
+
+
+def test_clean_chunk_images_carries_on_past_odd_entries(db_session):
+    (settings.CHUNK_STORAGE_DIR / "dir_0.webp").mkdir()
+    (settings.CHUNK_STORAGE_DIR / "broken_0.webp").symlink_to("/nonexistent/x.webp")
+    orphan = write_image(settings.CHUNK_STORAGE_DIR / "orphan_0.webp", age_days=10)
+
+    maintenance_module.clean_chunk_images()
+
+    assert not orphan.exists()
+    assert (settings.CHUNK_STORAGE_DIR / "dir_0.webp").is_dir()
+
+
+def test_clean_chunk_images_skips_while_another_run_holds_the_lock(db_session):
+    orphan = write_image(settings.CHUNK_STORAGE_DIR / "orphan_0.webp", age_days=10)
+
+    with distributed_lock(maintenance_module.CLEAN_CHUNK_IMAGES_LOCK, 60):
+        result = maintenance_module.clean_chunk_images()
+
+    assert result == {"status": "locked"}
+    assert orphan.exists()

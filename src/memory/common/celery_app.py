@@ -77,6 +77,7 @@ SYNC_LESSWRONG_COMMENTS = f"{FORUMS_ROOT}.sync_lesswrong_comments"
 CLEAN_ALL_COLLECTIONS = f"{MAINTENANCE_ROOT}.clean_all_collections"
 CLEAN_COLLECTION = f"{MAINTENANCE_ROOT}.clean_collection"
 REINGEST_MISSING_CHUNKS = f"{MAINTENANCE_ROOT}.reingest_missing_chunks"
+CLEAN_CHUNK_IMAGES = f"{MAINTENANCE_ROOT}.clean_chunk_images"
 REINGEST_CHUNK = f"{MAINTENANCE_ROOT}.reingest_chunk"
 REINGEST_ITEM = f"{MAINTENANCE_ROOT}.reingest_item"
 REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
@@ -454,6 +455,10 @@ def build_beat_schedule() -> dict:
         "cleanup-old-task-results": {
             "task": CLEANUP_OLD_TASK_RESULTS,
             "schedule": crontab(hour="4", minute="50"),
+        },
+        "clean-chunk-images": {
+            "task": CLEAN_CHUNK_IMAGES,
+            "schedule": crontab(hour="4", minute="35"),
         },
         "cleanup-old-pending-jobs": {
             "task": CLEANUP_OLD_PENDING_JOBS,

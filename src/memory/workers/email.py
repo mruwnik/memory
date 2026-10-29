@@ -12,7 +12,7 @@ from typing import Callable, Generator, Sequence, cast
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from sqlalchemy.orm import Session, scoped_session
+from sqlalchemy.orm import Session, object_session, scoped_session
 
 from memory.common import collections, embedding, paths, qdrant, settings
 from memory.common.db.models import EmailAccount, EmailAttachment, MailMessage
@@ -338,7 +338,11 @@ def vectorize_email(email: MailMessage):
         )
 
     embeds = defaultdict(list)
-    for attachment in email.attachments:
+    # The flush drops attachments whose content is already stored
+    # (handle_duplicate_sha256); chunking those only writes chunk images
+    # that no row will ever reference.
+    stored = [a for a in email.attachments if object_session(a) is not None]
+    for attachment in stored:
         try:
             chunks = embedding.embed_source_item(attachment)
         except Exception:
