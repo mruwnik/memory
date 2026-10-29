@@ -50,6 +50,7 @@ from memory.common.celery_app import (
     UPDATE_METADATA_FOR_ITEM,
     UPDATE_METADATA_FOR_SOURCE_ITEMS,
     RECONCILE_ACCESS_CONTROL,
+    BACKFILL_SEARCH_VECTORS,
     CLEAN_MAIL_HEADERS,
     CLEANUP_JUNK_NOTES,
     TRACK_GIT_CHANGES,
@@ -80,6 +81,7 @@ TASK_MAPPINGS = {
         "update_metadata_for_source_items": UPDATE_METADATA_FOR_SOURCE_ITEMS,
         "reconcile_access_control": RECONCILE_ACCESS_CONTROL,
         "clean_mail_headers": CLEAN_MAIL_HEADERS,
+        "backfill_search_vectors": BACKFILL_SEARCH_VECTORS,
         "cleanup_junk_notes": CLEANUP_JUNK_NOTES,
     },
     "blogs": {
@@ -369,6 +371,14 @@ def maintenance_reingest_all_empty_source_items(ctx):
 def maintenance_clean_mail_headers(ctx):
     """Decode stored mail headers and drop address tags from mail Qdrant payloads."""
     execute_task(ctx, "maintenance", "clean_mail_headers")
+
+
+@maintenance.command("backfill-search-vectors")
+@click.option("--batch-size", default=1000, help="Chunks per committed batch")
+@click.pass_context
+def maintenance_backfill_search_vectors(ctx, batch_size):
+    """Fill missing chunk full-text search vectors in batches."""
+    execute_task(ctx, "maintenance", "backfill_search_vectors", batch_size=batch_size)
 
 
 @maintenance.command("reconcile-access-control")

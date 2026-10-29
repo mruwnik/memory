@@ -219,7 +219,8 @@ class Chunk(Base):
     checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    search_vector: Mapped[Any | None] = mapped_column(TSVECTOR)  # Full-text search index
+    # Written by the chunk_search_vector_trigger from content, never by the app.
+    search_vector: Mapped[Any | None] = mapped_column(TSVECTOR)
     is_summary: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
@@ -270,6 +271,7 @@ class Chunk(Base):
         CheckConstraint("(file_paths IS NOT NULL) OR (content IS NOT NULL)"),
         Index("chunk_source_idx", "source_id"),
         Index("chunk_collection_idx", "collection_name"),
+        Index("chunk_search_vector_idx", "search_vector", postgresql_using="gin"),
     )
 
     @property

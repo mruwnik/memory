@@ -3,18 +3,26 @@ Tests for PostgreSQL full-text search (BM25) functionality.
 """
 
 import asyncio
+import random
 import threading
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from memory.api.search import bm25
 from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.access_control import (
+    AccessCondition,
     AccessFilter,
     apply_access_filter_to_query as apply_access_filter,
+    get_allowed_sensitivities,
 )
+from memory.common.db.models import Chunk, Note, SourceItem
+from memory.common.db.models.sources import GithubAccount, GithubRepo, Project
+from tests.conftest import unique_sha256
 
 # Superadmin/no-filter SearchFilters. ``search_bm25`` and
 # ``search_bm25_chunks`` now require an explicit ``access_filter`` key
@@ -39,6 +47,18 @@ def chained_query_mock(items: list) -> MagicMock:
         getattr(q, method).return_value = q
     q.all.return_value = items
     return q
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("foo,bar", "foo:* & bar:*"),
+        ("foo\\", "foo:*"),
+        ("foo;bar~baz", "foo:* & bar:* & baz:*"),
+    ],
+)
+def test_build_tsquery_drops_non_word_characters(query, expected):
+    assert bm25.build_tsquery(query) == expected
 
 
 class TestBuildTsquery:
@@ -293,7 +313,6 @@ class TestSearchBm25Chunks:
 
     async def test_data_chunks_with_no_strings_returns_empty(self):
         # DataChunks with only non-string content (using cast to test edge case handling)
-        from typing import cast, Any
         chunks = [
             extract.DataChunk(data=cast(Any, [123, 456])),
             extract.DataChunk(data=cast(Any, [{"key": "value"}])),
@@ -376,7 +395,6 @@ class TestSearchBm25Chunks:
     @patch("memory.api.search.bm25.search_bm25")
     async def test_mixed_content_chunks(self, mock_search_bm25):
         # DataChunks with mixed string and non-string content (using cast to test edge case handling)
-        from typing import cast, Any
         mock_search_bm25.return_value = {"chunk1": 0.5}
 
         chunks = [
@@ -517,7 +535,6 @@ class TestSearchBm25PersonFilter:
 @pytest.fixture
 def github_account(db_session, test_user):
     """Create a GitHub account for testing."""
-    from memory.common.db.models.sources import GithubAccount
 
     account = GithubAccount(
         user_id=test_user.id,
@@ -533,7 +550,6 @@ def github_account(db_session, test_user):
 @pytest.fixture
 def github_repo(db_session, github_account):
     """Create a GitHub repo for testing."""
-    from memory.common.db.models.sources import GithubRepo
 
     repo = GithubRepo(
         account_id=github_account.id,
@@ -548,7 +564,6 @@ def github_repo(db_session, github_account):
 @pytest.fixture
 def project(db_session, github_repo):
     """Create a GitHub-backed Project for testing."""
-    from memory.common.db.models.sources import Project
 
     milestone = Project(
         repo_id=github_repo.id,
@@ -565,7 +580,6 @@ def project(db_session, github_repo):
 @pytest.fixture
 def second_project(db_session, github_repo):
     """Create a second GitHub milestone (project) for testing."""
-    from memory.common.db.models.sources import Project
 
     milestone = Project(
         repo_id=github_repo.id,
@@ -582,9 +596,6 @@ def second_project(db_session, github_repo):
 @pytest.fixture
 def source_items_with_access(db_session, project, second_project):
     """Create source items with different project_id and sensitivity values."""
-    from tests.conftest import unique_sha256
-
-    from memory.common.db.models import Note
 
     items = [
         # Project 1 items
@@ -654,8 +665,6 @@ def test_apply_access_filter_single_project_sensitivity(
     db_session, project, source_items_with_access, role, expected_count
 ):
     """Test that single project filter respects sensitivity levels based on role."""
-    from memory.common.access_control import AccessCondition, AccessFilter, get_allowed_sensitivities
-    from memory.common.db.models import SourceItem
 
     # Ensure fixture ran (creates items in db)
     _ = source_items_with_access
@@ -685,9 +694,6 @@ def test_apply_access_filter_excludes_hidden_even_for_admin(db_session, project)
     The tombstone exclusion runs before the admin early-out, so no SQL
     search/listing path surfaces hidden content regardless of privilege.
     """
-    from tests.conftest import unique_sha256
-
-    from memory.common.db.models import Note, SourceItem
 
     visible = Note(
         content="visible basic item",
@@ -725,11 +731,6 @@ async def test_search_bm25_excludes_hidden_even_for_admin(db_session, project):
     covers the admin path where access_filter is None — the path that used to
     skip apply_access_filter_to_query entirely and leak hidden content.
     """
-    from sqlalchemy import func
-
-    from tests.conftest import unique_sha256
-
-    from memory.common.db.models import Chunk, Note
 
     term = "zqxhiddenbm25term"
     visible = Note(
@@ -756,7 +757,6 @@ async def test_search_bm25_excludes_hidden_even_for_admin(db_session, project):
             content=f"{label} {term}",
             collection_name="text",
             embedding_model="test",
-            search_vector=func.to_tsvector("english", f"{label} {term}"),
         )
         db_session.add(chunk)
         chunks[label] = chunk
@@ -770,12 +770,73 @@ async def test_search_bm25_excludes_hidden_even_for_admin(db_session, project):
     assert hidden_id not in result
 
 
+@pytest.mark.asyncio
+async def test_search_bm25_indexes_inserted_and_updated_chunks(db_session, project):
+    note = Note(
+        content="note",
+        modality="text",
+        sha256=unique_sha256("bm25-trigger"),
+        project_id=project.id,
+        sensitivity="basic",
+    )
+    db_session.add(note)
+    db_session.flush()
+    chunk = Chunk(
+        source_id=note.id,
+        content="the zqxoriginalterm appears here",
+        collection_name="text",
+        embedding_model="test",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    chunk_id = str(chunk.id)
+
+    assert chunk_id in await bm25.search_bm25("zqxoriginalterm", {"text"}, filters=SUPERADMIN_FILTERS)
+
+    chunk.content = "now zqxreplacedterm instead"
+    db_session.commit()
+
+    assert chunk_id in await bm25.search_bm25("zqxreplacedterm", {"text"}, filters=SUPERADMIN_FILTERS)
+    assert chunk_id not in await bm25.search_bm25("zqxoriginalterm", {"text"}, filters=SUPERADMIN_FILTERS)
+
+
+def kanji_clauses(count: int) -> str:
+    rng = random.Random(0)
+    return "、".join(
+        "".join(chr(rng.randrange(0x4E00, 0x9FFF)) for _ in range(12)) for _ in range(count)
+    )
+
+
+# A tsvector of all of either would pass Postgres's 1MB limit and fail the insert.
+@pytest.mark.parametrize(
+    "content",
+    [
+        " ".join(f"zqx{i:06x}" for i in range(125_000)),  # 1.25M ASCII characters
+        kanji_clauses(46_000),  # 600k characters, 1.8MB of UTF-8
+    ],
+    ids=["ascii", "cjk"],
+)
+def test_oversized_chunk_gets_search_vector(db_session, project, content):
+    note = Note(
+        content="note",
+        modality="text",
+        sha256=unique_sha256("bm25-oversized"),
+        project_id=project.id,
+        sensitivity="basic",
+    )
+    db_session.add(note)
+    db_session.flush()
+    chunk = Chunk(source_id=note.id, content=content, collection_name="text", embedding_model="test")
+    db_session.add(chunk)
+    db_session.commit()
+
+    assert db_session.scalar(select(Chunk.search_vector.isnot(None)).where(Chunk.id == chunk.id))
+
+
 def test_apply_access_filter_multiple_projects(
     db_session, project, second_project, source_items_with_access
 ):
     """Test that multiple project conditions are OR'd together correctly."""
-    from memory.common.access_control import AccessCondition, AccessFilter
-    from memory.common.db.models import SourceItem
 
     # Ensure fixture ran
     _ = source_items_with_access
@@ -824,8 +885,6 @@ def test_apply_access_filter_excludes_null_project_id(
     db_session, project, source_items_with_access
 ):
     """Test that items with NULL project_id are excluded for non-superadmins."""
-    from memory.common.access_control import AccessCondition, AccessFilter
-    from memory.common.db.models import SourceItem
 
     # Ensure fixture ran
     _ = source_items_with_access
@@ -851,7 +910,6 @@ def test_apply_access_filter_excludes_null_project_id(
 
 def test_apply_access_filter_superadmin_sees_all(db_session, source_items_with_access):
     """Test that superadmin (None filter) sees all items including NULL project_id."""
-    from memory.common.db.models import SourceItem
 
     # Ensure fixture ran
     _ = source_items_with_access
@@ -876,8 +934,6 @@ def test_apply_access_filter_public_with_null_project_visible_to_all(db_session,
     project assignment is visible to any non-superadmin with the public bypass
     enabled (the default).
     """
-    from memory.common.access_control import AccessCondition, AccessFilter
-    from memory.common.db.models import Note, SourceItem
 
     public_unscoped = Note(
         content="Public unscoped note",
@@ -915,8 +971,6 @@ def test_apply_access_filter_cross_project_isolation(
     This is a critical security test - even with admin-level access to project 1,
     a user should see ZERO items from project 2 (including basic sensitivity).
     """
-    from memory.common.access_control import AccessCondition, AccessFilter
-    from memory.common.db.models import SourceItem
 
     _ = source_items_with_access
 
@@ -953,8 +1007,6 @@ def test_apply_access_filter_contributor_cannot_see_higher_sensitivity(
 
     This test has explicit negative assertions for each sensitivity level.
     """
-    from memory.common.access_control import AccessCondition, AccessFilter
-    from memory.common.db.models import SourceItem
 
     _ = source_items_with_access
 

@@ -33,8 +33,8 @@ BM25_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 logger = logging.getLogger(__name__)
 
-# Pattern to remove special characters that confuse tsquery
-_TSQUERY_SPECIAL_CHARS = re.compile(r"[&|!():*<>'\"-]")
+# Anything else is tsquery syntax or breaks it (e.g. a trailing backslash).
+_TSQUERY_SPECIAL_CHARS = re.compile(r"[^\w\s.@/]")
 
 # Common English stopwords to filter from queries
 # These are words that appear in most documents and don't help with search relevance
@@ -131,7 +131,6 @@ def run_bm25_query(
             rank_expr.label("rank"),
         ).filter(
             Chunk.collection_name.in_(modalities),
-            Chunk.search_vector.isnot(None),
             Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
 
