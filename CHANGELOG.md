@@ -110,10 +110,11 @@ docker compose exec -T worker python - --wait --timeout 3600 maintenance backfil
 ```
 
 Then reclaim the dead row versions the backfill leaves and refresh planner
-statistics. Safe to re-run:
+statistics. `PARALLEL 0` because parallel vacuum workers need more shared
+memory than Docker's default 64 MB `/dev/shm`. Safe to re-run:
 
 ```bash
-docker compose exec -T postgres psql -U kb -d kb -c "VACUUM (ANALYZE) chunk"
+docker compose exec -T postgres psql -U kb -d kb -c "VACUUM (ANALYZE, PARALLEL 0) chunk"
 ```
 
 Optionally, delete orphaned chunk images now rather than at the next 04:35 run.
