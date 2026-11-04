@@ -23,7 +23,7 @@ if (!window.matchMedia) {
   }))
 }
 
-// jsdom lacks ResizeObserver, which recharts/xterm rely on.
+// jsdom lacks ResizeObserver, which recharts relies on.
 if (!window.ResizeObserver) {
   window.ResizeObserver = class {
     observe() {}

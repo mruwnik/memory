@@ -37,18 +37,13 @@ class KeyInput(KeyUpdate):
     instance: bool = False
 
 
-class DefaultInput(BaseModel):
-    key_id: int | None = None
-
-
-def key_view(key: SSHKey, user: User) -> dict:
+def key_view(key: SSHKey) -> dict:
     return {
         "id": key.id,
         "name": key.name,
         "user_id": key.user_id,
         "public_key": key.public_key,
         "fingerprint": key.fingerprint,
-        "is_default": user.default_ssh_key_id == key.id,
         "created_at": key.created_at.isoformat(),
         "updated_at": key.updated_at.isoformat(),
     }
@@ -90,7 +85,7 @@ def list_keys(
     if has_admin_scope(user):
         visible = or_(visible, SSHKey.user_id.is_(None))
     return [
-        key_view(key, user)
+        key_view(key)
         for key in db.query(SSHKey).filter(visible).order_by(SSHKey.name, SSHKey.id)
     ]
 
@@ -115,20 +110,7 @@ def create_key(
     )
     db.add(key)
     db.commit()
-    return key_view(key, user)
-
-
-@router.put("/default")
-def set_default(
-    body: DefaultInput,
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> dict:
-    if body.key_id is not None:
-        accessible_key(db, body.key_id, user)
-    user.default_ssh_key_id = body.key_id
-    db.commit()
-    return {"key_id": user.default_ssh_key_id}
+    return key_view(key)
 
 
 @router.put("/{key_id}")
@@ -147,7 +129,7 @@ def update_key(
         raise HTTPException(422, "Provide the private key with its passphrase")
     key.name = body.name.strip()
     db.commit()
-    return key_view(key, user)
+    return key_view(key)
 
 
 @router.delete("/{key_id}")

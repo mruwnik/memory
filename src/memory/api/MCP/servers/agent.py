@@ -877,7 +877,6 @@ async def schedule(
                 message=None,
                 notification_channel=None,
                 notification_target=None,
-                spawn_config=None,
                 agent_run=stamp | {"input": input},
             )
             db.commit()

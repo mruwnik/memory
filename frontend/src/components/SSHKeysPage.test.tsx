@@ -4,8 +4,7 @@ import { renderWithUser, screen, waitFor } from '@/test/utils'
 const list = vi.fn()
 const save = vi.fn()
 const remove = vi.fn()
-const setDefault = vi.fn()
-vi.mock('@/hooks/useSSHKeys', () => ({ useSSHKeys: () => ({ list, save, remove, setDefault }) }))
+vi.mock('@/hooks/useSSHKeys', () => ({ useSSHKeys: () => ({ list, save, remove }) }))
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ hasScope: () => true }) }))
 import { SSHKeysPage } from './SSHKeysPage'
 
@@ -27,15 +26,14 @@ it('imports an instance key and passphrase without offering private-key export',
   await waitFor(() => expect(screen.queryByLabelText('Private key')).not.toBeInTheDocument())
 })
 
-it('can generate a personal key and choose an existing container default', async () => {
+it('generates a personal key and lists it', async () => {
   const { user } = renderWithUser(<SSHKeysPage />)
   await user.click(await screen.findByRole('button', { name: 'Add SSH key' }))
   await user.type(screen.getByLabelText('Name'), 'Generated')
   await user.selectOptions(screen.getByLabelText('Method'), 'generate')
   expect(screen.queryByLabelText('Private key')).not.toBeInTheDocument()
-  list.mockResolvedValue([{ id: 3, name: 'Generated', user_id: 1, public_key: 'ssh-ed25519 public', fingerprint: 'SHA256:fingerprint', is_default: false }])
+  list.mockResolvedValue([{ id: 3, name: 'Generated', user_id: 1, public_key: 'ssh-ed25519 public', fingerprint: 'SHA256:fingerprint' }])
   await user.click(screen.getByRole('button', { name: 'Save key' }))
-  await user.click(await screen.findByRole('button', { name: 'Use for my containers' }))
+  expect(await screen.findByText('SHA256:fingerprint')).toBeInTheDocument()
   expect(save).toHaveBeenCalledWith({ name: 'Generated', generate: true, instance: false }, undefined)
-  expect(setDefault).toHaveBeenCalledWith(3)
 })

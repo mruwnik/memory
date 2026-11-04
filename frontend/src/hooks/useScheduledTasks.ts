@@ -39,18 +39,16 @@ export interface UpdateTaskBody {
   message?: string
   notification_channel?: string
   notification_target?: string
-  spawn_config?: Record<string, unknown>
 }
 
 export interface CreateTaskBody {
-  task_type: 'notification' | 'claude_session'
+  task_type: 'notification'
   topic?: string
   message?: string
   cron_expression?: string
   scheduled_time?: string
   notification_channel?: string
   notification_target?: string
-  spawn_config?: Record<string, unknown>
 }
 
 export const useScheduledTasks = () => {

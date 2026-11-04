@@ -29,7 +29,6 @@ from memory.common.instance_settings import (
     resolve,
 )
 from memory.common.modules import (
-    CLAUDE_CONTAINERS,
     MODULE_DESCRIPTIONS,
     MODULE_MCP_SERVERS,
     MODULES,
@@ -81,8 +80,6 @@ def human_count() -> int:
 
 def run_problem(module: str, on: bool, humans: Callable[[], int]) -> str | None:
     """Why the api can't run with this module on (or off)."""
-    if module == CLAUDE_CONTAINERS and on and not settings.ORCHESTRATOR_SOCKET:
-        return "needs ORCHESTRATOR_SOCKET: add docker-compose.claude.yaml to COMPOSE_FILE"
     if module == MULTI_USER and not on and humans() > 1:
         return "can't be off while more than one human user exists"
     return None
@@ -182,7 +179,7 @@ def follow_modules() -> frozenset[str]:
     """Move this process to the api's current modules, for one that follows them without a restart.
 
     Called before memory.api.MCP.base is imported, its boot_modules() is then a no-op: its
-    checks are the api's (a worker has no ORCHESTRATOR_SOCKET).
+    checks are the api's.
     """
     global _boot_modules
     _boot_modules = current_modules()

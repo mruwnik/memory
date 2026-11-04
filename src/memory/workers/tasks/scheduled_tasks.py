@@ -2,28 +2,20 @@
 """
 Celery tasks for executing scheduled tasks.
 
-Supports multiple task types: notification (Discord/Slack/Email), claude_session,
-agent_run (started on the agents queue).
+Supports notification (Discord/Slack/Email) and agent_run (started on the agents
+queue) tasks.
 """
 
 import asyncio
 import concurrent.futures
-import copy
 import logging
-import re
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import requests
-from sqlalchemy import and_, or_
-from sqlalchemy.exc import IntegrityError
-
-from memory.agents.principal import PrincipalRevoked, standing_key
+from memory.agents.principal import PrincipalRevoked
 from memory.common import discord as discord_utils
 from memory.common.access_control import UserProxy, credential_scopes
-from memory.common import settings
 from memory.common.celery_app import (
     EXECUTE_SCHEDULED_TASK,
     RUN_SCHEDULED_TASKS,
@@ -39,7 +31,6 @@ from memory.common.db.models import (
     ScheduledTask,
     TaskExecution,
     User,
-    UserSession,
 )
 from memory.common.db.models.scheduled_tasks import (
     ExecutionStatus,
@@ -60,10 +51,7 @@ from memory.common.email_sender import (
     send_email,
 )
 from memory.common.jobs import tracked_task
-from memory.common.module_settings import enabled_modules
-from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.notify import notify_user_now
-from memory.common.scopes import SCOPE_CLAUDE_SESSIONS
 from memory.common.slack import async_slack_call, slack_target_is_dm
 
 logger = logging.getLogger(__name__)
@@ -330,129 +318,6 @@ def send_notification(
     return {"sent": sent}
 
 
-def sanitize_slug(text: str, max_length: int = 30) -> str:
-    """Sanitize text for use in git branch names and run IDs.
-
-    Keeps only alphanumeric characters and hyphens, collapses runs of hyphens,
-    and strips leading/trailing hyphens.
-    """
-    slug = re.sub(r"[^a-z0-9-]", "-", text.lower())
-    slug = re.sub(r"-{2,}", "-", slug)
-    return slug[:max_length].strip("-")
-
-
-@contextmanager
-def session_token(db, user_id: int, api_key_id: int | None):
-    """Create a short-lived session token, acting through ``api_key_id`` when
-    set, that is cleaned up on exit.
-
-    Usage::
-
-        with session_token(db_session, user_id, api_key_id) as token:
-            requests.post(url, headers={"Authorization": f"Bearer {token}"})
-
-    The token row is deleted in the ``finally`` block regardless of success or
-    failure, so there are no orphaned session rows.
-    """
-    user_session = UserSession(
-        user_id=user_id,
-        api_key_id=api_key_id,
-        expires_at=datetime.now(timezone.utc).replace(tzinfo=None)
-        + timedelta(minutes=5),
-    )
-    db.add(user_session)
-    try:
-        db.commit()
-    except IntegrityError:
-        # The key was deleted since it was checked; leave the session usable
-        # so the caller can record the failure.
-        db.rollback()
-        raise ValueError(f"the API key {api_key_id} this session acts through is gone")
-    token = user_session.token
-    try:
-        yield token
-    finally:
-        db.query(UserSession).filter(UserSession.id == user_session.id).delete()
-        db.commit()
-
-
-def spawn_claude_session(task: ScheduledTask, db, api_key_id: int | None) -> str:
-    """Spawn a Claude Code session by calling the API's /claude/spawn endpoint.
-
-    The worker cannot talk to the orchestrator socket directly (only the API
-    container has it), so we create a short-lived session token and POST to the
-    internal API URL.
-
-    Args:
-        task: The ScheduledTask containing spawn_config in its data.
-        db: SQLAlchemy session for creating/cleaning up the auth token.
-        api_key_id: The API key the session acts through (None: the owner).
-
-    Returns the session_id of the spawned container.
-    """
-    data = task.data or {}
-    spawn_config = copy.deepcopy(data.get("spawn_config"))
-    if not spawn_config:
-        raise ValueError("Missing spawn_config in task data")
-
-    # initial_prompt is stored in task.message, inject it for the spawn API
-    if task.message:
-        spawn_config["initial_prompt"] = task.message
-
-    # Auto-suffix run_id with execution timestamp to avoid branch conflicts.
-    # ALWAYS apply sanitize_slug — the run_id flows into the container as
-    # CLAUDE_RUN_ID and is used by the entrypoint to construct a
-    # `claude/<run_id>` git branch name. Letting a user-supplied value
-    # through unsanitised would let a scheduler caller embed shell
-    # metacharacters / path-traversal segments / leading hyphens that
-    # `git checkout -b` would either fail on or interpret as flags. The
-    # task.topic path was already slugified; the explicit run_id path
-    # was the one that trusted user input.
-    now_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    user_run_id = spawn_config.get("run_id")
-    if user_run_id:
-        slug = sanitize_slug(str(user_run_id))
-    else:
-        raw = task.topic or f"task-{str(task.id)[:8]}"
-        slug = sanitize_slug(raw)
-    if not slug:
-        # `sanitize_slug` strips to empty for input that's all
-        # punctuation/whitespace; fall back to the task-id stub rather
-        # than producing a "claude/-<timestamp>" branch with a leading
-        # hyphen (which `git checkout -b` will reject).
-        slug = f"task-{str(task.id)[:8]}"
-    spawn_config["run_id"] = f"{slug}-{now_str}"
-
-    # NOTE: INTERNAL_API_URL should only point to container-internal or
-    # localhost addresses. The session token is sent over HTTP (not HTTPS).
-    # Pointing this at an external hostname would leak the token in transit.
-    url = f"{settings.INTERNAL_API_URL}/claude/spawn"
-
-    with session_token(db, task.user_id, api_key_id) as token:
-        resp = requests.post(
-            url,
-            json=spawn_config,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
-        )
-        if not resp.ok:
-            raise ValueError(f"API returned {resp.status_code}: {resp.text}")
-        session_id = resp.json().get("session_id")
-
-    logger.info(f"Spawned Claude session {session_id} for task {task.id}")
-    return session_id
-
-
-def check_session_principal(db, task: ScheduledTask) -> int | None:
-    """Re-check, at fire time, that whoever scheduled this session may still
-    spawn one; returns the API key id it acts through."""
-    user = db.get(User, task.user_id)
-    if user is None:
-        raise PrincipalRevoked(f"user {task.user_id} no longer exists")
-    key = standing_key(db, user, (task.data or {}).get("api_key_id"), SCOPE_CLAUDE_SESSIONS)
-    return key.id if key else None
-
-
 def check_notification_principal(db, task: ScheduledTask) -> None:
     """Re-check, at fire time, that the API key a notification was scheduled
     through is still valid and may still address its target. Only Discord
@@ -535,16 +400,6 @@ def execute_scheduled_task(self, execution_id: str):
             app.send_task(START_CRON_RUN, args=[execution_id])
             return {"handed_off": START_CRON_RUN, "execution_id": execution_id}
 
-        # A pending execution re-dispatched after the module went off has no /claude/spawn to reach.
-        if task_type == TaskType.CLAUDE_SESSION and CLAUDE_CONTAINERS not in enabled_modules():
-            reason = f"the {CLAUDE_CONTAINERS} module is off"
-            logger.warning(f"Not running scheduled Claude session {execution_id}: {reason}")
-            execution.status = ExecutionStatus.FAILED
-            execution.error_message = reason
-            execution.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            session.commit()
-            return {"error": reason}
-
         # Mark as running and commit - use try/finally to ensure we always
         # update the final status even if something goes wrong after this point
         execution.status = ExecutionStatus.RUNNING
@@ -553,7 +408,6 @@ def execute_scheduled_task(self, execution_id: str):
 
         final_status = ExecutionStatus.FAILED
         error_message = None
-        execution_data = None
 
         try:
             if task_type == TaskType.NOTIFICATION:
@@ -574,17 +428,6 @@ def execute_scheduled_task(self, execution_id: str):
                 else:
                     error_message = "Failed to send notification"
 
-            elif task_type == TaskType.CLAUDE_SESSION:
-                try:
-                    api_key_id = check_session_principal(session, task)
-                except PrincipalRevoked as e:
-                    revoke_schedule(session, task, e)
-                    raise
-                session_id = spawn_claude_session(task, session, api_key_id)
-                # The API's container reconciler finishes it once the container exits.
-                final_status = ExecutionStatus.RUNNING
-                execution_data = {"session_id": session_id, "api_key_id": api_key_id}
-
             else:
                 raise ValueError(f"Unknown task_type: {task_type}")
 
@@ -596,10 +439,7 @@ def execute_scheduled_task(self, execution_id: str):
             # to ensure we don't leave executions stuck in "running" state
             execution.status = final_status
             execution.error_message = error_message
-            if execution_data:
-                execution.data = execution_data
-            if final_status != ExecutionStatus.RUNNING:
-                execution.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            execution.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             session.commit()
 
         return {
@@ -617,24 +457,14 @@ def run_scheduled_tasks():
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     with make_session() as session:
-        # 1. Recover stale executions (stuck in "running" for too long). A
-        # session whose container started is the API reconciler's to finish,
-        # but the reconciler may be off, so it gets the session timeout here.
+        # 1. Recover stale executions (stuck in "running" for too long).
         stale_cutoff = now - timedelta(hours=STALE_EXECUTION_TIMEOUT_HOURS)
-        session_cutoff = now - timedelta(hours=settings.CLAUDE_SESSION_TIMEOUT_HOURS)
-        no_session = or_(
-            TaskExecution.data.is_(None),
-            TaskExecution.data["session_id"].as_string().is_(None),
-        )
         stale_executions = (
             session.query(TaskExecution)
             .filter(
                 TaskExecution.status == ExecutionStatus.RUNNING,
                 TaskExecution.finished_at.is_(None),
-                or_(
-                    and_(no_session, TaskExecution.started_at < stale_cutoff),
-                    and_(~no_session, TaskExecution.started_at < session_cutoff),
-                ),
+                TaskExecution.started_at < stale_cutoff,
             )
             .with_for_update(skip_locked=True)
             .all()
@@ -703,13 +533,7 @@ def run_scheduled_tasks():
 
         # 3. Create executions and dispatch
         execution_ids = []
-        containers_on = CLAUDE_CONTAINERS in enabled_modules()
         for task in due_tasks:
-            module_off = task.task_type == TaskType.CLAUDE_SESSION and not containers_on
-            if module_off and not task.cron_expression:
-                # A one-off keeps its time, so it runs once the module is back.
-                logger.debug(f"Holding scheduled Claude session {task.id}: the module is off")
-                continue
             scheduled_time = task.next_scheduled_time
             if task.cron_expression:
                 task.next_scheduled_time = compute_next_cron(
@@ -717,13 +541,6 @@ def run_scheduled_tasks():
                 )
             else:
                 task.next_scheduled_time = None
-
-            if module_off:
-                logger.warning(
-                    f"Skipping scheduled Claude session {task.id}: the {CLAUDE_CONTAINERS} "
-                    "module is off"
-                )
-                continue
 
             execution = TaskExecution(
                 task_id=task.id,

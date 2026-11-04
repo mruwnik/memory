@@ -13,21 +13,11 @@ the stack was started from.
      and print the full list of what is missing.
    - **Manual steps**, e.g. a Postgres image change. Do these as the entry says.
    - **Slow migrations**: plan for downtime.
-   - **Modules**: Claude containers, multiple users and teams are off unless
-     `ENABLE_MODULES` in `.env` lists them (README § Modules). Before
-     updating an instance that uses them, set
-     `ENABLE_MODULES=claude_containers,multi_user,teams` (only the ones you
-     use). Several human users with `multi_user` off stops the api at boot, by
-     design, rather than hiding users. For Claude containers also add
-     `COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml` to `.env`
-     (if `.env` already has `COMPOSE_FILE`, as `install.sh --non-interactive`
-     installs do, append `:docker-compose.claude.yaml` to it rather than
-     replacing it, or the proxy overlay is lost), or pass `-f docker-compose.claude.yaml` after the base file if you use
-     explicit `-f` flags: the socket mount, `DOCKER_GID` group and
-     `memory-api-<stack>` network moved out of `docker-compose.yaml`. MCP clients
-     that call `claude_session_list`, `_list_dir`, `_pull_url` or `_push_url`
-     use `containers_list_sessions`, `containers_list_dir`,
-     `containers_pull_url` and `containers_push_url` now.
+   - **Modules**: multiple users and teams are off unless `ENABLE_MODULES` in
+     `.env` lists them (README § Modules). Before updating an instance that
+     uses them, set `ENABLE_MODULES=multi_user,teams` (only the ones you use).
+     Several human users with `multi_user` off stops the api at boot, by
+     design, rather than hiding users.
    - **Post-deploy commands**: you run these after step 2.
 2. Find your current version:
    ```bash
@@ -123,8 +113,8 @@ abandoned. If `/health` is healthy at the expected revision, delete the file
 and run again. The file is removed when an update succeeds; after a manual
 rollback, remove it yourself (section 4).
 
-Because the checkout is detached, `git pull` and `tools/deploy.sh` no longer
-work in this checkout. Always update through `tools/update.sh`.
+Because the checkout is detached, `git pull` no longer works in this checkout.
+Always update through `tools/update.sh`.
 
 Settings via env: `COMPOSE` (default `docker compose`; e.g. `podman compose`),
 `DOCKER` (default `docker`, or `podman` when `COMPOSE` starts with podman),

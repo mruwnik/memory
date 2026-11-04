@@ -150,13 +150,6 @@ from memory.common.db.models.polls import (
     AvailabilityLevel,
     SlotAggregation,
 )
-from memory.common.db.models.claude_config import (
-    ClaudeConfigSnapshot,
-    ClaudeConfigSnapshotPayload,
-    ClaudeEnvironment,
-    ClaudeEnvironmentPayload,
-    ClaudeGitHubToken,
-)
 from memory.common.db.models.watchlist import (
     WatchedMarket,
 )
@@ -325,13 +318,6 @@ __all__ = [
     "PollStatus",
     "AvailabilityLevel",
     "SlotAggregation",
-    # Claude Config Snapshots
-    "ClaudeConfigSnapshot",
-    "ClaudeConfigSnapshotPayload",
-    # Claude Environments
-    "ClaudeEnvironment",
-    "ClaudeEnvironmentPayload",
-    "ClaudeGitHubToken",
     "SSHKey",
     "NotesSSHConfig",
     # Payloads

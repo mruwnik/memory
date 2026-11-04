@@ -189,10 +189,6 @@ if [[ -e $STATE_DIR/installed ]]; then
     # Installed before (this is a new root disk, or a re-run): .env and secrets/
     # are on the data volume. update.sh's checkouts aren't readable by the app user.
     log "Starting the installed stack"
-    # Only the claude_containers overlay attaches to it
-    if grep -Eq '^COMPOSE_FILE=(.*:)?docker-compose\.claude\.yaml(:|$)' "$ROOT/.env"; then
-        docker network inspect memory-api-prod >/dev/null 2>&1 || docker network create memory-api-prod >/dev/null
-    fi
     (cd "$ROOT" && APP_VERSION=$(git describe --tags --always) docker compose up -d)
 else
     log "Install"

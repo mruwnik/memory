@@ -6,7 +6,6 @@ export { default as Calendar } from './calendar'
 export { default as Tasks } from './todo'
 export { NotesPage } from './notes'
 export { Jobs } from './jobs'
-export { ConfigSources, Snapshots } from './snapshots'
 export { default as LoginPrompt } from './auth/LoginPrompt'
 export { default as AuthError } from './auth/AuthError'
 export { default as ForgotPassword } from './auth/ForgotPassword'
@@ -16,4 +15,4 @@ export { CeleryOverview } from './celery'
 export { ScheduledTasks } from './scheduled-tasks'
 export { ReportsPage } from './reports'
 
-// Note: Metrics, Usage, ClaudeSessions are lazy-loaded in App.tsx
+// Note: Metrics and Usage are lazy-loaded in App.tsx

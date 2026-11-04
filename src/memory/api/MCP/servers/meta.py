@@ -21,7 +21,7 @@ from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.api.search.search import searcher_keys
 from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
 from memory.api.search.types import MCPSearchFilters
-from memory.common.access_control import UserProxy, apply_access_filter_to_query
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common import embedding, qdrant
 from memory.common.instance_settings import (
     ENABLE_BM25_SEARCH,
@@ -36,7 +36,6 @@ from memory.common.dates import parse_wall_clock_utc
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
-from memory.common.ssh_keys import can_use_key
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.notify import (
     format_notification_message,
@@ -47,7 +46,6 @@ from memory.common.version import db_revision, version_info
 from memory.common.db.models import (
     ScheduledTask,
     SourceItem,
-    SSHKey,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,16 +64,12 @@ def _get_current_user(session: DBSession) -> dict:
 
     user = principal.user
     scopes = list(access_token.scopes or [])
-    key = session.get(SSHKey, user.default_ssh_key_id) if user.default_ssh_key_id else None
-    if key is not None and not can_use_key(key, UserProxy.from_user(user, scopes=scopes)):
-        key = None
     return {
         "authenticated": True,
         "token_type": "Bearer",
         "scopes": scopes,
         "client_id": access_token.client_id,
         "user": user_info_for(session, user),
-        "public_key": key.public_key if key else None,
     }
 
 

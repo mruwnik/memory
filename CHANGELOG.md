@@ -20,7 +20,32 @@ None.
 
 ### Manual steps
 
-None.
+`docker-compose.claude.yaml` is gone. If `COMPOSE_FILE` in `.env` lists it,
+remove it from the list before updating (keep any other overlay, such as
+`deploy/aws/compose.proxy.yaml`), or compose fails to find the file. Drop
+`-f docker-compose.claude.yaml` if you pass explicit `-f` flags. The
+`memory-api-<stack>` Docker network it attached to is no longer used; remove it
+with `docker network rm memory-api-prod` once the stack is up.
+
+If you ran Claude Code containers, clean up the host *before* updating. Session
+containers hold injected SSH keys and GitHub tokens, and once the migration
+drops `claude_environments` nothing knows their environment volumes. The
+orchestrator named session containers `claude-u<user>-<source>-<hex>`, their
+networks `claude-net-<session>` and environment volumes `claude-env-u<user>-…`.
+Use `podman` in place of `docker` if that is what the orchestrator ran on:
+
+```bash
+docker ps -a --format '{{.Names}}' | grep -E '^claude-u[0-9]+-' | xargs -r docker rm -f -v
+docker network ls --format '{{.Name}}' | grep -E '^claude-net-u[0-9]+-' | xargs -r docker network rm
+docker volume ls --format '{{.Name}}' | grep -E '^claude-env-u[0-9]+-' | xargs -r docker volume rm
+```
+
+Then stop and remove the orchestrator (the `claude-orchestrator` container;
+`docker compose down` in its directory if you installed it with compose) and
+delete its socket directory, `sudo rm -rf /var/run/claude-sessions`, and its
+logs in `/var/log/claude-sessions`. Keep the orchestrator if something other
+than Memory, such as `claude-web`, still uses it; its session containers are
+not matched above, because only Memory's session ids start with `u<user>-`.
 
 ### Other changes for operators
 
@@ -28,13 +53,46 @@ Postgres gets a 256 MB `/dev/shm` (Docker's default is 64 MB), so parallel
 `VACUUM` and index builds no longer fail with "could not resize shared memory
 segment". The update recreates the postgres container to apply it.
 
+The Claude Code containers runner is removed: the `claude_containers` module,
+its `/claude` routes, `containers_*` MCP tools and pages, scheduled Claude
+sessions, Claude environments and configuration snapshots, saved GitHub tokens
+for sessions, the `claude_sessions` scope, default SSH keys ("Use for my
+containers") and `public_key` in `meta_get_user`. `GET /github/repos` and
+`tools/deploy.sh` are gone too. The Claude Code session archive
+(`claude_session_search`, `claude_session_fetch` and the session hook) stays.
+SSH keys stay, for notes sync.
+
+`claude_containers` left in `ENABLE_MODULES` or `DISABLE_MODULES` is ignored
+with a WARNING at startup rather than stopping it; remove it from `.env`.
+These settings no longer do anything and can be removed from `.env`:
+`ORCHESTRATOR_SOCKET`, `ORCHESTRATOR_BASE_URL`, `DOCKER_GID`, `MEMORY_STACK`,
+`INTERNAL_API_URL`, `HOST_STORAGE_DIR`, `SNAPSHOT_STORAGE_DIR`,
+`MAX_CONCURRENT_SESSIONS_PER_USER`, `CLAUDE_MAINTENANCE_INTERVAL_SEC`,
+`CLAUDE_SESSION_TIMEOUT_HOURS`, `MAX_TRANSFER_PUSH_BYTES` and
+`TRANSFER_TOKEN_TTL_SECONDS`. `TRANSFER_TOKEN_SECRET` stays: it signs ingest
+upload URLs and password reset links. The api image no longer has `tmux` or the
+Docker CLI, nor `git` and `xz-utils`, which came with the Docker CLI: nothing in
+the api runs them (notes sync runs `git` in the workers, whose image keeps it).
+
 ### Migrations
 
-None.
+`20261124_drop_claude_containers` deletes scheduled Claude sessions (their
+executions cascade), drops the `claude_environments`, `claude_config_snapshots`
+and `claude_github_tokens` tables and `users.default_ssh_key_id`, strips the
+`claude_sessions` scope from users and API keys, and deletes the stored
+`module_claude_containers` setting. Each step tolerates the object being
+missing. Fast. Its downgrade restores nothing.
 
 ### Post-deploy commands
 
-None.
+Delete the configuration snapshot tarballs. Safe to re-run:
+
+```bash
+docker compose exec -T api python -c "import shutil; from memory.common import settings; p = settings.FILE_STORAGE_DIR / 'snapshots'; p.exists() and shutil.rmtree(p)"
+```
+
+If you had set `SNAPSHOT_STORAGE_DIR` to somewhere else, delete that directory
+instead.
 
 ## v0.4.2 (2026-11-04)
 

@@ -5,8 +5,7 @@ The audit finding (e36412f2): /books/upload, /photos/upload, and
 /reports/upload buffered the entire request body via ``await
 file.read()`` with no upper bound, allowing an authenticated user to
 OOM the API container or fill FILE_STORAGE_DIR with a multi-GB
-upload. Mirrors the streaming-cap pattern from
-``cloud_claude.transfer_push``.
+upload.
 
 These tests exercise ``read_upload_with_cap`` directly with a fake
 UploadFile so they don't need the full FastAPI/DB stack.

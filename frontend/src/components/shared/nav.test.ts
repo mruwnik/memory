@@ -12,7 +12,6 @@ describe('activeItem', () => {
     ['/ui/sources', '', '/ui/sources'],
     ['/ui/sources', '?tab=email', '/ui/sources'],
     ['/ui/ssh-keys', '', '/ui/ssh-keys'],
-    ['/ui/claude/abc', '', '/ui/claude'],
     ['/ui/settings', '', undefined],
     ['/ui/searching', '', undefined],
   ])('%s%s highlights %s', (pathname, search, expected) => {
@@ -36,18 +35,12 @@ describe('visibleSections', () => {
   })
 
   it.each([
-    ['Claude sessions', 'claude_containers'],
-    ['Claude configurations', 'claude_containers'],
     ['Teams', 'teams'],
     ['Projects', 'teams'],
   ])('shows %s only while %s is on', (title, module) => {
     const others = new Set([...ALL_MODULES].filter(m => m !== module))
     expect(titlesFor(() => true, others)).not.toContain(title)
     expect(titlesFor(() => true, new Set([module]))).toContain(title)
-  })
-
-  it('needs the scope as well as the module', () => {
-    expect(titlesFor(s => s !== 'claude_sessions', ALL_MODULES)).not.toContain('Claude sessions')
   })
 
   it('keeps core items with every module off', () => {

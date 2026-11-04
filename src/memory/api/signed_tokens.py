@@ -1,5 +1,5 @@
-"""Generic stateless HMAC token core shared by transfer_tokens and
-ingest_tokens. A token signs a JSON dict payload under a caller-supplied
+"""Generic stateless HMAC token core shared by ingest_tokens and
+password_reset. A token signs a JSON dict payload under a caller-supplied
 domain tag; the domain is mixed into the HMAC message so tokens minted for
 one domain cannot validate under another (cryptographic domain separation).
 
@@ -84,10 +84,10 @@ def sign(
 def verify(token: str, *, domain: str, secret: str | None = None) -> dict:
     """Validate a token under ``domain`` and return its decoded dict payload.
 
-    Raises ``SignedTokenExpiredError`` if the payload carries an int ``exp``
-    in the past. Raises ``SignedTokenError`` on any other validation failure
-    (malformed shape, bad version, bad signature, undecodable payload, or a
-    non-dict payload). Type-checking of individual payload fields beyond
+    Raises ``SignedTokenExpiredError`` if the payload's ``exp`` is in the
+    past. Raises ``SignedTokenError`` on any other validation failure
+    (malformed shape, bad version, bad signature, undecodable payload, a
+    non-dict payload, or a missing or non-int ``exp``). Type-checking of individual payload fields beyond
     "is a dict" is left to the caller.
     """
     secret = secret if secret is not None else require_secret()
@@ -121,8 +121,11 @@ def verify(token: str, *, domain: str, secret: str | None = None) -> dict:
     if not isinstance(data, dict):
         raise SignedTokenError("malformed token payload")
 
+    # sign() always sets an int exp, so anything else is malformed, not expired.
     exp = data.get("exp")
-    if isinstance(exp, int) and exp < int(time.time()):
+    if not isinstance(exp, int) or isinstance(exp, bool):
+        raise SignedTokenError("malformed payload")
+    if exp < int(time.time()):
         raise SignedTokenExpiredError("token expired")
 
     return data

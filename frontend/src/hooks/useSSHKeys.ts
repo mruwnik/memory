@@ -8,7 +8,6 @@ export interface SSHKey {
   user_id: number | null
   public_key: string
   fingerprint: string | null
-  is_default: boolean
 }
 export interface SSHKeyInput {
   name: string
@@ -27,6 +26,5 @@ export function useSSHKeys() {
   const list = useCallback((): Promise<SSHKey[]> => request(''), [request])
   const save = useCallback((body: SSHKeyInput, id?: number): Promise<SSHKey> => request(id === undefined ? '' : `/${id}`, id === undefined ? 'POST' : 'PUT', body), [request])
   const remove = useCallback((id: number) => request(`/${id}`, 'DELETE'), [request])
-  const setDefault = useCallback((key_id: number | null) => request('/default', 'PUT', { key_id }), [request])
-  return { list, save, remove, setDefault }
+  return { list, save, remove }
 }

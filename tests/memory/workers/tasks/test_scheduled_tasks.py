@@ -1,4 +1,3 @@
-import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -6,10 +5,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from memory.api.auth import lookup_principal, system_scopes
-from memory.common import module_settings
 from memory.common.celery_app import START_CRON_RUN
-from memory.common.db.models import APIKey, InstanceSetting, ScheduledTask, TaskExecution
+from memory.common.db.models import APIKey, ScheduledTask, TaskExecution
 from memory.common.db.models.discord import DiscordChannel, DiscordServer
 from memory.workers.tasks import scheduled_tasks
 
@@ -877,57 +874,6 @@ def test_run_scheduled_tasks_updates_next_scheduled_time_for_recurring(
     assert (task.next_scheduled_time.hour, task.next_scheduled_time.minute) == (3, 30)
 
 
-def due_session(db_session, user, cron_expression) -> tuple[ScheduledTask, datetime]:
-    due = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=user.id,
-        task_type="claude_session",
-        next_scheduled_time=due,
-        message="Run the digest",
-        cron_expression=cron_expression,
-        data={"spawn_config": {"environment_id": 1}},
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-    return task, due
-
-
-# Switched on in the settings, the module only counts once the api runs it (after a restart).
-@pytest.mark.parametrize("running, dispatched", [([], 0), (["claude_containers"], 1)])
-@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_due_sessions_follow_the_modules_the_api_runs(
-    mock_send, db_session, sample_user, unbooted, caplog, running, dispatched
-):
-    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
-    module_settings.record_running(db_session, frozenset(running))
-    task, due = due_session(db_session, sample_user, "0 9 * * *")
-
-    result = scheduled_tasks.run_scheduled_tasks()
-
-    db_session.refresh(task)
-    assert result["count"] == dispatched
-    assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == dispatched
-    assert task.next_scheduled_time is not None
-    assert task.next_scheduled_time > due
-    assert mock_send.call_count == dispatched
-    assert ("module is off" in caplog.text) == (dispatched == 0)
-
-
-@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-def test_a_due_one_off_session_waits_while_the_module_is_off(mock_send, db_session, sample_user, unbooted):
-    module_settings.record_running(db_session, frozenset())
-    task, due = due_session(db_session, sample_user, None)
-
-    result = scheduled_tasks.run_scheduled_tasks()
-
-    db_session.refresh(task)
-    assert (result["count"], task.next_scheduled_time) == (0, due)
-    assert db_session.query(TaskExecution).filter_by(task_id=task.id).count() == 0
-    mock_send.assert_not_called()
-
-
 @patch("memory.workers.tasks.scheduled_tasks.app.send_task")
 def test_run_scheduled_tasks_clears_next_scheduled_time_for_one_time(
     mock_delay, db_session, sample_user
@@ -1092,282 +1038,6 @@ def test_run_scheduled_tasks_recovers_stuck_pending_executions(
     mock_delay.assert_any_call(EXECUTE_SCHEDULED_TASK, args=[stuck_pending.id])
 
 
-# --- Claude session spawning tests ---
-
-
-@pytest.fixture
-def claude_session_task(db_session, sample_user):
-    """Create a scheduled task for Claude session spawning."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="Daily review",
-        data={
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "Review the latest changes",
-            }
-        },
-        cron_expression="0 9 * * *",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None)
-        - timedelta(minutes=5),
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-    return task
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_success(mock_post, claude_session_task, db_session):
-    """Test successful spawning of a Claude session via API."""
-    # Mock the API response
-    mock_response = Mock()
-    mock_response.ok = True
-    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
-    mock_post.return_value = mock_response
-
-    result = scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session, api_key_id=None)
-
-    assert result == "u1-e1-abc123"
-    mock_post.assert_called_once()
-    url_arg = mock_post.call_args.args[0]
-    assert "/claude/spawn" in url_arg
-    assert "Authorization" in mock_post.call_args.kwargs.get("headers", {})
-
-
-def test_spawn_claude_session_missing_config(db_session, sample_user):
-    """Test that missing spawn_config raises ValueError."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="No config",
-        data={},
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    with pytest.raises(ValueError, match="Missing spawn_config"):
-        scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_run_id_suffixed(mock_post, db_session, sample_user):
-    """Test that run_id gets a timestamp suffix appended."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="Daily review",
-        data={
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test",
-                "run_id": "daily-review",
-            }
-        },
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    mock_response = Mock()
-    mock_response.ok = True
-    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
-    mock_post.return_value = mock_response
-
-    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
-
-    posted_json = mock_post.call_args.kwargs["json"]
-    assert posted_json["run_id"].startswith("daily-review-")
-    # Should have YYYYMMDD-HHMMSS suffix
-    assert re.match(r"daily-review-\d{8}-\d{6}", posted_json["run_id"])
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_does_not_mutate_task_data(
-    mock_post, db_session, sample_user
-):
-    """Test that spawn_claude_session doesn't mutate task.data in place.
-
-    The original run_id in the task's data must remain unchanged so that
-    subsequent cron executions don't accumulate timestamp suffixes.
-    """
-    original_run_id = "daily-review"
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="Daily review",
-        data={
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test",
-                "run_id": original_run_id,
-            }
-        },
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    mock_response = Mock()
-    mock_response.ok = True
-    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
-    mock_post.return_value = mock_response
-
-    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
-
-    # The original task data must NOT have been mutated
-    assert task.data is not None
-    assert task.data["spawn_config"]["run_id"] == original_run_id
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_passes_enable_playwright(
-    mock_post, db_session, sample_user
-):
-    """Test that enable_playwright is passed through to the spawn API call."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="Playwright session",
-        data={
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test with playwright",
-                "enable_playwright": True,
-            }
-        },
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    mock_response = Mock()
-    mock_response.ok = True
-    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
-    mock_post.return_value = mock_response
-
-    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
-
-    posted_json = mock_post.call_args.kwargs["json"]
-    assert posted_json["enable_playwright"] is True
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_api_failure(mock_post, claude_session_task, db_session):
-    """Test that API failure raises ValueError."""
-    mock_response = Mock()
-    mock_response.ok = False
-    mock_response.status_code = 503
-    mock_response.text = "Orchestrator unavailable"
-    mock_post.return_value = mock_response
-
-    with pytest.raises(ValueError, match="API returned 503"):
-        scheduled_tasks.spawn_claude_session(claude_session_task, db=db_session, api_key_id=None)
-
-
-# ----- run_id sanitization regression tests -----
-
-
-def test_sanitize_slug_strips_shell_metachars():
-    """Direct test of the helper used by spawn_claude_session."""
-    assert scheduled_tasks.sanitize_slug("normal-name") == "normal-name"
-    # Path traversal segments get hyphenated.
-    assert scheduled_tasks.sanitize_slug("../../etc/passwd") == "etc-passwd"
-    # Spaces become hyphens.
-    assert scheduled_tasks.sanitize_slug("branch with spaces") == "branch-with-spaces"
-    # Lowercase.
-    assert scheduled_tasks.sanitize_slug("UPPER") == "upper"
-    # All-punctuation strips to empty.
-    assert scheduled_tasks.sanitize_slug("...") == ""
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_sanitises_user_run_id(mock_post, db_session, sample_user):
-    """User-supplied run_id used to flow through verbatim, which would let
-    a scheduler caller embed shell metacharacters or path-traversal
-    segments into the CLAUDE_RUN_ID env var (and from there into the
-    container entrypoint's branch-creation step). Pin that the same
-    `sanitize_slug` applied to the task.topic path is now applied to
-    user-supplied run_id too."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="Daily review",
-        data={
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test",
-                "run_id": "../../etc/passwd",
-            }
-        },
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    mock_response = Mock()
-    mock_response.ok = True
-    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
-    mock_post.return_value = mock_response
-
-    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
-
-    posted_run_id = mock_post.call_args.kwargs["json"]["run_id"]
-    # Path-traversal characters must be gone.
-    assert ".." not in posted_run_id
-    assert "/" not in posted_run_id
-    # No leading hyphen — would be interpreted as a flag.
-    assert not posted_run_id.startswith("-")
-    # Still has the timestamp suffix.
-    assert re.search(r"-\d{8}-\d{6}$", posted_run_id)
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawn_claude_session_run_id_falls_back_when_slug_empty(
-    mock_post, db_session, sample_user
-):
-    """A run_id consisting entirely of punctuation strips to "" and would
-    yield a leading-hyphen branch name that the git CLI rejects. Falls
-    back to the task-id stub instead."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=sample_user.id,
-        task_type="claude_session",
-        topic="Daily review",
-        data={
-            "spawn_config": {
-                "environment_id": 1,
-                "initial_prompt": "test",
-                "run_id": "...",  # all punctuation
-            }
-        },
-        enabled=True,
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    mock_response = Mock()
-    mock_response.ok = True
-    mock_response.json.return_value = {"session_id": "u1-e1-abc123"}
-    mock_post.return_value = mock_response
-
-    scheduled_tasks.spawn_claude_session(task, db=db_session, api_key_id=None)
-
-    posted_run_id = mock_post.call_args.kwargs["json"]["run_id"]
-    # Falls back to task-<task-id-stub>-<timestamp>
-    assert posted_run_id.startswith("task-")
-    assert not posted_run_id.startswith("-")
-    assert re.search(r"-\d{8}-\d{6}$", posted_run_id)
-
-
 @patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
 def test_send_notification_task_delivers_without_db(mock_deliver, sample_user):
     mock_deliver.return_value = True
@@ -1388,142 +1058,31 @@ def test_send_notification_task_delivers_without_db(mock_deliver, sample_user):
     assert params.data == {"discord_bot_id": 7}
 
 
-# ----- scheduled Claude sessions: lifecycle and principal re-check -----
-
-
-def due_session_execution(db_session, user, api_key_id=None):
+@patch("memory.workers.tasks.scheduled_tasks.notify_user_now")
+@patch("memory.workers.tasks.scheduled_tasks.deliver_notification")
+def test_revoked_schedule_notifies_its_owner_only_once(
+    mock_deliver, mock_notify, db_session, sample_user, no_celery_dispatch
+):
+    key = APIKey.create(user_id=sample_user.id)
+    key.revoked = True
+    db_session.add(key)
+    db_session.flush()
     task = ScheduledTask(
-        user_id=user.id,
-        task_type="claude_session",
-        topic="nightly",
-        message="Review the repo",
+        user_id=sample_user.id,
+        task_type="notification",
         cron_expression="0 9 * * *",
+        message="hi",
+        notification_channel="email",
+        notification_target="a@example.com",
         # Already advanced past this execution, as run_scheduled_tasks does.
         next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1),
-        data={"spawn_config": {"environment_id": 1}, "api_key_id": api_key_id},
+        data={"api_key_id": key.id},
     )
     db_session.add(task)
     db_session.flush()
     execution = TaskExecution(task_id=task.id, scheduled_time=datetime(2026, 1, 1), status="pending")
     db_session.add(execution)
     db_session.commit()
-    return task, execution
-
-
-def spawn_ok(session_id="u1-e1-abc123"):
-    response = Mock(ok=True)
-    response.json.return_value = {"session_id": session_id}
-    return response
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_spawned_session_stays_running_until_the_container_exits(
-    mock_post, db_session, sample_user
-):
-    sample_user.scopes = ["claude_sessions"]
-    _, execution = due_session_execution(db_session, sample_user)
-    mock_post.return_value = spawn_ok()
-
-    scheduled_tasks.execute_scheduled_task(execution.id)
-
-    db_session.refresh(execution)
-    assert execution.status == "running"
-    assert execution.finished_at is None
-    assert execution.data == {"session_id": "u1-e1-abc123", "api_key_id": None}
-
-
-@pytest.mark.parametrize(
-    "user_scopes, key_state, allowed",
-    [
-        (["claude_sessions"], "none", True),
-        (["*"], "none", True),
-        (["claude_sessions"], "inherits", True),
-        (["read", "write", "schedule:write"], "none", False),
-        (["claude_sessions"], "revoked", False),
-        (["claude_sessions"], "deleted", False),
-        (["claude_sessions"], "narrowed", False),
-        (["read"], "inherits", False),
-    ],
-)
-@patch("memory.workers.tasks.scheduled_tasks.notify_user_now")
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_scheduled_session_rechecks_the_principal_at_fire_time(
-    mock_post, mock_notify, db_session, sample_user, user_scopes, key_state, allowed
-):
-    sample_user.scopes = user_scopes
-    key = APIKey.create(user_id=sample_user.id, scopes=["read"] if key_state == "narrowed" else None)
-    key.revoked = key_state == "revoked"
-    db_session.add(key)
-    db_session.flush()
-    key_ids = {"none": None, "deleted": key.id + 1000}
-    task, execution = due_session_execution(db_session, sample_user, key_ids.get(key_state, key.id))
-    mock_post.return_value = spawn_ok()
-
-    scheduled_tasks.execute_scheduled_task(execution.id)
-
-    db_session.refresh(execution)
-    db_session.refresh(task)
-    assert (execution.status == "running") is allowed
-    assert (execution.status == "failed") is not allowed
-    assert task.enabled is allowed
-    assert mock_post.called is allowed
-    assert mock_notify.call_count == (0 if allowed else 1)
-
-
-@pytest.mark.parametrize(
-    "key_scopes,expected",
-    [
-        (["read", "claude_sessions"], ["claude_sessions", "read"]),
-        (None, ["*", "read", "write"]),
-    ],
-)
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_scheduled_session_spawns_with_the_scheduling_keys_scopes(
-    mock_post, db_session, sample_user, key_scopes, expected
-):
-    sample_user.scopes = ["*"]
-    key = APIKey.create(user_id=sample_user.id, scopes=key_scopes)
-    db_session.add(key)
-    db_session.flush()
-    _, execution = due_session_execution(db_session, sample_user, key.id)
-    seen = []
-
-    def spawn(url, headers, **kwargs):
-        token = headers["Authorization"].removeprefix("Bearer ")
-        principal = lookup_principal(token, db_session, record_use=False)
-        assert principal is not None
-        seen.append(sorted(system_scopes(principal)))
-        return spawn_ok()
-
-    mock_post.side_effect = spawn
-
-    scheduled_tasks.execute_scheduled_task(execution.id)
-
-    assert seen == [expected]
-
-
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_a_key_deleted_mid_fire_fails_the_execution(mock_post, db_session, sample_user):
-    sample_user.scopes = ["claude_sessions"]
-    _, execution = due_session_execution(db_session, sample_user)
-    mock_post.return_value = spawn_ok()
-
-    # The key vanishes between the principal check and minting the session.
-    with patch.object(scheduled_tasks, "check_session_principal", return_value=999999):
-        scheduled_tasks.execute_scheduled_task(execution.id)
-
-    db_session.expire_all()
-    assert db_session.get(TaskExecution, execution.id).status == "failed"
-    assert not mock_post.called
-
-
-@patch("memory.workers.tasks.scheduled_tasks.notify_user_now")
-@patch("memory.workers.tasks.scheduled_tasks.requests.post")
-def test_revoked_schedule_notifies_its_owner_only_once(
-    mock_post, mock_notify, db_session, sample_user, no_celery_dispatch
-):
-    sample_user.scopes = ["read"]
-    task, execution = due_session_execution(db_session, sample_user)
     scheduled_tasks.execute_scheduled_task(execution.id)
 
     later = scheduled_tasks.run_scheduled_tasks()
@@ -1532,49 +1091,5 @@ def test_revoked_schedule_notifies_its_owner_only_once(
     assert task.enabled is False
     assert later["count"] == 0
     assert mock_notify.call_count == 1
-    assert "claude_sessions" in mock_notify.call_args.kwargs["message"]
-
-
-@patch("memory.workers.tasks.scheduled_tasks.app.send_task")
-@pytest.mark.parametrize(
-    "data, age_hours, recovered",
-    [
-        ({"session_id": "u1-e1-abc"}, 5, 0),
-        ({"session_id": "u1-e1-abc"}, 25, 1),
-        (None, 5, 1),
-    ],
-)
-def test_stale_recovery_gives_started_containers_the_session_timeout(
-    mock_send, db_session, sample_user, data, age_hours, recovered
-):
-    task, execution = due_session_execution(db_session, sample_user)
-    task.next_scheduled_time = None
-    execution.status = "running"
-    execution.started_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-        hours=age_hours
-    )
-    execution.data = data
-    db_session.commit()
-
-    result = scheduled_tasks.run_scheduled_tasks()
-
-    assert result["recovered_stale"] == recovered
-
-
-# A pending execution re-dispatched after the api stopped running the module.
-@patch("memory.workers.tasks.scheduled_tasks.spawn_claude_session")
-def test_a_claude_session_execution_fails_while_the_api_runs_without_the_module(
-    mock_spawn, db_session, sample_user, unbooted
-):
-    module_settings.record_running(db_session, frozenset())
-    task, due = due_session(db_session, sample_user, None)
-    execution = TaskExecution(id=str(uuid.uuid4()), task_id=task.id, scheduled_time=due, status="pending")
-    db_session.add(execution)
-    db_session.commit()
-
-    result = scheduled_tasks.execute_scheduled_task(execution.id)
-
-    db_session.refresh(execution)
-    assert result == {"error": "the claude_containers module is off"}
-    assert (execution.status, execution.error_message) == ("failed", "the claude_containers module is off")
-    mock_spawn.assert_not_called()
+    assert "no longer valid" in mock_notify.call_args.kwargs["message"]
+    mock_deliver.assert_not_called()

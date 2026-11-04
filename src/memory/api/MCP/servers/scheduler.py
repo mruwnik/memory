@@ -16,20 +16,11 @@ from memory.common.access_control import UserProxy
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import settings
-from memory.common.claude_spawn import check_dev_channels_server
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentRun, ScheduledTask, SSHKey, TaskExecution, User
+from memory.common.db.models import AgentRun, ScheduledTask, TaskExecution, User
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
-from memory.common.module_settings import enabled_modules
-from memory.common.modules import CLAUDE_CONTAINERS
-from memory.common.scopes import (
-    SCOPE_CLAUDE_SESSIONS,
-    SCOPE_SCHEDULE,
-    SCOPE_SCHEDULE_WRITE,
-    has_scope,
-)
-from memory.common.ssh_keys import can_use_key
+from memory.common.scopes import SCOPE_SCHEDULE, SCOPE_SCHEDULE_WRITE
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +67,7 @@ async def list_all(
     List scheduled tasks for the current user.
 
     Args:
-        task_type: Filter by task type (notification, claude_session, agent_run)
+        task_type: Filter by task type (notification, agent_run)
         enabled: Filter by enabled status
         limit: Maximum number of tasks to return (default 50)
     """
@@ -102,21 +93,6 @@ async def list_all(
 
 TASK_TYPES = {t.value for t in TaskType}
 
-SPAWN_CONFIG_FIELDS = {
-    "allowed_tools",
-    "repo_url",
-    "custom_env",
-    "enable_playwright",
-    "run_id",
-    "environment_id",
-    "snapshot_id",
-    "use_saved_write_token",
-    "ssh_key_id",
-    "use_ssh_key",
-    "dev_channels_server",
-}
-
-
 def validate_cron_interval(cron_expression: str) -> None:
     """Validate a standard 5-field cron and enforce MIN_CRON_INTERVAL_MINUTES.
 
@@ -136,62 +112,6 @@ def validate_cron_interval(cron_expression: str) -> None:
             f"Cron interval too short ({interval_minutes:.0f}m). "
             f"Minimum is {settings.MIN_CRON_INTERVAL_MINUTES} minutes."
         )
-
-
-def validate_spawn_config_keys(spawn_config: dict[str, Any]) -> None:
-    """Reject unknown keys, and per-schedule GitHub tokens: those would sit in
-    plaintext in ScheduledTask.data, so scheduled sessions use the owner's saved
-    tokens instead."""
-    tokens = sorted({"github_token", "github_token_write"} & set(spawn_config))
-    if tokens:
-        raise ValueError(
-            f"Scheduled sessions don't take {', '.join(tokens)}: they use your saved "
-            "GitHub tokens (set them in the Claude sessions form; set "
-            "use_saved_write_token to give the session the write token)."
-        )
-    unknown = set(spawn_config) - SPAWN_CONFIG_FIELDS
-    if unknown:
-        raise ValueError(f"Unknown spawn_config keys: {', '.join(sorted(unknown))}")
-
-
-def validate_spawn_choices(session, spawn_config: dict[str, Any]) -> None:
-    """Fail at scheduling time rather than on every fire; /claude/spawn
-    re-checks both with the scheduling credential when the schedule fires."""
-    key_id = spawn_config.get("ssh_key_id")
-    if key_id is not None:
-        if type(key_id) is not int:
-            raise ValueError("ssh_key_id must be an integer")
-        key = session.get(SSHKey, key_id)
-        if key is None or not can_use_key(key, current_caller(session)):
-            raise ValueError("SSH key is not available")
-    dev_channels_server = spawn_config.get("dev_channels_server")
-    if dev_channels_server is not None and not isinstance(dev_channels_server, str):
-        raise ValueError("dev_channels_server must be a string")
-    check_dev_channels_server(dev_channels_server)
-
-
-def check_default_ssh_key(session, spawn_config: dict[str, Any]) -> None:
-    """A fire without ssh_key_id uses the owner's default key, so the
-    scheduling credential must be allowed it too."""
-    if spawn_config.get("use_ssh_key") is False or spawn_config.get("ssh_key_id") is not None:
-        return
-    caller = current_caller(session)
-    default_id = session.get_one(User, caller.id).default_ssh_key_id
-    key = session.get(SSHKey, default_id) if default_id is not None else None
-    if key is not None and not can_use_key(key, caller):
-        raise ValueError(
-            "Your default SSH key is not available to this credential; "
-            "pass ssh_key_id or set use_ssh_key to false"
-        )
-
-
-def session_principal(session) -> int | None:
-    """The API key a scheduled Claude session will act through (None: the
-    caller's session). Each fire re-checks it still holds claude_sessions."""
-    token = get_access_token()
-    if token is None or not has_scope(list(token.scopes or []), SCOPE_CLAUDE_SESSIONS):
-        raise ValueError(f"scheduling Claude sessions needs the '{SCOPE_CLAUDE_SESSIONS}' scope")
-    return scheduling_key_id(session)
 
 
 def scheduling_key_id(session) -> int | None:
@@ -242,7 +162,6 @@ def build_scheduled_task(
     message: str | None,
     notification_channel: str | None,
     notification_target: str | None,
-    spawn_config: dict[str, Any] | None,
     agent_run: dict[str, Any] | None = None,
 ) -> ScheduledTask:
     """Build (add but do not commit) a new ScheduledTask for upsert's create path.
@@ -254,13 +173,8 @@ def build_scheduled_task(
     """
     if task_type not in TASK_TYPES:
         raise ValueError(
-            "Creating a task requires task_type 'notification' or 'claude_session' "
+            "Creating a task requires task_type 'notification' "
             "(agent runs are scheduled with agent_schedule)"
-        )
-    if task_type == TaskType.CLAUDE_SESSION and CLAUDE_CONTAINERS not in enabled_modules():
-        raise ValueError(
-            "claude_session tasks need the claude_containers module "
-            "(an admin turns it on in Server settings)"
         )
     if bool(cron_expression) == bool(scheduled_time):
         raise ValueError("Provide exactly one of cron_expression or scheduled_time")
@@ -315,23 +229,10 @@ def build_scheduled_task(
             "subject": topic,
             "api_key_id": scheduling_key_id(session),
         }
-    elif task_type == TaskType.AGENT_RUN:
+    else:
         if not agent_run:
             raise ValueError("agent_run tasks require a definition and input")
         task.data = agent_run
-    else:
-        if not spawn_config:
-            raise ValueError("claude_session tasks require spawn_config")
-        if not message:
-            raise ValueError(
-                "claude_session tasks require message (the initial prompt)"
-            )
-        validate_spawn_config_keys(spawn_config)
-        validate_spawn_choices(session, spawn_config)
-        check_default_ssh_key(session, spawn_config)
-        task.message = message
-        task.topic = topic or message[:100]
-        task.data = {"spawn_config": spawn_config}
 
     if enabled is False:
         # Recurring + disabled (one-time+disabled is rejected above): the hybrid
@@ -354,7 +255,6 @@ async def upsert(
     message: str | None = None,
     notification_channel: str | None = None,
     notification_target: str | None = None,
-    spawn_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Create or update a scheduled task.
@@ -365,22 +265,20 @@ async def upsert(
     Creating requires task_type and exactly one of cron_expression (recurring)
     or scheduled_time (one-time ISO datetime — fires once, then the task is
     Done). notification tasks also require notification_channel,
-    notification_target, and message; claude_session tasks require message (the
-    initial prompt) and spawn_config.
+    notification_target, and message.
     agent_run tasks are created and changed with agent_schedule; here they can
     only be paused (enabled=False).
 
     Args:
         task_id: ID of the task to update. Omit (or pass a fresh id) to create.
-        task_type: "notification", or "claude_session" when the claude_containers
-            module is on (create only; an existing task's type is immutable).
+        task_type: "notification" (create only; an existing task's type is immutable).
         enabled: Whether the task is enabled (disabling clears its next run time).
         cron_expression: Cron schedule expression (5-field), in the user's
             timezone (see meta_get_user).
         scheduled_time: ISO datetime for a one-time task (create only). Without
             an offset it is read in the user's timezone (see meta_get_user).
         topic: Topic/subject of the task.
-        message: Notification body, or the Claude session's initial prompt.
+        message: Notification body.
         notification_channel: Notification channel (discord, slack, email).
         notification_target: Who/where to notify, validated and resolved to a
             concrete id/address before saving (a clear error is returned if it
@@ -388,13 +286,6 @@ async def upsert(
             person's Discord/Slack id or email), a Discord/Slack channel id, a
             raw Discord/Slack user id, or an email address. Delivery method
             (DM vs channel) is derived from the resolved id.
-        spawn_config: Spawn config for claude_session tasks. Supported keys:
-            allowed_tools, repo_url, custom_env, enable_playwright, run_id,
-            environment_id, snapshot_id, use_saved_write_token. The session
-            gets the owner's saved GitHub clone token, and their saved write
-            token only with use_saved_write_token. On update, set a key to null
-            to remove it. initial_prompt is stored in the message field, not
-            spawn_config.
     """
     user_id = get_authenticated_user_id()
 
@@ -420,10 +311,7 @@ async def upsert(
                 message=message,
                 notification_channel=notification_channel,
                 notification_target=notification_target,
-                spawn_config=spawn_config,
             )
-            if task.task_type == TaskType.CLAUDE_SESSION:
-                task.data = {**(task.data or {}), "api_key_id": session_principal(session)}
             created_id = task.id
             try:
                 session.commit()
@@ -459,8 +347,7 @@ async def upsert(
             message,
             notification_channel,
             notification_target,
-            spawn_config,
-        ) != (False, None, None, None, None, None, None)
+        ) != (False, None, None, None, None, None)
         if task.task_type == TaskType.AGENT_RUN and changes:
             raise ValueError(
                 "agent schedules can only be paused here; change them with agent_schedule"
@@ -500,29 +387,8 @@ async def upsert(
                 session, current_caller(session), task.notification_channel, task.notification_target
             )
 
-        if task.task_type == TaskType.CLAUDE_SESSION and changes:
-            task.data = {**(task.data or {}), "api_key_id": session_principal(session)}
         if task.task_type == TaskType.NOTIFICATION and changes:
             task.data = {**(task.data or {}), "api_key_id": scheduling_key_id(session)}
-
-        if spawn_config is not None:
-            if task.task_type != "claude_session":
-                raise ValueError("spawn_config can only be set on claude_session tasks")
-            validate_spawn_config_keys(spawn_config)
-            validate_spawn_choices(session, spawn_config)
-
-            data = dict(task.data or {})
-            existing = dict(data.get("spawn_config") or {})
-            for key, value in spawn_config.items():
-                if value is None:
-                    existing.pop(key, None)
-                else:
-                    existing[key] = value
-            data["spawn_config"] = existing
-            task.data = data
-
-        if task.task_type == TaskType.CLAUDE_SESSION and changes:
-            check_default_ssh_key(session, (task.data or {}).get("spawn_config") or {})
 
         if task.enabled and not was_active:
             # This update re-activated a previously-inactive task — enforce the

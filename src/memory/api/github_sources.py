@@ -236,46 +236,6 @@ def list_accounts(
     return [account_to_response(account, db, user) for account in accounts]
 
 
-class GithubRepoBasic(BaseModel):
-    """Minimal repo info for selection dropdowns."""
-
-    id: int
-    owner: str
-    name: str
-    repo_path: str
-
-
-@router.get("/repos")
-def list_all_repos(
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> list[GithubRepoBasic]:
-    """List all tracked repos. Admins see all repos, others see only their own."""
-    query = db.query(GithubRepo).filter(GithubRepo.active == True)  # noqa: E712
-
-    if not has_admin_scope(user):
-        # Non-admins only see repos from their own accounts
-        user_account_ids = [
-            acc.id
-            for acc in db.query(GithubAccount.id)
-            .filter(GithubAccount.user_id == user.id)
-            .all()
-        ]
-        query = query.filter(GithubRepo.account_id.in_(user_account_ids))
-
-    return [
-        GithubRepoBasic(
-            id=cast(int, repo.id),
-            owner=cast(str, repo.owner),
-            name=cast(str, repo.name),
-            repo_path=repo.repo_path,
-        )
-        for repo in sorted(
-            query.all(), key=lambda r: f"{r.owner}/{r.name}".casefold()
-        )
-    ]
-
-
 @router.post("/accounts")
 def create_account(
     data: GithubAccountCreate,

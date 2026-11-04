@@ -1,4 +1,4 @@
-"""Who unattended work (agent cron, triggers, scheduled Claude sessions) acts
+"""Who unattended work (agent cron, triggers, scheduled notifications) acts
 as, re-checked each time it starts. Worker-safe: no API imports."""
 
 from memory.common.access_control import credential_scopes

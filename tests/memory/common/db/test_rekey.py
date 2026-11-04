@@ -5,7 +5,7 @@ from sqlalchemy import LargeBinary, text
 from memory.common import settings
 from memory.common.crypto import derive_encryption_key
 from memory.common.db import rekey
-from memory.common.db.models import Base, ClaudeGitHubToken, SSHKey
+from memory.common.db.models import Base, LLMProviderKey, SSHKey
 from memory.common.db.rekey import encrypted_columns, is_encrypted_column, rekey_all_secrets
 
 # Binary columns that are not ciphertext. Anything else of type LargeBinary must
@@ -57,13 +57,13 @@ def decrypted_with(db_session, ssh_key, key_secret):
 
 def test_rekey_reencrypts_values_across_tables(db_session, regular_user):
     ssh_key = stored_under(db_session, regular_user, "old")
-    token = ClaudeGitHubToken(user_id=regular_user.id, kind="clone", token_encrypted=fernet("old").encrypt(b"pat"), token_hint="x")
+    token = LLMProviderKey(user_id=regular_user.id, provider="anthropic", label="x", key_encrypted=fernet("old").encrypt(b"pat"), key_hint="x")
     db_session.add(token)
     db_session.flush()
 
     assert rekey_all_secrets(db_session, "new", ["old"]) == 2
     assert decrypted_with(db_session, ssh_key, "new") == "s3cret"
-    assert fernet("new").decrypt(token.token_encrypted) == b"pat"
+    assert fernet("new").decrypt(token.key_encrypted) == b"pat"
 
 
 @pytest.mark.parametrize(

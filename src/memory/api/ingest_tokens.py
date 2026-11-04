@@ -1,7 +1,7 @@
 """Stateless HMAC tokens carrying a pending add_content ingestion intent.
 
-Shares the wire format and signing core (``signed_tokens``) with cloud-claude
-transfer tokens, but the payload is the ingest intent
+Shares the wire format and signing core (``signed_tokens``) with password
+reset tokens, but the payload is the ingest intent
 (type/filename/tags/metadata/project) so the /ingest/upload endpoint can land
 bytes and dispatch the right task with no server-side pending row.
 
@@ -21,8 +21,8 @@ from memory.common import settings
 VERSION = signed_tokens.VERSION
 
 # Domain separation tag mixed into the signed message. Ingest tokens share
-# TRANSFER_TOKEN_SECRET and the v1.<seg>.<sig> wire format with cloud-claude
-# transfer tokens, so without a context tag a signature minted for one family
+# TRANSFER_TOKEN_SECRET and the v1.<seg>.<sig> wire format with password
+# reset tokens, so without a context tag a signature minted for one family
 # would validate against the other's verifier. Signing over a tagged message
 # makes the two families cryptographically non-interchangeable.
 _SIGN_DOMAIN = "ingest.v1"

@@ -45,11 +45,12 @@ The installer will:
 - Ask for the Voyage API key (optional: leave it blank to set it on the settings page) and write it to `secrets/voyage_key.txt`
 - Set DB / Redis / Qdrant defaults in `.env` (Postgres on `localhost:15432`, etc.)
 - Optionally generate an SSH keypair for git-based notes sync
-- Ask whether to wire up Claude Code containers (default no): it detects your Docker group GID, appends `docker-compose.claude.yaml` to `COMPOSE_FILE` and creates the `memory-api-<stack>` Docker network. [Modules](#modules) themselves, this one included, are switched on in the setup wizard or on the Server settings page
+
+[Modules](#modules) are switched on in the setup wizard or on the Server settings page.
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN` is required (it exits before writing anything without it), `ADMIN_EMAIL` and `ADMIN_PASSWORD` are optional but go together, `CLAUDE_CONTAINERS=on` wires up Claude Code containers as above (default `off`; any other value exits before writing anything), `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, runs the migrations, starts the api, and creates the admin user (full access) from `ADMIN_EMAIL` and `ADMIN_PASSWORD` if it doesn't exist. Without them it prints the setup token to claim the instance with at `https://$DOMAIN/ui/setup` (or, if the token can't be read from the api log, the command that shows it). To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN` is required (it exits before writing anything without it), `ADMIN_EMAIL` and `ADMIN_PASSWORD` are optional but go together, `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, runs the migrations, starts the api, and creates the admin user (full access) from `ADMIN_EMAIL` and `ADMIN_PASSWORD` if it doesn't exist. Without them it prints the setup token to claim the instance with at `https://$DOMAIN/ui/setup` (or, if the token can't be read from the api log, the command that shows it). To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 
@@ -95,27 +96,16 @@ If you'd rather run it on the host (e.g. as part of a script), `pip install -e "
 
 ## Modules
 
-Three optional features are off by default. An admin switches them on the Server settings page (`/ui/server-settings`), then restarts the api from its banner. An operator can instead name them in `.env` with `ENABLE_MODULES` or `DISABLE_MODULES` (comma-separated), then restart every service: a module named there is locked on the page. An unknown name, or one in both variables, stops every process from starting.
+Two optional features are off by default. An admin switches them on the Server settings page (`/ui/server-settings`), then restarts the api from its banner. An operator can instead name them in `.env` with `ENABLE_MODULES` or `DISABLE_MODULES` (comma-separated), then restart every service: a module named there is locked on the page. An unknown name, or one in both variables, stops every process from starting; the removed `claude_containers` is ignored with a warning.
 
-The page refuses a value the api can't run with (`claude_containers` without the overlay below, `multi_user` off while several humans exist). If the environment later changes under a saved value, the api logs an ERROR, boots with the module the other way, and the page flags the row. Workers follow what the api runs, which it records at startup, rather than the saved values: a due Claude session waits until the api runs `claude_containers`, and the agents worker catches up at the start of each agent task, mounting the servers of a module switched on and hiding those of one switched off.
+The page refuses a value the api can't run with (`multi_user` off while several humans exist). If the environment later changes under a saved value, the api logs an ERROR, boots with the module the other way, and the page flags the row. Workers follow what the api runs, which it records at startup, rather than the saved values: the agents worker catches up at the start of each agent task, mounting the servers of a module switched on and hiding those of one switched off.
 
 | Module | Adds |
 |---|---|
-| `claude_containers` | Claude Code containers: the `/claude` routes, the `containers_*` MCP tools, the `claude_session` scheduled-task type, the `claude_sessions` scope, and the Claude sessions and configurations pages |
 | `multi_user` | More than one human user. Off, `tools/add_user.py` and `POST /users` allow one human, who gets `*` |
 | `teams` | Teams, their members and projects: MCP servers, scopes, and the team and project pickers |
 
 Everything else (search, ingest, people, notes, reports, journal, tasks, polls, agents, keys, transcript search) is always on. Modules never change who can see what. Off means 404 routes, unmounted MCP servers (their tools disappear from `tools/list` and from agent tool catalogs) and hidden scopes; data and existing scope grants stay, so turning a module back on restores it.
-
-`claude_containers` also needs the compose overlay and a running orchestrator. `tools/install.sh` wires the overlay up when asked (`CLAUDE_CONTAINERS=on` unattended); by hand, add it to `.env`, then turn the module on in the web UI:
-
-```
-COMPOSE_FILE=docker-compose.yaml:docker-compose.claude.yaml
-```
-
-If `.env` already has a `COMPOSE_FILE` line (`tools/install.sh --non-interactive` writes `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml`), append `:docker-compose.claude.yaml` to it instead, e.g. `COMPOSE_FILE=docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml`; replacing it drops the proxy overlay without any error.
-
-The overlay mounts the orchestrator socket, adds the Docker group (`DOCKER_GID`, default 992; `tools/install.sh` detects it) and attaches the api to the external `memory-api-<MEMORY_STACK>` network. Without it the settings page refuses to turn the module on, and the api refuses to start with it on in the env.
 
 ## Updating
 
@@ -225,7 +215,7 @@ SSH identities are managed in **System operations → SSH keys**. Paste or uploa
 
 Personal keys belong to their user. Admins can also create **Instance** keys. In **Sources → Notes**, choose one of your personal or instance keys and click **Check server**. Review the hostname, port, and SHA256 fingerprints, then choose **Trust this server** to save the SSH configuration. Confirm first-connection fingerprints with your server administrator when possible. Use **Advanced: enter trusted host keys manually** to paste independently verified keys instead. Then **Save and sync**. A changed server key stops sync until you explicitly approve new trust. Host trust is bound to the configured remote. Workers read changes without a restart and remove temporary private-key files after each Git operation. SSH sync requires a selected database key; operator-mounted identities are not used.
 
-In **System operations → SSH keys**, **Use for my containers** selects your default. The Claude session form can override this with another accessible key or **No SSH key**, including for scheduled sessions. Existing user keys migrate automatically into this table as their users’ defaults. Replacement and deletion affect future connections and containers; running containers retain their injected copy. A key selected for Notes cannot be deleted until the selection is changed or cleared.
+Replacing or deleting a key affects future connections. A key selected for Notes cannot be deleted until the selection is changed or cleared.
 
 ### Fireflies transcripts
 
@@ -299,8 +289,7 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |
 | `SERVER_URL`                      | `http://localhost:8000` | Public origin; used for OAuth redirects, CORS, cookies      |
-| `ENABLE_MODULES`, `DISABLE_MODULES` | unset (all modules off) | Comma-separated modules to turn on or off, locking them on the settings page: `claude_containers`, `multi_user`, `teams` (see Modules) |
-| `ORCHESTRATOR_SOCKET`             | set by `docker-compose.claude.yaml` | Unix socket of the Claude container orchestrator; required by `claude_containers` |
+| `ENABLE_MODULES`, `DISABLE_MODULES` | unset (all modules off) | Comma-separated modules to turn on or off, locking them on the settings page: `multi_user`, `teams` (see Modules) |
 | `PASSWORD_RESET_FROM_EMAIL`       | unset (reset off)    | Address of an admin-owned, send-enabled email account that mails "Forgot password?" links; its owner can read every link |
 | `DB_HOST`, `DB_PORT`              | `postgres` / `5432`  | PostgreSQL — set to `localhost` / `15432` for host-side dev   |
 | `REDIS_HOST`, `REDIS_PORT`        | `redis` / `6379`     | Celery broker + cache                                          |
@@ -324,8 +313,6 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `API_SELF_RESTART`                | `false` (`1` in compose) | Lets an admin restart the api from the settings page; the container's restart policy brings it back |
 | `CUSTOM_TASKS_DIR`                | unset                | Path to a directory of deployment-specific Celery tasks        |
 | `LATEST_RELEASE_URL`              | unset                | URL returning the latest release tag; enables `update_available` in `/health` |
-| `CLAUDE_MAINTENANCE_INTERVAL_SEC` | `300`                | How often the api settles scheduled Claude sessions and removes exited containers; `0` turns it off |
-| `CLAUDE_SESSION_TIMEOUT_HOURS`    | `24`                 | A scheduled Claude session still running after this is marked failed (container left running) |
 | `AGENT_DEFAULT_USER_KEY_RUN_COST_USD` | `1.00`           | Per-run cap for runs on a user's own provider key when the agent sets no `max_cost_usd` |
 | `AGENT_DEFAULT_USER_KEY_DAILY_COST_USD` | `20.00`        | Daily cap on a user's own provider key when neither the key nor the agent sets a daily cap |
 | `AGENT_MAX_TIMEOUT_SEC`           | `1800`               | Longest `timeout_sec` an agent spec may set                    |

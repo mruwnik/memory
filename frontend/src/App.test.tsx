@@ -42,7 +42,6 @@ vi.mock('@/components', () => ({
   Tasks: () => <div>TASKS</div>,
   NotesPage: () => <div>NOTES</div>,
   Jobs: () => <div>JOBS</div>,
-  ConfigSources: () => <div>SNAPSHOTS</div>,
   CeleryOverview: () => <div>CELERY</div>,
   ScheduledTasks: () => <div>SCHEDULED</div>,
   ReportsPage: () => <div>REPORTS</div>,
@@ -65,7 +64,6 @@ vi.mock('@/components/projects/Projects', () => ({ default: () => <div>PROJECTS<
 vi.mock('@/components/teams/Teams', () => ({ default: () => <div>TEAMS</div> }))
 vi.mock('@/components/metrics/Metrics', () => ({ default: () => <div>METRICS</div> }))
 vi.mock('@/components/usage/Usage', () => ({ default: () => <div>USAGE</div> }))
-vi.mock('@/components/claude/ClaudeSessions', () => ({ default: () => <div>CLAUDE</div> }))
 
 import App from './App'
 
@@ -192,27 +190,9 @@ describe('App routing & auth', () => {
     expect(screen.getByText('CELERY')).toBeInTheDocument()
   })
 
-  it('does not render ClaudeSessions without the claude_sessions scope', () => {
-    authState.isAuthenticated = true
-    authState.hasScope = vi.fn((s) => s !== 'claude_sessions')
-    setPath('/ui/claude')
-    render(<App />)
-    expect(screen.queryByText('CLAUDE')).not.toBeInTheDocument()
-  })
-
-  it('lazily renders ClaudeSessions for a user with the claude_sessions scope', async () => {
-    authState.isAuthenticated = true
-    authState.hasScope = vi.fn((s) => s === 'claude_sessions')
-    setPath('/ui/claude')
-    render(<App />)
-    await waitFor(() => expect(screen.getByText('CLAUDE')).toBeInTheDocument())
-  })
-
   it.each([
     ['/ui/teams', 'teams', 'TEAMS'],
     ['/ui/projects', 'teams', 'PROJECTS'],
-    ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
-    ['/ui/claude', 'claude_containers', 'CLAUDE'],
   ])('explains that %s needs %s while it is off', (path, module, marker) => {
     authState.isAuthenticated = true
     authState.user.modules = [...ALL_MODULES].filter(m => m !== module)
@@ -233,19 +213,9 @@ describe('App routing & auth', () => {
     expect(screen.queryByRole('link', { name: 'Open Server settings' })).not.toBeInTheDocument()
   })
 
-  it('still redirects home when the scope is missing, whatever the module', async () => {
-    authState.isAuthenticated = true
-    authState.hasScope = vi.fn(() => false)
-    authState.user.modules = []
-    setPath('/ui/claude')
-    render(<App />)
-    await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
-  })
-
   it.each([
     ['/ui/teams', 'teams', 'TEAMS'],
     ['/ui/projects', 'teams', 'PROJECTS'],
-    ['/ui/snapshots', 'claude_containers', 'SNAPSHOTS'],
   ])('renders %s while %s is on', (path, module, marker) => {
     authState.isAuthenticated = true
     authState.user.modules = [module]

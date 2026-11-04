@@ -43,8 +43,7 @@ def project(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "docker"
-    # Answers network inspect from docker.networks, /setup/status from
-    # setup_status, the api log from api.log, and ps and volume ls from the
+    # Answers /setup/status from setup_status, the api log from api.log, and ps and volume ls from the
     # containers and volumes files next to the project (see docker_bin).
     fake.write_text(
         f'#!/bin/sh\necho "$@" >> "{tmp_path}/docker.log"\n'
@@ -53,15 +52,11 @@ def project(tmp_path):
         'case "$*" in\n'
         f'  "ps "*) cat "{tmp_path.parent}/containers" 2>/dev/null; exit 0 ;;\n'
         f'  "volume ls"*) cat "{tmp_path.parent}/volumes" 2>/dev/null; exit 0 ;;\n'
-        f'  "network inspect "*) grep -qx "$3" "{tmp_path}/docker.networks" 2>/dev/null ;;\n'
         f'  *setup/status*) cat "{tmp_path}/setup_status" 2>/dev/null ;;\n'
         f'  "compose logs"*) cat "{tmp_path}/api.log" 2>/dev/null ;;\n'
         'esac\n'
     )
     fake.chmod(0o755)
-    getent = bin_dir / "getent"
-    getent.write_text('#!/bin/sh\n[ "$*" != "group docker" ] || echo docker:x:4242:\n')
-    getent.chmod(0o755)
     # Re-runs find their stack running from the checkout.
     (tmp_path.parent / "containers").write_text(f"project {tmp_path}\n")
     return tmp_path
@@ -141,28 +136,6 @@ def test_writes_reverse_proxy_settings(project, supplied, subnet, gateway):
     assert (env["KBNET_SUBNET"], env["KBNET_GATEWAY"]) == (subnet, gateway)
     assert env["FORWARDED_ALLOW_IPS"] == f"127.0.0.1,::1,{gateway}"
     assert env["RATE_LIMIT_TRUSTED_PROXIES"] == f"127.0.0.1,::1,{gateway}"
-
-
-# The claude overlay is appended, never replacing what is there (the proxy overlay).
-# Modules themselves are switched in the web UI, so .env never gets ENABLE_MODULES.
-@pytest.mark.parametrize(
-    "existing, containers, compose_file, docker_gid",
-    [
-        ("", "off", "docker-compose.yaml:deploy/aws/compose.proxy.yaml", None),
-        ("", "on", "docker-compose.yaml:deploy/aws/compose.proxy.yaml:docker-compose.claude.yaml", "4242"),
-        ("COMPOSE_FILE=custom.yaml\n", "off", "custom.yaml", None),
-        ("COMPOSE_FILE=custom.yaml\n", "on", "custom.yaml:docker-compose.claude.yaml", "4242"),
-    ],
-)
-def test_non_interactive_wires_claude_containers_on_request(project, existing, containers, compose_file, docker_gid):
-    (project / ".env").write_text(existing)
-
-    result = install(project, {**REQUIRED, "CLAUDE_CONTAINERS": containers})
-
-    assert result.returncode == 0, result.stderr
-    env = read_env(project)
-    assert (env["COMPOSE_FILE"], env.get("DOCKER_GID")) == (compose_file, docker_gid)
-    assert "ENABLE_MODULES" not in env
 
 
 def test_warns_when_compose_file_lacks_the_proxy_overlay(project):
@@ -261,42 +234,6 @@ def test_migrates_then_starts_the_api_then_creates_first_user_with_password_via_
     assert "--no-api-key" in add_user[0]
 
 
-@pytest.mark.parametrize("existing, created", [("", True), ("memory-api-prod", False)])
-@pytest.mark.parametrize(
-    "env, stdin",
-    [
-        ({**REQUIRED, "CLAUDE_CONTAINERS": "on"}, None),
-        # Blank answers, two rejected backup answers, no backups, no SSH keys, containers.
-        ({}, "\n" * 7 + "n\n" + "n\n" + "y\n\n"),
-    ],
-    ids=["non-interactive", "interactive"],
-)
-def test_creates_the_external_api_network_once_with_containers(project, existing, created, env, stdin):
-    # The fake inspects successfully only the networks named in docker.networks.
-    (project / "docker.networks").write_text(existing)
-
-    result = install(project, env, interactive_input=stdin)
-
-    assert result.returncode == 0, result.stderr
-    calls = [c for c in (project / "docker.log").read_text().splitlines() if c.startswith("network ")]
-    assert ("network create memory-api-prod" in calls) == created
-    assert calls[:1] == ["network inspect memory-api-prod"]
-
-
-@pytest.mark.parametrize(
-    "env, stdin",
-    [(REQUIRED, None), ({}, "\n" * 5 + "n\n" + "n\n" + "\n\n")],
-    ids=["non-interactive", "interactive"],
-)
-def test_no_api_network_without_containers(project, env, stdin):
-    (project / "docker.log").touch()
-
-    result = install(project, env, interactive_input=stdin)
-
-    assert result.returncode == 0, result.stderr
-    assert "network" not in (project / "docker.log").read_text()
-
-
 def test_runs_compose_in_the_project_directory_whatever_the_caller_cwd(project, tmp_path):
     result = install(project, REQUIRED, cwd=tmp_path)
 
@@ -386,7 +323,7 @@ def test_supplied_secrets_do_not_reach_compose_environment(project, earlier_runs
 
 
 @pytest.mark.parametrize(
-    "var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "POSTGRES_PASSWORD", "CLAUDE_CONTAINERS"]
+    "var", ["DOMAIN", "ADMIN_EMAIL", "VOYAGE_API_KEY", "POSTGRES_PASSWORD"]
 )
 @pytest.mark.parametrize("bad", ["a b", "a$b", "a|b"])
 def test_rejects_unsafe_values_naming_variable_but_not_value(project, var, bad):
@@ -580,34 +517,21 @@ def test_interactive_validates_env_supplied_backup_key(project):
     assert "a b" not in result.stdout + result.stderr
 
 
-CLAUDE_COMPOSE = "docker-compose.yaml:docker-compose.claude.yaml"
-
-
-# The only module question: the others need no host wiring and are set in the web UI.
-@pytest.mark.parametrize(
-    "answer, compose_file, docker_gid",
-    [pytest.param("\n", None, None, id="default"), pytest.param("y\n", CLAUDE_COMPOSE, "4242", id="containers")],
-)
-def test_interactive_claude_containers_question(project, answer, compose_file, docker_gid):
-    stdin = PROMPTS_BEFORE_BACKUP + "n\n" + "n\n" + answer
-
-    result = install(project, {}, interactive_input=stdin)
-
-    assert result.returncode == 0, result.stderr
-    env = read_env(project)
-    assert (env.get("COMPOSE_FILE"), env.get("DOCKER_GID")) == (compose_file, docker_gid)
-    assert "ENABLE_MODULES" not in env
-
-
-def test_interactive_rerun_keeps_the_wiring_and_the_operators_modules_without_asking(project):
-    (project / ".env").write_text(f"ENABLE_MODULES=teams\nCOMPOSE_FILE={CLAUDE_COMPOSE}\n")
+# Modules are switched in the web UI, so install.sh never writes ENABLE_MODULES itself.
+def test_interactive_rerun_keeps_the_operators_modules(project):
+    (project / ".env").write_text("ENABLE_MODULES=teams\n")
 
     result = install(project, {}, interactive_input=PROMPTS_BEFORE_BACKUP + "n\n" + "n\n")
 
     assert result.returncode == 0, result.stderr
-    env = read_env(project)
-    assert (env["ENABLE_MODULES"], env["COMPOSE_FILE"]) == ("teams", CLAUDE_COMPOSE)
-    assert "Wire up Claude Code containers" not in result.stdout
+    assert read_env(project)["ENABLE_MODULES"] == "teams"
+
+
+def test_non_interactive_leaves_modules_to_the_web_ui(project):
+    result = install(project, REQUIRED)
+
+    assert result.returncode == 0, result.stderr
+    assert "ENABLE_MODULES" not in read_env(project)
 
 
 @pytest.mark.parametrize("admin", [{"ADMIN_EMAIL": "owner@example.com"}, {"ADMIN_PASSWORD": "pw-Zk3v9QeXr7"}])
@@ -687,12 +611,3 @@ def test_without_admin_points_at_the_setup_token(project, files, on_terminal, to
 
 def astuple(result):
     return result.returncode, result.stdout
-
-
-@pytest.mark.parametrize("value", ["yes", "claude_containers"])
-def test_claude_containers_must_be_on_or_off(project, value):
-    result = install(project, {**REQUIRED, "CLAUDE_CONTAINERS": value})
-
-    assert result.returncode != 0
-    assert "CLAUDE_CONTAINERS" in result.stderr
-    assert sorted(p.name for p in project.iterdir()) == ["bin", "tools"]

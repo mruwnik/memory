@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 class TaskType(str, enum.Enum):
     """Valid task types for scheduled tasks."""
     NOTIFICATION = "notification"
-    CLAUDE_SESSION = "claude_session"
     AGENT_RUN = "agent_run"
 
 

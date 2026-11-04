@@ -5,7 +5,7 @@ import { ModuleOff } from './ModuleOff'
 describe('ModuleOff', () => {
   it.each([
     ['/ui/teams', 'Teams'],
-    ['/ui/claude/:sessionId', 'Claude sessions'],
+    ['/ui/agents/runs/:runId', 'Agents'],
     ['/ui/not-in-nav', 'Unavailable'],
   ])('titles %s after its section: %s', (path, title) => {
     renderWithRouter(<ModuleOff path={path} module="teams" isAdmin={false} />)
