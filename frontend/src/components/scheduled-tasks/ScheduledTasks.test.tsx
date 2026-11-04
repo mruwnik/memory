@@ -10,13 +10,9 @@ const deleteTask = vi.fn()
 const updateTask = vi.fn()
 const getExecutions = vi.fn()
 const createTask = vi.fn()
-const listEnvironments = vi.fn()
 
 vi.mock('@/hooks/useScheduledTasks', () => ({
   useScheduledTasks: () => ({ listTasks, toggleTask, deleteTask, updateTask, getExecutions, createTask }),
-}))
-vi.mock('@/hooks/useClaude', () => ({
-  useClaude: () => ({ listEnvironments }),
 }))
 
 const makeTask = (o: Partial<ScheduledTask> = {}): ScheduledTask => ({
@@ -36,25 +32,12 @@ const makeTask = (o: Partial<ScheduledTask> = {}): ScheduledTask => ({
   ...o,
 })
 
-const claudeTask = (o: Partial<ScheduledTask> = {}): ScheduledTask =>
-  makeTask({
-    id: 'c1',
-    task_type: 'claude_session',
-    topic: 'Nightly job',
-    message: 'do the thing',
-    notification_channel: null,
-    notification_target: null,
-    data: { spawn_config: { environment_id: 3, repo_url: 'https://github.com/org/repo', run_id: 'nightly', allowed_tools: ['Bash', 'Read'] } },
-    ...o,
-  })
-
 beforeEach(() => {
   listTasks.mockReset().mockResolvedValue([])
   toggleTask.mockReset()
   deleteTask.mockReset().mockResolvedValue(undefined)
   updateTask.mockReset()
   getExecutions.mockReset().mockResolvedValue([])
-  listEnvironments.mockReset().mockResolvedValue([])
 })
 
 describe('ScheduledTasks', () => {
@@ -95,50 +78,15 @@ describe('ScheduledTasks', () => {
     expect(screen.getByText('1 active')).toBeInTheDocument()
   })
 
-  it('renders a claude_session task with its spawn-config data fields', async () => {
-    listTasks.mockResolvedValue([claudeTask()])
-    renderWithRouter(<ScheduledTasks />)
-    await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
-    expect(screen.getByText('Claude session')).toBeInTheDocument()
-    expect(screen.getByText(/repo: org\/repo/)).toBeInTheDocument()
-    expect(screen.getByText(/run: nightly/)).toBeInTheDocument()
-  })
-
   it('filters by task type, passing the filter to listTasks', async () => {
     const user = userEvent.setup()
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(listTasks).toHaveBeenCalled())
-    await user.click(screen.getByRole('button', { name: 'Claude sessions' }))
+    await user.click(screen.getByRole('button', { name: 'Agent runs' }))
     await waitFor(() => {
       const last = listTasks.mock.calls.at(-1)?.[0]
-      expect(last.task_type).toBe('claude_session')
+      expect(last.task_type).toBe('agent_run')
     })
-  })
-
-  it('hides the Claude session filter and task type while claude_containers is off', async () => {
-    const { user } = renderWithRouter(<ScheduledTasks />, { modules: new Set() })
-    await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
-    expect(screen.queryByRole('button', { name: 'Claude sessions' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'New task' }))
-    expect(screen.queryByRole('button', { name: 'Claude session' })).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Message')).toBeInTheDocument()
-  })
-
-  it.each([
-    [new Set<string>(), false],
-    [new Set(['claude_containers']), true],
-  ])('offers editing an existing Claude session only while claude_containers is on (%j)', async (modules, editable) => {
-    listTasks.mockResolvedValue([claudeTask({ id: 'spawn' }), makeTask({ id: 'note', topic: 'Reminder' })])
-    renderWithRouter(<ScheduledTasks />, { modules })
-    await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
-    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(editable ? 2 : 1)
-  })
-
-  it('offers the Claude session task type while claude_containers is on', async () => {
-    const { user } = renderWithRouter(<ScheduledTasks />)
-    await waitFor(() => expect(screen.getByText('No scheduled tasks')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'New task' }))
-    expect(screen.getByRole('button', { name: 'Claude session' })).toBeInTheDocument()
   })
 
   it('toggles a task optimistically and persists', async () => {
@@ -327,77 +275,8 @@ describe('ScheduledTasks', () => {
     expect(screen.getByText(/bot: bot9/)).toBeInTheDocument()
   })
 
-  it('renders a long claude prompt and a tools-overflow field', async () => {
-    const longPrompt = 'p'.repeat(150)
-    listTasks.mockResolvedValue([
-      claudeTask({
-        id: 'long',
-        topic: 'long prompt',
-        data: {
-          spawn_config: {
-            initial_prompt: longPrompt,
-            allowed_tools: ['Bash', 'Read', 'Write', 'Edit', 'Grep'],
-            enable_playwright: true,
-            snapshot_id: 'snap-1',
-          },
-        },
-      }),
-    ])
-    renderWithRouter(<ScheduledTasks />)
-    await waitFor(() => expect(screen.getByText('long prompt')).toBeInTheDocument())
-    expect(screen.getByText(longPrompt)).toBeInTheDocument()
-    expect(screen.getByText(/tools: Bash, Read, Write\.\.\./)).toBeInTheDocument()
-    expect(screen.getByText(/Playwright/)).toBeInTheDocument()
-    expect(screen.getByText(/snapshot: snap-1/)).toBeInTheDocument()
-  })
-
-  it('edits claude_session spawn config and sends spawn_config updates', async () => {
-    const task = claudeTask({ id: 'spawn' })
-    listTasks.mockResolvedValue([task])
-    listEnvironments.mockResolvedValue([
-      { id: 3, name: 'env-a', description: 'desc a' },
-      { id: 4, name: 'env-b', description: null },
-    ])
-    updateTask.mockResolvedValue(task)
-    const user = userEvent.setup()
-    renderWithRouter(<ScheduledTasks />)
-    await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Edit' }))
-    await waitFor(() => expect(listEnvironments).toHaveBeenCalled())
-    // change the environment selection
-    await user.selectOptions(screen.getByDisplayValue(/env-a/), '4')
-    // toggle playwright on
-    await user.click(screen.getByLabelText('Enable Playwright'))
-    await user.click(screen.getByLabelText('Use my saved write token'))
-    // edit custom env vars
-    await user.type(screen.getByPlaceholderText(/KEY=value/), 'API_KEY=secret')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => {
-      const call = updateTask.mock.calls.at(-1)
-      expect(call?.[0]).toBe('spawn')
-      expect(call?.[1].spawn_config).toMatchObject({
-        environment_id: 4,
-        enable_playwright: true,
-        use_saved_write_token: true,
-        custom_env: { API_KEY: 'secret' },
-      })
-    })
-  })
-
-  it('renders custom_env back into the edit form for claude tasks', async () => {
-    listTasks.mockResolvedValue([
-      claudeTask({ id: 'envtask', data: { spawn_config: { environment_id: 3, custom_env: { FOO: 'bar' } } } }),
-    ])
-    const user = userEvent.setup()
-    renderWithRouter(<ScheduledTasks />)
-    await waitFor(() => expect(screen.getByText('Nightly job')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Edit' }))
-    expect(await screen.findByDisplayValue('FOO=bar')).toBeInTheDocument()
-  })
-
   it.each([
     ['Notifications', 'No notification tasks'],
-    ['Claude sessions', 'No Claude session tasks'],
     ['Agent runs', 'No agent run tasks'],
   ])('shows the empty message for the %s filter', async (filter, message) => {
     listTasks.mockResolvedValue([])
@@ -456,7 +335,7 @@ describe('ScheduledTasks formatting branches', () => {
     expect(screen.getByText(/Not scheduled/)).toBeInTheDocument()
   })
 
-  it('renders execution history with session id, duration, error and response', async () => {
+  it('renders execution history with duration, error and response', async () => {
     listTasks.mockResolvedValue([makeTask({ id: 'rich', topic: 'rich hist' })])
     const start = new Date()
     const end = new Date(start.getTime() + 2500)
@@ -466,7 +345,7 @@ describe('ScheduledTasks formatting branches', () => {
         started_at: start.toISOString(), finished_at: end.toISOString(),
         status: 'failed', response: 'partial output',
         error_message: 'it broke', celery_task_id: null,
-        data: { session_id: 'sess-abcdefghijklmnopqrstuvwxyz' },
+        data: null,
       },
     ])
     const user = userEvent.setup()
@@ -476,7 +355,6 @@ describe('ScheduledTasks formatting branches', () => {
     await waitFor(() => expect(screen.getByText('failed')).toBeInTheDocument())
     expect(screen.getByText('it broke')).toBeInTheDocument()
     expect(screen.getByText('partial output')).toBeInTheDocument()
-    expect(screen.getByText((_t, el) => el?.textContent === 'session: sess-abcdefghijklmno...')).toBeInTheDocument()
     expect(screen.getByText('2.5s')).toBeInTheDocument()
   })
 

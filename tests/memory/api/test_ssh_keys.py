@@ -1,4 +1,4 @@
-"""Shared SSH identities stay private and are selected by their owners."""
+"""Shared SSH identities stay private to their owners."""
 
 import pathlib
 import shlex
@@ -10,7 +10,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory.common.db.models import SSHKey
 from memory.common.encryption import decrypt_value
 from memory.common.notes_ssh import ssh_command
-from memory.common.ssh_keys import container_private_key
 
 
 def create(client, **values):
@@ -21,16 +20,14 @@ def create(client, **values):
     return response.json()
 
 
-def test_generate_default_replace_and_delete(client, user, db_session):
+def test_generate_replace_and_delete(client, db_session):
     result = create(client)
     key = db_session.get(SSHKey, result["id"])
     private = decrypt_value(key.private_key_encrypted)
     assert private.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
     assert "private" not in str(result)
     assert result["fingerprint"].startswith("SHA256:")
-    assert client.put("/ssh-keys/default", json={"key_id": key.id}).status_code == 200
-    assert container_private_key(db_session, user) == private
-    assert client.get("/ssh-keys").json()[0]["is_default"] is True
+    assert [k["id"] for k in client.get("/ssh-keys").json()] == [key.id]
     replacement = (
         Ed25519PrivateKey.generate()
         .private_bytes(
@@ -53,8 +50,7 @@ def test_generate_default_replace_and_delete(client, user, db_session):
     assert decrypt_value(key.private_key_encrypted) != private
     assert response.json()["public_key"] != result["public_key"]
     assert client.delete(f"/ssh-keys/{key.id}").status_code == 200
-    db_session.refresh(user)
-    assert user.default_ssh_key_id is None
+    assert db_session.get(SSHKey, key.id) is None
 
 
 def test_ownership_and_instance_permissions(client, user, regular_user, db_session):
@@ -68,7 +64,7 @@ def test_ownership_and_instance_permissions(client, user, regular_user, db_sessi
     db_session.commit()
     instance = create(client, instance=True)
     assert other.id not in [key["id"] for key in client.get("/ssh-keys").json()]
-    assert client.put("/ssh-keys/default", json={"key_id": other.id}).status_code == 404
+    assert client.put(f"/ssh-keys/{other.id}", json={"name": "Taken"}).status_code == 404
     assert client.delete(f"/ssh-keys/{other.id}").status_code == 404
     assert client.put(
         "/notes-source/git/ssh",
@@ -88,11 +84,9 @@ def test_ownership_and_instance_permissions(client, user, regular_user, db_sessi
         == 403
     )
     assert (
-        client.put("/ssh-keys/default", json={"key_id": instance["id"]}).status_code
+        client.put(f"/ssh-keys/{instance['id']}", json={"name": "Taken"}).status_code
         == 404
     )
-    with pytest.raises(ValueError):
-        container_private_key(db_session, user, instance["id"])
 
 
 @pytest.mark.parametrize("instance_owned", [False, True])

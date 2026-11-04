@@ -304,7 +304,7 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     # No global autoretry: blanket retry on Exception silently retries programming
     # errors (ValueError, KeyError, etc.) and causes side effects — e.g. spawning
-    # duplicate Claude containers or sending duplicate notifications.
+    # duplicate agent runs or sending duplicate notifications.
     # Tasks that need retry should declare autoretry_for per-task for transient
     # errors only (e.g. requests.Timeout, ConnectionError).
     # Celery's built-in celery.backend_cleanup is scheduled by beat whenever

@@ -6,7 +6,6 @@ import pytest
 
 from memory.api import ingest_tokens as it
 from memory.api import signed_tokens
-from memory.claude_containers import transfer_tokens as tt
 
 
 def _ingest_token_from_segment(seg: str) -> str:
@@ -61,24 +60,10 @@ def test_malformed_rejected():
         it.verify_token("v1.only-two")
 
 
-def test_transfer_token_rejected_cross_protocol():
-    """A cloud-claude transfer token (same secret, same wire format) must not
-    validate as an ingest token — domain separation makes the signatures
-    non-interchangeable, and a wrong-shape payload is an auth failure not a 500."""
-    transfer = tt.mint_token(
-        tt.TransferTokenPayload(
-            user_id=1, session_id="s", path="/p", action="write", exp=None
-        ),
-        ttl_seconds=60,
-    )
-    with pytest.raises(it.IngestTokenError):
-        it.verify_token(transfer)
-
-
 def test_wrong_shape_payload_rejected_not_typeerror():
     """A correctly-signed-by-ingest token whose JSON shape doesn't match the
     schema raises IngestTokenError (→ 403), never an unhandled TypeError."""
-    seg = signed_tokens.b64u_encode(json.dumps({"unexpected": "field"}).encode())
+    seg = signed_tokens.b64u_encode(json.dumps({"unexpected": "field", "exp": int(time.time()) + 60}).encode())
     token = _ingest_token_from_segment(seg)
     with pytest.raises(it.IngestTokenError):
         it.verify_token(token)

@@ -10,8 +10,6 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     curl \
     openssh-client \
-    tmux \
-    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python requirements

@@ -31,8 +31,6 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/ui/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
       { to: '/ui/keys', title: 'LLM keys', description: 'Your Anthropic and OpenAI keys pay for summaries, search steps and agents' },
-      { to: '/ui/claude', title: 'Claude sessions', description: 'Spawn and manage Claude Code containers', scope: 'claude_sessions', module: 'claude_containers' },
-      { to: '/ui/snapshots', title: 'Claude configurations', description: 'Manage Claude Code configurations', module: 'claude_containers' },
     ],
   },
   {
@@ -44,7 +42,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/ui/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and agent runs' },
       { to: '/ui/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/ui/server-settings', title: 'Server settings', description: 'Voyage key, modules, MCP servers and search limits for this server', scope: 'admin' },
-      { to: '/ui/ssh-keys', title: 'SSH keys', description: 'Manage SSH identities for Notes and containers' },
+      { to: '/ui/ssh-keys', title: 'SSH keys', description: 'Manage SSH identities for Notes' },
       { to: '/ui/users', title: 'User management', description: 'Manage users, permissions, and API keys', scope: 'admin:users' },
     ],
   },

@@ -34,18 +34,12 @@ describe('Dashboard', () => {
     renderDashboard(() => false)
     expect(screen.queryByText('Celery tasks')).not.toBeInTheDocument()
     expect(screen.queryByText('User management')).not.toBeInTheDocument()
-    expect(screen.queryByText('Claude sessions')).not.toBeInTheDocument()
   })
 
   it('shows the Celery card only with the admin scope', () => {
     renderDashboard(s => s === 'admin')
     expect(screen.getByText('Celery tasks')).toBeInTheDocument()
     expect(screen.queryByText('User management')).not.toBeInTheDocument()
-  })
-
-  it('shows the Claude Sessions card only with the claude_sessions scope', () => {
-    renderDashboard(s => s === 'claude_sessions')
-    expect(screen.getByText('Claude sessions').closest('a')).toHaveAttribute('href', '/ui/claude')
   })
 
   it('shows the User Management card only with the admin:users scope', () => {

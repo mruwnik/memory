@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { getNeedsAccount } from '@/hooks/useSetup'
 import { ModulesContext, type Module } from '@/hooks/useModule'
-import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, ConfigSources, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -21,10 +21,9 @@ import { ModuleOff } from '@/components/shared/ModuleOff'
 import { isVisible } from '@/components/shared/nav'
 import { LoadingState } from '@/components/shared/ui'
 
-// Lazy load heavy components (recharts ~300KB, xterm ~400KB)
+// Lazy load heavy components (recharts ~300KB)
 const Metrics = lazy(() => import('@/components/metrics/Metrics'))
 const Usage = lazy(() => import('@/components/usage/Usage'))
-const ClaudeSessions = lazy(() => import('@/components/claude/ClaudeSessions'))
 
 // AuthWrapper handles redirects based on auth state
 const AuthWrapper = () => {
@@ -130,9 +129,6 @@ const AuthWrapper = () => {
     { path: '/ui/agents/runs/new', element: <AdHocRun />, scope: 'agents' },
     { path: '/ui/agents/runs/:runId', element: <RunView />, scope: 'agents' },
     { path: '/ui/agents/:id', element: <AgentEditor />, scope: 'agents' },
-    { path: '/ui/snapshots', element: <ConfigSources />, module: 'claude_containers' },
-    { path: '/ui/claude', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions', module: 'claude_containers' },
-    { path: '/ui/claude/:sessionId', element: <Suspense fallback={<LoadingState />}><ClaudeSessions /></Suspense>, scope: 'claude_sessions', module: 'claude_containers' },
     { path: '/ui/server-settings', element: <SettingsPage onRestarted={checkAuth} />, scope: 'admin' },
     { path: '/ui/celery', element: <CeleryOverview />, scope: 'admin' },
     { path: '/ui/polls', element: <PollList /> },

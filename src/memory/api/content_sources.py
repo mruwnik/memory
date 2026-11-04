@@ -51,9 +51,8 @@ async def read_upload_with_cap(
 ) -> bytes:
     """Read the entire UploadFile body but refuse to exceed ``cap_bytes``.
 
-    Borrows the early-413 + chunked-read shape of
-    ``cloud_claude.transfer_push``, but unlike ``transfer_push`` this
-    helper does **not** stream the body to a destination — it buffers
+    Like ``request_body.read_request_body_with_cap`` it 413s early and reads
+    in chunks, but it does **not** stream the body to a destination — it buffers
     every chunk in memory and returns ``bytes``. Peak RAM use is therefore
     bounded by ``cap_bytes`` (plus a transient ~2× spike during the final
     ``b"".join``), not by the chunk size; callers that hand the result to

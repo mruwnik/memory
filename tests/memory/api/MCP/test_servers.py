@@ -37,7 +37,6 @@ def test_all_servers_in_enum():
         "agent",
         "books",
         "claude",
-        "containers",
         "core",
         "deadlines",
         "discord",
@@ -75,8 +74,7 @@ def test_enum_values_are_strings():
     "modules,expected_enabled",
     [
         (ALL_MODULES, ALL_MCP_SERVERS),
-        (frozenset(), ALL_MCP_SERVERS - {"teams", "projects", "containers"}),
-        (frozenset({"teams"}), ALL_MCP_SERVERS - {"containers"}),
+        (frozenset(), ALL_MCP_SERVERS - {"teams", "projects"}),
     ],
 )
 def test_unmounted_servers_are_those_of_modules_that_are_off(set_modules, modules, expected_enabled):
@@ -97,7 +95,7 @@ def test_effective_disabled_servers_adds_modules_that_are_off(db_session, set_mo
     db_session.add(InstanceSetting(key="disabled_mcp_servers", value=["slack"]))
     db_session.commit()
 
-    assert effective_disabled_servers() == frozenset({"slack", "teams", "projects", "containers"})
+    assert effective_disabled_servers() == frozenset({"slack", "teams", "projects"})
 
 
 def test_only_modules_unmount_servers():
@@ -112,7 +110,7 @@ def test_only_modules_unmount_servers():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
 
-    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"teams", "projects", "containers"}))
+    assert out.stdout.strip() == str(sorted(ALL_MCP_SERVERS - {"teams", "projects"}))
 
 
 def test_check_disabled_servers_keeps_one_server():
@@ -181,7 +179,6 @@ def test_a_module_the_api_switched_on_is_mounted_for_the_next_task(db_session, m
 
     tools = asyncio.run(fresh.get_tools())
     assert {"teams_upsert", "projects_fetch", "core_search"} <= set(tools)
-    assert not [t for t in tools if t.startswith("containers_")]
 
 
 def test_a_module_the_api_switched_off_is_refused_for_the_next_task(db_session, set_modules):
@@ -196,22 +193,24 @@ def test_a_module_the_api_switched_off_is_refused_for_the_next_task(db_session, 
 
     with pytest.raises(ToolError, match="Access denied: teams_fetch"):
         asyncio.run(call())
-    assert {"teams", "projects", "containers"} <= effective_disabled_servers()
+    assert {"teams", "projects"} <= effective_disabled_servers()
 
 
-# The api fell back to claude_containers off (no ORCHESTRATOR_SOCKET), though it is on in the settings.
+# Teams is on in the settings, but the api hasn't restarted onto it yet.
 def test_the_agents_worker_follows_what_the_api_runs_not_the_saved_value(db_session, monkeypatch, set_modules):
     monkeypatch.setattr(settings, "ENABLE_MODULES", frozenset())
-    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
+    db_session.add(InstanceSetting(key="module_teams", value=True))
     set_modules([])
     mounts = []
     monkeypatch.setattr(base.mcp, "mount", lambda server, prefix: mounts.append(prefix))
-    monkeypatch.setattr(base, "SUBSERVER_PREFIXES", [s for s in base.SUBSERVER_PREFIXES if s != "containers"])
+    monkeypatch.setattr(
+        base, "SUBSERVER_PREFIXES", [s for s in base.SUBSERVER_PREFIXES if s not in ("teams", "projects")]
+    )
 
     run_follows(db_session, [])
 
     assert mounts == []
-    assert "containers" in effective_disabled_servers()
+    assert "teams" in effective_disabled_servers()
 
 
 async def nothing(*args):

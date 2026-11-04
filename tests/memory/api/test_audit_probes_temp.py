@@ -1,4 +1,4 @@
-"""Regression checks for restricted credentials and bounded snapshot parsing."""
+"""Regression checks for restricted credentials."""
 
 import pytest
 
@@ -44,18 +44,3 @@ def test_reject_ownerless_job_disclosure(client, restricted_auth, user, db_sessi
     response = client.get(f"/jobs/{job.id}", headers=restricted_auth)
     assert response.status_code == 404
     assert "FAKE-PRIVATE-CONTENT" not in response.text
-
-
-def test_reject_snapshot_member_limit_bypass(monkeypatch):
-    import io
-    import tarfile
-    from memory.claude_containers import claude_snapshots
-
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for index in range(5):
-            archive.addfile(tarfile.TarInfo(f".claude/skills/{index}"))
-    monkeypatch.setattr(claude_snapshots, "MAX_TAR_MEMBERS", 2)
-    with tarfile.open(fileobj=io.BytesIO(buffer.getvalue()), mode="r:gz") as archive:
-        with pytest.raises(ValueError):
-            claude_snapshots.extract_folders_from_tar(archive)

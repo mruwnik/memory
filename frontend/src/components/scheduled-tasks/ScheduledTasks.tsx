@@ -1,20 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useScheduledTasks, ScheduledTask, TaskExecution, UpdateTaskBody, CreateTaskBody } from '@/hooks/useScheduledTasks'
-import { useClaude, Environment } from '@/hooks/useClaude'
 import { useDiscord } from '@/hooks/useDiscord'
 import { useSlack } from '@/hooks/useSlack'
 import { usePeople } from '@/hooks/usePeople'
 import { useAuth } from '@/hooks/useAuth'
-import { useModule } from '@/hooks/useModule'
 import { formatDateTimeInTimezone } from '@/utils/timezones'
 import { PauseButton, StatusBadge, formatRelativeTime } from '@/components/sources/shared'
-import { Badge, Button, ButtonLink, Checkbox, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, Fieldset, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
+import { Badge, Button, ButtonLink, Combobox, ConfirmButton, type ComboOption, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Page, RefreshButton, Row, RowError, Select, SubList, ExpandToggle, Textarea, ToggleGroup, Toolbar, useActionNotice, type Tone } from '@/components/shared/ui'
 
-type TypeFilter = 'all' | 'notification' | 'claude_session' | 'agent_run'
+type TypeFilter = 'all' | 'notification' | 'agent_run'
 
 const TYPE_LABELS: Record<string, string> = {
-  claude_session: 'Claude session',
   agent_run: 'Agent run',
 }
 
@@ -102,19 +99,6 @@ function formatDuration(start: string | null, end: string | null): string {
 function dataFacts(task: ScheduledTask): string[] {
   const data = task.data ?? {}
   if (task.task_type === 'agent_run') return []
-  if (task.task_type === 'claude_session') {
-    const config = (data.spawn_config ?? {}) as Record<string, unknown>
-    const tools = config.allowed_tools as string[] | undefined
-    return [
-      config.environment_id && `env: ${config.environment_id}`,
-      config.snapshot_id && `snapshot: ${config.snapshot_id}`,
-      config.repo_url && `repo: ${String(config.repo_url).replace(/^https?:\/\/github\.com\//, '')}`,
-      config.run_id && `run: ${config.run_id}`,
-      config.enable_playwright && 'Playwright',
-      config.use_saved_write_token && 'saved write token',
-      tools && `tools: ${tools.length > 3 ? `${tools.slice(0, 3).join(', ')}...` : tools.join(', ')}`,
-    ].filter((f): f is string => !!f)
-  }
   return [
     data.subject && `subject: ${data.subject}`,
     data.from_address && `from: ${data.from_address}`,
@@ -124,17 +108,13 @@ function dataFacts(task: ScheduledTask): string[] {
 
 const TaskDataBody = ({ task }: { task: ScheduledTask }) => {
   const data = task.data
-  if (task.task_type === 'agent_run' && data) {
-    return (
-      <div className="text-sm text-slate-600">
-        <p className="line-clamp-3">{String(data.input ?? '')}</p>
-        <Link to={`/ui/agents/${data.definition_id}`} className="text-primary text-xs">Edit on the agent's page</Link>
-      </div>
-    )
-  }
-  const prompt = (data?.spawn_config as Record<string, unknown> | undefined)?.initial_prompt as string | undefined
-  if (task.task_type !== 'claude_session' || !prompt || prompt.length <= 100) return null
-  return <p className="text-sm text-slate-600 line-clamp-3" title={prompt}>{prompt}</p>
+  if (task.task_type !== 'agent_run' || !data) return null
+  return (
+    <div className="text-sm text-slate-600">
+      <p className="line-clamp-3">{String(data.input ?? '')}</p>
+      <Link to={`/ui/agents/${data.definition_id}`} className="text-primary text-xs">Edit on the agent's page</Link>
+    </div>
+  )
 }
 
 // --- Edit Form ---
@@ -299,105 +279,13 @@ const NotificationFields = ({ channel, target, onChannel, onTarget }: Notificati
   )
 }
 
-interface SpawnConfigState {
-  envId: number | null
-  repoUrl: string
-  allowedTools: string
-  enablePlaywright: boolean
-  useSavedWriteToken: boolean
-  runId: string
-  customEnvText: string
-}
-
-// Build a spawn_config object (only set keys) from form state.
-function buildSpawnConfig(s: SpawnConfigState): Record<string, unknown> {
-  const cfg: Record<string, unknown> = {}
-  if (s.envId !== null) cfg.environment_id = s.envId
-  if (s.repoUrl) cfg.repo_url = s.repoUrl
-  const tools = s.allowedTools.split(',').map(t => t.trim()).filter(Boolean)
-  if (tools.length) cfg.allowed_tools = tools
-  if (s.enablePlaywright) cfg.enable_playwright = true
-  if (s.useSavedWriteToken) cfg.use_saved_write_token = true
-  if (s.runId) cfg.run_id = s.runId
-  const env: Record<string, string> = {}
-  for (const line of s.customEnvText.split('\n')) {
-    const t = line.trim()
-    const i = t.indexOf('=')
-    if (i > 0) env[t.slice(0, i)] = t.slice(i + 1)
-  }
-  if (Object.keys(env).length) cfg.custom_env = env
-  return cfg
-}
-
-interface SpawnConfigFieldsProps {
-  state: SpawnConfigState
-  setState: (updater: (s: SpawnConfigState) => SpawnConfigState) => void
-  environments: Environment[]
-}
-
-const SpawnConfigFields = ({ state, setState, environments }: SpawnConfigFieldsProps) => (
-  <Fieldset legend="Spawn config" className="space-y-4 border-t border-slate-200 pt-4">
-    <Field label="Environment">
-      <Select value={state.envId ?? ''} onChange={e => setState(s => ({ ...s, envId: e.target.value ? Number(e.target.value) : null }))}>
-        <option value="">Select environment...</option>
-        {environments.map(env => (
-          <option key={env.id} value={env.id}>{env.name}{env.description ? ` - ${env.description}` : ''}</option>
-        ))}
-      </Select>
-    </Field>
-    <FieldRow>
-      <Field label="Repo URL">
-        <Input type="text" value={state.repoUrl} onChange={e => setState(s => ({ ...s, repoUrl: e.target.value }))} placeholder="https://github.com/org/repo" />
-      </Field>
-      <Field label="Run ID">
-        <Input type="text" value={state.runId} onChange={e => setState(s => ({ ...s, runId: e.target.value }))} placeholder="custom-branch-name" />
-      </Field>
-    </FieldRow>
-    <Field label="Allowed tools" hint="Comma-separated tool names">
-      <Input type="text" value={state.allowedTools} onChange={e => setState(s => ({ ...s, allowedTools: e.target.value }))} placeholder="Bash, Read, Write, Edit, Grep, Glob" />
-    </Field>
-    <Field label="Environment variables" hint="One per line: KEY=value">
-      <Textarea value={state.customEnvText} onChange={e => setState(s => ({ ...s, customEnvText: e.target.value }))} rows={3} placeholder={"KEY=value\nANOTHER_KEY=value"} className="font-mono" />
-    </Field>
-    <Checkbox label="Enable Playwright" checked={state.enablePlaywright} onChange={e => setState(s => ({ ...s, enablePlaywright: e.target.checked }))} />
-    <Checkbox label="Use my saved write token" checked={state.useSavedWriteToken} onChange={e => setState(s => ({ ...s, useSavedWriteToken: e.target.checked }))} />
-  </Fieldset>
-)
-
-const envText = (env: unknown) =>
-  env ? Object.entries(env as Record<string, string>).map(([k, v]) => `${k}=${v}`).join('\n') : ''
-
-const spawnStateOf = (config: Record<string, unknown>): SpawnConfigState => ({
-  envId: (config.environment_id as number) ?? null,
-  repoUrl: (config.repo_url as string) || '',
-  allowedTools: Array.isArray(config.allowed_tools) ? (config.allowed_tools as string[]).join(', ') : '',
-  enablePlaywright: !!config.enable_playwright,
-  useSavedWriteToken: !!config.use_saved_write_token,
-  runId: (config.run_id as string) || '',
-  customEnvText: envText(config.custom_env),
-})
-
 const EditForm = ({ task, timezone, onSave, onCancel, saving, error }: EditFormProps) => {
   const [topic, setTopic] = useState(task.topic || '')
   const [cronExpr, setCronExpr] = useState(task.cron_expression || '')
   const [channel, setChannel] = useState(task.notification_channel || '')
   const [target, setTarget] = useState(task.notification_target || '')
 
-  const isClaude = task.task_type === 'claude_session'
-  const config = isClaude ? ((task.data?.spawn_config as Record<string, unknown>) || {}) : {}
-
   const [message, setMessage] = useState(task.message || '')
-
-  const original = spawnStateOf(config)
-  const [spawn, setSpawn] = useState<SpawnConfigState>(original)
-
-  // Load environments for dropdown
-  const { listEnvironments } = useClaude()
-  const [environments, setEnvironments] = useState<Environment[]>([])
-  useEffect(() => {
-    if (!isClaude) return
-    listEnvironments().then(setEnvironments).catch(() => {})
-  }, [isClaude, listEnvironments])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -406,27 +294,8 @@ const EditForm = ({ task, timezone, onSave, onCancel, saving, error }: EditFormP
     if (cronExpr !== (task.cron_expression || '')) updates.cron_expression = cronExpr
     if (message !== (task.message || '')) updates.message = message
 
-    if (isClaude) {
-      const configUpdates: Record<string, unknown> = {}
-      if (spawn.envId !== original.envId) configUpdates.environment_id = spawn.envId
-      if (spawn.repoUrl !== original.repoUrl) configUpdates.repo_url = spawn.repoUrl || null
-      if (spawn.allowedTools !== original.allowedTools) {
-        const tools = spawn.allowedTools.split(',').map(t => t.trim()).filter(Boolean)
-        configUpdates.allowed_tools = tools.length > 0 ? tools : null
-      }
-      if (spawn.enablePlaywright !== original.enablePlaywright) configUpdates.enable_playwright = spawn.enablePlaywright || null
-      if (spawn.useSavedWriteToken !== original.useSavedWriteToken) configUpdates.use_saved_write_token = spawn.useSavedWriteToken || null
-      if (spawn.runId !== original.runId) configUpdates.run_id = spawn.runId || null
-      if (spawn.customEnvText !== original.customEnvText) {
-        const env = buildSpawnConfig({ ...spawn }).custom_env
-        configUpdates.custom_env = env ?? null
-      }
-
-      if (Object.keys(configUpdates).length > 0) updates.spawn_config = configUpdates
-    } else {
-      if (channel !== (task.notification_channel || '')) updates.notification_channel = channel
-      if (target !== (task.notification_target || '')) updates.notification_target = target
-    }
+    if (channel !== (task.notification_channel || '')) updates.notification_channel = channel
+    if (target !== (task.notification_target || '')) updates.notification_target = target
 
     if (Object.keys(updates).length === 0) {
       onCancel()
@@ -443,13 +312,10 @@ const EditForm = ({ task, timezone, onSave, onCancel, saving, error }: EditFormP
       <Field label="Cron expression" hint={describeCron(cronExpr, timezone)}>
         <Input type="text" value={cronExpr} onChange={e => setCronExpr(e.target.value)} placeholder="0 9 * * *" className="font-mono" />
       </Field>
-      <Field label={isClaude ? 'Initial prompt' : 'Message'}>
-        <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={isClaude ? 4 : 2} />
+      <Field label="Message">
+        <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={2} />
       </Field>
-      {isClaude && <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
-      {task.task_type === 'notification' && (
-        <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
-      )}
+      <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
       {error && <Notice tone="error">{error}</Notice>}
       <FormActions>
         <Button type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
@@ -470,7 +336,6 @@ interface CreateFormProps {
 }
 
 const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormProps) => {
-  const [taskType, setTaskType] = useState<'notification' | 'claude_session'>('notification')
   const [cadence, setCadence] = useState<'recurring' | 'one_time'>('recurring')
   const [topic, setTopic] = useState('')
   const [message, setMessage] = useState('')
@@ -478,21 +343,12 @@ const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormP
   const [whenLocal, setWhenLocal] = useState('')
   const [channel, setChannel] = useState('')
   const [target, setTarget] = useState('')
-  const [spawn, setSpawn] = useState<SpawnConfigState>({
-    envId: null, repoUrl: '', allowedTools: '', enablePlaywright: false, useSavedWriteToken: false, runId: '', customEnvText: '',
-  })
-
-  const claudeOn = useModule('claude_containers')
-  const { listEnvironments } = useClaude()
-  const [environments, setEnvironments] = useState<Environment[]>([])
-  useEffect(() => {
-    if (taskType !== 'claude_session') return
-    listEnvironments().then(setEnvironments).catch(() => {})
-  }, [taskType, listEnvironments])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const body: CreateTaskBody = { task_type: taskType }
+    const body: CreateTaskBody = {
+      task_type: 'notification', notification_channel: channel, notification_target: target,
+    }
     if (topic) body.topic = topic
     if (message) body.message = message
     if (cadence === 'recurring') {
@@ -501,20 +357,12 @@ const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormP
       // Sent without an offset, so the server reads it on the user's clock.
       body.scheduled_time = whenLocal
     }
-    if (taskType === 'notification') {
-      body.notification_channel = channel
-      body.notification_target = target
-    } else {
-      body.spawn_config = buildSpawnConfig(spawn)
-    }
     await onCreate(body)
   }
 
   return (
     <Modal title="New scheduled task" onClose={onCancel} size="xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        {claudeOn && <ToggleGroup label="Task type" value={taskType} onChange={setTaskType}
-          options={[{ value: 'notification', label: 'Notification' }, { value: 'claude_session', label: 'Claude session' }]} />}
         <Field label="Topic">
           <Input type="text" value={topic} onChange={e => setTopic(e.target.value)} />
         </Field>
@@ -529,12 +377,10 @@ const CreateForm = ({ timezone, onCreate, onCancel, saving, error }: CreateFormP
             <Input type="datetime-local" value={whenLocal} onChange={e => setWhenLocal(e.target.value)} />
           </Field>
         )}
-        <Field label={taskType === 'claude_session' ? 'Initial prompt' : 'Message'}>
-          <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={taskType === 'claude_session' ? 4 : 2} />
+        <Field label="Message">
+          <Textarea value={message} onChange={e => setMessage(e.target.value)} rows={2} />
         </Field>
-        {taskType === 'notification'
-          ? <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
-          : <SpawnConfigFields state={spawn} setState={setSpawn} environments={environments} />}
+        <NotificationFields channel={channel} target={target} onChannel={setChannel} onTarget={setTarget} />
         {error && <Notice tone="error">{error}</Notice>}
         <FormActions>
           <Button type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
@@ -574,7 +420,6 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
       footer={expanded && error && <RowError live>{error}</RowError>}
     >
       {expanded && !error && executions?.map(ex => {
-        const sessionId = (ex.data as Record<string, unknown> | null)?.session_id as string | undefined
         const runId = (ex.data as Record<string, unknown> | null)?.run_id as string | undefined
         return (
           <Row
@@ -583,7 +428,6 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
             badges={<Badge tone={EXECUTION_STATUS_TONES[ex.status] ?? 'neutral'}>{ex.status}</Badge>}
             meta={[
               formatDuration(ex.started_at, ex.finished_at),
-              sessionId && <span className="font-mono" title={sessionId}>session: {sessionId.length > 20 ? `${sessionId.slice(0, 20)}...` : sessionId}</span>,
               runId && (ex.run_expired
                 ? <span className="text-slate-500">run expired</span>
                 : <Link to={`/ui/agents/runs/${runId}`} className="text-primary">view run</Link>),
@@ -610,7 +454,6 @@ interface TaskRowProps {
 }
 
 const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }: TaskRowProps) => {
-  const claudeOn = useModule('claude_containers')
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
@@ -655,7 +498,7 @@ const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }
             ? <ButtonLink size="sm" to={`/ui/agents/${task.data?.definition_id}`}>Resume on agent page</ButtonLink>
             : <PauseButton active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
         )}
-        {task.task_type !== 'agent_run' && (claudeOn || task.task_type !== 'claude_session') && (
+        {task.task_type === 'notification' && (
           <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>
         )}
         <ConfirmButton confirm={`Delete "${task.topic || 'Untitled'}"?`} onConfirm={() => onDelete(task.id)} />
@@ -685,14 +528,12 @@ const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'notification', label: 'Notifications' },
-  { value: 'claude_session', label: 'Claude sessions' },
   { value: 'agent_run', label: 'Agent runs' },
 ]
 
 const EMPTY_MESSAGES: Record<TypeFilter, string> = {
   all: 'No scheduled tasks',
   notification: 'No notification tasks',
-  claude_session: 'No Claude session tasks',
   agent_run: 'No agent run tasks',
 }
 
@@ -704,7 +545,6 @@ const ScheduledTasks = () => {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const { run, notice } = useActionNotice()
   const timezone = useAuth().user?.timezone ?? 'UTC'
-  const claudeOn = useModule('claude_containers')
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -764,8 +604,6 @@ const ScheduledTasks = () => {
   const countOf = (status: TaskStatus) => shown.filter(t => getTaskStatus(t) === status).length
   const counts = [`${countOf('active')} active`, countOf('inactive') > 0 && `${countOf('inactive')} paused`, countOf('done') > 0 && `${countOf('done')} done`]
 
-  const FILTERS = TYPE_FILTERS.filter(f => claudeOn || f.value !== 'claude_session')
-
   return (
     <Page
       title="Scheduled tasks"
@@ -779,7 +617,7 @@ const ScheduledTasks = () => {
       {showCreate && <CreateForm timezone={timezone} onCreate={handleCreate} onCancel={() => setShowCreate(false)} saving={creating} error={createError} />}
 
       <Toolbar actions={<RefreshButton onClick={() => loadTasks()} label="Refresh task list" />}>
-        <ToggleGroup label="Type" options={FILTERS} value={typeFilter} onChange={setTypeFilter} />
+        <ToggleGroup label="Type" options={TYPE_FILTERS} value={typeFilter} onChange={setTypeFilter} />
       </Toolbar>
 
       {tasks && error && <Notice tone="error" onRetry={() => loadTasks()}>{error}</Notice>}

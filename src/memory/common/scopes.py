@@ -103,7 +103,6 @@ SCOPE_PROJECTS_WRITE = "projects:write"
 # AI
 SCOPE_CLAUDE_AI = "claudeai"
 SCOPE_AGENTS = "agents"  # define and run your own agents
-SCOPE_CLAUDE_SESSIONS = "claude_sessions"  # spawn and manage Claude Code containers
 
 # ---------------------------------------------------------------------------
 # Metadata for UI display — grouped by category.
@@ -318,12 +317,6 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_AGENTS,
         "label": "Agents",
         "description": "Define and run agents with your own permissions",
-        "category": "ai",
-    },
-    {
-        "value": SCOPE_CLAUDE_SESSIONS,
-        "label": "Claude sessions",
-        "description": "Spawn, attach to and manage Claude Code containers, which carry your SSH key and GitHub tokens",
         "category": "ai",
     },
 ]

@@ -8,8 +8,6 @@ ENV_FILE="$PROJECT_DIR/.env"
 
 # --non-interactive never prompts. Required: DOMAIN. Optional: ADMIN_EMAIL with
 # ADMIN_PASSWORD (else the first account is claimed with the setup token),
-# CLAUDE_CONTAINERS=on (wires up the Claude Code containers overlay; an admin then
-# turns the module on in the setup wizard or on the Server settings page),
 # VOYAGE_API_KEY (else an admin sets it on the settings page), and,
 # used instead of generating, POSTGRES_PASSWORD, REDIS_PASSWORD, APP_NAME,
 # BACKUP_ENCRYPTION_KEY. Anything already installed is
@@ -44,10 +42,6 @@ if [ "$NON_INTERACTIVE" = true ]; then
             exit 1
         fi
     done
-    if [[ ! "${CLAUDE_CONTAINERS:-off}" =~ ^(on|off)$ ]]; then
-        echo "✗ CLAUDE_CONTAINERS must be on or off" >&2
-        exit 1
-    fi
 fi
 
 # Colors
@@ -318,7 +312,7 @@ echo "                  Deployment Settings (Optional)                 "
 echo "─────────────────────────────────────────────────────────────────"
 echo ""
 
-info "These settings are used by tools/deploy.sh and tools/diagnose.sh"
+info "These settings are used by tools/diagnose.sh"
 echo ""
 
 if [ -n "$(get_env_value 'DEPLOY_HOST')" ]; then
@@ -457,77 +451,6 @@ else
         touch "$SECRETS_DIR/ssh_public_key"
         touch "$SECRETS_DIR/ssh_known_hosts"
         info "SSH keys skipped - placeholder files created"
-    fi
-fi
-
-# ─────────────────────────────────────────────────────────────────────
-# Claude Code containers
-# ─────────────────────────────────────────────────────────────────────
-
-# Modules are switched in the web UI (setup wizard, Server settings); only the
-# claude_containers module needs host wiring first: the overlay, its network and DOCKER_GID.
-echo ""
-echo "─────────────────────────────────────────────────────────────────"
-echo "                    Claude Code containers                       "
-echo "─────────────────────────────────────────────────────────────────"
-echo ""
-
-# Yes only to y/yes; blank is no
-ask_yes() {
-    local answer
-    read -r -p "$1 [y/N]: " answer
-    [[ "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]
-}
-
-claude_wired() {
-    [[ ":$(get_env_value 'COMPOSE_FILE'):" == *:docker-compose.claude.yaml:* ]]
-}
-
-if claude_wired; then
-    wire_claude=true
-    success "Claude Code containers already wired up"
-elif [ "$NON_INTERACTIVE" = true ]; then
-    [ "${CLAUDE_CONTAINERS:-off}" = on ] && wire_claude=true || wire_claude=false
-elif ask_yes "Wire up Claude Code containers (needs the orchestrator on this host)?"; then
-    wire_claude=true
-else
-    wire_claude=false
-fi
-
-if [ "$wire_claude" = true ]; then
-    # Docker group GID - needed for orchestrator socket access
-    if [ -z "$(get_env_value 'DOCKER_GID')" ]; then
-        docker_gid=$(getent group docker 2>/dev/null | cut -d: -f3)
-        if [ -n "$docker_gid" ]; then
-            set_env_value "DOCKER_GID" "$docker_gid"
-            success "DOCKER_GID set to $docker_gid"
-        else
-            warn "Docker group not found - DOCKER_GID not set (needed for Claude sessions)"
-        fi
-    else
-        success "DOCKER_GID already configured: $(get_env_value 'DOCKER_GID')"
-    fi
-
-    # Appended, so an overlay already listed (the proxy one) stays in effect
-    compose_file="$(get_env_value 'COMPOSE_FILE')"
-    if [ -z "$compose_file" ]; then
-        set_env_value "COMPOSE_FILE" "docker-compose.yaml:docker-compose.claude.yaml"
-    elif [[ ":$compose_file:" != *:docker-compose.claude.yaml:* ]]; then
-        set_env_value "COMPOSE_FILE" "$compose_file:docker-compose.claude.yaml"
-    fi
-    success "COMPOSE_FILE includes docker-compose.claude.yaml"
-    info "Turn on the claude_containers module in the setup wizard or on the Server settings page."
-
-    # docker-compose.claude.yaml declares this network external, so compose fails without it there
-    stack="${MEMORY_STACK:-$(get_env_value 'MEMORY_STACK')}"
-    api_network="memory-api-${stack:-prod}"
-    if ! command -v docker >/dev/null 2>&1; then
-        warn "docker not found - create network $api_network before starting the stack"
-    elif docker network inspect "$api_network" >/dev/null 2>&1; then
-        success "Docker network $api_network exists"
-    else
-        docker network create "$api_network" >/dev/null
-        success "Created Docker network $api_network"
     fi
 fi
 

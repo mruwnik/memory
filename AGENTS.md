@@ -53,7 +53,6 @@ Every LLM call goes through `memory.agents.call.run_agent(agent, prompt, *, key)
 
 - Every request to a user-supplied URL goes through `common/safe_http.public_http_client`, which checks each address at dial time. Never use plain httpx/aiohttp for these.
 - Image boundary: maintenance/scheduler code must not import `memory.agents.spec` or `memory.agents.enqueue`; anything that calls `enqueue_run` runs on the `agents` queue (tested in `tests/memory/agents/test_tasks.py`).
-- Claude container reconcile and cleanup run in the API process (`claude_containers/claude_maintenance.py`), because only it holds the orchestrator socket.
 - User LLM provider keys are write-only: only `key_hint` is ever returned.
 - ERROR and CRITICAL log records of the api and workers reach the appliance operator, filtered, through `tools/ops/logs.sh`. Keep item text, titles, filenames, queries and secrets out of them: log ids, and leave exception text to `logger.exception`, whose traceback the filter cuts to the exception type.
 

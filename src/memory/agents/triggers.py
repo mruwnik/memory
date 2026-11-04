@@ -88,7 +88,7 @@ def source_types() -> list[str]:
         identity
         for identity, mapper in SourceItem.__mapper__.polymorphic_map.items()
         if identity != "source_item"
-        and mapper.class_.__name__ not in ("ClaudeSession", "SessionSegment")
+        and mapper.class_.__name__ != "SessionSegment"
     )
 
 

@@ -1,44 +1,41 @@
 """Optional features the operator switches on with ENABLE_MODULES / DISABLE_MODULES."""
 
 from memory.common.scopes import (
-    SCOPE_CLAUDE_SESSIONS,
     SCOPE_PROJECTS,
     SCOPE_PROJECTS_WRITE,
     SCOPE_TEAMS,
     SCOPE_TEAMS_WRITE,
 )
 
-CLAUDE_CONTAINERS = "claude_containers"
 MULTI_USER = "multi_user"
 TEAMS = "teams"
 
+# Removed modules, which may still be named in an old .env; naming one only warns.
+RETIRED_MODULES = frozenset({"claude_containers"})
+
 # Module name -> on by default.
 MODULES: dict[str, bool] = {
-    CLAUDE_CONTAINERS: False,
     MULTI_USER: False,
     TEAMS: False,
 }
 
 MODULE_DESCRIPTIONS: dict[str, str] = {
-    CLAUDE_CONTAINERS: "Claude Code containers, their configurations and scheduled Claude sessions",
     MULTI_USER: "More than one human user",
     TEAMS: "Teams, their members, and the projects they work on",
 }
 
 MODULE_MCP_SERVERS: dict[str, frozenset[str]] = {
-    CLAUDE_CONTAINERS: frozenset({"containers"}),
     TEAMS: frozenset({"teams", "projects"}),
 }
 
 MODULE_SCOPES: dict[str, frozenset[str]] = {
-    CLAUDE_CONTAINERS: frozenset({SCOPE_CLAUDE_SESSIONS}),
     TEAMS: frozenset({SCOPE_TEAMS, SCOPE_TEAMS_WRITE, SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE}),
 }
 
 
 def module_config_errors(enable: frozenset[str], disable: frozenset[str]) -> list[str]:
     errors = []
-    if unknown := (enable | disable) - set(MODULES):
+    if unknown := (enable | disable) - set(MODULES) - RETIRED_MODULES:
         errors.append(
             f"unknown modules {', '.join(sorted(unknown))} in ENABLE_MODULES/DISABLE_MODULES "
             f"(known: {', '.join(MODULES)})"

@@ -282,13 +282,13 @@ describe('SettingsPage modules', () => {
   it('shows an env-set module locked, and why a stored value is ignored', async () => {
     install(state([
       { ...teams, source: 'env', locked: true, set: true, value: true },
-      row({ key: 'module_claude_containers', applies: 'restart', module: 'claude_containers', description: 'Claude containers', source: 'ui', set: true, value: true, error: 'needs ORCHESTRATOR_SOCKET' }),
+      row({ key: 'module_multi_user', applies: 'restart', module: 'multi_user', description: 'More than one human user', source: 'ui', set: true, value: false, error: "can't be off while more than one human user exists" }),
     ]))
     renderWithRouter(<SettingsPage />)
 
     expect(await screen.findByText(/Set by the operator in the environment \(ENABLE_MODULES\)/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /module teams/ })).toBeNull()
-    expect(screen.getByText('needs ORCHESTRATOR_SOCKET')).toBeInTheDocument()
+    expect(screen.getByText("can't be off while more than one human user exists")).toBeInTheDocument()
   })
 })
 

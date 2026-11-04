@@ -251,8 +251,6 @@ services:
       # Discord collector API (running in ingest-hub)
       DISCORD_COLLECTOR_SERVER_URL: ingest-hub
       DISCORD_COLLECTOR_PORT: 8003
-      MEMORY_STACK: ${MEMORY_STACK:-prod}
-      HOST_STORAGE_DIR: ${PWD}/memory_files
       # Reverse-proxy trust: which upstream IPs may set X-Forwarded-* headers.
       # Compose's --env-file only feeds YAML interpolation, not container env;
       # without explicit pass-through here the Dockerfile default (loopback)
@@ -297,7 +295,6 @@ services:
           memory: 512M
     environment:
       <<: *worker-env
-      INTERNAL_API_URL: "http://api:8000"
       QUEUES: "backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
     volumes:

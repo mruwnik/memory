@@ -7,7 +7,7 @@ import logging
 import mimetypes
 import pathlib
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -26,12 +26,10 @@ from memory.common.access_control import (
 )
 from memory.common.csp import sanitize_csp_source_list
 from memory.common.module_settings import enabled_modules, record_running
-from memory.common.modules import CLAUDE_CONTAINERS
 from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
-from memory import claude_containers
 from memory.api.auth import (
     AuthenticationMiddleware,
     require_rest_access,
@@ -107,9 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # one human, and workers follow the modules the last recording api ran.
         logger.warning("Could not check human users or record modules at startup")
     announce_setup_token()
-    containers_on = CLAUDE_CONTAINERS in enabled_modules()
-    maintenance = claude_containers.maintenance_running() if containers_on else nullcontext()
-    async with mcp_http_app.lifespan(app), maintenance:
+    async with mcp_http_app.lifespan(app):
         yield
 
 # OpenAPI tag descriptions for better documentation organization
@@ -135,9 +131,6 @@ tags_metadata = [
     {"name": "telemetry", "description": "OpenTelemetry ingest"},
     {"name": "usage", "description": "LLM usage and cost"},
     {"name": "polls", "description": "Create and manage polls"},
-    {"name": "claude-snapshots", "description": "Claude conversation snapshots"},
-    {"name": "claude-environments", "description": "Claude environment management"},
-    {"name": "cloud-claude", "description": "Cloud Claude integration"},
     {"name": "settings", "description": "Server settings (admin)"},
     {"name": "discord", "description": "Discord integration"},
     {"name": "slack", "description": "Slack integration"},
@@ -519,9 +512,6 @@ app.include_router(usage_router)
 app.include_router(jobs_router)
 app.include_router(polls_router)
 app.include_router(sessions_router)
-if CLAUDE_CONTAINERS in enabled_modules():
-    for claude_router in claude_containers.routers:
-        app.include_router(claude_router)
 app.include_router(ssh_keys_router)
 app.include_router(instance_settings_router)
 app.include_router(users_router)

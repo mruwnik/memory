@@ -69,10 +69,9 @@ def test_valid_module_config_has_no_errors():
     [
         (
             frozenset(),
-            {"teams", "projects", "containers"},
-            {"teams", "teams:write", "projects", "projects:write", "claude_sessions"},
+            {"teams", "projects"},
+            {"teams", "teams:write", "projects", "projects:write"},
         ),
-        (frozenset({"teams"}), {"containers"}, {"claude_sessions"}),
         (ALL, set(), set()),
     ],
 )
@@ -81,13 +80,9 @@ def test_disabled_modules_drop_their_servers_and_scopes(enabled, servers, scopes
     assert scopes_hidden(enabled) == scopes
 
 
-def test_default_install_has_no_module_tools_scopes_routes_or_loops():
+def test_default_install_has_no_module_tools_or_scopes():
     code = (
         "import asyncio, json\n"
-        "from memory import claude_containers\n"
-        "def refuse():\n"
-        "    raise AssertionError('container maintenance started')\n"
-        "claude_containers.maintenance_running = refuse\n"
         "from memory.api import users\n"
         "users.check_single_user = lambda db, enabled: None\n"
         "from memory.api.app import app, lifespan\n"
@@ -120,14 +115,11 @@ def test_default_install_has_no_module_tools_scopes_routes_or_loops():
 
     assert {"core_search", "claude_session_search", "claude_session_fetch"} <= set(found["tools"])
     assert not [
-        t for t in found["tools"] if t.startswith(("teams_", "projects_", "containers_"))
+        t for t in found["tools"] if t.startswith(("teams_", "projects_"))
     ]
     assert "notes" in found["scopes"]
-    assert not {
-        "teams", "teams:write", "projects", "projects:write", "claude_sessions"
-    } & set(found["scopes"])
+    assert not {"teams", "teams:write", "projects", "projects:write"} & set(found["scopes"])
     assert "/auth/me" in found["routes"]
-    assert not [r for r in found["routes"] if r.startswith("/claude")]
 
 
 @pytest.mark.asyncio
@@ -197,24 +189,14 @@ def test_workers_follow_what_the_api_runs_over_the_saved_value(db_session, unboo
     assert module_settings.enabled_modules() == {"teams"}
 
 
-@pytest.mark.parametrize(
-    "stored, humans, expected",
-    [
-        ({"module_claude_containers": True}, 1, set()),
-        ({"module_multi_user": False}, 2, {"multi_user"}),
-    ],
-)
-def test_a_stored_flag_the_api_cant_boot_with_falls_back(
-    monkeypatch, unbooted, caplog, stored, humans, expected
-):
-    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "")
-    monkeypatch.setattr(instance_settings, "_boot_values", stored)
-    monkeypatch.setattr(module_settings, "human_count", lambda: humans)
+def test_a_stored_flag_the_api_cant_boot_with_falls_back(monkeypatch, unbooted, caplog):
+    monkeypatch.setattr(instance_settings, "_boot_values", {"module_multi_user": False})
+    monkeypatch.setattr(module_settings, "human_count", lambda: 2)
 
-    assert module_settings.boot_modules() == expected
-    assert module_settings.enabled_modules() == expected
+    assert module_settings.boot_modules() == {"multi_user"}
+    assert module_settings.enabled_modules() == {"multi_user"}
     [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
-    assert record.getMessage() == f"Ignoring the stored value of {next(iter(stored))}: the api can't boot with it"
+    assert record.getMessage() == "Ignoring the stored value of module_multi_user: the api can't boot with it"
 
 
 class DBError(Exception):
@@ -245,13 +227,13 @@ def test_other_sql_errors_fail_the_boot(monkeypatch, unbooted):
 
 # The agents worker imports memory.api.MCP.base, which boots, after following the api.
 def test_a_worker_that_follows_the_api_skips_the_api_boot_checks(db_session, monkeypatch, unbooted, caplog):
-    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "")
-    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
-    module_settings.record_running(db_session, frozenset({"claude_containers"}))
+    monkeypatch.setattr(module_settings, "human_count", lambda: 2)
+    db_session.add(InstanceSetting(key="module_multi_user", value=False))
+    module_settings.record_running(db_session, frozenset())
 
     module_settings.follow_modules()
 
-    assert module_settings.boot_modules() == {"claude_containers"}
+    assert module_settings.boot_modules() == frozenset()
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
@@ -259,7 +241,6 @@ def test_a_worker_that_follows_the_api_skips_the_api_boot_checks(db_session, mon
     "tool, server",
     [
         ("teams_upsert", "teams"),
-        ("containers_list_sessions", "containers"),
         ("claude_session_search", "claude"),
         ("notes_upsert", "notes"),
         ("web_search", None),
@@ -275,7 +256,6 @@ def test_tool_server_is_the_longest_server_prefix(tool, server):
     [
         ("teams", "teams"),
         ("projects", "teams"),
-        ("containers", "claude_containers"),
         ("claude", None),
         ("notes", None),
     ],
@@ -289,9 +269,6 @@ def test_every_mounted_tool_resolves_to_a_server():
 
     owners = {name: tool_server(name) for name in tools}
     assert None not in owners.values()
-    assert {"claude", "containers", "teams", "projects"} <= set(owners.values())
+    assert {"claude", "teams", "projects"} <= set(owners.values())
     modules = {name: server_module(owner or "") for name, owner in owners.items()}
     assert {m for n, m in modules.items() if n.startswith("claude_session_")} == {None}
-    assert {m for n, m in modules.items() if n.startswith("containers_")} == {
-        "claude_containers"
-    }

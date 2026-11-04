@@ -1,5 +1,6 @@
 """Tests for memory.common.settings env-reading helpers."""
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -121,12 +122,8 @@ COMPLETE_SETTINGS = dict(
     BACKUP_ENCRYPTION_KEY="",
     ENABLE_MODULES=frozenset(),
     DISABLE_MODULES=frozenset(),
-    ORCHESTRATOR_SOCKET="",
     NOTES_SYNC_INTERVAL=None,
 )
-
-CONTAINERS_ON = frozenset({"claude_containers"})
-
 
 @pytest.mark.parametrize(
     "overrides, expected",
@@ -244,29 +241,17 @@ def test_bad_module_config_refuses_to_start(capsys, enable, disable, named):
     assert named in capsys.readouterr().err
 
 
-def test_api_with_claude_containers_needs_the_orchestrator_socket(capsys):
-    values = SimpleNamespace(**{**COMPLETE_SETTINGS, "ENABLE_MODULES": CONTAINERS_ON})
-
-    with pytest.raises(SystemExit) as exc:
-        require_settings(values, "api")
-
-    assert exc.value.code == 1
-    assert "claude_containers module needs ORCHESTRATOR_SOCKET" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    "role, overrides",
-    [
-        ("api", {"ORCHESTRATOR_SOCKET": "/orch.sock"}),
-        ("worker", {"ANTHROPIC_API_KEY": "sk"}),
-    ],
-)
-def test_claude_containers_with_a_socket_or_on_a_worker_starts(role, overrides):
+@pytest.mark.parametrize("role", ["api", "worker"])
+@pytest.mark.parametrize("env_var", ["ENABLE_MODULES", "DISABLE_MODULES"])
+def test_retired_claude_containers_module_warns_and_starts(caplog, role, env_var):
     values = SimpleNamespace(
-        **{**COMPLETE_SETTINGS, "ENABLE_MODULES": CONTAINERS_ON, **overrides}
+        **{**COMPLETE_SETTINGS, env_var: frozenset({"claude_containers", "teams"})}
     )
 
-    require_settings(values, role)
+    with caplog.at_level(logging.WARNING, logger="memory.common.settings"):
+        require_settings(values, role)
+
+    assert "claude_containers" in caplog.text
 
 
 @pytest.mark.parametrize("interval", [0, 59, 24 * 60 * 60 + 1, 10**9])

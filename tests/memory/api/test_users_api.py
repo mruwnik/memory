@@ -869,7 +869,6 @@ def test_delete_user_with_owned_sources(client, db_session, regular_user, loaded
     from memory.common.db.models import ArticleFeed, EmailAccount, User
     from memory.common.db.models.watchlist import WatchedMarket
     from memory.common.db.models.sources import CalendarAccount, GithubAccount, GoogleAccount, TranscriptAccount
-    from memory.common.db.models.claude_config import ClaudeConfigSnapshot, ClaudeEnvironment
 
     user_id = regular_user.id
     mail = EmailAccount(user_id=user_id, name="Mail", email_address="delete@example.com")
@@ -883,8 +882,6 @@ def test_delete_user_with_owned_sources(client, db_session, regular_user, loaded
         "google_accounts": GoogleAccount(user_id=user_id, name="Google", email="delete@gmail.com"),
         "calendar_accounts": CalendarAccount(user_id=user_id, name="Calendar", calendar_type="caldav"),
         "transcript_accounts": TranscriptAccount(user_id=user_id, name="Transcripts", provider="generic"),
-        "claude_snapshots": ClaudeConfigSnapshot(user_id=user_id, name="Snapshot", content_hash="test", filename="test.tar", size=0),
-        "claude_environments": ClaudeEnvironment(user_id=user_id, name="Environment", volume_name="test-delete-user"),
     }
     person = Person(user_id=user_id, identifier="retained-contact", display_name="Contact to retain")
     bystander = EmailAccount(user_id=1, name="Other mail", email_address="keep@example.com")

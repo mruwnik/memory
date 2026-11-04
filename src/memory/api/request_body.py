@@ -1,8 +1,7 @@
 """Read a raw request body under a hard size cap.
 
-Shared by the cloud-claude transfer-push endpoint and the add_content
-/ingest/upload endpoint: both stream an unframed body and must bound peak
-allocation, differing only in the cap and where the bytes ultimately go.
+Shared by the endpoints that take an unframed body (/ingest/upload,
+transcript ingest), which must bound peak allocation.
 """
 
 from fastapi import HTTPException

@@ -226,7 +226,6 @@ def ui_modules(monkeypatch, set_modules):
     """The env names no module, so each is the admin's to set; the api booted with none."""
     monkeypatch.setattr(settings, "ENABLE_MODULES", frozenset())
     monkeypatch.setattr(settings, "DISABLE_MODULES", frozenset())
-    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "/orch.sock")
     set_modules([])
 
 
@@ -252,7 +251,7 @@ def test_a_module_change_is_pending_until_the_api_restarts(client, ui_modules, s
 def test_the_mcp_checklist_leaves_module_servers_to_their_modules(client):
     choices = rows(client.get("/settings"))["disabled_mcp_servers"]["choices"]
 
-    assert not {"teams", "projects", "containers"} & set(choices)
+    assert not {"teams", "projects"} & set(choices)
     assert client.patch("/settings", json={"values": {"disabled_mcp_servers": ["teams"]}}).status_code == 400
 
 
@@ -289,26 +288,20 @@ def test_multi_user_stays_on_while_several_humans_exist(client, db_session, ui_m
     assert rows(client.get("/settings"))["module_multi_user"]["value"] is True
 
 
-def test_claude_containers_needs_the_orchestrator_socket(client, db_session, ui_modules, monkeypatch):
-    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "")
-
-    response = client.patch("/settings", json={"values": {"module_claude_containers": True}})
-
-    assert response.status_code == 400
-    assert "ORCHESTRATOR_SOCKET" in response.json()["detail"]
-    assert saved(db_session) == []
-
-
-def test_a_stored_module_flag_the_api_cant_run_with_is_flagged(client, db_session, ui_modules, monkeypatch):
-    db_session.add(InstanceSetting(key="module_claude_containers", value=True))
+def test_a_stored_module_flag_the_api_cant_run_with_is_flagged(client, db_session, ui_modules, set_modules):
+    db_session.add(InstanceSetting(key="module_multi_user", value=False))
+    db_session.add_all(
+        HumanUser.create_with_password(email=f"{name}@example.com", name=name, password="pw123456")
+        for name in ("one", "two")
+    )
     db_session.commit()
-    monkeypatch.setattr(settings, "ORCHESTRATOR_SOCKET", "")
+    set_modules(["multi_user"])
 
-    containers = rows(client.get("/settings"))["module_claude_containers"]
+    multi_user = rows(client.get("/settings"))["module_multi_user"]
 
-    assert "ORCHESTRATOR_SOCKET" in containers["error"]
-    # It falls back to off, which the api already runs, so a restart would change nothing.
-    assert containers["pending_restart"] is False
+    assert "more than one human" in multi_user["error"]
+    # It falls back to on, which the api already runs, so a restart would change nothing.
+    assert multi_user["pending_restart"] is False
 
 
 def test_a_stored_mcp_list_that_hides_every_server_is_flagged(client, db_session, ui_modules):

@@ -4,7 +4,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { Button, Card, ConfirmButton, CopyButton, EmptyState, Field, FormActions, Input, Modal, Page, Select, Textarea, useActionNotice } from '@/components/shared/ui'
 
 export const SSHKeysPage = () => {
-  const { list, save, remove, setDefault } = useSSHKeys()
+  const { list, save, remove } = useSSHKeys()
   const { hasScope } = useAuth()
   const [keys, setKeys] = useState<SSHKey[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -16,16 +16,15 @@ export const SSHKeysPage = () => {
   }, [list])
   useEffect(() => { void load() }, [load])
   return <Page title="SSH keys" loading={keys === null && !error && "Loading SSH keys…"} error={error} onRetry={load}
-    actions={<Button onClick={() => setEditing('new')}>Add SSH key</Button>} description="Import or generate SSH keys for Git access. Personal keys belong to you; instance keys are managed by admins. Notes and containers use these database keys.">
+    actions={<Button onClick={() => setEditing('new')}>Add SSH key</Button>} description="Import or generate SSH keys for Git access. Personal keys belong to you; instance keys are managed by admins. Notes uses these database keys.">
     {notice}
     {keys?.length === 0 && <EmptyState message="No SSH keys configured" />}
-    {keys?.map(key => <Card key={key.id} title={key.name} description={`${key.user_id === null ? 'Instance' : 'Personal'}${key.is_default ? ' · Your container default' : ''}`}>
+    {keys?.map(key => <Card key={key.id} title={key.name} description={key.user_id === null ? 'Instance' : 'Personal'}>
       <p className="break-all font-mono text-sm">{key.fingerprint ?? 'Fingerprint unavailable for migrated key'}</p>
       <Field label="Public key"><div className="flex items-start gap-2"><code className="break-all text-xs">{key.public_key}</code><CopyButton text={key.public_key} /></div></Field>
       <FormActions>
         <Button onClick={() => setEditing(key)}>Edit or replace</Button>
-        <Button onClick={() => run(async () => { await setDefault(key.is_default ? null : key.id); await load() })}>{key.is_default ? 'Clear container default' : 'Use for my containers'}</Button>
-        <ConfirmButton confirm="Delete this SSH key? Running containers retain keys already injected; future sessions will no longer use it." onConfirm={() => run(async () => { await remove(key.id); await load() })}>Delete</ConfirmButton>
+        <ConfirmButton confirm="Delete this SSH key?" onConfirm={() => run(async () => { await remove(key.id); await load() })}>Delete</ConfirmButton>
       </FormActions>
     </Card>)}
     {editing && <KeyForm existing={editing === 'new' ? undefined : editing} admin={hasScope('*') || hasScope('admin')}

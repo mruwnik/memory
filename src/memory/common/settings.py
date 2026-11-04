@@ -9,7 +9,7 @@ from urllib.parse import quote, urlsplit
 from dotenv import load_dotenv
 
 from memory.common.crypto import derive_transfer_token_secret
-from memory.common.modules import CLAUDE_CONTAINERS, module_config_errors, resolve_modules
+from memory.common.modules import RETIRED_MODULES, module_config_errors
 
 load_dotenv()
 
@@ -150,19 +150,11 @@ SLACK_STORAGE_DIR = pathlib.Path(
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
-SNAPSHOT_STORAGE_DIR = pathlib.Path(
-    os.getenv("SNAPSHOT_STORAGE_DIR", FILE_STORAGE_DIR / "snapshots")
-)
 REPORT_STORAGE_DIR = pathlib.Path(
     os.getenv("REPORT_STORAGE_DIR", FILE_STORAGE_DIR / "reports")
 )
 MISC_STORAGE_DIR = pathlib.Path(
     os.getenv("MISC_STORAGE_DIR", FILE_STORAGE_DIR / "misc")
-)
-# Host path for snapshots (used by orchestrator which runs on host, not in container)
-# In Docker, FILE_STORAGE_DIR is /app/memory_files but host path may differ
-HOST_STORAGE_DIR = pathlib.Path(
-    os.getenv("HOST_STORAGE_DIR", pathlib.Path(__file__).parent.parent.parent.parent)
 )
 # Directories requiring encryption during backup (contain sensitive user data).
 # CHUNK_STORAGE_DIR is intentionally excluded: chunks are derived data that can be
@@ -350,7 +342,6 @@ OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = build_redirect_allowlist(
 # Address of a send-enabled email account that mails password-reset links.
 # Unset hides "Forgot password?".
 PASSWORD_RESET_FROM_EMAIL = os.getenv("PASSWORD_RESET_FROM_EMAIL", "")
-INTERNAL_API_URL = os.getenv("INTERNAL_API_URL", SERVER_URL)
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "session_id")
 SESSION_VALID_FOR = int(os.getenv("SESSION_VALID_FOR", 30))
 
@@ -390,7 +381,7 @@ RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
     "RATE_LIMIT_TRUSTED_PROXIES", "127.0.0.1,::1"
 )
 
-# Claude scheduled tasks limits
+# Scheduled tasks limits
 MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
 TASK_EXECUTION_RETENTION_DAYS = int(os.getenv("TASK_EXECUTION_RETENTION_DAYS", 30))
@@ -405,32 +396,11 @@ PENDING_JOB_RETENTION_DAYS = int(os.getenv("PENDING_JOB_RETENTION_DAYS", 30))
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", 365))
 AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", 730))
 
-# Maximum number of concurrently running Claude session containers a single
-# user may have. Bounds host CPU/memory usage. Enforced in the /claude/spawn
-# endpoint, which also covers cron-triggered spawns (they call that endpoint).
-MAX_CONCURRENT_SESSIONS_PER_USER = int(
-    os.getenv("MAX_CONCURRENT_SESSIONS_PER_USER", 4)
-)
-# How often the API settles scheduled Claude sessions against the orchestrator
-# and removes exited containers; 0 turns it off.
-CLAUDE_MAINTENANCE_INTERVAL_SEC = float(os.getenv("CLAUDE_MAINTENANCE_INTERVAL_SEC", 300))
-# A scheduled session still running after this long is recorded as failed
-# (its container is left alone).
-CLAUDE_SESSION_TIMEOUT_HOURS = float(os.getenv("CLAUDE_SESSION_TIMEOUT_HOURS", 24))
-
-# Maximum allowed body size for `/claude/transfer/push` (tar uploads to a
-# Claude container). The endpoint buffers the body in API memory before
-# proxying to the orchestrator, so an unbounded read is a single-request
-# OOM vector. Default 256 MB; raise if you need to push larger artifacts.
-MAX_TRANSFER_PUSH_BYTES = int(
-    os.getenv("MAX_TRANSFER_PUSH_BYTES", 256 * 1024 * 1024)
-)
-
 # Maximum allowed body size for `/telemetry/ingest` and the OTLP
 # fan-out routes (`/v1/metrics`, `/v1/logs`, `/v1/traces`). The handler
 # buffers the body in API memory and runs `parse_otlp_json` against it
-# synchronously, so an unbounded read is the same OOM vector as
-# transfer/push. Default 5 MiB — well above any sane batch from an
+# synchronously, so an unbounded read is a single-request OOM vector.
+# Default 5 MiB — well above any sane batch from an
 # in-process OTLP exporter.
 MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
@@ -566,47 +536,11 @@ SECRETS_ENCRYPTION_SALT = os.getenv(
     "SECRETS_ENCRYPTION_SALT", "memory-secrets-encryption-salt-v1"
 ).encode()
 
-# Memory stack identifier - used for network naming with Claude orchestrator
-# Set to "prod" or "dev" to separate environments
-MEMORY_STACK = os.getenv("MEMORY_STACK", "dev")
-
-# HMAC secret for short-lived signed URLs used by the cloud-claude session
-# file transfer endpoints.
-#
-# Two operator-facing modes:
-#
-# 1. ``TRANSFER_TOKEN_SECRET`` env var explicitly set → used as-is.
-#    Operators who want independently-rotatable secrets configure this
-#    directly. Rotation only invalidates in-flight transfer URLs (~60s)
-#    instead of forcing a full secrets-encryption-key migration.
-#
-# 2. ``TRANSFER_TOKEN_SECRET`` empty AND ``SECRETS_ENCRYPTION_KEY`` set →
-#    *derive* a domain-separated key from ``SECRETS_ENCRYPTION_KEY`` via
-#    HKDF-SHA256 (RFC 5869). The derived key is mathematically distinct
-#    from the input key (HKDF is a one-way pseudo-random function with a
-#    domain-separating ``info`` string), so HMAC-SHA256 tags computed on
-#    transfer URLs do NOT leak any information about the at-rest AES-GCM
-#    key that protects user secrets in the DB.
-#
-#    This gives operators the "single secret to configure" UX the previous
-#    bare-``or`` fallback intended, without the crypto-isolation cost of
-#    sharing key material across two distinct primitives:
-#
-#    | Use                      | Algorithm                | Boundary |
-#    |--------------------------|--------------------------|----------|
-#    | ``SECRETS_ENCRYPTION_KEY`` (raw)     | AES-GCM (Fernet) for at-rest secrets    | DB |
-#    | ``TRANSFER_TOKEN_SECRET`` (HKDF-derived) | HMAC-SHA256 of presigned URL | URL |
-#
-#    Rotating ``SECRETS_ENCRYPTION_KEY`` still rotates the derived
-#    transfer secret implicitly — that's expected; the input key changing
-#    means every output key changes. But a leak of one no longer trivially
-#    discloses the other.
-#
-# 3. Both empty → ``TRANSFER_TOKEN_SECRET`` stays None and the transfer
-#    code path raises a clear error at first mint/verify
-#    (``transfer_tokens._require_secret``). Operators who never use cloud-
-#    claude transfers don't need to configure either secret.
-#
+# HMAC secret for the short-lived signed tokens of memory.api.signed_tokens
+# (ingest upload URLs, password reset links). Set explicitly, it can be rotated
+# on its own, invalidating only tokens in flight. Otherwise it is derived from
+# SECRETS_ENCRYPTION_KEY with HKDF, so the HMAC tags reveal nothing about the
+# at-rest encryption key. With neither set, minting or verifying a token raises.
 _explicit_transfer_secret = secret_env("TRANSFER_TOKEN_SECRET")
 if _explicit_transfer_secret:
     TRANSFER_TOKEN_SECRET: str | None = _explicit_transfer_secret
@@ -617,21 +551,7 @@ elif SECRETS_ENCRYPTION_KEY:
 else:
     TRANSFER_TOKEN_SECRET = None
 
-# Default lifetime (seconds) for cloud-claude file transfer URLs.
-TRANSFER_TOKEN_TTL_SECONDS = int(os.getenv("TRANSFER_TOKEN_TTL_SECONDS", 60))
 INGEST_TOKEN_TTL_SECONDS = int(os.getenv("INGEST_TOKEN_TTL_SECONDS", 300))
-
-# Unix socket of the Claude session orchestrator, which only the api talks to.
-ORCHESTRATOR_SOCKET = os.getenv("ORCHESTRATOR_SOCKET", "")
-
-# Base URL the API uses to proxy to the Claude session orchestrator. The host
-# part is consumed by ``httpx.AsyncHTTPTransport(uds=ORCHESTRATOR_SOCKET)``
-# (the actual transport is the Unix socket; the URL hostname is just an
-# unused placeholder), but configurable so non-prod stacks or tests can
-# override the prefix without patching call sites.
-ORCHESTRATOR_BASE_URL = os.getenv(
-    "ORCHESTRATOR_BASE_URL", "http://orchestrator"
-).rstrip("/")
 
 
 def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[str]:
@@ -697,6 +617,11 @@ def require_settings(values: Any, role: str) -> None:
     if errors := module_config_errors(values.ENABLE_MODULES, values.DISABLE_MODULES):
         print(f"Refusing to start: {'; '.join(errors)}.", file=sys.stderr)
         raise SystemExit(1)
+    if retired := (values.ENABLE_MODULES | values.DISABLE_MODULES) & RETIRED_MODULES:
+        logger.warning(
+            "Ignoring removed modules %s in ENABLE_MODULES/DISABLE_MODULES; remove them from .env",
+            ", ".join(sorted(retired)),
+        )
     if missing := missing_required_settings(values):
         why = (
             " S3_BACKUP_BUCKET is set, which turns on encrypted S3 backups;"
@@ -714,15 +639,6 @@ def require_settings(values: Any, role: str) -> None:
     if values.NOTES_SYNC_INTERVAL is not None and not low <= values.NOTES_SYNC_INTERVAL <= high:
         print(
             f"Refusing to start: NOTES_SYNC_INTERVAL must be between {low} and {high} seconds.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    # Only the api reaches the orchestrator; workers spawn sessions through the api.
-    env_modules = resolve_modules(values.ENABLE_MODULES, values.DISABLE_MODULES)
-    if role == "api" and CLAUDE_CONTAINERS in env_modules and not values.ORCHESTRATOR_SOCKET:
-        print(
-            "Refusing to start: the claude_containers module needs ORCHESTRATOR_SOCKET; "
-            "add docker-compose.claude.yaml to COMPOSE_FILE (or -f), which sets it.",
             file=sys.stderr,
         )
         raise SystemExit(1)

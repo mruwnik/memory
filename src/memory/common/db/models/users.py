@@ -86,10 +86,6 @@ class User(Base):
         String, nullable=False, default="UTC", server_default="UTC"
     )
 
-    default_ssh_key_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("ssh_keys.id", ondelete="SET NULL", use_alter=True, name="users_default_ssh_key_fk"), nullable=True
-    )
-
     @validates("timezone")
     def validate_timezone(self, key: str, value: str) -> str:
         return check_timezone(value)
