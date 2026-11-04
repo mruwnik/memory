@@ -21,14 +21,15 @@ def test_app_version_prefers_baked_in_env(monkeypatch):
 
 def test_app_version_falls_back_to_git_describe(monkeypatch):
     monkeypatch.delenv("APP_VERSION", raising=False)
-    sha = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
+    # On a tagged commit describe gives the bare tag, without the sha.
+    described = subprocess.run(
+        ["git", "describe", "--tags", "--always"],
         cwd=version.REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout.strip()
-    assert sha in version.app_version()
+    assert version.app_version().startswith(described)
 
 
 def test_app_version_is_dev_outside_a_git_checkout(monkeypatch, tmp_path):

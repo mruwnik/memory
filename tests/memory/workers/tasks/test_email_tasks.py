@@ -214,43 +214,66 @@ def test_process_empty_message(db_session, test_email_account, qdrant):
     assert res == {"reason": "empty_content", "status": "skipped"}
 
 
-def test_process_duplicate_message(db_session, test_email_account, qdrant):
-    """Test that duplicate messages are detected and not stored again."""
-    # First call should succeed and create records
+# GitHub re-sends notifications under the same Message-ID with a different body.
+REDELIVERED_EMAIL_RAW = SIMPLE_EMAIL_RAW.replace(
+    "This is test email 1", "This is test email 1, edited"
+)
+REDELIVERED_ATTACHMENT_RAW = EMAIL_WITH_ATTACHMENT_RAW.replace(
+    "This email has an attachment", "This email has an attachment, edited"
+)
+
+
+@pytest.mark.parametrize(
+    "original, uid, raw_email",
+    [
+        (SIMPLE_EMAIL_RAW, "101", SIMPLE_EMAIL_RAW),
+        (SIMPLE_EMAIL_RAW, "102", REDELIVERED_EMAIL_RAW),
+        (EMAIL_WITH_ATTACHMENT_RAW, "102", REDELIVERED_ATTACHMENT_RAW),
+    ],
+)
+def test_process_duplicate_message(
+    db_session, test_email_account, qdrant, original, uid, raw_email
+):
+    run_process_message(
+        account_id=test_email_account.id,
+        message_id="101",
+        folder="INBOX",
+        raw_email=original,
+    )
+    source_count_before = db_session.query(SourceItem).count()
+
     res = run_process_message(
         account_id=test_email_account.id,
-        message_id="101",
+        message_id=uid,
         folder="INBOX",
-        raw_email=SIMPLE_EMAIL_RAW,
+        raw_email=raw_email,
     )
-    source_id_1 = res.get("mail_message_id")
 
-    assert source_id_1 is not None, "First call should return a source_id"
+    assert res == {"status": "already_exists", "message_id": uid}
+    assert db_session.query(SourceItem).count() == source_count_before
 
-    # Count records to verify state before second call
-    source_count_before = db_session.query(SourceItem).count()
-    message_count_before = db_session.query(MailMessage).count()
 
-    # Second call with same email should detect duplicate and return None
-    source_id_2 = run_process_message(
+@pytest.mark.parametrize(
+    "uid, raw_email",
+    [("101", SIMPLE_EMAIL_RAW), ("102", REDELIVERED_EMAIL_RAW)],
+)
+def test_queue_message_skips_stored_message_id(
+    db_session, test_email_account, qdrant, uid, raw_email
+):
+    run_process_message(
         account_id=test_email_account.id,
         message_id="101",
         folder="INBOX",
         raw_email=SIMPLE_EMAIL_RAW,
-    ).get("mail_message_id")
-
-    assert source_id_2 is None, "Second call should return None for duplicate message"
-
-    # Verify no new records were created
-    source_count_after = db_session.query(SourceItem).count()
-    message_count_after = db_session.query(MailMessage).count()
-
-    assert source_count_before == source_count_after, (
-        "No new SourceItem should be created"
     )
-    assert message_count_before == message_count_after, (
-        "No new MailMessage should be created"
-    )
+
+    with patch("memory.workers.tasks.email.process_message") as mock_proc:
+        queued = queue_message(
+            db_session, test_email_account.id, uid, "INBOX", raw_email
+        )
+
+    assert queued is False
+    mock_proc.delay.assert_not_called()
 
 
 def test_process_message_stores_account_and_uid(db_session, test_email_account, qdrant):

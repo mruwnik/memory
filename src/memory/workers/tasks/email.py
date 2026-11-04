@@ -16,7 +16,7 @@ from memory.common.db.models import EmailAccount, MailMessage
 from memory.common.db.models.source_item import clean_filename
 from memory.common.email_sender import PASSWORD_RESET_HEADER, PASSWORD_RESET_SUBJECT
 from memory.common.redis_lock import Lock, distributed_lock
-from memory.parsers.email import parse_email_message
+from memory.parsers.email import EmailMessage, parse_email_message
 from memory.workers.email import (
     create_mail_message,
     delete_emails,
@@ -108,6 +108,29 @@ def read_spooled_email(filename: str) -> str | None:
         return None
 
 
+def find_stored_message(
+    db: DBSession, account_id: int, parsed_email: EmailMessage
+) -> MailMessage | None:
+    """The stored copy of this email, matched by Message-ID or content hash.
+
+    Message-ID is unique across all accounts, so a re-delivery with a changed
+    body (GitHub re-sends notifications this way) can't be stored again.
+    """
+    existing = check_content_exists(
+        db,
+        MailMessage,
+        message_id=parsed_email["message_id"],
+        sha256=parsed_email["hash"],
+    )
+    if existing and existing.email_account_id != account_id:
+        # INFO, not WARNING: every sync of the second account repeats this.
+        logger.info(
+            f"Mail message {existing.id} of account {existing.email_account_id} "
+            f"also arrived in account {account_id}; keeping the first copy only"
+        )
+    return existing
+
+
 def store_email_message(
     account_id: int,
     message_id: str,
@@ -123,9 +146,7 @@ def store_email_message(
                 return {"status": "error", "error": "Account not found"}
 
             parsed_email = parse_email_message(raw_email, message_id)
-            if check_content_exists(
-                db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
-            ):
+            if find_stored_message(db, account_id, parsed_email):
                 return {"status": "already_exists", "message_id": message_id}
 
             mail_message = create_mail_message(
@@ -254,9 +275,7 @@ def queue_message(
     spooled: str | None = None
     try:
         parsed_email = parse_email_message(raw_email, message_id)
-        if check_content_exists(
-            db, MailMessage, message_id=message_id, sha256=parsed_email["hash"]
-        ):
+        if find_stored_message(db, account_id, parsed_email):
             return False
         spooled = spool_raw_email(
             account_id, message_id, raw_email, parsed_email["hash"].hex()

@@ -149,7 +149,6 @@ SYNC_MISC_DOC = f"{MISC_ROOT}.sync_misc_doc"
 # Metrics tasks
 COLLECT_SYSTEM_METRICS = f"{METRICS_ROOT}.collect_system_metrics"
 CLEANUP_OLD_METRICS = f"{METRICS_ROOT}.cleanup_old_metrics"
-REFRESH_METRIC_SUMMARIES = f"{METRICS_ROOT}.refresh_metric_summaries"
 
 # Verification tasks
 VERIFY_ORPHANS = f"{VERIFICATION_ROOT}.verify_orphans"
@@ -380,10 +379,6 @@ def build_beat_schedule() -> dict:
         "cleanup-old-metrics": {
             "task": CLEANUP_OLD_METRICS,
             "schedule": crontab(hour=str(settings.METRICS_CLEANUP_HOUR), minute="0"),
-        },
-        "refresh-metric-summaries": {
-            "task": REFRESH_METRIC_SUMMARIES,
-            "schedule": crontab(minute=str(settings.METRICS_SUMMARY_REFRESH_MINUTE)),
         },
         "clean-all-collections": {
             "task": CLEAN_ALL_COLLECTIONS,

@@ -12,6 +12,36 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+Emails whose Message-ID is already stored (GitHub re-sends notifications under
+the same Message-ID with a changed body) now count as already ingested. They no
+longer fail in `email.process_message` and get queued again on every sync.
+
+The hourly `refresh_metric_summaries` task and its `METRICS_SUMMARY_REFRESH_MINUTE`
+setting are removed. Nothing read the `metric_summaries` view.
+
+Slack `channel_not_found` and `not_in_channel` responses, for channels the app
+has left or can't see, are logged at INFO instead of ERROR.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.4.1 (2026-10-29)
 
 ### Required env vars

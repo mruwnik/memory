@@ -4,7 +4,6 @@ Metrics collection and maintenance tasks.
 Provides:
 - System metrics collection (CPU, memory, disk)
 - Old metrics cleanup (30-day retention)
-- Materialized view refresh for aggregations
 """
 
 import logging
@@ -12,13 +11,12 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 
 import psutil
-from sqlalchemy import CursorResult, delete, select, text
+from sqlalchemy import CursorResult, delete, select
 
 from memory.common.celery_app import (
     app,
     COLLECT_SYSTEM_METRICS,
     CLEANUP_OLD_METRICS,
-    REFRESH_METRIC_SUMMARIES,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import MetricEvent
@@ -154,38 +152,3 @@ def cleanup_old_metrics(retention_days: int = 30) -> dict:
 
     logger.info(f"Deleted {deleted} metric events older than {retention_days} days")
     return {"deleted": deleted, "retention_days": retention_days}
-
-
-@app.task(name=REFRESH_METRIC_SUMMARIES)
-@tracked_task
-def refresh_metric_summaries() -> dict:
-    """
-    Refresh the metric_summaries materialized view.
-
-    This should be run periodically (e.g., hourly) to update aggregations.
-    The CONCURRENTLY option allows queries to continue during refresh.
-    """
-    logger.info("Refreshing metric_summaries materialized view")
-
-    with make_session() as session:
-        try:
-            # Use CONCURRENTLY to allow reads during refresh
-            # Requires unique index: idx_metric_summaries_unique
-            session.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY metric_summaries"))
-            session.commit()
-            status = "success"
-        except Exception as e:
-            logger.error(f"Error refreshing metric_summaries concurrently: {e}")
-            # Fall back to blocking refresh if concurrent fails
-            # (e.g., if unique index missing or first-time population)
-            try:
-                session.rollback()
-                session.execute(text("REFRESH MATERIALIZED VIEW metric_summaries"))
-                session.commit()
-                status = "success_non_concurrent"
-            except Exception as e2:
-                logger.error(f"Non-concurrent refresh also failed: {e2}")
-                status = "error"
-
-    logger.info(f"Materialized view refresh: {status}")
-    return {"status": status}

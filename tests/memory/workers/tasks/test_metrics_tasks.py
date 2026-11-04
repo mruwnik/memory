@@ -1,14 +1,13 @@
 """Tests for the metrics collection and cleanup tasks."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 
 from memory.workers.tasks.metrics import (
     collect_open_files,
     cleanup_old_metrics,
     collect_system_metrics,
-    refresh_metric_summaries,
 )
 
 
@@ -316,58 +315,3 @@ def test_cleanup_old_metrics_batch_deletion(db_session):
 
     result = cleanup_old_metrics(retention_days=30)
     assert result["deleted"] == 100
-
-
-# ============== refresh_metric_summaries tests ==============
-
-
-def test_refresh_metric_summaries_success(db_session):
-    """Test successful refresh of materialized view."""
-    with patch("memory.workers.tasks.metrics.make_session") as mock_session:
-        mock_sess = MagicMock()
-        mock_session.return_value.__enter__ = Mock(return_value=mock_sess)
-        mock_session.return_value.__exit__ = Mock(return_value=False)
-
-        result = refresh_metric_summaries()
-
-        assert result["status"] == "success"
-        mock_sess.execute.assert_called()
-        mock_sess.commit.assert_called()
-
-
-def test_refresh_metric_summaries_fallback_on_concurrent_failure(db_session):
-    """Test fallback to non-concurrent refresh when concurrent fails."""
-    with patch("memory.workers.tasks.metrics.make_session") as mock_session:
-        mock_sess = MagicMock()
-        mock_session.return_value.__enter__ = Mock(return_value=mock_sess)
-        mock_session.return_value.__exit__ = Mock(return_value=False)
-
-        # First execute fails (concurrent), second succeeds (non-concurrent)
-        mock_sess.execute.side_effect = [
-            Exception("Concurrent refresh failed"),
-            None,  # Non-concurrent succeeds
-        ]
-
-        result = refresh_metric_summaries()
-
-        assert result["status"] == "success_non_concurrent"
-        assert mock_sess.execute.call_count == 2
-        mock_sess.rollback.assert_called_once()
-
-
-def test_refresh_metric_summaries_complete_failure(db_session):
-    """Test handling when both refresh methods fail."""
-    with patch("memory.workers.tasks.metrics.make_session") as mock_session:
-        mock_sess = MagicMock()
-        mock_session.return_value.__enter__ = Mock(return_value=mock_sess)
-        mock_session.return_value.__exit__ = Mock(return_value=False)
-
-        # Both refreshes fail
-        mock_sess.execute.side_effect = [
-            Exception("Concurrent refresh failed"),
-            Exception("Non-concurrent refresh also failed"),
-        ]
-
-        result = refresh_metric_summaries()
-
-        assert result["status"] == "error"
