@@ -95,6 +95,9 @@ def workspace_sync_interval(db: DBSession, workspace: SlackWorkspace, app_ids: l
     return workspace.sync_interval_seconds
 
 
+UNREACHABLE_CHANNEL_ERRORS = frozenset({"channel_not_found", "not_in_channel"})
+
+
 class SlackAPIError(Exception):
     """Error from Slack API."""
 
@@ -156,7 +159,10 @@ class SlackClient:
                 time.sleep(retry_after)
                 continue
 
-            logger.error(f"Slack API error in {method}: {error}")
+            # Channels the app has left or can't see fail like this on every
+            # sync; the caller already treats it as a per-channel result.
+            log = logger.info if error in UNREACHABLE_CHANNEL_ERRORS else logger.error
+            log(f"Slack API error in {method}: {error}")
             raise SlackAPIError(error, data)
 
         # Unreachable, but satisfies type checker

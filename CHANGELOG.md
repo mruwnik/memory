@@ -78,6 +78,16 @@ its `pending` action items are recreated and the rest kept, detached. A webhook 
 meeting at once no longer fails one of them, and a successful webhook fetch
 clears the account's earlier sync error.
 
+Emails whose Message-ID is already stored (GitHub re-sends notifications under
+the same Message-ID with a changed body) now count as already ingested. They no
+longer fail in `email.process_message` and get queued again on every sync.
+
+The hourly `refresh_metric_summaries` task and its `METRICS_SUMMARY_REFRESH_MINUTE`
+setting are removed. Nothing read the `metric_summaries` view.
+
+Slack `channel_not_found` and `not_in_channel` responses, for channels the app
+has left or can't see, are logged at INFO instead of ERROR.
+
 ### Migrations
 
 `20261114_drop_secrets` (since v0.4.0) no longer fails with `index "ix_secrets_name" does not exist` on databases created before the complete-schema baseline. An update that stopped there can simply be re-run.
