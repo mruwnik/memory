@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.4.2 (2026-11-04)
 
 ### Required env vars
 
