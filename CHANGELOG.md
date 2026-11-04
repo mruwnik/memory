@@ -12,6 +12,30 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+Postgres gets a 256 MB `/dev/shm` (Docker's default is 64 MB), so parallel
+`VACUUM` and index builds no longer fail with "could not resize shared memory
+segment". The update recreates the postgres container to apply it.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
 ## v0.4.2 (2026-11-04)
 
 ### Required env vars

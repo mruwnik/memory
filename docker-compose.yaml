@@ -116,6 +116,8 @@ services:
       timeout: 5s
       retries: 5
     security_opt: ["no-new-privileges=true"]
+    # Parallel vacuum and index builds overflow Docker's default 64 MB /dev/shm.
+    shm_size: 256m
     deploy:
       resources:
         limits:
