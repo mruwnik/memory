@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import text
 
 from memory.agents.provider_keys import credential
 from memory.api.search import hyde
@@ -1234,3 +1235,26 @@ async def test_boosts_reorder_near_ties_in_the_final_scores(
         )
 
     assert [r.id for r in results] == [{"plain": plain.id, "boosted": boosted.id}[winner]]
+
+
+@pytest.mark.asyncio
+async def test_search_skips_an_item_whose_subclass_row_is_gone(db_session):
+    kept = titled_post(db_session, "Kettle descaling").id
+    orphan = titled_post(db_session, "Kettle repairs").id
+    fused = {
+        str(chunk_id): 0.5
+        for (chunk_id,) in db_session.query(Chunk.id).filter(Chunk.source_id.in_([kept, orphan]))
+    }
+    db_session.execute(text("DELETE FROM blog_post WHERE id = :id"), {"id": orphan})
+    db_session.commit()
+
+    with patch.object(search_module, "_run_searches", AsyncMock(return_value=(fused, {}))):
+        results = await search_module.search(
+            [DataChunk(data=["kettle"])],
+            filters={"access_filter": None},
+            config=SearchConfig(
+                useBm25=False, useHyde=False, useReranking=False, useQueryAnalysis=False,
+            ),
+        )
+
+    assert [r.id for r in results] == [kept]

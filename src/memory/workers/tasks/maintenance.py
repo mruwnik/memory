@@ -37,6 +37,7 @@ from memory.common.celery_app import (
     CLEAN_COLLECTION,
     CLEAN_MAIL_HEADERS,
     CLEANUP_EXPIRED_SESSIONS,
+    DELETE_ORPHANED_SOURCE_ITEMS,
     PURGE_AGENT_RUNS,
     SWEEP_AGENT_RUNS,
     MATCH_INGEST_TRIGGERS,
@@ -62,6 +63,7 @@ from memory.common.celery_app import (
     COLLECT_SUMMARY_BATCHES,
 )
 from memory.common.db.connection import make_session
+from memory.common.db.orphans import orphaned_source_ids
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
     AgentDefinition,
@@ -449,7 +451,7 @@ def referenced_chunk_image_names() -> set[str]:
         rows = session.execute(
             select(Chunk.file_paths).where(func.cardinality(Chunk.file_paths) > 0)
         ).scalars()
-        return {pathlib.Path(p).name for paths in rows for p in paths}
+        return {pathlib.Path(p).name for paths in rows for p in paths or ()}
 
 
 @app.task(name=CLEAN_CHUNK_IMAGES)
@@ -1250,6 +1252,35 @@ def clean_mail_headers() -> dict[str, str | int]:
             messages += len(batch)
             session.commit()
     return {"status": "success", "messages": messages}
+
+
+@app.task(name=DELETE_ORPHANED_SOURCE_ITEMS)
+@tracked_task
+def delete_orphaned_source_items(batch_size: int = 1000) -> dict[str, str | int]:
+    """Delete source items whose subclass row is gone, their Qdrant vectors first.
+    Safe to re-run."""
+    client = qdrant.get_qdrant_client()
+    deleted = 0
+    with make_session() as session:
+        orphans = orphaned_source_ids(session)
+        for batch in itertools.batched(orphans, batch_size):
+            chunks = session.query(Chunk.id, Chunk.collection_name).filter(
+                Chunk.source_id.in_(batch), Chunk.collection_name.isnot(None)
+            )
+            by_collection: dict[str, list[str]] = defaultdict(list)
+            for chunk_id, collection in chunks:
+                by_collection[collection].append(str(chunk_id))
+            for collection, ids in by_collection.items():
+                qdrant.delete_points(client, collection, ids)
+            result = session.execute(
+                delete(SourceItem)
+                .where(SourceItem.id.in_(batch))
+                .execution_options(synchronize_session=False)
+            )
+            deleted += cast(CursorResult, result).rowcount
+            session.commit()
+    logger.info("Deleted %d orphaned source items", deleted)
+    return {"status": "success", "deleted": deleted}
 
 
 @app.task(name=BACKFILL_SEARCH_VECTORS)

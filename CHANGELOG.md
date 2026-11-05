@@ -12,6 +12,41 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Deleting an email account (its mail and attachments), book, Slack channel or
+  workspace, forum post or Claude session now deletes the source items under
+  it. It used to delete only the subclass rows and leave their source items,
+  chunks and vectors behind; search then failed on every query that hit one.
+- Search skips an item it can't load (logged at WARNING with its id) instead
+  of failing.
+
+### Migrations
+
+`20261128_orphaned_source_items`: adds a deferred `AFTER DELETE` trigger to
+each source item subclass table (`mail_message`, `book_section`, …) that deletes
+the `source_item` row once its subclass row is gone. Fast: it only creates a
+function and the triggers.
+
+### Post-deploy commands
+
+Delete the source items orphaned before the migration, with their chunks and
+Qdrant vectors. Safe to re-run:
+
+```bash
+docker compose exec -T worker python - --wait maintenance delete-orphaned-source-items < tools/run_celery_task.py
+```
+
 ## v0.4.4 (2026-11-05)
 
 ### Required env vars

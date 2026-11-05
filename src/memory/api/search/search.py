@@ -44,6 +44,7 @@ from memory.common.db.models import (
     Task,
 )
 from memory.common.db.models.source_item import item_summaries
+from memory.common.db.orphans import orphaned_source_ids
 from memory.common.collections import ALL_COLLECTIONS
 from memory.api.search.date_range import date_bounds, source_ids_in_range
 from memory.api.search.embeddings import require_access_filter, search_chunks_embeddings
@@ -112,6 +113,14 @@ def apply_query_term_boost(
         chunk.boost += QUERY_TERM_BOOST * (matches / len(query_terms))
 
 
+def loadable(db, sources: Sequence[SourceItem]) -> list[SourceItem]:
+    """``sources`` minus those whose subclass row is gone: reading them raises."""
+    orphans = set(orphaned_source_ids(db, [s.id for s in sources]))
+    for source_id in sorted(orphans):
+        logger.warning("Skipping source item %s: its subclass row is missing", source_id)
+    return [s for s in sources if s.id not in orphans]
+
+
 def apply_source_boosts(
     chunks: Sequence[Chunk],
     query_terms: set[str],
@@ -136,7 +145,7 @@ def apply_source_boosts(
 
     # Single query to fetch all source metadata
     with make_session() as db:
-        sources = db.query(SourceItem).filter(SourceItem.id.in_(source_ids)).all()
+        sources = loadable(db, db.query(SourceItem).filter(SourceItem.id.in_(source_ids)).all())
         source_map = {}
         for s in sources:
             try:
@@ -846,7 +855,7 @@ async def search_sources(
             # Title recall adds chunks that never passed the Qdrant/BM25 tag filters.
             tag_filters = {k: filters.get(k) for k in ("tags", "exclude_tags")}
             query = apply_registry_filters_sql(query, tag_filters)
-            sources = query.all()
+            sources = loadable(db, query.all())
             summaries = item_summaries(db, [source.id for source in sources])
             return [
                 SearchResult.from_source_item(
