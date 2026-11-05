@@ -23,7 +23,8 @@ RUN chmod +x entry.sh
 # Create storage directory
 RUN mkdir -p /app/memory_files
 
-COPY docker/ingest_hub/supervisor.conf /etc/supervisor/conf.d/supervisor.conf
+# Appliance checkouts are written root-only, and supervisord reads this as kb.
+COPY --chmod=0644 docker/ingest_hub/supervisor.conf /etc/supervisor/conf.d/supervisor.conf
 COPY docker/ingest_hub/entry.sh ./supervisord_entry.sh
 RUN chmod +x supervisord_entry.sh
 
