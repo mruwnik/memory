@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.4.5 (2026-11-05)
 
 ### Required env vars
 
@@ -107,7 +107,8 @@ function and the triggers.
 column. Fast.
 
 `20261130_beeper`: creates the `beeper_accounts`, `beeper_networks`,
-`beeper_chats`, `beeper_participants` and `beeper_message` tables. Fast.
+`beeper_chats`, `beeper_participants`, `beeper_reactions` and `beeper_message`
+tables. Fast.
 
 `20261201_discord_channel_parent`: adds the nullable `discord_channels.parent_id`
 column. Fast.
