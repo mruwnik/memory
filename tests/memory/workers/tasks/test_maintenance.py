@@ -34,6 +34,7 @@ from memory.workers.tasks.maintenance import (
     backfill_search_vectors,
     clean_collection,
     clean_mail_headers,
+    delete_orphaned_source_items,
     reingest_chunk,
     check_batch,
     reingest_missing_chunks,
@@ -2200,6 +2201,34 @@ def test_backfill_search_vectors_fills_only_missing(db_session, source, batch_si
         ("zqxbackfill2", "'zqxbackfill2':1"),
         (None, None),
     ]
+
+
+def test_delete_orphaned_source_items_removes_rows_and_vectors(db_session, qdrant):
+    posts = {}
+    for name in ("kept", "orphan"):
+        chunk_id = str(uuid.uuid4())
+        post = BlogPost(
+            sha256=name.encode() + bytes(32 - len(name)), modality="blog", title=name, tags=[]
+        )
+        db_session.add_all([
+            post,
+            Chunk(id=chunk_id, source=post, content=name, embedding_model="m", collection_name="blog"),
+        ])
+        db_session.flush()
+        posts[name] = (post.id, chunk_id)
+    db_session.commit()
+    qd.ensure_collection_exists(qdrant, "blog", 1024)
+    chunk_ids = [chunk_id for _, chunk_id in posts.values()]
+    qd.upsert_vectors(qdrant, "blog", chunk_ids, [[1] * 1024] * 2, [{}, {}])
+    db_session.execute(text("DELETE FROM blog_post WHERE id = :id"), {"id": posts["orphan"][0]})
+    db_session.commit()
+
+    assert delete_orphaned_source_items() == {"status": "success", "deleted": 1}
+    assert delete_orphaned_source_items() == {"status": "success", "deleted": 0}
+
+    remaining = db_session.scalars(text("SELECT id FROM source_item")).all()
+    assert remaining == [posts["kept"][0]]
+    assert set(qd.get_payloads(qdrant, "blog", chunk_ids)) == {posts["kept"][1]}
 
 
 def test_clean_mail_headers_decodes_rows_and_strips_address_tags(db_session, qdrant):

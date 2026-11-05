@@ -54,6 +54,7 @@ from memory.common.celery_app import (
     BACKFILL_SEARCH_VECTORS,
     CLEAN_MAIL_HEADERS,
     CLEANUP_JUNK_NOTES,
+    DELETE_ORPHANED_SOURCE_ITEMS,
     TRACK_GIT_CHANGES,
     BACKUP_PATH,
     BACKUP_ALL,
@@ -83,6 +84,7 @@ TASK_MAPPINGS = {
         "update_metadata_for_source_items": UPDATE_METADATA_FOR_SOURCE_ITEMS,
         "reconcile_access_control": RECONCILE_ACCESS_CONTROL,
         "clean_mail_headers": CLEAN_MAIL_HEADERS,
+        "delete_orphaned_source_items": DELETE_ORPHANED_SOURCE_ITEMS,
         "backfill_search_vectors": BACKFILL_SEARCH_VECTORS,
         "cleanup_junk_notes": CLEANUP_JUNK_NOTES,
     },
@@ -383,6 +385,13 @@ def maintenance_reingest_all_empty_source_items(ctx):
 def maintenance_clean_mail_headers(ctx):
     """Decode stored mail headers and drop address tags from mail Qdrant payloads."""
     execute_task(ctx, "maintenance", "clean_mail_headers")
+
+
+@maintenance.command("delete-orphaned-source-items")
+@click.pass_context
+def maintenance_delete_orphaned_source_items(ctx):
+    """Delete source items whose subclass row is gone, and their vectors."""
+    execute_task(ctx, "maintenance", "delete_orphaned_source_items")
 
 
 @maintenance.command("backfill-search-vectors")
