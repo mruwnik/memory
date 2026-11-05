@@ -355,7 +355,7 @@ const ChatRow = ({ chat, projects, networkCollecting, networkSensitivity, onUpda
         {chat.is_merged && <Badge tone="neutral" title="Its messages are collected from the chats merged into it">Merged</Badge>}
         {!!chat.message_expiry_seconds && <Badge tone="warning" title="Messages disappear after a while">Disappearing</Badge>}
         {chat.backfill_stopped && (
-          <Badge tone="warning" title="The Beeper Server kept answering with no older history, so memory stopped asking">History incomplete</Badge>
+          <Badge tone="warning" title="The Beeper Server kept answering with no older history, so memory paused asking; it tries again on the next reconcile">History incomplete</Badge>
         )}
       </>}
       meta={[chat.last_activity_at && `Last activity: ${formatRelativeTime(chat.last_activity_at)}`]}

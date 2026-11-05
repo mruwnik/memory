@@ -295,3 +295,19 @@ def test_turning_collection_on_starts_reading(client, db_session, fake_beeper, n
 
     sent = [(c.args[0], c.kwargs["args"]) for c in no_celery_dispatch.call_args_list if "beeper" in c.args[0]]
     assert sent == [(SYNC_BEEPER_ACCOUNT, [account_id]), (SYNC_BEEPER_CHAT, [chat.id])]
+
+
+@pytest.mark.parametrize("path", ["/beeper/networks/{n}", "/beeper/chats/{c}"])
+def test_turning_collection_back_on_resumes_a_stopped_backfill(client, db_session, fake_beeper, path):
+    account_id = sign_in(client, fake_beeper)
+    network_id = client.post(f"/beeper/accounts/{account_id}/refresh").json()[1]["id"]
+    chat = BeeperChat(network_id=network_id, chat_id="!c:beeper.local", backfill_stalls=BACKFILL_MAX_STALLS)
+    db_session.add(chat)
+    db_session.commit()
+    url = path.format(n=network_id, c=chat.id)
+
+    client.patch(url, json={"collect_messages": False})
+    client.patch(url, json={"collect_messages": True})
+
+    db_session.refresh(chat)
+    assert (chat.backfill_stalls, chat.backfill_stopped) == (0, False)

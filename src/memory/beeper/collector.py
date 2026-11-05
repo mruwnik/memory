@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import Any
 
+import redis
 from celery import Celery
 from pydantic import ValidationError
 from websockets.asyncio.client import ClientConnection, connect
@@ -97,6 +98,14 @@ def record_app_state(account_id: int, state: dict[str, Any]) -> None:
         session.commit()
 
 
+async def record_connected(account_id: int, connected: bool) -> None:
+    """Share the socket's state; Redis being down mustn't take the collector with it."""
+    try:
+        await asyncio.to_thread(state.set_connected, account_id, connected)
+    except redis.RedisError:
+        logger.warning("Beeper account %s: could not record the WebSocket state", account_id)
+
+
 class no_redirects(connect):
     """A redirect could lead off the allowlist with the token."""
 
@@ -129,7 +138,7 @@ class AccountCollector:
                 logger.exception("Beeper account %s: WebSocket failed", self.info.id)
             finally:
                 self.connected = False
-                state.set_connected(self.info.id, False)
+                await record_connected(self.info.id, False)
             failures = 0 if monotonic() - started >= STABLE_SECONDS else failures + 1
             await retry_sleep(min(2 ** max(failures - 1, 0), MAX_RETRY_SECONDS))
 
@@ -152,7 +161,7 @@ class AccountCollector:
             await ws.send(json.dumps(SUBSCRIBE))
         elif kind == "subscriptions.updated":
             self.connected = True
-            state.set_connected(self.info.id, True)
+            await record_connected(self.info.id, True)
             logger.info("Beeper account %s: WebSocket subscribed", self.info.id)
             if await self.reconcile_due():
                 self.sync_queued_at = monotonic()
@@ -182,10 +191,10 @@ class CollectorManager:
 
     async def sync(self) -> None:
         """Run exactly the accounts that should be connected, restarting any
-        whose URL or token changed."""
+        whose URL or token changed or whose collector died."""
         wanted = {info.id: info for info in await asyncio.to_thread(collected_accounts)}
         for account_id, running in list(self.collectors.items()):
-            if wanted.get(account_id) != running.info:
+            if wanted.get(account_id) != running.info or self.tasks[account_id].done():
                 await self.stop(account_id)
         for account_id, info in wanted.items():
             if account_id not in self.collectors:
@@ -198,7 +207,7 @@ class CollectorManager:
                 await self.sync()
                 for collector in self.collectors.values():
                     if collector.connected:
-                        state.set_connected(collector.info.id, True)
+                        await record_connected(collector.info.id, True)
             except Exception:
                 logger.exception("Beeper collector sync failed")
 
@@ -214,8 +223,10 @@ class CollectorManager:
         if task is None:
             return
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        # A collector that died has its exception logged here, not lost.
+        [outcome] = await asyncio.gather(task, return_exceptions=True)
+        if isinstance(outcome, Exception):
+            logger.error("Beeper account %s: collector died (%s)", account_id, type(outcome).__name__)
         logger.info("Beeper account %s: collector stopped", account_id)
 
     async def stop_all(self) -> None:

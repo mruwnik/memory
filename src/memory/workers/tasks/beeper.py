@@ -68,27 +68,29 @@ def sync_all_beeper_accounts() -> dict[str, Any]:
 @app.task(name=SYNC_BEEPER_ACCOUNT)
 @tracked_task
 def sync_beeper_account(account_id: int) -> dict[str, Any]:
-    """Refresh an account's networks and chats, then read each collected chat."""
+    """Refresh an account's networks and chats, then read each collected chat,
+    retrying backfills that gave up."""
     try:
         result = asyncio.run(sync.sync_account(account_id))
     except BeeperError as e:
         return failed(e, account_id=account_id)
     for chat_pk in result.get("collected", []):
-        state.queue_chat_sync(chat_pk, random.randint(0, CHAT_JITTER_SECONDS))
+        state.queue_chat_sync(chat_pk, random.randint(0, CHAT_JITTER_SECONDS), retry_stopped=True)
     return result
 
 
 @app.task(name=SYNC_BEEPER_CHAT)
 @tracked_task
-def sync_beeper_chat(chat_id: int) -> dict[str, Any]:
+def sync_beeper_chat(chat_id: int, retry_stopped: bool = False) -> dict[str, Any]:
     """Read a chat's new messages and backfill its history, a budget at a time;
-    a run that doesn't finish queues the next, unless one is already queued."""
+    a run that doesn't finish queues the next, unless one is already queued.
+    A backfill that gave up is tried again only with ``retry_stopped``."""
     state.chat_sync_started(chat_id)
     with distributed_lock(f"memory:lock:beeper-chat:{chat_id}", CHAT_LOCK_TTL_SECONDS) as lock:
         if lock is None:
             return {"status": "locked", "chat_id": chat_id}
         try:
-            result = asyncio.run(sync.sync_chat(chat_id, settings.BEEPER_SYNC_MAX_MESSAGES_PER_RUN))
+            result = asyncio.run(sync.sync_chat(chat_id, settings.BEEPER_SYNC_MAX_MESSAGES_PER_RUN, retry_stopped))
         except BeeperError as e:
             return failed(e, chat_id=chat_id)
     if result["status"] == "ok" and not result["done"]:

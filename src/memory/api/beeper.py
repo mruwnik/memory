@@ -695,6 +695,8 @@ def update_network(
     if updates.sensitivity is not None:
         network.sensitivity = updates.sensitivity
     apply_llm_key(db, user, network, updates.llm_key)
+    if starts_collecting:
+        ingest.resume_backfills(network.chats)
     db.commit()
     db.refresh(network)
     if starts_collecting:
@@ -738,8 +740,11 @@ def update_chat(
         chat.project_id = updates.project_id
     if "sensitivity" in updates.model_fields_set:
         chat.sensitivity = updates.sensitivity
+    starts_collecting = chat.should_collect and not collected
+    if starts_collecting:
+        ingest.resume_backfills([chat])
     db.commit()
     db.refresh(chat)
-    if chat.should_collect and not collected:
+    if starts_collecting:
         state.queue_chat_sync(chat.id)
     return chat_view(chat)

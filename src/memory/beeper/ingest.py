@@ -45,11 +45,17 @@ def record_version(account: BeeperAccount, version: str | None) -> None:
 # --- Networks, chats and participants ---
 
 
+def resume_backfills(chats: list[BeeperChat]) -> None:
+    for chat in chats:
+        chat.backfill_stalls = 0
+
+
 def refresh_networks(
     session: DBSession, account: BeeperAccount, accounts: list[beeper.NetworkAccount]
 ) -> list[BeeperNetwork]:
     """Record the networks connected in Beeper; new ones follow the account's
-    collect default, and ones no longer listed are marked removed."""
+    collect default, ones no longer listed are marked removed, and ones
+    connected again resume their chats' stopped backfills."""
     for entry in accounts:
         insert_missing(
             session,
@@ -70,6 +76,9 @@ def refresh_networks(
         network.bridge_type = entry.bridge.type
         network.bridge_provider = entry.bridge.provider
         network.display_name = entry.user.display_text or entry.user.full_name or entry.user.username
+        if entry.status == "connected" and network.status not in (None, "connected"):
+            # Backfills likely stalled while the bridge was away.
+            resume_backfills(network.chats)
         network.status = entry.status
     session.flush()
     return networks
@@ -248,6 +257,10 @@ def is_older(message: beeper.Message, stored: BeeperMessage) -> bool:
     return message.edited_timestamp is None or message.edited_timestamp < stored.edited_at
 
 
+# Fields whose change, with the text unchanged, makes a message "updated".
+UPDATES = ("edited_at", "reactions", "attachments")
+
+
 def store_message(
     session: DBSession, chat: BeeperChat, message: beeper.Message, images: list[str], event_id: str | None = None
 ) -> str:
@@ -277,13 +290,14 @@ def store_message(
 
     if is_older(message, stored):
         return "unchanged"
+    updated = any(getattr(stored, name) != fields[name] for name in UPDATES)
     stored.message_id = message.id
     stored.event_id = event_id or stored.event_id
     for name, value in fields.items():
         setattr(stored, name, value)
     if stored.content == content:
         session.commit()
-        return "unchanged"
+        return "updated" if updated else "unchanged"
     stored.content = content
     clear_item_chunks(stored, session)
     process_content_item(stored, session)

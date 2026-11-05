@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+import redis
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
@@ -200,6 +201,24 @@ async def test_the_connection_state_is_shared(db_session, regular_user, socket_s
 
 
 @pytest.mark.asyncio
+async def test_a_redis_outage_does_not_stop_the_collector(
+    db_session, regular_user, socket_server, quick_retries, monkeypatch
+):
+    def unreachable(account_id: int, connected: bool) -> None:
+        raise redis.ConnectionError("redis is down")
+
+    monkeypatch.setattr(state, "set_connected", unreachable)
+    account = add_account(db_session, regular_user, socket_server.url)
+    socket_server.drop = True
+    task = asyncio.create_task(AccountCollector(AccountInfo(account.id, socket_server.url, TOKEN)).run())
+
+    await until(lambda: len(socket_server.subscriptions) >= 3)
+
+    assert not task.done()
+    task.cancel()
+
+
+@pytest.mark.asyncio
 async def test_reconnects_back_off_while_the_server_refuses(
     db_session, regular_user, socket_server, quick_retries
 ):
@@ -267,6 +286,22 @@ async def test_the_manager_follows_added_paused_and_unverified_accounts(
     await manager.sync()
     assert manager.collectors[third.id].info.token == "rotated"
     assert not_allowed.id not in running(manager)
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_the_manager_restarts_a_collector_that_died(db_session, regular_user, socket_server, idle_collectors):
+    account = add_account(db_session, regular_user, socket_server.url)
+    manager = CollectorManager()
+    await manager.sync()
+    dead = manager.tasks[account.id]
+    dead.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await dead
+
+    await manager.sync()
+
+    assert not manager.tasks[account.id].done()
     await manager.stop_all()
 
 

@@ -18,6 +18,13 @@ HOMESERVER = "https://matrix.beeper.com/"
 VERSION = "4.3.284"
 
 
+def event(kind: str, chat_id: str, ids: list[str], entries: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    body: dict[str, Any] = {"type": kind, "seq": 1, "ts": "2026-11-05T12:00:00.000Z", "chatID": chat_id, "ids": ids}
+    if entries is not None:
+        body["entries"] = entries
+    return body
+
+
 class FakeBeeperServer:
     def __init__(self):
         self.token = "fake-access-token"
@@ -88,6 +95,49 @@ class FakeBeeperServer:
 
     def message(self, chat_id: str, message_id: str) -> dict[str, Any]:
         return next(m for m in self.messages[chat_id] if m["id"] == message_id)
+
+    # --- live events, in the order Server 4.3.284 sends them ---
+
+    def send(self, chat_id: str, message_id: str, text: str, event_id: str) -> list[dict[str, Any]]:
+        """Listed by its id, then again by its Matrix event id once the homeserver echoes it."""
+        message = self.add_message(chat_id, message_id, text)
+        self.event_ids[event_id] = message_id
+        return [
+            event("message.upserted", chat_id, [message_id], [message]),
+            event("message.upserted", chat_id, [event_id], [message]),
+        ]
+
+    def event_id(self, message_id: str) -> str:
+        return next(e for e, m in self.event_ids.items() if m == message_id)
+
+    def react(self, chat_id: str, reaction_id: str, parent_id: str, participant: str, key: str) -> list[dict[str, Any]]:
+        """The hidden REACTION row by its id, then the parent by its event id with its reactions."""
+        reaction = self.add_message(chat_id, reaction_id, type="REACTION", isHidden=True, linkedMessageID=parent_id)
+        parent = self.message(chat_id, parent_id)
+        parent["reactions"] = [
+            *parent.get("reactions", []), {"id": participant, "reactionKey": key, "participantID": participant}
+        ]
+        return [
+            event("message.upserted", chat_id, [reaction_id], [reaction]),
+            event("message.upserted", chat_id, [self.event_id(parent_id)], [parent]),
+        ]
+
+    def unreact(self, chat_id: str, reaction_id: str) -> list[dict[str, Any]]:
+        """The REACTION row deleted by its id, then ``message.deleted`` naming the
+        parent's event id: the parent still exists, without that reaction."""
+        reaction = self.message(chat_id, reaction_id)
+        self.messages[chat_id].remove(reaction)
+        parent = self.message(chat_id, reaction["linkedMessageID"])
+        parent["reactions"] = []
+        return [
+            event("message.upserted", chat_id, [reaction_id], [{**reaction, "isDeleted": True}]),
+            event("message.deleted", chat_id, [self.event_id(parent["id"])]),
+        ]
+
+    def delete(self, chat_id: str, message_id: str) -> list[dict[str, Any]]:
+        message = self.message(chat_id, message_id)
+        message["isDeleted"] = True
+        return [event("message.upserted", chat_id, [message_id], [message])]
 
     # --- shapes ---
 

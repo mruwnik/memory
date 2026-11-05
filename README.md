@@ -319,8 +319,9 @@ queues its message and chat events. The socket has no replay, so a
 `BEEPER_RECONCILE_INTERVAL` (default 6 hours), re-reads each collected chat
 from where it stopped. A chat's first read backfills its history as far back
 as the Server has it, `BEEPER_SYNC_MAX_MESSAGES_PER_RUN` messages per run; a
-chat whose Server keeps finding no older history for about an hour stops
-there and shows "History incomplete". The account shows whether its
+chat whose Server keeps finding no older history for about an hour pauses
+there and shows "History incomplete"; each reconcile tries again, and the
+network reconnecting or collection being turned back on resumes it. The account shows whether its
 WebSocket is connected. Edits update messages in place, deletes remove them, and
 reactions are stored on the message they react to. Images are stored under
 `BEEPER_STORAGE_DIR`; voice-note transcriptions are stored as text. A Server

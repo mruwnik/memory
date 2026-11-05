@@ -29,7 +29,8 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.encryption import decrypt_value, encrypt_value
 
-# Runs in a row that found no older history before a chat's backfill stops for good.
+# Runs in a row that found no older history before a chat's backfill stops
+# queueing itself; reconciles still retry it.
 BACKFILL_MAX_STALLS = 20
 
 if TYPE_CHECKING:
@@ -248,7 +249,7 @@ class BeeperChat(Base):
 
     @property
     def backfill_stopped(self) -> bool:
-        """Server kept answering with no older history, so the backfill gave up."""
+        """Server kept answering with no older history, so the backfill waits for the next reconcile."""
         return not self.backfill_done and self.backfill_stalls >= BACKFILL_MAX_STALLS
 
     @property

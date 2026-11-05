@@ -25,11 +25,17 @@ def connected_key(account_id: int) -> str:
     return f"memory:beeper:connected:{account_id}"
 
 
-def queue_chat_sync(chat_pk: int, countdown: int = 0) -> bool:
+def queue_chat_sync(chat_pk: int, countdown: int = 0, retry_stopped: bool = False) -> bool:
     """Queue a read of the chat unless one is already queued; True if this call queued it."""
-    if not client().set(queued_key(chat_pk), 1, nx=True, ex=countdown + QUEUED_GRACE_SECONDS):
+    key = queued_key(chat_pk)
+    if not client().set(key, 1, nx=True, ex=countdown + QUEUED_GRACE_SECONDS):
         return False
-    app.send_task(SYNC_BEEPER_CHAT, args=[chat_pk], countdown=countdown)
+    try:
+        app.send_task(SYNC_BEEPER_CHAT, args=[chat_pk], kwargs={"retry_stopped": retry_stopped}, countdown=countdown)
+    except Exception:
+        # Nothing was queued, so nothing may wait on the mark.
+        client().delete(key)
+        raise
     return True
 
 

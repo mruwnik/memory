@@ -25,6 +25,9 @@ CHAT_PAGE_SIZE = 200
 # more but gave nothing this time (it answers an empty older page with hasMore
 # while it asks the bridge for history, and a later run asks again).
 Stop = Literal["end", "budget", "stalled"]
+# What store_message did that is news; Server rewrites unrelated fields
+# (``seen``) on every read, so a page that only repeats isn't progress.
+CHANGES = frozenset({"added", "edited", "updated", "deleted"})
 
 
 def skipped(reason: str, **extra: Any) -> dict[str, Any]:
@@ -115,12 +118,12 @@ def save_cursor(chat_pk: int, direction: Literal["before", "after"], cursor: str
         session.commit()
 
 
-def save_stalls(chat_pk: int, stop: Stop, stored: int) -> tuple[int, bool]:
-    """Count the backfill runs in a row that stalled; one that stored anything
+def save_stalls(chat_pk: int, stop: Stop, changed: int) -> tuple[int, bool]:
+    """Count the backfill runs in a row that stalled; one that changed anything
     starts over. Returns the count and whether the backfill gave up."""
     with make_session() as session:
         chat = session.get_one(BeeperChat, chat_pk)
-        stalls = 0 if stored else chat.backfill_stalls
+        stalls = 0 if changed else chat.backfill_stalls
         chat.backfill_stalls = stalls + 1 if stop == "stalled" else stalls
         session.commit()
         return chat.backfill_stalls, chat.backfill_stopped
@@ -133,35 +136,38 @@ async def crawl(
     cursor: str | None,
     direction: Literal["before", "after"],
     budget: int,
-) -> tuple[int, Stop]:
+) -> tuple[int, int, Stop]:
     """Store whole pages from ``cursor`` until Server says there are no more,
-    the budget is spent, or Server stalls. Returns (messages stored, why it stopped)."""
-    processed = 0
+    the budget is spent, or Server stalls. Returns (messages stored, how many
+    of them were new or changed, why it stopped)."""
+    processed = changed = 0
     while processed < budget:
         page = await client.messages(chat_id, cursor, direction)
         # Server answers some chats' newer pages empty with hasMore, every time.
         if not page.items and direction == "after":
-            return processed, "end"
+            return processed, changed, "end"
         if not page.items and page.has_more:
-            return processed, "stalled"
-        await store_messages(client, chat_pk, page.items)
+            return processed, changed, "stalled"
+        results = await store_messages(client, chat_pk, page.items)
         processed += len(page.items)
+        changed += sum(result in CHANGES for result in results)
         moved = page.newest_cursor if direction == "after" else page.oldest_cursor
         if page.has_more and moved in (None, cursor):
             logger.warning("Beeper chat %s: Server's %s cursor didn't move", chat_pk, direction)
-            return processed, "end" if direction == "after" else "stalled"
+            return processed, changed, "end" if direction == "after" else "stalled"
         cursor = moved or cursor
         save_cursor(chat_pk, direction, cursor, reached_end=not page.has_more)
         if not page.has_more:
-            return processed, "end"
-    return processed, "budget"
+            return processed, changed, "end"
+    return processed, changed, "budget"
 
 
-async def sync_chat(chat_pk: int, budget: int) -> dict[str, Any]:
+async def sync_chat(chat_pk: int, budget: int, retry_stopped: bool = False) -> dict[str, Any]:
     """Read a collected chat forward from its newest cursor, then backward from
     its oldest until Server has no more history, within ``budget`` messages.
     ``done`` means both directions reached their end, or the backfill gave up
-    after too many stalled runs; ``stalls`` counts those runs."""
+    after too many stalled runs; ``stalls`` counts those runs. A backfill that
+    gave up is tried again only with ``retry_stopped``."""
     with make_session() as session:
         chat = session.get(BeeperChat, chat_pk)
         if chat is None:
@@ -185,12 +191,12 @@ async def sync_chat(chat_pk: int, budget: int) -> dict[str, Any]:
             save_cursor(chat_pk, "before", page.oldest_cursor, reached_end=not page.has_more)
             oldest, backfilled = page.oldest_cursor, not page.has_more
         else:
-            processed, forward = await crawl(client, chat_pk, chat_id, newest, "after", budget)
+            processed, _, forward = await crawl(client, chat_pk, chat_id, newest, "after", budget)
             caught_up = forward == "end"
-        if not backfilled and not stopped:
-            count, stop = await crawl(client, chat_pk, chat_id, oldest, "before", budget - processed)
+        if not backfilled and (retry_stopped or not stopped):
+            count, changed, stop = await crawl(client, chat_pk, chat_id, oldest, "before", budget - processed)
             processed += count
-            stalls, stopped = save_stalls(chat_pk, stop, count)
+            stalls, stopped = save_stalls(chat_pk, stop, changed)
     backfill_over = backfilled or stopped or stop == "end"
     return {
         "status": "ok",
@@ -204,14 +210,18 @@ async def sync_chat(chat_pk: int, budget: int) -> dict[str, Any]:
 # --- Live events ---
 
 
-def listed_messages(event: dict[str, Any]) -> dict[str, beeper.Message]:
+def listed_messages(event: dict[str, Any], ids: list[str]) -> dict[str, beeper.Message]:
+    """The event's entries by the id the event names each with: its ids pair
+    with its entries in order, and an id may be the entry's Matrix event id."""
+    entries = event.get("entries") or []
+    named = zip(ids, entries) if len(ids) == len(entries) else ((e.get("id"), e) for e in entries)
     messages = {}
-    for entry in event.get("entries") or []:
+    for name, entry in named:
         try:
             message = beeper.Message.model_validate(entry)
         except ValidationError:
             continue
-        messages[message.id] = message
+        messages[str(name or message.id)] = message
     return messages
 
 
@@ -265,9 +275,10 @@ def as_chat(entry: dict[str, Any]) -> beeper.Chat | None:
 
 
 async def handle_event(account_id: int, event: dict[str, Any]) -> dict[str, Any]:
-    """Apply one WebSocket event. ``message.deleted`` also fires when a reaction
-    is removed, so its messages are fetched again and deleted only when Server
-    marks them deleted or no longer has them. ``start_sync`` names a chat to read in full."""
+    """Apply one WebSocket event. ``message.deleted`` also fires, naming the
+    parent's event id, when a reaction is removed, so its messages are fetched
+    again and deleted only when Server marks them deleted or no longer has them.
+    ``start_sync`` names a chat to read in full."""
     with make_session() as session:
         access = account_access(session.get(BeeperAccount, account_id))
         if access is not None:
@@ -291,11 +302,13 @@ async def handle_event(account_id: int, event: dict[str, Any]) -> dict[str, Any]
             return {"status": "ok", "chat_id": chat_pk, "start_sync": start_sync}
 
         ids = [str(i) for i in event.get("ids") or []]
-        listed = listed_messages(event) if kind == "message.upserted" else {}
+        listed = listed_messages(event, ids) if kind == "message.upserted" else {}
         fetched, gone = await fetch_messages(client, event["chatID"], [i for i in ids if i not in listed])
-        messages = [listed[i] for i in ids if i in listed] + list(fetched.values())
-        # Server takes a Matrix event id wherever it takes a message id.
-        event_ids = {m.id: i for i, m in fetched.items() if i != m.id and i.startswith("$")}
+        named = {**listed, **fetched}
+        messages = [named[i] for i in ids if i in named]
+        # Server takes a Matrix event id wherever it takes a message id, but
+        # only the WebSocket ever says which event a message is.
+        event_ids = {m.id: i for i, m in named.items() if i != m.id and i.startswith("$")}
         # A delete for a message Server has forgotten is a delete.
         refresh = forget_messages(chat_pk, gone) if kind == "message.deleted" else set()
         # A reaction row is never stored; its parent lists the reactions.
