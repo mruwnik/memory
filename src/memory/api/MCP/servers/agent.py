@@ -698,7 +698,9 @@ async def trigger_upsert(
     "window_sec", "max_items"}, "template": the run's input, where "{items}" becomes
     one line per item with its id, "on_edit": bool}. Set filter values must all
     hold; within a list, any value matches. exclude_channel_ids drops items in
-    those channels and their threads. Only items stored since it was last
+    those channels and their threads; a Discord thread whose parent isn't known
+    yet still matches until a thread listing or thread event records it. Beeper
+    chats aren't matched by channel id. Only items stored since it was last
     enabled match, each at most once, and only if you can read them.
 
     With "on_edit": true, an item this trigger has matched fires again each time its

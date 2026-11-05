@@ -109,6 +109,12 @@ class IngestFilter(BaseModel):
     # Author ids, usernames or email addresses (case-insensitive, exact).
     exclude_authors: FilterValues = []
 
+    @field_validator("channel_ids", "exclude_channel_ids")
+    @classmethod
+    def stripped(cls, value: list[str]) -> list[str]:
+        # Ids match exactly, and a padded exclusion would silently exclude nothing.
+        return [v.strip() for v in value]
+
     @field_validator("source_types")
     @classmethod
     def known_source_types(cls, value: list[str]) -> list[str]:

@@ -66,6 +66,18 @@ describe('Triggers', () => {
     }))
   })
 
+  it('keeps filter keys the form does not know when editing', async () => {
+    const stored = { ...config, filter: { ...config.filter, future_key: ['x'] } }
+    listTriggers.mockResolvedValue([{ id: 3, definition_id: 1, kind: 'ingest', config: stored, enabled: true, state: {} }])
+    saveTrigger.mockResolvedValue({})
+    renderWithRouter(<Triggers definitionId={1} sourceTypes={[]} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save trigger' }))
+
+    await waitFor(() => expect(saveTrigger).toHaveBeenCalledWith({ definitionId: 1, config: stored, triggerId: 3 }))
+  })
+
   it('shows a save failure once, in the form, and stops showing saving', async () => {
     listTriggers.mockResolvedValue([])
     saveTrigger.mockRejectedValue(new Error('needs a filter'))

@@ -43,6 +43,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
 
   const save = () => submit(() => onSave({
     filter: {
+      ...initial.filter,
       source_types: types,
       tags_any: splitList(tags),
       channel_ids: splitList(channels),

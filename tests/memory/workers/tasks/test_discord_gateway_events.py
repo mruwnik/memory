@@ -258,7 +258,7 @@ def test_threads_become_channels(db_session, webhook_bot, event_type):
     )
 
 
-def test_a_thread_stored_without_its_parent_gets_it_from_the_next_listing(db_session, webhook_bot):
+def test_a_thread_stored_without_its_parent_gets_it_from_a_later_thread_event(db_session, webhook_bot):
     db_session.add(DiscordServer(id=int(GUILD), name="Guild", bot_id=webhook_bot.id, verified=True))
     db_session.commit()
     handle(webhook_bot, "THREAD_CREATE", {"id": "42", "guild_id": GUILD, "name": "a thread", "type": 11})

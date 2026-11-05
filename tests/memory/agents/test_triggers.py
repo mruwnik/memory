@@ -168,6 +168,16 @@ def test_matches_every_set_criterion(f, expected):
             SlackMessage(type="slack_message", channel_id="C2", message_ts="1.0"),
             False,
         ),
+        (
+            {"channel_ids": [" C1 "], "exclude_channel_ids": [" C2"]},
+            SlackMessage(type="slack_message", channel_id="C1", message_ts="1.0"),
+            True,
+        ),
+        (
+            {"channel_ids": [" C1 ", "C2"], "exclude_channel_ids": ["C2 "]},
+            SlackMessage(type="slack_message", channel_id="C2", message_ts="1.0"),
+            False,
+        ),
     ],
 )
 def test_excluded_channels_never_match(f, item, expected):
