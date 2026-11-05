@@ -374,7 +374,8 @@ class CollectorManager:
                 logger.exception(f"Bot {bot_info.id} crashed")
                 # close() clears READY, so read it first.
                 self.hold_after_crash(bot_info, collector.is_ready())
-                await collector.close()
+            # discord.py leaves its HTTP session open on login and intents failures.
+            await collector.close()
         finally:
             # A restart may already have put a new collector under this id.
             if self.collectors.get(bot_info.id) is collector:

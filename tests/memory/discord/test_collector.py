@@ -128,7 +128,8 @@ async def test_a_bot_discord_refuses_waits_for_new_settings(db_session, refusal)
         raise refusal
 
     manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
-    with patch.object(MessageCollector, "start", refuse), patch.object(MessageCollector, "close", AsyncMock()):
+    close = AsyncMock()
+    with patch.object(MessageCollector, "start", refuse), patch.object(MessageCollector, "close", close):
         for token in ("tok", "tok", "new-token"):
             bot.token = token
             db_session.commit()
@@ -137,6 +138,7 @@ async def test_a_bot_discord_refuses_waits_for_new_settings(db_session, refusal)
                 await asyncio.sleep(0)
 
     assert logins == ["tok", "new-token"]
+    assert close.await_count == 2
     await manager.stop_all()
 
 
