@@ -370,6 +370,16 @@ class ChatMessage(SourceItem):
     __table_args__ = (Index("chat_channel_idx", "platform", "channel_id"),)
 
 
+DIRECT_CHANNEL_TYPES = {"dm", "group_dm", "mpim"}
+
+
+def said_in(author: str, channel: DiscordChannel | SlackChannel | None) -> str:
+    """``alice in #general``; a direct message names only its author."""
+    if channel is None or channel.channel_type in DIRECT_CHANNEL_TYPES:
+        return author
+    return f"{author} in #{channel.name}"
+
+
 class DiscordMessage(SourceItem):
     """Discord message collected from a channel or DM.
 
@@ -455,6 +465,10 @@ class DiscordMessage(SourceItem):
         """Format message for display."""
         author_name = self.author.username if self.author else "unknown"
         return f"{author_name}: {self.content or ''}"
+
+    @property
+    def display_title(self) -> str:
+        return said_in(self.author.username if self.author else "unknown", self.channel)
 
     @property
     def should_embed(self) -> bool:
@@ -594,6 +608,10 @@ class SlackMessage(SourceItem):
         return f"{name}: {content}"
 
     @property
+    def display_title(self) -> str:
+        return said_in(self.author_name or self.author_id or "unknown", self.channel)
+
+    @property
     def should_embed(self) -> bool:
         """Skip embedding for very short messages (< 20 chars)."""
         content = self.resolved_content or self.content or ""
@@ -721,6 +739,13 @@ class BeeperMessage(SourceItem):
             return sender
         where = " — ".join(filter(None, [self.chat.title, sender]))
         return f"[{self.chat.network.network}] {where}"
+
+    @property
+    def display_title(self) -> str:
+        sender = self.sender_name or self.sender_id or "unknown"
+        if not self.chat:
+            return sender
+        return f"[{self.chat.network.network}] " + " — ".join(filter(None, [self.chat.title, sender]))
 
     def as_payload(self) -> BeeperMessagePayload:
         chat = self.chat

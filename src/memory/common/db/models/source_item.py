@@ -762,10 +762,17 @@ class SourceItem(AccessControlMixin, Base):
         return self.filename
 
     @property
+    def display_title(self) -> str | None:
+        """A short title for search results, where ``title`` would repeat the content."""
+        return None
+
+    @property
     def display_contents(self) -> dict | None:
         payload = self.as_payload()
         payload.pop("source_id", None)  # type: ignore
+        title = self.display_title
         return {
+            **({"title": title} if title else {}),
             **payload,
             "tags": self.tags,
             "content": self.readable_content,

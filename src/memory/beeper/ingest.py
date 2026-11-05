@@ -4,12 +4,16 @@ Every write is an upsert keyed on Beeper's ids, so the backfill, the reconcile
 and live events may store the same thing in any order, any number of times.
 """
 
+import functools
 import hashlib
 import logging
 import mimetypes
 import pathlib
-from typing import Any
+import re
+from typing import Any, Callable
+from urllib.parse import unquote
 
+from markdownify import MarkdownConverter
 from sqlalchemy import exc as sqlalchemy_exc
 
 from memory.common import beeper, settings
@@ -29,6 +33,31 @@ logger = logging.getLogger(__name__)
 
 # Media Server keeps for a chat. A file:// URL would serve any file on its disk.
 ASSET_SCHEMES = ("mxc://", "localmxc://")
+
+# A tag-shaped substring alone doesn't make text HTML ("if a<b and c>d", "use
+# the <div> tag"), so converting takes markup that Matrix formatted bodies
+# produce and plain text rarely holds.
+HTML_TAG = re.compile(
+    r"</?(?:a|b|i|u|s|p|br|hr|em|strong|del|code|pre|blockquote|ul|ol|li|h[1-6]|sup|sub|span|font|div"
+    r"|table|thead|tbody|tr|th|td|caption|img|details|summary|mx-reply)\b[^<>]*>",
+    re.IGNORECASE,
+)
+HTML_MARKUP = re.compile(
+    r"<mx-reply>|<a\s+href="
+    r"|<(a|b|i|u|s|p|em|strong|del|code|pre|blockquote|ul|ol|li|h[1-6]|sup|sub|span|font|div|table|details)"
+    r"(?:\s[^<>]*)?>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+HTML_ENTITY = re.compile(r"&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);", re.IGNORECASE)
+# The quoted parent of a reply: the reply-to is stored on its own.
+MX_REPLY = re.compile(r"<mx-reply>.*?</mx-reply>", re.IGNORECASE | re.DOTALL)
+MATRIX_USER = re.compile(r"https://matrix\.to/#/(@[^/?#]+)")
+PILL = r'<a href="https://matrix\.to/#/[^"]*"[^>]*>[^<]*</a>'
+# Slack's channel_join/channel_leave messages as Beeper bridges them: nothing
+# in Server's fields marks them, so only a message that is nothing but this matches.
+MEMBERSHIP_NOTICE = re.compile(
+    rf"\s*{PILL} (?:has joined|has left|was added to|was removed from) the channel(?: by {PILL})?\s*"
+)
 
 
 def record_version(account: BeeperAccount, version: str | None) -> None:
@@ -161,10 +190,71 @@ def images_to_fetch(message: beeper.Message) -> list[beeper.Attachment]:
     ]
 
 
-def message_content(message: beeper.Message) -> str:
-    """The text, with voice-note transcriptions after it."""
+NameOf = Callable[[str], str | None]
+
+
+class ChatTextConverter(MarkdownConverter):
+    """Markdown as email HTML gets, with Matrix mention links as ``@Name``."""
+
+    def __init__(self, name_of: NameOf):
+        super().__init__(escape_underscores=False, escape_asterisks=False)
+        self.name_of = name_of
+
+    def convert_a(self, el, text, convert_as_inline):
+        user = MATRIX_USER.fullmatch(unquote(el.get("href") or ""))
+        if user is None:
+            return super().convert_a(el, text, convert_as_inline)
+        user_id = user.group(1)
+        name = text.strip() or self.name_of(user_id) or user_id[1:].split(":")[0]
+        return name if name.startswith("@") else f"@{name}"
+
+    def convert_img(self, el, text, convert_as_inline):
+        # Media comes in as attachments; the inline mxc:// reference is noise.
+        if (el.get("src") or "").startswith(ASSET_SCHEMES):
+            return ""
+        return super().convert_img(el, text, convert_as_inline)
+
+
+def is_html(text: str) -> bool:
+    # Formatted bodies escape a literal "<" as &lt;, so a bare one means plain text.
+    if not all(HTML_TAG.match(text, i) for i, char in enumerate(text) if char == "<"):
+        return False
+    return bool(HTML_MARKUP.search(text) or (HTML_ENTITY.search(text) and HTML_TAG.search(text)))
+
+
+def plain_text(text: str, name_of: NameOf) -> str:
+    """Formatted (HTML) message text as plain text; plain text unchanged."""
+    if not is_html(text):
+        return text
+    markdown = ChatTextConverter(name_of).convert(MX_REPLY.sub("", text))
+    lines = (line.rstrip() for line in markdown.splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def is_membership_notice(text: str | None) -> bool:
+    return text is not None and MEMBERSHIP_NOTICE.fullmatch(text) is not None
+
+
+def participant_name(session: DBSession, chat_pk: int, participant_id: str) -> str | None:
+    """The name of someone on the chat's network, if memory has seen them."""
+    participant = (
+        session.query(BeeperParticipant)
+        .join(BeeperChat, BeeperChat.network_id == BeeperParticipant.network_id)
+        .filter(BeeperChat.id == chat_pk, BeeperParticipant.participant_id == participant_id)
+        .one_or_none()
+    )
+    return participant and (participant.full_name or participant.username)
+
+
+def names_in_chat(session: DBSession, chat_pk: int) -> NameOf:
+    return functools.partial(participant_name, session, chat_pk)
+
+
+def message_content(message: beeper.Message, name_of: NameOf) -> str:
+    """The text as plain text, with voice-note transcriptions after it."""
     transcripts = [a.transcription.transcription for a in message.attachments if a.transcription]
-    return "\n\n".join(filter(None, [message.text, *transcripts]))
+    plain = plain_text(message.text, name_of) if message.text else None
+    return "\n\n".join(filter(None, [plain, *transcripts]))
 
 
 def reactions_by_key(message: beeper.Message) -> dict[str, list[str]] | None:
@@ -275,9 +365,11 @@ def store_message(
         return record_reaction(session, chat.id, message)
     if message.is_hidden:
         return "ignored"
+    if is_membership_notice(message.text):
+        return delete_message(session, chat.id, message.id, event_id)
 
     upsert_participant(session, chat.network, message.sender_id, full_name=message.sender_name)
-    content = message_content(message)
+    content = message_content(message, names_in_chat(session, chat.id))
     fields = message_fields(message, images)
     stored = find_message(session, chat.id, message.id, event_id)
     if stored is None:
