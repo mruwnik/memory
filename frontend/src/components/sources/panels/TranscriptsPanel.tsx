@@ -28,7 +28,7 @@ export const TranscriptsPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<TranscriptAccount | null>(null)
-  const [pushAccount, setPushAccount] = useState<{ account: TranscriptAccount; generate: boolean } | null>(null)
+  const [pushAccount, setPushAccount] = useState<TranscriptAccount | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadAccounts = useCallback(async () => {
@@ -57,7 +57,7 @@ export const TranscriptsPanel = () => {
     const created = await createTranscriptAccount(data)
     setShowForm(false)
     loadAccounts()
-    if (created.provider === 'fireflies') setPushAccount({ account: created, generate: true })
+    if (created.provider === 'fireflies') setPushAccount(created)
   }
 
   const handleUpdate = async (data: any) => {
@@ -124,7 +124,7 @@ export const TranscriptsPanel = () => {
                     Full rescan
                   </Button>
                 )}
-                <Button size="sm" onClick={() => setPushAccount({ account, generate: false })} title="URL and secret for pushing transcripts to this account">
+                <Button size="sm" onClick={() => setPushAccount(account)} title="URL and secret for pushing transcripts to this account">
                   {account.provider === 'fireflies' ? 'Webhook' : 'Push'}
                 </Button>
               </>}
@@ -164,7 +164,7 @@ export const TranscriptsPanel = () => {
       )}
 
       {pushAccount && (
-        <PushModal account={pushAccount.account} generateOnOpen={pushAccount.generate} onClose={() => { setPushAccount(null); loadAccounts() }} />
+        <PushModal account={pushAccount} onClose={() => { setPushAccount(null); loadAccounts() }} />
       )}
     </Section>
   )
@@ -329,15 +329,15 @@ const FirefliesWebhookSteps = () => (
 
 interface PushModalProps {
   account: TranscriptAccount
-  /** Generate a secret as soon as the modal opens: the setup step right after adding a Fireflies account. */
-  generateOnOpen?: boolean
   onClose: () => void
 }
 
-const PushModal = ({ account, generateOnOpen = false, onClose }: PushModalProps) => {
+const PushModal = ({ account, onClose }: PushModalProps) => {
   const { generateTranscriptWebhookSecret, deleteTranscriptWebhookSecret } = useSources()
   const [hint, setHint] = useState(account.webhook_secret_hint)
   const [secret, setSecret] = useState<string | null>(null)
+  // An account without a secret gets one on open, so the setup step never shows "not set".
+  const [generating, setGenerating] = useState(!account.webhook_secret_hint)
   const { run, notice } = useActionNotice()
   const fireflies = account.provider === 'fireflies'
 
@@ -345,12 +345,12 @@ const PushModal = ({ account, generateOnOpen = false, onClose }: PushModalProps)
     const result = await generateTranscriptWebhookSecret(account.id)
     setSecret(result.secret)
     setHint(result.webhook_secret_hint)
-  })
+  }).finally(() => setGenerating(false))
 
   // A ref, not state: StrictMode's double effect run must not rotate the secret twice.
   const generated = useRef(false)
   useEffect(() => {
-    if (!generateOnOpen || generated.current) return
+    if (account.webhook_secret_hint || generated.current) return
     generated.current = true
     generate()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, on open
@@ -375,7 +375,7 @@ const PushModal = ({ account, generateOnOpen = false, onClose }: PushModalProps)
         )}
         <DetailList items={[
           ['Ingest URL', <span className="flex items-center gap-2"><code className="break-all">{account.ingest_url}</code><CopyButton text={account.ingest_url} /></span>],
-          ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (push is disabled)'],
+          ['Secret', hint ? `Set, ending in …${hint}` : generating ? 'Generating…' : 'Not set (push is disabled)'],
         ]} />
 
         {secret && (

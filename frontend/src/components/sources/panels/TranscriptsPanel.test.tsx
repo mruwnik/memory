@@ -300,19 +300,23 @@ describe('TranscriptsPanel - push ingest', () => {
     expect(await screen.findByText(/Webhook not set up/)).toBeInTheDocument()
   })
 
-  it('generates a secret and shows it once with the URL and an example curl', async () => {
-    listTranscriptAccounts.mockResolvedValue([account({ provider: 'generic', polls: false, has_api_key: false })])
+  it.each([
+    ['generic', 'Push', /curl .*X-Hub-Signature/s],
+    ['fireflies', 'Webhook', /meeting\.transcribed/],
+  ])('opening a %s account without a secret generates one and shows it once with the URL and setup steps', async (provider, button, steps) => {
+    listTranscriptAccounts.mockResolvedValue([account({ provider, polls: provider === 'fireflies', webhook_secret_hint: null })])
     const { user } = renderWithRouter(<TranscriptsPanel />)
     await screen.findByText('My Fireflies')
 
-    await user.click(screen.getByRole('button', { name: 'Push' }))
+    await user.click(screen.getByRole('button', { name: button }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('https://mem.example/transcripts/ingest/1')).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: 'Generate secret' }))
+    expect(within(dialog).queryByText(/Not set/)).not.toBeInTheDocument()
 
-    await waitFor(() => expect(generateTranscriptWebhookSecret).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(generateTranscriptWebhookSecret).toHaveBeenCalledTimes(1))
+    expect(generateTranscriptWebhookSecret).toHaveBeenCalledWith(1)
     expect(await within(dialog).findByText('fresh-secret-abcd')).toBeInTheDocument()
-    expect(within(dialog).getByText(/curl .*X-Hub-Signature/s)).toBeInTheDocument()
+    expect(within(dialog).getByText(steps)).toBeInTheDocument()
   })
 
   it('removes an existing secret', async () => {
