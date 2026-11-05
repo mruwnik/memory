@@ -76,7 +76,7 @@ def admin_user_with_session(db_session):
 @pytest.fixture
 def discord_bot(db_session, admin_user_with_session):
     user, _ = admin_user_with_session
-    bot = DiscordBot(id=int(BOT_ID), name="Test Bot", is_active=True)
+    bot = DiscordBot(id=int(BOT_ID), application_id=int(BOT_ID), name="Test Bot", is_active=True)
     db_session.add(bot)
     user.discord_bots.append(bot)
     db_session.commit()
@@ -179,7 +179,7 @@ def two_owners(db_session, regular_user, user_session):
         (regular_user, 101, 1001, "mine"),
         (other, 102, 1002, "theirs"),
     ]:
-        bot = DiscordBot(id=bot_id, name=f"{prefix} bot", is_active=True)
+        bot = DiscordBot(id=bot_id, application_id=bot_id, name=f"{prefix} bot", is_active=True)
         owner.discord_bots.append(bot)
         db_session.add(bot)
         db_session.flush()
@@ -315,7 +315,7 @@ def sent():
 @pytest.fixture
 def two_bot_owner(db_session, two_owners, regular_user):
     """The caller also owns bot 103, alone in server 1003."""
-    bot = DiscordBot(id=103, name="extra bot", is_active=True)
+    bot = DiscordBot(id=103, application_id=103, name="extra bot", is_active=True)
     regular_user.discord_bots.append(bot)
     db_session.add(bot)
     db_session.flush()

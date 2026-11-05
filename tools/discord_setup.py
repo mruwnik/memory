@@ -86,7 +86,12 @@ def add_bot(bot_token: str, user_email: str | None):
 
     with make_session() as session:
         # Get or create DiscordBot
-        bot = session.get(DiscordBot, discord_id)
+        bot = (
+            session.query(DiscordBot)
+            .filter(DiscordBot.application_id == discord_id)
+            .order_by(DiscordBot.id)
+            .first()
+        )
         if bot:
             click.echo(f"Found existing bot: {bot.name}")
             # Update name and token in case they changed
@@ -94,10 +99,7 @@ def add_bot(bot_token: str, user_email: str | None):
             bot.token = bot_token  # Uses encrypted setter
             click.echo("Updated bot token and name")
         else:
-            bot = DiscordBot(
-                id=discord_id,
-                name=name,
-            )
+            bot = DiscordBot(application_id=discord_id, name=name)
             bot.token = bot_token  # Uses encrypted setter
             session.add(bot)
             click.echo(f"Created new bot: {name}")

@@ -472,11 +472,14 @@ DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.
 
 # Discord history backfill
 DISCORD_BACKFILL_INTERVAL = int(
-    os.getenv("DISCORD_BACKFILL_INTERVAL", 60 * 60 * 24 * 7)  # weekly (seconds)
+    os.getenv("DISCORD_BACKFILL_INTERVAL", 60 * 60 * 24)  # daily (seconds)
 )
 DISCORD_BACKFILL_JITTER_SECONDS = int(
     os.getenv("DISCORD_BACKFILL_JITTER_SECONDS", 60 * 60 * 3)  # spread dispatch over 3h
 )
+# The daily catch-up re-reads this many days of each channel, filling
+# messages a webhook delivery missed.
+DISCORD_CATCH_UP_DAYS = int(os.getenv("DISCORD_CATCH_UP_DAYS", 2))
 DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN = int(
     os.getenv("DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN", 5000)
 )
@@ -487,6 +490,13 @@ DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN = int(
 # ≤1h staleness on partial outages, so 1h is the smallest interval that
 # stays comfortably inside Slack's tier-3 rate limits while meeting RTO.
 SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 3600))  # seconds (1 hour)
+
+# Extra https origins (e.g. https://chat.example.com) that non-admin users may
+# point Slack apps' OAuth/Web API URLs and Discord bots' REST URL at. Slack's
+# and Discord's own origins are always allowed.
+CHAT_API_ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("CHAT_API_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
 
 
 # S3 backups are on only when S3_BACKUP_BUCKET is set, and then need

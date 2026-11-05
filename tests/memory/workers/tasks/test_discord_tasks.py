@@ -26,6 +26,7 @@ def discord_bot(db_session):
     """Create a Discord bot for testing."""
     bot = DiscordBot(
         id=999999999,
+        application_id=999999999,
         name="Test Bot",
         is_active=True,
     )
@@ -146,10 +147,7 @@ def test_add_discord_message_already_exists(db_session, sample_message_data, qdr
 
 def test_add_discord_message_with_reactions(db_session, sample_message_data, qdrant):
     """Test adding a Discord message with reactions."""
-    sample_message_data["reactions"] = [
-        {"emoji": "👍", "count": 5},
-        {"emoji": "❤️", "count": 3},
-    ]
+    sample_message_data["reactions"] = {"👍": ["1", "2"], "❤️": ["3"]}
 
     discord.add_discord_message(**sample_message_data)
 
@@ -158,9 +156,7 @@ def test_add_discord_message_with_reactions(db_session, sample_message_data, qdr
         .filter_by(message_id=sample_message_data["message_id"])
         .first()
     )
-    assert message.reactions is not None
-    assert len(message.reactions) == 2
-    assert message.reactions[0]["emoji"] == "👍"
+    assert message.reactions == {"👍": ["1", "2"], "❤️": ["3"]}
 
 
 def test_add_discord_message_with_embeds(db_session, sample_message_data, qdrant):
@@ -303,43 +299,66 @@ def test_edit_discord_message_not_found(db_session):
     assert result["message_id"] == 999999
 
 
-def test_update_reactions_success(db_session, sample_message_data, qdrant):
-    """Test updating reactions on a Discord message."""
-    # First add the message
+@pytest.mark.parametrize(
+    "events, expected",
+    [
+        ([("add", "🎉", "1")], {"🎉": ["1"]}),
+        ([("add", "🎉", "1"), ("add", "🎉", "1")], {"🎉": ["1"]}),
+        ([("add", "🎉", "1"), ("add", "🎉", "2"), ("remove", "🎉", "1")], {"🎉": ["2"]}),
+        ([("add", "🎉", "1"), ("add", "🔥", "2"), ("clear_emoji", "🎉", None)], {"🔥": ["2"]}),
+        ([("add", "🎉", "1"), ("add", "🔥", "2"), ("clear", None, None)], {}),
+        ([("remove", "🎉", "1")], {}),
+    ],
+)
+def test_update_reactions_applies_events_per_user(
+    db_session, sample_message_data, events, expected, qdrant
+):
     discord.add_discord_message(**sample_message_data)
 
-    # Update reactions
-    reactions = [
-        {"emoji": "🎉", "count": 10},
-        {"emoji": "🔥", "count": 5},
-    ]
+    for action, emoji, user_id in events:
+        result = discord.update_reactions(
+            sample_message_data["message_id"], action, emoji=emoji, user_id=user_id
+        )
+        assert result["status"] == "updated"
 
-    result = discord.update_reactions(
-        sample_message_data["message_id"],
-        reactions,
-    )
-
-    assert result["status"] == "updated"
-
-    # Verify the reactions were updated
     message = (
         db_session.query(DiscordMessage)
         .filter_by(message_id=sample_message_data["message_id"])
-        .first()
+        .one()
     )
-    assert message.reactions == reactions
+    assert message.reactions == expected
 
 
-def test_update_reactions_not_found(db_session):
-    """Test updating reactions on a message that doesn't exist."""
-    result = discord.update_reactions(
-        999999,
-        [{"emoji": "👍", "count": 1}],
-    )
+@pytest.mark.parametrize(
+    "attempt, status, retried",
+    [
+        (0, "retrying", True),
+        (discord.RETRIES - 1, "retrying", True),
+        (discord.RETRIES, "not_found", False),
+    ],
+)
+def test_update_reactions_waits_for_a_message_not_stored_yet(db_session, attempt, status, retried):
+    with patch.object(discord.update_reactions, "apply_async") as retry:
+        result = discord.update_reactions(999999, "add", emoji="👍", user_id="1", attempt=attempt)
 
-    assert result["status"] == "error"
-    assert result["error"] == "Message not found"
-    assert result["message_id"] == 999999
+    assert (result["status"], retry.called) == (status, retried)
+
+
+def test_delete_discord_messages_removes_rows(db_session, sample_message_data, qdrant):
+    discord.add_discord_message(**sample_message_data)
+    discord.add_discord_message(**sample_message_data | {"message_id": 999888778})
+
+    result = discord.delete_discord_messages([999888777, 999888778, 123])
+
+    assert result == {"status": "deleted", "deleted": 2}
+    assert db_session.query(DiscordMessage).count() == 0
+
+
+def test_delete_discord_messages_is_idempotent(db_session, sample_message_data, qdrant):
+    discord.add_discord_message(**sample_message_data)
+    discord.delete_discord_messages([999888777])
+
+    assert discord.delete_discord_messages([999888777]) == {"status": "deleted", "deleted": 0}
 
 
 def test_add_discord_message_unique_hash(db_session, sample_message_data, qdrant):
@@ -491,3 +510,39 @@ def test_discord_person_identifier_collision_does_not_claim_existing_person(db_s
     assert person.id != claimed.id
     assert person.identifier.startswith("discord_123456789_")
     assert person.contact_info["discord"] == "123456789"
+
+
+def test_an_unchanged_re_read_message_is_left_alone(db_session, sample_message_data, qdrant):
+    discord.add_discord_message(**sample_message_data)
+
+    with patch.object(discord, "process_content_item") as process:
+        result = discord.add_discord_message(**sample_message_data, is_edit=True)
+
+    assert result["status"] == "already_exists"
+    process.assert_not_called()
+
+
+def test_a_re_read_message_with_new_content_is_rewritten(db_session, sample_message_data, qdrant):
+    discord.add_discord_message(**sample_message_data)
+    edited = "a later edit of this message read back by the catch-up"
+
+    discord.add_discord_message(**sample_message_data | {"content": edited}, is_edit=True)
+
+    message = db_session.query(DiscordMessage).one()
+    db_session.refresh(message)
+    assert message.content == edited
+
+
+def test_a_concurrent_duplicate_insert_is_reported_as_existing(db_session, sample_message_data, qdrant, caplog):
+    """Two deliveries of one message racing past the existence check (with
+    different content, e.g. an edit) collide on the unique message_id."""
+    discord.add_discord_message(**sample_message_data)
+    racing = sample_message_data | {"content": "the racing delivery's own text for this message"}
+
+    with patch.object(discord, "check_content_exists", return_value=None), caplog.at_level("INFO"):
+        result = discord.add_discord_message(**racing)
+
+    assert result["status"] == "already_exists"
+    assert db_session.query(DiscordMessage).count() == 1
+    assert racing["content"] not in caplog.text
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]

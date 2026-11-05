@@ -60,11 +60,14 @@ def test_slack_app_secrets_clearable(db_session):
     assert app.client_secret is None
 
 
-def test_slack_app_client_id_unique(db_session):
-    db_session.add(make_app(client_id="dupe.999"))
+def test_slack_app_client_id_unique_per_user(db_session):
+    user = HumanUser(email="owner@example.com", name="Owner", password_hash="x")
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(make_app(client_id="dupe.999", created_by_user_id=user.id))
     db_session.commit()
 
-    db_session.add(make_app(client_id="dupe.999", name="Duplicate"))
+    db_session.add(make_app(client_id="dupe.999", name="Duplicate", created_by_user_id=user.id))
     with pytest.raises(IntegrityError):
         db_session.commit()
 

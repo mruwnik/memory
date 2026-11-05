@@ -56,6 +56,8 @@ from memory.common.scopes import SCOPE_AGENTS
         # in-endpoint HMAC check fires.
         "/slack/events/5",
         "/slack/events/123?wizard_nonce=abc",
+        # Discord Webhook Events are Ed25519-signed per bot.
+        "/discord/events/5",
         # Transcript push ingest authenticates per source by HMAC/bearer
         # secret inside the endpoint.
         "/transcripts/ingest/7",
@@ -118,6 +120,8 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         # ``/slack/`` and accidentally expose every authenticated Slack
         # admin route). These sibling routes MUST stay auth'd.
         "/slack/workspaces",
+        "/discord/bots",
+        "/discord/events",
         "/slack/workspaces/abc",
         "/slack/apps",
         "/slack/apps/123",

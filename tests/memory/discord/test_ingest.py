@@ -119,7 +119,7 @@ def fake_db_message():
 
 def test_ensure_message_entities_creates_rows_and_returns_channel(db_session):
     # DiscordServer.bot_id is a FK to discord_bots.id, so the bot row must exist.
-    db_session.add(DiscordBot(id=42, name="Test Bot"))
+    db_session.add(DiscordBot(id=42, application_id=42, name="Test Bot"))
     db_session.flush()
 
     message = fake_db_message()

@@ -7,6 +7,13 @@ from memory.common import discord
 BOT_ID = 42
 
 
+@pytest.fixture(autouse=True)
+def gateway_bots():
+    """These tests cover the collector path, taken by bots with a gateway."""
+    with patch("memory.common.discord.rest_access", return_value=None):
+        yield
+
+
 @pytest.fixture
 def mock_api_url():
     """Mock the API URL to avoid using actual settings"""

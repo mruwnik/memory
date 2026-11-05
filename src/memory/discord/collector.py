@@ -18,6 +18,8 @@ from discord import (
     Intents,
     Message,
     RawReactionActionEvent,
+    RawReactionClearEmojiEvent,
+    RawReactionClearEvent,
     abc,
 )
 from discord.ext import commands
@@ -25,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 
 from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, UPDATE_REACTIONS
 from memory.common.db.connection import make_session
+from memory.common.discord_events import emoji_key as event_emoji_key
 from memory.common.db.models import DiscordBot, DiscordChannel
 from memory.discord.ingest import (
     ensure_channel,
@@ -37,6 +40,10 @@ from memory.discord.ingest import (
 
 if TYPE_CHECKING:
     from celery import Celery
+
+
+def emoji_key(emoji) -> str | None:
+    return event_emoji_key({"id": emoji.id, "name": emoji.name})
 
 
 @dataclass
@@ -195,52 +202,33 @@ class MessageCollector(commands.Bot):
             logger.exception(f"Failed to delete channel {channel.id}")
 
     async def on_raw_reaction_add(self, payload: RawReactionActionEvent) -> None:
-        """Handle reaction additions."""
-        await self._process_reaction_update(payload)
+        self._queue_reaction(payload.message_id, "add", emoji_key(payload.emoji), payload.user_id)
 
-    async def on_raw_reaction_remove(
-        self, payload: RawReactionActionEvent
+    async def on_raw_reaction_remove(self, payload: RawReactionActionEvent) -> None:
+        self._queue_reaction(payload.message_id, "remove", emoji_key(payload.emoji), payload.user_id)
+
+    async def on_raw_reaction_clear(self, payload: RawReactionClearEvent) -> None:
+        self._queue_reaction(payload.message_id, "clear")
+
+    async def on_raw_reaction_clear_emoji(self, payload: RawReactionClearEmojiEvent) -> None:
+        self._queue_reaction(payload.message_id, "clear_emoji", emoji_key(payload.emoji))
+
+    def _queue_reaction(
+        self,
+        message_id: int,
+        action: str,
+        emoji: str | None = None,
+        user_id: int | None = None,
     ) -> None:
-        """Handle reaction removals."""
-        await self._process_reaction_update(payload)
-
-    async def _process_reaction_update(
-        self, payload: RawReactionActionEvent
-    ) -> None:
-        """Fetch current reactions and queue update."""
-        try:
-            channel = self.get_channel(payload.channel_id)
-            if channel is None:
-                channel = await self.fetch_channel(payload.channel_id)
-            if channel is None or not hasattr(channel, "fetch_message"):
-                return
-
-            message = await channel.fetch_message(payload.message_id)  # type: ignore[union-attr]
-
-            # Build reactions list from message
-            reactions = []
-            for reaction in message.reactions:
-                emoji_str = (
-                    str(reaction.emoji)
-                    if isinstance(reaction.emoji, str)
-                    else reaction.emoji.name
-                )
-                reactions.append(
-                    {
-                        "emoji": emoji_str,
-                        "count": reaction.count,
-                    }
-                )
-
-            self.celery_app.send_task(
-                UPDATE_REACTIONS,
-                kwargs={
-                    "message_id": payload.message_id,
-                    "reactions": reactions,
-                },
-            )
-        except Exception:
-            logger.exception(f"Error processing reaction update for {payload.message_id}")
+        self.celery_app.send_task(
+            UPDATE_REACTIONS,
+            kwargs={
+                "message_id": message_id,
+                "action": action,
+                "emoji": emoji,
+                "user_id": str(user_id) if user_id is not None else None,
+            },
+        )
 
     async def _process_message(
         self, message: Message, is_edit: bool = False
@@ -317,7 +305,7 @@ class CollectorManager:
             bots = session.query(DiscordBot).filter_by(is_active=True).all()
             for bot in bots:
                 token = bot.token
-                if token:
+                if token and bot.runs_gateway:
                     bot_infos.append(BotInfo(id=bot.id, name=bot.name, token=token))
 
         for bot_info in bot_infos:

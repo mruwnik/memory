@@ -16,7 +16,7 @@ from memory.common.db.models.slack import (
     SlackUserCredentials,
     SlackWorkspace,
 )
-from memory.common.slack import async_slack_call
+from memory.common.slack import async_slack_call, slack_api_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +95,8 @@ def _resolve_channel(session: DBSession, workspace_id: str, channel: str) -> str
     return db_channel.id
 
 
-def _get_slack_token_for_dm(token: str, workspace_id: str | None) -> str:
-    """Get the Slack access token for sending a DM (runs in thread)."""
+def _get_slack_token_for_dm(token: str, workspace_id: str | None) -> tuple[str, str]:
+    """Get the Slack access token and API URL for sending a DM (runs in thread)."""
     with make_session() as session:
         if workspace_id:
             credentials = _get_credentials_for_workspace(session, token, workspace_id)
@@ -104,12 +104,14 @@ def _get_slack_token_for_dm(token: str, workspace_id: str | None) -> str:
             credentials = _get_default_credentials(session, token)
         if not credentials.access_token:
             raise ValueError("No access token for workspace")
-        return credentials.access_token
+        return credentials.access_token, slack_api_base_url(credentials.slack_app)
 
 
-async def _open_dm_channel(slack_token: str, user_id: str) -> str:
+async def _open_dm_channel(slack_token: str, base_url: str, user_id: str) -> str:
     """Open a DM channel with a user, returning the channel ID."""
-    data = await async_slack_call(slack_token, "conversations.open", users=user_id)
+    data = await async_slack_call(
+        slack_token, "conversations.open", base_url=base_url, users=user_id
+    )
     channel = data.get("channel", {})
     channel_id = channel.get("id")
     if not channel_id:
@@ -119,11 +121,11 @@ async def _open_dm_channel(slack_token: str, user_id: str) -> str:
 
 def _get_credentials_for_send(
     token: str, workspace_id: str | None, channel: str
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     """
     Get credentials needed for sending a message (runs in thread).
 
-    Returns: (workspace_id, channel_id, access_token)
+    Returns: (workspace_id, channel_id, access_token, api_base_url)
     """
     with make_session() as session:
         if workspace_id:
@@ -137,7 +139,12 @@ def _get_credentials_for_send(
         if not access_token:
             raise ValueError("No access token for workspace")
 
-        return credentials.workspace_id, channel_id, access_token
+        return (
+            credentials.workspace_id,
+            channel_id,
+            access_token,
+            slack_api_base_url(credentials.slack_app),
+        )
 
 
 # All available channel fields that can be requested
@@ -223,11 +230,11 @@ def _get_channels_data(
 
 def _get_history_data(
     token: str, workspace_id: str | None, channel: str
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     """
     Get data needed for fetching history (runs in thread).
 
-    Returns: (workspace_id, channel_id, access_token)
+    Returns: (workspace_id, channel_id, access_token, api_base_url)
     """
     with make_session() as session:
         if workspace_id:
@@ -241,7 +248,12 @@ def _get_history_data(
         if not access_token:
             raise ValueError("No access token for workspace")
 
-        return credentials.workspace_id, channel_id, access_token
+        return (
+            credentials.workspace_id,
+            channel_id,
+            access_token,
+            slack_api_base_url(credentials.slack_app),
+        )
 
 
 # --- MCP Tools ---
@@ -286,15 +298,15 @@ async def send(
     # If user specified, we need to open a DM channel
     if user:
         # Get credentials in thread to avoid blocking
-        slack_token = await asyncio.to_thread(
+        slack_token, base_url = await asyncio.to_thread(
             _get_slack_token_for_dm, access_token.token, workspace_id
         )
         # Open DM channel with the user
-        channel_id = await _open_dm_channel(slack_token, user)
+        channel_id = await _open_dm_channel(slack_token, base_url, user)
     else:
         # Run DB operations in thread to avoid blocking event loop
         assert channel is not None  # for type checker
-        _, channel_id, slack_token = await asyncio.to_thread(
+        _, channel_id, slack_token, base_url = await asyncio.to_thread(
             _get_credentials_for_send, access_token.token, workspace_id, channel
         )
 
@@ -307,7 +319,7 @@ async def send(
         params["thread_ts"] = thread_ts
 
     # Make async API call (session is now closed)
-    data = await async_slack_call(slack_token, "chat.postMessage", **params)
+    data = await async_slack_call(slack_token, "chat.postMessage", base_url=base_url, **params)
 
     return {
         "success": True,
@@ -349,7 +361,7 @@ async def add_reaction(
         raise ValueError("Not authenticated")
 
     # Run DB operations in thread
-    _, channel_id, slack_token = await asyncio.to_thread(
+    _, channel_id, slack_token, base_url = await asyncio.to_thread(
         _get_credentials_for_send, access_token.token, workspace_id, channel
     )
 
@@ -357,6 +369,7 @@ async def add_reaction(
     await async_slack_call(
         slack_token,
         "reactions.add",
+        base_url=base_url,
         channel=channel_id,
         timestamp=message_ts,
         name=emoji,
@@ -461,7 +474,7 @@ async def get_channel_history(
         raise ValueError("Not authenticated")
 
     # Run DB operations in thread
-    ws_id, channel_id, slack_token = await asyncio.to_thread(
+    ws_id, channel_id, slack_token, base_url = await asyncio.to_thread(
         _get_history_data, access_token.token, workspace_id, channel
     )
 
@@ -476,7 +489,9 @@ async def get_channel_history(
         params["oldest"] = after
 
     # Make async API call
-    data = await async_slack_call(slack_token, "conversations.history", **params)
+    data = await async_slack_call(
+        slack_token, "conversations.history", base_url=base_url, **params
+    )
     messages = data.get("messages", [])
 
     # Format messages (user names not available without additional API calls)

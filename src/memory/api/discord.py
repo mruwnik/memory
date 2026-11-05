@@ -2,10 +2,16 @@
 
 import base64
 import binascii
-from typing import Literal, cast
+import hashlib
+import json
+import logging
+import time
+from typing import Annotated, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, StringConstraints
 from sqlalchemy.orm import Session
 
 from memory.api.auth import (
@@ -13,9 +19,15 @@ from memory.api.auth import (
     get_interactive_user,
     resolve_user_filter,
 )
+from memory.api.https_url import HttpsUrl, require_chat_url
+from memory.api.request_body import read_request_body_with_cap
+from memory.api.webhook_events import record_event_arrival, register_body_seen
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.common import discord as discord_client
+from memory.common import settings
 from memory.common.access_control import has_admin_scope
+from memory.common.celery_app import HANDLE_DISCORD_EVENT
+from memory.common.celery_app import app as celery_app
 from memory.common.data_source_access import (
     enqueue_access_control_propagation,
     mark_access_control_changed_if_needed,
@@ -33,26 +45,47 @@ from memory.common.discord_data import (
     get_user_bots,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/discord", tags=["discord"])
 
 
 # --- Bot Models ---
 
 
+PublicKey = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$", to_lower=True)]
+Snowflake = Annotated[str, StringConstraints(pattern=r"^[0-9]{1,20}$")]
+
+
 class DiscordBotCreate(BaseModel):
+    """A gateway bot needs its token; a webhook bot its application id and
+    public key (and optionally a token for the daily catch-up)."""
+
     name: str
-    token: str
+    token: str | None = None
+    application_id: Snowflake | None = None
+    public_key: PublicKey | None = None
+    api_base_url: HttpsUrl | None = None
 
 
 class DiscordBotUpdate(BaseModel):
     name: str | None = None
     is_active: bool | None = None
+    token: str | None = None
+    public_key: PublicKey | None = None
+    api_base_url: HttpsUrl | None = None
 
 
 class DiscordBotResponse(BaseModel):
     id: str  # String to avoid JavaScript precision loss on large snowflake IDs
+    application_id: str
     name: str
     is_active: bool
+    has_token: bool
+    public_key: str | None
+    api_base_url: str
+    events_url: str | None
+    last_event_at: str | None
     created_at: str | None
     updated_at: str | None
     connected: bool | None = None
@@ -130,14 +163,34 @@ def require_discord_access(
     return user, db
 
 
+def events_url_for(bot: DiscordBot) -> str:
+    return f"{settings.SERVER_URL}/discord/events/{bot.id}"
+
+
+def application_id_from_token(token: str) -> int:
+    """Discord tokens start with the base64 bot user id, which is the application id."""
+    try:
+        encoded_id = token.split(".")[0]
+        padded = encoded_id + "=" * (-len(encoded_id) % 4)
+        return int(base64.b64decode(padded).decode())
+    except (ValueError, IndexError, binascii.Error, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid bot token format")
+
+
 def bot_to_response(
     bot: DiscordBot, connected: bool | None = None
 ) -> DiscordBotResponse:
     """Convert a DiscordBot model to a response."""
     return DiscordBotResponse(
         id=str(bot.id),
+        application_id=str(bot.application_id),
         name=cast(str, bot.name),
         is_active=cast(bool, bot.is_active),
+        has_token=bot.token_encrypted is not None,
+        public_key=bot.public_key,
+        api_base_url=bot.api_base_url,
+        events_url=events_url_for(bot) if bot.public_key else None,
+        last_event_at=bot.last_event_at.isoformat() if bot.last_event_at else None,
         created_at=bot.created_at.isoformat() if bot.created_at else None,
         updated_at=bot.updated_at.isoformat() if bot.updated_at else None,
         connected=connected,
@@ -209,29 +262,38 @@ def create_bot(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> DiscordBotResponse:
-    """Create a new Discord bot.
+    """Register a Discord bot for the caller.
 
-    The bot ID is extracted from the token. The registering user owns the bot.
+    The application id comes from the body, else from the token. Each user
+    has their own row per application; registering one again updates its key,
+    token and API URL.
     """
-    # Extract bot ID from token (format: base64(user_id).timestamp.hmac)
-    try:
-        encoded_id = data.token.split(".")[0]
-        # Add padding if needed for base64 decoding
-        padded = encoded_id + "=" * (-len(encoded_id) % 4)
-        bot_id = int(base64.b64decode(padded).decode())
-    except (ValueError, IndexError, binascii.Error):
-        raise HTTPException(status_code=400, detail="Invalid bot token format")
+    token_application_id = application_id_from_token(data.token) if data.token else None
+    if data.application_id is None and token_application_id is None:
+        raise HTTPException(status_code=400, detail="Give a bot token or an application id")
+    application_id = int(data.application_id) if data.application_id else token_application_id
+    if token_application_id is not None and token_application_id != application_id:
+        raise HTTPException(status_code=400, detail="The bot token belongs to another application")
+    if not data.token and not data.public_key:
+        raise HTTPException(status_code=400, detail="A bot without a token needs a public key")
+    if data.api_base_url:
+        require_chat_url(data.api_base_url, user)
 
-    # Check if bot already exists
-    existing = db.get(DiscordBot, bot_id)
-    if existing:
-        if not existing.is_authorized(user):
-            raise HTTPException(status_code=409, detail="This bot is already registered")
-        return bot_to_response(existing)
-
-    # Create new bot
-    bot = DiscordBot(id=bot_id, name=data.name, created_by_user_id=user.id)
-    bot.token = data.token
+    existing = (
+        db.query(DiscordBot)
+        .filter(
+            DiscordBot.application_id == application_id,
+            DiscordBot.created_by_user_id == user.id,
+        )
+        .first()
+    )
+    bot = existing or DiscordBot(application_id=application_id, name=data.name, created_by_user_id=user.id)
+    if data.public_key:
+        bot.public_key = data.public_key
+    if data.api_base_url:
+        bot.api_base_url = data.api_base_url
+    if data.token:
+        bot.token = data.token
 
     db.add(bot)
     db.commit()
@@ -254,6 +316,15 @@ def update_bot(
         bot.name = updates.name
     if updates.is_active is not None:
         bot.is_active = updates.is_active
+    if updates.token:
+        if application_id_from_token(updates.token) != bot.application_id:
+            raise HTTPException(status_code=400, detail="The bot token belongs to another application")
+        bot.token = updates.token
+    if updates.public_key:
+        bot.public_key = updates.public_key
+    if updates.api_base_url:
+        require_chat_url(updates.api_base_url, user)
+        bot.api_base_url = updates.api_base_url
 
     db.commit()
     db.refresh(bot)
@@ -312,9 +383,9 @@ def get_bot_invite_url(
     Returns a URL that can be used to add the bot to a Discord server.
     Permissions: Send Messages (2048) + Read Message History (65536) + View Channels (1024)
     """
-    get_user_bot(db, bot_id, user)  # Verify authorization
+    bot = get_user_bot(db, bot_id, user)
     permissions = 2048 + 65536 + 1024  # send messages, read history, view channels
-    invite_url = f"https://discord.com/oauth2/authorize?client_id={bot_id}&scope=bot&permissions={permissions}"
+    invite_url = f"https://discord.com/oauth2/authorize?client_id={bot.application_id}&scope=bot&permissions={permissions}"
     return {"invite_url": invite_url}
 
 
@@ -330,14 +401,25 @@ def user_can_manage_server(user: User, db: Session, server: DiscordServer) -> bo
 
     Servers with bot_id IS NULL (legacy rows from before the bot_id migration,
     or rows whose bot has been deleted) are admin-only — treating them as
-    "anyone can manage" would be a privilege-escalation back door.
+    "anyone can manage" would be a privilege-escalation back door. So are
+    servers only pushed events have claimed (not ``verified``).
     """
     if has_admin_scope(user):
         return True
-    if server.bot_id is None:
+    if server.bot_id is None or not server.verified:
         return False
     user_bot_ids = {bot.id for bot in get_user_bots(db, user.id)}
     return server.bot_id in user_bot_ids
+
+
+def user_can_manage_channel(user: User, db: Session, channel: DiscordChannel) -> bool:
+    """A server channel follows its server; a DM belongs to the owner of the
+    bot that first delivered it, and without one to admins only."""
+    if channel.server is not None:
+        return user_can_manage_server(user, db, channel.server)
+    if has_admin_scope(user):
+        return True
+    return channel.bot is not None and channel.bot.created_by_user_id == user.id
 
 
 @router.get("/servers")
@@ -410,8 +492,7 @@ def update_channel(
     channel = db.get(DiscordChannel, channel_id)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-    # Check ownership via the channel's parent server
-    if channel.server and not user_can_manage_server(user, db, channel.server):
+    if not user_can_manage_channel(user, db, channel):
         raise HTTPException(status_code=404, detail="Channel not found")
 
     snap_pid, snap_sens = channel.project_id, channel.sensitivity
@@ -438,3 +519,91 @@ def update_channel(
         enqueue_access_control_propagation("discord_channel", channel)
 
     return channel_to_response(channel)
+
+
+# --- Webhook Events ---
+#
+# Discord's Webhook Events envelope: {version, application_id, type: 0 PING |
+# 1 event, event: {type, timestamp, data}}, signed with Ed25519 over
+# timestamp + body. Events carry gateway types (MESSAGE_CREATE ...) with the
+# gateway's data. Discord expects a 204 within 3 s and probes with bad
+# signatures, which must get a 401.
+
+DISCORD_EVENT_MAX_BODY_BYTES = 1_048_576
+DISCORD_EVENT_MAX_TS_SKEW_SECONDS = 5 * 60
+DISCORD_PING = 0
+DISCORD_EVENT = 1
+CARRIED_EVENT_TYPES = frozenset(
+    {
+        "MESSAGE_CREATE",
+        "MESSAGE_UPDATE",
+        "MESSAGE_DELETE",
+        "MESSAGE_DELETE_BULK",
+        "MESSAGE_REACTION_ADD",
+        "MESSAGE_REACTION_REMOVE",
+        "MESSAGE_REACTION_REMOVE_ALL",
+        "MESSAGE_REACTION_REMOVE_EMOJI",
+        "THREAD_CREATE",
+        "THREAD_UPDATE",
+    }
+)
+
+
+def verify_discord_signature(public_key_hex: str, timestamp: str, body: bytes, signature_hex: str) -> bool:
+    try:
+        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex))
+        key.verify(bytes.fromhex(signature_hex), timestamp.encode() + body)
+    except (ValueError, InvalidSignature):
+        return False
+    return True
+
+
+def is_fresh(timestamp: str) -> bool:
+    try:
+        return abs(time.time() - int(timestamp)) <= DISCORD_EVENT_MAX_TS_SKEW_SECONDS
+    except ValueError:
+        return False
+
+
+@router.post("/events/{bot_id}", status_code=204)
+async def discord_events(bot_id: int, request: Request, db: Session = Depends(get_session)) -> Response:
+    """Receive Discord Webhook Events for one bot; the work is queued."""
+    unauthorized = Response(status_code=401)
+    try:
+        body = await read_request_body_with_cap(request, DISCORD_EVENT_MAX_BODY_BYTES)
+    except HTTPException:
+        return unauthorized
+    timestamp = request.headers.get("x-signature-timestamp", "")
+    signature = request.headers.get("x-signature-ed25519", "")
+
+    bot = db.get(DiscordBot, bot_id)
+    if bot is None or not bot.is_active or not bot.public_key:
+        return unauthorized
+    if not is_fresh(timestamp) or not verify_discord_signature(bot.public_key, timestamp, body, signature):
+        logger.info("Discord event rejected for bot %s", bot_id)
+        return unauthorized
+
+    try:
+        envelope = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return Response(status_code=400)
+
+    if str(envelope.get("application_id")) != str(bot.application_id):
+        logger.info("Discord event for another application rejected for bot %s", bot_id)
+        return unauthorized
+
+    record_event_arrival(db, bot)
+    # Discord retries a delivery it saw fail; the events are idempotent, so a
+    # replay within the signature window is just acknowledged.
+    if not register_body_seen(hashlib.sha256(body).hexdigest(), DISCORD_EVENT_MAX_TS_SKEW_SECONDS + 60):
+        return Response(status_code=204)
+    if envelope.get("type") != DISCORD_EVENT:
+        return Response(status_code=204)
+    event = envelope.get("event") or {}
+    event_type = event.get("type")
+    if event_type in CARRIED_EVENT_TYPES and isinstance(event.get("data"), dict):
+        celery_app.send_task(
+            HANDLE_DISCORD_EVENT,
+            kwargs={"bot_id": bot.id, "event_type": event_type, "data": event["data"]},
+        )
+    return Response(status_code=204)

@@ -245,13 +245,15 @@ def test_items_the_owner_cannot_read_never_match(
     no_celery_dispatch.assert_not_called()
 
 
-def discord_message(db, author_id):
+def discord_message(db, author_id, bot_token="tok"):
+    bot = DiscordBot(id=200, application_id=200, name="ourbot")
+    bot.token = bot_token
     db.add_all(
         [
             DiscordServer(id=1, name="s"),
             DiscordUser(id=100, username="alice"),
             DiscordUser(id=200, username="ourbot"),
-            DiscordBot(id=200, name="ourbot"),
+            bot,
         ]
     )
     db.flush()
@@ -274,12 +276,17 @@ def discord_message(db, author_id):
     return message
 
 
-@pytest.mark.parametrize("author_id,fires", [(100, True), (200, False)])
+@pytest.mark.parametrize(
+    "author_id, bot_token, fires",
+    [(100, "tok", True), (200, "tok", False), (200, None, True)],
+)
 def test_our_own_discord_bots_never_trigger(
-    db_session, admin_user, client, no_celery_dispatch, author_id, fires
+    db_session, admin_user, client, no_celery_dispatch, author_id, bot_token, fires
 ):
+    """Only bots that authenticate with a token are known to post as their
+    application id; a token-less row's id is just what its owner typed."""
     make_trigger(db_session, make_definition(db_session, admin_user))
-    message = discord_message(db_session, author_id)
+    message = discord_message(db_session, author_id, bot_token)
 
     assert bool(triggers.match_ingest_triggers(message.id, client)) is fires
 

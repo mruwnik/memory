@@ -158,7 +158,7 @@ def discord_message(db, channel_id, server_id=None):
 
 def discord_bot_of(db, user):
     db.add_all(
-        [DiscordBot(id=1, name="bot", created_by_user_id=user.id), DiscordUser(id=9, username="u")]
+        [DiscordBot(id=1, application_id=1, name="bot", created_by_user_id=user.id), DiscordUser(id=9, username="u")]
     )
     db.commit()
 

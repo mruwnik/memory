@@ -41,12 +41,18 @@ if TYPE_CHECKING:
     from memory.common.db.models.users import User
 
 
+DEFAULT_SLACK_AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
+DEFAULT_SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
+DEFAULT_SLACK_API_BASE_URL = "https://slack.com/api"
+
+
 class SlackApp(Base):
     """A Slack app registered at api.slack.com.
 
-    One row per Slack app, used only by its owner (created_by_user_id), who
-    connects workspaces through it via OAuth. The app's client_secret and
-    signing_secret are stored encrypted.
+    One row per (Slack app, user): each user who uses an app registers it,
+    connects workspaces through it via OAuth and is its only user. The app's
+    client_secret and signing_secret are stored encrypted. The OAuth and Web
+    API URLs default to Slack's and can point at any Slack-compatible server.
 
     URL routing uses the surrogate id (not client_id), so the URL schema is
     decoupled from Slack's client_id format.
@@ -55,8 +61,21 @@ class SlackApp(Base):
     __tablename__ = "slack_apps"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    client_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
+
+    authorize_url: Mapped[str] = mapped_column(
+        Text, nullable=False, default=DEFAULT_SLACK_AUTHORIZE_URL,
+        server_default=DEFAULT_SLACK_AUTHORIZE_URL,
+    )
+    token_url: Mapped[str] = mapped_column(
+        Text, nullable=False, default=DEFAULT_SLACK_TOKEN_URL,
+        server_default=DEFAULT_SLACK_TOKEN_URL,
+    )
+    api_base_url: Mapped[str] = mapped_column(
+        Text, nullable=False, default=DEFAULT_SLACK_API_BASE_URL,
+        server_default=DEFAULT_SLACK_API_BASE_URL,
+    )
 
     client_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     signing_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
@@ -66,6 +85,9 @@ class SlackApp(Base):
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_by_user_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -86,6 +108,9 @@ class SlackApp(Base):
         CheckConstraint(
             "setup_state IN ('draft', 'signing_verified', 'live', 'degraded')",
             name="valid_slack_app_setup_state",
+        ),
+        UniqueConstraint(
+            "client_id", "created_by_user_id", name="uq_slack_apps_client_id_user"
         ),
         Index("slack_apps_setup_state_idx", "setup_state"),
         Index("slack_apps_created_by_idx", "created_by_user_id"),

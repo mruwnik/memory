@@ -54,8 +54,8 @@ def test_cli_assigns_and_lists_bot_owner(db_session, regular_user, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(discord_setup.cli, ["add-bot", "--bot-token", "test-token", "--user-email", regular_user.email])
     assert result.exit_code == 0, result.output
-    bot = db_session.get(DiscordBot, 123456789)
-    assert bot is not None and bot.created_by_user_id == regular_user.id
+    bot = db_session.query(DiscordBot).filter_by(application_id=123456789).one()
+    assert bot.created_by_user_id == regular_user.id
     result = runner.invoke(discord_setup.cli, ["list-bots"])
     assert result.exit_code == 0, result.output
     assert f"Owner: {regular_user.email}" in result.output
@@ -67,7 +67,7 @@ def test_cli_set_owner_reassigns_bot(db_session, admin_user, regular_user, monke
     from memory.common.db.models import DiscordBot
     from tools.discord_setup import cli
 
-    bot = DiscordBot(id=987654321, name="Test bot", created_by_user_id=admin_user.id)
+    bot = DiscordBot(id=987654321, application_id=987654321, name="Test bot", created_by_user_id=admin_user.id)
     db_session.add(bot)
     db_session.commit()
     monkeypatch.setattr(connection, "make_session", lambda: nullcontext(db_session))

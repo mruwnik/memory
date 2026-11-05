@@ -21,16 +21,21 @@ from memory.common import paths, settings
 from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_DISCORD_MESSAGE,
+    DELETE_DISCORD_MESSAGES,
     EDIT_DISCORD_MESSAGE,
+    HANDLE_DISCORD_EVENT,
     UPDATE_REACTIONS,
     app,
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage, Person
-from memory.common.db.models.discord import DiscordUser
+from memory.common import discord_events
+from memory.common.db.models.discord import DiscordBot, DiscordUser
 from memory.common.people import DBSession, json_string
+from memory.common.reactions import ReactionAction, Reactions, apply_reaction
 from memory.common.content_processing import (
     check_content_exists,
+    clear_item_chunks,
     create_task_result,
     process_content_item,
 )
@@ -50,25 +55,15 @@ def safe_process_discord_message(
     message_id: int,
     operation: str,
 ) -> dict[str, Any]:
-    """Wrap ``process_content_item`` so callers don't repeat the IntegrityError path.
-
-    ``add_discord_message`` and ``edit_discord_message`` had three near-
-    identical try/except blocks that all logged + returned the same
-    error dict. Centralising it here keeps the error wording in lock-
-    step and makes it easy to add common-shape recovery (e.g. retry
-    with a backoff) in one place.
-    """
+    """``process_content_item``, treating a lost insert race as the message
+    already being stored. The IntegrityError text holds the row's content, so
+    only ids are logged."""
     try:
         return process_content_item(message, session)
-    except sqlalchemy_exc.IntegrityError as e:
-        logger.error(
-            "Integrity error %s Discord message %s: %s", operation, message_id, e
-        )
-        return {
-            "status": "error",
-            "error": "Integrity error",
-            "message_id": message_id,
-        }
+    except sqlalchemy_exc.IntegrityError:
+        session.rollback()
+        logger.info("Discord message %s already stored while %s it", message_id, operation)
+        return {"status": "already_exists", "message_id": message_id}
 
 
 def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
@@ -97,17 +92,18 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
     return saved_paths
 
 
-def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Person:
-    """The Person whose contact_info names this account by id or username, else a
-    new Person. Never matched by name: the account's owner picks those."""
+def person_for_discord_user(
+    session: DBSession, discord_user: DiscordUser, by_username: bool = True
+) -> Person:
+    """The Person whose contact_info names this account by id (or username,
+    when the username came from Discord itself), else a new Person. Never
+    matched by name: the account's owner picks those."""
+    names = [json_string(str(discord_user.id))]
+    if by_username:
+        names.append(json_string(discord_user.username))
     named = (
         session.query(Person)
-        .filter(
-            or_(
-                Person.contact_info["discord"].contains(json_string(str(discord_user.id))),
-                Person.contact_info["discord"].contains(json_string(discord_user.username)),
-            )
-        )
+        .filter(or_(*(Person.contact_info["discord"].contains(n) for n in names)))
         .order_by(Person.id)
         .first()
     )
@@ -123,6 +119,11 @@ def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Pe
     )
     session.add(person)
     return person
+
+
+def is_stale_edit(message: DiscordMessage, edited_at: datetime | None) -> bool:
+    """Edits can arrive out of order; one older than the stored edit is ignored."""
+    return bool(message.edited_at and edited_at and edited_at < message.edited_at)
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
@@ -143,13 +144,15 @@ def add_discord_message(
     images: list[str] | None = None,
     embeds: list[dict] | None = None,
     attachments: list[dict] | None = None,
-    reactions: list[dict] | None = None,
+    reactions: Reactions | None = None,
     is_edit: bool = False,
+    link_by_username: bool = True,
 ) -> dict[str, Any]:
     """
     Add a Discord message to the database and queue for embedding.
 
-    This task is queued by the Discord collector when messages are received.
+    ``link_by_username`` is off for pushed messages, whose author names are
+    only as trustworthy as the pushing bot's owner.
     """
     logger.info(f"Adding Discord message {message_id}")
 
@@ -183,8 +186,12 @@ def add_discord_message(
         if existing and is_edit:
             # Update existing message
             existing_msg = cast(DiscordMessage, existing)
+            unchanged = existing_msg.content == content and edited_at_dt in (None, existing_msg.edited_at)
+            if unchanged or is_stale_edit(existing_msg, edited_at_dt):
+                return create_task_result(existing_msg, "already_exists", message_id=message_id)
             existing_msg.content = content  # type: ignore
-            existing_msg.edited_at = edited_at_dt
+            if edited_at_dt:
+                existing_msg.edited_at = edited_at_dt
             if saved_image_paths:
                 existing_msg.images = saved_image_paths  # type: ignore
             if embeds is not None:
@@ -225,7 +232,9 @@ def add_discord_message(
 
         if discord_user := session.get(DiscordUser, author_id):
             if not discord_user.person:
-                discord_user.person = person_for_discord_user(session, discord_user)
+                discord_user.person = person_for_discord_user(
+                    session, discord_user, by_username=link_by_username
+                )
                 session.flush()
             if discord_user.person not in discord_message.people:
                 discord_message.people.append(discord_user.person)
@@ -238,74 +247,191 @@ def add_discord_message(
         )
 
 
+def find_message(session, message_id: int, bot_ids: set[int] | None, lock: bool = False) -> DiscordMessage | None:
+    """The stored message, if these bots may change it (any bots when None).
+    Locks only the discord_message row, so concurrent updates queue on it alone."""
+    query = session.query(DiscordMessage).filter(DiscordMessage.message_id == message_id)
+    if lock:
+        query = query.with_for_update(of=DiscordMessage.__table__)
+    message = query.first()
+    if message is None or bot_ids is None or discord_events.may_change(message, bot_ids):
+        return message
+    logger.info("Discord message %s not changed: it belongs to another owner", message_id)
+    return None
+
+
 @app.task(name=EDIT_DISCORD_MESSAGE)
 @tracked_task
 def edit_discord_message(
     message_id: int,
     content: str,
-    edited_at: str,
+    edited_at: str | None = None,
+    bot_ids: list[int] | None = None,
 ) -> dict[str, Any]:
-    """
-    Edit a Discord message in the database.
-
-    This task is queued by the Discord collector when messages are edited.
-    """
-    logger.info(f"Editing Discord message {message_id}")
-
+    """Edit a stored message's content. An edit older than the stored one is
+    ignored; without an edit time the stored one stays."""
+    edited_at_dt = datetime.fromisoformat(edited_at.replace("Z", "+00:00")) if edited_at else None
     with make_session() as session:
-        existing = check_content_exists(
-            session, DiscordMessage, message_id=message_id
-        )
-        if not existing:
-            return {
-                "status": "error",
-                "error": "Message not found",
-                "message_id": message_id,
-            }
+        message = find_message(session, message_id, set(bot_ids) if bot_ids is not None else None)
+        if message is None:
+            return {"status": "error", "error": "Message not found", "message_id": message_id}
+        if is_stale_edit(message, edited_at_dt):
+            return create_task_result(message, "already_exists", message_id=message_id)
+        message.content = content  # type: ignore
+        if edited_at_dt:
+            message.edited_at = edited_at_dt
+        return safe_process_discord_message(message, session, message_id=message_id, operation="editing")
 
-        existing_msg = cast(DiscordMessage, existing)
-        existing_msg.content = content  # type: ignore
-        existing_msg.edited_at = datetime.fromisoformat(
-            edited_at.replace("Z", "+00:00")
-        )
 
-        return safe_process_discord_message(
-            existing_msg,
-            session,
-            message_id=message_id,
-            operation="editing",
-        )
+# A reaction can be processed before its message is stored; retry a few times
+# before dropping it.
+RETRIES = 3
+RETRY_SECONDS = 30
 
 
 @app.task(name=UPDATE_REACTIONS)
 @tracked_task
 def update_reactions(
     message_id: int,
-    reactions: list[dict],
+    action: ReactionAction,
+    emoji: str | None = None,
+    user_id: str | None = None,
+    attempt: int = 0,
+    bot_ids: list[int] | None = None,
 ) -> dict[str, Any]:
-    """
-    Update reactions on a Discord message.
+    """Apply one reaction event to a Discord message, as a per-user set
+    operation on the locked row. ``bot_ids`` limits it to messages those bots may change."""
+    retry_kwargs = {
+        "message_id": message_id,
+        "action": action,
+        "emoji": emoji,
+        "user_id": user_id,
+        "attempt": attempt + 1,
+        "bot_ids": bot_ids,
+    }
+    try:
+        with make_session() as session:
+            exists = session.query(DiscordMessage.id).filter(DiscordMessage.message_id == message_id).first()
+            message = find_message(session, message_id, set(bot_ids) if bot_ids is not None else None, lock=True)
+            if message:
+                message.reactions = apply_reaction(message.reactions, action, emoji, user_id)
+                session.commit()
+                return {"status": "updated", "message_id": message_id}
+            if exists:
+                return {"status": "ignored", "message_id": message_id}
+    except sqlalchemy_exc.OperationalError:
+        logger.info("Reaction update for Discord message %s hit a lock conflict; retrying", message_id)
+        update_reactions.apply_async(kwargs=retry_kwargs, countdown=1)  # type: ignore[attr-defined]
+        return {"status": "retrying", "message_id": message_id}
 
-    This task is queued when reactions are added or removed.
-    """
-    logger.info(f"Updating reactions on Discord message {message_id}")
+    if attempt >= RETRIES:
+        return {"status": "not_found", "message_id": message_id}
+    update_reactions.apply_async(  # type: ignore[attr-defined]
+        kwargs=retry_kwargs, countdown=RETRY_SECONDS * (attempt + 1)
+    )
+    return {"status": "retrying", "message_id": message_id}
 
+
+@app.task(name=DELETE_DISCORD_MESSAGES)
+@tracked_task
+def delete_discord_messages(message_ids: list[int], bot_ids: list[int] | None = None) -> dict[str, Any]:
+    """Delete stored Discord messages with their chunks; unknown ids, and with
+    ``bot_ids`` messages those bots may not change, are skipped.
+
+    A delete processed before its create finds nothing, and the later create
+    stores the message.
+    """
     with make_session() as session:
-        existing = check_content_exists(
-            session, DiscordMessage, message_id=message_id
-        )
-        if not existing:
-            return {
-                "status": "error",
-                "error": "Message not found",
-                "message_id": message_id,
-            }
-
-        existing_msg = cast(DiscordMessage, existing)
-        existing_msg.reactions = reactions  # type: ignore
+        messages = [
+            m
+            for m in session.query(DiscordMessage).filter(DiscordMessage.message_id.in_(message_ids)).all()
+            if bot_ids is None or discord_events.may_change(m, set(bot_ids))
+        ]
+        for message in messages:
+            clear_item_chunks(message, session)
+            session.delete(message)
         session.commit()
+        return {"status": "deleted", "deleted": len(messages)}
 
-        return {
-            "status": "updated",
-            "message_id": message_id,
-        }
+
+REACTION_EVENTS: dict[str, ReactionAction] = {
+    "MESSAGE_REACTION_ADD": "add",
+    "MESSAGE_REACTION_REMOVE": "remove",
+    "MESSAGE_REACTION_REMOVE_EMOJI": "clear_emoji",
+    "MESSAGE_REACTION_REMOVE_ALL": "clear",
+}
+
+
+def store_message(bot: DiscordBot, data: dict, is_edit: bool) -> dict[str, Any]:
+    with make_session() as session:
+        channel = discord_events.ensure_message_entities(
+            session, data, bot.id, push_only=not bot.runs_gateway
+        )
+        collect = channel.should_collect
+        session.commit()
+    if not collect:
+        return {"status": "skipped", "reason": "not_collected"}
+    return add_discord_message(
+        **discord_events.message_task_kwargs(data, bot.id, is_edit), link_by_username=False
+    )
+
+
+def update_message(bot: DiscordBot, bot_ids: set[int], data: dict) -> dict[str, Any]:
+    """A MESSAGE_UPDATE: an edit when it carries content. An update for a
+    message not stored yet stores it if the payload is complete, else is dropped."""
+    if "content" not in data:
+        return {"status": "ignored"}
+    message_id = int(data["id"])
+    with make_session() as session:
+        stored = session.query(DiscordMessage.id).filter(DiscordMessage.message_id == message_id).first()
+        if stored and find_message(session, message_id, bot_ids) is None:
+            return {"status": "ignored"}
+    if discord_events.is_full_message(data):
+        return store_message(bot, data, is_edit=True)
+    if not stored:
+        return {"status": "ignored"}
+    return edit_discord_message(message_id, data["content"], data.get("edited_timestamp"), sorted(bot_ids))
+
+
+@app.task(name=HANDLE_DISCORD_EVENT)
+@tracked_task
+def handle_discord_event(bot_id: int, event_type: str, data: dict) -> dict[str, Any]:
+    """Apply one gateway event pushed to a bot's events endpoint.
+
+    Every branch is idempotent: Discord retries deliveries and doesn't order
+    them. The bot's key only proves its owner sent the event, so edits,
+    deletes and reactions only touch messages that owner's bots may change.
+    """
+    with make_session() as session:
+        bot = session.get(DiscordBot, bot_id)
+        if bot is None:
+            return {"status": "skipped", "reason": "unknown_bot"}
+        bot_ids = discord_events.owner_bot_ids(session, bot)
+        session.expunge(bot)
+
+    if event_type == "MESSAGE_CREATE":
+        return store_message(bot, data, is_edit=False)
+    if event_type == "MESSAGE_UPDATE":
+        return update_message(bot, bot_ids, data)
+    if event_type == "MESSAGE_DELETE":
+        return delete_discord_messages([int(data["id"])], sorted(bot_ids))
+    if event_type == "MESSAGE_DELETE_BULK":
+        return delete_discord_messages([int(i) for i in data.get("ids", [])], sorted(bot_ids))
+
+    if action := REACTION_EVENTS.get(event_type):
+        user_id = data.get("user_id")
+        return update_reactions(
+            int(data["message_id"]),
+            action,
+            emoji=discord_events.emoji_key(data.get("emoji")),
+            user_id=str(user_id) if user_id is not None else None,
+            bot_ids=sorted(bot_ids),
+        )
+
+    if event_type in ("THREAD_CREATE", "THREAD_UPDATE"):
+        with make_session() as session:
+            thread = discord_events.ensure_thread(session, data, bot.id, push_only=not bot.runs_gateway)
+            session.commit()
+            return {"status": "updated", "channel_id": thread.id}
+
+    return {"status": "ignored"}

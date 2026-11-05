@@ -8,13 +8,15 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import desc
+from sqlalchemy import and_, desc, or_
 from sqlalchemy.orm import Query
 
 from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.connection import DBSession
+from memory.common.reactions import reaction_counts
 from memory.common.db.models import (
     DiscordBot,
+    DiscordBotServer,
     DiscordChannel,
     DiscordMessage,
     DiscordServer,
@@ -72,18 +74,23 @@ def caller_can_see_discord_user(
 
 
 def visible_channels(db: DBSession, caller: UserLike) -> Query[DiscordChannel]:
-    """Channels in servers owned by one of the caller's bots; admins see all.
+    """Channels in servers one of the caller's bots is verified in, and DMs
+    one of them delivered first; admins see all.
 
     Mirrors the Discord user gate and the Slack shared-workspace requirement so
-    a caller can't address a server they have no bot in. Server-less channels
-    (DMs) and servers without a bot are admin-only.
+    a caller can't address a server they have no bot in. Servers without a bot
+    and DMs without one are admin-only.
     """
     query = db.query(DiscordChannel)
     if has_admin_scope(caller):
         return query
-    return query.join(DiscordServer, DiscordChannel.server_id == DiscordServer.id).join(
-        DiscordBot, DiscordServer.bot_id == DiscordBot.id
-    ).filter(DiscordBot.created_by_user_id == caller.id)
+    caller_bots = db.query(DiscordBot.id).filter(DiscordBot.created_by_user_id == caller.id)
+    return query.filter(
+        or_(
+            DiscordChannel.server_id.in_(verified_server_ids(db, caller_bots)),
+            and_(DiscordChannel.server_id.is_(None), DiscordChannel.bot_id.in_(caller_bots)),
+        )
+    )
 
 
 def caller_can_see_discord_channel(
@@ -107,10 +114,11 @@ def find_visible_channel(
 
 
 def get_user_bots(session: DBSession, user_id: int) -> list[DiscordBot]:
-    """Get all Discord bots authorized for a user."""
+    """A user's Discord bots, gateway bots first, so the default sender is stable."""
     return (
         session.query(DiscordBot)
         .filter(DiscordBot.created_by_user_id == user_id)
+        .order_by(DiscordBot.public_key.is_not(None), DiscordBot.id)
         .all()
     )
 
@@ -188,7 +196,7 @@ def fetch_channel_history(
                 "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
                 "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
                 "is_pinned": msg.is_pinned,
-                "reactions": msg.reactions,
+                "reactions": reaction_counts(msg.reactions),
                 "reply_to": str(msg.reply_to_message_id)
                 if msg.reply_to_message_id
                 else None,
@@ -265,15 +273,23 @@ def fetch_servers(
 
     Args:
         session: Database session.
-        user_id: When provided, only return servers whose ``bot_id`` belongs
-            to a bot that this user is authorized for.  Servers with no
-            ``bot_id`` set (legacy rows or orphaned after bot deletion) are
-            excluded from per-user listings — they are admin-only.
+        user_id: When provided, only return servers one of this user's bots
+            is verified in: by owning it, or by its own token listing it.
+            Pushed events alone never show a server.
     """
     query = session.query(DiscordServer)
     if user_id is not None:
         user_bot_ids = [bot.id for bot in get_user_bots(session, user_id)]
         if not user_bot_ids:
             return []
-        query = query.filter(DiscordServer.bot_id.in_(user_bot_ids))
+        query = query.filter(DiscordServer.id.in_(verified_server_ids(session, user_bot_ids)))
     return query.order_by(DiscordServer.name).all()
+
+
+def verified_server_ids(session: DBSession, bot_ids) -> Query:
+    """Servers these bots own as verified bots, or whose membership their tokens confirmed."""
+    owned = session.query(DiscordServer.id).filter(
+        DiscordServer.verified.is_(True), DiscordServer.bot_id.in_(bot_ids)
+    )
+    member = session.query(DiscordBotServer.server_id).filter(DiscordBotServer.bot_id.in_(bot_ids))
+    return owned.union(member)

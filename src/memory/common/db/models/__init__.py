@@ -50,6 +50,7 @@ from memory.common.db.models.source_items import (
 )
 from memory.common.db.models.discord import (
     DiscordBot,
+    DiscordBotServer,
     DiscordServer,
     DiscordChannel,
     DiscordUser,
@@ -265,6 +266,7 @@ __all__ = [
     "CalendarEventPayload",
     "TranscriptAccount",
     "DiscordBot",
+    "DiscordBotServer",
     "DiscordServer",
     "DiscordChannel",
     "DiscordUser",

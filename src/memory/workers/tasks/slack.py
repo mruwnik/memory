@@ -20,9 +20,10 @@ import pathlib
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import redis
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from memory.common import paths, settings
 from memory.common.redis_lock import distributed_lock
@@ -40,6 +41,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models import SlackMessage
 from memory.common.db.models.slack import (
+    SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
@@ -52,6 +54,8 @@ from memory.common.slack import (
     iter_messages,
     iter_thread_replies,
     iter_users,
+    slack_api_base_url,
+    slack_client_for,
     workspace_poll_plan,
     workspace_sync_interval,
 )
@@ -61,6 +65,7 @@ from memory.common.content_processing import (
 )
 from memory.common.jobs import tracked_task
 from memory.common.people import find_person_by_slack_id, sync_slack_users_to_people
+from memory.common.reactions import ReactionAction, Reactions, apply_reaction, slack_reactions
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +118,9 @@ def is_channel_sync_locked(channel_id: str) -> bool:
     return client.exists(channel_sync_lock_key(channel_id)) > 0  # type: ignore[operator]
 
 
-def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, str]:
+def get_cached_user_mapping(
+    workspace_id: str, credentials: SlackUserCredentials
+) -> dict[str, str]:
     """Get user ID -> name mapping with Redis caching.
 
     Caches the result for 5 minutes to avoid N API calls when processing
@@ -129,7 +136,7 @@ def get_cached_user_mapping(workspace_id: str, access_token: str) -> dict[str, s
 
     # Cache miss - fetch from API
     try:
-        with SlackClient(access_token) as client:
+        with slack_client_for(credentials) as client:
             users_by_id = build_user_cache(client)
         # Cache the result
         redis_client.setex(cache_key, USER_CACHE_TTL_SECONDS, json.dumps(users_by_id))
@@ -303,7 +310,7 @@ def sync_slack_workspace(
             return {"status": "error", "error": "No access token"}
 
         try:
-            with SlackClient(access_token) as client:
+            with slack_client_for(credentials) as client:
                 # Test token and get workspace info
                 try:
                     auth_response = client.call("auth.test")
@@ -419,6 +426,9 @@ def sync_workspace_channels(
             name = channel.get("name") or channel_id
 
         slack_channel = session.get(SlackChannel, channel_id)
+        if slack_channel and slack_channel.workspace_id != workspace.id:
+            logger.info(f"Slack channel {channel_id} belongs to another workspace; skipped")
+            continue
         if not slack_channel:
             slack_channel = SlackChannel(id=channel_id, workspace_id=workspace.id)
 
@@ -508,7 +518,7 @@ def _sync_slack_channel_impl(
         access_token = credentials.access_token
 
         try:
-            with SlackClient(access_token) as client:
+            with slack_client_for(credentials) as client:
                 messages_synced = 0
                 oldest = channel.last_message_ts
                 newest_ts = oldest
@@ -543,6 +553,7 @@ def _sync_slack_channel_impl(
                             "reactions": msg.get("reactions"),
                             "files": msg.get("files"),
                             "slack_app_id": slack_app_id,
+                            "polled": True,
                         },
                     )
                     messages_synced += 1
@@ -599,6 +610,7 @@ def fetch_thread_replies(
                     "reactions": msg.get("reactions"),
                     "files": msg.get("files"),
                     "slack_app_id": slack_app_id,
+                    "polled": True,
                 },
             )
             messages_queued += 1
@@ -609,8 +621,9 @@ def fetch_thread_replies(
     return messages_queued
 
 
-def ensure_slack_channel(workspace_id: str, channel_id: str) -> None:
-    """Ensure a SlackChannel row exists for ``(workspace_id, channel_id)``.
+def ensure_slack_channel(workspace_id: str, channel_id: str) -> bool:
+    """Ensure a SlackChannel row exists for ``(workspace_id, channel_id)``;
+    False when the channel id belongs to another workspace.
 
     Commits in its own transaction so the channel row survives even if the
     caller's main transaction later rolls back (e.g. on an IntegrityError race
@@ -618,8 +631,8 @@ def ensure_slack_channel(workspace_id: str, channel_id: str) -> None:
     worker.
     """
     with make_session() as session:
-        if session.get(SlackChannel, channel_id):
-            return
+        if existing := session.get(SlackChannel, channel_id):
+            return existing.workspace_id == workspace_id
         try:
             channel = SlackChannel(
                 id=channel_id,
@@ -635,6 +648,30 @@ def ensure_slack_channel(workspace_id: str, channel_id: str) -> None:
             logger.debug(
                 f"SlackChannel {channel_id} concurrently created by another worker"
             )
+    return True
+
+
+def owner_app_ids(session, slack_app_id: int) -> set[int]:
+    """The apps of this app's owner; just this one for an unowned app."""
+    app = session.get(SlackApp, slack_app_id)
+    if app is None or app.created_by_user_id is None:
+        return {slack_app_id}
+    rows = session.query(SlackApp.id).filter(SlackApp.created_by_user_id == app.created_by_user_id)
+    return {row[0] for row in rows}
+
+
+def may_change(session, message: SlackMessage, slack_app_id: int | None, polled: bool = False) -> bool:
+    """Whether data from this app may edit, delete or react to a stored message:
+    one ingested by an app of the same owner. A message no app has claimed
+    changes only through a poll, which reads with the app's own token."""
+    if slack_app_id is None:
+        return True
+    if message.slack_app_id is None:
+        return polled
+    if message.slack_app_id in owner_app_ids(session, slack_app_id):
+        return True
+    logger.info(f"Slack message {message.id} not changed: it belongs to another owner")
+    return False
 
 
 def _maybe_update_content(existing: SlackMessage, content: str) -> bool:
@@ -649,7 +686,7 @@ def merge_slack_message_state(
     existing: SlackMessage,
     content: str,
     edited_ts: str | None,
-    reactions: list[dict] | None,
+    reactions: Reactions | None,
     files: list[dict] | None,
 ) -> bool:
     """Apply incoming Slack message data onto an existing row.
@@ -667,8 +704,8 @@ def merge_slack_message_state(
       both content and ``edited_ts``.
     * Both have ``edited_ts`` → newer wins; equal/older is a no-op for content.
 
-    Reactions and files: Slack delivers the full current list with each event,
-    so we always take incoming when provided (per design doc §7 decision 1).
+    Reactions and files: message payloads carry the full current lists, so
+    incoming replaces stored when provided.
 
     Returns True iff ``existing.content`` changed (caller may need to re-embed).
     """
@@ -735,6 +772,10 @@ def _link_author_person(session, message: SlackMessage, workspace_id: str) -> No
 
 def _apply_merge(session, existing: SlackMessage, msg_kwargs: dict) -> dict[str, Any]:
     """Merge incoming data into ``existing``; re-embed if content changed."""
+    if not may_change(session, existing, msg_kwargs["slack_app_id"], msg_kwargs["polled"]):
+        return {"status": "already_exists", "message_ts": existing.message_ts, "slackmessage_id": existing.id}
+    if existing.slack_app_id is None:
+        existing.slack_app_id = msg_kwargs["slack_app_id"]
     content_changed = merge_slack_message_state(
         existing,
         msg_kwargs["content"],
@@ -754,20 +795,29 @@ def _apply_merge(session, existing: SlackMessage, msg_kwargs: dict) -> dict[str,
     }
 
 
-def _download_message_images(
+SLACK_FILES_HOST = "files.slack.com"
+
+
+def download_message_images(
     files: list[dict],
     access_token: str,
     message_ts: str,
     workspace_id: str,
+    api_base_url: str,
 ) -> list[str]:
-    """Download image attachments for a Slack message; returns relative paths."""
+    """Download image attachments for a Slack message; returns relative paths.
+
+    File URLs come from the event, so the token is only sent to Slack's file
+    host or the host of the issuing app's own API.
+    """
     headers = {"Authorization": f"Bearer {access_token}"}
+    token_hosts = {SLACK_FILES_HOST, urlparse(api_base_url).hostname}
     saved: list[str] = []
     for file_info in files:
         if not file_info.get("mimetype", "").startswith("image/"):
             continue
         url = file_info.get("url_private_download") or file_info.get("url_private")
-        if not url:
+        if not url or urlparse(url).hostname not in token_hosts:
             continue
         path = download_slack_file(url, headers, message_ts, workspace_id)
         if path:
@@ -790,6 +840,7 @@ def _build_slack_message(msg_kwargs: dict, author_name: str | None,
     ).digest()
 
     return SlackMessage(
+        slack_app_id=msg_kwargs["slack_app_id"],
         modality="message",
         sha256=content_hash,
         content=content,
@@ -821,17 +872,22 @@ def _insert_new_slack_message(session, msg_kwargs: dict) -> dict[str, Any]:
     access_token = credentials.access_token if credentials else None
 
     users_by_id: dict[str, str] = {}
-    if access_token:
-        users_by_id = get_cached_user_mapping(workspace_id, access_token)
+    if credentials and access_token:
+        users_by_id = get_cached_user_mapping(workspace_id, credentials)
 
     resolved_content = resolve_mentions(content, users_by_id)
     author_name = users_by_id.get(author_id) if author_id else None
 
     saved_images: list[str] = []
-    if msg_kwargs["files"] and access_token:
-        saved_images = _download_message_images(
-            msg_kwargs["files"], access_token, message_ts, workspace_id
-        )
+    if msg_kwargs["files"] and credentials and access_token:
+        try:
+            api_base_url = slack_api_base_url(credentials.slack_app)
+        except SlackAPIError:
+            api_base_url = None
+        if api_base_url:
+            saved_images = download_message_images(
+                msg_kwargs["files"], access_token, message_ts, workspace_id, api_base_url=api_base_url
+            )
 
     message = _build_slack_message(msg_kwargs, author_name, resolved_content, saved_images)
     _link_author_person(session, message, workspace_id)
@@ -894,8 +950,12 @@ def add_slack_message(
     edited_ts: str | None = None,
     reactions: list[dict] | None = None,
     files: list[dict] | None = None,
+    polled: bool = False,
 ) -> dict[str, Any]:
     """Add or merge a Slack message in the database.
+
+    ``polled`` marks a message read with the app's own token (history sync)
+    rather than pushed; only those claim messages no app has claimed yet.
 
     On the happy path, inserts a new ``SlackMessage`` row and embeds it.
     If a row already exists (or appears mid-flight via a concurrent insert),
@@ -913,7 +973,9 @@ def add_slack_message(
 
     # Channel auto-create commits independently so it survives a later
     # IntegrityError race on the message insert (B-pre-1).
-    ensure_slack_channel(workspace_id, channel_id)
+    if not ensure_slack_channel(workspace_id, channel_id):
+        logger.info(f"Slack channel {channel_id} belongs to another workspace; message ignored")
+        return {"status": "skipped", "reason": "channel_in_another_workspace"}
 
     msg_kwargs: dict[str, Any] = {
         "workspace_id": workspace_id,
@@ -925,9 +987,10 @@ def add_slack_message(
         "reply_count": reply_count,
         "subtype": subtype,
         "edited_ts": edited_ts,
-        "reactions": reactions,
+        "reactions": slack_reactions(reactions),
         "files": files,
         "slack_app_id": slack_app_id,
+        "polled": polled,
     }
 
     result = _try_add_slack_message(msg_kwargs)
@@ -954,9 +1017,8 @@ def mark_slack_message_deleted(
     """Hard-delete a Slack message in response to a `message_deleted` event.
 
     Removes the SlackMessage row, its associated Chunks, and the underlying
-    Qdrant points. ``slack_app_id`` is accepted for parity with other push
-    handlers but isn't used for the lookup — message identity is
-    ``(workspace_id, channel_id, message_ts)``.
+    Qdrant points. Message identity is ``(workspace_id, channel_id,
+    message_ts)``; ``slack_app_id`` limits it to messages its owner's apps ingested.
     """
     with make_session() as session:
         message = (
@@ -974,6 +1036,8 @@ def mark_slack_message_deleted(
                 f"({workspace_id}, {channel_id}, {message_ts})"
             )
             return {"status": "not_found", "message_ts": message_ts}
+        if not may_change(session, message, slack_app_id):
+            return {"status": "ignored", "message_ts": message_ts}
 
         clear_item_chunks(message, session)
         session.delete(message)
@@ -981,10 +1045,11 @@ def mark_slack_message_deleted(
         return {"status": "deleted", "message_ts": message_ts}
 
 
-def _reactions_apply_lock_key(
-    workspace_id: str, channel_id: str, message_ts: str
-) -> str:
-    return f"slack_reactions_apply:{workspace_id}:{channel_id}:{message_ts}"
+# A reaction can be processed before its message is stored; retry a few
+# times, then drop it. History syncs only fetch new messages, so a dropped
+# reaction stays missing until that message is next stored in full.
+REACTION_RETRIES = 3
+REACTION_RETRY_SECONDS = 30
 
 
 @app.task(name=UPDATE_SLACK_REACTIONS)
@@ -993,24 +1058,28 @@ def update_slack_reactions(
     workspace_id: str,
     channel_id: str,
     message_ts: str,
-    reactions: list[dict] | None,
+    action: ReactionAction,
+    emoji: str | None = None,
+    user_id: str | None = None,
     slack_app_id: int | None = None,
+    attempt: int = 0,
 ) -> dict[str, Any]:
     """Apply a `reaction_added` / `reaction_removed` event to a SlackMessage.
 
-    Slack delivers the FULL current reaction list on each event, so naive
-    overwrite is correct (per §7 decision 1). If the parent message row
-    is missing (race against ingestion), enqueue a single-message
-    conversations.history lookup and re-try.
-
-    Coalescing: a short-lived Redis lock keyed on the message ts prevents
-    duplicate concurrent updates from clobbering each other.
+    Only the slack_message row is locked while the per-user set operation
+    applies, so concurrent events for one message queue on it rather than
+    losing each other's updates; a lock conflict is retried.
     """
-    redis_client = get_redis_client()
-    lock_key = _reactions_apply_lock_key(workspace_id, channel_id, message_ts)
-    if not redis_client.set(lock_key, "1", nx=True, ex=30):
-        return {"status": "skipped", "reason": "concurrent_update"}
-
+    retry_kwargs = {
+        "workspace_id": workspace_id,
+        "channel_id": channel_id,
+        "message_ts": message_ts,
+        "action": action,
+        "emoji": emoji,
+        "user_id": user_id,
+        "slack_app_id": slack_app_id,
+        "attempt": attempt + 1,
+    }
     try:
         with make_session() as session:
             message = (
@@ -1020,36 +1089,26 @@ def update_slack_reactions(
                     SlackMessage.channel_id == channel_id,
                     SlackMessage.message_ts == message_ts,
                 )
+                .with_for_update(of=SlackMessage.__table__)
                 .first()
             )
-            if not message:
-                # Parent missing — fall back to a single-message conversations.history
-                # fetch via add_slack_message, which will create the row. We pass the
-                # reactions list along so it's set on insert.
-                logger.info(
-                    f"update_slack_reactions: parent missing for "
-                    f"({workspace_id}, {channel_id}, {message_ts}); "
-                    f"deferring to add_slack_message"
-                )
-                app.send_task(
-                    ADD_SLACK_MESSAGE,
-                    kwargs={
-                        "workspace_id": workspace_id,
-                        "channel_id": channel_id,
-                        "message_ts": message_ts,
-                        "author_id": None,
-                        "content": "",
-                        "reactions": reactions,
-                        "slack_app_id": slack_app_id,
-                    },
-                )
-                return {"status": "deferred", "message_ts": message_ts}
+            if message and not may_change(session, message, slack_app_id):
+                return {"status": "ignored", "message_ts": message_ts}
+            if message:
+                message.reactions = apply_reaction(message.reactions, action, emoji, user_id)
+                session.commit()
+                return {"status": "updated", "message_ts": message_ts}
+    except OperationalError:
+        logger.info(f"Reaction update for Slack message {message_ts} hit a lock conflict; retrying")
+        update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=1)  # type: ignore[attr-defined]
+        return {"status": "retrying", "message_ts": message_ts}
 
-            message.reactions = reactions
-            session.commit()
-            return {"status": "updated", "message_ts": message_ts}
-    finally:
-        redis_client.delete(lock_key)
+    if attempt >= REACTION_RETRIES:
+        return {"status": "not_found", "message_ts": message_ts}
+    update_slack_reactions.apply_async(  # type: ignore[attr-defined]
+        kwargs=retry_kwargs, countdown=REACTION_RETRY_SECONDS * (attempt + 1)
+    )
+    return {"status": "retrying", "message_ts": message_ts}
 
 
 @app.task(name=UPDATE_SLACK_CHANNEL)
@@ -1072,6 +1131,9 @@ def update_slack_channel(
 
     with make_session() as session:
         channel = session.get(SlackChannel, channel_id)
+        if channel is not None and channel.workspace_id != workspace_id:
+            logger.info(f"Slack channel {channel_id} belongs to another workspace; event ignored")
+            return {"status": "ignored", "channel_id": channel_id}
         created = channel is None
         if channel is None:
             channel = SlackChannel(

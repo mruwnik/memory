@@ -1,17 +1,34 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
-import { renderWithUser, mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
+import { renderWithUser, mcpToolFromRequest, mockFetch, mockFetchRoutes, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { DiscordPanel } from './DiscordPanel'
 
 const authMe = { json: { user_id: 1, name: 'A', email: 'a@b.c', user_type: 'human', scopes: ['*'] } }
 
 const bot = {
   id: 'bot-1',
+  application_id: '1111',
   name: 'KB Bot',
   is_active: true,
+  has_token: true,
+  public_key: null,
+  api_base_url: 'https://discord.com/api/v10',
+  events_url: null,
+  last_event_at: null,
   created_at: '',
   updated_at: '2030-01-01T00:00:00Z',
   connected: true,
+}
+
+const webhookBot = {
+  ...bot,
+  id: 'bot-2',
+  name: 'Hooked',
+  has_token: false,
+  public_key: 'ab'.repeat(32),
+  events_url: 'https://memory.example.com/discord/events/bot-2',
+  last_event_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  connected: false,
 }
 
 const server = {
@@ -81,36 +98,99 @@ describe('DiscordPanel load states', () => {
   })
 })
 
-describe('DiscordPanel add bot', () => {
+// The bots route answers a POST with the created bot and a GET with the list.
+const withCreate = (created: unknown) => {
+  const list = routes({})
+  return mockFetch(async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/discord/bots') && init?.method === 'POST') return mockResponse({ json: created })
+    const tool = mcpToolFromRequest(input, init)
+    const target = tool === null ? url : `${url}/${tool}`
+    const match = Object.entries(list).find(([pattern]) => pattern !== '__default' && target.includes(pattern))
+    return mockResponse(match ? match[1] : list.__default)
+  })
+}
+
+const postedBot = (mock: ReturnType<typeof mockFetch>) => {
+  const post = mock.mock.calls.find(
+    ([url, init]) => String(url).endsWith('/discord/bots') && (init as RequestInit)?.method === 'POST',
+  )
+  return post && JSON.parse((post[1] as RequestInit).body as string)
+}
+
+const openAddBot = async () => {
+  const { user } = renderWithUser(<DiscordPanel />)
+  await waitFor(() => expect(screen.getByText(/No Discord bots configured/)).toBeInTheDocument())
+  await user.click(screen.getAllByRole('button', { name: 'Add bot' })[0])
+  return { user, dialog: await screen.findByRole('dialog') }
+}
+
+describe('DiscordPanel add webhook bot', () => {
+  it('asks for the application id and public key by default, then shows the events URL', async () => {
+    const mock = withCreate(webhookBot)
+    const { user, dialog } = await openAddBot()
+
+    expect(within(dialog).getByRole('button', { name: 'Webhook' })).toHaveAttribute('aria-pressed', 'true')
+    await user.type(within(dialog).getByLabelText('Bot name'), ' Hooked ')
+    await user.type(within(dialog).getByLabelText('Application ID'), '1111')
+    await user.type(within(dialog).getByLabelText('Public key'), 'ab'.repeat(32))
+    await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
+
+    await waitFor(() => expect(postedBot(mock)).toEqual({ name: 'Hooked', application_id: '1111', public_key: 'ab'.repeat(32) }))
+    expect(await within(dialog).findByDisplayValue(webhookBot.events_url)).toBeInTheDocument()
+  })
+
+  it('sends the optional token and API URL when given', async () => {
+    const mock = withCreate(webhookBot)
+    const { user, dialog } = await openAddBot()
+
+    await user.type(within(dialog).getByLabelText('Bot name'), 'Hooked')
+    await user.type(within(dialog).getByLabelText('Application ID'), '1111')
+    await user.type(within(dialog).getByLabelText('Public key'), 'ab'.repeat(32))
+    await user.type(within(dialog).getByLabelText(/Bot token/), 'tok')
+    await user.click(within(dialog).getByText('Advanced'))
+    await user.type(within(dialog).getByLabelText('API base URL'), 'https://chat.example.com/discord/api/v10')
+    await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
+
+    await waitFor(() => expect(postedBot(mock)).toEqual({
+      name: 'Hooked', application_id: '1111', public_key: 'ab'.repeat(32), token: 'tok',
+      api_base_url: 'https://chat.example.com/discord/api/v10',
+    }))
+  })
+})
+
+describe('DiscordPanel add gateway bot', () => {
   it('validates that both fields are required', async () => {
     mockFetchRoutes(routes({}))
-    const { user } = renderWithUser(<DiscordPanel />)
-    await waitFor(() => expect(screen.getByText(/No Discord bots configured/)).toBeInTheDocument())
-    await user.click(screen.getAllByRole('button', { name: 'Add bot' })[0])
-    const dialog = await screen.findByRole('dialog')
-    // jsdom blocks empty required submit, so fill only one field then submit
-    await user.type(within(dialog).getByPlaceholderText('e.g., My Bot'), 'X')
-    await user.type(within(dialog).getByPlaceholderText(/Discord bot token/), ' ')
+    const { user, dialog } = await openAddBot()
+    await user.click(within(dialog).getByRole('button', { name: 'Gateway bot' }))
+    await user.type(within(dialog).getByLabelText('Bot name'), 'X')
+    await user.type(within(dialog).getByLabelText('Bot token'), ' ')
     await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
     expect(await within(dialog).findByText('Please fill in all fields')).toBeInTheDocument()
   })
 
   it('submits a create with trimmed name and token', async () => {
-    const mock = mockFetchRoutes(routes({}))
-    const { user } = renderWithUser(<DiscordPanel />)
-    await waitFor(() => expect(screen.getByText(/No Discord bots configured/)).toBeInTheDocument())
-    await user.click(screen.getAllByRole('button', { name: 'Add bot' })[0])
-    const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByPlaceholderText('e.g., My Bot'), '  My Bot  ')
-    await user.type(within(dialog).getByPlaceholderText(/Discord bot token/), 'tok123')
+    const mock = withCreate(bot)
+    const { user, dialog } = await openAddBot()
+    await user.click(within(dialog).getByRole('button', { name: 'Gateway bot' }))
+    await user.type(within(dialog).getByLabelText('Bot name'), '  My Bot  ')
+    await user.type(within(dialog).getByLabelText('Bot token'), 'tok123')
     await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
-    await waitFor(() => {
-      const post = mock.mock.calls.find(
-        ([url, init]) => String(url).endsWith('/discord/bots') && (init as RequestInit)?.method === 'POST',
-      )
-      expect(post).toBeTruthy()
-      expect(JSON.parse((post![1] as RequestInit).body as string)).toEqual({ name: 'My Bot', token: 'tok123' })
-    })
+    await waitFor(() => expect(postedBot(mock)).toEqual({ name: 'My Bot', token: 'tok123' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+})
+
+describe('DiscordPanel webhook bot row', () => {
+  it('shows delivery, the last event and the events URL instead of the gateway state', async () => {
+    mockFetchRoutes(routes({ bots: [webhookBot] }))
+    renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('Hooked')).toBeInTheDocument())
+    expect(screen.getByText('Webhook')).toBeInTheDocument()
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument()
+    expect(screen.getByText(/Last event: 5m ago/)).toBeInTheDocument()
+    expect(screen.getByDisplayValue(webhookBot.events_url)).toBeInTheDocument()
   })
 })
 

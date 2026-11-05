@@ -123,7 +123,7 @@ async def send_to_channel(
         if server_bot is not None and sender != server_bot:
             raise ValueError(f"Bot {bot_id} is not in this channel's server")
     else:
-        sender = server_bot or resolve_bot(session, None)
+        sender = server_bot or channel.bot_id or resolve_bot(session, None)
 
     success = await asyncio.to_thread(
         discord_client.send_to_channel, sender, target, message

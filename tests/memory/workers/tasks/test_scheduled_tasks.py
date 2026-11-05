@@ -157,6 +157,7 @@ def test_send_via_slack_routes(monkeypatch, target, expect_open):
 
     monkeypatch.setattr(scheduled_tasks, "make_session", fake_session)
     monkeypatch.setattr(scheduled_tasks, "async_slack_call", fake_call)
+    monkeypatch.setattr(scheduled_tasks, "slack_api_base_url", lambda app: "https://slack.com/api")
 
     assert (
         scheduled_tasks.send_via_slack(make_notification_params("slack", target))

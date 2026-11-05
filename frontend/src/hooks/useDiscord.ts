@@ -8,8 +8,15 @@ import { apiError } from './apiError'
 // Note: IDs are strings to avoid JavaScript precision loss on large Discord snowflake IDs
 export interface DiscordBot {
   id: string
+  application_id: string
   name: string
   is_active: boolean
+  has_token: boolean
+  public_key: string | null
+  api_base_url: string
+  // Where Discord delivers Webhook Events; set once the bot has a public key
+  events_url: string | null
+  last_event_at: string | null
   created_at: string | null
   updated_at: string | null
   connected: boolean | null
@@ -17,12 +24,18 @@ export interface DiscordBot {
 
 export interface DiscordBotCreate {
   name: string
-  token: string
+  token?: string
+  application_id?: string
+  public_key?: string
+  api_base_url?: string
 }
 
 export interface DiscordBotUpdate {
   name?: string
   is_active?: boolean
+  token?: string
+  public_key?: string
+  api_base_url?: string
 }
 
 // Types for Discord Servers

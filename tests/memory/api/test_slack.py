@@ -492,13 +492,20 @@ def test_workspace_lists_the_callers_apps_and_their_event_setup(
 ):
     slack_app.setup_state = "draft"
     slack_app.created_by_user_id = user.id
+    slack_app.last_event_at = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
     db_session.commit()
 
     data = client.get(f"/slack/workspaces/{slack_workspace.id}").json()
 
     assert data["poll_blocker"] is None
     assert data["apps"] == [
-        {"id": slack_app.id, "name": "Test Slack App", "setup_state": "draft", "is_owner": True}
+        {
+            "id": slack_app.id,
+            "name": "Test Slack App",
+            "setup_state": "draft",
+            "is_owner": True,
+            "last_event_at": "2026-11-05T12:00:00+00:00",
+        }
     ]
 
 
@@ -597,7 +604,7 @@ def _mock_slack_token_exchange(team_id: str, **authed_user_overrides):
     """Build the AsyncClient context manager that returns a fake Slack
     oauth.v2.access response with the given team_id. Use as:
 
-        with patch("memory.api.slack.httpx.AsyncClient") as m:
+        with patch("memory.api.slack.public_http_client") as m:
             m.return_value = _mock_slack_token_exchange(team_id="T1234ABCD")
             ...
 
@@ -722,7 +729,7 @@ def test_callback_malformed_team_id_returns_400(
     reach the DB or the HTML template. Catches XSS via team_id if the
     regex is ever loosened."""
     signed_state = _seed_state_for_user(db_session, user.id)
-    with patch("memory.api.slack.httpx.AsyncClient") as mock_httpx:
+    with patch("memory.api.slack.public_http_client") as mock_httpx:
         mock_httpx.return_value = _mock_slack_token_exchange(
             team_id="<script>alert(1)</script>"
         )
@@ -742,7 +749,7 @@ def test_callback_happy_path_creates_credentials_with_slack_app_id(
     user_id), and returns the BroadcastChannel HTML."""
     signed_state = _seed_state_for_user(db_session, user.id)
     with (
-        patch("memory.api.slack.httpx.AsyncClient") as mock_httpx,
+        patch("memory.api.slack.public_http_client") as mock_httpx,
         patch("memory.api.slack.celery_app.send_task"),
     ):
         mock_httpx.return_value = _mock_slack_token_exchange(
@@ -773,6 +780,34 @@ def test_callback_happy_path_creates_credentials_with_slack_app_id(
     assert creds.slack_app_id == authorized_slack_app.id
 
 
+@pytest.mark.parametrize(
+    "scope, scopes",
+    [
+        ("channels:history,users:read", ["channels:history", "users:read"]),
+        ("channels:history, users:read", ["channels:history", "users:read"]),
+        ("channels:history users:read", ["channels:history", "users:read"]),
+        ("channels:history", ["channels:history"]),
+        ("", []),
+    ],
+)
+def test_callback_stores_each_granted_scope(
+    client, db_session, user, authorized_slack_app, scope, scopes
+):
+    signed_state = _seed_state_for_user(db_session, user.id)
+    with (
+        patch("memory.api.slack.public_http_client") as mock_httpx,
+        patch("memory.api.slack.celery_app.send_task"),
+    ):
+        mock_httpx.return_value = _mock_slack_token_exchange(team_id="T0123ABCDE", scope=scope)
+        client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+
+    creds = db_session.query(SlackUserCredentials).filter_by(workspace_id="T0123ABCDE").one()
+    assert creds.scopes == scopes
+
+
 def test_callback_html_response_uses_json_dumps_for_slack_app_id(
     client, db_session, user, authorized_slack_app
 ):
@@ -783,7 +818,7 @@ def test_callback_html_response_uses_json_dumps_for_slack_app_id(
     by verifying the JS literal is properly quoted."""
     signed_state = _seed_state_for_user(db_session, user.id)
     with (
-        patch("memory.api.slack.httpx.AsyncClient") as mock_httpx,
+        patch("memory.api.slack.public_http_client") as mock_httpx,
         patch("memory.api.slack.celery_app.send_task"),
     ):
         mock_httpx.return_value = _mock_slack_token_exchange(team_id="T98765ABCD")
@@ -1061,16 +1096,16 @@ def test_slack_app_response_contract():
         "updated_at",
         "client_secret_configured",
         "signing_secret_configured",
+        "authorize_url",
+        "token_url",
+        "api_base_url",
+        "last_event_at",
     }
     assert set(SlackAppResponse.model_fields.keys()) == expected
 
 
 def test_create_slack_app_duplicate_client_id_returns_409(client, db_session, user):
-    """A second POST with the same client_id (even by the same user) is 409.
-
-    The error message points at the squatting cleanup window so the
-    legitimate owner has a path forward.
-    """
+    """One user can't register the same client_id twice."""
     first = client.post(
         "/slack/apps", json={"name": "First", "client_id": "dup.id"}
     )
@@ -1080,8 +1115,193 @@ def test_create_slack_app_duplicate_client_id_returns_409(client, db_session, us
         "/slack/apps", json={"name": "Second", "client_id": "dup.id"}
     )
     assert second.status_code == 409
-    assert "client_id" in second.json()["detail"]
-    assert "24 hours" in second.json()["detail"] or "support" in second.json()["detail"]
+    assert second.json()["detail"] == "You already have a Slack app with this client_id."
+
+
+def test_two_users_can_register_the_same_client_id(client, db_session, user, other_user):
+    """A shared Slack app (one per workspace) is registered by each user who uses it."""
+    db_session.add(SlackApp(client_id="shared.id", name="Theirs", created_by_user_id=other_user.id))
+    db_session.commit()
+
+    response = client.post("/slack/apps", json={"name": "Mine", "client_id": "shared.id"})
+
+    assert response.status_code == 201
+    assert db_session.query(SlackApp).filter_by(client_id="shared.id").count() == 2
+
+
+def test_slack_app_endpoint_urls_default_to_slack(client, db_session, user):
+    body = client.post("/slack/apps", json={"name": "A", "client_id": "urls.default"}).json()
+
+    assert (body["authorize_url"], body["token_url"], body["api_base_url"]) == (
+        "https://slack.com/oauth/v2/authorize",
+        "https://slack.com/api/oauth.v2.access",
+        "https://slack.com/api",
+    )
+
+
+CUSTOM_SLACK_URLS = {
+    "authorize_url": "https://chat.example.com/oauth/v2/authorize",
+    "token_url": "https://chat.example.com/api/oauth.v2.access",
+    "api_base_url": "https://chat.example.com/api",
+}
+
+
+def test_slack_app_endpoint_urls_set_on_create(client, db_session, user):
+    body = client.post(
+        "/slack/apps", json={"name": "A", "client_id": "urls.set"} | CUSTOM_SLACK_URLS
+    ).json()
+
+    assert {k: body[k] for k in CUSTOM_SLACK_URLS} == CUSTOM_SLACK_URLS
+
+
+def test_slack_app_endpoint_urls_set_by_patch(client, db_session, user):
+    app_id = client.post("/slack/apps", json={"name": "A", "client_id": "urls.set"}).json()["id"]
+
+    body = client.patch(f"/slack/apps/{app_id}", json=CUSTOM_SLACK_URLS).json()
+
+    assert {k: body[k] for k in CUSTOM_SLACK_URLS} == CUSTOM_SLACK_URLS
+
+
+@pytest.mark.parametrize(
+    "field", ["authorize_url", "token_url", "api_base_url"]
+)
+@pytest.mark.parametrize(
+    "url", ["http://chat.example.com/x", "ftp://chat.example.com", "https://", "not a url"]
+)
+def test_slack_app_endpoint_urls_must_be_https(client, db_session, user, field, url):
+    response = client.post("/slack/apps", json={"name": "A", "client_id": "urls.bad", field: url})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["authorize_url", "token_url", "api_base_url"])
+@pytest.mark.parametrize("method", ["post", "patch"])
+def test_members_cannot_point_an_app_outside_the_allowlist(member_client, db_session, user, field, method):
+    app = SlackApp(client_id="allow.list", name="A", created_by_user_id=user.id)
+    db_session.add(app)
+    db_session.commit()
+    url = "https://chat.example.com/x"
+    body = {"name": "A", "client_id": "allow.other", field: url}
+    with patch("memory.common.chat_urls.settings.CHAT_API_ALLOWED_ORIGINS", []):
+        response = {
+            "post": lambda: member_client.post("/slack/apps", json=body),
+            "patch": lambda: member_client.patch(f"/slack/apps/{app.id}", json={field: url}),
+        }[method]()
+
+    assert response.status_code == 400
+    assert "CHAT_API_ALLOWED_ORIGINS" in response.json()["detail"]
+    assert db_session.query(SlackApp).filter(getattr(SlackApp, field) == url).count() == 0
+
+
+def test_members_can_use_an_allowed_origin(member_client, db_session, user):
+    with patch("memory.common.chat_urls.settings.CHAT_API_ALLOWED_ORIGINS", ["https://chat.example.com"]):
+        response = member_client.post(
+            "/slack/apps", json={"name": "A", "client_id": "allowed", "api_base_url": "https://chat.example.com/api"}
+        )
+
+    assert response.status_code == 201
+
+
+def test_callback_refuses_a_token_url_no_longer_allowed(
+    member_client, db_session, user, authorized_slack_app
+):
+    authorized_slack_app.token_url = "https://chat.example.com/api/oauth.v2.access"
+    db_session.commit()
+    signed_state = _seed_state_for_user(db_session, user.id)
+    with (
+        patch("memory.api.slack.public_http_client") as mock_httpx,
+        patch("memory.common.chat_urls.settings.CHAT_API_ALLOWED_ORIGINS", []),
+    ):
+        response = member_client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+
+    assert response.status_code == 400
+    mock_httpx.assert_not_called()
+
+
+def test_oauth_state_refuses_an_authorize_url_no_longer_allowed(member_client, db_session, user):
+    app = SlackApp(
+        client_id="x", name="A", created_by_user_id=user.id,
+        authorize_url="https://chat.example.com/oauth/v2/authorize",
+    )
+    db_session.add(app)
+    db_session.commit()
+
+    with patch("memory.common.chat_urls.settings.CHAT_API_ALLOWED_ORIGINS", []):
+        response = member_client.post(f"/slack/apps/{app.id}/oauth-state")
+
+    assert response.status_code == 400
+
+
+def token_reply(json_side_effect):
+    from unittest.mock import AsyncMock, MagicMock
+
+    response = MagicMock()
+    response.json = MagicMock(side_effect=json_side_effect)
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=ctx)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    ctx.post = AsyncMock(return_value=response)
+    return ctx
+
+
+@pytest.mark.parametrize(
+    "reply, detail",
+    [
+        ([{"ok": False, "error": "invalid_code"}], "Slack OAuth failed: invalid_code"),
+        ([{"ok": False, "error": "<script>alert(1)</script>"}], "Slack OAuth failed: unknown_error"),
+        ([{"ok": False, "error": "x" * 500}], "Slack OAuth failed: unknown_error"),
+        (ValueError("not json"), "Slack OAuth failed: invalid response"),
+    ],
+)
+def test_callback_reports_token_errors_without_echoing_them(
+    client, db_session, user, authorized_slack_app, reply, detail, caplog
+):
+    signed_state = _seed_state_for_user(db_session, user.id)
+    with patch("memory.api.slack.public_http_client", return_value=token_reply(reply)):
+        response = client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+
+    assert (response.status_code, response.json()["detail"]) == (400, detail)
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+@pytest.mark.parametrize(
+    "error, detail",
+    [("access_denied", "OAuth error: access_denied"), ("<b>evil</b>", "OAuth error: unknown_error")],
+)
+def test_callback_reports_provider_errors_without_echoing_them(client, db_session, user, authorized_slack_app, error, detail):
+    response = client.get(
+        f"/slack/callback/{authorized_slack_app.id}",
+        params={"code": "c", "state": "s", "error": error},
+    )
+
+    assert (response.status_code, response.json()["detail"]) == (400, detail)
+
+
+def test_callback_exchanges_the_code_at_the_apps_token_url(
+    client, db_session, user, authorized_slack_app
+):
+    authorized_slack_app.token_url = "https://chat.example.com/api/oauth.v2.access"
+    db_session.commit()
+    signed_state = _seed_state_for_user(db_session, user.id)
+    with (
+        patch("memory.api.slack.public_http_client") as mock_httpx,
+        patch("memory.api.slack.celery_app.send_task"),
+    ):
+        mock_httpx.return_value = _mock_slack_token_exchange(team_id="T0123ABCDE")
+        response = client.get(
+            f"/slack/callback/{authorized_slack_app.id}",
+            params={"code": "fake_code", "state": signed_state},
+        )
+
+    assert response.status_code == 200, response.text
+    post = mock_httpx.return_value.post
+    assert post.call_args.args[0] == "https://chat.example.com/api/oauth.v2.access"
 
 
 def test_create_slack_app_secret_blob_never_leaks_via_get(

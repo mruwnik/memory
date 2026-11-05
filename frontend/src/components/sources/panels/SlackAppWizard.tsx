@@ -12,8 +12,10 @@ import {
   type SlackAppResponse,
   useSlackWizard,
 } from '../../../hooks/useSlackWizard'
-import { Button, Field, FormActions, Hint, Input, Modal, Notice, CopyButton, NewTabLink } from '@/components/shared/ui'
+import { Button, Disclosure, Field, FormActions, Hint, Input, Modal, Notice, CopyButton, NewTabLink } from '@/components/shared/ui'
 import { PopupBlockedNotice, openPopup } from '../shared'
+
+const DEFAULT_SLACK_AUTHORIZE_URL = 'https://slack.com/oauth/v2/authorize'
 
 interface SlackAppWizardProps {
   initialApp?: SlackAppResponse | null
@@ -110,6 +112,9 @@ export const SlackAppWizard = ({
 
   const [name, setName] = useState(initialApp?.name ?? '')
   const [clientId, setClientId] = useState(initialApp?.client_id ?? '')
+  const [authorizeUrl, setAuthorizeUrl] = useState('')
+  const [tokenUrl, setTokenUrl] = useState('')
+  const [apiBaseUrl, setApiBaseUrl] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [signingSecret, setSigningSecret] = useState('')
 
@@ -199,7 +204,12 @@ export const SlackAppWizard = ({
     }
     setBusy(true)
     try {
-      const created = await wizard.createApp({name: name.trim(), client_id: clientId.trim()})
+      const urls = Object.fromEntries(
+        [['authorize_url', authorizeUrl], ['token_url', tokenUrl], ['api_base_url', apiBaseUrl]]
+          .filter(([, url]) => url.trim())
+          .map(([field, url]) => [field, url.trim()]),
+      )
+      const created = await wizard.createApp({ name: name.trim(), client_id: clientId.trim(), ...urls })
       setApp(created)
       setStep('client-secret')
     } catch (e) {
@@ -207,7 +217,7 @@ export const SlackAppWizard = ({
     } finally {
       setBusy(false)
     }
-  }, [name, clientId, wizard])
+  }, [name, clientId, authorizeUrl, tokenUrl, apiBaseUrl, wizard])
 
   const handleClientSecret = useCallback(async () => {
     if (!app) return
@@ -245,14 +255,17 @@ export const SlackAppWizard = ({
     try {
       const { blockedUrl } = await openPopup(async () => {
         const state = await wizard.issueOAuthState(app.id)
+        // Slack-compatible servers issue user tokens only, so they get no bot `scope`.
+        const scopes: Record<string, string> = app.authorize_url === DEFAULT_SLACK_AUTHORIZE_URL
+          ? { scope: SLACK_OAUTH_SCOPES, user_scope: SLACK_OAUTH_SCOPES }
+          : { user_scope: SLACK_OAUTH_SCOPES }
         const params = new URLSearchParams({
           client_id: app.client_id,
-          scope: SLACK_OAUTH_SCOPES,
-          user_scope: SLACK_OAUTH_SCOPES,
+          ...scopes,
           redirect_uri: callbackUrl,
           state,
         })
-        return `https://slack.com/oauth/v2/authorize?${params.toString()}`
+        return `${app.authorize_url}?${params.toString()}`
       })
       setBlockedOAuthUrl(blockedUrl)
     } catch (e) {
@@ -352,6 +365,21 @@ export const SlackAppWizard = ({
                 disabled={busy}
               />
             </Field>
+            <Disclosure summary="Advanced">
+              <p className="text-sm text-slate-600 mb-3">For a Slack-compatible server. Leave empty to use Slack.</p>
+              <Field label="Authorize URL">
+                <Input type="url" value={authorizeUrl} onChange={(e) => setAuthorizeUrl(e.target.value)}
+                  placeholder={DEFAULT_SLACK_AUTHORIZE_URL} disabled={busy} />
+              </Field>
+              <Field label="Token URL">
+                <Input type="url" value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)}
+                  placeholder="https://slack.com/api/oauth.v2.access" disabled={busy} />
+              </Field>
+              <Field label="API base URL">
+                <Input type="url" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)}
+                  placeholder="https://slack.com/api" disabled={busy} />
+              </Field>
+            </Disclosure>
             <FormActions>
               <Button type="button" onClick={onCancel}>Cancel</Button>
               <Button variant="primary" type="submit" disabled={busy}>

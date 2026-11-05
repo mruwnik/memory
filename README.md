@@ -227,13 +227,51 @@ Behind a reverse proxy, `/transcripts/ingest/` must reach the api without a logi
 
 ### Discord integration
 
-To get notifications in Discord, [create a bot](https://discord.com/developers/applications), then run:
+Add a bot in **Sources → Discord**. By default it receives messages by webhook:
+enter the bot's application ID and the Ed25519 public key that signs its
+[Webhook Events](https://docs.discord.com/developers/events/webhook-events), and
+Memory shows the bot's events URL, `<SERVER_URL>/discord/events/<bot id>`, to
+paste as the webhook URL. The endpoint answers a signed PING with 204 and a bad
+signature with 401. Events carry gateway payloads (`MESSAGE_CREATE`,
+`MESSAGE_UPDATE`, `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, the four
+`MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
+acknowledged and ignored. Servers and DMs first seen through a webhook bot
+collect everything it receives; turn collection off per server or channel as
+usual. Several people can each add the same application with their own key and
+token; a message they can all see is stored once.
+
+A signing key only proves which Memory user sent an event, so pushes are
+limited to that user's own rows: edits, deletes and reactions only touch
+messages their bots delivered or that sit in servers (or DMs) their bots own,
+and a push never renames or claims an existing server or channel, changes a
+stored Discord user's name, or links an author to a person by username. A
+server first seen in a pushed event isn't listed or manageable until a bot
+with a token (gateway, or the daily REST listing) confirms it, which takes it
+over with default access settings. A DM is
+managed by the owner of the bot that first delivered it.
+
+The bot token is optional for a webhook bot. With one, the bot can send (through
+the REST API, as it has no gateway connection), and a daily catch-up
+(`DISCORD_BACKFILL_INTERVAL`, default a day) refreshes the bot's servers and
+channels, re-reads the last `DISCORD_CATCH_UP_DAYS` (2) of each collected
+channel to store deliveries that didn't arrive and apply missed edits, and
+continues the history backfill. Missed deletes and reactions are not repaired.
+Under **Advanced**, **API base URL** points the bot at any server speaking
+Discord's REST API (default `https://discord.com/api/v10`); it is called with
+`Authorization: Bot <token>`.
+
+The other option, **Gateway bot**, takes only a token and runs a gateway
+connection in the ingest hub instead. To get notifications in Discord through a
+gateway bot, [create a bot](https://discord.com/developers/applications), then run:
 
 ```bash
 python tools/discord_setup.py generate-invite --bot-token <your bot token>
 ```
 
 That returns an invite URL for adding the bot to your server.
+
+Behind a reverse proxy, `/discord/events/` must reach the api without a login:
+it authenticates with the signature, not a session.
 
 ### Manually triggering Celery tasks
 
@@ -460,6 +498,21 @@ workspace, or use **Sync now** for an immediate sweep. Initial imports run immed
 If any polling app for a workspace lacks verified events, normal polling continues.
 The scheduler checks on `SLACK_SYNC_INTERVAL` (default one hour), so sweeps run on
 the next scheduler tick after their interval expires.
+
+The wizard's **Advanced** section takes an **Authorize URL**, **Token URL** and
+**API base URL** for a Slack-compatible server (defaults `https://slack.com/oauth/v2/authorize`,
+`https://slack.com/api/oauth.v2.access` and `https://slack.com/api`). With a
+custom authorize URL the wizard asks for user scopes only. Several users can
+register the same client ID, one app each. An events URL registered without the
+wizard's `wizard_nonce` is verified by its signature alone. An app only takes
+events for workspaces it was authorized into, and only its own token is used
+for them (file downloads send it only to `files.slack.com` or the app's API host).
+
+Custom Slack and Discord URLs are limited to an allowlist, since Memory sends
+tokens and OAuth codes there: Slack's and Discord's own origins, plus the
+comma-separated https origins in `CHAT_API_ALLOWED_ORIGINS` (for example
+`https://chat-proxy.equistamp.io`). Admins may set any URL. The list is checked
+when a URL is saved and again whenever it is used.
 
 Invite the bot to channels whose messages it should receive and subscribe to the
 matching message events. History sweeps cover enabled channels accessible to the

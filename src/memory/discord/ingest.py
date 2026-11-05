@@ -21,7 +21,8 @@ from discord import (
 
 from memory.common.celery_app import ADD_DISCORD_MESSAGE
 from memory.common.db.connection import DBSession
-from memory.common.db.models import DiscordChannel, DiscordServer, DiscordUser
+from memory.common.db.models import DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
+from memory.common.discord_events import verify_server
 
 
 def get_channel_type(channel: abc.Messageable) -> str:
@@ -57,9 +58,14 @@ def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -
             description=getattr(guild, "description", None),
             member_count=getattr(guild, "member_count", None),
             bot_id=bot_id,
+            verified=bot_id is not None,
         )
         session.add(server)
         session.flush()
+    elif bot_id is not None and not server.verified:
+        # A gateway connection proves membership; a server so far claimed
+        # only by pushed events starts over under this bot.
+        verify_server(session, guild.id, bot_id, collect=server.collect_messages, name=guild.name)
     else:
         if guild.name and server.name != guild.name:
             server.name = guild.name
@@ -72,6 +78,8 @@ def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -
         # Back-fill bot_id if not yet set
         if server.bot_id is None and bot_id is not None:
             server.bot_id = bot_id
+    if bot_id is not None:
+        session.merge(DiscordBotServer(bot_id=bot_id, server_id=guild.id))
     return server
 
 
@@ -79,8 +87,9 @@ def ensure_channel(
     session: DBSession,
     channel: abc.Messageable,
     guild_id: int | None,
+    bot_id: int | None = None,
 ) -> DiscordChannel:
-    """Ensure a Discord channel record exists."""
+    """Ensure a Discord channel record exists; a new one records the bot that saw it."""
     channel_id = getattr(channel, "id", None)
     if channel_id is None:
         raise ValueError("Channel is missing an identifier.")
@@ -93,6 +102,7 @@ def ensure_channel(
         channel_model = DiscordChannel(
             id=channel_id,
             server_id=guild_id,
+            bot_id=bot_id,
             category_id=category_id,
             name=getattr(channel, "name", f"Channel {channel_id}"),
             channel_type=get_channel_type(channel),
@@ -200,7 +210,7 @@ def ensure_message_entities(session: DBSession, message: Message, bot_id: int | 
     guild_id = message.guild.id if message.guild else None
     if message.guild:
         ensure_server(session, message.guild, bot_id=bot_id)
-    channel_model = ensure_channel(session, message.channel, guild_id)
+    channel_model = ensure_channel(session, message.channel, guild_id, bot_id)
     ensure_user(session, message.author)
     return channel_model
 

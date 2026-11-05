@@ -19,7 +19,6 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
@@ -32,6 +31,9 @@ from memory.api.auth import (
     get_interactive_user,
     resolve_user_filter,
 )
+from memory.api.https_url import HttpsUrl, require_chat_url
+from memory.api.request_body import read_request_body_with_cap
+from memory.api.webhook_events import record_event_arrival, register_body_seen
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common import settings
@@ -64,6 +66,7 @@ from memory.common.oauth_client import (
     store_state,
     validate_and_consume_state,
 )
+from memory.common.safe_http import public_http_client
 from memory.common.slack import user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
 
 logger = logging.getLogger(__name__)
@@ -95,6 +98,7 @@ class SlackWorkspaceApp(BaseModel):
     name: str
     setup_state: str
     is_owner: bool
+    last_event_at: str | None
 
 
 class SlackWorkspaceResponse(SyncStatusResponse):
@@ -160,6 +164,9 @@ class SlackAppCreate(BaseModel):
 
     name: str
     client_id: str
+    authorize_url: HttpsUrl | None = None
+    token_url: HttpsUrl | None = None
+    api_base_url: HttpsUrl | None = None
 
 
 class SlackAppUpdate(BaseModel):
@@ -172,6 +179,12 @@ class SlackAppUpdate(BaseModel):
 
     name: str | None = None
     is_active: bool | None = None
+    authorize_url: HttpsUrl | None = None
+    token_url: HttpsUrl | None = None
+    api_base_url: HttpsUrl | None = None
+
+
+SLACK_APP_URL_FIELDS = ("authorize_url", "token_url", "api_base_url")
 
 
 class SlackAppResponse(BaseModel):
@@ -194,6 +207,10 @@ class SlackAppResponse(BaseModel):
     updated_at: str | None
     client_secret_configured: bool
     signing_secret_configured: bool
+    authorize_url: str
+    token_url: str
+    api_base_url: str
+    last_event_at: str | None
 
 
 # --- Helper Functions ---
@@ -273,6 +290,7 @@ def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWor
             name=app.name,
             setup_state=app.setup_state,
             is_owner=app.is_owner(user),
+            last_event_at=app.last_event_at.isoformat() if app.last_event_at else None,
         )
         for app in apps
     ]
@@ -392,15 +410,26 @@ def _consume_oauth_state(db: Session, state: str, user: User) -> None:
         )
 
 
+OAUTH_ERROR_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+def oauth_error_code(error: object) -> str | None:
+    """An OAuth error as Slack spells them (``invalid_code``); anything else,
+    which the token server or redirect controls, as ``unknown_error``."""
+    if error is None:
+        return None
+    return error if isinstance(error, str) and OAUTH_ERROR_CODE.fullmatch(error) else "unknown_error"
+
+
 async def _exchange_slack_oauth_code(
     slack_app: SlackApp, code: str, redirect_uri: str
 ) -> dict:
     """POST to Slack's oauth.v2.access. Returns the parsed authed_user payload
     plus the validated team. Raises 400 on Slack-reported errors, missing
     user token, or malformed team_id."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with public_http_client(timeout=30.0) as client:
         response = await client.post(
-            "https://slack.com/api/oauth.v2.access",
+            slack_app.token_url,
             data={
                 "client_id": slack_app.client_id,
                 "client_secret": slack_app.client_secret,
@@ -408,12 +437,16 @@ async def _exchange_slack_oauth_code(
                 "redirect_uri": redirect_uri,
             },
         )
+    try:
         data = response.json()
+    except ValueError:
+        logger.warning(f"Slack app {slack_app.id}: token exchange reply was not JSON")
+        raise HTTPException(status_code=400, detail="Slack OAuth failed: invalid response")
 
-    if not data.get("ok"):
-        error_msg = data.get("error", "Unknown error")
-        logger.error(f"Slack OAuth token exchange error: {error_msg}")
-        raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {error_msg}")
+    if not isinstance(data, dict) or not data.get("ok"):
+        error = oauth_error_code(data.get("error") if isinstance(data, dict) else None)
+        logger.warning(f"Slack app {slack_app.id}: token exchange failed: {error}")
+        raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {error}")
 
     authed_user = data.get("authed_user", {})
     if not authed_user.get("access_token"):
@@ -476,7 +509,7 @@ def _persist_oauth_credentials(
 
     creds.access_token = authed_user["access_token"]
     creds.refresh_token = authed_user.get("refresh_token")
-    creds.scopes = authed_user.get("scope", "").split()
+    creds.scopes = authed_user.get("scope", "").replace(",", " ").split()
     creds.token_expires_at = token_expires_at
     creds.slack_user_id = authed_user.get("id")
 
@@ -541,14 +574,16 @@ async def slack_callback_for_app(
     logger.info(
         f"Slack OAuth callback received (multi-app): slack_app_id={slack_app_id}, "
         f"code_corr={log_corr_id(code)}, "
-        f"state_corr={log_corr_id(state)}, len={len(state)}, error={error}"
+        f"state_corr={log_corr_id(state)}, len={len(state)}, error={oauth_error_code(error)}"
     )
 
     if error:
-        logger.warning(f"Slack OAuth error from provider: {error}")
-        raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
+        error_code = oauth_error_code(error)
+        logger.warning(f"Slack OAuth error from provider: {error_code}")
+        raise HTTPException(status_code=400, detail=f"OAuth error: {error_code}")
 
     slack_app = _resolve_callback_app(db, slack_app_id, user)
+    require_chat_url(slack_app.token_url, user)
     _consume_oauth_state(db, state, user)
     exchange = await _exchange_slack_oauth_code(
         slack_app, code, _callback_url_for(slack_app_id)
@@ -851,6 +886,10 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
         updated_at=app.updated_at.isoformat() if app.updated_at else None,
         client_secret_configured=app.client_secret_encrypted is not None,
         signing_secret_configured=app.signing_secret_encrypted is not None,
+        authorize_url=app.authorize_url,
+        token_url=app.token_url,
+        api_base_url=app.api_base_url,
+        last_event_at=app.last_event_at.isoformat() if app.last_event_at else None,
     )
 
 
@@ -872,35 +911,30 @@ def create_slack_app(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
-    """Create a draft SlackApp claim for a (new) Slack client_id.
+    """Register a draft SlackApp for the caller.
 
-    Returns 409 if another user has already claimed the same client_id.
-    Per §3.1 squatting mitigation: the legitimate client_id owner can
-    wait 24h for the stale-draft cleanup task to free the slot, or
-    contact support.
+    Several users can register the same client_id (a shared Slack app);
+    one user registering it twice gets a 409.
     """
+    for field in SLACK_APP_URL_FIELDS:
+        if value := getattr(body, field):
+            require_chat_url(value, user)
     app = SlackApp(
         name=body.name,
         client_id=body.client_id,
         created_by_user_id=user.id,
         setup_state="draft",
         is_active=True,
+        **{f: getattr(body, f) for f in SLACK_APP_URL_FIELDS if getattr(body, f)},
     )
     db.add(app)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        # Don't reveal whether the existing row is owned by this user vs
-        # someone else — uniform 409 either way (§4 S11 information
-        # discipline).
         raise HTTPException(
             status_code=409,
-            detail=(
-                "A Slack app with this client_id already exists. If you own "
-                "this client_id, wait up to 24 hours for the squatting "
-                "cleanup or contact support."
-            ),
+            detail="You already have a Slack app with this client_id.",
         )
     db.refresh(app)
     return slack_app_to_response(app, user)
@@ -934,13 +968,17 @@ def update_slack_app(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
-    """Update display name / is_active. Owner only."""
+    """Update display name, is_active and the OAuth / API URLs. Owner only."""
     app = get_slack_app_for_owner(db, app_id, user)
 
     if body.name is not None:
         app.name = body.name
     if body.is_active is not None:
         app.is_active = body.is_active
+    for field in SLACK_APP_URL_FIELDS:
+        if value := getattr(body, field):
+            require_chat_url(value, user)
+            setattr(app, field, value)
 
     db.commit()
     db.refresh(app)
@@ -984,24 +1022,8 @@ the caller)."""
 # uvicorn worker (see docker/api/Dockerfile), so plain dicts + a lock are
 # fine; multi-worker deployments would lose this state across workers.
 _slack_state_lock = threading.Lock()
-_event_body_seen: dict[str, float] = {}  # body_sha256 → expiry monotonic seconds
 _wizard_nonces: dict[int, tuple[str, float]] = {}  # app_id → (nonce, expiry)
 _test_message_tokens: dict[int, tuple[str, float]] = {}  # app_id → (token, expiry)
-
-
-def _register_event_body_seen(body_sha: str, ttl_seconds: int) -> bool:
-    """Returns True if the body is novel (and records it), False if it's a
-    replay we've seen within ``ttl_seconds``."""
-    now = time.monotonic()
-    with _slack_state_lock:
-        # Drop expired entries lazily.
-        expired = [k for k, exp in _event_body_seen.items() if exp <= now]
-        for k in expired:
-            _event_body_seen.pop(k, None)
-        if body_sha in _event_body_seen:
-            return False
-        _event_body_seen[body_sha] = now + ttl_seconds
-        return True
 
 
 def _set_wizard_nonce(slack_app_id: int, nonce: str, ttl_seconds: int) -> None:
@@ -1079,6 +1101,19 @@ def _verify_slack_signature(
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(digest, expected_hex)
+
+
+def app_has_workspace(db: Session, slack_app_id: int, team_id: str | None) -> bool:
+    return (
+        team_id is not None
+        and db.query(SlackUserCredentials.id)
+        .filter(
+            SlackUserCredentials.slack_app_id == slack_app_id,
+            SlackUserCredentials.workspace_id == team_id,
+        )
+        .first()
+        is not None
+    )
 
 
 def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
@@ -1181,7 +1216,9 @@ def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
                 "workspace_id": workspace_id,
                 "channel_id": channel_id,
                 "message_ts": reaction_item.get("ts"),
-                "reactions": event.get("reactions"),
+                "action": "add" if event_type == "reaction_added" else "remove",
+                "emoji": event.get("reaction"),
+                "user_id": event.get("user"),
                 "slack_app_id": slack_app_id,
             },
         )
@@ -1250,9 +1287,10 @@ async def slack_events(
     """
     log = _events_logger()
 
-    # 1. Body size cap (must read body to count, but we cap the read).
-    body = await request.body()
-    if len(body) > SLACK_EVENT_MAX_BODY_BYTES:
+    # 1. Body size cap, enforced while reading.
+    try:
+        body = await read_request_body_with_cap(request, SLACK_EVENT_MAX_BODY_BYTES)
+    except HTTPException:
         return _uniform_401()
 
     # 2. Timestamp skew check (header-only, no body parse).
@@ -1288,7 +1326,7 @@ async def slack_events(
 
     # 4. Replay protection: register-if-novel on the body hash.
     body_sha = hashlib.sha256(body).hexdigest()
-    if not _register_event_body_seen(body_sha, SLACK_EVENT_REPLAY_TTL_SECONDS):
+    if not register_body_seen(body_sha, SLACK_EVENT_REPLAY_TTL_SECONDS):
         # Slack expects 200 on duplicates so its retry loop stops.
         return PlainTextResponse(content="", status_code=200)
 
@@ -1301,26 +1339,32 @@ async def slack_events(
     envelope_type = envelope.get("type")
 
     if envelope_type == "url_verification":
-        # Wizard nonce binding (slack-changes.md §3.4 step 5b, security H1).
         nonce_qs = request.query_params.get("wizard_nonce")
-        if not nonce_qs:
-            return _uniform_401()
-        stored_nonce = _get_wizard_nonce(slack_app_id)
-        if stored_nonce is None:
-            return _uniform_401()
-        if not hmac.compare_digest(stored_nonce, nonce_qs):
-            return _uniform_401()
+        challenge = envelope.get("challenge", "")
+        # An events URL registered without the wizard's nonce is verified
+        # by the signature alone: it proves the sender holds the signing
+        # secret the owner pasted, which is all 'signing_verified' claims.
+        # A nonce that is present must still match (security H1).
+        if nonce_qs:
+            stored_nonce = _get_wizard_nonce(slack_app_id)
+            if stored_nonce is None:
+                return _uniform_401()
+            if not hmac.compare_digest(stored_nonce, nonce_qs):
+                return _uniform_401()
 
-        # Advance SlackApp.setup_state from 'draft' → 'signing_verified'.
-        # Failed verification doesn't get here; nonce mismatch above bails.
         if app.setup_state == "draft":
             app.setup_state = "signing_verified"
             db.commit()
 
-        challenge = envelope.get("challenge", "")
         return PlainTextResponse(content=challenge, status_code=200)
 
     if envelope_type == "event_callback":
+        record_event_arrival(db, app)
+        # The signature only proves the app's owner sent this; an event counts
+        # only for a workspace the app was authorized into.
+        if not app_has_workspace(db, app.id, envelope.get("team_id")):
+            log.info("slack event for an unconnected workspace dropped", extra={"slack_app_id": slack_app_id})
+            return PlainTextResponse(content="", status_code=200)
         log.info(
             "slack event received",
             extra={
@@ -1485,8 +1529,8 @@ def issue_oauth_state(
     Owner-only. The state is bound to ``user.id`` so the callback's
     session-vs-state user check (CSRF binding) succeeds.
     """
-    # Side effect: 404 if missing/inactive, 403 if not owner.
-    get_slack_app_for_owner(db, app_id, user)
+    app = get_slack_app_for_owner(db, app_id, user)
+    require_chat_url(app.authorize_url, user)
     raw_state = generate_state()
     store_state(db, raw_state, "slack", user.id)
     return SlackOAuthStateResponse(state=sign_state(raw_state, user.id))

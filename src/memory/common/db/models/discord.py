@@ -24,6 +24,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -37,21 +38,37 @@ if TYPE_CHECKING:
     from memory.common.db.models.users import User
 
 
-class DiscordBot(Base):
-    """A Discord bot we control.
+DEFAULT_DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 
-    The registering Memory user owns the bot.
-    The bot token is stored encrypted.
+
+class DiscordBot(Base):
+    """A Discord bot (application) we receive messages for.
+
+    One row per (Discord application, registering user): several users can
+    each connect the same application with their own token and key. A bot
+    with a public key receives signed Webhook Events; one with only a token
+    runs a gateway collector. The token is stored encrypted; the REST API URL
+    defaults to Discord's.
     """
 
     __tablename__ = "discord_bots"
 
-    # Use Discord's bot user ID as primary key
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Discord's application id, which is also the bot user's snowflake
+    application_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Encrypted Discord bot token
     token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Hex Ed25519 key that signs Webhook Events
+    public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_base_url: Mapped[str] = mapped_column(
+        Text, nullable=False, default=DEFAULT_DISCORD_API_BASE_URL,
+        server_default=DEFAULT_DISCORD_API_BASE_URL,
+    )
+    last_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by_user_id: Mapped[int | None] = mapped_column(
@@ -66,6 +83,17 @@ class DiscordBot(Base):
     )
 
     owner: Mapped[User | None] = relationship("User", back_populates="discord_bots")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "application_id", "created_by_user_id", name="uq_discord_bots_application_user"
+        ),
+    )
+
+    @property
+    def runs_gateway(self) -> bool:
+        """Webhook bots get their events pushed; a gateway would duplicate them."""
+        return self.token_encrypted is not None and self.public_key is None
 
     @property
     def token(self) -> str | None:
@@ -122,6 +150,12 @@ class DiscordServer(LLMKeyChoice, Base):
     bot_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("discord_bots.id", ondelete="SET NULL"), nullable=True
     )
+    # Whether bot_id was set by a token-authenticated source (the gateway or a
+    # REST listing). A server first seen in a pushed event gives its bot's
+    # owner nothing until such a bot claims it.
+    verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
 
     # Relationships
     channels: Mapped[list[DiscordChannel]] = relationship(
@@ -139,6 +173,19 @@ class DiscordServer(LLMKeyChoice, Base):
     @property
     def llm_registrant_id(self) -> int | None:
         return self.bot.created_by_user_id if self.bot else None
+
+
+class DiscordBotServer(Base):
+    """A server a bot's own token says it is in (gateway or REST listing)."""
+
+    __tablename__ = "discord_bot_servers"
+
+    bot_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("discord_bots.id", ondelete="CASCADE"), primary_key=True
+    )
+    server_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("discord_servers.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class DiscordChannel(Base):
@@ -163,6 +210,12 @@ class DiscordChannel(Base):
     # Collection setting: null = inherit from server, True/False = explicit override
     collect_messages: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
+    # The bot that first delivered this channel. A DM has no server, so its
+    # owner is this bot's owner.
+    bot_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("discord_bots.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Access control: link to project and sensitivity level
     project_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
@@ -179,6 +232,7 @@ class DiscordChannel(Base):
 
     # Relationships
     server: Mapped[DiscordServer | None] = relationship("DiscordServer", back_populates="channels")
+    bot: Mapped[DiscordBot | None] = relationship("DiscordBot")
 
     __table_args__ = (
         Index("discord_channels_server_idx", "server_id"),

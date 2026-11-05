@@ -52,7 +52,7 @@ from memory.common.email_sender import (
 )
 from memory.common.jobs import tracked_task
 from memory.common.notify import notify_user_now
-from memory.common.slack import async_slack_call, slack_target_is_dm
+from memory.common.slack import async_slack_call, slack_api_base_url, slack_target_is_dm
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +167,12 @@ async def send_via_slack_async(params: NotificationParams) -> bool:
             logger.error(f"No Slack credentials for user {params.user_id}")
             return False
         slack_token = credentials.access_token
+        base_url = slack_api_base_url(credentials.slack_app)
 
     try:
         if slack_target_is_dm(target):
             data = await async_slack_call(
-                slack_token, "conversations.open", users=target
+                slack_token, "conversations.open", base_url=base_url, users=target
             )
             channel_id = data.get("channel", {}).get("id")
             if not channel_id:
@@ -184,6 +185,7 @@ async def send_via_slack_async(params: NotificationParams) -> bool:
         await async_slack_call(
             slack_token,
             "chat.postMessage",
+            base_url=base_url,
             channel=channel_id,
             text=message,
         )

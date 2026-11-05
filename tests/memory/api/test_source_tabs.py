@@ -84,7 +84,7 @@ def seed_sources(db_session, user_id):
     google = GoogleAccount(user_id=user_id, name="g", email=f"g{user_id}@example.com", **FAILING)
     google.folders.append(GoogleFolder(folder_id="f", folder_name="F", **FAILING))
     google.folders.append(GoogleFolder(folder_id="ok", folder_name="OK"))
-    bot = DiscordBot(id=user_id, name="bot")
+    bot = DiscordBot(id=user_id, application_id=user_id, name="bot")
     bot.created_by_user_id = user_id
     db_session.add_all(
         [
@@ -227,13 +227,13 @@ def test_admin_sees_every_bot_and_workspace_without_a_user_filter(
     client, user, db_session, query, discord, slack
 ):
     """Bots and workspaces with nobody connected only show in the admin's unfiltered view."""
-    mine = DiscordBot(id=1, name="mine")
+    mine = DiscordBot(id=1, application_id=1, name="mine")
     mine.created_by_user_id = user.id
     app = SlackApp(client_id="c", name="app", setup_state="live")
     connected = SlackWorkspace(id="T1", name="connected")
     orphan = SlackWorkspace(id="T2", name="orphan")
     orphan.record_sync("boom")
-    db_session.add_all([mine, DiscordBot(id=2, name="orphan"), app, connected, orphan])
+    db_session.add_all([mine, DiscordBot(id=2, application_id=2, name="orphan"), app, connected, orphan])
     db_session.flush()
     db_session.add(SlackUserCredentials(slack_app_id=app.id, workspace_id="T1", user_id=user.id))
     db_session.commit()

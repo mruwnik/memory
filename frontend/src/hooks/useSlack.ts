@@ -10,6 +10,7 @@ export interface SlackWorkspaceApp {
   name: string
   setup_state: SlackAppSetupState
   is_owner: boolean
+  last_event_at: string | null
 }
 
 export interface SlackWorkspace extends SyncStatus {

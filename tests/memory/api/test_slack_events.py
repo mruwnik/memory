@@ -8,11 +8,15 @@ the broader Slack API tests once the DB-backed fixtures are available.
 
 import hashlib
 import hmac
+import json
+import time
 from unittest.mock import patch
 
 import pytest
 
+from memory.api import slack as slack_api
 from memory.api.slack import _dispatch_event_callback, _verify_slack_signature
+from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
 
 
 def _slack_sig(secret: str, ts: str, body: bytes) -> str:
@@ -174,22 +178,20 @@ GOOD_CHANNEL_ID = "C12345678"
         ),
         # Reaction added → UPDATE_SLACK_REACTIONS (channel comes from event.item.channel)
         (
-            {"event": {"type": "reaction_added",
-                       "item": {"channel": GOOD_CHANNEL_ID, "ts": "1.2"},
-                       "reactions": [{"name": "thumbsup", "count": 1}]},
+            {"event": {"type": "reaction_added", "user": "U1", "reaction": "thumbsup",
+                       "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "1.2"}},
              "team_id": GOOD_TEAM_ID},
             "update_slack_reactions",
-            {"workspace_id", "channel_id", "message_ts", "reactions",
+            {"workspace_id", "channel_id", "message_ts", "emoji", "user_id", "action",
              "slack_app_id"},
         ),
         # Reaction removed → UPDATE_SLACK_REACTIONS (same handler as add).
         (
-            {"event": {"type": "reaction_removed",
-                       "item": {"channel": GOOD_CHANNEL_ID, "ts": "1.2"},
-                       "reactions": []},
+            {"event": {"type": "reaction_removed", "user": "U1", "reaction": "thumbsup",
+                       "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "1.2"}},
              "team_id": GOOD_TEAM_ID},
             "update_slack_reactions",
-            {"workspace_id", "channel_id", "message_ts", "reactions",
+            {"workspace_id", "channel_id", "message_ts", "emoji", "user_id", "action",
              "slack_app_id"},
         ),
     ],
@@ -206,6 +208,37 @@ def test_dispatch_event_callback_routes_correctly(
     assert expected_kwarg_keys.issubset(kwargs.keys())
     assert kwargs["slack_app_id"] == 42
     assert result["dispatch"]
+
+
+@pytest.mark.parametrize(
+    "event_type, action", [("reaction_added", "add"), ("reaction_removed", "remove")]
+)
+def test_dispatch_reaction_event_passes_who_reacted_with_what(event_type, action):
+    with _capture_send_task() as mock_send:
+        _dispatch_event_callback(
+            {"event": {"type": event_type, "user": "U777", "reaction": "tada",
+                       "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "5.5"}},
+             "team_id": GOOD_TEAM_ID},
+            slack_app_id=9,
+        )
+
+    kwargs = mock_send.call_args.kwargs["kwargs"]
+    assert (kwargs["message_ts"], kwargs["emoji"], kwargs["user_id"], kwargs["action"]) == (
+        "5.5", "tada", "U777", action,
+    )
+
+
+def test_dispatch_ignores_reactions_on_files():
+    with _capture_send_task() as mock_send:
+        result = _dispatch_event_callback(
+            {"event": {"type": "reaction_added", "user": "U1", "reaction": "tada",
+                       "item": {"type": "file", "file": "F123"}},
+             "team_id": GOOD_TEAM_ID},
+            slack_app_id=9,
+        )
+
+    mock_send.assert_not_called()
+    assert result["dispatch"].startswith("rejected")
 
 
 def test_dispatch_event_callback_ignores_unknown_event_type():
@@ -335,3 +368,163 @@ def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     assert kwargs["channel_id"] == GOOD_CHANNEL_ID
     # Full dict ships as channel_payload for downstream merging.
     assert kwargs["channel_payload"]["name"] == "renamed"
+
+
+# ---------------------------------------------------------------------------
+# url_verification on the route
+# ---------------------------------------------------------------------------
+
+SIGNING_SECRET = "route-signing-secret"
+
+
+@pytest.fixture
+def events_app(db_session, user):
+    app = SlackApp(client_id="events.app", name="Events", created_by_user_id=user.id)
+    app.signing_secret = SIGNING_SECRET
+    db_session.add(app)
+    db_session.commit()
+    return app
+
+
+def post_signed(client, path: str, envelope: dict, secret: str = SIGNING_SECRET):
+    body = json.dumps(envelope).encode()
+    ts = str(int(time.time()))
+    return client.post(
+        path,
+        content=body,
+        headers={
+            "x-slack-request-timestamp": ts,
+            "x-slack-signature": _slack_sig(secret, ts, body),
+            "content-type": "application/json",
+        },
+    )
+
+
+def challenge(value: str) -> dict:
+    return {"type": "url_verification", "token": "", "challenge": value}
+
+
+@pytest.mark.parametrize(
+    "state, after",
+    [
+        ("draft", "signing_verified"),
+        ("signing_verified", "signing_verified"),
+        ("live", "live"),
+        ("degraded", "degraded"),
+    ],
+)
+def test_url_verification_without_nonce_is_verified_by_the_signature(
+    client, db_session, events_app, state, after
+):
+    events_app.setup_state = state
+    db_session.commit()
+
+    response = post_signed(client, f"/slack/events/{events_app.id}", challenge(f"no-nonce-{state}"))
+
+    assert (response.status_code, response.content) == (200, f"no-nonce-{state}".encode())
+    db_session.refresh(events_app)
+    assert events_app.setup_state == after
+
+
+@pytest.mark.parametrize("state", ["live", "draft"])
+def test_url_verification_without_nonce_still_checks_the_signature(
+    client, db_session, events_app, state
+):
+    events_app.setup_state = state
+    db_session.commit()
+
+    response = post_signed(
+        client, f"/slack/events/{events_app.id}", challenge(f"no-nonce-bad-sig-{state}"), secret="wrong"
+    )
+
+    assert response.status_code == 401
+
+
+def test_url_verification_with_wizard_nonce_advances_a_draft(client, db_session, events_app):
+    slack_api._set_wizard_nonce(events_app.id, "nonce-abc", 60)
+
+    response = post_signed(
+        client, f"/slack/events/{events_app.id}?wizard_nonce=nonce-abc", challenge("wiz-1")
+    )
+
+    assert (response.status_code, response.content) == (200, b"wiz-1")
+    db_session.refresh(events_app)
+    assert events_app.setup_state == "signing_verified"
+
+
+@pytest.mark.parametrize("state", ["draft", "live"])
+def test_url_verification_with_a_wrong_nonce_is_rejected(client, db_session, events_app, state):
+    events_app.setup_state = state
+    db_session.commit()
+    slack_api._set_wizard_nonce(events_app.id, "nonce-abc", 60)
+
+    response = post_signed(
+        client, f"/slack/events/{events_app.id}?wizard_nonce=nonce-xyz", challenge(f"wiz-wrong-{state}")
+    )
+
+    assert response.status_code == 401
+
+
+def message_event(team_id: str, ts: str) -> dict:
+    return {
+        "type": "event_callback",
+        "team_id": team_id,
+        "event": {"type": "message", "ts": ts, "user": "U1", "text": "x", "channel": GOOD_CHANNEL_ID},
+    }
+
+
+def test_events_for_a_team_the_app_has_no_credential_in_are_dropped(client, db_session, events_app):
+    with _capture_send_task() as send:
+        response = post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, "7.1"))
+
+    assert response.status_code == 200
+    send.assert_not_called()
+
+
+def test_events_for_a_team_the_app_is_connected_to_are_dispatched(client, db_session, events_app, user):
+    db_session.add(SlackWorkspace(id=GOOD_TEAM_ID, name="W"))
+    db_session.flush()
+    db_session.add(SlackUserCredentials(slack_app_id=events_app.id, workspace_id=GOOD_TEAM_ID, user_id=user.id))
+    db_session.commit()
+
+    with _capture_send_task() as send:
+        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, "7.2"))
+
+    assert send.call_args.kwargs["kwargs"]["workspace_id"] == GOOD_TEAM_ID
+
+
+def test_events_for_another_apps_team_are_dropped(client, db_session, events_app, user):
+    other = SlackApp(client_id="other.app", name="Other", created_by_user_id=user.id)
+    db_session.add_all([other, SlackWorkspace(id=GOOD_TEAM_ID, name="W")])
+    db_session.flush()
+    db_session.add(SlackUserCredentials(slack_app_id=other.id, workspace_id=GOOD_TEAM_ID, user_id=user.id))
+    db_session.commit()
+
+    with _capture_send_task() as send:
+        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, "7.3"))
+
+    send.assert_not_called()
+
+
+def test_an_oversized_body_is_rejected(client, events_app):
+    with patch.object(slack_api, "SLACK_EVENT_MAX_BODY_BYTES", 10):
+        response = post_signed(client, f"/slack/events/{events_app.id}", challenge("too-big-body"))
+
+    assert response.status_code == 401
+
+
+def test_event_records_when_it_arrived(client, db_session, events_app):
+    with _capture_send_task():
+        post_signed(
+            client,
+            f"/slack/events/{events_app.id}",
+            {
+                "type": "event_callback",
+                "team_id": GOOD_TEAM_ID,
+                "event": {"type": "message", "ts": "9.1", "user": "U1", "text": "x",
+                          "channel": GOOD_CHANNEL_ID},
+            },
+        )
+
+    db_session.refresh(events_app)
+    assert events_app.last_event_at is not None

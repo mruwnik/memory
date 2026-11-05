@@ -1,10 +1,13 @@
 """
 Discord integration.
 
-Simple HTTP client that communicates with the Discord collector's API server.
+Gateway bots send through the Discord collector's API server; bots without a
+gateway connection (webhook bots) send through the REST API at their API URL.
 """
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 import requests
@@ -14,7 +17,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm.scoping import scoped_session
 
 from memory.common import settings
-from memory.common.db.models import DiscordServer
+from memory.common.db.connection import make_session
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordServer, DiscordUser
+from memory.discord.rest import BotAccess, DiscordAPIError, DiscordRest, bot_access
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +31,50 @@ def get_api_url() -> str:
     return f"http://{host}:{port}"
 
 
+def rest_access(bot_id: int) -> BotAccess | None:
+    """REST access for a bot that has no gateway connection, else None."""
+    with make_session() as session:
+        bot = session.get(DiscordBot, bot_id)
+        if bot is None or bot.runs_gateway:
+            return None
+        return bot_access(bot)
+
+
+def resolve_id(model: type[DiscordChannel] | type[DiscordUser], identifier: int | str) -> int | None:
+    """A snowflake as given, or the id of the channel or user with that name."""
+    if str(identifier).isdigit():
+        return int(identifier)
+    column = DiscordChannel.name if model is DiscordChannel else DiscordUser.username
+    with make_session() as session:
+        row = session.query(model.id).filter(column == str(identifier)).order_by(model.id).first()
+        return row[0] if row else None
+
+
+def send_over_rest(access: BotAccess, action: Callable[[DiscordRest], Awaitable[Any]]) -> bool:
+    async def run() -> None:
+        async with DiscordRest(access) as rest:
+            await action(rest)
+
+    try:
+        asyncio.run(run())
+    except DiscordAPIError as e:
+        logger.error(f"Discord bot {access.bot_id} could not send ({e})")
+        return False
+    return True
+
+
 def send_dm(bot_id: int, user_identifier: str, message: str) -> bool:
-    """Send a DM via the Discord collector API"""
+    """Send a DM, through the REST API for a webhook bot, else the collector."""
+    if access := rest_access(bot_id):
+        user_id = resolve_id(DiscordUser, user_identifier)
+        if user_id is None:
+            logger.error(f"Discord bot {bot_id}: no known user to DM")
+            return False
+
+        async def dm(rest: DiscordRest) -> None:
+            await rest.send_message(await rest.open_dm(user_id), message)
+
+        return send_over_rest(access, dm)
     try:
         response = requests.post(
             f"{get_api_url()}/send_dm",
@@ -45,6 +92,12 @@ def send_dm(bot_id: int, user_identifier: str, message: str) -> bool:
 
 def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
     """Send message to a channel by name or ID (ID supports threads)"""
+    if access := rest_access(bot_id):
+        channel_id = resolve_id(DiscordChannel, channel)
+        if channel_id is None:
+            logger.error(f"Discord bot {bot_id}: no known channel to send to")
+            return False
+        return send_over_rest(access, lambda rest: rest.send_message(channel_id, message))
     try:
         response = requests.post(
             f"{get_api_url()}/send_channel",
@@ -66,6 +119,11 @@ def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
 
 def add_reaction(bot_id: int, channel: int | str, message_id: int, emoji: str) -> bool:
     """Add a reaction to a message in a channel"""
+    if access := rest_access(bot_id):
+        channel_id = resolve_id(DiscordChannel, channel)
+        if channel_id is None:
+            return False
+        return send_over_rest(access, lambda rest: rest.add_reaction(channel_id, message_id, emoji))
     try:
         response = requests.post(
             f"{get_api_url()}/add_reaction",

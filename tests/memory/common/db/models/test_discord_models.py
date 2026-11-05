@@ -217,6 +217,7 @@ def test_create_discord_bot(db_session):
     """Test creating a Discord bot."""
     bot = DiscordBot(
         id=123456789,
+        application_id=123456789,
         name="Test Bot",
         is_active=True,
     )
@@ -233,6 +234,7 @@ def test_discord_bot_token_encryption(db_session):
     """Test that bot token is encrypted and decrypted correctly."""
     bot = DiscordBot(
         id=123456789,
+        application_id=123456789,
         name="Test Bot",
     )
     bot.token = "my_secret_token"
@@ -258,7 +260,7 @@ def test_discord_bot_user_authorization(db_session):
     db_session.add_all([user1, user2])
     db_session.commit()
 
-    bot = DiscordBot(id=123456789, name="Test Bot")
+    bot = DiscordBot(id=123456789, application_id=123456789, name="Test Bot")
     bot.created_by_user_id = user1.id
     db_session.add(bot)
     db_session.commit()
@@ -279,8 +281,8 @@ def test_user_multiple_bots(db_session):
     db_session.add(user)
     db_session.commit()
 
-    bot1 = DiscordBot(id=111111111, name="Bot 1")
-    bot2 = DiscordBot(id=222222222, name="Bot 2")
+    bot1 = DiscordBot(id=111111111, application_id=111111111, name="Bot 1")
+    bot2 = DiscordBot(id=222222222, application_id=222222222, name="Bot 2")
     bot1.created_by_user_id = user.id
     bot2.created_by_user_id = user.id
     db_session.add_all([bot1, bot2])

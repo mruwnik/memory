@@ -11,9 +11,18 @@ from collections.abc import Iterator
 from typing import Any
 
 import httpx
+from sqlalchemy.orm import object_session
 
 from memory.common.db.connection import DBSession
-from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
+from memory.common.db.models.slack import (
+    DEFAULT_SLACK_API_BASE_URL,
+    SlackApp,
+    SlackUserCredentials,
+    SlackWorkspace,
+)
+from memory.common.chat_urls import chat_url_allowed
+from memory.common.db.models.users import User
+from memory.common.safe_http import public_http_client, public_sync_http_client
 from memory.common.access_control import UserLike
 
 logger = logging.getLogger(__name__)
@@ -21,6 +30,20 @@ logger = logging.getLogger(__name__)
 # Rate limit retry settings
 MAX_RATE_LIMIT_RETRIES = 3
 DEFAULT_RETRY_AFTER = 5  # seconds
+# The API URL is user-configurable, so a server asking for longer waits gets
+# the call failed rather than a worker held.
+MAX_RETRY_AFTER = 30  # seconds
+
+
+def rate_limit_wait(error: str, response: httpx.Response, attempt: int) -> int | None:
+    """Seconds to wait before retrying a rate-limited call, or None to give up."""
+    if error != "ratelimited" or attempt >= MAX_RATE_LIMIT_RETRIES:
+        return None
+    try:
+        retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
+    except (ValueError, TypeError):
+        retry_after = DEFAULT_RETRY_AFTER
+    return retry_after if retry_after <= MAX_RETRY_AFTER else None
 
 # Slack object ids are prefix-typed: users are U/W, channels are C (public),
 # G (private) or D (DM). The delivery method is derived from this prefix.
@@ -107,22 +130,28 @@ class SlackAPIError(Exception):
         super().__init__(f"Slack API error: {error}")
 
 
-class SlackClient:
-    """Synchronous Slack API client."""
+def api_url(base_url: str, method: str) -> str:
+    return f"{base_url.rstrip('/')}/{method}"
 
-    def __init__(self, access_token: str, timeout: float = 30.0):
+
+class SlackClient:
+    """Synchronous client for the Slack Web API, or any server speaking it at
+    ``base_url``. The URL is user-configurable, so every dial is address-checked."""
+
+    def __init__(
+        self,
+        access_token: str,
+        timeout: float = 30.0,
+        base_url: str = DEFAULT_SLACK_API_BASE_URL,
+    ):
         self.access_token = access_token
         self.timeout = timeout
+        self.base_url = base_url
         self._client: httpx.Client | None = None
 
     def __enter__(self) -> "SlackClient":
-        self._client = httpx.Client(
-            base_url="https://slack.com/api/",
-            headers={
-                "Authorization": f"Bearer {self.access_token}",
-            },
-            timeout=self.timeout,
-        )
+        self._client = public_sync_http_client(timeout=self.timeout)
+        self._client.headers["Authorization"] = f"Bearer {self.access_token}"
         return self
 
     def __exit__(self, *args) -> None:
@@ -136,7 +165,9 @@ class SlackClient:
             raise RuntimeError("SlackClient must be used as context manager")
 
         for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
-            response = self._client.post(method, data=kwargs if kwargs else None)
+            response = self._client.post(
+                api_url(self.base_url, method), data=kwargs if kwargs else None
+            )
             data = response.json()
 
             if data.get("ok"):
@@ -145,13 +176,8 @@ class SlackClient:
             error = data.get("error", "unknown_error")
 
             # Handle rate limiting with retry
-            if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
-                try:
-                    retry_after = int(
-                        response.headers.get("Retry-After", DEFAULT_RETRY_AFTER)
-                    )
-                except (ValueError, TypeError):
-                    retry_after = DEFAULT_RETRY_AFTER
+            retry_after = rate_limit_wait(error, response, attempt)
+            if retry_after is not None:
                 logger.warning(
                     f"Slack rate limited on {method}, waiting {retry_after}s "
                     f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"
@@ -169,12 +195,34 @@ class SlackClient:
         raise SlackAPIError("ratelimited", {"error": "ratelimited"})
 
 
-async def async_slack_call(access_token: str, method: str, **params) -> dict:
+def slack_api_base_url(app: SlackApp) -> str:
+    """The app's Web API URL, if it is still on the chat API allowlist."""
+    session = object_session(app)
+    owner = session.get(User, app.created_by_user_id) if session and app.created_by_user_id else None
+    if not chat_url_allowed(app.api_base_url, owner):
+        logger.warning(f"Slack app {app.id}: API URL is not on the allowlist")
+        raise SlackAPIError("api_base_url_not_allowed")
+    return app.api_base_url
+
+
+def slack_client_for(credentials: SlackUserCredentials) -> SlackClient:
+    """A client for the API of the app the credential was issued through."""
+    return SlackClient(
+        credentials.access_token or "", base_url=slack_api_base_url(credentials.slack_app)
+    )
+
+
+async def async_slack_call(
+    access_token: str,
+    method: str,
+    base_url: str = DEFAULT_SLACK_API_BASE_URL,
+    **params,
+) -> dict:
     """Make an async Slack API call with rate limit retry handling."""
-    async with httpx.AsyncClient() as client:
+    async with public_http_client() as client:
         for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
             response = await client.post(
-                f"https://slack.com/api/{method}",
+                api_url(base_url, method),
                 headers={
                     "Authorization": f"Bearer {access_token}",
                 },
@@ -189,13 +237,8 @@ async def async_slack_call(access_token: str, method: str, **params) -> dict:
             error = data.get("error", "unknown_error")
 
             # Handle rate limiting with retry
-            if error == "ratelimited" and attempt < MAX_RATE_LIMIT_RETRIES:
-                try:
-                    retry_after = int(
-                        response.headers.get("Retry-After", DEFAULT_RETRY_AFTER)
-                    )
-                except (ValueError, TypeError):
-                    retry_after = DEFAULT_RETRY_AFTER
+            retry_after = rate_limit_wait(error, response, attempt)
+            if retry_after is not None:
                 logger.warning(
                     f"Slack rate limited on {method}, waiting {retry_after}s "
                     f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"

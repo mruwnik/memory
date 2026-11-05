@@ -136,7 +136,7 @@ def test_discord_channel_gated_for_regular(db_session, regular_user, discord_cha
 def test_discord_channel_visible_via_user_bot(
     db_session, regular_user, discord_server, discord_channel
 ):
-    bot = DiscordBot(id=321, name="Bot")
+    bot = DiscordBot(id=321, application_id=321, name="Bot")
     bot.created_by_user_id = regular_user.id
     discord_server.bot_id = bot.id
     db_session.add(bot)

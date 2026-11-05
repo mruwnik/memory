@@ -95,7 +95,7 @@ def slack(db, user):
 
 
 def discord(db, user):
-    bot = DiscordBot(id=7, name="b", created_by_user_id=user.id)
+    bot = DiscordBot(id=7, application_id=7, name="b", created_by_user_id=user.id)
     bot.created_by_user_id = user.id
     db.add(bot)
     db.flush()

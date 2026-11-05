@@ -39,6 +39,10 @@ const app = (over: Partial<SlackAppResponse> = {}): SlackAppResponse => ({
   is_owner: true,
   client_secret_configured: false,
   signing_secret_configured: false,
+  authorize_url: 'https://slack.com/oauth/v2/authorize',
+  token_url: 'https://slack.com/api/oauth.v2.access',
+  api_base_url: 'https://slack.com/api',
+  last_event_at: null,
   created_by_user_id: 42,
   created_at: null,
   updated_at: null,
@@ -131,6 +135,25 @@ describe('SlackAppWizard - register -> client-secret -> oauth', () => {
     expect(screen.getByText('Step 2 of 7')).toBeInTheDocument()
   })
 
+  it('sends the advanced Slack-compatible URLs when given', async () => {
+    const { user } = renderWithUser(<SlackAppWizard onCancel={vi.fn()} />)
+    await user.type(screen.getByPlaceholderText("My team's Slack"), 'Acme')
+    await user.type(screen.getByPlaceholderText('1234567890.1234567890'), 'cid-9')
+    await user.click(screen.getByText('Advanced'))
+    await user.type(screen.getByLabelText('Authorize URL'), 'https://chat.example.com/oauth/v2/authorize')
+    await user.type(screen.getByLabelText('Token URL'), 'https://chat.example.com/api/oauth.v2.access')
+    await user.type(screen.getByLabelText('API base URL'), 'https://chat.example.com/api')
+    await user.click(screen.getByRole('button', { name: 'Create app' }))
+
+    await waitFor(() => expect(createApp).toHaveBeenCalledWith({
+      name: 'Acme',
+      client_id: 'cid-9',
+      authorize_url: 'https://chat.example.com/oauth/v2/authorize',
+      token_url: 'https://chat.example.com/api/oauth.v2.access',
+      api_base_url: 'https://chat.example.com/api',
+    }))
+  })
+
   it('shows an error if app creation fails', async () => {
     createApp.mockRejectedValueOnce(new Error('client_id taken'))
     const { user } = renderWithUser(<SlackAppWizard onCancel={vi.fn()} />)
@@ -179,6 +202,25 @@ describe('SlackAppWizard - oauth redirect', () => {
     expect(url).toContain('https://slack.com/oauth/v2/authorize?')
     expect(url).toContain('client_id=cid-123')
     expect(url).toContain('state=signed-state')
+    openSpy.mockRestore()
+  })
+
+  it.each([
+    ['https://slack.com/oauth/v2/authorize', true],
+    ['https://chat.example.com/oauth/v2/authorize', false],
+  ])('builds the authorize URL from %s, asking for bot scopes only from Slack', async (authorizeUrl, botScopes) => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    setClientSecret.mockResolvedValue(app({ authorize_url: authorizeUrl, client_secret_configured: true }))
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app({ authorize_url: authorizeUrl })} onCancel={vi.fn()} />)
+    const input = document.querySelector('input[type="password"]') as HTMLInputElement
+    await user.type(input, 'sec')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+    await user.click(await screen.findByRole('button', { name: 'Authorize workspace' }))
+
+    const url = new URL((await screen.findByRole('link', { name: 'Open Slack authorization (opens in a new tab)' })).getAttribute('href')!)
+    expect(`${url.origin}${url.pathname}`).toBe(authorizeUrl)
+    expect(url.searchParams.has('user_scope')).toBe(true)
+    expect(url.searchParams.has('scope')).toBe(botScopes)
     openSpy.mockRestore()
   })
 

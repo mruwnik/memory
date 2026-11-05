@@ -271,6 +271,7 @@ const WorkspaceRow = ({
 
   const status = collectionStatus(workspace)
   const eventlessApps = workspace.apps.filter(app => !EVENTS_LIVE.includes(app.setup_state))
+  const lastEventAt = workspace.apps.map(app => app.last_event_at).filter(Boolean).sort().at(-1) ?? null
 
   return (
     <Row
@@ -288,6 +289,7 @@ const WorkspaceRow = ({
         `${workspace.channel_count} channels`,
         `${workspace.connected_users} connected users`,
         workspace.last_sync_at && `Last sync: ${formatRelativeTime(workspace.last_sync_at)}`,
+        lastEventAt && `Last event: ${formatRelativeTime(lastEventAt)}`,
       ]}
       actions={<>
         <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={update.busy}

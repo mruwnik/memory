@@ -88,6 +88,9 @@ WHITELIST = {
     # are deliberately NOT under this prefix, so this does not weaken
     # auth on the operator-facing Slack APIs.
     "/slack/events/",
+    # Discord Webhook Events, signed with the bot's Ed25519 key and checked
+    # inside discord.discord_events.
+    "/discord/events/",
     # Transcript push ingest. Senders authenticate per account with the
     # webhook secret (HMAC of the body or a bearer token), checked inside
     # transcript_ingest.ingest_transcript; they have no session.

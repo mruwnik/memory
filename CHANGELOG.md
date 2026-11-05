@@ -49,6 +49,41 @@ not matched above, because only Memory's session ids start with `u<user>-`.
 
 ### Other changes for operators
 
+Discord bots can receive messages by webhook, now the default in **Sources →
+Discord**: `POST /discord/events/{bot_id}` takes Discord's Webhook Events
+envelope, checks its Ed25519 signature against the bot's public key and queues
+the gateway event it carries. Behind a reverse proxy, let `/discord/events/`
+through without a login, as `/slack/events/` already is. Gateway bots keep
+working; a bot with a public key gets no gateway connection. Several users can
+add the same Discord application, and the same Slack client ID, each with their
+own row. Deleted Discord messages are now removed. Pushed events only change
+rows their sender's bots own: they never rename or claim existing servers or
+channels, overwrite stored Discord user names, or edit, delete or react to other
+users' bots' messages; a Slack app only takes events for workspaces it was
+authorized into, for channels of that workspace, and only changes messages its
+owner's apps ingested. A Discord server first seen in a pushed event gives that
+bot's owner nothing until a bot with a token (gateway or REST listing) claims it,
+which resets its project and sensitivity; servers are listed by that verified
+membership. A DM is managed by the owner of the bot that first delivered
+it. A webhook bot with a token sends through the REST API.
+
+New setting `CHAT_API_ALLOWED_ORIGINS` (comma-separated https origins, default
+empty): the only servers besides slack.com and discord.com that non-admin users
+may point a Slack app's authorize, token or API URL, or a Discord bot's API URL,
+at. Checked on save and on every use. To use a chat proxy, set it, e.g.
+`CHAT_API_ALLOWED_ORIGINS=https://chat-proxy.equistamp.io`.
+
+The Discord backfill runs daily instead of weekly (`DISCORD_BACKFILL_INTERVAL`
+now defaults to 86400; an explicit value in `.env` still wins). It reads through
+Discord's REST API at each bot's API base URL rather than discord.py, refreshes
+each bot's servers and channels, and re-reads the last `DISCORD_CATCH_UP_DAYS`
+(new, default 2) of every collected channel, storing missed messages and edits
+(not missed deletes or reactions). Slack apps get optional authorize,
+token-exchange and Web API URLs for Slack-compatible servers; requests to them,
+including the OAuth token exchange, go through the address-checked HTTP client.
+Reactions on Slack and Discord messages are stored per user and kept in step
+with each add and remove.
+
 Postgres gets a 256 MB `/dev/shm` (Docker's default is 64 MB), so parallel
 `VACUUM` and index builds no longer fail with "could not resize shared memory
 segment". The update recreates the postgres container to apply it.
@@ -82,6 +117,24 @@ and `claude_github_tokens` tables and `users.default_ssh_key_id`, strips the
 `claude_sessions` scope from users and API keys, and deletes the stored
 `module_claude_containers` setting. Each step tolerates the object being
 missing. Fast. Its downgrade restores nothing.
+
+`20261125_chat_webhooks` splits Slack credentials' comma-joined scopes into one
+entry per scope; makes `slack_apps.client_id` unique per registering user and
+adds `authorize_url`, `token_url`, `api_base_url` and `last_event_at`; gives
+`discord_bots` a sequence-backed id (existing rows keep theirs, the application
+snowflake, which is copied to the new `application_id`), unique per
+(application, user), plus `public_key`, `api_base_url` and `last_event_at`; and
+adds `discord_channels.bot_id`, filled for DMs from the bot of their first
+message; `discord_servers.verified` (true for existing rows) and the
+`discord_bot_servers` membership table, filled from existing server owners; and
+`slack_message.slack_app_id` (empty for existing rows). Fast. Its downgrade refuses while bots added under the new ids or Slack
+client IDs shared by several users exist.
+
+`20261126_per_user_reactions` rewrites stored reactions as `{emoji: [user ids]}`.
+Slack reactions keep their users. Discord reactions were stored as counts without
+users, so they are dropped; reactions from now on are recorded per user. It
+rewrites every message row that has reactions, which may take a while on a large
+archive. Its downgrade restores the list shapes, with counts from the user lists.
 
 ### Post-deploy commands
 

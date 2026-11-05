@@ -300,7 +300,9 @@ def own_authors(db: DBSession, owner_id: int) -> frozenset[str]:
     """Accounts an agent's own posts come from: any of our Discord bots, and the
     owner's Slack integration user. Matching their items would let an agent
     that posts to a channel re-trigger itself."""
-    bots = db.scalars(select(DiscordBot.id)).all()
+    bots = db.scalars(
+        select(DiscordBot.application_id).where(DiscordBot.token_encrypted.is_not(None))
+    ).all()
     slack = db.scalars(
         select(SlackUserCredentials.slack_user_id).where(
             SlackUserCredentials.user_id == owner_id

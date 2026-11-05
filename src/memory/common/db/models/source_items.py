@@ -417,8 +417,8 @@ class DiscordMessage(SourceItem):
     images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
     # Rich content stored as JSON
-    # reactions: [{"emoji": "👍", "count": 3, "users": [123, 456]}]
-    reactions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # reactions: {emoji: [user ids]}
+    reactions: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB, nullable=True)
     # embeds: Discord embed objects (link previews, etc.)
     embeds: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     # attachments: Non-image attachments metadata
@@ -531,6 +531,11 @@ class SlackMessage(SourceItem):
     workspace_id: Mapped[str] = mapped_column(
         Text, ForeignKey("slack_workspaces.id", ondelete="CASCADE"), nullable=False
     )
+    # The app that ingested the message: pushed edits, deletes and reactions
+    # only apply through apps of its owner.
+    slack_app_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("slack_apps.id", ondelete="SET NULL"), nullable=True
+    )
     # Slack user ID (no FK - user info stored in Person.contact_info)
     author_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Author display name (cached for display, resolved at ingest time)
@@ -547,7 +552,7 @@ class SlackMessage(SourceItem):
     edited_ts: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Rich content
-    reactions: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    reactions: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB, nullable=True)  # {emoji: [user ids]}
     files: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)  # File metadata
 
     # Resolved content (mentions replaced with display names)

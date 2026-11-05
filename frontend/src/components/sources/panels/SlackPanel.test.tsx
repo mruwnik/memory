@@ -85,7 +85,7 @@ const channel = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-const draftApp = { id: 4, name: 'Acme app', setup_state: 'draft', is_owner: true }
+const draftApp = { id: 4, name: 'Acme app', setup_state: 'draft', is_owner: true, last_event_at: null }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -322,6 +322,16 @@ describe('SlackPanel - event setup', () => {
     await screen.findByText('Acme')
     expect(screen.queryByText('Polling only')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Finish event setup' })).not.toBeInTheDocument()
+  })
+
+  it('shows when the newest event arrived', async () => {
+    const recent = new Date(Date.now() - 3 * 60_000).toISOString()
+    const older = new Date(Date.now() - 3 * 3600_000).toISOString()
+    listWorkspaces.mockResolvedValue([workspace({
+      apps: [{ ...draftApp, setup_state: 'live', last_event_at: older }, { ...draftApp, id: 5, setup_state: 'live', last_event_at: recent }],
+    })])
+    renderWithUser(<SlackPanel />)
+    expect(await screen.findByText(/Last event: 3m ago/)).toBeInTheDocument()
   })
 
   it('resumes the existing app in the setup wizard', async () => {

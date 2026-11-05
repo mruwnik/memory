@@ -35,6 +35,11 @@ export interface SlackAppResponse {
   is_owner: boolean
   client_secret_configured: boolean
   signing_secret_configured: boolean
+  // OAuth and Web API endpoints; Slack's unless the app runs on a Slack-compatible server
+  authorize_url: string
+  token_url: string
+  api_base_url: string
+  last_event_at: string | null
   created_by_user_id: number | null
   created_at: string | null
   updated_at: string | null
@@ -43,6 +48,9 @@ export interface SlackAppResponse {
 export interface SlackAppCreate {
   name: string
   client_id: string
+  authorize_url?: string
+  token_url?: string
+  api_base_url?: string
 }
 
 export interface SlackAppNonceResponse {

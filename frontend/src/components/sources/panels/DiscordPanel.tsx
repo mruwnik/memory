@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useDiscord, DiscordBot, DiscordServer, DiscordChannel, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
+import { useDiscord, DiscordBot, DiscordBotCreate, DiscordServer, DiscordChannel, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
-import { Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, useActionNotice, useSubmit } from '@/components/shared/ui'
+import { Badge, Button, ConfirmButton, Disclosure, EmptyState, ErrorState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, ToggleGroup, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 
 export const DiscordPanel = () => {
@@ -74,10 +74,10 @@ export const DiscordPanel = () => {
     }
   }
 
-  const handleAddBot = async (data: { name: string; token: string }) => {
-    await createBot(data)
-    setAddingBot(false)
+  const handleAddBot = async (data: DiscordBotCreate) => {
+    const created = await createBot(data)
     loadData()
+    return created
   }
 
   const handleDeleteBot = (bot: DiscordBot) => run(async () => {
@@ -235,19 +235,27 @@ const BotRow = ({
       muted={!bot.is_active}
       badges={<>
         <StatusBadge active={bot.is_active} />
-        <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>
+        {bot.events_url
+          ? <Badge tone="info">Webhook</Badge>
+          : <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>}
       </>}
-      meta={[bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`]}
+      meta={[
+        bot.events_url ? `Last event: ${formatRelativeTime(bot.last_event_at)}` : null,
+        bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`,
+      ]}
       actions={<>
-        <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />
+        {!bot.events_url && <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />}
         <PauseButton active={bot.is_active} onClick={onToggleActive} />
         <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>
         <ConfirmButton confirm={`Remove "${bot.name}"? This removes the bot from Memory.`} onConfirm={onDelete}>Remove</ConfirmButton>
       </>}
     >
+      {bot.events_url && <EventsUrl url={bot.events_url} />}
       <SubList
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Servers ({servers.length})</ExpandToggle>}
-        empty={expanded && 'No servers found. Click "Refresh metadata" to sync.'}
+        empty={expanded && (bot.events_url
+          ? 'No servers yet. They appear with the first event, or after the daily sync if the bot has a token.'
+          : 'No servers found. Click "Refresh metadata" to sync.')}
       >
         {expanded && servers.map(server => (
             <ServerRow
@@ -358,20 +366,40 @@ const ChannelRow = ({ channel, projects, serverCollecting, onUpdate }: ChannelRo
   )
 }
 
+const EventsUrl = ({ url }: { url: string }) => (
+  <Field label="Events URL" hint="Discord delivers this bot's messages here; paste it as the webhook events URL">
+    <Input readOnly value={url} onFocus={e => e.target.select()} />
+  </Field>
+)
+
+type Delivery = 'webhook' | 'gateway'
+
+const DELIVERY_OPTIONS: { value: Delivery; label: string }[] = [
+  { value: 'webhook', label: 'Webhook' },
+  { value: 'gateway', label: 'Gateway bot' },
+]
+
 interface AddBotFormProps {
-  onAdd: (data: { name: string; token: string }) => Promise<void>
+  onAdd: (data: DiscordBotCreate) => Promise<DiscordBot>
   onCancel: () => void
 }
 
 const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
+  const [delivery, setDelivery] = useState<Delivery>('webhook')
   const [name, setName] = useState('')
+  const [applicationId, setApplicationId] = useState('')
+  const [publicKey, setPublicKey] = useState('')
   const [token, setToken] = useState('')
+  const [apiBaseUrl, setApiBaseUrl] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [created, setCreated] = useState<DiscordBot | null>(null)
+  const webhook = delivery === 'webhook'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim() || !token.trim()) {
+    const required = webhook ? [name, applicationId, publicKey] : [name, token]
+    if (required.some(value => !value.trim())) {
       setError('Please fill in all fields')
       return
     }
@@ -379,12 +407,34 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
     setSubmitting(true)
     setError(null)
 
+    const optional = (value: string) => value.trim() || undefined
+    const data: DiscordBotCreate = webhook
+      ? { name: name.trim(), application_id: applicationId.trim(), public_key: publicKey.trim(), token: optional(token) }
+      : { name: name.trim(), token: token.trim() }
     try {
-      await onAdd({ name: name.trim(), token: token.trim() })
+      const bot = await onAdd({ ...data, api_base_url: optional(apiBaseUrl) })
+      if (!bot.events_url) {
+        onCancel()
+        return
+      }
+      setCreated(bot)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to add bot')
+    } finally {
       setSubmitting(false)
     }
+  }
+
+  if (created?.events_url) {
+    return (
+      <Modal title="Add Discord bot" onClose={onCancel}>
+        <div className="space-y-4">
+          <Notice tone="success">{created.name} is added. Its messages arrive once the sender delivers to this URL.</Notice>
+          <EventsUrl url={created.events_url} />
+          <FormActions><Button variant="primary" onClick={onCancel}>Done</Button></FormActions>
+        </div>
+      </Modal>
+    )
   }
 
   return (
@@ -392,38 +442,37 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
 
+        <ToggleGroup label="Delivery" options={DELIVERY_OPTIONS} value={delivery} onChange={setDelivery} />
+
         <Field label="Bot name" hint="A friendly name for this bot">
-          <Input
-            type="text"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="e.g., My Bot"
-            required
-          />
+          <Input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g., My Bot" required />
         </Field>
 
-        <Field label="Bot token" hint="Get this from the Discord Developer Portal under Bot → Token">
-          <Input
-            type="password"
-            value={token}
-            onChange={e => setToken(e.target.value)}
-            placeholder="Paste your Discord bot token"
-            required
-          />
+        {webhook && <>
+          <Field label="Application ID" hint="The bot's application ID">
+            <Input type="text" inputMode="numeric" value={applicationId} onChange={e => setApplicationId(e.target.value)} required />
+          </Field>
+          <Field label="Public key" hint="The key that signs the webhook events, as hex">
+            <Input type="text" value={publicKey} onChange={e => setPublicKey(e.target.value)} required />
+          </Field>
+        </>}
+
+        <Field
+          label={webhook ? 'Bot token (optional)' : 'Bot token'}
+          hint={webhook ? 'Lets the daily catch-up read messages a webhook delivery missed' : 'Get this from the Discord Developer Portal under Bot → Token'}
+        >
+          <Input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="Paste your Discord bot token" required={!webhook} />
         </Field>
+
+        <Disclosure summary="Advanced">
+          <Field label="API base URL" hint="Where the bot's REST API lives; leave empty for https://discord.com/api/v10">
+            <Input type="url" value={apiBaseUrl} onChange={e => setApiBaseUrl(e.target.value)} placeholder="https://discord.com/api/v10" />
+          </Field>
+        </Disclosure>
 
         <FormActions>
-          <Button
-            type="button"
-            onClick={onCancel}
-            disabled={submitting}
-          >
-            Cancel
-          </Button>
-          <Button variant="primary"
-            type="submit"
-            disabled={submitting}
-          >
+          <Button type="button" onClick={onCancel} disabled={submitting}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={submitting}>
             {submitting ? 'Adding...' : 'Add bot'}
           </Button>
         </FormActions>
