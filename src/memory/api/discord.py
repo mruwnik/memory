@@ -94,6 +94,7 @@ class DiscordBotResponse(BaseModel):
     # Where webhook delivery posts; shown before switching a bot to it
     events_url: str
     last_event_at: str | None
+    last_sync_at: str | None
     created_at: str | None
     updated_at: str | None
     connected: bool | None = None
@@ -209,6 +210,7 @@ def bot_to_response(
         api_base_url=bot.api_base_url,
         events_url=events_url_for(bot),
         last_event_at=bot.last_event_at.isoformat() if bot.last_event_at else None,
+        last_sync_at=bot.last_sync_at.isoformat() if bot.last_sync_at else None,
         created_at=bot.created_at.isoformat() if bot.created_at else None,
         updated_at=bot.updated_at.isoformat() if bot.updated_at else None,
         connected=connected,
@@ -266,13 +268,8 @@ def list_bots(
     else:
         bots = get_user_bots(db, resolved_user_id)
 
-    # Check connection status for each bot
-    responses = []
-    for bot in bots:
-        connected = discord_client.is_collector_healthy(cast(int, bot.id))
-        responses.append(bot_to_response(bot, connected=connected))
-
-    return responses
+    connected = discord_client.connected_bots()
+    return [bot_to_response(bot, connected=bot.id in connected) for bot in bots]
 
 
 @router.post("/bots")
@@ -393,9 +390,9 @@ def refresh_bot_metadata(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ):
-    """Trigger metadata refresh from Discord API."""
+    """Record this bot's servers, channels and members again, if it is on the gateway."""
     get_user_bot(db, bot_id, user)  # Verify authorization
-    result = discord_client.refresh_discord_metadata()
+    result = discord_client.refresh_discord_metadata(bot_id)
     if result is None:
         raise HTTPException(status_code=503, detail="Failed to refresh metadata")
     return {"success": True, **result}

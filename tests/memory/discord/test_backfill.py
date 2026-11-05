@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL
+from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, DELETE_DISCORD_MESSAGES
 from memory.common.db.models import (
     DiscordBot,
     DiscordBotServer,
@@ -191,8 +191,47 @@ async def test_catch_up_fills_recent_gaps_then_crawls_older_history(db_session, 
         await backfill.backfill_channel_messages(ACCESS, 10, celery_app, max_messages=100)
 
     assert queued_ids(celery_app) == [newest, recent_stored, recent_missed, older]
-    edits = [c.kwargs["kwargs"]["is_edit"] for c in celery_app.send_task.call_args_list]
+    edits = [c.kwargs["kwargs"]["is_edit"] for c in sent(celery_app, ADD_DISCORD_MESSAGE)]
     assert edits == [True, True, True, False]
+
+
+def sent(celery_app, task: str) -> list:
+    return [c for c in celery_app.send_task.call_args_list if c.args[0] == task]
+
+
+@pytest.mark.asyncio
+async def test_catch_up_deletes_messages_gone_from_a_fully_read_window(db_session, fake_api):
+    make_discord_rows(db_session)
+    now = datetime.now(timezone.utc)
+    window = snowflake_at(now - timedelta(days=2))
+    kept, deleted = snowflake_at(now - timedelta(hours=5)), snowflake_at(now - timedelta(hours=6))
+    outside = window - 1000
+    for message_id in (kept, deleted, outside):
+        add_message(db_session, message_id)
+    db_session.commit()
+    celery_app = MagicMock()
+
+    with fake_api(FakeDiscord([kept])):
+        await backfill.backfill_channel_messages(ACCESS, 10, celery_app, max_messages=100)
+
+    assert [c.kwargs["kwargs"] for c in sent(celery_app, DELETE_DISCORD_MESSAGES)] == [
+        {"message_ids": [deleted], "bot_ids": [42]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_partly_read_window_deletes_nothing(db_session, fake_api):
+    make_discord_rows(db_session)
+    now = datetime.now(timezone.utc)
+    recent = [snowflake_at(now - timedelta(hours=h)) for h in (1, 2, 3)]
+    add_message(db_session, snowflake_at(now - timedelta(hours=10)))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    with fake_api(FakeDiscord(recent)):
+        await backfill.backfill_channel_messages(ACCESS, 10, celery_app, max_messages=2)
+
+    assert sent(celery_app, DELETE_DISCORD_MESSAGES) == []
 
 
 @pytest.mark.asyncio
@@ -375,6 +414,7 @@ async def test_discover_bot_servers_stores_servers_and_text_channels(db_session,
     assert (general.name, general.channel_type, general.category_id) == ("general", "text", 79)
     assert db_session.get(DiscordChannel, 71).channel_type == "forum"
     assert db_session.get(DiscordChannel, 79) is None
+    assert db_session.get(DiscordBot, 42).last_sync_at is not None
 
 
 @pytest.mark.asyncio

@@ -214,7 +214,7 @@ async def test_a_crashing_bot_is_retried_with_growing_delays(db_session, ready_o
     async def crash(self, token):
         starts.append(clock[0])
         if len(starts) == ready_on_start:
-            self._ready.set()
+            self.is_ready = lambda: True
         raise RuntimeError("gateway fell over")
 
     manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]

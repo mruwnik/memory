@@ -72,11 +72,11 @@ def test_refresh_discord_metadata_success(mock_post, mock_api_url):
     mock_response.raise_for_status.return_value = None
     mock_post.return_value = mock_response
 
-    result = discord.refresh_discord_metadata()
+    result = discord.refresh_discord_metadata(BOT_ID)
 
     assert result == {"servers": 5, "channels": 20, "users": 100}
     mock_post.assert_called_once_with(
-        "http://localhost:8000/refresh_metadata", timeout=30
+        "http://localhost:8000/refresh_metadata/42", timeout=30
     )
 
 
@@ -85,7 +85,7 @@ def test_refresh_discord_metadata_failure(mock_post, mock_api_url):
     """Test metadata refresh failure"""
     mock_post.side_effect = requests.RequestException("Failed to connect")
 
-    result = discord.refresh_discord_metadata()
+    result = discord.refresh_discord_metadata(BOT_ID)
 
     assert result is None
 
@@ -97,7 +97,7 @@ def test_refresh_discord_metadata_http_error(mock_post, mock_api_url):
     mock_response.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
     mock_post.return_value = mock_response
 
-    result = discord.refresh_discord_metadata()
+    result = discord.refresh_discord_metadata(BOT_ID)
 
     assert result is None
 

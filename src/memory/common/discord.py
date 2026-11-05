@@ -98,25 +98,27 @@ def add_reaction(bot_id: int, channel: int | str, message_id: int, emoji: str) -
     return send_over_rest(access, lambda rest: rest.add_reaction(channel_id, message_id, emoji))
 
 
-def is_collector_healthy(bot_id: int) -> bool:
-    """Check if the Discord collector is running and healthy"""
+def connected_bots() -> set[int]:
+    """Ids of the bots connected to the gateway; none when the collector is unreachable."""
     try:
         response = requests.get(f"{get_api_url()}/health", timeout=5)
         response.raise_for_status()
         result = response.json()
-        bot_status = result.get(str(bot_id))
-        if not isinstance(bot_status, dict):
-            return False
-        return bool(bot_status.get("connected"))
-
     except requests.RequestException:
-        return False
+        return set()
+    return {
+        int(bot_id) for bot_id, status in result.items() if isinstance(status, dict) and status.get("connected")
+    }
 
 
-def refresh_discord_metadata() -> dict[str, Any] | None:
-    """Refresh Discord server/channel/user metadata from Discord API"""
+def is_collector_healthy(bot_id: int) -> bool:
+    return bot_id in connected_bots()
+
+
+def refresh_discord_metadata(bot_id: int) -> dict[str, Any] | None:
+    """Have the collector record a running bot's servers, channels and members again."""
     try:
-        response = requests.post(f"{get_api_url()}/refresh_metadata", timeout=30)
+        response = requests.post(f"{get_api_url()}/refresh_metadata/{bot_id}", timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:

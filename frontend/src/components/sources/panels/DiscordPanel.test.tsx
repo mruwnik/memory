@@ -17,6 +17,7 @@ const bot: DiscordBot = {
   api_base_url: 'https://discord.com/api/v10',
   events_url: 'https://memory.example.com/discord/events/bot-1',
   last_event_at: null,
+  last_sync_at: null,
   created_at: '',
   updated_at: '2030-01-01T00:00:00Z',
   connected: true,
@@ -296,6 +297,18 @@ describe('DiscordPanel webhook bot row', () => {
     expect(screen.queryByText('Disconnected')).not.toBeInTheDocument()
     expect(screen.getByText(/Last event: 5m ago/)).toBeInTheDocument()
     expect(screen.getByDisplayValue(webhookBot.events_url)).toBeInTheDocument()
+  })
+})
+
+describe('DiscordPanel last sync', () => {
+  it.each([
+    [new Date(Date.now() - 10 * 60_000).toISOString(), 'Last sync: 10m ago'],
+    [null, 'Last sync: Never'],
+  ])('shows when the bot last listed its servers, not when it was edited', async (last_sync_at, text) => {
+    mockFetchRoutes(routes({ bots: [{ ...bot, last_sync_at, updated_at: new Date().toISOString() }] }))
+    renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
+    expect(screen.getByText(new RegExp(text))).toBeInTheDocument()
   })
 })
 

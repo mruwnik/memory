@@ -30,6 +30,13 @@ None.
   chunks and vectors behind; search then failed on every query that hit one.
 - Search skips an item it can't load (logged at WARNING with its id) instead
   of failing.
+- Discord gateway bots now apply deletes and edits of older messages, and
+  record servers they join after connecting. Bots on a custom API URL no
+  longer request member lists at startup. The daily catch-up deletes stored
+  messages that are gone from the channel's recent window, and a channel's
+  backfill stops once its collection is paused. The collector's
+  `POST /refresh_metadata` is now `POST /refresh_metadata/{bot_id}` and
+  refreshes only that bot.
 
 ### Migrations
 
@@ -37,6 +44,9 @@ None.
 each source item subclass table (`mail_message`, `book_section`, …) that deletes
 the `source_item` row once its subclass row is gone. Fast: it only creates a
 function and the triggers.
+
+`20261129_discord_bot_last_sync`: adds the nullable `discord_bots.last_sync_at`
+column. Fast.
 
 ### Post-deploy commands
 

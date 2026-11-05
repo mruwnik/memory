@@ -15,15 +15,22 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from time import monotonic
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from discord import (
     ConnectionClosed,
+    Guild,
     Intents,
     LoginFailure,
+    Member,
     Message,
     PrivilegedIntentsRequired,
+    RawBulkMessageDeleteEvent,
+    RawMessageDeleteEvent,
+    RawMessageUpdateEvent,
     RawReactionActionEvent,
     RawReactionClearEmojiEvent,
     RawReactionClearEvent,
@@ -34,10 +41,10 @@ from discord.ext import commands
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, UPDATE_REACTIONS
+from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT, UPDATE_REACTIONS
 from memory.common.db.connection import make_session
 from memory.common.discord_events import emoji_key as event_emoji_key
-from memory.common.db.models import DiscordBot, DiscordChannel
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel
 from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
 from memory.discord.ingest import (
     ensure_channel,
@@ -132,8 +139,11 @@ class MessageCollector(commands.Bot):
         intents.guilds = True
         intents.reactions = True
 
-        super().__init__(command_prefix="!", intents=intents)
-        if bot_info.api_base_url.rstrip("/") != DEFAULT_DISCORD_API_BASE_URL:
+        proxied = bot_info.api_base_url.rstrip("/") != DEFAULT_DISCORD_API_BASE_URL
+        # READY waits for member chunks, which a proxy may serve slowly or never. Without them
+        # members still come with each GUILD_CREATE (all of them in small servers) and as authors.
+        super().__init__(command_prefix="!", intents=intents, chunk_guilds_at_startup=not proxied)
+        if proxied:
             self.http = ProxiedHTTPClient(
                 bot_info.api_base_url, lambda url: gateway_allowed(bot_info.id, url), self.http.loop
             )
@@ -141,46 +151,54 @@ class MessageCollector(commands.Bot):
 
         self.bot_info = bot_info
         self.celery_app = celery_app
-        self._ready = asyncio.Event()
 
     async def on_ready(self) -> None:
-        """Called when the bot is ready."""
+        # Each server's GUILD_CREATE, at startup too, records it (on_guild_available/on_guild_join).
         logger.info(f"Bot {self.user} (ID: {self.bot_info.id}) is ready")
-        self._ready.set()
 
-        # Sync all guild members to database
-        await self._sync_guild_metadata()
+    async def on_guild_available(self, guild: Guild) -> None:
+        await self.sync_guilds([guild])
 
-    async def wait_until_ready(self) -> None:
-        """Wait until the bot is ready."""
-        await self._ready.wait()
+    async def on_guild_join(self, guild: Guild) -> None:
+        await self.sync_guilds([guild])
 
-    async def _sync_guild_metadata(self) -> None:
-        """Sync all servers, channels, and users to the database."""
-        user_count = 0
-        server_count = 0
-        channel_count = 0
+    async def on_guild_remove(self, guild: Guild) -> None:
+        await asyncio.to_thread(self.forget_guild, guild.id)
 
+    async def sync_guild_metadata(self) -> dict[str, int]:
+        return await self.sync_guilds(self.guilds)
+
+    async def sync_guilds(self, guilds: Sequence[Guild]) -> dict[str, int]:
+        """Record these servers as this bot's, with their channels and the members
+        discord.py holds. The database work runs off the event loop that every bot
+        and the health API share."""
+        snapshot = [
+            (guild, [c for c in guild.channels if isinstance(c, abc.Messageable)], guild.members) for guild in guilds
+        ]
+        return await asyncio.to_thread(self.store_guilds, snapshot)
+
+    def store_guilds(self, guilds: Sequence[tuple[Guild, Sequence[abc.Messageable], Sequence[Member]]]) -> dict[str, int]:
+        counts = {"servers": 0, "channels": 0, "users": 0}
         with make_session() as session:
-            for guild in self.guilds:
+            for guild, channels, members in guilds:
                 ensure_server(session, guild, bot_id=self.bot_info.id)
-                server_count += 1
-
-                for channel in guild.channels:
-                    if hasattr(channel, "send"):  # Text-like channels
-                        ensure_channel(session, channel, guild.id)  # type: ignore[arg-type]
-                        channel_count += 1
-
-                for member in guild.members:
+                counts["servers"] += 1
+                for channel in channels:
+                    ensure_channel(session, channel, guild.id)
+                    counts["channels"] += 1
+                for member in members:
                     ensure_user(session, member)
-                    user_count += 1
-
+                    counts["users"] += 1
+            if bot := session.get(DiscordBot, self.bot_info.id):
+                bot.last_sync_at = datetime.now(timezone.utc)
             session.commit()
+        logger.info(f"Bot {self.bot_info.id} synced {counts}")
+        return counts
 
-        logger.info(
-            f"Synced metadata: {server_count} servers, "
-            f"{channel_count} channels, {user_count} users"
-        )
+    def forget_guild(self, guild_id: int) -> None:
+        with make_session() as session:
+            session.query(DiscordBotServer).filter_by(bot_id=self.bot_info.id, server_id=guild_id).delete()
+            session.commit()
 
     async def on_message(self, message: Message) -> None:
         """Handle incoming messages (including our own for complete history)."""
@@ -189,14 +207,21 @@ class MessageCollector(commands.Bot):
         except Exception:
             logger.exception(f"Error processing message {message.id}")
 
-    async def on_message_edit(
-        self, _before: Message, after: Message
-    ) -> None:
-        """Handle message edits (including our own for complete history)."""
-        try:
-            await self._process_message(after, is_edit=True)
-        except Exception:
-            logger.exception(f"Error processing message edit {after.id}")
+    async def on_raw_message_edit(self, payload: RawMessageUpdateEvent) -> None:
+        self.queue_event("MESSAGE_UPDATE", payload.data)
+
+    async def on_raw_message_delete(self, payload: RawMessageDeleteEvent) -> None:
+        self.queue_event("MESSAGE_DELETE", {"id": str(payload.message_id)})
+
+    async def on_raw_bulk_message_delete(self, payload: RawBulkMessageDeleteEvent) -> None:
+        self.queue_event("MESSAGE_DELETE_BULK", {"ids": [str(i) for i in sorted(payload.message_ids)]})
+
+    def queue_event(self, event_type: str, data: Mapping[str, Any]) -> None:
+        """Hand a gateway event to the task webhook deliveries use, which handles
+        partial and stale edits and only touches messages this bot's owner may change."""
+        self.celery_app.send_task(
+            HANDLE_DISCORD_EVENT, kwargs={"bot_id": self.bot_info.id, "event_type": event_type, "data": data}
+        )
 
     async def on_guild_channel_create(self, channel: abc.GuildChannel) -> None:
         """Persist newly-created text-like channels so name-based lookups work
@@ -294,9 +319,7 @@ class MessageCollector(commands.Bot):
             },
         )
 
-    async def _process_message(
-        self, message: Message, is_edit: bool = False
-    ) -> None:
+    async def _process_message(self, message: Message) -> None:
         """Process a message - check collection settings and queue for storage."""
         with make_session() as session:
             channel_model = ensure_message_entities(
@@ -306,7 +329,7 @@ class MessageCollector(commands.Bot):
                 return
             session.commit()
 
-        queue_message(self.celery_app, message, self.bot_info.id, is_edit)
+        queue_message(self.celery_app, message, self.bot_info.id)
         logger.debug(f"Queued message {message.id} for processing")
 
 

@@ -258,7 +258,7 @@ const BotRow = ({
       </>}
       meta={[
         webhook ? `Last event: ${formatRelativeTime(bot.last_event_at)}` : null,
-        bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`,
+        `Last sync: ${formatRelativeTime(bot.last_sync_at)}`,
       ]}
       actions={<>
         <Button size="sm" onClick={onEdit}>Edit</Button>

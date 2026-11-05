@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 
 from memory.common import discord_events
-from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL
+from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, DELETE_DISCORD_MESSAGES
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordChannel, DiscordMessage
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordMessage
 from memory.discord.rest import PAGE_SIZE, BotAccess, DiscordAPIError, DiscordRest
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 DISCORD_EPOCH_MS = 1420070400000
 # Channel types whose messages are collected: text, voice chat, news, stage, forum.
 COLLECTED_CHANNEL_TYPES = frozenset({0, 2, 5, 13, 15})
+CLOCK_MARGIN = timedelta(minutes=1)
 
 
 def snowflake_at(moment: datetime) -> int:
@@ -36,6 +37,26 @@ def stored_message_id_bounds(channel_id: int) -> tuple[int | None, int | None]:
             .one()
         )
         return low, high
+
+
+def delete_unlisted(
+    access: BotAccess, channel_id: int, celery_app, listed: set[int], after: int, before: int
+) -> None:
+    """Queue the delete of stored messages between two ids that a full listing
+    of that range left out, limited to those this bot's owner may change."""
+    with make_session() as session:
+        bot = session.get(DiscordBot, access.bot_id)
+        if bot is None:
+            return
+        bot_ids = sorted(discord_events.owner_bot_ids(session, bot))
+        stored = session.query(DiscordMessage.message_id).filter(
+            DiscordMessage.channel_id == channel_id,
+            DiscordMessage.message_id > after,
+            DiscordMessage.message_id < before,
+        )
+        gone = sorted(row[0] for row in stored if row[0] not in listed)
+    if gone:
+        celery_app.send_task(DELETE_DISCORD_MESSAGES, kwargs={"message_ids": gone, "bot_ids": bot_ids})
 
 
 def queue_messages(
@@ -66,10 +87,11 @@ async def crawl(
     before: int | None,
     stop_at: int | None = None,
     is_edit: bool = False,
+    seen: set[int] | None = None,
 ) -> tuple[int, int | None, bool]:
     """Queue messages newest-first from ``before`` (the newest if None) until
     ``stop_at``, the start of the channel, or the budget. ``is_edit`` rewrites
-    stored messages whose content changed.
+    stored messages whose content changed. The ids queued are added to ``seen``.
 
     Returns (processed, oldest id fetched, reached the end).
     """
@@ -81,12 +103,14 @@ async def crawl(
         taken = fresh[: budget - processed]
         queue_messages(access, taken, server_id, celery_app, is_edit)
         processed += len(taken)
+        if seen is not None:
+            seen.update(int(m["id"]) for m in taken)
         if taken:
             oldest = int(taken[-1]["id"])
-        if len(page) < PAGE_SIZE or len(fresh) < len(page):
-            return processed, oldest, True
         if len(taken) < len(fresh):
             break
+        if len(page) < PAGE_SIZE or len(fresh) < len(page):
+            return processed, oldest, True
         before = int(page[-1]["id"])
     return processed, oldest, False
 
@@ -104,9 +128,10 @@ async def backfill_channel_messages(
 
     The first run (``before_id`` None) re-reads the last ``catch_up_days`` and
     everything after the newest stored message, storing messages a webhook
-    missed and rewriting ones whose content changed (missed edits), then
-    crawls history from the oldest stored message. Missed deletes and
-    reactions are not repaired: a message listing doesn't show them per user. Continuation
+    missed and rewriting ones whose content changed (missed edits), and when
+    it read that whole window deleting stored messages it no longer lists
+    (missed deletes); then it crawls history from the oldest stored message.
+    Missed reactions are not repaired: a message listing doesn't show them per user. Continuation
     runs carry the history cursor in ``before_id``: messages are stored
     asynchronously, so re-reading MIN(stored) would refetch the same window.
 
@@ -127,11 +152,18 @@ async def backfill_channel_messages(
             if before_id is None:
                 low, high = stored_message_id_bounds(channel_id)
                 if high is not None:
-                    window = snowflake_at(datetime.now(timezone.utc) - timedelta(days=catch_up_days))
-                    processed, _, _ = await crawl(
+                    started = datetime.now(timezone.utc)
+                    stop_at = min(high, snowflake_at(started - timedelta(days=catch_up_days)))
+                    listed: set[int] = set()
+                    processed, _, read_all = await crawl(
                         rest, access, channel_id, server_id, celery_app,
-                        max_messages, before=None, stop_at=min(high, window), is_edit=True,
+                        max_messages, before=None, stop_at=stop_at, is_edit=True, seen=listed,
                     )
+                    if read_all:
+                        # Messages sent after the listing began aren't in it; the margin covers clock skew.
+                        delete_unlisted(
+                            access, channel_id, celery_app, listed, stop_at, snowflake_at(started - CLOCK_MARGIN)
+                        )
                 before_id = low
             count, oldest_seen, reached_start = await crawl(
                 rest, access, channel_id, server_id, celery_app,
@@ -215,5 +247,7 @@ async def discover_bot_servers(access: BotAccess) -> int:
             for channel in channels:
                 if channel.get("type") in COLLECTED_CHANNEL_TYPES:
                     discord_events.ensure_listed_channel(session, channel, server_id, access.bot_id)
+        if bot := session.get(DiscordBot, access.bot_id):
+            bot.last_sync_at = datetime.now(timezone.utc)
         session.commit()
     return len(listed)

@@ -1,7 +1,10 @@
 import base64
-from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 import pytest
+
+from memory.common import discord as discord_client
 
 from memory.common.db.models import (
     DiscordBot,
@@ -323,6 +326,36 @@ def test_only_a_verified_owner_manages_a_server(member_client, db_session, user,
     response = member_client.patch("/discord/servers/9", json={"sensitivity": "public"})
 
     assert response.status_code == status
+
+
+def test_listing_bots_asks_the_collector_once(member_client, db_session, user):
+    synced = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    bots = [DiscordBot(application_id=i, name=f"b{i}", created_by_user_id=user.id, last_sync_at=synced) for i in (1, 2)]
+    db_session.add_all(bots)
+    db_session.commit()
+    health = Mock()
+    health.json.return_value = {str(bots[0].id): {"connected": True}}
+
+    with patch("requests.get", return_value=health) as get:
+        listed = member_client.get("/discord/bots").json()
+
+    assert get.call_count == 1
+    assert {b["name"]: (b["connected"], b["last_sync_at"]) for b in listed} == {
+        "b1": (True, synced.isoformat()),
+        "b2": (False, synced.isoformat()),
+    }
+
+
+def test_refreshing_a_bot_refreshes_only_that_bot(member_client, db_session, user):
+    bot = DiscordBot(application_id=5, name="b", created_by_user_id=user.id)
+    db_session.add(bot)
+    db_session.commit()
+
+    with patch.object(discord_client, "refresh_discord_metadata", return_value={"updated": {}}) as refresh:
+        response = member_client.post(f"/discord/bots/{bot.id}/refresh")
+
+    assert response.status_code == 200
+    refresh.assert_called_once_with(bot.id)
 
 
 def test_patch_rejects_a_token_for_another_application(client, db_session, user):

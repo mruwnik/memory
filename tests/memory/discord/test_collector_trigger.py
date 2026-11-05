@@ -1,10 +1,19 @@
-from unittest.mock import MagicMock
+import threading
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
+from discord import MessageType
+from fastapi import HTTPException
 
-from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL
-from memory.common.db.models import DiscordServer
-from memory.discord.collector import BotInfo, MessageCollector
+from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer
+from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
+from memory.discord import api as collector_api
+from memory.discord import collector as collector_module
+from memory.discord.collector import BotInfo, CollectorManager, MessageCollector
 
 
 def fake_guild_channel(channel_id=10, guild_id=1):
@@ -47,3 +56,148 @@ async def test_new_non_collectible_channel_does_not_trigger_backfill(db_session)
     calls = [c for c in celery_app.send_task.call_args_list
              if c.args and c.args[0] == BACKFILL_DISCORD_CHANNEL]
     assert calls == []
+
+
+def collector_with(celery_app=None, **info) -> MessageCollector:
+    return MessageCollector(BotInfo(id=42, name="bot", token="t", **info), celery_app or MagicMock())
+
+
+def handled_events(celery_app) -> list[dict]:
+    return [c.kwargs["kwargs"] for c in celery_app.send_task.call_args_list if c.args[0] == HANDLE_DISCORD_EVENT]
+
+
+@pytest.mark.parametrize(
+    "event, payload, expected",
+    [
+        ("on_raw_message_delete", SimpleNamespace(message_id=5), ("MESSAGE_DELETE", {"id": "5"})),
+        ("on_raw_bulk_message_delete", SimpleNamespace(message_ids={6, 5}), ("MESSAGE_DELETE_BULK", {"ids": ["5", "6"]})),
+        (
+            "on_raw_message_edit",
+            SimpleNamespace(message_id=5, data={"id": "5", "content": "new"}),
+            ("MESSAGE_UPDATE", {"id": "5", "content": "new"}),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_deletes_and_edits_go_through_the_owner_scoped_event_task(event, payload, expected):
+    celery_app = MagicMock()
+
+    await getattr(collector_with(celery_app), event)(payload)
+
+    event_type, data = expected
+    assert handled_events(celery_app) == [{"bot_id": 42, "event_type": event_type, "data": data}]
+
+
+def fake_guild(guild_id=1, name="Guild") -> Any:
+    return SimpleNamespace(id=guild_id, name=name, description=None, member_count=3, channels=[], members=[])
+
+
+@pytest.mark.parametrize("event", ["on_guild_join", "on_guild_available"])
+@pytest.mark.asyncio
+async def test_a_server_joined_after_ready_is_recorded_as_the_bots(db_session, event):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.commit()
+
+    await getattr(collector_with(), event)(fake_guild())
+
+    db_session.expire_all()
+    server = db_session.get(DiscordServer, 1)
+    assert (server.bot_id, server.verified) == (42, True)
+    assert db_session.get(DiscordBotServer, (42, 1)) is not None
+
+
+@pytest.mark.asyncio
+async def test_leaving_a_server_drops_the_bots_membership(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.add(DiscordServer(id=1, name="Guild", bot_id=42))
+    db_session.flush()
+    db_session.add(DiscordBotServer(bot_id=42, server_id=1))
+    db_session.commit()
+
+    await collector_with().on_guild_remove(fake_guild())
+
+    db_session.expire_all()
+    assert db_session.get(DiscordBotServer, (42, 1)) is None
+    assert db_session.get(DiscordServer, 1) is not None
+
+
+@pytest.mark.asyncio
+async def test_syncing_servers_runs_off_the_event_loop_and_records_the_sync(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.commit()
+    collector = collector_with()
+    sessions_on = []
+    real_make_session = collector_module.make_session
+
+    def recording_make_session():
+        sessions_on.append(threading.get_ident())
+        return real_make_session()
+
+    with (
+        patch.object(MessageCollector, "guilds", new=[fake_guild()]),
+        patch.object(collector_module, "make_session", recording_make_session),
+    ):
+        await collector.sync_guild_metadata()
+
+    assert sessions_on and threading.get_ident() not in sessions_on
+    db_session.expire_all()
+    assert db_session.get(DiscordBotServer, (42, 1)) is not None
+    assert db_session.get(DiscordBot, 42).last_sync_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_syncs_only_the_bot_asked_for(db_session):
+    db_session.add_all([DiscordBot(id=42, application_id=42, name="a"), DiscordBot(id=43, application_id=43, name="b")])
+    db_session.commit()
+    manager = CollectorManager(MagicMock())
+    manager.collectors = {42: collector_with(), 43: MessageCollector(BotInfo(id=43, name="b", token="t"), MagicMock())}
+
+    with (
+        patch.object(collector_api, "manager", manager),
+        patch.object(MessageCollector, "guilds", new=[fake_guild()]),
+    ):
+        await collector_api.refresh_metadata(42)
+        with pytest.raises(HTTPException):
+            await collector_api.refresh_metadata(44)
+
+    db_session.expire_all()
+    assert [m.bot_id for m in db_session.query(DiscordBotServer).all()] == [42]
+    assert db_session.get(DiscordServer, 1).verified
+
+
+@pytest.mark.parametrize(
+    "api_base_url, chunks",
+    [(DEFAULT_DISCORD_API_BASE_URL, True), ("https://chat.example.com/discord/api/v10", False)],
+)
+def test_only_discord_itself_is_asked_for_member_chunks(api_base_url, chunks):
+    assert collector_with(api_base_url=api_base_url)._connection._chunk_guilds is chunks
+
+
+def fake_message():
+    channel = MagicMock(id=333, category_id=None)
+    channel.name = "tester"
+    guild = MagicMock(id=222, description=None, member_count=10)
+    guild.name = "Test Server"
+    author = MagicMock(id=444, display_name="Alice")
+    author.name = "alice"
+    return MagicMock(
+        id=111, guild=guild, channel=channel, author=author, content="hello", reference=None, thread=None,
+        type=MessageType.default, pinned=False, attachments=[], embeds=[], edited_at=None,
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+@pytest.mark.parametrize("server_collect, queued", [(False, False), (True, True)])
+@pytest.mark.asyncio
+async def test_a_paused_server_stops_collection_for_channels_that_inherit(db_session, server_collect, queued):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.add(DiscordServer(id=222, name="Test Server", bot_id=42, collect_messages=server_collect))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=333, server_id=222, name="tester", channel_type="text"))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_message())
+
+    sent = [c.args[0] for c in celery_app.send_task.call_args_list]
+    assert (ADD_DISCORD_MESSAGE in sent) is queued

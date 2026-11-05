@@ -10,15 +10,12 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, cast
+from typing import Any
 
-from discord import abc
 from fastapi import FastAPI, HTTPException
 
 from memory.common.celery_app import app as celery_app
-from memory.common.db.connection import make_session
 from memory.discord.collector import CollectorManager
-from memory.discord.ingest import ensure_channel, ensure_server, ensure_user
 
 logger = logging.getLogger(__name__)
 
@@ -68,33 +65,13 @@ async def health() -> dict[str, Any]:
     return result
 
 
-@app.post("/refresh_metadata")
-async def refresh_metadata() -> dict[str, Any]:
-    """Refresh Discord metadata from API."""
-    mgr = get_manager()
-    updated = {"servers": 0, "channels": 0, "users": 0}
-
-    for collector in mgr.collectors.values():
-        with make_session() as session:
-            # Update servers
-            for guild in collector.guilds:
-                ensure_server(session, guild)
-                updated["servers"] += 1
-
-                # Update channels
-                for channel in guild.channels:
-                    if hasattr(channel, "send"):  # Text-like channels
-                        ensure_channel(session, cast(abc.Messageable, channel), guild.id)
-                        updated["channels"] += 1
-
-                # Update users
-                for member in guild.members:
-                    ensure_user(session, member)
-                    updated["users"] += 1
-
-            session.commit()
-
-    return {"success": True, "updated": updated}
+@app.post("/refresh_metadata/{bot_id}")
+async def refresh_metadata(bot_id: int) -> dict[str, Any]:
+    """Record one running bot's servers, channels and members again."""
+    collector = get_manager().collectors.get(bot_id)
+    if collector is None:
+        raise HTTPException(status_code=404, detail="Bot not running")
+    return {"success": True, "updated": await collector.sync_guild_metadata()}
 
 
 if __name__ == "__main__":

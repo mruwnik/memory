@@ -99,6 +99,12 @@ def backfill_channel(channel_id: int, before_id: int | None = None) -> dict[str,
     stores rows on a *separate* worker — re-deriving MIN before that queue
     drains would re-fetch the same window and spin.
     """
+    with make_session() as session:
+        channel = session.get(DiscordChannel, channel_id)
+        # Collection may have been paused since this run, or its continuation, was queued.
+        if channel is not None and not channel.should_collect:
+            return {"status": "skipped", "channel_id": channel_id, "reason": "not_collected"}
+
     access = resolve_channel_bot(channel_id)
     if access is None:
         logger.info("Skipping backfill for channel %s: no usable bot token", channel_id)

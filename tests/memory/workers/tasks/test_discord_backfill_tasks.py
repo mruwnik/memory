@@ -196,7 +196,22 @@ def test_backfill_channel_skips_when_no_token(db_session):
     assert result["status"] == "skipped"
 
 
+@pytest.mark.parametrize("server_collect, channel_collect", [(False, None), (True, False)])
+def test_a_backfill_queued_before_a_pause_reads_nothing(db_session, server_collect, channel_collect):
+    _, server, channel = make_bot_server_channel(db_session)
+    server.collect_messages, channel.collect_messages = server_collect, channel_collect
+    db_session.commit()
+    crawl = AsyncMock()
+    with patch.object(discord_backfill, "distributed_lock", acquired_lock), \
+         patch.object(discord_backfill, "backfill_channel_messages", new=crawl):
+        result = discord_backfill.backfill_channel(10)
+
+    assert result["status"] == "skipped"
+    crawl.assert_not_called()
+
+
 def test_backfill_channel_skips_when_locked(db_session):
+    make_bot_server_channel(db_session)
     with patch.object(discord_backfill, "resolve_channel_bot",
                       return_value=ACCESS), \
          patch.object(discord_backfill, "distributed_lock", held_lock):
@@ -205,6 +220,7 @@ def test_backfill_channel_skips_when_locked(db_session):
 
 
 def test_backfill_channel_redispatches_when_not_done(db_session):
+    make_bot_server_channel(db_session)
     with patch.object(discord_backfill, "resolve_channel_bot",
                       return_value=ACCESS), \
          patch.object(discord_backfill, "distributed_lock", acquired_lock), \
@@ -226,6 +242,7 @@ def test_backfill_channel_redispatches_when_not_done(db_session):
 
 
 def test_backfill_channel_no_redispatch_when_done(db_session):
+    make_bot_server_channel(db_session)
     with patch.object(discord_backfill, "resolve_channel_bot",
                       return_value=ACCESS), \
          patch.object(discord_backfill, "distributed_lock", acquired_lock), \

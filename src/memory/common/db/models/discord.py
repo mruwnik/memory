@@ -71,6 +71,8 @@ class DiscordBot(Base):
     last_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the bot last listed its servers: the gateway at READY or a refresh, or the REST discovery
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by_user_id: Mapped[int | None] = mapped_column(
