@@ -38,7 +38,7 @@ def sample_poll(db_session, user):
 
 def test_get_poll_for_response(client: TestClient, sample_poll):
     """Test getting poll details for responding (public, no auth)."""
-    response = client.get(f"/polls/respond/{sample_poll.slug}")
+    response = client.get(f"/api/polls/respond/{sample_poll.slug}")
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "Test Poll"
@@ -50,7 +50,7 @@ def test_get_poll_for_response(client: TestClient, sample_poll):
 
 def test_get_poll_for_response_not_found(client: TestClient):
     """Test getting non-existent poll returns 404."""
-    response = client.get("/polls/respond/nonexistent")
+    response = client.get("/api/polls/respond/nonexistent")
     assert response.status_code == 404
 
 
@@ -60,7 +60,7 @@ def test_submit_response_success(client: TestClient, sample_poll):
     slot_end = datetime(2026, 2, 2, 10, 30, tzinfo=timezone.utc)
 
     response = client.post(
-        f"/polls/respond/{sample_poll.slug}",
+        f"/api/polls/respond/{sample_poll.slug}",
         json={
             "respondent_name": "Alice",
             "availabilities": [
@@ -85,7 +85,7 @@ def test_submit_response_if_needed(client: TestClient, sample_poll):
     slot_end = datetime(2026, 2, 2, 11, 30, tzinfo=timezone.utc)
 
     response = client.post(
-        f"/polls/respond/{sample_poll.slug}",
+        f"/api/polls/respond/{sample_poll.slug}",
         json={
             "respondent_name": "Bob",
             "availabilities": [
@@ -109,7 +109,7 @@ def test_submit_response_slot_outside_range(client: TestClient, sample_poll):
     slot_end = datetime(2026, 2, 10, 10, 30, tzinfo=timezone.utc)
 
     response = client.post(
-        f"/polls/respond/{sample_poll.slug}",
+        f"/api/polls/respond/{sample_poll.slug}",
         json={
             "respondent_name": "Charlie",
             "availabilities": [
@@ -131,7 +131,7 @@ def test_submit_response_invalid_availability_level(client: TestClient, sample_p
     slot_end = datetime(2026, 2, 2, 10, 30, tzinfo=timezone.utc)
 
     response = client.post(
-        f"/polls/respond/{sample_poll.slug}",
+        f"/api/polls/respond/{sample_poll.slug}",
         json={
             "respondent_name": "David",
             "availabilities": [
@@ -164,7 +164,7 @@ def test_submit_response_to_closed_poll(client: TestClient, db_session, user):
     slot_end = datetime(2026, 2, 2, 10, 30, tzinfo=timezone.utc)
 
     response = client.post(
-        f"/polls/respond/{poll.slug}",
+        f"/api/polls/respond/{poll.slug}",
         json={
             "respondent_name": "Eve",
             "availabilities": [
@@ -195,7 +195,7 @@ def test_update_response_with_token(client: TestClient, sample_poll, db_session)
     slot_end = datetime(2026, 2, 2, 10, 30, tzinfo=timezone.utc)
 
     response = client.put(
-        f"/polls/respond/{sample_poll.slug}/{response_obj.id}",
+        f"/api/polls/respond/{sample_poll.slug}/{response_obj.id}",
         headers={"X-Edit-Token": response_obj.edit_token},
         json={
             "respondent_name": "Alice Updated",
@@ -225,7 +225,7 @@ def test_update_response_invalid_token(client: TestClient, sample_poll, db_sessi
     slot_end = datetime(2026, 2, 2, 10, 30, tzinfo=timezone.utc)
 
     response = client.put(
-        f"/polls/respond/{sample_poll.slug}/{response_obj.id}",
+        f"/api/polls/respond/{sample_poll.slug}/{response_obj.id}",
         headers={"X-Edit-Token": "wrong-token"},
         json={
             "respondent_name": "Alice Updated",
@@ -265,7 +265,7 @@ def test_get_response_by_token(client: TestClient, sample_poll, db_session):
     db_session.refresh(response_obj)
 
     response = client.get(
-        f"/polls/respond/{sample_poll.slug}/response",
+        f"/api/polls/respond/{sample_poll.slug}/response",
         headers={"X-Edit-Token": response_obj.edit_token},
     )
     assert response.status_code == 200
@@ -278,7 +278,7 @@ def test_get_response_by_token(client: TestClient, sample_poll, db_session):
 def test_get_response_by_token_not_found(client: TestClient, sample_poll):
     """Test that invalid edit token returns 404."""
     response = client.get(
-        f"/polls/respond/{sample_poll.slug}/response",
+        f"/api/polls/respond/{sample_poll.slug}/response",
         headers={"X-Edit-Token": "nonexistent-token"},
     )
     assert response.status_code == 404
@@ -310,7 +310,7 @@ def test_get_poll_results_public(client: TestClient, sample_poll, db_session):
     db_session.add_all([avail1, avail2])
     db_session.commit()
 
-    response = client.get(f"/polls/respond/{sample_poll.slug}/results")
+    response = client.get(f"/api/polls/respond/{sample_poll.slug}/results")
     assert response.status_code == 200
     data = response.json()
     assert data["response_count"] == 2
@@ -329,7 +329,7 @@ def test_get_poll_results_public(client: TestClient, sample_poll, db_session):
 
 def test_get_poll_results_empty(client: TestClient, sample_poll):
     """Test getting results for poll with no responses."""
-    response = client.get(f"/polls/respond/{sample_poll.slug}/results")
+    response = client.get(f"/api/polls/respond/{sample_poll.slug}/results")
     assert response.status_code == 200
     data = response.json()
     assert data["response_count"] == 0
@@ -354,7 +354,7 @@ def test_get_poll_results_says_whether_viewer_owns_poll(
     }
 
     response = client.get(
-        f"/polls/respond/{sample_poll.slug}/results",
+        f"/api/polls/respond/{sample_poll.slug}/results",
         headers={"Authorization": f"Bearer {tokens[viewer]}"},
     )
 
@@ -436,7 +436,7 @@ def test_poll_response_edit_token_is_stored_hashed(db_session, sample_poll):
 def test_submit_response_tz_naive_datetime(client: TestClient, sample_poll):
     """Tz-naive datetimes from clients (no Z suffix) must not raise TypeError."""
     response = client.post(
-        f"/polls/respond/{sample_poll.slug}",
+        f"/api/polls/respond/{sample_poll.slug}",
         json={
             "respondent_name": "TzNaive",
             "availabilities": [

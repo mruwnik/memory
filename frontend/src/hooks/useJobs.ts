@@ -71,44 +71,38 @@ export const useJobs = () => {
     if (filters.offset) params.set('offset', filters.offset.toString())
 
     const query = params.toString()
-    const response = await apiCall(`/jobs${query ? `?${query}` : ''}`)
+    const response = await apiCall(`/api/jobs${query ? `?${query}` : ''}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch jobs')
     return parseJsonResponse<Job[]>(response)
   }, [apiCall])
 
   const getJobCounts = useCallback(async (filters: JobFilters = {}): Promise<JobCounts> => {
     const query = jobFilterParams(filters).toString()
-    const response = await apiCall(`/jobs/counts${query ? `?${query}` : ''}`)
+    const response = await apiCall(`/api/jobs/counts${query ? `?${query}` : ''}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch job counts')
     return parseJsonResponse<JobCounts>(response)
   }, [apiCall])
 
-  const getJob = useCallback(async (id: number): Promise<Job> => {
-    const response = await apiCall(`/jobs/${id}`)
-    if (!response.ok) throw await apiError(response, 'Failed to fetch job')
-    return parseJsonResponse<Job>(response)
-  }, [apiCall])
-
   const retryJob = useCallback(async (id: number): Promise<Job> => {
-    const response = await apiCall(`/jobs/${id}/retry`, { method: 'POST' })
+    const response = await apiCall(`/api/jobs/${id}/retry`, { method: 'POST' })
     if (!response.ok) throw await apiError(response, 'Failed to retry job')
     return parseJsonResponse<Job>(response)
   }, [apiCall])
 
   const reingestJob = useCallback(async (id: number): Promise<Job> => {
-    const response = await apiCall(`/jobs/${id}/reingest`, { method: 'POST' })
+    const response = await apiCall(`/api/jobs/${id}/reingest`, { method: 'POST' })
     if (!response.ok) throw await apiError(response, 'Failed to reingest job')
     return parseJsonResponse<Job>(response)
   }, [apiCall])
 
   const getJobTypes = useCallback(async (): Promise<string[]> => {
-    const response = await apiCall('/jobs/types')
+    const response = await apiCall('/api/jobs/types')
     if (!response.ok) return []
     return parseJsonResponse<string[]>(response)
   }, [apiCall])
 
   const getUsersWithJobs = useCallback(async (): Promise<JobUser[]> => {
-    const response = await apiCall('/jobs/users/with-jobs')
+    const response = await apiCall('/api/jobs/users/with-jobs')
     if (!response.ok) throw await apiError(response, 'Failed to fetch job users')
     return parseJsonResponse<JobUser[]>(response)
   }, [apiCall])
@@ -116,7 +110,6 @@ export const useJobs = () => {
   return {
     listJobs,
     getJobCounts,
-    getJob,
     retryJob,
     reingestJob,
     getJobTypes,

@@ -58,7 +58,7 @@ async def test_oauth_servers_connect_through_the_callback(
 
     server_id = result["server"]["id"]
     assert response.status_code == 303
-    assert response.headers["location"] == f"/ui/agents/servers/{server_id}?connected=1"
+    assert response.headers["location"] == f"/agents/servers/{server_id}?connected=1"
     assert reload(db_session, server_id).status == "connected"
 
 

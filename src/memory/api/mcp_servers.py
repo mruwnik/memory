@@ -21,7 +21,7 @@ def page(title: str, message: str, status_code: int) -> Response:
     return Response(
         content=(
             f"<html><body><h1>{escape(title)}</h1><p>{escape(message)}</p>"
-            '<p><a href="/ui/agents/servers">Your MCP servers</a></p></body></html>'
+            '<p><a href="/agents/servers">Your MCP servers</a></p></body></html>'
         ),
         media_type="text/html",
         status_code=status_code,
@@ -58,4 +58,4 @@ async def mcp_oauth_callback(request: Request) -> Response:
     except StateError as e:
         return page("Authorization failed", str(e), 400)
     outcome = "connected=1" if connected else "failed=1"
-    return RedirectResponse(f"/ui/agents/servers/{server_id}?{outcome}", status_code=303)
+    return RedirectResponse(f"/agents/servers/{server_id}?{outcome}", status_code=303)

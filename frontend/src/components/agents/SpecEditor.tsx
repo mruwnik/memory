@@ -40,7 +40,7 @@ function ExternalServers({ servers, value, onChange }: {
   return (
     <Fieldset legend="External MCP servers">
       {servers.length === 0 && (
-        <div className="text-sm text-slate-500">No MCP servers yet. <Link className="text-primary hover:underline" to="/ui/agents/servers">Add one</Link></div>
+        <div className="text-sm text-slate-500">No MCP servers yet. <Link className="text-primary hover:underline" to="/agents/servers">Add one</Link></div>
       )}
       <div className="space-y-2">
         {servers.map(server => {
@@ -48,7 +48,7 @@ function ExternalServers({ servers, value, onChange }: {
           return (
             <div key={server.id} className="border border-slate-200 rounded p-2">
               <div className="flex items-center gap-2 text-sm">
-                <Link className="font-medium text-primary" to={`/ui/agents/servers/${server.id}`}>{server.name}</Link>
+                <Link className="font-medium text-primary" to={`/agents/servers/${server.id}`}>{server.name}</Link>
                 <ServerStatusBadge status={server.status} />
               </div>
               {selected.length > 0 && server.status !== 'connected' && (

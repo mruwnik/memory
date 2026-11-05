@@ -4,6 +4,10 @@ import { resetUserTimezone, setUserTimezone } from '@/utils/timezones'
 export const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 export const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
 
+export const REDIRECT_URI = `${window.location.origin}/`
+// A client id only works with the redirect URI it was registered for.
+export const CLIENT_ID_KEY = `oauth_client_id:${REDIRECT_URI}`
+
 const AUTH_LOST_EVENT = 'memory:auth-lost'
 
 // Cookie utilities
@@ -30,7 +34,7 @@ export const storeSession = (accessToken: string) => {
   setCookie(SESSION_COOKIE_NAME, accessToken, 30)
 }
 
-const getClientId = () => localStorage.getItem('oauth_client_id')
+const getClientId = () => localStorage.getItem(CLIENT_ID_KEY)
 
 // Every useAuth instance listens for this, so whichever call notices first
 // signs the whole page out once.
@@ -38,7 +42,7 @@ const dropAuth = () => {
   deleteCookie('access_token')
   deleteCookie('refresh_token')
   deleteCookie(SESSION_COOKIE_NAME)
-  localStorage.removeItem('oauth_client_id')
+  localStorage.removeItem(CLIENT_ID_KEY)
   window.dispatchEvent(new Event(AUTH_LOST_EVENT))
 }
 

@@ -31,7 +31,7 @@ const ForgotPassword = () => {
   }
 
   return (
-    <Page title="Reset your password" back={{ to: '/ui/login', label: 'Log in' }} width="narrow"
+    <Page title="Reset your password" back={{ to: '/login', label: 'Log in' }} width="narrow"
       loading={available === null && !loadError} error={loadError} onRetry={load}>
       {!available ? (
         <Notice tone="info">Password reset by email isn't set up on this server. Ask an admin to reset your password.</Notice>
@@ -47,7 +47,7 @@ const ForgotPassword = () => {
             </Field>
             {error && <Notice tone="error">{error}</Notice>}
             <FormActions>
-              <ButtonLink to="/ui/login">Cancel</ButtonLink>
+              <ButtonLink to="/login">Cancel</ButtonLink>
               <Button type="submit" variant="primary" disabled={submitting}>Send reset link</Button>
             </FormActions>
           </form>

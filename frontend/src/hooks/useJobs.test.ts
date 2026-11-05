@@ -97,22 +97,6 @@ describe('useJobs.getJobCounts', () => {
   })
 })
 
-describe('useJobs.getJob', () => {
-  it('fetches a single job by id', async () => {
-    const fetchMock = route(() => mockResponse({ json: job, headers: JSON_HEADERS }))
-    const { result } = renderHook(() => useJobs())
-    const got = await result.current.getJob(7)
-    expect(got).toEqual(job)
-    expect(fetchMock.mock.calls.some((c) => String(c[0]).endsWith('/jobs/7'))).toBe(true)
-  })
-
-  it('throws on non-ok response', async () => {
-    route(() => mockResponse({ status: 404, json: {} }))
-    const { result } = renderHook(() => useJobs())
-    await expect(result.current.getJob(7)).rejects.toThrow('Failed to fetch job (404)')
-  })
-})
-
 describe('useJobs.retryJob', () => {
   it('POSTs to the retry endpoint and returns the job', async () => {
     const fetchMock = route(() => mockResponse({ json: job, headers: JSON_HEADERS }))

@@ -112,7 +112,7 @@ const TaskDataBody = ({ task }: { task: ScheduledTask }) => {
   return (
     <div className="text-sm text-slate-600">
       <p className="line-clamp-3">{String(data.input ?? '')}</p>
-      <Link to={`/ui/agents/${data.definition_id}`} className="text-primary text-xs">Edit on the agent's page</Link>
+      <Link to={`/agents/${data.definition_id}`} className="text-primary text-xs">Edit on the agent's page</Link>
     </div>
   )
 }
@@ -430,7 +430,7 @@ const ExecutionHistory = ({ taskId, getExecutions }: ExecutionHistoryProps) => {
               formatDuration(ex.started_at, ex.finished_at),
               runId && (ex.run_expired
                 ? <span className="text-slate-500">run expired</span>
-                : <Link to={`/ui/agents/runs/${runId}`} className="text-primary">view run</Link>),
+                : <Link to={`/agents/runs/${runId}`} className="text-primary">view run</Link>),
             ]}
           >
             {ex.error_message && <RowError>{ex.error_message}</RowError>}
@@ -495,7 +495,7 @@ const TaskRow = ({ task, timezone, onToggle, onDelete, onUpdate, getExecutions }
         {getTaskStatus(task) !== 'done' && (
           // Agent schedules resume on the agent's page, which re-checks their tools and scopes.
           task.task_type === 'agent_run' && !task.enabled
-            ? <ButtonLink size="sm" to={`/ui/agents/${task.data?.definition_id}`}>Resume on agent page</ButtonLink>
+            ? <ButtonLink size="sm" to={`/agents/${task.data?.definition_id}`}>Resume on agent page</ButtonLink>
             : <PauseButton active={task.enabled} onClick={() => onToggle(task.id, !task.enabled)} />
         )}
         {task.task_type === 'notification' && (

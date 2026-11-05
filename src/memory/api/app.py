@@ -65,6 +65,7 @@ from memory.api.notes_source import router as notes_source_router
 from memory.api.celery_overview import router as celery_overview_router
 from memory.api.ingest import router as ingest_router
 from memory.api.MCP.base import mcp
+from memory.api.web_ui import WebUIMiddleware
 from memory.api.safety import validate_disable_auth_safety
 
 logger = logging.getLogger(__name__)
@@ -196,7 +197,7 @@ SENSITIVE_VALIDATION_FIELDS = frozenset({
     "secret",
     "github_token",
     "github_token_write",
-    "value",  # /settings/voyage_api_key/check
+    "value",  # /api/settings/voyage_api_key/check
     "caldav_password",
     "webhook_secret",
 })
@@ -284,6 +285,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # Add rate limiting middleware
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
+app.add_middleware(WebUIMiddleware, router=app.router)
 # Configure CORS with specific origin to prevent CSRF attacks.
 # allow_credentials=True requires specific origins, not wildcards.
 #
@@ -379,18 +381,6 @@ def stored_file_response(file_path: pathlib.Path, download: bool) -> FileRespons
     if mime_type != "application/pdf":
         response.headers["Content-Security-Policy"] = STRICT_SANDBOX_CSP
     return response
-
-
-@app.get("/ui{full_path:path}")
-async def serve_react_app(full_path: str):
-    full_path = full_path.lstrip("/")
-    try:
-        index_file = validate_path_within_directory(settings.STATIC_DIR, full_path)
-        if index_file.is_file():
-            return FileResponse(index_file)
-    except HTTPException:
-        pass  # Fall through to index.html for SPA routing
-    return FileResponse(settings.STATIC_DIR / "index.html")
 
 
 @app.get("/reports/{path:path}")

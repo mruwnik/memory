@@ -399,7 +399,7 @@ def dispatch_job(
     return DispatchResult(
         job=job,
         is_new=True,
-        message=f"Job queued. Track status via GET /jobs/{job.id}",
+        message=f"Job {job.id} queued.",
     )
 
 
@@ -489,7 +489,7 @@ def retry_failed_job(
     return DispatchResult(
         job=locked_job,
         is_new=False,
-        message=f"Job {locked_job.id} queued for retry. Track status via GET /jobs/{locked_job.id}",
+        message=f"Job {locked_job.id} queued for retry.",
     )
 
 
@@ -582,7 +582,7 @@ def reingest_job(
     return DispatchResult(
         job=locked_job,
         is_new=False,
-        message=f"Job {locked_job.id} queued for reingest. Track status via GET /jobs/{locked_job.id}",
+        message=f"Job {locked_job.id} queued for reingest.",
     )
 
 

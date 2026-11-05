@@ -39,7 +39,7 @@ export const AccountStep = ({ onCreated }: { onCreated: () => Promise<void> }) =
       loading={needed === null && !loadError} error={loadError} onRetry={load}>
       {!needed ? (
         <Notice tone="info">
-          This server is already set up. <Link to="/ui/login" className="underline">Log in</Link>
+          This server is already set up. <Link to="/login" className="underline">Log in</Link>
         </Notice>
       ) : (
         <Card>

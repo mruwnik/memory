@@ -158,7 +158,7 @@ export const useUsage = () => {
     if (options.to) params.set('to', options.to.toISOString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
-    const response = await apiCall(`/usage?${params}`)
+    const response = await apiCall(`/api/usage?${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch usage')
     return parseJsonResponse<UsageResponse>(response)
   }, [apiCall])
@@ -189,7 +189,7 @@ export const useUsage = () => {
     if (options.apiKeyId !== undefined) params.set('api_key_id', options.apiKeyId.toString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
-    const response = await apiCall(`/usage/raw?${params}`)
+    const response = await apiCall(`/api/usage/raw?${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry events')
     return parseJsonResponse<TelemetryRawResponse>(response)
   }, [apiCall])
@@ -218,7 +218,7 @@ export const useUsage = () => {
     if (options.apiKeyId !== undefined) params.set('api_key_id', options.apiKeyId.toString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
-    const response = await apiCall(`/usage/metrics?${params}`)
+    const response = await apiCall(`/api/usage/metrics?${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry metrics')
     return parseJsonResponse<TelemetryMetricsResponse>(response)
   }, [apiCall])
@@ -235,7 +235,7 @@ export const useUsage = () => {
     if (options.to) params.set('to', options.to.toISOString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
-    const response = await apiCall(`/usage/tools?${params}`)
+    const response = await apiCall(`/api/usage/tools?${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch tool usage')
     return parseJsonResponse<ToolUsageResponse>(response)
   }, [apiCall])
@@ -254,7 +254,7 @@ export const useUsage = () => {
     if (options.apiKeyId !== undefined) params.set('api_key_id', options.apiKeyId.toString())
     if (options.userId !== undefined) params.set('user_id', options.userId.toString())
 
-    const response = await apiCall(`/usage/sessions?${params}`)
+    const response = await apiCall(`/api/usage/sessions?${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch session stats')
     return parseJsonResponse<SessionStatsResponse>(response)
   }, [apiCall])
@@ -262,7 +262,7 @@ export const useUsage = () => {
   const getApiKeysWithTelemetry = useCallback(async (userId?: number): Promise<TelemetryApiKey[]> => {
     const params = new URLSearchParams()
     if (userId !== undefined) params.set('user_id', userId.toString())
-    const response = await apiCall(`/usage/api-keys?${params}`)
+    const response = await apiCall(`/api/usage/api-keys?${params}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch telemetry API keys')
     return parseJsonResponse<TelemetryApiKey[]>(response)
   }, [apiCall])

@@ -128,11 +128,11 @@ function RunView({ runId }: { runId: string }) {
   }, [definitionId, getDefinition])
 
   const retry = () => setAttempt(n => n + 1)
-  const runs = { to: '/ui/agents/runs', label: 'Runs' }
+  const runs = { to: '/agents/runs', label: 'Runs' }
   if (!run) return <Page back={runs} title="Run" loading="Loading run..." error={error} onRetry={retry} />
   const live = !TERMINAL_STATUSES.includes(run.status)
   const agent = run.definition_id === null ? null : agentName ?? `Agent ${run.definition_id}`
-  const back = agent && fromAgent ? { to: `/ui/agents/${run.definition_id}`, label: agent } : runs
+  const back = agent && fromAgent ? { to: `/agents/${run.definition_id}`, label: agent } : runs
 
   return (
     <Page
@@ -149,13 +149,13 @@ function RunView({ runId }: { runId: string }) {
       </>}
     >
     <DetailList items={[
-      ['Agent', agent && <Link to={`/ui/agents/${run.definition_id}`} className="text-primary hover:underline">{agent}</Link>],
+      ['Agent', agent && <Link to={`/agents/${run.definition_id}`} className="text-primary hover:underline">{agent}</Link>],
       ['Input', run.input.length > LONG_INPUT || run.input.includes('\n')
         ? <Disclosure summary="Show input"><div className="whitespace-pre-wrap">{run.input}</div></Disclosure>
         : run.input],
       ['Model', <span className="font-mono">{run.model}</span>],
       ['Trigger', TRIGGER_LABELS[run.trigger_kind] ?? run.trigger_kind],
-      ['Started by', run.parent_run_id && <Link to={`/ui/agents/runs/${run.parent_run_id}`} className="text-primary hover:underline">Parent run</Link>],
+      ['Started by', run.parent_run_id && <Link to={`/agents/runs/${run.parent_run_id}`} className="text-primary hover:underline">Parent run</Link>],
       ['Started', run.started_at && formatUserDateTime(run.started_at)],
       ['Duration', run.started_at && run.finished_at && formatDuration(run.started_at, run.finished_at)],
       ['Cost', `${formatCost(run.cost_usd)} of ${formatCost(run.max_cost_usd)}`],

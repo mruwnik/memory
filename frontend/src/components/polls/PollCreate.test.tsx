@@ -36,11 +36,11 @@ function mockMcp(upsertResult: unknown | Error) {
 function renderCreate() {
   const user = userEvent.setup()
   render(
-    <MemoryRouter initialEntries={['/ui/polls/new']}>
+    <MemoryRouter initialEntries={['/polls/new']}>
       <Routes>
-        <Route path="/ui/polls/new" element={<PollCreate />} />
-        <Route path="/ui/polls/results/:slug" element={<div>Results for poll</div>} />
-        <Route path="/ui/polls" element={<div>Polls list</div>} />
+        <Route path="/polls/new" element={<PollCreate />} />
+        <Route path="/polls/results/:slug" element={<div>Results for poll</div>} />
+        <Route path="/polls" element={<div>Polls list</div>} />
       </Routes>
     </MemoryRouter>,
   )

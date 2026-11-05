@@ -41,7 +41,7 @@ const AuthWrapper = () => {
         if (success) {
           checkAuth().then(() => {
             // Redirect to dashboard after successful OAuth
-            navigate('/ui/dashboard', { replace: true })
+            navigate('/dashboard', { replace: true })
           })
         }
       })
@@ -51,26 +51,26 @@ const AuthWrapper = () => {
   // Handle redirects based on auth state changes
   useEffect(() => {
     if (!isLoading) {
-      if (location.pathname === '/ui/logout') {
+      if (location.pathname === '/logout') {
         logout()
-        navigate('/ui/login', { replace: true })
+        navigate('/login', { replace: true })
       } else if (isAuthenticated) {
         // If authenticated and on login page, redirect to dashboard
-        if (location.pathname === '/ui/login' || location.pathname === '/ui') {
-          navigate('/ui/dashboard', { replace: true })
+        if (location.pathname === '/login' || location.pathname === '/') {
+          navigate('/dashboard', { replace: true })
         }
       } else {
         // If not authenticated and on protected route, redirect to login
         // Allow public poll routes without auth
         const isPublicRoute =
-          location.pathname === '/ui/login' ||
-          location.pathname === '/ui/setup' ||
-          location.pathname === '/ui/forgot-password' ||
-          location.pathname === '/ui/reset-password' ||
-          location.pathname.startsWith('/ui/polls/respond/') ||
-          location.pathname.startsWith('/ui/polls/results/')
+          location.pathname === '/login' ||
+          location.pathname === '/setup' ||
+          location.pathname === '/forgot-password' ||
+          location.pathname === '/reset-password' ||
+          location.pathname.startsWith('/polls/respond/') ||
+          location.pathname.startsWith('/polls/results/')
         if (!isPublicRoute) {
-          navigate('/ui/login', { replace: true })
+          navigate('/login', { replace: true })
         }
       }
     }
@@ -78,9 +78,9 @@ const AuthWrapper = () => {
 
   // A server with no account yet has nobody to log in as, so its first visitor goes to setup.
   useEffect(() => {
-    if (isLoading || isAuthenticated || location.pathname !== '/ui/login') return
+    if (isLoading || isAuthenticated || location.pathname !== '/login') return
     getNeedsAccount()
-      .then(needed => needed && navigate('/ui/setup', { replace: true }))
+      .then(needed => needed && navigate('/setup', { replace: true }))
       .catch(() => undefined) // The login page is already the fallback.
   }, [isAuthenticated, isLoading, location.pathname, navigate])
 
@@ -103,49 +103,49 @@ const AuthWrapper = () => {
   }
 
   const routes: { path: string; element: ReactNode; scope?: string; module?: Module }[] = [
-    { path: '/ui/dashboard', element: <Dashboard hasScope={hasScope} /> },
-    { path: '/ui/settings', element: <UserSettings /> },
-    { path: '/ui/users', element: <UserManagement />, scope: 'admin:users' },
-    { path: '/ui/search', element: <Search /> },
-    { path: '/ui/sources', element: <Sources /> },
-    { path: '/ui/ingestion', element: <IngestionOverview standalone /> },
-    { path: '/ui/ssh-keys', element: <SSHKeysPage /> },
-    { path: '/ui/calendar', element: <Calendar /> },
-    { path: '/ui/tasks', element: <Tasks /> },
-    { path: '/ui/metrics', element: <Suspense fallback={<LoadingState />}><Metrics /></Suspense> },
-    { path: '/ui/notes', element: <NotesPage /> },
-    { path: '/ui/reports', element: <ReportsPage /> },
-    { path: '/ui/people', element: <PeopleManagement />, scope: 'people' },
-    { path: '/ui/projects', element: <Projects />, module: 'teams' },
-    { path: '/ui/teams', element: <Teams />, module: 'teams' },
-    { path: '/ui/usage', element: <Suspense fallback={<LoadingState />}><Usage /></Suspense> },
-    { path: '/ui/jobs', element: <Jobs /> },
-    { path: '/ui/scheduled-tasks', element: <ScheduledTasks /> },
-    { path: '/ui/agents', element: <AgentsPage />, scope: 'agents' },
-    { path: '/ui/keys', element: <KeysPage /> },
-    { path: '/ui/agents/servers', element: <ServersPage />, scope: 'agents' },
-    { path: '/ui/agents/servers/:id', element: <ServerDetail />, scope: 'agents' },
-    { path: '/ui/agents/runs', element: <AgentRuns />, scope: 'agents' },
-    { path: '/ui/agents/runs/new', element: <AdHocRun />, scope: 'agents' },
-    { path: '/ui/agents/runs/:runId', element: <RunView />, scope: 'agents' },
-    { path: '/ui/agents/:id', element: <AgentEditor />, scope: 'agents' },
-    { path: '/ui/server-settings', element: <SettingsPage onRestarted={checkAuth} />, scope: 'admin' },
-    { path: '/ui/celery', element: <CeleryOverview />, scope: 'admin' },
-    { path: '/ui/polls', element: <PollList /> },
-    { path: '/ui/polls/new', element: <PollCreate /> },
-    { path: '/ui/polls/edit/:slug', element: <PollEdit /> },
+    { path: '/dashboard', element: <Dashboard hasScope={hasScope} /> },
+    { path: '/settings', element: <UserSettings /> },
+    { path: '/users', element: <UserManagement />, scope: 'admin:users' },
+    { path: '/search', element: <Search /> },
+    { path: '/sources', element: <Sources /> },
+    { path: '/ingestion', element: <IngestionOverview standalone /> },
+    { path: '/ssh-keys', element: <SSHKeysPage /> },
+    { path: '/calendar', element: <Calendar /> },
+    { path: '/tasks', element: <Tasks /> },
+    { path: '/metrics', element: <Suspense fallback={<LoadingState />}><Metrics /></Suspense> },
+    { path: '/notes', element: <NotesPage /> },
+    { path: '/reports', element: <ReportsPage /> },
+    { path: '/people', element: <PeopleManagement />, scope: 'people' },
+    { path: '/projects', element: <Projects />, module: 'teams' },
+    { path: '/teams', element: <Teams />, module: 'teams' },
+    { path: '/usage', element: <Suspense fallback={<LoadingState />}><Usage /></Suspense> },
+    { path: '/jobs', element: <Jobs /> },
+    { path: '/scheduled-tasks', element: <ScheduledTasks /> },
+    { path: '/agents', element: <AgentsPage />, scope: 'agents' },
+    { path: '/keys', element: <KeysPage /> },
+    { path: '/agents/servers', element: <ServersPage />, scope: 'agents' },
+    { path: '/agents/servers/:id', element: <ServerDetail />, scope: 'agents' },
+    { path: '/agents/runs', element: <AgentRuns />, scope: 'agents' },
+    { path: '/agents/runs/new', element: <AdHocRun />, scope: 'agents' },
+    { path: '/agents/runs/:runId', element: <RunView />, scope: 'agents' },
+    { path: '/agents/:id', element: <AgentEditor />, scope: 'agents' },
+    { path: '/server-settings', element: <SettingsPage onRestarted={checkAuth} />, scope: 'admin' },
+    { path: '/celery', element: <CeleryOverview />, scope: 'admin' },
+    { path: '/polls', element: <PollList /> },
+    { path: '/polls/new', element: <PollCreate /> },
+    { path: '/polls/edit/:slug', element: <PollEdit /> },
   ]
-  const home = <Navigate to={isAuthenticated ? '/ui/dashboard' : '/ui/login'} replace />
+  const home = <Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />
   // Results are public, but a signed-in owner reaches them from Polls and should keep the app chrome.
-  const pollResults = <Route path="/ui/polls/results/:slug" element={<PollResults />} />
+  const pollResults = <Route path="/polls/results/:slug" element={<PollResults />} />
 
   return (
     <ModulesContext.Provider value={modules}>
       <Routes>
-        <Route path="/ui/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
-        <Route path="/ui/forgot-password" element={<ForgotPassword />} />
-        <Route path="/ui/reset-password" element={<ResetPassword />} />
-        <Route path="/ui/setup" element={<SetupWizard isAuthenticated={isAuthenticated} user={user} checkAuth={checkAuth} />} />
+        <Route path="/login" element={isAuthenticated ? home : <LoginPrompt onLogin={startOAuth} />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/setup" element={<SetupWizard isAuthenticated={isAuthenticated} user={user} checkAuth={checkAuth} />} />
 
         <Route element={<AppShell user={user} onLogout={logout} hasScope={hasScope} />}>
           {routes.map(({ path, element, scope, module }) => {
@@ -157,7 +157,7 @@ const AuthWrapper = () => {
         </Route>
 
         {/* Poll respond/results are public (no auth required) */}
-        <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
+        <Route path="/polls/respond/:slug" element={<PollRespond />} />
         {!isAuthenticated && pollResults}
 
         <Route path="*" element={home} />

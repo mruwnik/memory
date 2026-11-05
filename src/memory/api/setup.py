@@ -5,7 +5,6 @@ import logging
 import secrets
 import threading
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
@@ -68,7 +67,7 @@ def setup_token() -> str:
             _setup_token = secrets.token_urlsafe(24)
             # The operator reads the token from this line, so it carries the value on purpose.
             logger.warning(
-                "No account exists yet. Create it at %s/ui/setup with setup token: %s",
+                "No account exists yet. Create it at %s/setup with setup token: %s",
                 settings.SERVER_URL,
                 _setup_token,
             )
@@ -109,8 +108,10 @@ def source_counts(db: Session, user_id: int) -> dict[str, int]:
 
 
 def is_web_ui(redirect_uris: list[str]) -> bool:
-    # The web UI signs in through the same OAuth flow, redirecting back to /ui.
-    return any(urlsplit(uri).path.rstrip("/") == "/ui" for uri in redirect_uris)
+    # The web UI signs in through the same OAuth flow, redirecting back to the server's root;
+    # browsers that registered before the UI moved there still hold clients for /ui.
+    base = settings.SERVER_URL.rstrip("/")
+    return any(uri.rstrip("/") in (base, base + "/ui") for uri in redirect_uris)
 
 
 def mcp_clients(db: Session, user_id: int) -> list[str]:

@@ -6,14 +6,14 @@ const items = NAV_SECTIONS.flatMap(s => s.items)
 
 describe('activeItem', () => {
   it.each([
-    ['/ui/agents', '', '/ui/agents'],
-    ['/ui/agents/runs/12', '', '/ui/agents'],
-    ['/ui/keys', '', '/ui/keys'],
-    ['/ui/sources', '', '/ui/sources'],
-    ['/ui/sources', '?tab=email', '/ui/sources'],
-    ['/ui/ssh-keys', '', '/ui/ssh-keys'],
-    ['/ui/settings', '', undefined],
-    ['/ui/searching', '', undefined],
+    ['/agents', '', '/agents'],
+    ['/agents/runs/12', '', '/agents'],
+    ['/keys', '', '/keys'],
+    ['/sources', '', '/sources'],
+    ['/sources', '?tab=email', '/sources'],
+    ['/ssh-keys', '', '/ssh-keys'],
+    ['/settings', '', undefined],
+    ['/searching', '', undefined],
   ])('%s%s highlights %s', (pathname, search, expected) => {
     expect(activeItem(items, pathname, search)?.to).toBe(expected)
   })

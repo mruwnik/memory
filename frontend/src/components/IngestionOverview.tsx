@@ -36,7 +36,7 @@ export default function IngestionOverview({ standalone = false }: { standalone?:
   useEffect(() => { void load() }, [load])
   const Container = standalone ? Page : Section
   return <Container title="Ingestion overview" description="Stored items you can access, including imported content and items created in Memory. Messages and book sections count individually; search chunks do not."
-    actions={<>{!standalone && <ButtonLink to="/ui/ingestion">View ingestion overview</ButtonLink>}<RefreshButton onClick={load} loading={busy} /></>}>
+    actions={<>{!standalone && <ButtonLink to="/ingestion">View ingestion overview</ButtonLink>}<RefreshButton onClick={load} loading={busy} /></>}>
     {error && <ErrorState message={error} onRetry={load} />}
     {!data && !error && <LoadingState message="Loading ingestion counts..." />}
     {data && <>
@@ -49,7 +49,7 @@ export default function IngestionOverview({ standalone = false }: { standalone?:
         <Stat label="Indexing skipped" value={data.skipped.toLocaleString()} hint="Stored without indexing" />
       </StatGrid>
       {data.last_ingested_at && <p className="text-sm text-slate-600">Last item added: {formatUserDateTime(new Date(data.last_ingested_at))}</p>}
-      {data.total === 0 ? <EmptyState message="No items ingested yet" action={<ButtonLink to="/ui/sources">Connect a source</ButtonLink>} /> :
+      {data.total === 0 ? <EmptyState message="No items ingested yet" action={<ButtonLink to="/sources">Connect a source</ButtonLink>} /> :
         <Card title="Items by content type">
           <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
             {data.by_type.map(group => <div key={group.item_type} className="flex justify-between gap-4">

@@ -69,7 +69,7 @@ Set `route53_zone_id` to have the A record created for you. Caddy gets the certi
 
 ### First login
 
-Once bootstrap finishes, create the first account (an admin) at `https://<domain>/ui/setup`. It asks for the setup token the api logs while no account exists. Read it over Session Manager (needs the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)):
+Once bootstrap finishes, create the first account (an admin) at `https://<domain>/setup`. It asks for the setup token the api logs while no account exists. Read it over Session Manager (needs the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)):
 
 ```bash
 aws ssm start-session --region <region> --target "$(terraform output -raw instance_id)"

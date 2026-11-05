@@ -528,7 +528,7 @@ def _render_oauth_complete_html(
     ``team_id`` already passed the regex check upstream, but the encoding
     is the contract a future caller inherits.
     """
-    frontend_url = f"{settings.SERVER_URL}/ui/sources?tab=slack&connected={team_id}"
+    frontend_url = f"{settings.SERVER_URL}/sources?tab=slack&connected={team_id}"
     workspace_id_js = json.dumps(team_id)
     frontend_url_js = json.dumps(frontend_url)
     channel_name_js = json.dumps(f"slack-oauth-{user_id}")

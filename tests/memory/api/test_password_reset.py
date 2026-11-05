@@ -93,7 +93,7 @@ def test_request_emails_a_fragment_link_from_the_sender(
     channel, target, body, owner_id, _subject, data = sent.kwargs["args"]
     assert (channel, target, owner_id) == ("email", reset_user.email, mail_configured.user_id)
     assert (data["from_address"], data["password_reset"]) == (SENDER, True)
-    assert f"{settings.SERVER_URL}/ui/reset-password#token=" in body
+    assert f"{settings.SERVER_URL}/reset-password#token=" in body
 
 
 def test_request_for_unknown_email_looks_the_same(client, mail_configured, reset_user, no_celery_dispatch):
@@ -207,7 +207,7 @@ def login_page_html() -> str:
 
 
 def test_login_page_links_to_reset_only_when_available(db_session, mail_configured, monkeypatch):
-    assert "/ui/forgot-password" in login_page_html()
+    assert "/forgot-password" in login_page_html()
 
     monkeypatch.setattr(settings, "PASSWORD_RESET_FROM_EMAIL", "")
-    assert "/ui/forgot-password" not in login_page_html()
+    assert "/forgot-password" not in login_page_html()

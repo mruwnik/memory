@@ -19,7 +19,7 @@ export interface SSHKeyInput {
 export function useSSHKeys() {
   const { apiCall } = useAuth()
   const request = useCallback(async (path: string, method = 'GET', body?: unknown) => {
-    const response = await apiCall(`/ssh-keys${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+    const response = await apiCall(`/api/ssh-keys${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
     if (!response.ok) throw await apiError(response, 'SSH key operation failed')
     return response.json()
   }, [apiCall])

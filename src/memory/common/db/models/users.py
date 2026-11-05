@@ -457,6 +457,11 @@ class OAuthClientInformation(Base):
         }
 
 
+def utc_timestamp(naive_utc: datetime) -> float:
+    """POSIX time of a naive-UTC column value; ``.timestamp()`` alone reads it as local time."""
+    return naive_utc.replace(tzinfo=timezone.utc).timestamp()
+
+
 class OAuthToken:
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_id: Mapped[str] = mapped_column(
@@ -475,7 +480,7 @@ class OAuthToken:
         return {
             "client_id": self.client_id,
             "scopes": self.scopes,
-            "expires_at": self.expires_at.timestamp(),
+            "expires_at": utc_timestamp(self.expires_at),
         }
 
 
@@ -500,7 +505,7 @@ class OAuthState(Base, OAuthToken):
         if code:
             data |= {
                 "code": self.code,
-                "expires_at": self.expires_at.timestamp(),
+                "expires_at": utc_timestamp(self.expires_at),
             }
         return data
 

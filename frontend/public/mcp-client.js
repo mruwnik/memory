@@ -4,7 +4,7 @@
  * Provides access to ALL MCP tools via authenticated API calls.
  *
  * Usage:
- *   <script src="/ui/mcp-client.js"></script>
+ *   <script src="/mcp-client.js"></script>
  *   <script>
  *     // Generic - works with ANY MCP method
  *     MCP.call('people_list_all', { limit: 100 }).then(people => {

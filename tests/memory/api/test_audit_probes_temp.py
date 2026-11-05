@@ -22,13 +22,13 @@ def restricted_auth(client, app_client, user, db_session, monkeypatch):
 
 
 def test_reject_key_escalation(client, restricted_auth, user):
-    response = client.post(f"/users/{user.id}/api-keys", headers=restricted_auth,
+    response = client.post(f"/api/users/{user.id}/api-keys", headers=restricted_auth,
                            json={"name": "audit-escalated", "scopes": ["*"]})
     assert response.status_code == 403
 
 
 def test_reject_account_mutation(client, restricted_auth, user):
-    response = client.patch(f"/users/{user.id}", headers=restricted_auth,
+    response = client.patch(f"/api/users/{user.id}", headers=restricted_auth,
                             json={"email": "audit-replacement@example.invalid"})
     assert response.status_code == 403
     assert user.email != "audit-replacement@example.invalid"
@@ -41,6 +41,6 @@ def test_reject_ownerless_job_disclosure(client, restricted_auth, user, db_sessi
     job = PendingJob(job_type="content_ingest", user_id=None, params={"private_text": "FAKE-PRIVATE-CONTENT"})
     db_session.add(job)
     db_session.commit()
-    response = client.get(f"/jobs/{job.id}", headers=restricted_auth)
-    assert response.status_code == 404
+    response = client.get("/api/jobs", headers=restricted_auth)
+    assert response.status_code == 200
     assert "FAKE-PRIVATE-CONTENT" not in response.text

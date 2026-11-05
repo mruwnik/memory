@@ -154,7 +154,7 @@ async def test_a_server_that_isnt_connected_fails_before_any_call(
     server.status = status
     db_session.commit()
 
-    with pytest.raises(ToolHubError, match=f"/ui/agents/servers/{server.id}"):
+    with pytest.raises(ToolHubError, match=f"/agents/servers/{server.id}"):
         async with hub(external_spec(server.id), user_session, ["teams"]):
             pass
 

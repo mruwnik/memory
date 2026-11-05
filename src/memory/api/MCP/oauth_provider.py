@@ -33,6 +33,7 @@ from memory.common.db.models.users import (
 from memory.common.db.models.users import (
     OAuthToken as TokenBase,
     hash_token,
+    utc_timestamp,
 )
 from memory.api.auth import (
     is_expired,
@@ -188,16 +189,8 @@ def create_refresh_token_record(
 
 
 def session_expires_at_unix(user_session: UserSession) -> int:
-    """Return ``expires_at`` as a POSIX timestamp, tz-correct.
-
-    The column is naive UTC; calling ``.timestamp()`` on a naive datetime
-    interprets it as *local* time, which silently shifts the expiry by
-    the host's UTC offset. Convert explicitly before serializing.
-    """
     exp = cast(datetime, user_session.expires_at)
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=timezone.utc)
-    return int(exp.timestamp())
+    return int(exp.timestamp() if exp.tzinfo else utc_timestamp(exp))
 
 
 def revoke_refresh_token_family(
@@ -867,7 +860,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 token=refresh_token,
                 client_id=client.client_id,
                 scopes=cast(list[str], db_refresh_token.scopes),
-                expires_at=int(db_refresh_token.expires_at.timestamp()),
+                expires_at=int(utc_timestamp(db_refresh_token.expires_at)),
             )
 
     @raises_token_error

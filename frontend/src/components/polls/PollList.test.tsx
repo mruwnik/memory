@@ -97,11 +97,11 @@ describe('PollList - populated list', () => {
     mockMcp({ polling_list_polls: [makePoll({ slug: 'team-sync' })] })
     const user = userEvent.setup()
     renderWithRouter(<PollList />)
-    expect(await screen.findByRole('link', { name: 'Team Sync' })).toHaveAttribute('href', '/ui/polls/results/team-sync')
-    expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute('href', '/ui/polls/edit/team-sync')
+    expect(await screen.findByRole('link', { name: 'Team Sync' })).toHaveAttribute('href', '/polls/results/team-sync')
+    expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute('href', '/polls/edit/team-sync')
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     await user.click(screen.getByRole('button', { name: 'Copy link' }))
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/ui/polls/respond/team-sync'))
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/polls/respond/team-sync'))
     expect(await screen.findByText('Link copied')).toBeInTheDocument()
   })
 
@@ -194,7 +194,7 @@ describe('PollList - header', () => {
     renderWithRouter(<PollList />)
     await screen.findByText('Team Sync')
     const header = screen.getByRole('link', { name: 'New poll' })
-    expect(header).toHaveAttribute('href', '/ui/polls/new')
+    expect(header).toHaveAttribute('href', '/polls/new')
   })
 })
 

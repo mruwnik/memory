@@ -4,9 +4,9 @@ import { ModuleOff } from './ModuleOff'
 
 describe('ModuleOff', () => {
   it.each([
-    ['/ui/teams', 'Teams'],
-    ['/ui/agents/runs/:runId', 'Agents'],
-    ['/ui/not-in-nav', 'Unavailable'],
+    ['/teams', 'Teams'],
+    ['/agents/runs/:runId', 'Agents'],
+    ['/not-in-nav', 'Unavailable'],
   ])('titles %s after its section: %s', (path, title) => {
     renderWithRouter(<ModuleOff path={path} module="teams" isAdmin={false} />)
     expect(screen.getByRole('heading', { level: 1, name: title })).toBeInTheDocument()

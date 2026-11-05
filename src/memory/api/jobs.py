@@ -15,7 +15,7 @@ from memory.common.db.models import PendingJob, PendingJobPayload, User, JobStat
 from memory.common import jobs as job_utils
 from memory.common.jobs import retry_failed_job, reingest_job
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
 class JobUser(BaseModel):
@@ -72,32 +72,6 @@ def get_job_types(
     return [r[0] for r in rows]
 
 
-# NOTE: /external/{external_id}, /types and /counts must come BEFORE /{job_id}
-# to avoid FastAPI treating the path segment as a job_id integer
-@router.get("/external/{external_id}")
-def get_job_by_external_id(
-    external_id: str,
-    user: User = Depends(require_rest_access),
-    db: DBSession = Depends(get_session),
-    job_type: str | None = Query(None, description="Filter by job type"),
-) -> PendingJobPayload:
-    """
-    Get job status by external ID (client-provided idempotency key).
-
-    This is useful for checking the status of a job when you only have
-    the external_id you provided when creating it.
-    """
-    job = job_utils.get_job_by_external_id(db, external_id, job_type)
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if not can_access_job(job, user):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    return PendingJobPayload.model_validate(job)
-
-
 @router.get("/counts")
 def get_job_counts(
     user: User = Depends(require_rest_access),
@@ -120,29 +94,6 @@ def get_job_counts(
         created_before=parse_iso_datetime_query("created_before", created_before),
         user_id=resolve_user_filter(user_id, user, db),
     )
-
-
-@router.get("/{job_id}")
-def get_job(
-    job_id: int,
-    user: User = Depends(require_rest_access),
-    db: DBSession = Depends(get_session),
-) -> PendingJobPayload:
-    """
-    Get the status of a specific job.
-
-    Returns 404 if the job doesn't exist or doesn't belong to the user.
-    Admins can view any job.
-    """
-    job = job_utils.get_job(db, job_id)
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if not can_access_job(job, user):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    return PendingJobPayload.model_validate(job)
 
 
 @router.get("")

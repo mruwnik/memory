@@ -76,9 +76,9 @@ export default function AgentRuns() {
 
   return (
     <Page
-      back={{ to: '/ui/agents', label: 'Agents' }}
+      back={{ to: '/agents', label: 'Agents' }}
       title="Agent runs"
-      actions={<ButtonLink to="/ui/agents/runs/new" variant="primary">New ad-hoc run</ButtonLink>}
+      actions={<ButtonLink to="/agents/runs/new" variant="primary">New ad-hoc run</ButtonLink>}
     >
       <Toolbar actions={<RefreshButton onClick={load} />}>
         <ToggleGroup label="Filter by status" options={FILTERS} value={status} onChange={setStatus} />
@@ -91,7 +91,7 @@ export default function AgentRuns() {
           {runs.map(r => (
             <Row
               key={r.id}
-              to={`/ui/agents/runs/${r.id}`}
+              to={`/agents/runs/${r.id}`}
               title={<>{r.starred && <span aria-label="Starred">★ </span>}{runTitle(r)}</>}
               badges={<StatusBadge status={r.status} />}
               meta={[<span className="font-mono">{r.model}</span>, formatRelativeTime(r.created_at), formatCost(r.cost_usd), TRIGGER_LABELS[r.trigger_kind] ?? r.trigger_kind]}

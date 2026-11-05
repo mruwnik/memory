@@ -4,10 +4,13 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
+// Pages the api renders itself, which a browser opens directly.
+const API_PAGES = /^\/(authorize|oauth|auth|docs|redoc|files|reports|google-drive|slack|discord|\.well-known)(\/|\?|$)/
+const isPageNavigation = req => req.method === 'GET' && req.headers.accept?.includes('text/html') && !API_PAGES.test(req.url)
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: '/ui/',
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -41,8 +44,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // Everything outside the app's own /ui/ base is the API
-      '^/(?!ui(/|$))': 'http://localhost:8000',
+      // Vite serves its own modules and the app's pages; the api answers everything else.
+      '^/(?!@|src/|node_modules/|favicon\\.ico|mcp-client\\.js)': {
+        target: 'http://localhost:8000',
+        bypass: req => (isPageNavigation(req) ? req.url : undefined),
+      },
     },
   },
 })

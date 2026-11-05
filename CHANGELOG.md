@@ -20,10 +20,28 @@ None.
 
 ### Manual steps
 
-None.
+None. A reverse proxy that passes everything to the api, like the Caddyfile
+`deploy/aws` writes, needs no change. A proxy that only forwards `/ui` and
+named API paths to the api must now forward everything.
 
 ### Other changes for operators
 
+- The web UI is served at the root: `https://<domain>/sources` instead of
+  `https://<domain>/ui/sources`. `/ui` and everything under it redirect there
+  (307, keeping the path and query), so bookmarks, sent password-reset links,
+  shared poll links and stored reports that load `/ui/mcp-client.js` keep
+  working. The redirect is temporary and will be removed in a later release.
+- Browsers may need to sign in once more: the UI's OAuth client is now registered for the
+  root URL.
+- The REST endpoints that shared a path with a UI page moved under `/api`:
+  `/settings`, `/users`, `/usage`, `/jobs`, `/ssh-keys` and `/polls/respond`
+  are now `/api/settings`, `/api/users`, … Scripts that call them directly
+  need the new paths. `GET /jobs/{id}`, `GET /jobs/external/{external_id}` and
+  `GET /users/{id}` are gone, so job-queued messages no longer point at a
+  status URL.
+- OAuth sign-in works on an api run on a host whose clock isn't UTC; it used to
+  reject every authorization code as expired.
+- The setup token log line now points at `/setup`.
 - Every Discord bot needs its token, and chooses its real-time delivery:
   WebSocket gateway (the default) or webhook. Bots that had a public key keep
   webhook delivery; the rest stay on the gateway. Bots registered without a

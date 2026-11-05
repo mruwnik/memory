@@ -123,7 +123,7 @@ export function LLMKeyField({ value, onChange, compact = false }: {
     {confirm}
     <Field label="LLM key" error={keysFailed ? "Couldn't load your keys." : null} hint={<>
       {stopped && "No LLM work runs on this source's new items: no usable key pays for it. "}
-      Pays for summaries and other LLM work on this source's items. <NewTabLink className="underline" to="/ui/keys">Manage LLM keys</NewTabLink>
+      Pays for summaries and other LLM work on this source's items. <NewTabLink className="underline" to="/keys">Manage LLM keys</NewTabLink>
     </>}>
       {select}
     </Field>

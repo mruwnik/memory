@@ -51,7 +51,7 @@ export function KeyPicker({ value, catalog, onChange }: {
       </Field>
       {problem && (
         <Notice tone="warning">
-          {problem} <Link className="underline" to="/ui/keys">Manage LLM keys</Link>
+          {problem} <Link className="underline" to="/keys">Manage LLM keys</Link>
         </Notice>
       )}
     </div>

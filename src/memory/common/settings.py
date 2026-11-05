@@ -366,7 +366,7 @@ API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
 # Default rate limit: 100 requests per minute
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
 # Auth endpoints have stricter limits to prevent brute force.
-# Used by /oauth/login and /users/me/change-password — see
+# Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
 # Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
@@ -573,7 +573,7 @@ def parse_csv_set(key: str, default: frozenset[str] = frozenset()) -> frozenset[
 
 
 # Set by the compose api service, whose restart policy brings the api back after
-# POST /settings/restart makes it exit. A host-run api has nothing to restart it.
+# POST /api/settings/restart makes it exit. A host-run api has nothing to restart it.
 API_SELF_RESTART = boolean_env("API_SELF_RESTART", False)
 
 # Optional features (memory.common.modules). A module named here is locked; the others

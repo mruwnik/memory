@@ -115,7 +115,7 @@ export const PollEdit: React.FC = () => {
         datetime_end,
         slot_duration: formData.slot_duration,
       })
-      navigate(`/ui/polls/results/${slug}`)
+      navigate(`/polls/results/${slug}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update poll')
     } finally {
@@ -123,7 +123,7 @@ export const PollEdit: React.FC = () => {
     }
   }
 
-  const back = { to: '/ui/polls', label: 'Polls' }
+  const back = { to: '/polls', label: 'Polls' }
   if (loading || !formData || !poll) {
     return <Page back={back} title="Edit poll" width="narrow" loading={loading && 'Loading poll...'} error={loading ? null : error ?? 'Poll not found'} />
   }
@@ -264,7 +264,7 @@ export const PollEdit: React.FC = () => {
         <div className="flex justify-end gap-3">
           <Button
             type="button"
-            onClick={() => navigate(`/ui/polls/results/${slug}`)}
+            onClick={() => navigate(`/polls/results/${slug}`)}
           >
             Cancel
           </Button>

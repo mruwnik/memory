@@ -178,7 +178,7 @@ describe('Usage page', () => {
     renderWithRouter(<Usage />)
 
     expect(await screen.findByText('No usage in this period')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Manage LLM keys' })).toHaveAttribute('href', '/ui/keys')
+    expect(screen.getByRole('link', { name: 'Manage LLM keys' })).toHaveAttribute('href', '/keys')
     expect(await screen.findByText(/No Claude Code telemetry in this period/)).toBeInTheDocument()
     expect(screen.queryByText('Session activity')).not.toBeInTheDocument()
   })

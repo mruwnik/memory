@@ -1,5 +1,7 @@
 """Tests for MCP OAuth provider."""
 
+import time
+
 import pytest
 from datetime import datetime, timedelta, timezone
 from typing import cast
@@ -28,6 +30,7 @@ from memory.common.db.models.users import (
     OAuthClientInformation,
     OAuthState,
     OAuthRefreshToken,
+    OAuthToken,
     User,
     UserSession,
     hash_token,
@@ -150,6 +153,7 @@ def test_make_token_from_oauth_state_sets_oauth_state_id(db_session):
     assert session is not None
     assert session.oauth_state_id == oauth_state.id
     assert session.user_id == user.id
+    assert token.refresh_token is not None
     refresh = db_session.query(OAuthRefreshToken).filter(
         OAuthRefreshToken.token_hash == hash_token(token.refresh_token)
     ).one()
@@ -1765,3 +1769,63 @@ def test_attribute_read_after_commit_does_not_autobegin(db_session):
             "session auto-began a transaction on attribute read after commit "
             "— expire_on_commit is not False"
         )
+
+
+@pytest.fixture
+def host_ahead_of_utc(monkeypatch):
+    """A host clock east of UTC, where a naive-UTC time read as local lands in the past."""
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def oauth_state_with_code(db_session, user, lifetime=timedelta(minutes=10)):
+    create_oauth_client(db_session)
+    state = OAuthState(
+        state="tz-state",
+        client_id="test-client",
+        redirect_uri="http://localhost/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="challenge",
+        scopes=["read"],
+        expires_at=now_naive_utc() + lifetime,
+        code="code_tz",
+        user_id=user.id,
+    )
+    db_session.add(state)
+    db_session.commit()
+    return state
+
+
+def test_codes_and_tokens_expire_at_their_utc_instant_on_any_host(db_session, host_ahead_of_utc):
+    user = create_test_user(db_session)
+    state = oauth_state_with_code(db_session, user)
+    expected = time.time() + 600
+
+    assert [
+        state.serialize(code=True)["expires_at"],
+        OAuthToken.serialize(state)["expires_at"],
+    ] == [pytest.approx(expected, abs=5)] * 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_expiry_is_its_utc_instant_on_any_host(db_session, host_ahead_of_utc):
+    user = create_test_user(db_session)
+    create_oauth_client(db_session)
+    row = OAuthRefreshToken(
+        client_id="test-client", user_id=user.id, scopes=["read"],
+        expires_at=now_naive_utc() + timedelta(days=1),
+    )
+    db_session.add(row)
+    db_session.commit()
+    client = OAuthClientInformationFull(
+        client_id="test-client", client_secret="test-secret",
+        redirect_uris=cast(list, ["http://localhost/callback"]),
+    )
+
+    loaded = await SimpleOAuthProvider().load_refresh_token(client, row.token)
+
+    assert loaded is not None
+    assert loaded.expires_at == pytest.approx(time.time() + 86400, abs=5)

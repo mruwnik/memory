@@ -47,7 +47,7 @@ export default function ServerDetail() {
     }
   }
 
-  const back = { to: '/ui/agents/servers', label: 'MCP servers' }
+  const back = { to: '/agents/servers', label: 'MCP servers' }
   if (!Number.isInteger(serverId) || server === null) {
     return (
       <Page back={back} title="Unknown MCP server">
@@ -71,7 +71,7 @@ export default function ServerDetail() {
   })
   const remove = () => act(async () => {
     await deleteServer(server.id)
-    navigate('/ui/agents/servers')
+    navigate('/agents/servers')
   })
 
   return (

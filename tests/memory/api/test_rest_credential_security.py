@@ -40,23 +40,24 @@ def identity(db, admin=True, key_scopes=None, session=False):
 def test_read_key_cannot_mint_keys_or_change_account(security_client, db_session, admin, requested, other_target):
     user, headers = identity(db_session, admin=admin, key_scopes=["read"])
     target = user.id + 100 if other_target else user.id
-    result = security_client.post(f"/users/{target}/api-keys", headers=headers,
+    result = security_client.post(f"/api/users/{target}/api-keys", headers=headers,
                                   json={"name": "escalation", "scopes": requested})
     assert result.status_code == 403
-    assert security_client.patch(f"/users/{target}", headers=headers,
+    assert security_client.patch(f"/api/users/{target}", headers=headers,
                                   json={"email": "changed@example.test"}).status_code == 403
     db_session.refresh(user)
     assert user.email == "security@example.test"
     assert user.scopes == (["*"] if admin else ["read", "write"])
 
 
-@pytest.mark.parametrize("scopes,expected", [(["read"], 404), (["*"], 200)])
+@pytest.mark.parametrize("scopes,expected", [(["read"], False), (["*"], True)])
 def test_ownerless_job_only_visible_to_credential_admin(security_client, db_session, scopes, expected):
     _, headers = identity(db_session, key_scopes=scopes)
     job = PendingJob(job_type="test", params={}, status="failed", user_id=None)
     db_session.add(job)
     db_session.commit()
-    assert security_client.get(f"/jobs/{job.id}", headers=headers).status_code == expected
+    listed = security_client.get("/api/jobs", headers=headers).json()
+    assert (job.id in [j["id"] for j in listed]) is expected
 
 
 @pytest.mark.parametrize("action", ["retry", "reingest"])
@@ -66,12 +67,12 @@ def test_read_key_cannot_mutate_jobs(security_client, db_session, action, owned)
     job = PendingJob(job_type="test", params={}, status="failed", user_id=user.id if owned else None)
     db_session.add(job)
     db_session.commit()
-    assert security_client.post(f"/jobs/{job.id}/{action}", headers=headers).status_code == 403
+    assert security_client.post(f"/api/jobs/{job.id}/{action}", headers=headers).status_code == 403
 
 
 def test_session_can_manage_keys(security_client, db_session):
     user, headers = identity(db_session, session=True)
-    response = security_client.post(f"/users/{user.id}/api-keys", headers=headers,
+    response = security_client.post(f"/api/users/{user.id}/api-keys", headers=headers,
                                    json={"name": "session-created", "scopes": ["read"]})
     assert response.status_code == 200
 
@@ -81,6 +82,6 @@ def test_ssh_key_management_requires_interactive_session(security_client, db_ses
     from memory.api.ssh_keys import router
     security_client.app.include_router(router)
     _, headers = identity(db_session, key_scopes=['*'], session=session)
-    response = security_client.post('/ssh-keys', headers=headers, json={'name': 'SSH', 'generate': True})
+    response = security_client.post('/api/ssh-keys', headers=headers, json={'name': 'SSH', 'generate': True})
     assert response.status_code == (200 if session else 403)
-    assert security_client.get('/ssh-keys', headers=headers).status_code == (200 if session else 403)
+    assert security_client.get('/api/ssh-keys', headers=headers).status_code == (200 if session else 403)

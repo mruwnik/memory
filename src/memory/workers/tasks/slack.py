@@ -515,8 +515,6 @@ def _sync_slack_channel_impl(
         if not credentials or not credentials.access_token:
             return {"status": "error", "error": "No valid workspace credentials"}
 
-        access_token = credentials.access_token
-
         try:
             with slack_client_for(credentials) as client:
                 messages_synced = 0

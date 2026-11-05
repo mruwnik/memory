@@ -38,14 +38,12 @@ from memory.common.scopes import SCOPE_AGENTS
         "/revoke",
         "/mcp",
         "/mcp/tools",
-        "/ui",
-        "/ui/index.html",
         "/oauth/login",
         "/oauth/callback/google",
         "/.well-known/openid-configuration",
         "/google-drive/callback",
-        "/polls/respond",
-        "/polls/respond/abc-123",
+        "/api/polls/respond",
+        "/api/polls/respond/abc-123",
         # Generic content upload: authorized by the signed ingest token in
         # the query string, not a session cookie. Must bypass the middleware
         # or the minted upload_url is unusable from a non-browser client.
@@ -97,16 +95,16 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/tokenrevoke",
         "/mcphidden",
         "/mcp-admin",
-        "/uiAttacker",
-        "/uiconfig",
+        "/ui",
+        "/ui/index.html",
         # Real-but-not-whitelisted endpoints
-        "/users",
+        "/api/users",
         "/auth/me",
         "/auth/password-resets",
         "/teams/1",
         "/calendar-accounts",
         "/google-drive/config",  # admin-gated; must NOT be whitelisted
-        "/polls",  # the public list endpoint is /polls/respond, /polls itself is auth'd
+        "/api/polls",  # the public list endpoint is /api/polls/respond, /api/polls itself is auth'd
         # Regression: ``/admin/statics/*`` was previously whitelisted for a
         # SQLAdmin app that never shipped, pre-granting unauthenticated
         # access to anything mounted under that prefix. Pin that nothing

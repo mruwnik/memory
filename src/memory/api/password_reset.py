@@ -102,7 +102,7 @@ def user_for_token(db: Session, token: str) -> HumanUser | None:
 
 def reset_email_args(account: EmailAccount, user: HumanUser) -> list:
     # The fragment never reaches the server, keeping the token out of access logs and Referer.
-    link = f"{settings.SERVER_URL}/ui/reset-password#token={make_reset_token(user)}"
+    link = f"{settings.SERVER_URL}/reset-password#token={make_reset_token(user)}"
     body = (
         f"Someone asked to reset the password for the Memory account {user.email}.\n\n"
         f"To choose a new password, open this link within {TOKEN_TTL_SECONDS // 60} minutes:\n\n"

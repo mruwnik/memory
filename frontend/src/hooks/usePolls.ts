@@ -181,14 +181,14 @@ export const usePolls = () => {
 
 // Public functions (no auth required) - exported separately
 export const getPollBySlug = (slug: string): Promise<Poll> => {
-  return publicFetch<Poll>(`/polls/respond/${slug}`)
+  return publicFetch<Poll>(`/api/polls/respond/${slug}`)
 }
 
 export const submitPollResponse = (
   slug: string,
   data: SubmitResponseRequest
 ): Promise<SubmitResponseResult> => {
-  return publicFetch<SubmitResponseResult>(`/polls/respond/${slug}`, {
+  return publicFetch<SubmitResponseResult>(`/api/polls/respond/${slug}`, {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -201,7 +201,7 @@ export const updatePollResponse = (
   data: SubmitResponseRequest
 ): Promise<{ status: string }> => {
   return publicFetch<{ status: string }>(
-    `/polls/respond/${slug}/${responseId}`,
+    `/api/polls/respond/${slug}/${responseId}`,
     {
       method: 'PUT',
       headers: { 'X-Edit-Token': editToken },
@@ -221,11 +221,11 @@ export const getResponseByToken = (
   slug: string,
   editToken: string
 ): Promise<ExistingResponse> => {
-  return publicFetch<ExistingResponse>(`/polls/respond/${slug}/response`, {
+  return publicFetch<ExistingResponse>(`/api/polls/respond/${slug}/response`, {
     headers: { 'X-Edit-Token': editToken },
   })
 }
 
 export const getPollResults = (slug: string): Promise<PollResults> => {
-  return publicFetch<PollResults>(`/polls/respond/${slug}/results`)
+  return publicFetch<PollResults>(`/api/polls/respond/${slug}/results`)
 }

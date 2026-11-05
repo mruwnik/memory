@@ -72,7 +72,7 @@ const Sources = () => {
   // Compute userId for API calls
   const userId = selectedUser.id || undefined
 
-  if (tabParam === 'ssh-keys') return <Navigate to="/ui/ssh-keys" replace />
+  if (tabParam === 'ssh-keys') return <Navigate to="/ssh-keys" replace />
 
   return (
     <SourcesContext.Provider value={{ selectedUser, userId, refreshCounts }}>

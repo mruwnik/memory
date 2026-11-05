@@ -55,20 +55,20 @@ export const useSettings = () => {
   const { apiCall } = useAuth()
 
   const getSettings = useCallback(async (): Promise<SettingsState> => {
-    const response = await apiCall('/settings')
+    const response = await apiCall('/api/settings')
     if (!response.ok) throw await apiError(response, 'Failed to load settings')
     return response.json()
   }, [apiCall])
 
   /** A null value clears the UI value, back to the default. */
   const updateSettings = useCallback(async (values: Record<string, unknown>): Promise<SettingsState> => {
-    const response = await apiCall('/settings', { method: 'PATCH', body: JSON.stringify({ values }) })
+    const response = await apiCall('/api/settings', { method: 'PATCH', body: JSON.stringify({ values }) })
     if (!response.ok) throw await apiError(response, 'Failed to save settings')
     return response.json()
   }, [apiCall])
 
   const checkVoyageKey = useCallback(async (value: string): Promise<KeyCheckResult> => {
-    const response = await apiCall('/settings/voyage_api_key/check', { method: 'POST', body: JSON.stringify({ value }) })
+    const response = await apiCall('/api/settings/voyage_api_key/check', { method: 'POST', body: JSON.stringify({ value }) })
     if (!response.ok) throw await apiError(response, 'Failed to check the key')
     return response.json()
   }, [apiCall])
@@ -76,7 +76,7 @@ export const useSettings = () => {
   /** Asks the api to restart, then resolves once /health reports a different boot id. */
   const restartApi = useCallback(async (): Promise<void> => {
     const before = await bootId()
-    const response = await apiCall('/settings/restart', { method: 'POST' })
+    const response = await apiCall('/api/settings/restart', { method: 'POST' })
     if (!response.ok) throw await apiError(response, 'Failed to restart the api')
     // Without a pre-restart id, only an id seen after the api went down counts as the new process.
     let sawDown = false

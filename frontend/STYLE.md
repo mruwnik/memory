@@ -17,7 +17,7 @@ Each route component returns exactly one `<Page>`:
 ```tsx
 <Page
   title="MCP servers"                      // ReactNode: a status badge can sit next to the text
-  back={{ to: '/ui/agents', label: 'Agents' }}  // only for sub-pages; the top bar already links home
+  back={{ to: '/agents', label: 'Agents' }}  // only for sub-pages; the top bar already links home
   description="Remote MCP servers your agents can call."
   actions={<Button variant="primary">Add server</Button>}   // rendered on a row under the title
   width="default"                          // narrow | default | wide | full
@@ -67,7 +67,7 @@ Show `LoadingState` / `EmptyState` in place of the list, and `Pager` under it fo
   </Toolbar>
   <List>
     {jobs.map(job => (
-      <Row key={job.id} title={job.name} to={`/ui/jobs/${job.id}`}
+      <Row key={job.id} title={job.name} to={`/jobs/${job.id}`}
         badges={<Badge tone="danger">failed</Badge>}
         meta={[job.external_id, timeAgo(job.created_at), `${job.attempts} attempts`]}
         actions={<><Button size="sm">Retry</Button><ConfirmButton confirm="Delete this job?" onConfirm={...} /></>}>
@@ -101,7 +101,7 @@ Show `LoadingState` / `EmptyState` in place of the list, and `Pager` under it fo
 `Page back title actions`, then a `DetailList` of facts, then `Section`s for related collections.
 
 ```tsx
-<Page back={{ to: '/ui/agents', label: 'Agents' }} title={server.name} actions={<Button>Edit</Button>}>
+<Page back={{ to: '/agents', label: 'Agents' }} title={server.name} actions={<Button>Edit</Button>}>
   <DetailList items={[['URL', server.url], ['Status', <Badge tone="success">connected</Badge>], ['Tools', tools.length]]} />
   <Section title="Tools"><List>...</List></Section>
   <Disclosure summary="Raw response"><pre>...</pre></Disclosure>

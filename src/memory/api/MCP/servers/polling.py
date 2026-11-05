@@ -154,8 +154,8 @@ async def upsert_poll(
         session.refresh(poll)
 
         result = poll_to_payload(poll).model_dump()
-        result["share_url"] = f"/ui/polls/respond/{poll.slug}"
-        result["results_url"] = f"/ui/polls/results/{poll.slug}"
+        result["share_url"] = f"/polls/respond/{poll.slug}"
+        result["results_url"] = f"/polls/results/{poll.slug}"
         return result
 
 

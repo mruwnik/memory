@@ -84,7 +84,7 @@ export const PollCreate: React.FC = () => {
         datetime_end,
         slot_duration: formData.slot_duration,
       })
-      navigate(`/ui/polls/results/${poll.slug}`)
+      navigate(`/polls/results/${poll.slug}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create poll')
     } finally {
@@ -93,7 +93,7 @@ export const PollCreate: React.FC = () => {
   }
 
   return (
-    <Page back={{ to: '/ui/polls', label: 'Polls' }} title="New poll" width="narrow">
+    <Page back={{ to: '/polls', label: 'Polls' }} title="New poll" width="narrow">
       <Card>
       <form className="space-y-4" onSubmit={handleSubmit}>
         {error && <Notice tone="error">{error}</Notice>}
@@ -211,7 +211,7 @@ export const PollCreate: React.FC = () => {
         <div className="flex justify-end gap-3">
           <Button
             type="button"
-            onClick={() => navigate('/ui/polls')}
+            onClick={() => navigate('/polls')}
           >
             Cancel
           </Button>
