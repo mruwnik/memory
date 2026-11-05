@@ -68,6 +68,7 @@ def test_ensure_collection_exists_new(mock_qdrant_client):
         "recipient_emails": KEYWORD,
         "folder": KEYWORD,
         "email_account_id": INTEGER,
+        "beeper_chat_id": INTEGER,
         "source_id": INTEGER,
         **ACCESS_INDEXES,
     }

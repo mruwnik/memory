@@ -81,6 +81,7 @@ SCOPE_DISCORD = "discord"
 SCOPE_DISCORD_WRITE = "discord:write"
 SCOPE_SLACK = "slack"
 SCOPE_SLACK_WRITE = "slack:write"
+SCOPE_BEEPER = "beeper"
 
 # Research
 SCOPE_FORECAST = "forecast"
@@ -218,6 +219,12 @@ VALID_SCOPES: list[ScopeInfo] = [
         "value": SCOPE_SLACK_WRITE,
         "label": "Slack (write)",
         "description": "Send messages and reactions to Slack",
+        "category": "integrations",
+    },
+    {
+        "value": SCOPE_BEEPER,
+        "label": "Beeper",
+        "description": "View your Beeper chats",
         "category": "integrations",
     },
     # Research & Analysis

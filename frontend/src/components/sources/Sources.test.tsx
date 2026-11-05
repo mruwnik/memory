@@ -24,6 +24,7 @@ vi.mock('./panels/PhotosPanel', () => ({ PhotosPanel: () => <div data-testid="pa
 vi.mock('./panels/NotesPanel', () => ({ NotesPanel: () => <div data-testid="panel-notes" /> }))
 vi.mock('./panels/DiscordPanel', () => ({ DiscordPanel: () => <div data-testid="panel-discord" /> }))
 vi.mock('./panels/SlackPanel', () => ({ SlackPanel: () => <div data-testid="panel-slack" /> }))
+vi.mock('./panels/BeeperPanel', () => ({ BeeperPanel: () => <div data-testid="panel-beeper" /> }))
 
 // Stub the admin user selector so its own data-fetching does not interfere.
 vi.mock('../common/UserSelector', async () => {

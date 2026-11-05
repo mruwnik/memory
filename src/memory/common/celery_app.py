@@ -24,6 +24,7 @@ SCHEDULED_TASKS_ROOT = "memory.workers.tasks.scheduled_tasks"
 DISCORD_ROOT = "memory.workers.tasks.discord"
 DISCORD_BACKFILL_ROOT = "memory.workers.tasks.discord_backfill"
 SLACK_ROOT = "memory.workers.tasks.slack"
+BEEPER_ROOT = "memory.workers.tasks.beeper"
 BACKUP_ROOT = "memory.workers.tasks.backup"
 GITHUB_ROOT = "memory.workers.tasks.github"
 PEOPLE_ROOT = "memory.workers.tasks.people"
@@ -45,6 +46,10 @@ HANDLE_DISCORD_EVENT = f"{DISCORD_ROOT}.handle_discord_event"
 BACKFILL_DISCORD_CHANNEL = f"{DISCORD_BACKFILL_ROOT}.backfill_channel"
 DISCOVER_DISCORD_THREADS = f"{DISCORD_BACKFILL_ROOT}.discover_threads"
 SCHEDULE_DISCORD_BACKFILLS = f"{DISCORD_BACKFILL_ROOT}.schedule_discord_backfills"
+SYNC_ALL_BEEPER_ACCOUNTS = f"{BEEPER_ROOT}.sync_all_beeper_accounts"
+SYNC_BEEPER_ACCOUNT = f"{BEEPER_ROOT}.sync_beeper_account"
+SYNC_BEEPER_CHAT = f"{BEEPER_ROOT}.sync_beeper_chat"
+HANDLE_BEEPER_EVENT = f"{BEEPER_ROOT}.handle_beeper_event"
 
 # Slack tasks
 SYNC_ALL_SLACK_WORKSPACES = f"{SLACK_ROOT}.sync_all_slack_workspaces"
@@ -324,6 +329,9 @@ app.conf.update(
         f"{DISCORD_BACKFILL_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-backfill"
         },
+        # Live events go with the other chat messages; crawls with the other backfills.
+        HANDLE_BEEPER_EVENT: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-discord"},
+        f"{BEEPER_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backfill"},
         SYNC_ALL_SLACK_WORKSPACES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"},
         SYNC_SLACK_WORKSPACE: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"},
         SYNC_SLACK_CHANNEL: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-slack-sync"},
@@ -436,6 +444,10 @@ def build_beat_schedule() -> dict:
         "schedule-discord-backfills": {
             "task": SCHEDULE_DISCORD_BACKFILLS,
             "schedule": settings.DISCORD_BACKFILL_INTERVAL,
+        },
+        "sync-beeper-accounts": {
+            "task": SYNC_ALL_BEEPER_ACCOUNTS,
+            "schedule": settings.BEEPER_RECONCILE_INTERVAL,
         },
         "verify-orphans": {
             "task": VERIFY_ORPHANS,

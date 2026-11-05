@@ -36,6 +36,7 @@ from memory.common.scopes import (
 from memory.api.search.filters import (
     FILTER_REGISTRY,
     account_match_sql,
+    beeper_match_sql,
     apply_registry_filters_sql,
     reject_unknown_filter_keys,
 )
@@ -120,6 +121,8 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
         "mail",
     ),
     ("authors", "list of authors to match", None),
+    ("network", "chat network, e.g. whatsapp, signal, slack (case-insensitive)", "beeper"),
+    ("chat", "chat title or Beeper chat id (case-insensitive)", "beeper"),
 ]
 
 
@@ -175,8 +178,8 @@ SCOPE_SECTION = "\n".join(
             "since / until: ISO date or datetime bounding when the content happened;",
             "    a date-only until includes that whole day (UTC)",
             "    (mail sent, message posted, issue opened, post published; else when stored)",
-            "channel: Discord or Slack channel name (with or without #) or id",
-            "author: Discord/Slack user name or id, GitHub login, blog/comic/forum author,",
+            "channel: Discord or Slack channel name (with or without #) or id, or Beeper chat title or id",
+            "author: Discord/Slack/Beeper user name or id, GitHub login, blog/comic/forum author,",
             "    commit author, or part of a mail sender (case-insensitive)",
             "repo: GitHub repository as owner/name (issues, PRs, commits)",
         ]
@@ -837,7 +840,7 @@ def apply_access_control_to_query(query, access_filter: AccessFilter | None, ses
 # shared FILTER_REGISTRY). Everything else (registry keys) is folded on
 # declaratively.
 ITEM_SPECIAL_FILTER_KEYS = frozenset(
-    {"source_ids", "min_created_at", "max_created_at", "person_id", "account"}
+    {"source_ids", "min_created_at", "max_created_at", "person_id", "account", "network", "chat"}
 )
 
 # Keys accepted by item enumeration: the declarative registry plus the special
@@ -899,6 +902,8 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
 
     if account := filters.get("account"):
         query = query.filter(account_match_sql(account))
+    if (beeper_clause := beeper_match_sql(filters)) is not None:
+        query = query.filter(beeper_clause)
 
     return query
 

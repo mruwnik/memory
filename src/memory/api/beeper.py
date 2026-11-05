@@ -19,8 +19,11 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import assert_project_membership, get_interactive_user, resolve_user_filter
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
+from memory.beeper import ingest
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
+from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
+from memory.common.celery_app import app as celery_app
 from memory.common.beeper import (
     BeeperClient,
     BeeperError,
@@ -333,18 +336,7 @@ async def server(account: BeeperAccount, *, authed: bool = True) -> AsyncIterato
         except BeeperError as e:
             raise http_error(account, e) from None
         finally:
-            record_version(account, client.server_version)
-
-
-def record_version(account: BeeperAccount, version: str | None) -> None:
-    if version is None or version == account.server_version:
-        return
-    account.server_version = version
-    if version != settings.BEEPER_SERVER_VERSION:
-        logger.warning(
-            "Beeper account %s: Server runs %s, expected %s",
-            account.id, version, settings.BEEPER_SERVER_VERSION,
-        )
+            ingest.record_version(account, client.server_version)
 
 
 def require_same_user(account: BeeperAccount, user_id: str | None) -> None:
@@ -560,7 +552,7 @@ async def setup_code(
         except BeeperError as e:
             raise http_error(account, e) from None
         finally:
-            record_version(account, client.server_version)
+            ingest.record_version(account, client.server_version)
     if served != login.user_id:
         logger.warning("Beeper account %s: sign-in and /v1/accounts disagree on the user", account.id)
         raise HTTPException(status_code=409, detail="The Beeper Server serves a different Beeper user")
@@ -654,26 +646,9 @@ async def refresh_networks(
         accounts = await client.accounts()
     require_same_user(account, self_user_id(accounts))
 
-    known = {network.network_account_id: network for network in account.networks}
-    seen = set()
-    for entry in accounts:
-        seen.add(entry.account_id)
-        network = known.get(entry.account_id) or BeeperNetwork(
-            account=account,
-            network_account_id=entry.account_id,
-            collect_messages=account.collect_by_default,
-        )
-        network.network = entry.network or entry.bridge.type
-        network.bridge_type = entry.bridge.type
-        network.bridge_provider = entry.bridge.provider
-        network.display_name = entry.user.display_text or entry.user.full_name or entry.user.username
-        network.status = entry.status
-        db.add(network)
-    for network_account_id, network in known.items():
-        if network_account_id not in seen:
-            network.status = "removed"
+    networks = ingest.refresh_networks(db, account, accounts)
     db.commit()
-    return [network_view(db, user, network) for network in sorted(account.networks, key=lambda n: n.id)]
+    return [network_view(db, user, network) for network in networks]
 
 
 @router.get("/accounts/{account_id}/networks")
@@ -694,6 +669,7 @@ def update_network(
     db: Session = Depends(get_session),
 ) -> NetworkResponse:
     network = owned_network(db, network_id, user)
+    starts_collecting = updates.collect_messages is True and not network.collect_messages
     if updates.collect_messages is not None:
         network.collect_messages = updates.collect_messages
     if "project_id" in updates.model_fields_set:
@@ -705,6 +681,8 @@ def update_network(
     apply_llm_key(db, user, network, updates.llm_key)
     db.commit()
     db.refresh(network)
+    if starts_collecting:
+        celery_app.send_task(SYNC_BEEPER_ACCOUNT, args=[network.account_id])
     return network_view(db, user, network)
 
 
@@ -735,6 +713,7 @@ def update_chat(
 ) -> ChatResponse:
     """collect_messages: true or false overrides the network; null inherits it."""
     chat = owned_chat(db, chat_id, user)
+    collected = chat.should_collect
     if "collect_messages" in updates.model_fields_set:
         chat.collect_messages = updates.collect_messages
     if "project_id" in updates.model_fields_set:
@@ -745,4 +724,6 @@ def update_chat(
         chat.sensitivity = updates.sensitivity
     db.commit()
     db.refresh(chat)
+    if chat.should_collect and not collected:
+        celery_app.send_task(SYNC_BEEPER_CHAT, args=[chat.id])
     return chat_view(chat)

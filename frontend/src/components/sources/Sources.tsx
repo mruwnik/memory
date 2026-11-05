@@ -17,6 +17,7 @@ import { PhotosPanel } from './panels/PhotosPanel'
 import { NotesPanel } from './panels/NotesPanel'
 import { DiscordPanel } from './panels/DiscordPanel'
 import { SlackPanel } from './panels/SlackPanel'
+import { BeeperPanel } from './panels/BeeperPanel'
 import { Page, Tabs } from '@/components/shared/ui'
 
 const TABS = [
@@ -33,6 +34,7 @@ const TABS = [
   { value: 'notes', label: 'Notes', panel: NotesPanel },
   { value: 'discord', label: 'Discord', panel: DiscordPanel },
   { value: 'slack', label: 'Slack', panel: SlackPanel },
+  { value: 'beeper', label: 'Beeper', panel: BeeperPanel },
 ] as const
 type TabType = typeof TABS[number]['value']
 

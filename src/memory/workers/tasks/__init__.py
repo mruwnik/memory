@@ -5,6 +5,7 @@ Import sub-modules so Celery can register their @app.task decorators.
 from memory.workers.tasks import (
     agents,
     backup,
+    beeper,
     blogs,
     calendar,
     comic,
@@ -35,6 +36,7 @@ from memory.workers.tasks import (
 __all__ = [
     "agents",
     "backup",
+    "beeper",
     "blogs",
     "calendar",
     "comic",

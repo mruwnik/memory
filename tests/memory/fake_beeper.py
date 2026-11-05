@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from memory.common import beeper, settings
+from memory.common.db.models import BeeperAccount
 
 URL = "http://beeper:23373"
 HOMESERVER = "https://matrix.beeper.com/"
@@ -40,6 +41,49 @@ class FakeBeeperServer:
             }
         ]
         self.paths: list[str] = []
+        self.chats: list[dict[str, Any]] = []
+        # Per chat, oldest first
+        self.messages: dict[str, list[dict[str, Any]]] = {}
+        # Per chat, how many direction=before pages come back empty with hasMore,
+        # as Server does while it asks the bridge for older history
+        self.empty_pages: dict[str, int] = {}
+        # Chats whose direction=after pages are empty with hasMore, as Server 4.3.284
+        # answers for some Matrix rooms
+        self.stuck_after: set[str] = set()
+        self.assets: dict[str, bytes] = {}
+        self.page_size = 2
+        self.next_sort_key = 100
+
+    # --- content ---
+
+    def add_chat(self, chat_id: str, account_id: str = "slackgo.T1-U1", **fields: Any) -> dict[str, Any]:
+        chat = {
+            "id": chat_id, "localChatID": str(len(self.chats) + 1), "accountID": account_id,
+            "network": "Slack", "title": f"Chat {chat_id}", "type": "group",
+            "participants": {"items": [], "hasMore": False, "total": 0},
+            "lastActivity": "2026-11-05T10:00:00.000Z", "messageExpirySeconds": None, **fields,
+        }
+        self.chats.append(chat)
+        self.messages.setdefault(chat_id, [])
+        return chat
+
+    def add_message(self, chat_id: str, message_id: str, text: str | None = None, **fields: Any) -> dict[str, Any]:
+        self.next_sort_key += 1
+        chat = next(c for c in self.chats if c["id"] == chat_id)
+        message = {
+            "id": message_id, "chatID": chat_id, "accountID": chat["accountID"],
+            "senderID": "@alice:beeper.local", "senderName": "Alice",
+            "timestamp": f"2026-11-0{1 + self.next_sort_key % 4}T10:00:{self.next_sort_key % 60:02d}.000Z",
+            "sortKey": str(self.next_sort_key), "type": "TEXT", "isSender": False, "isDeleted": False,
+            "mentions": [], **fields,
+        }
+        if text is not None:
+            message["text"] = text
+        self.messages[chat_id].append(message)
+        return message
+
+    def message(self, chat_id: str, message_id: str) -> dict[str, Any]:
+        return next(m for m in self.messages[chat_id] if m["id"] == message_id)
 
     # --- shapes ---
 
@@ -138,7 +182,63 @@ class FakeBeeperServer:
                 return self.reply(self.all_accounts())
         if request.method == "POST" and request.url.path.startswith("/v1/app/setup/verifications/verification-1/"):
             return self.verification_action(request.url.path.rsplit("verification-1/", 1)[1])
+        if request.method == "GET":
+            return self.read(request)
         return self.error(404, "not_found")
+
+    def read(self, request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        parts = request.url.path.split("/")[1:]
+        match parts:
+            case ["v1", "chats"]:
+                return self.reply(self.chat_page(params.get("cursor"), params.get("direction")))
+            case ["v1", "chats", chat_id]:
+                chat = next((c for c in self.chats if c["id"] == chat_id), None)
+                return self.reply(chat) if chat else self.error(404, "not_found")
+            case ["v1", "chats", chat_id, "messages"] if chat_id in self.messages:
+                return self.reply(self.message_page(chat_id, params.get("cursor"), params.get("direction")))
+            case ["v1", "chats", chat_id, "messages", message_id] if chat_id in self.messages:
+                found = [m for m in self.messages[chat_id] if m["id"] == message_id]
+                return self.reply(found[0]) if found else self.error(404, "not_found")
+            case ["v1", "assets", "serve"] if params.get("url") in self.assets:
+                # Like Server: no useful content type, so the mimeType must come from the message.
+                return httpx.Response(
+                    200, content=self.assets[params["url"]],
+                    headers={**self.headers(), "content-type": "application/octet-stream"},
+                )
+        return self.error(404, "not_found")
+
+    def chat_page(self, cursor: str | None, direction: str | None) -> dict[str, Any]:
+        """Chats newest activity first, paged by position."""
+        start = int(cursor) if cursor and direction == "before" else 0
+        items = self.chats[start : start + self.page_size]
+        end = start + len(items)
+        return {
+            "items": items, "hasMore": end < len(self.chats),
+            "oldestCursor": str(end) if items else None, "newestCursor": str(start) if items else None,
+        }
+
+    def message_page(self, chat_id: str, cursor: str | None, direction: str | None) -> dict[str, Any]:
+        """A page of messages newest first; the cursors are sort keys."""
+        messages = self.messages[chat_id]
+        key = lambda m: int(m["sortKey"])  # noqa: E731
+        if cursor and direction == "after" and chat_id in self.stuck_after:
+            return {"items": [], "hasMore": True, "oldestCursor": None, "newestCursor": None}
+        if cursor and direction == "after":
+            newer = [m for m in messages if key(m) > int(cursor)]
+            items, has_more = newer[: self.page_size], len(newer) > self.page_size
+        else:
+            older = [m for m in messages if not cursor or key(m) < int(cursor)]
+            if cursor and self.empty_pages.get(chat_id):
+                self.empty_pages[chat_id] -= 1
+                return {"items": [], "hasMore": True, "oldestCursor": None, "newestCursor": None}
+            items, has_more = older[-self.page_size :], len(older) > self.page_size
+        items = sorted(items, key=key, reverse=True)
+        return {
+            "items": items, "hasMore": has_more,
+            "oldestCursor": items[-1]["sortKey"] if items else None,
+            "newestCursor": items[0]["sortKey"] if items else None,
+        }
 
     def verification_action(self, action: str) -> httpx.Response:
         if action == "sas/start":
@@ -180,3 +280,21 @@ def fake_beeper(monkeypatch) -> FakeBeeperServer:
     monkeypatch.setattr(settings, "BEEPER_HOMESERVER_ORIGINS", ["https://matrix.beeper.com"])
     monkeypatch.setattr(beeper, "inner_transport", lambda: httpx.MockTransport(server.handle))
     return server
+
+
+@pytest.fixture
+def beeper_account(db_session, fake_beeper, regular_user) -> BeeperAccount:
+    """A signed-in, verified account of regular_user on the fake Server."""
+    fake_beeper.signed_in = fake_beeper.verified = True
+    account = BeeperAccount(
+        created_by_user_id=regular_user.id,
+        server_url=URL,
+        beeper_user_id=fake_beeper.user_id,
+        homeserver=HOMESERVER,
+        setup_state="ready",
+        verified=True,
+    )
+    account.token = fake_beeper.token
+    db_session.add(account)
+    db_session.commit()
+    return account

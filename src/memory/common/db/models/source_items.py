@@ -641,6 +641,18 @@ class SlackMessage(SourceItem):
         return chain
 
 
+class BeeperMessagePayload(SourceItemPayload):
+    network: Annotated[str | None, "Network, lowercased: whatsapp, signal, slack, ..."]
+    network_name: Annotated[str | None, "Network as Beeper names it, e.g. WhatsApp"]
+    network_account: Annotated[str | None, "The user's account on that network"]
+    account_name: Annotated[str | None, "Name of the Beeper account in memory"]
+    beeper_chat_id: Annotated[int, "memory's id of the chat"]
+    chat_title: Annotated[str | None, "Title of the chat"]
+    chat_type: Annotated[str | None, "single (direct message) or group"]
+    sender_name: Annotated[str | None, "Display name of the sender"]
+    sent_at: Annotated[str, "When the message was sent (ISO 8601)"]
+
+
 class BeeperMessage(SourceItem):
     """A message from a Beeper chat.
 
@@ -700,7 +712,28 @@ class BeeperMessage(SourceItem):
 
     @property
     def title(self) -> str:
-        return f"{self.sender_name or self.sender_id or 'unknown'}: {self.content or ''}"
+        """``[WhatsApp] Family — Alice: text``: where it came from, for search and for the LLM."""
+        sender = f"{self.sender_name or self.sender_id or 'unknown'}: {self.content or ''}"
+        if not self.chat:
+            return sender
+        where = " — ".join(filter(None, [self.chat.title, sender]))
+        return f"[{self.chat.network.network}] {where}"
+
+    def as_payload(self) -> BeeperMessagePayload:
+        chat = self.chat
+        network = chat.network if chat else None
+        return BeeperMessagePayload(
+            **super().as_payload(),
+            network=network.network.lower() if network else None,
+            network_name=network.network if network else None,
+            network_account=network.display_name if network else None,
+            account_name=network.account.name if network else None,
+            beeper_chat_id=self.chat_id,
+            chat_title=chat.title if chat else None,
+            chat_type=chat.chat_type if chat else None,
+            sender_name=self.sender_name,
+            sent_at=self.sent_at.isoformat(),
+        )
 
     @property
     def should_embed(self) -> bool:

@@ -813,6 +813,7 @@ def mock_file_storage(tmp_path: Path):
     photo_storage_dir.mkdir(parents=True, exist_ok=True)
     email_spool_dir = tmp_path / "email_spool"
     email_spool_dir.mkdir(parents=True, exist_ok=True)
+    beeper_storage_dir = tmp_path / "beeper"
     with (
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
         patch.object(settings, "CHUNK_STORAGE_DIR", chunk_storage_dir),
@@ -824,6 +825,7 @@ def mock_file_storage(tmp_path: Path):
         patch.object(settings, "MISC_STORAGE_DIR", misc_storage_dir),
         patch.object(settings, "PHOTO_STORAGE_DIR", photo_storage_dir),
         patch.object(settings, "EMAIL_SPOOL_DIR", email_spool_dir),
+        patch.object(settings, "BEEPER_STORAGE_DIR", beeper_storage_dir),
     ):
         yield
 

@@ -11,8 +11,9 @@ from typing import Callable
 
 from sqlalchemy import Float, Text, and_, cast, func, or_, select
 
-from memory.api.search.filters import escape_like
+from memory.api.search.filters import beeper_chat_ids, escape_like
 from memory.common.db.models import (
+    BeeperMessage,
     BlogPost,
     CalendarEvent,
     ChatMessage,
@@ -35,6 +36,7 @@ from memory.common.db.models import (
 CONTENT_DATES = [
     (MailMessage, MailMessage.sent_at),
     (DiscordMessage, DiscordMessage.sent_at),
+    (BeeperMessage, BeeperMessage.sent_at),
     (ChatMessage, ChatMessage.sent_at),
     (SlackMessage, func.to_timestamp(cast(SlackMessage.message_ts, Float))),
     (GitCommit, GitCommit.author_date),
@@ -95,6 +97,7 @@ def channel_clause(channel: str):
             ),
         ),
         ids_of(ChatMessage, ChatMessage.channel_id == channel),
+        ids_of(BeeperMessage, BeeperMessage.chat_id.in_(beeper_chat_ids(None, channel))),
     )
 
 
@@ -121,6 +124,10 @@ def author_clause(author: str):
             or_(SlackMessage.author_id == author, func.lower(SlackMessage.author_name) == lowered),
         ),
         ids_of(ChatMessage, func.lower(ChatMessage.author) == lowered),
+        ids_of(
+            BeeperMessage,
+            or_(BeeperMessage.sender_id == author, func.lower(BeeperMessage.sender_name) == lowered),
+        ),
         ids_of(GithubItem, func.lower(GithubItem.author) == lowered),
         ids_of(BlogPost, func.lower(BlogPost.author) == lowered),
         ids_of(Comic, func.lower(Comic.author) == lowered),

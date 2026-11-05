@@ -7,7 +7,7 @@ import pytest
 import redis
 
 from memory.common import settings
-from memory.common.db.models import Book, BookSection, HumanUser, Note, Person, Team
+from memory.common.db.models import BeeperAccount, Book, BookSection, HumanUser, Note, Person, Team
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import ForumPost, Photo
@@ -46,6 +46,7 @@ TABS = [
     "notes",
     "discord",
     "slack",
+    "beeper",
 ]
 
 
@@ -97,6 +98,7 @@ def seed_sources(db_session, user_id):
             CalendarAccount(user_id=user_id, name="cal", calendar_type="google", **FAILING),
             TranscriptAccount(user_id=user_id, name="t", provider="fireflies", **FAILING),
             bot,
+            BeeperAccount(created_by_user_id=user_id, server_url=f"http://beeper-{user_id}:23373"),
         ]
     )
     db_session.commit()
@@ -111,6 +113,7 @@ SEEDED = tabs(
     calendar=(1, 1),
     transcripts=(1, 1),
     discord=(1, 0),
+    beeper=(1, 0),
 )
 
 

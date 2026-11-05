@@ -52,20 +52,33 @@ None.
 - The `discord_list_channels` MCP tool's `collect_messages` is now the
   channel's own setting (null when it inherits the server's); the value in
   effect is in the new `effective_collect` field.
-- Beeper accounts (setup and settings only so far; nothing is collected yet).
-  Users sign a Beeper account in through a Beeper Server at `/beeper/*`.
-  Beeper Server is closed source with no licence, and unsigned: the opt-in
-  `beeper` compose service (`--profile beeper`) builds a pinned release
+- Beeper: users sign a Beeper account in through a Beeper Server at
+  `/beeper/*`, and memory collects the messages of the networks connected to
+  it in the Beeper app (see the README's Beeper section). Beeper Server is
+  closed source with no licence, and unsigned: the opt-in `beeper` compose
+  service (`--profile beeper`) builds a pinned release
   (`docker/beeper/Dockerfile`, checked against the update feed's sha512) that
-  runs as non-root on a private network shared only with `api` and
-  `ingest-hub`. Never publish its port: its setup endpoints need no auth until
-  sign-in. Its `beeper_data` volume holds the session and encryption keys.
-  New optional settings: `BEEPER_SERVER_URLS` (the Server origins users may
-  connect through, e.g. `http://beeper:23373`; none by default),
-  `BEEPER_HOMESERVER_ORIGINS` (Matrix homeservers that may receive a token to
-  sign it out; default `https://matrix.beeper.com`), `BEEPER_SERVER_VERSION`
-  (the pinned release; other versions are flagged) and
-  `BEEPER_REQUEST_TIMEOUT` (seconds, default 60).
+  runs as non-root on a private `beepernet` network shared only with `api`,
+  `worker` and `ingest-hub`. Never publish its port: its setup endpoints need
+  no auth until sign-in. Its `beeper_data` volume holds the session and
+  encryption keys and is not in the S3 backup; back it up as UPDATING.md
+  describes. ingest-hub runs a new `beeper-collector` program (a WebSocket per
+  verified account); the sync tasks run on the existing `backfill` and
+  `discord` queues, and images go to `BEEPER_STORAGE_DIR` (default
+  `$FILE_STORAGE_DIR/beeper`, backed up encrypted). New optional settings:
+  `BEEPER_SERVER_URLS` (the Server origins users may connect through, e.g.
+  `http://beeper:23373`; none by default), `BEEPER_HOMESERVER_ORIGINS`
+  (Matrix homeservers that may receive a token to sign it out; default
+  `https://matrix.beeper.com`), `BEEPER_SERVER_VERSION` (the pinned release;
+  other versions are flagged), `BEEPER_REQUEST_TIMEOUT` (seconds, default
+  60), `BEEPER_RECONCILE_INTERVAL` (how often collected chats are re-read,
+  seconds, default 6 hours), `BEEPER_SYNC_MAX_MESSAGES_PER_RUN` (default
+  2000), `BEEPER_ATTACHMENT_MAX_BYTES` (default 50 MiB) and
+  `BEEPER_STORAGE_DIR`. New MCP tool `beeper_list_chats` behind the new
+  `beeper` scope. Search, `core_list_items` and `core_count_items` take
+  `network` and `chat` filters for Beeper messages, and the `channel` and
+  `author` scopes match Beeper chats and senders. Qdrant collections get a new
+  `beeper_chat_id` payload index, created on startup.
 
 ### Migrations
 

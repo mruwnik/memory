@@ -147,6 +147,9 @@ DISCORD_STORAGE_DIR = pathlib.Path(
 SLACK_STORAGE_DIR = pathlib.Path(
     os.getenv("SLACK_STORAGE_DIR", FILE_STORAGE_DIR / "slack")
 )
+BEEPER_STORAGE_DIR = pathlib.Path(
+    os.getenv("BEEPER_STORAGE_DIR", FILE_STORAGE_DIR / "beeper")
+)
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
@@ -161,6 +164,7 @@ MISC_STORAGE_DIR = pathlib.Path(
 # regenerated, and not backed up at all (see storage_dirs below).
 PRIVATE_DIRS = [
     EMAIL_STORAGE_DIR,
+    BEEPER_STORAGE_DIR,
     NOTES_STORAGE_DIR,
     PHOTO_STORAGE_DIR,
     REPORT_STORAGE_DIR,
@@ -177,6 +181,7 @@ storage_dirs = [
     NOTES_STORAGE_DIR,
     DISCORD_STORAGE_DIR,
     SLACK_STORAGE_DIR,
+    BEEPER_STORAGE_DIR,
     REPORT_STORAGE_DIR,
     MISC_STORAGE_DIR,
 ]
@@ -513,6 +518,10 @@ BEEPER_HOMESERVER_ORIGINS = [
 # The release docker/beeper/Dockerfile pins; other versions get a warning.
 BEEPER_SERVER_VERSION = os.getenv("BEEPER_SERVER_VERSION", "4.3.284")
 BEEPER_REQUEST_TIMEOUT = float(os.getenv("BEEPER_REQUEST_TIMEOUT", 60))
+# The WebSocket has no replay, so collected chats are re-read this often (seconds).
+BEEPER_RECONCILE_INTERVAL = int(os.getenv("BEEPER_RECONCILE_INTERVAL", 60 * 60 * 6))
+BEEPER_SYNC_MAX_MESSAGES_PER_RUN = int(os.getenv("BEEPER_SYNC_MAX_MESSAGES_PER_RUN", 2000))
+BEEPER_ATTACHMENT_MAX_BYTES = int(os.getenv("BEEPER_ATTACHMENT_MAX_BYTES", 50 * 1024 * 1024))
 
 
 # S3 backups are on only when S3_BACKUP_BUCKET is set, and then need

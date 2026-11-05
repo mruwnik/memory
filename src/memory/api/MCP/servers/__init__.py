@@ -15,6 +15,7 @@ class MCPServer(str, Enum):
     """All available MCP subservers."""
 
     AGENT = "agent"
+    BEEPER = "beeper"
     BOOKS = "books"
     CLAUDE = "claude"
     CORE = "core"
@@ -86,6 +87,10 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.agent import agent_mcp
 
             return agent_mcp
+        case MCPServer.BEEPER:
+            from memory.api.MCP.servers.beeper import beeper_mcp
+
+            return beeper_mcp
         case MCPServer.BOOKS:
             from memory.api.MCP.servers.books import books_mcp
 

@@ -20,6 +20,7 @@ from memory.api.search.filters import (
     build_registry_qdrant_filters,
     reject_unknown_filter_keys,
     resolve_account_ids,
+    resolve_beeper_chat_ids,
 )
 from memory.api.search.types import SearchFilters
 from memory.common.db.connection import make_session
@@ -303,6 +304,10 @@ def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any
         with make_session() as session:
             account_ids = resolve_account_ids(account, session)
         result.append({"key": "email_account_id", "match": {"any": account_ids}})
+    if filters.get("network") or filters.get("chat"):
+        with make_session() as session:
+            chat_ids = resolve_beeper_chat_ids(filters, session)
+        result.append({"key": "beeper_chat_id", "match": {"any": chat_ids}})
     if observation_types := filters.get("observation_types"):
         result.append({"key": "observation_types", "match": {"any": observation_types}})
     if min_confidences := filters.get("min_confidences"):
@@ -381,7 +386,7 @@ async def search_chunks(
     # Qdrant-specific special-key shapes. access_filter and person_id build
     # compound conditions below.
     search_filters = build_registry_qdrant_filters(filters)
-    # The account filter resolves addresses with a DB query.
+    # The account, network and chat filters resolve to ids with a DB query.
     search_filters.extend(await asyncio.to_thread(build_qdrant_special_filters, filters))
 
     # Build the complete Qdrant filter. The "hidden" tombstone sensitivity is

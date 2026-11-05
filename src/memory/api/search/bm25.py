@@ -16,6 +16,7 @@ from memory.api.search.filters import (
     FILTER_REGISTRY,
     SPECIAL_FILTER_KEYS,
     account_match_sql,
+    beeper_match_sql,
     apply_registry_filters_sql,
     reject_unknown_filter_keys,
 )
@@ -183,6 +184,8 @@ def run_bm25_query(
         # subquery correlates correctly.
         if account:
             items_query = items_query.filter(account_match_sql(account))
+        if (beeper_clause := beeper_match_sql(filters)) is not None:
+            items_query = items_query.filter(beeper_clause)
 
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))

@@ -35,6 +35,9 @@ from sqlalchemy import Text
 from sqlalchemy.orm import Session
 
 from memory.common.db.models import (
+    BeeperChat,
+    BeeperMessage,
+    BeeperNetwork,
     BlogPost,
     EmailAccount,
     GoogleDoc,
@@ -208,6 +211,9 @@ FILTER_REGISTRY: dict[str, FilterSpec] = {spec.key: spec for spec in _SPECS}
 # Qdrant payload has no such key, so search folds the bounds into source_ids
 # (see filter_source_ids in api/MCP/servers/core.py), which both arms filter
 # on; list/count apply them to the SourceItem query directly.
+# ``network`` and ``chat`` constrain Beeper messages through their chat, which
+# holds neither; both arms resolve them to chat ids (SQL inline, Qdrant in
+# Python against the indexed ``beeper_chat_id`` payload key).
 # ``account`` is special because the user supplies an email *address* but the
 # filter constrains ``MailMessage.email_account_id`` (an FK). The address must be
 # resolved to account id(s) first, which the registry's value->column mapping
@@ -218,6 +224,8 @@ SPECIAL_FILTER_KEYS: frozenset[str] = frozenset(
         "access_filter",
         "person_id",
         "account",
+        "network",
+        "chat",
         "source_ids",
         "min_confidences",
         "observation_types",
@@ -490,3 +498,27 @@ def reject_unknown_filter_keys(filters, *, allowed: set[str]) -> None:
     }
     if leftover:
         raise ValueError(f"Unsupported filter(s): {sorted(leftover)}")
+
+
+def beeper_chat_ids(network: str | None, chat: str | None):
+    """Select of the Beeper chats in ``network`` (its name) and matching ``chat``
+    (its title or Beeper id), case-insensitive."""
+    query = select(BeeperChat.id).join(BeeperNetwork, BeeperChat.network_id == BeeperNetwork.id)
+    if network:
+        query = query.where(func.lower(BeeperNetwork.network) == network.lower())
+    if chat:
+        query = query.where(or_(BeeperChat.chat_id == chat, func.lower(BeeperChat.title) == chat.lower()))
+    return query
+
+
+def beeper_match_sql(filters: MCPSearchFilters | SearchFilters):
+    """SQL clause for the network/chat filters, or None when neither is set."""
+    network, chat = filters.get("network"), filters.get("chat")
+    if not network and not chat:
+        return None
+    messages = select(BeeperMessage.id).where(BeeperMessage.chat_id.in_(beeper_chat_ids(network, chat)))
+    return SourceItem.id.in_(messages)
+
+
+def resolve_beeper_chat_ids(filters: SearchFilters, session: Session) -> list[int]:
+    return list(session.scalars(beeper_chat_ids(filters.get("network"), filters.get("chat"))))

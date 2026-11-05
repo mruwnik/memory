@@ -24,6 +24,8 @@ EXTRA_PAYLOAD_INDEXES: dict[str, "qdrant_models.PayloadSchemaType"] = {
     "recipient_emails": qdrant_models.PayloadSchemaType.KEYWORD,
     "folder": qdrant_models.PayloadSchemaType.KEYWORD,
     "email_account_id": qdrant_models.PayloadSchemaType.INTEGER,
+    # The network and chat filters resolve to Beeper chat ids
+    "beeper_chat_id": qdrant_models.PayloadSchemaType.INTEGER,
     # Date-restricted searches filter on long source_id lists
     "source_id": qdrant_models.PayloadSchemaType.INTEGER,
     # Every non-admin search filters on these (build_access_qdrant_filter)

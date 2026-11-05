@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -368,6 +369,41 @@ class BeeperClient:
     ) -> Page[Message]:
         data = await self.get(f"/v1/chats/{quote_id(chat_id)}/messages", cursor=cursor, direction=direction)
         return Page[Message].model_validate(data)
+
+    async def message(self, chat_id: str, message_id: str) -> Message:
+        data = await self.get(f"/v1/chats/{quote_id(chat_id)}/messages/{quote_id(message_id)}")
+        return Message.model_validate(data)
+
+    async def download_asset(self, url: str, destination: Path, max_bytes: int) -> bool:
+        """Save a message's media file; False, leaving no file, when it fails or
+        passes ``max_bytes``. Server sends no useful content type, so callers
+        take it from the attachment's mimeType."""
+        partial = destination.with_name(destination.name + ".part")
+        partial.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            complete = await self.stream_asset(url, partial, max_bytes)
+        except httpx.HTTPError:
+            complete = False
+        if complete:
+            partial.replace(destination)
+        partial.unlink(missing_ok=True)
+        return complete
+
+    async def stream_asset(self, url: str, path: Path, max_bytes: int) -> bool:
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        async with self.http.stream(
+            "GET", self.base_url + "/v1/assets/serve", params={"url": url}, headers=headers
+        ) as response:
+            if not response.is_success:
+                return False
+            size = 0
+            with path.open("wb") as out:
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        return False
+                    out.write(chunk)
+        return True
 
 
 def quote_id(value: str) -> str:

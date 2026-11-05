@@ -14,7 +14,7 @@ from memory.common.access_control import (
 )
 from memory.common.db.connection import get_session
 from memory.common.db.counts import count_rows
-from memory.common.db.models import BookSection, User
+from memory.common.db.models import BeeperAccount, BookSection, User
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.slack import SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import ForumPost, Photo
@@ -56,6 +56,7 @@ class SourceTabs(BaseModel):
     notes: TabCounts
     discord: TabCounts
     slack: TabCounts
+    beeper: TabCounts
 
 
 def with_failures(db: Session, model: type[SyncStatusMixin], *criteria) -> TabCounts:
@@ -150,4 +151,5 @@ def source_tabs(
         notes=TabCounts(count=visible_notes(db, access), failing=int(sync_failing(user))),
         discord=TabCounts(count=discord_bots),
         slack=with_failures(db, SlackWorkspace, *slack_filter),
+        beeper=TabCounts(count=count_rows(db, BeeperAccount, *owned(BeeperAccount.created_by_user_id))),
     )

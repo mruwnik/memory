@@ -3,7 +3,7 @@ networks:
   kbnet:
     # internal overlay – NOT exposed
     driver: bridge
-  # Only api and ingest-hub reach Beeper Server: its setup endpoints need no auth until sign-in.
+  # Only api, worker and ingest-hub reach Beeper Server: its setup endpoints need no auth until sign-in.
   beepernet:
     driver: bridge
 
@@ -290,6 +290,8 @@ services:
   # ------------------------------------------------------------ Celery workers
   worker:
     <<: *worker-base
+    # Beeper sync tasks run here (backfill and discord queues).
+    networks: [kbnet, beepernet]
     deploy:
       resources:
         limits:

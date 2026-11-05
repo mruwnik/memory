@@ -280,6 +280,57 @@ That returns an invite URL for adding the bot to your server.
 Behind a reverse proxy, `/discord/events/` must reach the api without a login:
 it authenticates with the signature, not a session.
 
+### Beeper integration
+
+[Beeper](https://www.beeper.com) bridges WhatsApp, Signal, Telegram, Slack,
+Discord and more into one Matrix account. Memory reads it through **Beeper
+Server**, Beeper's headless client, and collects the messages of the networks
+connected in the Beeper app. Memory never connects networks or sends messages.
+
+> [!WARNING]
+> Never publish the Beeper Server's port, nor put it on any network other
+> than `beepernet`. Until an account is signed in, its setup endpoints need no
+> authentication: anyone who reaches it can sign it into their own account.
+> After sign-in, its token reads and sends every message of every network.
+
+1. Start it with the stack: `docker compose --profile beeper up -d`. The
+   `beeper` service builds a pinned release (closed source, unsigned, no
+   licence; Beeper's terms allow personal use) and joins only `beepernet`,
+   with `api`, `worker` and `ingest-hub`. It needs about 400 MB of RAM.
+2. Allow it: `BEEPER_SERVER_URLS=http://beeper:23373` in `.env`. One Server
+   holds one Beeper account; for more accounts run more Servers (each with its
+   own data volume) and list each URL.
+3. In **Sources → Beeper**, add an account on that Server, enter its email and
+   the emailed code, then approve the device: compare the emoji with another
+   Beeper device, or paste the account's recovery key. Memory refuses an email
+   with no Beeper account; create it in the Beeper app.
+4. Choose per network whether to collect, and its project and sensitivity.
+   Chats inherit their network's collect setting and can override it, like
+   Discord channels.
+
+Only networks connected through **Beeper Cloud** reach the Server. A network
+connected "on this device" in the Beeper app stays on that device; reconnect
+it with Beeper Cloud for memory to see it. Some networks (Slack, Discord,
+Google Chat, LINE, Google Messages) are cloud-only.
+
+The ingest hub keeps a WebSocket open to each active, verified account and
+queues its message and chat events. The socket has no replay, so every
+(re)connect, and every `BEEPER_RECONCILE_INTERVAL` (default 6 hours), re-reads
+each collected chat from where it stopped. A chat's first read backfills its
+history as far back as the Server has it, `BEEPER_SYNC_MAX_MESSAGES_PER_RUN`
+messages per run. Edits update messages in place, deletes remove them, and
+reactions are stored on the message they react to. Images are stored under
+`BEEPER_STORAGE_DIR`; voice-note transcriptions are stored as text. A Server
+that loses its sign-in or verification shows it on the account, and memory
+stops reading it until it is verified again.
+
+Messages are owned by the account's owner and take their project from the
+chat, else its network, and their sensitivity from the chat. Each is indexed
+as `[WhatsApp] Family — Alice: text`, and its metadata names the network,
+chat, chat type and sender. Search them with `core_search`, narrowed with the
+`network` (e.g. `whatsapp`, `signal`) and `chat` filters; the
+`beeper_list_chats` MCP tool lists your chats.
+
 ### Manually triggering Celery tasks
 
 ```bash

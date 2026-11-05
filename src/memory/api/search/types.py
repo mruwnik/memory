@@ -115,6 +115,10 @@ class MCPSearchFilters(TypedDict):
     # Mail ingested by the email account with this address (resolved to the
     # account's email_account_id, so it groups every alias the account handled).
     account: NotRequired[str]
+    # Beeper messages from this network (e.g. whatsapp) and chat (title or Beeper
+    # id), case-insensitive; resolved to chat ids like account.
+    network: NotRequired[str]
+    chat: NotRequired[str]
     sender: NotRequired[str]
     domain: NotRequired[str]
     author: NotRequired[str]

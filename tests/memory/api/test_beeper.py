@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
 from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork, HumanUser
 from memory.common.db.models.sources import Project
 from tests.memory.fake_beeper import URL, FakeBeeperServer
@@ -245,3 +246,19 @@ def test_members_see_only_their_own_accounts(member_client, db_session, user, fa
 
     assert [a["server_url"] for a in listed] == [URL]
     assert member_client.get("/beeper/servers").json() == [{"url": URL, "in_use": True}]
+
+
+def test_turning_collection_on_starts_reading(client, db_session, fake_beeper, no_celery_dispatch):
+    account_id = sign_in(client, fake_beeper)
+    network_id = client.post(f"/beeper/accounts/{account_id}/refresh").json()[1]["id"]
+    chat = BeeperChat(network_id=network_id, chat_id="!c:beeper.local", collect_messages=False)
+    db_session.add(chat)
+    db_session.commit()
+
+    client.patch(f"/beeper/networks/{network_id}", json={"collect_messages": False})
+    client.patch(f"/beeper/networks/{network_id}", json={"collect_messages": True})
+    client.patch(f"/beeper/chats/{chat.id}", json={"collect_messages": True})
+    client.patch(f"/beeper/chats/{chat.id}", json={"collect_messages": True})
+
+    sent = [(c.args[0], c.kwargs["args"]) for c in no_celery_dispatch.call_args_list if "beeper" in c.args[0]]
+    assert sent == [(SYNC_BEEPER_ACCOUNT, [account_id]), (SYNC_BEEPER_CHAT, [chat.id])]

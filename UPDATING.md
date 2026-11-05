@@ -310,6 +310,53 @@ or rollback on an install that has rotated moves the restored secrets to the
 current key, from whichever kept key each one is under. `rollback.sh` does that
 with the release it rolls back to, unless that release predates rotation.
 
+### Beeper Server
+
+The opt-in `beeper` service (README § Beeper integration) is not rebuilt by
+`tools/update.sh`, and its `beeper_data` volume is not in the S3 backup.
+
+**Updating it.** The release is pinned in `docker/beeper/Dockerfile`. Beeper
+signs nothing, so the pin and its sha512 are the only check. Take the
+`version` and each architecture's `sha512` (base64, as the feed gives it) from
+the update feed, `https://api.beeper.com/desktop/update-feed.json?bundleID=com.automattic.beeper.server&platform=linux&channel=stable&arch=x64`
+(and `arch=arm64`). Set `BEEPER_SERVER_VERSION` and both
+`BEEPER_SERVER_SHA512_*` build args in the Dockerfile, and `BEEPER_SERVER_VERSION`
+in `settings.py` (an account whose Server runs another version is flagged), then:
+
+```bash
+docker compose --profile beeper build beeper    # fails on a sha512 mismatch
+docker compose --profile beeper up -d beeper
+```
+
+**Backing it up.** `/data` holds the session and the end-to-end encryption
+keys: losing it means signing in and verifying again, and maybe losing older
+encrypted history. It holds a dozen SQLite databases in WAL mode, so copy it
+with the Server stopped (a minute or so):
+
+```bash
+export BACKUP_ENCRYPTION_KEY=...   # the same key as the other backups
+docker compose stop beeper
+docker compose run --rm -T --no-deps --entrypoint tar beeper -C /data -czf - . \
+  | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY \
+  > backups/beeper-data-$(date +%Y%m%d).tar.gz.enc
+docker compose --profile beeper up -d beeper
+```
+
+Copy the file off the box (e.g. `aws s3 cp` to your backup bucket). To restore
+it, stop the Server and replace the volume's contents:
+
+```bash
+docker compose stop beeper
+openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in backups/beeper-data-<date>.tar.gz.enc \
+  | docker compose run --rm -T --no-deps --entrypoint sh beeper -c 'find /data -mindepth 1 -delete && tar -C /data -xzf -'
+docker compose --profile beeper up -d beeper
+```
+
+The session and keys come back with it, so the account should need no new
+sign-in or verification (not yet tested end to end). Beeper's message ids are
+assigned in `/data`, and how Server numbers messages that arrived after the
+copy is untested, so keep copies recent.
+
 ## 5. When a migration fails
 
 `update.sh` stops right after the failed `migrate` run, and the app services
