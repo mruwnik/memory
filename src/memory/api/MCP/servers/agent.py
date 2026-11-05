@@ -75,7 +75,7 @@ from memory.api.MCP.servers.scheduler import (
     check_active_task_cap,
     validate_cron_interval,
 )
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import DBSession, make_session
@@ -325,7 +325,7 @@ async def delete(definition_id: int) -> dict:
     return {"deleted": definition_id}
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def list_all() -> dict:
     """Your agent definitions, each with its most recent run."""
@@ -361,7 +361,7 @@ async def list_all() -> dict:
 PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI"}
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 # The keys page lists these for everyone whose keys pay for them, not only agent users.
 @visible_when(require_scopes(SCOPE_AGENTS, SCOPE_WRITE))
 async def system_list() -> dict:
@@ -391,7 +391,7 @@ async def system_list() -> dict:
     return {"agents": [entry(a) for a in SYSTEM_AGENTS.values()]}
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def fetch(definition_id: int) -> dict:
     """One of your agent definitions."""
@@ -490,7 +490,7 @@ async def run(input: str, agent: int | str | dict) -> dict:
         return {"run_id": started.id, "status": started.status}
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def wait(
     run_id: str, after_seq: int = -1, wait: int = 0, limit: int = 100
@@ -523,7 +523,7 @@ async def wait(
         await asyncio.sleep(1)
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def list_runs(
     definition_id: int | None = None,
@@ -589,7 +589,7 @@ def capabilities_json(caps: Capabilities) -> dict:
     return asdict(caps) | {"reasoning_levels": sorted(caps.reasoning_levels)}
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def catalog() -> dict:
     """What a definition can use: your visible tools, builtins, models, limits,
@@ -693,11 +693,12 @@ async def trigger_upsert(
 ) -> dict:
     """Create or update an ingest trigger: run one of your definitions when newly stored items match.
 
-    config: {"filter": {source_types, tags_any, channel_ids, text_contains, regex,
-    exclude_authors}, "delivery": {"mode": "per_item"} or {"mode": "batch",
+    config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
+    text_contains, regex, exclude_authors}, "delivery": {"mode": "per_item"} or {"mode": "batch",
     "window_sec", "max_items"}, "template": the run's input, where "{items}" becomes
     one line per item with its id, "on_edit": bool}. Set filter values must all
-    hold; within a list, any value matches. Only items stored since it was last
+    hold; within a list, any value matches. exclude_channel_ids drops items in
+    those channels and their threads. Only items stored since it was last
     enabled match, each at most once, and only if you can read them.
 
     With "on_edit": true, an item this trigger has matched fires again each time its
@@ -774,7 +775,7 @@ def pause_trigger(trigger_id: int, user_id: int) -> dict:
     return result
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def triggers(definition_id: int) -> dict:
     """The triggers of one of your definitions, including any tripped breaker's reason."""
@@ -900,7 +901,7 @@ async def schedule(
         return task.serialize()
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def schedules(definition_id: int) -> dict:
     """The schedules that run one of your definitions."""
@@ -972,7 +973,7 @@ def server_definitions(db: DBSession, user_id: int, server_id: int) -> list[str]
     )
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def server_list() -> dict:
     """Your external MCP servers, with status and cached tools."""
@@ -1222,7 +1223,7 @@ def promote_default(
     return successor
 
 
-@agent_mcp.tool()
+@agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_WRITE))
 async def key_list() -> dict:
     """Your LLM provider API keys by provider (never the keys themselves, only their

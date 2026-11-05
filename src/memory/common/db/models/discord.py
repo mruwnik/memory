@@ -209,6 +209,9 @@ class DiscordChannel(Base):
     category_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )  # Discord category snowflake ID (not a FK - fetched from Discord on demand)
+    # A thread's parent channel (snowflake; not a FK, as the parent may be unstored).
+    # Null until a thread listing or gateway Thread object names it.
+    parent_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     channel_type: Mapped[str] = mapped_column(
         Text, nullable=False

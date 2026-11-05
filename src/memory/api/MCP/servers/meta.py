@@ -17,7 +17,7 @@ from memory.api.MCP.servers.core import (
 from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
 from memory.api.auth import lookup_principal
 from memory.api.MCP.access import get_mcp_current_user
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.api.search.search import searcher_keys
 from memory.api.search.filters import FILTER_REGISTRY, QdrantUnsupported
 from memory.api.search.types import MCPSearchFilters
@@ -146,7 +146,7 @@ def search_filters(collection: str) -> dict[str, SchemaArg]:
     }
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
     """Get the metadata schema for each collection used in the knowledge base.
@@ -185,7 +185,7 @@ async def get_metadata_schemas() -> dict[str, CollectionMetadata]:
     }
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def get_search_defaults() -> dict[str, bool]:
     """The search enhancements available to you.
@@ -212,7 +212,7 @@ async def get_search_defaults() -> dict[str, bool]:
     }
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def get_tags() -> list[str]:
     """List the tags on items you can search, for the `tags` filter of `search`."""
@@ -227,7 +227,7 @@ async def get_tags() -> list[str]:
         return sorted({t for (t,) in query.distinct()})
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(annotations=READ_ONLY)
 @visible_when()  # genuinely public utility — no PII, no side effects
 async def get_current_time() -> dict:
     """Get the current time in UTC."""
@@ -235,7 +235,7 @@ async def get_current_time() -> dict:
     return {"current_time": datetime.now(timezone.utc).isoformat()}
 
 
-@meta_mcp.tool()
+@meta_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def get_user() -> dict:
     """Get information about the authenticated user and the server's version."""

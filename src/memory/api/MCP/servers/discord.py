@@ -9,7 +9,7 @@ from sqlalchemy import or_
 from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import discord as discord_client
 from memory.common.access_control import UserProxy
 from memory.common.dates import parse_iso_datetime
@@ -259,7 +259,7 @@ async def send_message(
         return await send_dm(session, resolve_bot(session, bot_id), message, user_id, username)
 
 
-@discord_mcp.tool()
+@discord_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def channel_history(
     channel_id: str | None = None,
@@ -310,7 +310,7 @@ async def channel_history(
         )
 
 
-@discord_mcp.tool()
+@discord_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_DISCORD), has_discord_bots)
 async def list_channels(
     server: str | None = None,

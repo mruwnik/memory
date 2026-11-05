@@ -18,7 +18,7 @@ from memory.api.MCP.access import (
     require_can_write_at_sensitivity,
     require_project_membership,
 )
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import settings
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_PEOPLE, SCOPE_PEOPLE_WRITE
 from memory.common.access_control import (
@@ -451,7 +451,7 @@ async def upsert(
     return result
 
 
-@people_mcp.tool()
+@people_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_PEOPLE))
 async def fetch(
     identifier: str,
@@ -554,7 +554,7 @@ async def fetch(
         return result
 
 
-@people_mcp.tool()
+@people_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_PEOPLE))
 async def list_all(
     tags: list[str] | None = None,
@@ -1186,7 +1186,7 @@ async def tidbit_delete(tidbit_id: int) -> dict:
         }
 
 
-@people_mcp.tool()
+@people_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_PEOPLE))
 async def tidbit_list(
     identifier: str,

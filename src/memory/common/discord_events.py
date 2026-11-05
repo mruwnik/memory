@@ -240,7 +240,10 @@ def ensure_listed_channel(
         session, int(data["id"]), server_id, bot_id, name=data.get("name"), channel_type=channel_type
     )
     parent_id = snowflake(data.get("parent_id"))
-    if not existed and channel_type != "thread" and parent_id is not None:
+    if channel_type == "thread":
+        # A thread first stored from a message event has no parent yet.
+        channel.parent_id = parent_id or channel.parent_id
+    elif not existed and parent_id is not None:
         channel.category_id = parent_id
     return channel
 

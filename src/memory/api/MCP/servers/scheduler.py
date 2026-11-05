@@ -14,7 +14,7 @@ from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.common.access_control import UserProxy
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import settings
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import make_session
@@ -56,7 +56,7 @@ def get_owned_task(session, task_id: str, user_id: int) -> ScheduledTask:
     return task
 
 
-@scheduler_mcp.tool()
+@scheduler_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_SCHEDULE))
 async def list_all(
     task_type: str | None = None,
@@ -435,7 +435,7 @@ async def delete(task_id: str) -> dict[str, Any]:
         return {"deleted": True, "task_id": task_id}
 
 
-@scheduler_mcp.tool()
+@scheduler_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_SCHEDULE))
 async def executions(
     task_id: str,

@@ -26,7 +26,7 @@ from memory.api.MCP.access import (
     require_can_write_at_sensitivity,
     require_project_membership,
 )
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, has_items, require_scopes, visible_when
 from memory.common.access_control import (
     apply_access_filter_to_query,
     build_access_filter,
@@ -101,7 +101,7 @@ PRIORITY_RANK = case(
 CLEARABLE_FIELDS = frozenset({"priority", "owner_id", "description", "project_id"})
 
 
-@deadlines_mcp.tool()
+@deadlines_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Deadline))
 async def list_upcoming(
     days: int = 14,
@@ -164,7 +164,7 @@ async def list_upcoming(
         return [d.as_payload() for d in deadlines]
 
 
-@deadlines_mcp.tool()
+@deadlines_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Deadline))
 async def fetch(deadline_id: int) -> DeadlinePayload | dict:
     """

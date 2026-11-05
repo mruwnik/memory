@@ -22,7 +22,7 @@ from memory.api.MCP.access import (
     log_item_access,
     log_search_access,
 )
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, has_items, require_scopes, visible_when
 from memory.common.access_control import (
     AccessFilter,
     apply_access_filter_to_query,
@@ -351,7 +351,7 @@ def filter_source_ids(
         return [item.id for item in items_query.all()]
 
 
-@core_mcp.tool(description=_build_search_description())
+@core_mcp.tool(description=_build_search_description(), annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def search(
     query: str,
@@ -509,7 +509,7 @@ async def observe(
     }
 
 
-@core_mcp.tool()
+@core_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_OBSERVE), has_items(AgentObservation))
 async def search_observations(
     query: str,
@@ -598,7 +598,7 @@ async def search_observations(
 MAX_FETCH_FILE_BYTES = 10 * 1024 * 1024
 
 
-@core_mcp.tool()
+@core_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 def fetch_file(filename: str) -> dict:
     """
@@ -683,7 +683,7 @@ def fetch_file(filename: str) -> dict:
 # --- Enumeration tools for systematic investigations ---
 
 
-@core_mcp.tool()
+@core_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def fetch(
     id: int | None = None,
@@ -908,7 +908,7 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     return query
 
 
-@core_mcp.tool(description=_build_list_items_description())
+@core_mcp.tool(description=_build_list_items_description(), annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def list_items(
     modalities: set[str] = set(),
@@ -986,7 +986,7 @@ async def list_items(
         }
 
 
-@core_mcp.tool(description=_build_count_items_description())
+@core_mcp.tool(description=_build_count_items_description(), annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def count_items(
     modalities: set[str] = set(),

@@ -45,11 +45,16 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 
+from mcp.types import ToolAnnotations
+
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_ADMIN
 
 logger = logging.getLogger(__name__)
 
+# For tools that only read memory: agents warn about every tool without it, as
+# one that can write or reach outside memory.
+READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 # Type alias for checker functions
 VisibilityCheckerFunc = Callable[[dict, DBSession | None], Awaitable[bool]]

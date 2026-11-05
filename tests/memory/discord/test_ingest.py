@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from discord import MessageType
+from discord import MessageType, Thread
 
 from memory.common.db.models import (
     DiscordBot,
@@ -137,3 +137,16 @@ def test_ensure_message_entities_creates_rows_and_returns_channel(db_session):
     user = db_session.get(DiscordUser, 444)
     assert user is not None
     assert user.username == "alice"
+
+
+def test_a_thread_records_its_parent_channel(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="Test Bot"))
+    db_session.flush()
+    thread = MagicMock(spec=Thread, id=333, parent_id=10, category_id=None)
+    thread.name = "a thread"
+    message = fake_db_message()
+    message.channel = thread
+
+    channel_model = ensure_message_entities(db_session, message, bot_id=42)
+
+    assert (channel_model.channel_type, channel_model.parent_id) == ("thread", 10)

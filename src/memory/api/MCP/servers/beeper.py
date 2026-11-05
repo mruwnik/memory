@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 
 from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork
 from memory.common.scopes import SCOPE_BEEPER
@@ -91,7 +91,7 @@ def fetch_chats(
     return {"chats": [{k: chat[k] for k in wanted if k in chat} for chat in chats], "count": len(chats)}
 
 
-@beeper_mcp.tool()
+@beeper_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_BEEPER), has_beeper_accounts)
 async def list_chats(
     network: str | None = None,

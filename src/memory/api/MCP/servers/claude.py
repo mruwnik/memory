@@ -19,7 +19,7 @@ from memory.api.MCP.access import (
     get_mcp_current_user,
     log_search_access,
 )
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.api.search.search import search as search_base
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract, settings
@@ -98,7 +98,7 @@ def parse_time_arg(value: str | None, name: str) -> datetime | None:
     return parsed
 
 
-@claude_mcp.tool()
+@claude_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def session_search(
     query: str,
@@ -230,7 +230,7 @@ def window_around_time(
     return list(before) + after
 
 
-@claude_mcp.tool()
+@claude_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def session_fetch(
     session_id: str,

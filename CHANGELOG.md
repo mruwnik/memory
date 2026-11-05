@@ -79,6 +79,15 @@ None.
   `network` and `chat` filters for Beeper messages, and the `channel` and
   `author` scopes match Beeper chats and senders. Qdrant collections get a new
   `beeper_chat_id` payload index, created on startup.
+- Agent ingest trigger filters take `exclude_channel_ids` (Discord or Slack
+  channel ids whose items, threads included, never match). It doesn't count as
+  narrowing a filter on its own. Discord threads now record their parent
+  channel (`discord_channels.parent_id`); threads stored before this release
+  get it from the next daily catch-up's thread listing, and until then their
+  messages match even when the parent is excluded.
+- Memory MCP tools that only read now carry `readOnlyHint`, so `agent_catalog`
+  reports them as `read_only` and creating a trigger or agent no longer warns
+  about them.
 
 ### Migrations
 
@@ -92,6 +101,9 @@ column. Fast.
 
 `20261130_beeper`: creates the `beeper_accounts`, `beeper_networks`,
 `beeper_chats`, `beeper_participants` and `beeper_message` tables. Fast.
+
+`20261201_discord_channel_parent`: adds the nullable `discord_channels.parent_id`
+column. Fast.
 
 ### Post-deploy commands
 

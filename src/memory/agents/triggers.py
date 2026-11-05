@@ -101,6 +101,8 @@ class IngestFilter(BaseModel):
     tags_any: FilterValues = []
     # Discord channel snowflakes or Slack channel ids.
     channel_ids: FilterValues = []
+    # Also excludes the threads of these channels.
+    exclude_channel_ids: FilterValues = []
     # Case-insensitive substrings of the item's title or text.
     text_contains: FilterValues = []
     regex: str | None = Field(default=None, max_length=MAX_REGEX_CHARS)
@@ -183,6 +185,8 @@ class ItemFacts:
     # Lowercased author ids, usernames and addresses.
     authors: frozenset[str]
     text: str
+    # A Discord thread's parent; Slack thread replies carry their channel's id.
+    parent_channel_id: str | None = None
 
 
 def lowered(values: Iterable[Any]) -> frozenset[str]:
@@ -241,6 +245,13 @@ def content_version(item: SourceItem) -> bytes:
     return hashlib.sha256("\x1f".join(parts).encode()).digest()
 
 
+def parent_channel_id(item: SourceItem) -> str | None:
+    if not isinstance(item, DiscordMessage) or item.channel is None:
+        return None
+    parent = item.channel.parent_id
+    return None if parent is None else str(parent)
+
+
 def item_facts(item: SourceItem) -> ItemFacts:
     channel_id, authors = channel_and_authors(item)
     return ItemFacts(
@@ -249,6 +260,7 @@ def item_facts(item: SourceItem) -> ItemFacts:
         channel_id=channel_id,
         authors=lowered(authors),
         text=item_text(item),
+        parent_channel_id=parent_channel_id(item),
     )
 
 
@@ -287,6 +299,8 @@ def matches(f: IngestFilter, facts: ItemFacts) -> bool:
     if f.tags_any and not facts.tags & set(f.tags_any):
         return False
     if f.channel_ids and facts.channel_id not in f.channel_ids:
+        return False
+    if {facts.channel_id, facts.parent_channel_id} & set(f.exclude_channel_ids):
         return False
     if facts.authors & lowered(f.exclude_authors):
         return False

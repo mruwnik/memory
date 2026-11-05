@@ -7,7 +7,7 @@ import logging
 from fastmcp import FastMCP
 
 from memory.api.MCP.access import get_mcp_current_user
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import paths, settings
 from memory.common.access_control import (
     UserLike,
@@ -118,7 +118,7 @@ async def upsert(
     }
 
 
-@notes_mcp.tool()
+@notes_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_NOTES))
 async def note_files(path: str = "/"):
     """

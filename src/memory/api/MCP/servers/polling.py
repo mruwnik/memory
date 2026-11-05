@@ -9,7 +9,7 @@ from typing import Literal, cast
 from fastmcp import FastMCP
 
 from memory.api.MCP.access import get_mcp_current_user
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import make_session
 from memory.common.scopes import SCOPE_POLLING, SCOPE_POLLING_WRITE
@@ -159,7 +159,7 @@ async def upsert_poll(
         return result
 
 
-@polling_mcp.tool()
+@polling_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_POLLING))
 async def list_polls(
     status: Literal["open", "closed", "finalized", "cancelled"] | None = None,
@@ -226,7 +226,7 @@ async def delete_poll(poll_id: int) -> dict:
         }
 
 
-@polling_mcp.tool()
+@polling_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_POLLING))
 async def fetch(poll_id: int | None = None, slug: str | None = None) -> dict:
     """

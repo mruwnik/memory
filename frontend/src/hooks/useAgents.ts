@@ -227,6 +227,8 @@ export interface IngestFilter {
   source_types: string[]
   tags_any: string[]
   channel_ids: string[]
+  // Absent from triggers saved before the field existed.
+  exclude_channel_ids?: string[]
   text_contains: string[]
   regex: string | null
   exclude_authors: string[]
@@ -257,7 +259,7 @@ export interface AgentTrigger {
 export const DEFAULT_TRIGGER_TEMPLATE = 'New items matched this trigger:\n\n{items}'
 
 export const emptyTriggerConfig = (): TriggerConfig => ({
-  filter: { source_types: [], tags_any: [], channel_ids: [], text_contains: [], regex: null, exclude_authors: [] },
+  filter: { source_types: [], tags_any: [], channel_ids: [], exclude_channel_ids: [], text_contains: [], regex: null, exclude_authors: [] },
   delivery: { mode: 'per_item' },
   template: DEFAULT_TRIGGER_TEMPLATE,
   on_edit: false,

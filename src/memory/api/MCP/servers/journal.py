@@ -11,7 +11,7 @@ from memory.api.MCP.access import (
     get_mcp_current_user,
     get_project_roles_by_user_id,
 )
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.access_control import (
     has_admin_scope,
     normalize_sensitivity,
@@ -197,7 +197,7 @@ async def add(
         }
 
 
-@journal_mcp.tool()
+@journal_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def list_all(
     target_id: int,

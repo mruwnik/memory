@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.core import get_current_user_access_filter
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, has_items, require_scopes, visible_when
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
 from memory.common.scopes import SCOPE_READ
@@ -35,7 +35,7 @@ def accessible_sections(session):
     )
 
 
-@books_mcp.tool()
+@books_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ), has_items(Book))
 async def list_books(
     sections: bool = False,
@@ -91,7 +91,7 @@ async def list_books(
         return [p | {"sections": by_book[p["id"]]} for p in payloads]
 
 
-@books_mcp.tool()
+@books_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ), has_items(Book))
 def fetch(
     book_id: int,

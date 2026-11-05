@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.access_control import (
     filter_projects_query,
     get_user_project_roles,
@@ -136,7 +136,7 @@ def _creation_result_to_dict(
 # ============== Project CRUD ==============
 
 
-@projects_mcp.tool()
+@projects_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_PROJECTS))
 async def list_all(
     state: Literal["open", "closed"] | None = None,
@@ -251,7 +251,7 @@ async def list_all(
         }
 
 
-@projects_mcp.tool()
+@projects_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_PROJECTS))
 async def fetch(
     project_id: int,

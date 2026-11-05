@@ -13,7 +13,7 @@ from memory.api.MCP.access import (
     get_mcp_current_user,
     get_project_roles_by_user_id,
 )
-from memory.api.MCP.visibility import has_items, require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, has_items, require_scopes, visible_when
 from memory.common.access_control import (
     build_access_filter,
     has_admin_scope,
@@ -36,7 +36,7 @@ _UNSET: Any = "__UNSET__"
 organizer_mcp = FastMCP("org")
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(CalendarEvent))
 async def upcoming(
     start_date: str | None = None,
@@ -76,7 +76,7 @@ async def upcoming(
 # =============================================================================
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Task))
 async def list_tasks(
     status: Literal["pending", "in_progress", "done", "cancelled"] | None = None,
@@ -128,7 +128,7 @@ async def list_tasks(
         )
 
 
-@organizer_mcp.tool()
+@organizer_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Task))
 async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
     """

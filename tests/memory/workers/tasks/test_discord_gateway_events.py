@@ -253,7 +253,20 @@ def test_threads_become_channels(db_session, webhook_bot, event_type):
 
     db_session.expire_all()
     thread = db_session.get(DiscordChannel, 42)
-    assert (thread.name, thread.channel_type, thread.server_id) == ("a thread", "thread", int(GUILD))
+    assert (thread.name, thread.channel_type, thread.server_id, thread.parent_id) == (
+        "a thread", "thread", int(GUILD), int(CHANNEL)
+    )
+
+
+def test_a_thread_stored_without_its_parent_gets_it_from_the_next_listing(db_session, webhook_bot):
+    db_session.add(DiscordServer(id=int(GUILD), name="Guild", bot_id=webhook_bot.id, verified=True))
+    db_session.commit()
+    handle(webhook_bot, "THREAD_CREATE", {"id": "42", "guild_id": GUILD, "name": "a thread", "type": 11})
+
+    handle(webhook_bot, "THREAD_UPDATE", {"id": "42", "guild_id": GUILD, "parent_id": CHANNEL, "type": 11})
+
+    db_session.expire_all()
+    assert db_session.get(DiscordChannel, 42).parent_id == int(CHANNEL)
 
 
 def test_thread_update_renames(db_session, webhook_bot):

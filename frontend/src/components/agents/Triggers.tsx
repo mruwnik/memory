@@ -10,6 +10,7 @@ export const describeTrigger = (config: TriggerConfig): string => {
     f.source_types.length && `types: ${f.source_types.join(', ')}`,
     f.tags_any.length && `tags: ${f.tags_any.join(', ')}`,
     f.channel_ids.length && `channels: ${f.channel_ids.join(', ')}`,
+    f.exclude_channel_ids?.length && `not in: ${f.exclude_channel_ids.join(', ')}`,
     f.text_contains.length && `text: ${f.text_contains.map(t => `"${t}"`).join(' or ')}`,
     f.regex && `regex: /${f.regex}/`,
     f.exclude_authors.length && `not by: ${f.exclude_authors.join(', ')}`,
@@ -29,6 +30,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
   const [types, setTypes] = useState<string[]>(initial.filter.source_types)
   const [tags, setTags] = useState(initial.filter.tags_any.join(', '))
   const [channels, setChannels] = useState(initial.filter.channel_ids.join(', '))
+  const [excludedChannels, setExcludedChannels] = useState((initial.filter.exclude_channel_ids ?? []).join(', '))
   const [text, setText] = useState(initial.filter.text_contains.join(', '))
   const [regex, setRegex] = useState(initial.filter.regex ?? '')
   const [excluded, setExcluded] = useState(initial.filter.exclude_authors.join(', '))
@@ -44,6 +46,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
       source_types: types,
       tags_any: splitList(tags),
       channel_ids: splitList(channels),
+      exclude_channel_ids: splitList(excludedChannels),
       text_contains: splitList(text),
       regex: regex.trim() || null,
       exclude_authors: splitList(excluded),
@@ -62,6 +65,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
       <FieldRow>
         <Field label="Any of these tags (comma-separated)"><Input value={tags} onChange={e => setTags(e.target.value)} /></Field>
         <Field label="Channel ids (Discord/Slack)"><Input value={channels} onChange={e => setChannels(e.target.value)} /></Field>
+        <Field label="Ignore channel ids"><Input value={excludedChannels} onChange={e => setExcludedChannels(e.target.value)} /></Field>
         <Field label="Text contains any of"><Input value={text} onChange={e => setText(e.target.value)} /></Field>
         <Field label="Regex (optional)"><Input className="font-mono" value={regex} onChange={e => setRegex(e.target.value)} /></Field>
         <Field label="Ignore authors (ids, names or emails)"><Input value={excluded} onChange={e => setExcluded(e.target.value)} /></Field>

@@ -98,6 +98,7 @@ def ensure_channel(
 
     # Get category_id if available (TextChannel, VoiceChannel have it)
     category_id = getattr(channel, "category_id", None)
+    parent_id = channel.parent_id if isinstance(channel, Thread) else None
 
     channel_model, created = get_or_insert(
         session,
@@ -107,6 +108,7 @@ def ensure_channel(
         server_id=guild_id,
         bot_id=bot_id,
         category_id=category_id,
+        parent_id=parent_id,
         name=getattr(channel, "name", f"Channel {channel_id}"),
         channel_type=get_channel_type(channel),
     )
@@ -117,6 +119,8 @@ def ensure_channel(
         channel_model.name = name
     if category_id is not None and channel_model.category_id != category_id:
         channel_model.category_id = category_id
+    if parent_id is not None:
+        channel_model.parent_id = parent_id
     return channel_model
 
 

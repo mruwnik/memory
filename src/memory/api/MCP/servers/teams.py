@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, scoped_session, selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.audit import audit_call
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.access_control import (
     UserLike,
     filter_projects_query,
@@ -328,7 +328,7 @@ def set_team_members(
     return result
 
 
-@teams_mcp.tool()
+@teams_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_TEAMS))
 async def fetch(
     team: str | int,
@@ -389,7 +389,7 @@ async def fetch(
         }
 
 
-@teams_mcp.tool()
+@teams_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_TEAMS))
 async def list_all(
     tags: list[str] | None = None,
@@ -617,7 +617,7 @@ def project_summary(project: Project) -> dict[str, Any]:
     }
 
 
-@teams_mcp.tool()
+@teams_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_TEAMS))
 async def project_list_access(
     project: int | str,

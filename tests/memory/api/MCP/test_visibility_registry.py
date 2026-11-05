@@ -33,6 +33,44 @@ async def test_every_mounted_tool_forbids_task_execution():
     assert [n for n, t in mounted_tools.items() if t.to_mcp_tool().execution] == []
 
 
+# Forecast lookups only read, but send caller-chosen text to outside services.
+READ_ONLY_TOOLS = {
+    *("agent_catalog", "agent_fetch", "agent_key_list", "agent_list_all"),
+    *("agent_list_runs", "agent_schedules", "agent_server_list", "agent_system_list"),
+    *("agent_triggers", "agent_wait"),
+    "beeper_list_chats",
+    *("books_fetch", "books_list_books"),
+    *("claude_session_fetch", "claude_session_search"),
+    *("core_count_items", "core_fetch", "core_fetch_file", "core_list_items"),
+    *("core_search", "core_search_observations"),
+    *("deadlines_fetch", "deadlines_list_upcoming"),
+    *("discord_channel_history", "discord_list_channels"),
+    "journal_list_all",
+    *("meta_get_current_time", "meta_get_metadata_schemas", "meta_get_search_defaults"),
+    *("meta_get_tags", "meta_get_user"),
+    "notes_note_files",
+    *("organizer_fetch", "organizer_list_tasks", "organizer_upcoming"),
+    *("people_fetch", "people_list_all", "people_tidbit_list"),
+    *("polling_fetch", "polling_list_polls"),
+    *("projects_fetch", "projects_list_all"),
+    *("scheduler_executions", "scheduler_list_all"),
+    *("slack_get_channel_history", "slack_list_channels"),
+    *("teams_fetch", "teams_list_all", "teams_project_list_access"),
+}
+
+
+@pytest.mark.asyncio
+async def test_exactly_the_tools_that_only_read_are_marked_read_only():
+    mounted_tools = await mcp.get_tools()
+
+    marked = {
+        name
+        for name, t in mounted_tools.items()
+        if t.annotations and t.annotations.readOnlyHint
+    }
+    assert marked == READ_ONLY_TOOLS
+
+
 @pytest.fixture
 def no_people_scope_middleware(monkeypatch):
     """The production VisibilityMiddleware, as seen by a user without `people`."""

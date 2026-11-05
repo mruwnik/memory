@@ -76,6 +76,7 @@ def facts(**overrides):
     "config,expected",
     [
         ({"filter": {}}, "set at least one of"),
+        ({"filter": {"exclude_channel_ids": ["C1"]}}, "set at least one of"),
         ({"filter": {"source_types": ["nope"]}}, "unknown source types"),
         ({"filter": {"regex": "("}}, "regex does not compile"),
         ({"filter": {"regex": "a" * 501}}, "at most 500"),
@@ -109,6 +110,68 @@ def test_config_validation_names_the_problem(config, expected):
 )
 def test_matches_every_set_criterion(f, expected):
     assert matches(IngestFilter.model_validate(f), facts()) is expected
+
+
+@pytest.mark.parametrize(
+    "f,item,expected",
+    [
+        (
+            {"source_types": ["slack_message"], "exclude_channel_ids": ["C1"]},
+            SlackMessage(type="slack_message", channel_id="C1", message_ts="1.0"),
+            False,
+        ),
+        # Slack thread replies carry their parent channel's id.
+        (
+            {"source_types": ["slack_message"], "exclude_channel_ids": ["C1"]},
+            SlackMessage(
+                type="slack_message", channel_id="C1", message_ts="2.0", thread_ts="1.0"
+            ),
+            False,
+        ),
+        (
+            {"source_types": ["discord_message"], "exclude_channel_ids": ["10"]},
+            DiscordMessage(type="discord_message", channel_id=10, author_id=1),
+            False,
+        ),
+        (
+            {"source_types": ["discord_message"], "exclude_channel_ids": ["10"]},
+            DiscordMessage(
+                type="discord_message",
+                channel_id=20,
+                author_id=1,
+                channel=DiscordChannel(id=20, name="t", channel_type="thread", parent_id=10),
+            ),
+            False,
+        ),
+        (
+            {"source_types": ["slack_message"], "exclude_channel_ids": ["C1"]},
+            SlackMessage(type="slack_message", channel_id="C2", message_ts="1.0"),
+            True,
+        ),
+        (
+            {"source_types": ["discord_message"], "exclude_channel_ids": ["10"]},
+            DiscordMessage(
+                type="discord_message",
+                channel_id=20,
+                author_id=1,
+                channel=DiscordChannel(id=20, name="t", channel_type="thread", parent_id=11),
+            ),
+            True,
+        ),
+        (
+            {"channel_ids": ["C1", "C2"], "exclude_channel_ids": ["C2"]},
+            SlackMessage(type="slack_message", channel_id="C1", message_ts="1.0"),
+            True,
+        ),
+        (
+            {"channel_ids": ["C1", "C2"], "exclude_channel_ids": ["C2"]},
+            SlackMessage(type="slack_message", channel_id="C2", message_ts="1.0"),
+            False,
+        ),
+    ],
+)
+def test_excluded_channels_never_match(f, item, expected):
+    assert matches(IngestFilter.model_validate(f), item_facts(item)) is expected
 
 
 def test_regexes_refuse_to_run_off_the_main_thread():

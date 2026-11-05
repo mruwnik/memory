@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 
 from memory.api.MCP.access import fetch_user_by_token
-from memory.api.MCP.visibility import require_scopes, visible_when
+from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_SLACK, SCOPE_SLACK_WRITE
 from memory.common.db.models.slack import (
@@ -383,7 +383,7 @@ async def add_reaction(
     }
 
 
-@slack_mcp.tool()
+@slack_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_SLACK), has_slack_workspaces)
 async def list_channels(
     workspace_id: str | None = None,
@@ -441,7 +441,7 @@ async def list_channels(
     )
 
 
-@slack_mcp.tool()
+@slack_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_SLACK), has_slack_workspaces)
 async def get_channel_history(
     channel: str,

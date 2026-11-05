@@ -369,6 +369,7 @@ async def test_discover_channel_threads_ensures_rows_and_dispatches(db_session, 
     assert set(thread_ids) == {201, 202}
     db_session.expire_all()
     assert (db_session.get(DiscordChannel, 201).name, db_session.get(DiscordChannel, 202).channel_type) == ("a", "thread")
+    assert {db_session.get(DiscordChannel, t).parent_id for t in (201, 202)} == {10}
     assert {(c.args[0], c.kwargs["args"][0]) for c in celery_app.send_task.call_args_list} == {
         (BACKFILL_DISCORD_CHANNEL, 201),
         (BACKFILL_DISCORD_CHANNEL, 202),
