@@ -142,18 +142,6 @@ describe('useDiscord bots', () => {
 
 
 describe('useDiscord servers', () => {
-  it('listServers without botId hits the bare endpoint', async () => {
-    const fetchMock = mockJson([])
-    await setup().listServers()
-    expect(callTo(fetchMock, '/discord/servers').url).not.toContain('bot_id')
-  })
-
-  it('listServers with botId appends bot_id query', async () => {
-    const fetchMock = mockJson([])
-    await setup().listServers('99')
-    expect(callTo(fetchMock, '/discord/servers').url).toContain('bot_id=99')
-  })
-
   it('listServers throws on non-ok', async () => {
     mockJson({}, 500)
     await expect(setup().listServers()).rejects.toThrow('Failed to fetch Discord servers')

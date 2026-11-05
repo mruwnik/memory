@@ -53,6 +53,8 @@ export interface DiscordServer {
   collect_messages: boolean
   last_sync_at: string | null
   channel_count: number
+  // The requester's bots in this server
+  bot_ids: string[]
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
@@ -161,9 +163,8 @@ export const useDiscord = () => {
 
   // === Server Operations ===
 
-  const listServers = useCallback(async (botId?: string): Promise<DiscordServer[]> => {
-    const url = botId ? `/discord/servers?bot_id=${botId}` : '/discord/servers'
-    const response = await apiCall(url)
+  const listServers = useCallback(async (): Promise<DiscordServer[]> => {
+    const response = await apiCall('/discord/servers')
     if (!response.ok) throw await apiError(response, 'Failed to fetch Discord servers')
     return response.json()
   }, [apiCall])

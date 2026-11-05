@@ -43,6 +43,7 @@ from memory.common.discord_data import (
     fetch_servers,
     get_bot_for_user,
     get_user_bots,
+    server_bot_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,8 @@ class DiscordServerResponse(BaseModel):
     collect_messages: bool
     last_sync_at: str | None
     channel_count: int
+    # The requester's bots in this server
+    bot_ids: list[str]
     # Access control
     project_id: int | None
     sensitivity: str
@@ -213,7 +216,7 @@ def bot_to_response(
 
 
 def server_to_response(
-    server: DiscordServer, db: Session, user: User
+    server: DiscordServer, db: Session, user: User, bot_ids: list[int]
 ) -> DiscordServerResponse:
     """Convert a DiscordServer model to a response."""
     return DiscordServerResponse(
@@ -224,6 +227,7 @@ def server_to_response(
         collect_messages=cast(bool, server.collect_messages),
         last_sync_at=server.last_sync_at.isoformat() if server.last_sync_at else None,
         channel_count=len(server.channels),
+        bot_ids=[str(bot_id) for bot_id in bot_ids],
         project_id=server.project_id,
         sensitivity=cast(str, server.sensitivity) or "basic",
         llm_key=llm_key_view(db, user, server),
@@ -447,6 +451,10 @@ def user_can_manage_channel(user: User, db: Session, channel: DiscordChannel) ->
     return channel.bot is not None and channel.bot.created_by_user_id == user.id
 
 
+def user_bots_by_server(db: Session, user: User) -> dict[int, list[int]]:
+    return server_bot_ids(db, [bot.id for bot in get_user_bots(db, user.id)])
+
+
 @router.get("/servers")
 def list_servers(
     auth: tuple[User, Session] = Depends(require_discord_access),
@@ -454,7 +462,8 @@ def list_servers(
     """List Discord servers owned by the requesting user's bots."""
     user, db = auth
     servers = fetch_servers(db, user_id=user.id)
-    return [server_to_response(server, db, user) for server in servers]
+    bots_by_server = user_bots_by_server(db, user)
+    return [server_to_response(server, db, user, bots_by_server.get(server.id, [])) for server in servers]
 
 
 @router.patch("/servers/{server_id}")
@@ -494,7 +503,7 @@ def update_server(
     if access_changed:
         enqueue_access_control_propagation("discord_server", server)
 
-    return server_to_response(server, db, user)
+    return server_to_response(server, db, user, user_bots_by_server(db, user).get(server.id, []))
 
 
 # --- Channel Endpoints ---

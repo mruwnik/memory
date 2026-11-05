@@ -166,7 +166,7 @@ export const SlackPanel = () => {
       )}
 
       {workspaces.length > 0 ? (
-        <List>
+        <List separate>
           {workspaces.map(workspace => (
             <WorkspaceRow
               key={workspace.id}
@@ -325,6 +325,7 @@ const WorkspaceRow = ({
         {workspace.effective_sync_interval_seconds != null && ` Current scheduled interval: ${Math.round(workspace.effective_sync_interval_seconds / 60)} minutes.`}
       </Hint>
       <SubList
+        indent
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels ({workspace.channel_count})</ExpandToggle>}
         {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}
       >

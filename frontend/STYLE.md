@@ -93,7 +93,9 @@ Show `LoadingState` / `EmptyState` in place of the list, and `Pager` under it fo
 - **On/off state** (an active source, an enabled schedule) is a static `Badge`; changing it is a row action ("Pause"/"Resume"),
   not a clickable badge.
 - **Nested collections** (a GitHub account's repos, a bot's servers, run history) are a `SubList` in the
-  row body; make its `title` an `ExpandToggle` when it loads lazily.
+  row body; make its `title` an `ExpandToggle` when it loads lazily, and its `actions` the buttons that act on
+  that collection ("Add to server"). When rows carry nested collections with controls of their own (bot →
+  servers → channels), use `List separate` so each item is its own card, and `SubList indent` so the levels read as a tree.
 - **Card grids** are only for media (Photos) and the Dashboard home tiles.
 
 ### Detail

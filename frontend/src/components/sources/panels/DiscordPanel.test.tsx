@@ -42,6 +42,7 @@ const server = {
   collect_messages: false,
   last_sync_at: null,
   channel_count: 3,
+  bot_ids: ['bot-1'],
   project_id: null,
   sensitivity: 'basic',
 }
@@ -83,6 +84,7 @@ describe('DiscordPanel load states', () => {
     mockFetchRoutes(routes({ bots: [bot] }))
     renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
+    expect(screen.getByText('Gateway')).toBeInTheDocument()
     expect(screen.getByText('Connected')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add to server' })).toBeInTheDocument()
   })
@@ -91,6 +93,29 @@ describe('DiscordPanel load states', () => {
     mockFetchRoutes(routes({ bots: [{ ...bot, connected: false }] }))
     renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('Disconnected')).toBeInTheDocument())
+  })
+
+  it('does not flag a paused bot as disconnected', async () => {
+    mockFetchRoutes(routes({ bots: [{ ...bot, is_active: false, connected: false }] }))
+    renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('Inactive')).toBeInTheDocument())
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument()
+  })
+
+  it('lists under each bot only the servers it is in', async () => {
+    const servers = [
+      { ...server, id: 'srv-1', name: 'Mine only', bot_ids: ['bot-1'] },
+      { ...server, id: 'srv-2', name: 'Shared', bot_ids: ['bot-1', 'bot-2'] },
+    ]
+    mockFetchRoutes(routes({ bots: [bot, webhookBot], servers }))
+    const { user } = renderWithUser(<DiscordPanel />)
+    const hooked = await screen.findByRole('button', { name: 'Servers (1)' })
+    expect(screen.getByRole('button', { name: 'Servers (2)' })).toBeInTheDocument()
+
+    await user.click(hooked)
+
+    expect(await screen.findByText('Shared')).toBeInTheDocument()
+    expect(screen.queryByText('Mine only')).not.toBeInTheDocument()
   })
 
   it('shows an error state when the bots fetch fails', async () => {

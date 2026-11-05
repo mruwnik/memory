@@ -130,8 +130,15 @@ export const RefreshButton = ({ onClick, loading, label = 'Refresh' }: { onClick
   </Button>
 )
 
-export const List = ({ flush, className, ...props }: ComponentProps<'ul'> & { flush?: boolean }) => (
-  <ul className={cx('divide-y divide-slate-100', !flush && 'bg-white rounded-xl border border-slate-200 shadow-sm', className)} {...props} />
+/**
+ * `separate` gives each row its own card, for items whose nested collections would otherwise
+ * run into the next item (a bot's servers, a workspace's channels).
+ */
+export const List = ({ flush, separate, className, ...props }: ComponentProps<'ul'> & { flush?: boolean; separate?: boolean }) => (
+  <ul className={cx(
+    separate ? 'space-y-4 [&>li]:bg-white [&>li]:rounded-xl [&>li]:border [&>li]:border-slate-200 [&>li]:shadow-sm [&>li]:py-4'
+      : cx('divide-y divide-slate-100', !flush && 'bg-white rounded-xl border border-slate-200 shadow-sm'),
+    className)} {...props} />
 )
 
 interface RowProps {
@@ -272,17 +279,19 @@ interface SubListProps {
   footer?: ReactNode
   /** Scroll the rows past a fixed height, for collections that grow without bound. */
   scroll?: boolean
+  /** Indent the rows behind a guide line, so a collection nested in a nested row reads as a tree. */
+  indent?: boolean
 }
 
 /** A collection nested inside a Row: an item's repos, folders, servers or run history. */
-export const SubList = ({ title, actions, empty, children, footer, scroll }: SubListProps) => (
+export const SubList = ({ title, actions, empty, children, footer, scroll, indent }: SubListProps) => (
   <div className="border-t border-slate-100 pt-2 space-y-1">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-medium text-slate-700">{title}</h3>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
     {Children.toArray(children).length > 0
-      ? <List flush className={cx('[&>li]:px-0', scroll && 'max-h-48 overflow-y-auto')}>{children}</List>
+      ? <List flush className={cx('[&>li]:px-0', indent && 'ml-1.5 border-l-2 border-slate-200 pl-3 sm:pl-4', scroll && 'max-h-48 overflow-y-auto')}>{children}</List>
       : empty && <Hint>{empty}</Hint>}
     {footer}
   </div>

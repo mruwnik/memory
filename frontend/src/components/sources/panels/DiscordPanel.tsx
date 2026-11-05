@@ -156,12 +156,12 @@ export const DiscordPanel = () => {
           onAction={() => setAddingBot(true)}
         />
       ) : (
-        <List>
+        <List separate>
           {bots.map(bot => (
             <BotRow
               key={bot.id}
               bot={bot}
-              servers={servers}
+              servers={servers.filter(server => server.bot_ids.includes(bot.id))}
               channelsByServer={channelsByServer}
               projects={projects}
               expanded={expandedBot === bot.id}
@@ -251,26 +251,30 @@ const BotRow = ({
       muted={!bot.is_active}
       badges={<>
         <StatusBadge active={bot.is_active} />
-        {webhook
-          ? <Badge tone="info">Webhook</Badge>
-          : <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>}
+        <Badge tone="info" title={webhook ? 'Live messages arrive as webhook events' : 'Live messages arrive over the WebSocket gateway'}>
+          {webhook ? 'Webhook' : 'Gateway'}
+        </Badge>
+        {!webhook && bot.is_active && <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>}
       </>}
       meta={[
         webhook ? `Last event: ${formatRelativeTime(bot.last_event_at)}` : null,
         bot.updated_at && `Last sync: ${formatRelativeTime(bot.updated_at)}`,
       ]}
       actions={<>
-        {!webhook && <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />}
         <Button size="sm" onClick={onEdit}>Edit</Button>
         <PauseButton active={bot.is_active} onClick={onToggleActive} />
-        <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>
         <ConfirmButton confirm={`Remove "${bot.name}"? This removes the bot from Memory.`} onConfirm={onDelete}>Remove</ConfirmButton>
       </>}
     >
       {!bot.has_token && <RowError>Add the bot's token in Edit to resume it.</RowError>}
       {webhook && <EventsUrl url={bot.events_url} />}
       <SubList
+        indent
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Servers ({servers.length})</ExpandToggle>}
+        actions={<>
+          {!webhook && <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />}
+          <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>
+        </>}
         empty={expanded && (webhook
           ? 'No servers yet. They appear with the first event or after the daily sync.'
           : 'No servers found. Click "Refresh metadata" to sync.')}
@@ -334,7 +338,8 @@ const ServerRow = ({
     >
       {update.error && <RowError live>{update.error}</RowError>}
       <SubList
-        title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels</ExpandToggle>}
+        indent
+        title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Channels ({server.channel_count})</ExpandToggle>}
         {...(expanded ? lazySubList(channels, 'channels', onRetryChannels) : {})}
       >
         {expanded && Array.isArray(channels) && channels.map(channel => (

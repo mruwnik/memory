@@ -293,3 +293,17 @@ def verified_server_ids(session: DBSession, bot_ids) -> Query:
     )
     member = session.query(DiscordBotServer.server_id).filter(DiscordBotServer.bot_id.in_(bot_ids))
     return owned.union(member)
+
+
+def server_bot_ids(session: DBSession, bot_ids) -> dict[int, list[int]]:
+    """Which of these bots are verified in each server, by the same rule as verified_server_ids."""
+    owned = session.query(DiscordServer.id, DiscordServer.bot_id).filter(
+        DiscordServer.verified.is_(True), DiscordServer.bot_id.in_(bot_ids)
+    )
+    member = session.query(DiscordBotServer.server_id, DiscordBotServer.bot_id).filter(
+        DiscordBotServer.bot_id.in_(bot_ids)
+    )
+    by_server: dict[int, list[int]] = {}
+    for server_id, bot_id in sorted(owned.union(member).all()):
+        by_server.setdefault(server_id, []).append(bot_id)
+    return by_server

@@ -292,6 +292,28 @@ def test_servers_list_follows_verified_membership_not_deliveries(member_client, 
     assert names == ["member", "owned"]
 
 
+def test_servers_list_names_the_users_bots_in_each_server(member_client, db_session, user):
+    mine, theirs = two_owners_bots(db_session, user)
+    second = DiscordBot(application_id=3, name="second", created_by_user_id=user.id)
+    db_session.add(second)
+    db_session.flush()
+    db_session.add_all([
+        DiscordServer(id=1, name="owned", bot_id=mine.id, verified=True),
+        DiscordServer(id=2, name="shared", bot_id=theirs.id, verified=True),
+    ])
+    db_session.flush()
+    db_session.add_all([
+        DiscordBotServer(bot_id=mine.id, server_id=2),
+        DiscordBotServer(bot_id=second.id, server_id=2),
+        DiscordBotServer(bot_id=theirs.id, server_id=1),
+    ])
+    db_session.commit()
+
+    bots = {s["name"]: s["bot_ids"] for s in member_client.get("/discord/servers").json()}
+
+    assert bots == {"owned": [str(mine.id)], "shared": [str(i) for i in sorted([mine.id, second.id])]}
+
+
 @pytest.mark.parametrize("verified, status", [(True, 200), (False, 404)])
 def test_only_a_verified_owner_manages_a_server(member_client, db_session, user, verified, status):
     mine, _ = two_owners_bots(db_session, user)
