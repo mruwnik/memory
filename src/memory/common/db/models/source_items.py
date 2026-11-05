@@ -4,6 +4,7 @@ Database models for the knowledge base system.
 
 from __future__ import annotations
 
+import logging
 import pathlib
 import textwrap
 from datetime import datetime
@@ -69,6 +70,8 @@ if TYPE_CHECKING:
     )
     from memory.common.db.models.observations import ObservationContradiction
     from memory.common.db.models.sessions import Session
+
+logger = logging.getLogger(__name__)
 
 
 def mail_addresses(values: Sequence[str]) -> list[str]:
@@ -657,8 +660,8 @@ class BeeperMessage(SourceItem):
     """A message from a Beeper chat.
 
     ``message_id`` is Beeper Server's per-install id; ``event_id`` is the
-    Matrix event id, which survives rebuilding the Server's data. Reactions
-    are stored on the message they react to.
+    Matrix event id, which survives rebuilding the Server's data, when a live
+    event named it. Reactions are stored on the message they react to.
     """
 
     __tablename__ = "beeper_message"
@@ -702,7 +705,7 @@ class BeeperMessage(SourceItem):
 
     __table_args__ = (
         Index("beeper_message_chat_message_idx", "chat_id", "message_id", unique=True),
-        Index("beeper_message_event_idx", "event_id"),
+        Index("beeper_message_event_idx", "chat_id", "event_id"),
         Index("beeper_message_chat_sent_idx", "chat_id", "sent_at"),
     )
 
@@ -742,6 +745,16 @@ class BeeperMessage(SourceItem):
     @property
     def embedding_text(self) -> str:
         return self.title if self.should_embed else ""
+
+    def as_content(self) -> dict[str, Any]:
+        """The message ready for an LLM: its text and the images on disk."""
+        images = []
+        for path in self.images or []:
+            try:
+                images.append(Image.open(settings.FILE_STORAGE_DIR / path))
+            except OSError:
+                logger.info("Beeper message %s: an image could not be opened", self.id)
+        return {"text": self.title, "images": images}
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         text = self.embedding_text

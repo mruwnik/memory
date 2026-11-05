@@ -74,17 +74,29 @@ def test_chat_collects_by_override_else_network_and_never_when_merged(
     assert chat.should_collect is expected
 
 
-def test_message_inherits_chat_then_network_access_and_owner(db_session, regular_user):
+@pytest.mark.parametrize(
+    "chat_sensitivity, network_sensitivity, expected",
+    [
+        (None, "confidential", "confidential"),
+        ("public", "confidential", "public"),
+        ("confidential", "internal", "confidential"),
+        (None, None, "basic"),
+    ],
+)
+def test_message_inherits_chat_then_network_access_and_owner(
+    db_session, regular_user, chat_sensitivity, network_sensitivity, expected
+):
     project = Project(title="P", state="open")
     db_session.add(project)
     db_session.flush()
-    chat = make_chat(db_session, regular_user, project_id=project.id, sensitivity="internal")
-    chat.sensitivity = "confidential"
+    network = {"sensitivity": network_sensitivity} if network_sensitivity else {}
+    chat = make_chat(db_session, regular_user, project_id=project.id, **network)
+    chat.sensitivity = chat_sensitivity
 
     message = make_message(db_session, chat)
 
     assert (message.project_id, message.sensitivity, message.creator_id) == (
-        project.id, "confidential", regular_user.id,
+        project.id, expected, regular_user.id,
     )
     assert message.llm_key_holder is chat.network
     assert message.llm_registrant_id == regular_user.id

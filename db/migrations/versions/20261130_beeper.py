@@ -24,10 +24,15 @@ def timestamps() -> list[sa.Column]:
     ]
 
 
-def access_control(name: str) -> list:
+def access_control(name: str, inherits: bool = False) -> list:
+    sensitivity = (
+        sa.Column("sensitivity", sa.String(20))
+        if inherits
+        else sa.Column("sensitivity", sa.String(20), nullable=False, server_default="basic")
+    )
     return [
         sa.Column("project_id", sa.BigInteger(), sa.ForeignKey("projects.id", ondelete="SET NULL")),
-        sa.Column("sensitivity", sa.String(20), nullable=False, server_default="basic"),
+        sensitivity,
         sa.Column("config_version", sa.Integer(), nullable=False, server_default="1"),
         sa.CheckConstraint(SENSITIVITY, name=f"valid_{name}_sensitivity"),
     ]
@@ -100,10 +105,11 @@ def upgrade() -> None:
         sa.Column("message_expiry_seconds", sa.Integer()),
         sa.Column("last_activity_at", sa.DateTime(timezone=True)),
         sa.Column("collect_messages", sa.Boolean()),
-        *access_control("beeper_chat"),
+        *access_control("beeper_chat", inherits=True),
         sa.Column("newest_cursor", sa.Text()),
         sa.Column("oldest_cursor", sa.Text()),
         sa.Column("backfill_done", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("backfill_stalls", sa.Integer(), nullable=False, server_default="0"),
         *timestamps(),
         sa.UniqueConstraint("network_id", "chat_id", name="uq_beeper_chats_network_chat"),
     )
@@ -125,6 +131,16 @@ def upgrade() -> None:
         sa.UniqueConstraint("network_id", "participant_id", name="uq_beeper_participants_network"),
     )
     op.create_index("beeper_participants_person_idx", "beeper_participants", ["person_id"])
+
+    op.create_table(
+        "beeper_reactions",
+        sa.Column(
+            "chat_id", sa.BigInteger(),
+            sa.ForeignKey("beeper_chats.id", ondelete="CASCADE"), primary_key=True,
+        ),
+        sa.Column("message_id", sa.Text(), primary_key=True),
+        sa.Column("parent_message_id", sa.Text(), nullable=False),
+    )
 
     op.create_table(
         "beeper_message",
@@ -154,7 +170,7 @@ def upgrade() -> None:
     op.create_index(
         "beeper_message_chat_message_idx", "beeper_message", ["chat_id", "message_id"], unique=True
     )
-    op.create_index("beeper_message_event_idx", "beeper_message", ["event_id"])
+    op.create_index("beeper_message_event_idx", "beeper_message", ["chat_id", "event_id"])
     op.create_index("beeper_message_chat_sent_idx", "beeper_message", ["chat_id", "sent_at"])
     # See 20261128_orphaned_source_items: every source_item subclass table needs it.
     op.execute(
@@ -167,6 +183,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DELETE FROM source_item WHERE type = 'beeper_message'")
     op.drop_table("beeper_message")
+    op.drop_table("beeper_reactions")
     op.drop_table("beeper_participants")
     op.drop_table("beeper_chats")
     op.drop_table("beeper_networks")

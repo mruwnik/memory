@@ -50,6 +50,10 @@ class FakeBeeperServer:
         # Chats whose direction=after pages are empty with hasMore, as Server 4.3.284
         # answers for some Matrix rooms
         self.stuck_after: set[str] = set()
+        # Chats whose direction=before pages always repeat the cursor they were asked for
+        self.frozen_cursor: set[str] = set()
+        # Matrix event id -> message id; GET .../messages/{id} takes either, as Server does
+        self.event_ids: dict[str, str] = {}
         self.assets: dict[str, bytes] = {}
         self.page_size = 2
         self.next_sort_key = 100
@@ -198,6 +202,7 @@ class FakeBeeperServer:
             case ["v1", "chats", chat_id, "messages"] if chat_id in self.messages:
                 return self.reply(self.message_page(chat_id, params.get("cursor"), params.get("direction")))
             case ["v1", "chats", chat_id, "messages", message_id] if chat_id in self.messages:
+                message_id = self.event_ids.get(message_id, message_id)
                 found = [m for m in self.messages[chat_id] if m["id"] == message_id]
                 return self.reply(found[0]) if found else self.error(404, "not_found")
             case ["v1", "assets", "serve"] if params.get("url") in self.assets:
@@ -229,6 +234,9 @@ class FakeBeeperServer:
             items, has_more = newer[: self.page_size], len(newer) > self.page_size
         else:
             older = [m for m in messages if not cursor or key(m) < int(cursor)]
+            if cursor and chat_id in self.frozen_cursor:
+                items = sorted(older[-self.page_size :], key=key, reverse=True)
+                return {"items": items, "hasMore": True, "oldestCursor": cursor, "newestCursor": cursor}
             if cursor and self.empty_pages.get(chat_id):
                 self.empty_pages[chat_id] -= 1
                 return {"items": [], "hasMore": True, "oldestCursor": None, "newestCursor": None}

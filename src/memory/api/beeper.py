@@ -15,14 +15,15 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from memory.api.auth import assert_project_membership, get_interactive_user, resolve_user_filter
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
-from memory.beeper import ingest
+from memory.beeper import ingest, state
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
-from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
+from memory.common.celery_app import SYNC_BEEPER_ACCOUNT
 from memory.common.celery_app import app as celery_app
 from memory.common.beeper import (
     BeeperClient,
@@ -51,6 +52,7 @@ ACTIONS: dict[str, VerificationAction] = {
     "sas-start": "sas/start",
     "sas-confirm": "sas/confirm",
 }
+SERVER_TAKEN = "This Beeper Server already has an account in memory"
 SIGNED_OUT_NOTE = (
     "Signed out of Beeper. The Beeper Server still holds this account's data: "
     "ask the operator to wipe its data directory before signing in on it again."
@@ -105,6 +107,8 @@ class AccountResponse(BaseModel):
     server_version: str | None
     # False when the Server runs another build than the pinned one
     version_matches: bool
+    # Whether the collector's WebSocket to the Server is up
+    connected: bool
     last_reconcile_at: str | None
     last_event_at: str | None
     created_at: str | None
@@ -167,8 +171,12 @@ class ChatResponse(BaseModel):
     collect_messages: bool | None
     effective_collect: bool
     project_id: int | None
-    sensitivity: str
+    # null = inherit from the network
+    sensitivity: str | None
     last_activity_at: str | None
+    backfill_done: bool
+    # Server kept answering with no older history, so the backfill gave up
+    backfill_stopped: bool
 
 
 class ChatUpdate(BaseModel):
@@ -205,6 +213,7 @@ def account_view(account: BeeperAccount) -> AccountResponse:
         is_active=account.is_active,
         server_version=account.server_version,
         version_matches=account.server_version in (None, settings.BEEPER_SERVER_VERSION),
+        connected=state.is_connected(account.id),
         last_reconcile_at=iso(account.last_reconcile_at),
         last_event_at=iso(account.last_event_at),
         created_at=iso(account.created_at),
@@ -257,8 +266,10 @@ def chat_view(chat: BeeperChat) -> ChatResponse:
         collect_messages=chat.collect_messages,
         effective_collect=chat.should_collect,
         project_id=chat.project_id,
-        sensitivity=chat.sensitivity or "basic",
+        sensitivity=chat.sensitivity,
         last_activity_at=iso(chat.last_activity_at),
+        backfill_done=chat.backfill_done,
+        backfill_stopped=chat.backfill_stopped,
     )
 
 
@@ -396,7 +407,7 @@ async def create_account(
     """Add a Beeper account on a fresh, allowlisted Server. One Server holds one account."""
     server_url = require_server_url(data.server_url)
     if db.scalar(select(BeeperAccount.id).where(BeeperAccount.server_url == server_url)):
-        raise HTTPException(status_code=409, detail="This Beeper Server already has an account in memory")
+        raise HTTPException(status_code=409, detail=SERVER_TAKEN)
     account = BeeperAccount(
         created_by_user_id=user.id,
         server_url=server_url,
@@ -416,7 +427,12 @@ async def create_account(
     if state.state != "needs-login":
         raise HTTPException(status_code=409, detail="This Beeper Server is already signed in")
     db.add(account)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Another add on this Server won the race to the unique index.
+        db.rollback()
+        raise HTTPException(status_code=409, detail=SERVER_TAKEN) from None
     db.refresh(account)
     return account_view(account)
 
@@ -711,7 +727,7 @@ def update_chat(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> ChatResponse:
-    """collect_messages: true or false overrides the network; null inherits it."""
+    """collect_messages and sensitivity: a value overrides the network; null inherits it."""
     chat = owned_chat(db, chat_id, user)
     collected = chat.should_collect
     if "collect_messages" in updates.model_fields_set:
@@ -720,10 +736,10 @@ def update_chat(
         if updates.project_id is not None:
             assert_project_membership(db, user, updates.project_id)
         chat.project_id = updates.project_id
-    if updates.sensitivity is not None:
+    if "sensitivity" in updates.model_fields_set:
         chat.sensitivity = updates.sensitivity
     db.commit()
     db.refresh(chat)
     if chat.should_collect and not collected:
-        celery_app.send_task(SYNC_BEEPER_CHAT, args=[chat.id])
+        state.queue_chat_sync(chat.id)
     return chat_view(chat)

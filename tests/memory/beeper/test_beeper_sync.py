@@ -1,9 +1,12 @@
+import io
 from datetime import datetime, timezone
 
 import pytest
+from PIL import Image
 
 from memory.common import settings
 from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
+from memory.common.db.models import beeper as beeper_models
 from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork, BeeperParticipant
 from memory.common.db.models.source_items import BeeperMessage
 from memory.common.db.models.sources import Project
@@ -12,11 +15,6 @@ from tests.memory.fake_beeper import FakeBeeperServer
 
 CHAT = "!general:beeper.local"
 ALICE = "@alice:beeper.local"
-
-
-@pytest.fixture(autouse=True)
-def no_waits(monkeypatch):
-    monkeypatch.setattr(tasks.sync, "EMPTY_PAGE_WAIT_SECONDS", 0)
 
 
 def dispatched(mock, name: str) -> list:
@@ -105,22 +103,34 @@ def test_a_chat_is_backfilled_to_the_start_of_its_history(db_session, fake_beepe
     assert chat.backfill_done is True
 
 
-def test_backfill_keeps_paging_through_empty_pages(db_session, fake_beeper, beeper_account, qdrant):
+def countdowns(mock) -> list[int]:
+    return [call.kwargs["countdown"] for call in mock.call_args_list if call.args[0] == SYNC_BEEPER_CHAT]
+
+
+def test_backfill_waits_out_empty_pages_in_later_runs(
+    db_session, fake_beeper, beeper_account, no_celery_dispatch, qdrant
+):
     fake_beeper.add_chat(CHAT)
     for i in range(4):
         fake_beeper.add_message(CHAT, f"m{i}", f"text {i}")
     fake_beeper.empty_pages[CHAT] = 3
     chat = collected_chat(db_session, fake_beeper, beeper_account)
+    no_celery_dispatch.reset_mock()
 
-    result = tasks.sync_beeper_chat(chat.id)
+    runs = [tasks.sync_beeper_chat(chat.id)]
+    while not runs[-1]["done"]:
+        runs.append(tasks.sync_beeper_chat(chat.id))
 
-    assert result["done"] is True
+    assert countdowns(no_celery_dispatch) == [5, 10, 20]
     assert sorted(stored(db_session)) == ["m0", "m1", "m2", "m3"]
+    db_session.refresh(chat)
+    assert (chat.backfill_done, chat.backfill_stalls) == (True, 0)
 
 
-def test_backfill_stuck_on_empty_pages_resumes_later_without_finishing(
-    db_session, fake_beeper, beeper_account, no_celery_dispatch, qdrant
+def test_a_backfill_stuck_on_empty_pages_stops_at_its_stall_limit(
+    db_session, fake_beeper, beeper_account, no_celery_dispatch, qdrant, monkeypatch
 ):
+    monkeypatch.setattr(beeper_models, "BACKFILL_MAX_STALLS", 3)
     fake_beeper.add_chat(CHAT)
     for i in range(4):
         fake_beeper.add_message(CHAT, f"m{i}", f"text {i}")
@@ -128,14 +138,45 @@ def test_backfill_stuck_on_empty_pages_resumes_later_without_finishing(
     chat = collected_chat(db_session, fake_beeper, beeper_account)
     no_celery_dispatch.reset_mock()
 
+    runs = [tasks.sync_beeper_chat(chat.id) for _ in range(3)]
+    fake_beeper.paths.clear()
+    again = tasks.sync_beeper_chat(chat.id)
+
+    assert [run["done"] for run in runs] == [False, False, True]
+    assert len(dispatched(no_celery_dispatch, SYNC_BEEPER_CHAT)) == 2
+    assert again["done"] is True
+    assert len([p for p in fake_beeper.paths if p.endswith("/messages")]) == 1
+    db_session.refresh(chat)
+    assert (chat.backfill_done, chat.backfill_stopped) == (False, True)
+
+
+def test_a_cursor_that_does_not_move_ends_the_run(db_session, fake_beeper, beeper_account, no_celery_dispatch, qdrant):
+    fake_beeper.add_chat(CHAT)
+    for i in range(5):
+        fake_beeper.add_message(CHAT, f"m{i}", f"text {i}")
+    fake_beeper.frozen_cursor.add(CHAT)
+    chat = collected_chat(db_session, fake_beeper, beeper_account)
+    fake_beeper.paths.clear()
+
     result = tasks.sync_beeper_chat(chat.id)
 
+    assert result["done"] is False
+    assert len([p for p in fake_beeper.paths if p.endswith("/messages")]) == 2
     db_session.refresh(chat)
-    assert (result["done"], chat.backfill_done) == (False, False)
+    assert chat.backfill_stalls == 1
+
+
+def test_a_chat_has_one_read_queued_at_a_time(db_session, fake_beeper, beeper_account, no_celery_dispatch):
+    fake_beeper.add_chat(CHAT)
+    tasks.sync_beeper_account(beeper_account.id)
+    tasks.sync_beeper_account(beeper_account.id)
+    chat = db_session.query(BeeperChat).filter_by(chat_id=CHAT).one()
     assert dispatched(no_celery_dispatch, SYNC_BEEPER_CHAT) == [chat.id]
-    fake_beeper.empty_pages[CHAT] = 0
-    assert tasks.sync_beeper_chat(chat.id)["done"] is True
-    assert sorted(stored(db_session)) == ["m0", "m1", "m2", "m3"]
+
+    tasks.sync_beeper_chat(chat.id)
+    tasks.sync_beeper_account(beeper_account.id)
+
+    assert dispatched(no_celery_dispatch, SYNC_BEEPER_CHAT) == [chat.id, chat.id]
 
 
 @pytest.mark.parametrize("budget", [1, 2, 3])
@@ -228,7 +269,9 @@ def test_a_message_keeps_its_reply_mentions_reactions_and_sender(db_session, fak
 
 def test_attachments_are_fetched_with_their_mime_type(db_session, fake_beeper, beeper_account, qdrant):
     image, voice = "mxc://local.beeper.com/image", "mxc://local.beeper.com/voice"
-    fake_beeper.assets[image] = b"\x89PNG fake image bytes"
+    png = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(png, format="PNG")
+    fake_beeper.assets[image] = png.getvalue()
     fake_beeper.add_chat(CHAT)
     fake_beeper.add_message(
         CHAT, "m0", "look at this",
@@ -254,7 +297,8 @@ def test_attachments_are_fetched_with_their_mime_type(db_session, fake_beeper, b
     messages = stored(db_session)
     [path] = messages["m0"].images or []
     assert path.endswith(".png")
-    assert (settings.FILE_STORAGE_DIR / path).read_bytes() == b"\x89PNG fake image bytes"
+    assert (settings.FILE_STORAGE_DIR / path).read_bytes() == png.getvalue()
+    assert [i.size for i in messages["m0"].as_content()["images"]] == [(2, 2)]
     assert not any("secret" in p for p in fake_beeper.paths)
     assert "call me back about the invoice tomorrow" in (messages["m1"].content or "")
     assert [a["mime_type"] for a in messages["m1"].attachments or []] == ["audio/ogg"]
@@ -264,7 +308,7 @@ def test_attachments_are_fetched_with_their_mime_type(db_session, fake_beeper, b
     "chat_project, network_project, expected",
     [("chat", "network", "chat"), (None, "network", "network"), (None, None, None)],
 )
-def test_the_project_comes_from_the_chat_then_its_network(
+def test_access_comes_from_the_chat_then_its_network(
     db_session, fake_beeper, beeper_account, qdrant, chat_project, network_project, expected
 ):
     projects = {name: Project(title=name, state="open") for name in ("chat", "network")}
@@ -275,7 +319,7 @@ def test_the_project_comes_from_the_chat_then_its_network(
     chat = collected_chat(db_session, fake_beeper, beeper_account)
     chat.project_id = projects[chat_project].id if chat_project else None
     chat.network.project_id = projects[network_project].id if network_project else None
-    chat.sensitivity = "confidential"
+    chat.network.sensitivity = "confidential"
     db_session.commit()
 
     tasks.sync_beeper_chat(chat.id)
@@ -343,6 +387,59 @@ def test_message_deleted_events_act_only_on_a_refetched_delete(
     tasks.handle_beeper_event(beeper_account.id, event("message.deleted", ["m0"]))
 
     assert ("m0" in stored(db_session)) is kept
+
+
+def test_a_deleted_message_server_no_longer_has_is_removed(db_session, fake_beeper, beeper_account, qdrant):
+    collected_chat(db_session, fake_beeper, beeper_account)
+    message = fake_beeper.add_message(CHAT, "m0", "deleted for everyone")
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["m0"], [message]))
+    fake_beeper.messages[CHAT].clear()
+
+    tasks.handle_beeper_event(beeper_account.id, event("message.deleted", ["m0"]))
+
+    assert stored(db_session) == {}
+
+
+def test_a_removed_reaction_server_no_longer_has_refreshes_its_parent(
+    db_session, fake_beeper, beeper_account, qdrant
+):
+    collected_chat(db_session, fake_beeper, beeper_account)
+    parent = fake_beeper.add_message(CHAT, "m0", "react to me please")
+    parent["reactions"] = [{"id": ALICE, "reactionKey": "❤️", "participantID": ALICE}]
+    reaction = fake_beeper.add_message(CHAT, "r0", type="REACTION", isHidden=True, linkedMessageID="m0")
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["m0", "r0"], [parent, reaction]))
+    parent["reactions"] = []
+    fake_beeper.messages[CHAT].remove(reaction)
+
+    tasks.handle_beeper_event(beeper_account.id, event("message.deleted", ["r0"]))
+
+    assert {k: m.reactions for k, m in stored(db_session).items()} == {"m0": None}
+
+
+def test_a_message_is_matched_on_its_matrix_event_id(db_session, fake_beeper, beeper_account, qdrant):
+    collected_chat(db_session, fake_beeper, beeper_account)
+    message = fake_beeper.add_message(CHAT, "m0", "seen live before the Server was rebuilt")
+    fake_beeper.event_ids["$event0"] = "m0"
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["$event0"], [message]))
+    item_id = stored(db_session)["m0"].id
+
+    # A rebuilt Server gives the same event a new per-install id.
+    message["id"] = "n0"
+    fake_beeper.event_ids["$event0"] = "n0"
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["$event0"], [message]))
+
+    assert {(k, m.id, m.event_id) for k, m in stored(db_session).items()} == {("n0", item_id, "$event0")}
+
+
+def test_an_unedited_copy_does_not_undo_an_edit(db_session, fake_beeper, beeper_account, qdrant):
+    collected_chat(db_session, fake_beeper, beeper_account)
+    original = fake_beeper.add_message(CHAT, "m0", "the text before the edit")
+    edited = {**original, "text": "the text after the edit", "editedTimestamp": "2026-11-05T12:00:00.000Z"}
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["m0"], [edited]))
+
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["m0"], [original]))
+
+    assert stored(db_session)["m0"].content == "the text after the edit"
 
 
 def test_a_reaction_refreshes_its_parent(db_session, fake_beeper, beeper_account, qdrant):

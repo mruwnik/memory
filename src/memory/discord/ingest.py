@@ -22,7 +22,8 @@ from discord import (
 from memory.common.celery_app import ADD_DISCORD_MESSAGE
 from memory.common.db.connection import DBSession
 from memory.common.db.models import DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
-from memory.common.discord_events import get_or_insert, insert_missing, verify_server
+from memory.common.db.upsert import get_or_insert, insert_missing
+from memory.common.discord_events import verify_server
 
 
 def get_channel_type(channel: abc.Messageable) -> str:

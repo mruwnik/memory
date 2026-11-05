@@ -305,8 +305,8 @@ connected in the Beeper app. Memory never connects networks or sends messages.
    Beeper device, or paste the account's recovery key. Memory refuses an email
    with no Beeper account; create it in the Beeper app.
 4. Choose per network whether to collect, and its project and sensitivity.
-   Chats inherit their network's collect setting and can override it, like
-   Discord channels.
+   Chats inherit their network's collect setting and sensitivity and can
+   override them.
 
 Only networks connected through **Beeper Cloud** reach the Server. A network
 connected "on this device" in the Beeper app stays on that device; reconnect
@@ -314,18 +314,22 @@ it with Beeper Cloud for memory to see it. Some networks (Slack, Discord,
 Google Chat, LINE, Google Messages) are cloud-only.
 
 The ingest hub keeps a WebSocket open to each active, verified account and
-queues its message and chat events. The socket has no replay, so every
-(re)connect, and every `BEEPER_RECONCILE_INTERVAL` (default 6 hours), re-reads
-each collected chat from where it stopped. A chat's first read backfills its
-history as far back as the Server has it, `BEEPER_SYNC_MAX_MESSAGES_PER_RUN`
-messages per run. Edits update messages in place, deletes remove them, and
+queues its message and chat events. The socket has no replay, so a
+(re)connect (unless a reconcile ran in the last 5 minutes), and every
+`BEEPER_RECONCILE_INTERVAL` (default 6 hours), re-reads each collected chat
+from where it stopped. A chat's first read backfills its history as far back
+as the Server has it, `BEEPER_SYNC_MAX_MESSAGES_PER_RUN` messages per run; a
+chat whose Server keeps finding no older history for about an hour stops
+there and shows "History incomplete". The account shows whether its
+WebSocket is connected. Edits update messages in place, deletes remove them, and
 reactions are stored on the message they react to. Images are stored under
 `BEEPER_STORAGE_DIR`; voice-note transcriptions are stored as text. A Server
-that loses its sign-in or verification shows it on the account, and memory
-stops reading it until it is verified again.
+that loses its sign-in or verification, or answers as another Beeper user,
+shows it on the account, and memory stops reading it until it is verified
+again.
 
 Messages are owned by the account's owner and take their project from the
-chat, else its network, and their sensitivity from the chat. Each is indexed
+chat, else its network, and likewise their sensitivity. Each is indexed
 as `[WhatsApp] Family — Alice: text`, and its metadata names the network,
 chat, chat type and sender. Search them with `core_search`, narrowed with the
 `network` (e.g. `whatsapp`, `signal`) and `chat` filters; the

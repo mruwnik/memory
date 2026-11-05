@@ -28,6 +28,8 @@ export interface BeeperAccount {
   is_active: boolean
   server_version: string | null
   version_matches: boolean
+  // Whether the collector's WebSocket to the Server is up
+  connected: boolean
   last_reconcile_at: string | null
   last_event_at: string | null
   created_at: string | null
@@ -102,14 +104,18 @@ export interface BeeperChat {
   collect_messages: boolean | null
   effective_collect: boolean
   project_id: number | null
-  sensitivity: Sensitivity
+  // null inherits the network's sensitivity
+  sensitivity: Sensitivity | null
   last_activity_at: string | null
+  backfill_done: boolean
+  // Server kept answering with no older history, so the backfill gave up
+  backfill_stopped: boolean
 }
 
 export interface BeeperChatUpdate {
   collect_messages?: boolean | null
   project_id?: number | null
-  sensitivity?: Sensitivity
+  sensitivity?: Sensitivity | null
 }
 
 export const useBeeper = () => {

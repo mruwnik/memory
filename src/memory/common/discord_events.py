@@ -7,9 +7,6 @@ so this mirrors ``memory.discord.ingest`` without importing discord.py.
 
 from typing import Any
 
-from sqlalchemy import literal_column
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
@@ -19,6 +16,7 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
 )
+from memory.common.db.upsert import get_or_insert, insert_missing
 
 # Gateway message types that are ordinary messages: DEFAULT and REPLY.
 ORDINARY_MESSAGE_TYPES = {0, 19}
@@ -108,22 +106,6 @@ def ensure_server(session: DBSession, server_id: int, bot_id: int, collect: bool
         id=server_id, name=f"Server {server_id}", bot_id=bot_id, collect_messages=collect, verified=False,
     )
     return server
-
-
-def insert_missing(session: DBSession, model: type, **values: Any) -> bool:
-    """Insert a row unless one with its key exists; True if this call made it.
-    The gateway loop, its sync threads, Celery and webhooks all create these
-    rows, so a plain get-then-insert would raise on the loser of a race."""
-    stmt = pg_insert(model).values(**values).on_conflict_do_nothing().returning(literal_column("1"))
-    return session.execute(stmt).first() is not None
-
-
-def get_or_insert[T](session: DBSession, model: type[T], key: Any, **values: Any) -> tuple[T, bool]:
-    """The row with this key, inserted from ``values`` if missing; True if this call made it."""
-    if (row := session.get(model, key)) is not None:
-        return row, False
-    created = insert_missing(session, model, **values)
-    return session.get_one(model, key), created
 
 
 def verify_server(

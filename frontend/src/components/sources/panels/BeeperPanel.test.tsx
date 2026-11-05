@@ -20,6 +20,7 @@ const fresh: BeeperAccount = {
   is_active: true,
   server_version: null,
   version_matches: true,
+  connected: false,
   last_reconcile_at: null,
   last_event_at: null,
   created_at: null,
@@ -63,8 +64,10 @@ const chat: BeeperChat = {
   collect_messages: null,
   effective_collect: true,
   project_id: null,
-  sensitivity: 'basic',
+  sensitivity: null,
   last_activity_at: null,
+  backfill_done: false,
+  backfill_stopped: false,
 }
 
 const verification = (state: string, actions: string[], emojis: string | null = null): BeeperVerification => ({
@@ -296,6 +299,35 @@ describe('BeeperPanel', () => {
     expect(await screen.findByText('backfilling')).toBeInTheDocument()
     expect(screen.getByText('removed')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Verify device' })).toBeInTheDocument()
+  })
+
+  it.each([
+    [true, 'Connected'],
+    [false, 'Not connected'],
+  ])('shows whether the collector is connected (%s)', async (connected, label) => {
+    fakeBeeper({ accounts: [{ ...ready, connected }] })
+    renderWithUser(<BeeperPanel />)
+    expect(await screen.findByText(label)).toBeInTheDocument()
+  })
+
+  it('shows the sensitivity an inheriting chat gets from its network, and overrides it', async () => {
+    const { mock } = fakeBeeper({
+      accounts: [ready], networks: [{ ...network, sensitivity: 'confidential' }], chats: [{ ...chat, backfill_stopped: true }],
+    })
+    const { user } = renderWithUser(<BeeperPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Chats' }))
+
+    expect(await screen.findByText('History incomplete')).toBeInTheDocument()
+    const select = (await screen.findAllByRole('combobox', { name: 'Sensitivity' })).at(-1)!
+    expect(within(select).getByRole('option', { selected: true })).toHaveTextContent('Inherit (Confidential)')
+    await user.selectOptions(select, 'internal')
+    await waitFor(() => expect(requests(mock)).toEqual(['PATCH /chats/100']))
+    await user.selectOptions(select, 'inherit')
+
+    await waitFor(() => expect(requests(mock)).toEqual(['PATCH /chats/100', 'PATCH /chats/100']))
+    const bodies = mock.mock.calls.filter(([url]) => String(url).includes('/beeper/chats/100'))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string))
+    expect(bodies).toEqual([{ sensitivity: 'internal' }, { sensitivity: null }])
   })
 
   it.each([

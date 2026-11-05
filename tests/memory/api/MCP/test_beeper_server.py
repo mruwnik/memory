@@ -59,14 +59,32 @@ async def test_list_chats_filters(two_owners, user_session, filters, expected):
 
 
 @pytest.mark.asyncio
-async def test_list_chats_collected_only_follows_overrides(db_session, two_owners, user_session):
+async def test_list_chats_collected_only_follows_overrides_before_the_limit(db_session, two_owners, user_session):
     db_session.query(BeeperChat).filter_by(title="random").one().collect_messages = False
+    db_session.add(BeeperChat(network=two_owners, chat_id="!merged", title="merged", is_merged=True))
     db_session.commit()
 
     with mcp_auth_context(user_session.token):
-        result = await list_chats.fn(collected_only=True, fields=["title", "collect_messages", "effective_collect"])
+        result = await list_chats.fn(
+            collected_only=True, limit=1, fields=["title", "collect_messages", "effective_collect"]
+        )
 
     assert result["chats"] == [{"title": "general", "collect_messages": None, "effective_collect": True}]
+
+
+@pytest.mark.asyncio
+async def test_list_chats_shows_the_inherited_sensitivity(db_session, two_owners, user_session):
+    two_owners.sensitivity = "confidential"
+    db_session.query(BeeperChat).filter_by(title="random").one().sensitivity = "public"
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await list_chats.fn(fields=["title", "sensitivity"])
+
+    assert sorted(result["chats"], key=lambda c: c["title"]) == [
+        {"title": "general", "sensitivity": "confidential"},
+        {"title": "random", "sensitivity": "public"},
+    ]
 
 
 @pytest.mark.asyncio

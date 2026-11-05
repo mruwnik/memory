@@ -7,6 +7,8 @@ import asyncio
 from typing import Any
 
 from fastmcp import FastMCP
+from sqlalchemy import func
+from sqlalchemy.orm import contains_eager
 
 from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
 from memory.api.MCP.visibility import require_scopes, visible_when
@@ -50,36 +52,41 @@ def chat_fields(chat: BeeperChat) -> dict[str, Any]:
         "collect_messages": chat.collect_messages,
         "effective_collect": chat.should_collect,
         "project_id": chat.project_id if chat.project_id is not None else network.project_id,
-        "sensitivity": chat.sensitivity,
+        "sensitivity": chat.sensitivity or network.sensitivity,
         "last_activity_at": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
         "backfill_done": chat.backfill_done,
     }
 
 
 def fetch_chats(
-    session: DBSession,
-    user_id: int,
     network: str | None,
     name: str | None,
     collected_only: bool,
     fields: list[str] | None,
     limit: int,
 ) -> dict[str, Any]:
-    query = (
-        session.query(BeeperChat)
-        .join(BeeperNetwork, BeeperChat.network_id == BeeperNetwork.id)
-        .join(BeeperAccount, BeeperNetwork.account_id == BeeperAccount.id)
-        .filter(BeeperAccount.created_by_user_id == user_id)
-        .order_by(BeeperChat.last_activity_at.desc().nulls_last(), BeeperChat.id)
-    )
-    if network:
-        query = query.filter(BeeperNetwork.network.ilike(f"%{network}%"))
-    if name:
-        query = query.filter(BeeperChat.title.ilike(f"%{name}%"))
-    chats = [chat_fields(chat) for chat in query]
-    if collected_only:
-        chats = [chat for chat in chats if chat["effective_collect"]]
-    chats = chats[:limit]
+    with make_session() as session:
+        caller = get_mcp_current_user(session)
+        if caller is None or caller.id is None:
+            raise ValueError("Not authenticated")
+        query = (
+            session.query(BeeperChat)
+            .join(BeeperNetwork, BeeperChat.network_id == BeeperNetwork.id)
+            .join(BeeperAccount, BeeperNetwork.account_id == BeeperAccount.id)
+            .options(contains_eager(BeeperChat.network))
+            .filter(BeeperAccount.created_by_user_id == caller.id)
+            .order_by(BeeperChat.last_activity_at.desc().nulls_last(), BeeperChat.id)
+        )
+        if network:
+            query = query.filter(BeeperNetwork.network.ilike(f"%{network}%"))
+        if name:
+            query = query.filter(BeeperChat.title.ilike(f"%{name}%"))
+        if collected_only:
+            query = query.filter(
+                BeeperChat.is_merged.is_(False),
+                func.coalesce(BeeperChat.collect_messages, BeeperNetwork.collect_messages).is_(True),
+            )
+        chats = [chat_fields(chat) for chat in query.limit(limit)]
     wanted = fields or DEFAULT_FIELDS
     return {"chats": [{k: chat[k] for k in wanted if k in chat} for chat in chats], "count": len(chats)}
 
@@ -115,7 +122,7 @@ async def list_chats(
                 - collect_messages: The chat's own setting (null = inherit from network)
                 - effective_collect: Whether messages are collected
                 - project_id: Project for access control (the network's when the chat has none)
-                - sensitivity: Sensitivity level
+                - sensitivity: Sensitivity level (the network's when the chat has none)
                 - last_activity_at: Time of the last activity (ISO 8601)
                 - backfill_done: Whether its history has been read to the start
         limit: Maximum chats to return (default 100)
@@ -123,10 +130,4 @@ async def list_chats(
     Returns:
         Dict with the chats and their count
     """
-    with make_session() as session:
-        caller = get_mcp_current_user(session)
-        if caller is None or caller.id is None:
-            raise ValueError("Not authenticated")
-        return await asyncio.to_thread(
-            fetch_chats, session, caller.id, network, name, collected_only, fields, max(1, min(limit, 500))
-        )
+    return await asyncio.to_thread(fetch_chats, network, name, collected_only, fields, max(1, min(limit, 500)))

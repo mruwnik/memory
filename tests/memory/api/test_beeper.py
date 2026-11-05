@@ -2,8 +2,11 @@ import logging
 
 import pytest
 
+from memory.beeper import state
+from memory.common.beeper import BeeperClient
 from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
 from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork, HumanUser
+from memory.common.db.models.beeper import BACKFILL_MAX_STALLS
 from memory.common.db.models.sources import Project
 from tests.memory.fake_beeper import URL, FakeBeeperServer
 
@@ -120,6 +123,22 @@ def test_a_server_holds_one_account(client, fake_beeper):
     assert client.post("/beeper/accounts", json={"server_url": URL + "/"}).status_code == 409
 
 
+def test_a_concurrent_add_on_the_same_server_is_a_conflict(client, db_session, fake_beeper, admin_user, monkeypatch):
+    setup_state = BeeperClient.setup_state
+
+    async def racing_setup_state(self):
+        db_session.add(BeeperAccount(created_by_user_id=admin_user.id, server_url=URL))
+        db_session.commit()
+        return await setup_state(self)
+
+    monkeypatch.setattr(BeeperClient, "setup_state", racing_setup_state)
+
+    response = client.post("/beeper/accounts", json={"server_url": URL})
+
+    assert response.status_code == 409
+    assert db_session.query(BeeperAccount).count() == 1
+
+
 def test_a_server_serving_another_user_is_refused(client, db_session, fake_beeper):
     account_id = sign_in(client, fake_beeper)
     fake_beeper.user_id = "@someone-else:beeper.com"
@@ -173,7 +192,9 @@ def test_network_and_chat_settings_save(client, db_session, fake_beeper):
     account_id = sign_in(client, fake_beeper)
     network_id = client.post(f"/beeper/accounts/{account_id}/refresh").json()[1]["id"]
     project = Project(title="P", state="open")
-    chat = BeeperChat(network_id=network_id, chat_id="!c:beeper.local", collect_messages=False)
+    chat = BeeperChat(
+        network_id=network_id, chat_id="!c:beeper.local", collect_messages=False, backfill_stalls=BACKFILL_MAX_STALLS
+    )
     db_session.add_all([project, chat])
     db_session.commit()
 
@@ -181,11 +202,23 @@ def test_network_and_chat_settings_save(client, db_session, fake_beeper):
         f"/beeper/networks/{network_id}",
         json={"collect_messages": False, "project_id": project.id, "sensitivity": "internal"},
     ).json()
-    chats = client.patch(f"/beeper/chats/{chat.id}", json={"collect_messages": None}).json()
+    overridden = client.patch(f"/beeper/chats/{chat.id}", json={"sensitivity": "confidential"}).json()
+    chats = client.patch(f"/beeper/chats/{chat.id}", json={"collect_messages": None, "sensitivity": None}).json()
 
     assert (network["collect_messages"], network["project_id"], network["sensitivity"]) == (False, project.id, "internal")
-    assert (chats["collect_messages"], chats["effective_collect"]) == (None, False)
+    assert overridden["sensitivity"] == "confidential"
+    assert (chats["collect_messages"], chats["effective_collect"], chats["sensitivity"]) == (None, False, None)
+    assert (chats["backfill_done"], chats["backfill_stopped"]) == (False, True)
     assert client.get(f"/beeper/networks/{network_id}/chats").json() == [chats]
+
+
+def test_an_account_shows_whether_its_collector_is_connected(client, fake_beeper):
+    account_id = add_account(client)["id"]
+    before = client.get(f"/beeper/accounts/{account_id}").json()["connected"]
+
+    state.set_connected(account_id, True)
+
+    assert (before, client.get(f"/beeper/accounts/{account_id}").json()["connected"]) == (False, True)
 
 
 def test_another_server_version_is_flagged(client, fake_beeper):

@@ -6,7 +6,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import text
 
-TABLES = {"beeper_accounts", "beeper_networks", "beeper_chats", "beeper_participants", "beeper_message"}
+TABLES = {"beeper_accounts", "beeper_networks", "beeper_chats", "beeper_participants", "beeper_reactions", "beeper_message"}
 
 
 def load_migration():

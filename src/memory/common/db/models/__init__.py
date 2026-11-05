@@ -61,6 +61,7 @@ from memory.common.db.models.beeper import (
     BeeperChat,
     BeeperNetwork,
     BeeperParticipant,
+    BeeperReaction,
 )
 from memory.common.db.models.slack import (
     SlackApp,
@@ -222,6 +223,7 @@ __all__ = [
     "BeeperChat",
     "BeeperNetwork",
     "BeeperParticipant",
+    "BeeperReaction",
     "BlogPost",
     "Comic",
     "BookSection",

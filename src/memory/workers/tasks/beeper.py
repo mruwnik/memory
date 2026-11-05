@@ -9,7 +9,7 @@ import logging
 import random
 from typing import Any
 
-from memory.beeper import sync
+from memory.beeper import state, sync
 from memory.common import settings
 from memory.common.beeper import BeeperError
 from memory.common.celery_app import (
@@ -31,7 +31,8 @@ CHAT_LOCK_TTL_SECONDS = 60 * 60
 # Spreads an account's chat reads, so a reconcile doesn't hit Server all at once.
 CHAT_JITTER_SECONDS = 60
 CONTINUE_SECONDS = 5
-# A run that stopped on empty pages waits for Server to fetch older history.
+# A run that stalled on empty pages waits for Server to fetch older history,
+# twice as long after each stall in a row, up to this.
 STALLED_SECONDS = 5 * 60
 
 
@@ -40,8 +41,10 @@ def failed(error: BeeperError, **ids: Any) -> dict[str, Any]:
     return {"status": "error", "error": error.code, "http_status": error.status, **ids}
 
 
-def start_chat_sync(chat_pk: int, countdown: int = 0) -> None:
-    app.send_task(SYNC_BEEPER_CHAT, args=[chat_pk], countdown=countdown)
+def next_run_wait(stalls: int) -> int:
+    if not stalls:
+        return CONTINUE_SECONDS
+    return min(CONTINUE_SECONDS * 2 ** (stalls - 1), STALLED_SECONDS)
 
 
 @app.task(name=SYNC_ALL_BEEPER_ACCOUNTS)
@@ -71,7 +74,7 @@ def sync_beeper_account(account_id: int) -> dict[str, Any]:
     except BeeperError as e:
         return failed(e, account_id=account_id)
     for chat_pk in result.get("collected", []):
-        start_chat_sync(chat_pk, random.randint(0, CHAT_JITTER_SECONDS))
+        state.queue_chat_sync(chat_pk, random.randint(0, CHAT_JITTER_SECONDS))
     return result
 
 
@@ -79,7 +82,8 @@ def sync_beeper_account(account_id: int) -> dict[str, Any]:
 @tracked_task
 def sync_beeper_chat(chat_id: int) -> dict[str, Any]:
     """Read a chat's new messages and backfill its history, a budget at a time;
-    a run that doesn't finish queues the next."""
+    a run that doesn't finish queues the next, unless one is already queued."""
+    state.chat_sync_started(chat_id)
     with distributed_lock(f"memory:lock:beeper-chat:{chat_id}", CHAT_LOCK_TTL_SECONDS) as lock:
         if lock is None:
             return {"status": "locked", "chat_id": chat_id}
@@ -88,8 +92,7 @@ def sync_beeper_chat(chat_id: int) -> dict[str, Any]:
         except BeeperError as e:
             return failed(e, chat_id=chat_id)
     if result["status"] == "ok" and not result["done"]:
-        stalled = result["processed"] == 0
-        start_chat_sync(chat_id, STALLED_SECONDS if stalled else CONTINUE_SECONDS)
+        state.queue_chat_sync(chat_id, next_run_wait(result["stalls"]))
     return result
 
 
@@ -103,5 +106,5 @@ def handle_beeper_event(account_id: int, event: dict[str, Any]) -> dict[str, Any
     except BeeperError as e:
         return failed(e, account_id=account_id)
     if chat_pk := result.get("start_sync"):
-        start_chat_sync(chat_pk)
+        state.queue_chat_sync(chat_pk)
     return result

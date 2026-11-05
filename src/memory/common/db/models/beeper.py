@@ -29,6 +29,9 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.encryption import decrypt_value, encrypt_value
 
+# Runs in a row that found no older history before a chat's backfill stops for good.
+BACKFILL_MAX_STALLS = 20
+
 if TYPE_CHECKING:
     from memory.common.db.models.sources import Person
     from memory.common.db.models.users import User
@@ -204,7 +207,8 @@ class BeeperChat(Base):
     project_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
-    sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
+    # null = inherit from the network
+    sensitivity: Mapped[str | None] = mapped_column(String(20), nullable=True)
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
     # Message cursors: reconcile reads after newest_cursor, backfill before oldest_cursor
@@ -213,6 +217,8 @@ class BeeperChat(Base):
     backfill_done: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Runs in a row that ended on Server answering with no older history
+    backfill_stalls: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -241,12 +247,30 @@ class BeeperChat(Base):
         return self.network.collect_messages
 
     @property
+    def backfill_stopped(self) -> bool:
+        """Server kept answering with no older history, so the backfill gave up."""
+        return not self.backfill_done and self.backfill_stalls >= BACKFILL_MAX_STALLS
+
+    @property
     def llm_key_holder(self) -> BeeperNetwork:
         return self.network
 
     @property
     def content_owner_id(self) -> int | None:
         return self.network.content_owner_id
+
+
+class BeeperReaction(Base):
+    """A REACTION message and the message it reacts to. Server may forget a
+    removed reaction, and this is how its parent is found to refresh."""
+
+    __tablename__ = "beeper_reactions"
+
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("beeper_chats.id", ondelete="CASCADE"), primary_key=True
+    )
+    message_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    parent_message_id: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class BeeperParticipant(Base):

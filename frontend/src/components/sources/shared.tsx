@@ -425,6 +425,8 @@ export const SourceRow = ({
   </Row>
 )
 
+const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
+
 /** The sensitivities every source accepts. Email accounts also accept "hidden", passed as an extra option. */
 export const SENSITIVITIES = ['public', 'basic', 'internal', 'confidential'] as const
 export type Sensitivity = typeof SENSITIVITIES[number]
@@ -450,7 +452,7 @@ export const SensitivitySelect = <T extends string = Sensitivity>({ value, onCha
   onChange: (value: T) => void
 }) => (
   <Select {...props} value={value} onChange={e => onChange(e.target.value as T)}>
-    {SENSITIVITIES.map(v => <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>)}
+    {SENSITIVITIES.map(v => <option key={v} value={v}>{capitalize(v)}</option>)}
     {children}
   </Select>
 )
@@ -469,13 +471,17 @@ export const useBusy = <A extends unknown[]>(action: (...args: A) => Promise<unk
   return [busy, run] as const
 }
 
-/** Inline project and sensitivity pickers for a row; "No project" sends project_id: null. */
-export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onChange }: {
+/**
+ * Inline project and sensitivity pickers for a row; "No project" sends project_id: null.
+ * With `inheritedSensitivity`, a null sensitivity shows as "Inherit (<it>)", and picking that sends sensitivity: null.
+ */
+export const AccessSelects = <S extends Sensitivity | null = Sensitivity>({ projectId, sensitivity, inheritedSensitivity, projects, disabled, onChange }: {
   projectId: number | null | undefined
-  sensitivity: string
+  sensitivity: string | null
+  inheritedSensitivity?: string
   projects: AccessProject[]
   disabled: boolean
-  onChange: (updates: { project_id?: number | null; sensitivity?: Sensitivity }) => void
+  onChange: (updates: { project_id?: number | null; sensitivity?: S }) => void
 }) => {
   const teamsOn = useModule('teams')
   return (
@@ -484,8 +490,11 @@ export const AccessSelects = ({ projectId, sensitivity, projects, disabled, onCh
       <ProjectSelect className="w-auto py-1 text-xs" value={projectId} projects={projects} disabled={disabled} title="Project" aria-label="Project"
         onChange={id => onChange({ project_id: id ?? null })} />
     )}
-    <SensitivitySelect className="w-auto py-1 text-xs" value={sensitivity as Sensitivity} disabled={disabled} title="Sensitivity" aria-label="Sensitivity"
-      onChange={s => onChange({ sensitivity: s })} />
+    <SensitivitySelect<Sensitivity | 'inherit'> className="w-auto py-1 text-xs" value={(sensitivity ?? 'inherit') as Sensitivity | 'inherit'}
+      disabled={disabled} title="Sensitivity" aria-label="Sensitivity"
+      onChange={s => onChange({ sensitivity: (s === 'inherit' ? null : s) as S })}>
+      {inheritedSensitivity !== undefined && <option value="inherit">Inherit ({capitalize(inheritedSensitivity)})</option>}
+    </SensitivitySelect>
   </>
   )
 }

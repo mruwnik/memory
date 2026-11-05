@@ -226,6 +226,11 @@ const AccountRow = ({
           : account.verified ? <Badge tone="success">Verified</Badge> : <Badge tone="warning">Signed in, not verified</Badge>}
         {account.signed_in && account.setup_state !== 'ready' && <Badge tone="warning" title="The Beeper Server's sign-in state">{account.setup_state}</Badge>}
         {!account.version_matches && <Badge tone="warning">Server version mismatch</Badge>}
+        {account.connected
+          ? <Badge tone="success" title="The collector's WebSocket to the Beeper Server is up">Connected</Badge>
+          : account.is_active && account.verified && (
+            <Badge tone="warning" title="The collector has no WebSocket to the Beeper Server, so new messages arrive only with the next reconcile">Not connected</Badge>
+          )}
       </>}
       meta={[
         account.server_url,
@@ -326,17 +331,18 @@ const NetworkRow = ({ network, chats, projects, expanded, onToggleExpand, onRetr
       >
         {expanded && Array.isArray(chats) && chats.map(chat => (
           <ChatRow key={chat.id} chat={chat} projects={projects} networkCollecting={network.collect_messages}
-            onUpdate={updates => onUpdateChat(chat, updates)} />
+            networkSensitivity={network.sensitivity} onUpdate={updates => onUpdateChat(chat, updates)} />
         ))}
       </SubList>
     </Row>
   )
 }
 
-const ChatRow = ({ chat, projects, networkCollecting, onUpdate }: {
+const ChatRow = ({ chat, projects, networkCollecting, networkSensitivity, onUpdate }: {
   chat: BeeperChat
   projects: Project[]
   networkCollecting: boolean
+  networkSensitivity: string
   onUpdate: (updates: BeeperChatUpdate) => Promise<unknown>
 }) => {
   const [updating, update] = useBusy(onUpdate)
@@ -348,10 +354,14 @@ const ChatRow = ({ chat, projects, networkCollecting, onUpdate }: {
         {chat.chat_type && <Badge tone="neutral">{chat.chat_type}</Badge>}
         {chat.is_merged && <Badge tone="neutral" title="Its messages are collected from the chats merged into it">Merged</Badge>}
         {!!chat.message_expiry_seconds && <Badge tone="warning" title="Messages disappear after a while">Disappearing</Badge>}
+        {chat.backfill_stopped && (
+          <Badge tone="warning" title="The Beeper Server kept answering with no older history, so memory stopped asking">History incomplete</Badge>
+        )}
       </>}
       meta={[chat.last_activity_at && `Last activity: ${formatRelativeTime(chat.last_activity_at)}`]}
       actions={<>
-        <AccessSelects projectId={chat.project_id} sensitivity={chat.sensitivity} projects={projects} disabled={updating} onChange={update} />
+        <AccessSelects projectId={chat.project_id} sensitivity={chat.sensitivity} inheritedSensitivity={networkSensitivity}
+          projects={projects} disabled={updating} onChange={update} />
         {!chat.is_merged && (
           <CollectSelect value={chat.collect_messages} inherited={networkCollecting} disabled={updating}
             onChange={collect_messages => update({ collect_messages })} />

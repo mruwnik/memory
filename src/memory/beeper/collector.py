@@ -1,8 +1,10 @@
 """Beeper WebSocket collector: one ``/v1/ws`` connection per active, verified account.
 
 Runs in ingest-hub (``python -m memory.beeper.collector``). Message and chat
-events go to Celery. The socket delivers at most once with no replay, so every
-(re)connect queues a sync of the account, which re-reads its collected chats.
+events go to Celery. The socket delivers at most once with no replay, so a
+(re)connect queues a sync of the account, which re-reads its collected chats,
+unless one ran or was queued within RECONNECT_SYNC_AFTER_SECONDS: a flapping
+socket would otherwise flood the workers.
 """
 
 import asyncio
@@ -11,6 +13,7 @@ import json
 import logging
 import signal
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import Any
 
@@ -19,6 +22,7 @@ from pydantic import ValidationError
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import InvalidStatus, WebSocketException
 
+from memory.beeper import state
 from memory.beeper.access import account_access
 from memory.common import beeper
 from memory.common.celery_app import HANDLE_BEEPER_EVENT, SYNC_BEEPER_ACCOUNT
@@ -33,6 +37,7 @@ SYNC_INTERVAL_SECONDS = 60
 MAX_RETRY_SECONDS = 5 * 60
 # A connection that lasted this long resets the backoff.
 STABLE_SECONDS = 60
+RECONNECT_SYNC_AFTER_SECONDS = 5 * 60
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 QUEUED_EVENTS = frozenset({"chat.upserted", "message.upserted", "message.deleted"})
 SUBSCRIBE = {"type": "subscriptions.set", "chatIDs": ["*"], "app": {"state": True}}
@@ -59,6 +64,12 @@ def collected_accounts() -> list[AccountInfo]:
         ]
 
 
+def last_reconcile_at(account_id: int) -> datetime | None:
+    with make_session() as session:
+        account = session.get(BeeperAccount, account_id)
+        return account.last_reconcile_at if account else None
+
+
 def socket_url(server_url: str) -> str:
     return "ws" + beeper.origin(server_url).removeprefix("http") + "/v1/ws"
 
@@ -76,7 +87,10 @@ def record_app_state(account_id: int, state: dict[str, Any]) -> None:
         if account is None:
             return
         if snapshot.matrix and account.beeper_user_id and snapshot.matrix.user_id != account.beeper_user_id:
-            logger.warning("Beeper account %s: Server serves a different Beeper user", account_id)
+            # Unverified, the account's events are skipped and the manager drops its socket.
+            logger.warning("Beeper account %s: Server serves a different Beeper user; collection stopped", account_id)
+            account.verified = False
+            session.commit()
             return
         account.setup_state = snapshot.state
         account.verified = snapshot.e2ee.verified
@@ -95,6 +109,7 @@ class AccountCollector:
         self.info = info
         self.celery = celery
         self.connected = False
+        self.sync_queued_at: float | None = None
 
     async def run(self) -> None:
         """Stay connected until cancelled, backing off exponentially while
@@ -112,7 +127,9 @@ class AccountCollector:
                 logger.info("Beeper account %s: WebSocket closed (%s)", self.info.id, type(e).__name__)
             except Exception:
                 logger.exception("Beeper account %s: WebSocket failed", self.info.id)
-            self.connected = False
+            finally:
+                self.connected = False
+                state.set_connected(self.info.id, False)
             failures = 0 if monotonic() - started >= STABLE_SECONDS else failures + 1
             await retry_sleep(min(2 ** max(failures - 1, 0), MAX_RETRY_SECONDS))
 
@@ -135,14 +152,24 @@ class AccountCollector:
             await ws.send(json.dumps(SUBSCRIBE))
         elif kind == "subscriptions.updated":
             self.connected = True
+            state.set_connected(self.info.id, True)
             logger.info("Beeper account %s: WebSocket subscribed", self.info.id)
-            self.celery.send_task(SYNC_BEEPER_ACCOUNT, args=[self.info.id])
+            if await self.reconcile_due():
+                self.sync_queued_at = monotonic()
+                self.celery.send_task(SYNC_BEEPER_ACCOUNT, args=[self.info.id])
         elif kind == "app.state.updated":
             await asyncio.to_thread(record_app_state, self.info.id, message.get("appState") or {})
         elif kind in QUEUED_EVENTS:
             self.celery.send_task(HANDLE_BEEPER_EVENT, kwargs={"account_id": self.info.id, "event": message})
         elif kind == "error":
             logger.warning("Beeper account %s: WebSocket error %s", self.info.id, message.get("code"))
+
+
+    async def reconcile_due(self) -> bool:
+        if self.sync_queued_at is not None and monotonic() - self.sync_queued_at < RECONNECT_SYNC_AFTER_SECONDS:
+            return False
+        last = await asyncio.to_thread(last_reconcile_at, self.info.id)
+        return last is None or datetime.now(timezone.utc) - last >= timedelta(seconds=RECONNECT_SYNC_AFTER_SECONDS)
 
 
 class CollectorManager:
@@ -169,6 +196,9 @@ class CollectorManager:
             await asyncio.sleep(SYNC_INTERVAL_SECONDS)
             try:
                 await self.sync()
+                for collector in self.collectors.values():
+                    if collector.connected:
+                        state.set_connected(collector.info.id, True)
             except Exception:
                 logger.exception("Beeper collector sync failed")
 

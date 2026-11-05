@@ -1,7 +1,9 @@
 """The Beeper WebSocket collector, against a local WebSocket server shaped like Beeper Server's."""
 
 import asyncio
+import contextlib
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -10,7 +12,7 @@ from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from memory.beeper import collector
+from memory.beeper import collector, state
 from memory.beeper.collector import AccountCollector, AccountInfo, CollectorManager
 from memory.common import settings
 from memory.common.celery_app import HANDLE_BEEPER_EVENT, SYNC_BEEPER_ACCOUNT
@@ -150,31 +152,51 @@ async def test_app_state_updates_the_account(db_session, regular_user, socket_se
 
 
 @pytest.mark.asyncio
-async def test_app_state_of_another_beeper_user_is_not_applied(db_session, regular_user, socket_server):
+async def test_app_state_of_another_beeper_user_stops_collecting(
+    db_session, regular_user, socket_server, no_celery_dispatch
+):
     account = add_account(db_session, regular_user, socket_server.url)
-    socket_server.events = [app_state("needs-login", False, user_id="@someone-else:beeper.com")]
+    socket_server.events = [app_state("ready", True, user_id="@someone-else:beeper.com")]
     task = asyncio.create_task(AccountCollector(AccountInfo(account.id, socket_server.url, TOKEN)).run())
 
-    await until(lambda: socket_server.subscriptions)
-    await asyncio.sleep(0.2)
+    def unverified() -> bool:
+        db_session.expire_all()
+        return not db_session.get(BeeperAccount, account.id).verified
+
+    await until(unverified)
     task.cancel()
 
-    db_session.expire_all()
-    assert (db_session.get(BeeperAccount, account.id).setup_state, account.verified) == ("ready", True)
+    assert db_session.get(BeeperAccount, account.id).setup_state == "ready"
+    assert collector.collected_accounts() == []
 
 
 @pytest.mark.asyncio
-async def test_a_dropped_connection_reconnects_and_reconciles(
-    db_session, regular_user, socket_server, no_celery_dispatch, quick_retries
+@pytest.mark.parametrize("minutes_ago, syncs", [(None, 1), (1, 0), (10, 1)])
+async def test_a_reconnect_reconciles_unless_a_reconcile_just_ran(
+    db_session, regular_user, socket_server, no_celery_dispatch, quick_retries, minutes_ago, syncs
 ):
-    account = add_account(db_session, regular_user, socket_server.url)
+    last = None if minutes_ago is None else datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    account = add_account(db_session, regular_user, socket_server.url, last_reconcile_at=last)
     socket_server.drop = True
     task = asyncio.create_task(AccountCollector(AccountInfo(account.id, socket_server.url, TOKEN)).run())
 
-    await until(lambda: len(calls(no_celery_dispatch, SYNC_BEEPER_ACCOUNT)) >= 3)
+    await until(lambda: len(socket_server.subscriptions) >= 3)
     task.cancel()
 
-    assert len(socket_server.subscriptions) >= 3
+    assert len(calls(no_celery_dispatch, SYNC_BEEPER_ACCOUNT)) == syncs
+
+
+@pytest.mark.asyncio
+async def test_the_connection_state_is_shared(db_session, regular_user, socket_server):
+    account = add_account(db_session, regular_user, socket_server.url)
+    task = asyncio.create_task(AccountCollector(AccountInfo(account.id, socket_server.url, TOKEN)).run())
+
+    await until(lambda: state.is_connected(account.id))
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert not state.is_connected(account.id)
 
 
 @pytest.mark.asyncio

@@ -15,9 +15,15 @@ from sqlalchemy import exc as sqlalchemy_exc
 from memory.common import beeper, settings
 from memory.common.content_processing import clear_item_chunks, process_content_item
 from memory.common.db.connection import DBSession
-from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork, BeeperParticipant
+from memory.common.db.models import (
+    BeeperAccount,
+    BeeperChat,
+    BeeperNetwork,
+    BeeperParticipant,
+    BeeperReaction,
+)
 from memory.common.db.models.source_items import BeeperMessage
-from memory.common.discord_events import insert_missing
+from memory.common.db.upsert import insert_missing
 
 logger = logging.getLogger(__name__)
 
@@ -189,13 +195,22 @@ def message_fields(message: beeper.Message, images: list[str]) -> dict[str, Any]
     }
 
 
-def find_message(session: DBSession, chat_pk: int, message_id: str) -> BeeperMessage | None:
-    return session.query(BeeperMessage).filter_by(chat_id=chat_pk, message_id=message_id).one_or_none()
+def find_message(
+    session: DBSession, chat_pk: int, message_id: str, event_id: str | None = None
+) -> BeeperMessage | None:
+    """The stored message, matched on its Matrix event id first: that survives
+    a rebuilt Server, whose per-install ids all change."""
+    query = session.query(BeeperMessage).filter_by(chat_id=chat_pk)
+    if event_id is not None and (found := query.filter_by(event_id=event_id).first()) is not None:
+        return found
+    return query.filter_by(message_id=message_id).one_or_none()
 
 
-def delete_message(session: DBSession, chat_pk: int, message_id: str) -> str:
-    stored = find_message(session, chat_pk, message_id)
+def delete_message(session: DBSession, chat_pk: int, message_id: str, event_id: str | None = None) -> str:
+    session.query(BeeperReaction).filter_by(chat_id=chat_pk, message_id=message_id).delete()
+    stored = find_message(session, chat_pk, message_id, event_id)
     if stored is None:
+        session.commit()
         return "ignored"
     clear_item_chunks(stored, session)
     session.delete(stored)
@@ -203,32 +218,67 @@ def delete_message(session: DBSession, chat_pk: int, message_id: str) -> str:
     return "deleted"
 
 
-def store_message(session: DBSession, chat: BeeperChat, message: beeper.Message, images: list[str]) -> str:
+def forget_message(session: DBSession, chat_pk: int, message_id: str) -> str | None:
+    """Server no longer has this message (an id or a Matrix event id): delete the
+    stored copy. Returns the parent's id when it was a reaction, to refresh."""
+    reaction = session.get(BeeperReaction, (chat_pk, message_id))
+    if reaction is None:
+        delete_message(session, chat_pk, message_id, event_id=message_id)
+        return None
+    parent = reaction.parent_message_id
+    session.delete(reaction)
+    session.commit()
+    return parent
+
+
+def record_reaction(session: DBSession, chat_pk: int, message: beeper.Message) -> str:
+    if message.linked_message_id:
+        insert_missing(
+            session, BeeperReaction, chat_id=chat_pk, message_id=message.id,
+            parent_message_id=message.linked_message_id,
+        )
+        session.commit()
+    return "ignored"
+
+
+def is_older(message: beeper.Message, stored: BeeperMessage) -> bool:
+    """Edits can arrive out of order, and an unedited copy is older than any edit."""
+    if stored.edited_at is None:
+        return False
+    return message.edited_timestamp is None or message.edited_timestamp < stored.edited_at
+
+
+def store_message(
+    session: DBSession, chat: BeeperChat, message: beeper.Message, images: list[str], event_id: str | None = None
+) -> str:
     """Store, edit or delete one message as Server now lists it; returns what was done.
 
-    A REACTION row is never stored: its parent lists the reactions. Hidden rows
-    (reactions, state events) aren't stored either.
+    A REACTION row is never stored: its parent lists the reactions, and only
+    which message it reacts to is kept. Hidden rows (state events) aren't stored either.
     """
     if message.is_deleted:
-        return delete_message(session, chat.id, message.id)
-    if message.type == "REACTION" or message.is_hidden:
+        return delete_message(session, chat.id, message.id, event_id)
+    if message.type == "REACTION":
+        return record_reaction(session, chat.id, message)
+    if message.is_hidden:
         return "ignored"
 
     upsert_participant(session, chat.network, message.sender_id, full_name=message.sender_name)
     content = message_content(message)
     fields = message_fields(message, images)
-    stored = find_message(session, chat.id, message.id)
+    stored = find_message(session, chat.id, message.id, event_id)
     if stored is None:
-        added = add_message(session, chat, message, content, fields)
+        added = add_message(session, chat, message, content, fields, event_id)
         if added is not None:
             return added
-        stored = find_message(session, chat.id, message.id)
+        stored = find_message(session, chat.id, message.id, event_id)
         if stored is None:
             return "ignored"
 
-    # Edits can arrive out of order; one older than the stored edit is ignored.
-    if stored.edited_at and message.edited_timestamp and message.edited_timestamp < stored.edited_at:
+    if is_older(message, stored):
         return "unchanged"
+    stored.message_id = message.id
+    stored.event_id = event_id or stored.event_id
     for name, value in fields.items():
         setattr(stored, name, value)
     if stored.content == content:
@@ -241,7 +291,12 @@ def store_message(session: DBSession, chat: BeeperChat, message: beeper.Message,
 
 
 def add_message(
-    session: DBSession, chat: BeeperChat, message: beeper.Message, content: str, fields: dict[str, Any]
+    session: DBSession,
+    chat: BeeperChat,
+    message: beeper.Message,
+    content: str,
+    fields: dict[str, Any],
+    event_id: str | None,
 ) -> str | None:
     """Insert a new message; None when another worker stored it first."""
     item = BeeperMessage(
@@ -250,6 +305,7 @@ def add_message(
         content=content,
         chat_id=chat.id,
         message_id=message.id,
+        event_id=event_id,
         **fields,
     )
     session.add(item)

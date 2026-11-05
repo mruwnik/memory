@@ -6,7 +6,6 @@ newest cursor and backward from its oldest until Server has no more history.
 Cursors are saved after each stored page, so a run cut short resumes there.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -21,11 +20,11 @@ from memory.common.db.models import BeeperAccount, BeeperChat
 
 logger = logging.getLogger(__name__)
 
-# Server answers an empty older page with hasMore while it asks the bridge for
-# more history; it is asked again after a wait, and a run gives up after a few.
-EMPTY_PAGE_WAIT_SECONDS = 5
-EMPTY_PAGE_RETRIES = 6
 CHAT_PAGE_SIZE = 200
+# How a crawl stopped: Server has no more, the budget ran out, or Server has
+# more but gave nothing this time (it answers an empty older page with hasMore
+# while it asks the bridge for history, and a later run asks again).
+Stop = Literal["end", "budget", "stalled"]
 
 
 def skipped(reason: str, **extra: Any) -> dict[str, Any]:
@@ -87,14 +86,21 @@ async def fetch_images(client: beeper.BeeperClient, chat_pk: int, message: beepe
     return saved
 
 
-async def store_messages(client: beeper.BeeperClient, chat_pk: int, messages: list[beeper.Message]) -> list[str]:
-    """Store each message as listed; returns what was done to each."""
+async def store_messages(
+    client: beeper.BeeperClient,
+    chat_pk: int,
+    messages: list[beeper.Message],
+    event_ids: dict[str, str] | None = None,
+) -> list[str]:
+    """Store each message as listed, with the Matrix event ids known for them;
+    returns what was done to each."""
     results = []
     for message in messages:
         images = [] if message.is_deleted else await fetch_images(client, chat_pk, message)
         with make_session() as session:
             chat = session.get_one(BeeperChat, chat_pk)
-            results.append(ingest.store_message(session, chat, message, images))
+            event_id = (event_ids or {}).get(message.id)
+            results.append(ingest.store_message(session, chat, message, images, event_id))
     return results
 
 
@@ -109,6 +115,17 @@ def save_cursor(chat_pk: int, direction: Literal["before", "after"], cursor: str
         session.commit()
 
 
+def save_stalls(chat_pk: int, stop: Stop, stored: int) -> tuple[int, bool]:
+    """Count the backfill runs in a row that stalled; one that stored anything
+    starts over. Returns the count and whether the backfill gave up."""
+    with make_session() as session:
+        chat = session.get_one(BeeperChat, chat_pk)
+        stalls = 0 if stored else chat.backfill_stalls
+        chat.backfill_stalls = stalls + 1 if stop == "stalled" else stalls
+        session.commit()
+        return chat.backfill_stalls, chat.backfill_stopped
+
+
 async def crawl(
     client: beeper.BeeperClient,
     chat_pk: int,
@@ -116,36 +133,35 @@ async def crawl(
     cursor: str | None,
     direction: Literal["before", "after"],
     budget: int,
-) -> tuple[int, bool]:
-    """Store whole pages from ``cursor`` until Server says there are no more or
-    the budget is spent. Returns (messages stored, reached the end)."""
-    processed = empty = 0
+) -> tuple[int, Stop]:
+    """Store whole pages from ``cursor`` until Server says there are no more,
+    the budget is spent, or Server stalls. Returns (messages stored, why it stopped)."""
+    processed = 0
     while processed < budget:
         page = await client.messages(chat_id, cursor, direction)
         # Server answers some chats' newer pages empty with hasMore, every time.
         if not page.items and direction == "after":
-            return processed, True
+            return processed, "end"
         if not page.items and page.has_more:
-            empty += 1
-            if empty > EMPTY_PAGE_RETRIES:
-                logger.info("Beeper chat %s: no history yet after %s empty pages", chat_pk, empty)
-                return processed, False
-            await asyncio.sleep(EMPTY_PAGE_WAIT_SECONDS)
-            continue
-        empty = 0
+            return processed, "stalled"
         await store_messages(client, chat_pk, page.items)
         processed += len(page.items)
-        cursor = (page.newest_cursor if direction == "after" else page.oldest_cursor) or cursor
+        moved = page.newest_cursor if direction == "after" else page.oldest_cursor
+        if page.has_more and moved in (None, cursor):
+            logger.warning("Beeper chat %s: Server's %s cursor didn't move", chat_pk, direction)
+            return processed, "end" if direction == "after" else "stalled"
+        cursor = moved or cursor
         save_cursor(chat_pk, direction, cursor, reached_end=not page.has_more)
         if not page.has_more:
-            return processed, True
-    return processed, False
+            return processed, "end"
+    return processed, "budget"
 
 
 async def sync_chat(chat_pk: int, budget: int) -> dict[str, Any]:
     """Read a collected chat forward from its newest cursor, then backward from
     its oldest until Server has no more history, within ``budget`` messages.
-    ``done`` means both directions reached their end."""
+    ``done`` means both directions reached their end, or the backfill gave up
+    after too many stalled runs; ``stalls`` counts those runs."""
     with make_session() as session:
         chat = session.get(BeeperChat, chat_pk)
         if chat is None:
@@ -153,10 +169,12 @@ async def sync_chat(chat_pk: int, budget: int) -> dict[str, Any]:
         if not chat.should_collect:
             return skipped("not_collected", chat_id=chat_pk)
         access = account_access(chat.network.account)
-        chat_id, newest, oldest, backfilled = chat.chat_id, chat.newest_cursor, chat.oldest_cursor, chat.backfill_done
+        chat_id, newest, oldest = chat.chat_id, chat.newest_cursor, chat.oldest_cursor
+        backfilled, stopped, stalls = chat.backfill_done, chat.backfill_stopped, chat.backfill_stalls
     if access is None:
         return skipped("account_unavailable", chat_id=chat_pk)
 
+    stop: Stop = "end"
     async with access.client() as client:
         if newest is None:
             # First read: the latest page sets both cursors.
@@ -167,11 +185,20 @@ async def sync_chat(chat_pk: int, budget: int) -> dict[str, Any]:
             save_cursor(chat_pk, "before", page.oldest_cursor, reached_end=not page.has_more)
             oldest, backfilled = page.oldest_cursor, not page.has_more
         else:
-            processed, caught_up = await crawl(client, chat_pk, chat_id, newest, "after", budget)
-        if not backfilled:
-            count, backfilled = await crawl(client, chat_pk, chat_id, oldest, "before", budget - processed)
+            processed, forward = await crawl(client, chat_pk, chat_id, newest, "after", budget)
+            caught_up = forward == "end"
+        if not backfilled and not stopped:
+            count, stop = await crawl(client, chat_pk, chat_id, oldest, "before", budget - processed)
             processed += count
-    return {"status": "ok", "chat_id": chat_pk, "processed": processed, "done": caught_up and backfilled}
+            stalls, stopped = save_stalls(chat_pk, stop, count)
+    backfill_over = backfilled or stopped or stop == "end"
+    return {
+        "status": "ok",
+        "chat_id": chat_pk,
+        "processed": processed,
+        "done": caught_up and backfill_over,
+        "stalls": stalls if stop == "stalled" else 0,
+    }
 
 
 # --- Live events ---
@@ -188,16 +215,25 @@ def listed_messages(event: dict[str, Any]) -> dict[str, beeper.Message]:
     return messages
 
 
-async def fetch_messages(client: beeper.BeeperClient, chat_id: str, ids: list[str]) -> list[beeper.Message]:
-    """The messages as Server lists them now; ones it no longer has are left out."""
-    found = []
+async def fetch_messages(
+    client: beeper.BeeperClient, chat_id: str, ids: list[str]
+) -> tuple[dict[str, beeper.Message], list[str]]:
+    """The messages as Server lists them now, by the id asked for, and the ids it no longer has."""
+    found, gone = {}, []
     for message_id in ids:
         try:
-            found.append(await client.message(chat_id, message_id))
+            found[message_id] = await client.message(chat_id, message_id)
         except beeper.BeeperError as e:
             if e.status != 404:
                 raise
-    return found
+            gone.append(message_id)
+    return found, gone
+
+
+def forget_messages(chat_pk: int, ids: list[str]) -> set[str]:
+    """Delete what Server no longer has; returns the parents of reactions among them."""
+    with make_session() as session:
+        return {parent for i in ids if (parent := ingest.forget_message(session, chat_pk, i))}
 
 
 async def event_chat(
@@ -231,7 +267,7 @@ def as_chat(entry: dict[str, Any]) -> beeper.Chat | None:
 async def handle_event(account_id: int, event: dict[str, Any]) -> dict[str, Any]:
     """Apply one WebSocket event. ``message.deleted`` also fires when a reaction
     is removed, so its messages are fetched again and deleted only when Server
-    marks them deleted. ``start_sync`` names a chat to read in full."""
+    marks them deleted or no longer has them. ``start_sync`` names a chat to read in full."""
     with make_session() as session:
         access = account_access(session.get(BeeperAccount, account_id))
         if access is not None:
@@ -256,10 +292,14 @@ async def handle_event(account_id: int, event: dict[str, Any]) -> dict[str, Any]
 
         ids = [str(i) for i in event.get("ids") or []]
         listed = listed_messages(event) if kind == "message.upserted" else {}
-        missing = [i for i in ids if i not in listed]
-        messages = [listed[i] for i in ids if i in listed] + await fetch_messages(client, event["chatID"], missing)
+        fetched, gone = await fetch_messages(client, event["chatID"], [i for i in ids if i not in listed])
+        messages = [listed[i] for i in ids if i in listed] + list(fetched.values())
+        # Server takes a Matrix event id wherever it takes a message id.
+        event_ids = {m.id: i for i, m in fetched.items() if i != m.id and i.startswith("$")}
+        # A delete for a message Server has forgotten is a delete.
+        refresh = forget_messages(chat_pk, gone) if kind == "message.deleted" else set()
         # A reaction row is never stored; its parent lists the reactions.
-        parents = sorted({m.linked_message_id for m in messages if m.type == "REACTION" and m.linked_message_id})
-        messages += await fetch_messages(client, event["chatID"], parents)
-        results = await store_messages(client, chat_pk, messages)
+        refresh |= {m.linked_message_id for m in messages if m.type == "REACTION" and m.linked_message_id}
+        parents, _ = await fetch_messages(client, event["chatID"], sorted(refresh))
+        results = await store_messages(client, chat_pk, messages + list(parents.values()), event_ids)
     return {"status": "ok", "chat_id": chat_pk, "results": results, "start_sync": start_sync}
