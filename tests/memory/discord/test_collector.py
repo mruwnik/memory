@@ -2,8 +2,10 @@
 
 import asyncio
 import socket
+import threading
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import discord
@@ -11,7 +13,7 @@ import pytest
 import pytest_asyncio
 import yarl
 from aiohttp import ClientConnectorError, ClientPayloadError, ClientSession, WSMessage, WSMsgType, web
-from discord.errors import GatewayNotFound, HTTPException, LoginFailure
+from discord.errors import ConnectionClosed, GatewayNotFound, HTTPException, LoginFailure, PrivilegedIntentsRequired
 from discord.gateway import DiscordWebSocket
 from discord.http import HTTPClient, Route
 
@@ -109,13 +111,21 @@ async def test_a_proxied_bot_sends_rest_and_gateway_through_one_client():
 
 
 @pytest.mark.asyncio
-async def test_a_bot_whose_login_fails_waits_for_a_new_token(db_session):
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        LoginFailure("Improper token has been passed."),
+        PrivilegedIntentsRequired(None),
+        ConnectionClosed(SimpleNamespace(close_code=4004), shard_id=None),
+    ],
+)
+async def test_a_bot_discord_refuses_waits_for_new_settings(db_session, refusal):
     bot = add_bot(db_session, 1)
     logins: list[str] = []
 
     async def refuse(self, token):
         logins.append(token)
-        raise LoginFailure("Improper token has been passed.")
+        raise refusal
 
     manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
     with patch.object(MessageCollector, "start", refuse), patch.object(MessageCollector, "close", AsyncMock()):
@@ -127,6 +137,31 @@ async def test_a_bot_whose_login_fails_waits_for_a_new_token(db_session):
                 await asyncio.sleep(0)
 
     assert logins == ["tok", "new-token"]
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_a_crashing_bot_is_retried_with_growing_delays(db_session):
+    add_bot(db_session, 1)
+    clock = [0.0]
+    starts: list[float] = []
+
+    async def crash(self, token):
+        starts.append(clock[0])
+        raise RuntimeError("gateway fell over")
+
+    manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
+    with (
+        patch.object(MessageCollector, "start", crash),
+        patch.object(MessageCollector, "close", AsyncMock()),
+        patch("memory.discord.collector.monotonic", lambda: clock[0]),
+    ):
+        for clock[0] in range(0, 600, 60):
+            await manager.sync()
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+    assert starts == [0, 60, 180, 420]
     await manager.stop_all()
 
 
@@ -195,7 +230,7 @@ async def test_rest_calls_go_to_the_bots_api_url_once(proxied, route, url):
 async def test_the_gateway_is_the_one_the_api_url_names(proxied, requested, gateway, dialed):
     with (
         patch.object(ProxiedHTTPClient, "get_bot_gateway", AsyncMock(return_value=(1, gateway, {}))),
-        patch.object(HTTPClient, "ws_connect", AsyncMock()) as connect,
+        patch.object(ProxiedHTTPClient, "dial", AsyncMock()) as connect,
     ):
         socket = await proxied.ws_connect(str(requested))
 
@@ -227,12 +262,55 @@ async def test_a_gateway_off_the_allowlist_or_unencrypted_is_refused(requested, 
     proxied = ProxiedHTTPClient(PROXY_API, lambda url: "169.254" not in url, asyncio.new_event_loop())
     with (
         patch.object(ProxiedHTTPClient, "get_bot_gateway", AsyncMock(return_value=(1, named, {}))),
-        patch.object(HTTPClient, "ws_connect", AsyncMock()) as connect,
+        patch.object(ProxiedHTTPClient, "dial", AsyncMock()) as connect,
         pytest.raises(GatewayNotFound),
     ):
         await proxied.ws_connect(requested)
 
     connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_check_runs_off_the_event_loop():
+    checked_on = []
+
+    def allowed(url):
+        checked_on.append(threading.get_ident())
+        return True
+
+    proxied = ProxiedHTTPClient(PROXY_API, allowed, asyncio.get_running_loop())
+    with patch.object(ProxiedHTTPClient, "dial", AsyncMock()):
+        await proxied.ws_connect("wss://resume.chat.example.com/?v=10")
+
+    assert checked_on and threading.get_ident() not in checked_on
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_transport_caps_message_size():
+    async def oversized(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_str("x" * 2048)
+        await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/", oversized)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    proxied = ProxiedHTTPClient(PROXY_API, allow_all, asyncio.get_running_loop())
+    proxied._HTTPClient__session = ClientSession()  # what static_login would set
+
+    with patch.object(proxied_http, "MAX_GATEWAY_MESSAGE_BYTES", 1024):
+        socket = await proxied.dial(f"ws://127.0.0.1:{runner.addresses[0][1]}/")
+        message = await socket.receive()
+
+    await socket.close()
+    await proxied._HTTPClient__session.close()
+    await runner.cleanup()
+    assert message.type is WSMsgType.ERROR
 
 
 class FakeSocket:
@@ -368,7 +446,7 @@ async def test_the_resolver_refuses_private_addresses(host):
 
 
 def test_discord_py_is_the_pinned_version():
-    """ProxiedHTTPClient leans on discord.py internals (Route.url, ws_connect,
+    """ProxiedHTTPClient leans on discord.py internals (Route.url, ws_connect and its session,
     DEFAULT_GATEWAY); re-check it against a new release before bumping the pin."""
     pins = (Path(__file__).parents[3] / "requirements/requirements-ingesters.txt").read_text()
 

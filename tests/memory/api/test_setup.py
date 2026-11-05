@@ -174,6 +174,27 @@ def grant(db_session, client_id: str, user_id: int, revoked: bool = False, expir
     )
 
 
+@pytest.mark.parametrize(
+    "server, uri, web_ui",
+    [
+        ("https://memory.example.com", "https://memory.example.com/", True),
+        ("https://memory.example.com", "https://memory.example.com/ui", True),
+        ("https://memory.example.com", "http://memory.example.com", True),
+        ("https://memory.example.com", "https://MEMORY.example.com/ui/", True),
+        ("https://memory.example.com", "https://memory.example.com/callback", False),
+        ("https://memory.example.com", "https://other.example.com/", False),
+        ("https://memory.example.com", "https://memory.example.com:8443/", False),
+        ("http://localhost:8000", "http://127.0.0.1:8000/", True),
+        ("http://localhost:8000", "http://[::1]:8000/ui", True),
+        ("http://localhost:8000", "http://127.0.0.1:4322/", False),
+    ],
+)
+def test_the_web_ui_is_told_apart_by_its_redirect(monkeypatch, server, uri, web_ui):
+    monkeypatch.setattr(settings, "SERVER_URL", server)
+
+    assert setup.is_web_ui([uri]) is web_ui
+
+
 def test_status_for_the_signed_in_user(setup_client, db_session, admin_user, regular_user):
     session_id = str(create_user_session(admin_user.id, db_session))
     db_session.add_all([

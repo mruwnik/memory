@@ -31,8 +31,6 @@ named API paths to the api must now forward everything.
   (307, keeping the path and query), so bookmarks, sent password-reset links,
   shared poll links and stored reports that load `/ui/mcp-client.js` keep
   working. The redirect is temporary and will be removed in a later release.
-- Browsers may need to sign in once more: the UI's OAuth client is now registered for the
-  root URL.
 - The REST endpoints that shared a path with a UI page moved under `/api`:
   `/settings`, `/users`, `/usage`, `/jobs`, `/ssh-keys` and `/polls/respond`
   are now `/api/settings`, `/api/users`, … Scripts that call them directly

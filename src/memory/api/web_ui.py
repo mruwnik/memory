@@ -65,11 +65,9 @@ class WebUIMiddleware:
             target = URL(path="/" + rest, query=URL(scope=scope).query)
             return await RedirectResponse(str(target), status_code=307)(scope, receive, send)
 
-        if is_backend_path(self.router, scope):
+        # Walking the route table is the costly check, so most API calls skip it.
+        found = static_file(path)
+        wants_page = "text/html" in Headers(scope=scope).get("accept", "")
+        if not (found or wants_page) or is_backend_path(self.router, scope):
             return await self.app(scope, receive, send)
-
-        if found := static_file(path):
-            return await FileResponse(found)(scope, receive, send)
-        if "text/html" in Headers(scope=scope).get("accept", ""):
-            return await FileResponse(settings.STATIC_DIR / "index.html")(scope, receive, send)
-        await self.app(scope, receive, send)
+        await FileResponse(found or settings.STATIC_DIR / "index.html")(scope, receive, send)

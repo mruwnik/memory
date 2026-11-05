@@ -299,6 +299,8 @@ def create_bot(
     realtime = data.realtime or (existing.realtime if existing else "gateway")
     require_usable(realtime, data.public_key or (existing and existing.public_key), True, True)
     bot = existing or DiscordBot(application_id=application_id, name=data.name, created_by_user_id=user.id)
+    if existing and existing.token_encrypted is None:
+        bot.is_active = True
     bot.token = data.token
     bot.realtime = realtime
     if data.public_key:

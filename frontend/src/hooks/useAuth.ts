@@ -7,6 +7,9 @@ export const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || '
 export const REDIRECT_URI = `${window.location.origin}/`
 // A client id only works with the redirect URI it was registered for.
 export const CLIENT_ID_KEY = `oauth_client_id:${REDIRECT_URI}`
+// Where clients registered for /ui were kept. A refresh doesn't use the redirect
+// URI, so their refresh tokens still work.
+export const LEGACY_CLIENT_ID_KEY = 'oauth_client_id'
 
 const AUTH_LOST_EVENT = 'memory:auth-lost'
 
@@ -34,7 +37,8 @@ export const storeSession = (accessToken: string) => {
   setCookie(SESSION_COOKIE_NAME, accessToken, 30)
 }
 
-const getClientId = () => localStorage.getItem(CLIENT_ID_KEY)
+const getClientId = () =>
+  localStorage.getItem(CLIENT_ID_KEY) ?? localStorage.getItem(LEGACY_CLIENT_ID_KEY)
 
 // Every useAuth instance listens for this, so whichever call notices first
 // signs the whole page out once.
@@ -43,6 +47,7 @@ const dropAuth = () => {
   deleteCookie('refresh_token')
   deleteCookie(SESSION_COOKIE_NAME)
   localStorage.removeItem(CLIENT_ID_KEY)
+  localStorage.removeItem(LEGACY_CLIENT_ID_KEY)
   window.dispatchEvent(new Event(AUTH_LOST_EVENT))
 }
 

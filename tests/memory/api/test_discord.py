@@ -185,13 +185,20 @@ def test_patch_refuses_webhook_mode_without_a_public_key(client, db_session, use
     assert db_session.get(DiscordBot, int(bot_id)).realtime == "gateway"
 
 
-def test_a_tokenless_bot_resumes_only_with_a_token(client, db_session, user):
+@pytest.mark.parametrize(
+    "add_token",
+    [
+        lambda client, bot: client.patch(f"/discord/bots/{bot.id}", json={"token": gateway_token(77778)}),
+        lambda client, bot: client.post("/discord/bots", json={"name": "Old", "token": gateway_token(77778)}),
+    ],
+)
+def test_a_tokenless_bot_resumes_only_with_a_token(client, db_session, user, add_token):
     bot = DiscordBot(application_id=77778, name="Old", created_by_user_id=user.id, is_active=False)
     db_session.add(bot)
     db_session.commit()
 
     refused = client.patch(f"/discord/bots/{bot.id}", json={"is_active": True})
-    resumed = client.patch(f"/discord/bots/{bot.id}", json={"token": gateway_token(77778)})
+    resumed = add_token(client, bot)
 
     assert (refused.status_code, resumed.status_code, resumed.json()["is_active"]) == (400, 200, True)
 

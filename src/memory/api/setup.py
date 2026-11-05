@@ -5,6 +5,7 @@ import logging
 import secrets
 import threading
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
@@ -107,11 +108,22 @@ def source_counts(db: Session, user_id: int) -> dict[str, int]:
     }
 
 
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def site(url: str) -> tuple[str | None, int | None, str]:
+    """Host, explicit port and path, whichever scheme or loopback name the
+    browser used: a proxy may terminate TLS, and SERVER_URL may name another."""
+    parts = urlsplit(url)
+    host = "localhost" if parts.hostname in LOOPBACK_HOSTS else parts.hostname
+    return host, parts.port, parts.path.rstrip("/")
+
+
 def is_web_ui(redirect_uris: list[str]) -> bool:
     # The web UI signs in through the same OAuth flow, redirecting back to the server's root;
     # browsers that registered before the UI moved there still hold clients for /ui.
-    base = settings.SERVER_URL.rstrip("/")
-    return any(uri.rstrip("/") in (base, base + "/ui") for uri in redirect_uris)
+    host, port, path = site(settings.SERVER_URL)
+    return any(site(uri) in ((host, port, path), (host, port, path + "/ui")) for uri in redirect_uris)
 
 
 def mcp_clients(db: Session, user_id: int) -> list[str]:

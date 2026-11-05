@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { CLIENT_ID_KEY, REDIRECT_URI } from '@/hooks/useAuth'
+import { CLIENT_ID_KEY, LEGACY_CLIENT_ID_KEY, REDIRECT_URI } from '@/hooks/useAuth'
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
@@ -102,7 +102,7 @@ export const useOAuth = () => {
       if (response.ok) {
         const clientInfo = await response.json()
         setClientId(clientInfo.client_id)
-        localStorage.removeItem('oauth_client_id') // where clients registered for /ui were kept
+        localStorage.removeItem(LEGACY_CLIENT_ID_KEY)
         return clientInfo.client_id
       }
       return null

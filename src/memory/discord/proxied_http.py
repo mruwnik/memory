@@ -9,6 +9,7 @@ Discord-compatible servers support, and inflate it themselves. Bots on
 discord.com don't use this.
 """
 
+import asyncio
 import logging
 import socket
 import zlib
@@ -142,9 +143,23 @@ class ProxiedHTTPClient(HTTPClient):
         if gateway.host == DiscordWebSocket.DEFAULT_GATEWAY.host:
             _, named, _ = await self.get_bot_gateway()
             gateway = yarl.URL(named).with_query(gateway.query)
-        if gateway.scheme != "wss" or not self.gateway_allowed(str(gateway)):
+        if gateway.scheme != "wss" or not await asyncio.to_thread(self.gateway_allowed, str(gateway)):
             logger.warning("Refused a Discord gateway that is unencrypted or off the allowlist")
             raise GatewayNotFound()
         if "compress" in gateway.query:
             gateway = gateway.update_query(compress="zlib-stream")
-        return ZlibTextFrames(await super().ws_connect(str(gateway)))
+        return ZlibTextFrames(await self.dial(str(gateway)))
+
+    async def dial(self, url: str) -> aiohttp.ClientWebSocketResponse:
+        """discord.py's ``ws_connect``, which reads frames of any size, with the
+        size capped."""
+        session: aiohttp.ClientSession = self._HTTPClient__session  # type: ignore[attr-defined]
+        return await session.ws_connect(
+            url,
+            proxy=self.proxy,
+            proxy_auth=self.proxy_auth,
+            max_msg_size=MAX_GATEWAY_MESSAGE_BYTES,
+            timeout=aiohttp.ClientWSTimeout(ws_close=30.0),  # pyright: ignore[reportCallIssue]
+            autoclose=False,
+            headers={"User-Agent": self.user_agent},
+        )

@@ -13,13 +13,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from discord import (
+    ConnectionClosed,
     Intents,
     LoginFailure,
     Message,
+    PrivilegedIntentsRequired,
     RawReactionActionEvent,
     RawReactionClearEmojiEvent,
     RawReactionClearEvent,
@@ -69,6 +73,27 @@ logger = logging.getLogger(__name__)
 
 # How often the collector picks up bots added, paused or switched between modes.
 SYNC_INTERVAL_SECONDS = 60
+MAX_RETRY_DELAY_SECONDS = 60 * 60
+# Gateway closes that recur until the bot's owner changes something: auth
+# failed, invalid shard, sharding required, invalid version or intents.
+REFUSED_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013}
+
+
+@dataclass(frozen=True)
+class Hold:
+    """A bot not restarted before ``until`` unless its settings change.
+    Every start costs an IDENTIFY, and Discord resets the token of a bot that
+    sends 1000 in a day."""
+
+    info: BotInfo
+    until: float = math.inf
+    crashes: int = 0
+
+
+def refused(error: Exception) -> bool:
+    if isinstance(error, (LoginFailure, PrivilegedIntentsRequired)):
+        return True
+    return isinstance(error, ConnectionClosed) and error.code in REFUSED_CLOSE_CODES
 
 
 def gateway_allowed(bot_id: int, url: str) -> bool:
@@ -292,8 +317,7 @@ class CollectorManager:
         self.celery_app = celery_app
         self.collectors: dict[int, MessageCollector] = {}
         self._tasks: dict[int, asyncio.Task] = {}
-        # Logins Discord refused, not retried until the bot's settings change
-        self.refused: dict[int, BotInfo] = {}
+        self.held: dict[int, Hold] = {}
 
     async def sync(self) -> None:
         """Run exactly the bots that should be on the gateway, restarting any
@@ -304,9 +328,10 @@ class CollectorManager:
             if wanted.get(bot_id) != collector.bot_info:
                 await self.stop_bot(bot_id)
         for bot_id, info in wanted.items():
-            if bot_id not in self.collectors and self.refused.get(bot_id) != info:
-                self.refused.pop(bot_id, None)
-                await self.start_bot(info)
+            hold = self.held.get(bot_id)
+            if bot_id in self.collectors or (hold and hold.info == info and monotonic() < hold.until):
+                continue
+            await self.start_bot(info)
 
     async def keep_synced(self) -> None:
         while True:
@@ -335,16 +360,27 @@ class CollectorManager:
         """Run a bot until stopped."""
         try:
             await collector.start(bot_info.token)
-        except LoginFailure:
-            logger.error(f"Discord bot {bot_info.id} was refused at login; waiting for a new token")
-            self.refused[bot_info.id] = bot_info
-        except Exception:
-            logger.exception(f"Bot {bot_info.id} crashed")
+        except Exception as e:
+            if refused(e):
+                logger.error(f"Discord refused bot {bot_info.id}; waiting for its settings to change")
+                self.held[bot_info.id] = Hold(bot_info)
+            else:
+                logger.exception(f"Bot {bot_info.id} crashed")
+                self.hold_after_crash(bot_info, collector)
         finally:
             # A restart may already have put a new collector under this id.
             if self.collectors.get(bot_info.id) is collector:
                 self.collectors.pop(bot_info.id, None)
                 self._tasks.pop(bot_info.id, None)
+
+    def hold_after_crash(self, bot_info: BotInfo, collector: MessageCollector) -> None:
+        """Back off exponentially, starting over once a bot has reached READY."""
+        previous = self.held.get(bot_info.id)
+        crashes = 1
+        if previous and previous.info == bot_info and not collector.is_ready():
+            crashes = previous.crashes + 1
+        delay = min(SYNC_INTERVAL_SECONDS * 2 ** (crashes - 1), MAX_RETRY_DELAY_SECONDS)
+        self.held[bot_info.id] = Hold(bot_info, monotonic() + delay, crashes)
 
     async def stop_bot(self, bot_id: int) -> None:
         """Stop a single bot."""

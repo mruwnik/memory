@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { CLIENT_ID_KEY, useAuth } from './useAuth'
+import { CLIENT_ID_KEY, LEGACY_CLIENT_ID_KEY, useAuth } from './useAuth'
 import { mockFetch, mockResponse, clearCookies } from '@/test/utils'
 
 const setCookie = (name: string, value: string) => {
@@ -257,10 +257,10 @@ describe('apiCall', () => {
 })
 
 describe('token refresh', () => {
-  const seedRefreshable = () => {
+  const seedRefreshable = (clientIdKey = CLIENT_ID_KEY) => {
     setCookie('access_token', 'old')
     setCookie('refresh_token', 'r1')
-    localStorage.setItem(CLIENT_ID_KEY, 'client-1')
+    localStorage.setItem(clientIdKey, 'client-1')
   }
   const callsTo = (fetchMock: ReturnType<typeof mockFetch>, path: string) =>
     fetchMock.mock.calls.filter(([u]) => u.toString().endsWith(path))
@@ -268,30 +268,33 @@ describe('token refresh', () => {
     (init?.headers as Record<string, string> | undefined)?.Authorization
   const me = { user_id: 1, name: 'A', email: 'a@x', user_type: 'human', scopes: [] }
 
-  it('posts a form-encoded refresh_token grant and stores the rotated pair', async () => {
-    seedRefreshable()
-    const fetchMock = mockFetch(async (input, init) => {
-      if (input.toString().endsWith('/token')) {
-        return mockResponse({ json: { access_token: 'new', refresh_token: 'r2' } })
-      }
-      return mockResponse({ status: bearer(init) === 'Bearer new' ? 200 : 401, json: me })
-    })
-    const { result } = renderHook(() => useAuth())
-    await waitFor(() => expect(result.current.isAuthenticated).toBe(true))
+  it.each([CLIENT_ID_KEY, LEGACY_CLIENT_ID_KEY])(
+    'posts a form-encoded refresh_token grant with the client id under %s and stores the rotated pair',
+    async (clientIdKey) => {
+      seedRefreshable(clientIdKey)
+      const fetchMock = mockFetch(async (input, init) => {
+        if (input.toString().endsWith('/token')) {
+          return mockResponse({ json: { access_token: 'new', refresh_token: 'r2' } })
+        }
+        return mockResponse({ status: bearer(init) === 'Bearer new' ? 200 : 401, json: me })
+      })
+      const { result } = renderHook(() => useAuth())
+      await waitFor(() => expect(result.current.isAuthenticated).toBe(true))
 
-    const [, init] = callsTo(fetchMock, '/token')[0]
-    expect((init!.headers as Record<string, string>)['Content-Type']).toBe(
-      'application/x-www-form-urlencoded',
-    )
-    expect(Object.fromEntries(new URLSearchParams(init!.body as URLSearchParams))).toEqual({
-      grant_type: 'refresh_token',
-      refresh_token: 'r1',
-      client_id: 'client-1',
-    })
-    expect(document.cookie).toContain('access_token=new')
-    expect(document.cookie).toContain('session_id=new')
-    expect(document.cookie).toContain('refresh_token=r2')
-  })
+      const [, init] = callsTo(fetchMock, '/token')[0]
+      expect((init!.headers as Record<string, string>)['Content-Type']).toBe(
+        'application/x-www-form-urlencoded',
+      )
+      expect(Object.fromEntries(new URLSearchParams(init!.body as URLSearchParams))).toEqual({
+        grant_type: 'refresh_token',
+        refresh_token: 'r1',
+        client_id: 'client-1',
+      })
+      expect(document.cookie).toContain('access_token=new')
+      expect(document.cookie).toContain('session_id=new')
+      expect(document.cookie).toContain('refresh_token=r2')
+    },
+  )
 
   it.each([400, 401])(
     'gives up after one refresh attempt when /token answers %i',
@@ -384,6 +387,7 @@ describe('logout', () => {
     setCookie('refresh_token', 'r')
     setCookie('session_id', 's')
     localStorage.setItem(CLIENT_ID_KEY, 'client-1')
+    localStorage.setItem(LEGACY_CLIENT_ID_KEY, 'client-0')
     mockFetch(async () =>
       mockResponse({
         json: {
@@ -404,6 +408,7 @@ describe('logout', () => {
     expect(result.current.isAuthenticated).toBe(false)
     expect(result.current.user).toBeNull()
     expect(localStorage.getItem(CLIENT_ID_KEY)).toBeNull()
+    expect(localStorage.getItem(LEGACY_CLIENT_ID_KEY)).toBeNull()
     expect(document.cookie).not.toContain('access_token=tok')
   })
 
