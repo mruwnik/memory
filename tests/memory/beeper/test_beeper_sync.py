@@ -2,6 +2,7 @@ import io
 from datetime import datetime, timezone
 
 import pytest
+import redis
 from PIL import Image
 
 from memory.beeper import state
@@ -255,6 +256,39 @@ def test_a_read_the_broker_refused_is_not_marked_queued(no_celery_dispatch):
     no_celery_dispatch.side_effect = None
 
     assert state.queue_chat_sync(1) is True
+
+
+def test_a_failed_cleanup_does_not_hide_the_broker_error(no_celery_dispatch, monkeypatch):
+    def redis_down(*args):
+        raise redis.RedisError("redis is down")
+
+    no_celery_dispatch.side_effect = ConnectionError("broker is down")
+    monkeypatch.setattr(type(state.client()), "delete", redis_down)
+
+    with pytest.raises(ConnectionError):
+        state.queue_chat_sync(1)
+
+
+def test_one_refused_read_does_not_stop_the_others_queueing(
+    db_session, fake_beeper, beeper_account, no_celery_dispatch
+):
+    fake_beeper.add_chat(CHAT)
+    fake_beeper.add_chat("!other:beeper.local")
+    tasks.sync_beeper_account(beeper_account.id)
+    chats = {c.chat_id: c.id for c in db_session.query(BeeperChat)}
+    for chat_pk in chats.values():
+        state.chat_sync_started(chat_pk)
+    no_celery_dispatch.reset_mock()
+
+    def refuse_general(name, args, **kwargs):
+        if args == [chats[CHAT]]:
+            raise ConnectionError("broker is down")
+
+    no_celery_dispatch.side_effect = refuse_general
+    result = tasks.sync_beeper_account(beeper_account.id)
+
+    assert dispatched(no_celery_dispatch, SYNC_BEEPER_CHAT) == [chats[CHAT], chats["!other:beeper.local"]]
+    assert result["unqueued"] == [chats[CHAT]]
 
 
 @pytest.mark.parametrize("budget", [1, 2, 3])
@@ -529,6 +563,30 @@ def test_a_message_is_matched_on_its_matrix_event_id(db_session, fake_beeper, be
     tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ["$event0"], [message]))
 
     assert {(k, m.id, m.event_id) for k, m in stored(db_session).items()} == {("n0", item_id, "$event0")}
+
+
+@pytest.mark.parametrize(
+    "ids, expected_event_ids",
+    [
+        (["m0", "$event1"], {"m0": None, "m1": "$event1"}),
+        (["$event0", "$event1"], {"m0": "$event0", "m1": "$event1"}),
+    ],
+)
+def test_a_batch_listed_out_of_order_pairs_each_event_id_with_its_message(
+    db_session, fake_beeper, beeper_account, qdrant, ids, expected_event_ids
+):
+    collected_chat(db_session, fake_beeper, beeper_account)
+    first = fake_beeper.add_message(CHAT, "m0", "the first message of the batch")
+    second = fake_beeper.add_message(CHAT, "m1", "the second message of the batch")
+    fake_beeper.event_ids["$event0"] = "m0"
+    fake_beeper.event_ids["$event1"] = "m1"
+
+    tasks.handle_beeper_event(beeper_account.id, event("message.upserted", ids, [second, first]))
+
+    assert {k: (m.event_id, m.content) for k, m in stored(db_session).items()} == {
+        "m0": (expected_event_ids["m0"], "the first message of the batch"),
+        "m1": (expected_event_ids["m1"], "the second message of the batch"),
+    }
 
 
 def test_an_unedited_copy_does_not_undo_an_edit(db_session, fake_beeper, beeper_account, qdrant):

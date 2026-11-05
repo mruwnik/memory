@@ -69,14 +69,24 @@ def sync_all_beeper_accounts() -> dict[str, Any]:
 @tracked_task
 def sync_beeper_account(account_id: int) -> dict[str, Any]:
     """Refresh an account's networks and chats, then read each collected chat,
-    retrying backfills that gave up."""
+    retrying backfills that gave up. Chats whose read the broker refused are
+    listed under ``unqueued``."""
     try:
         result = asyncio.run(sync.sync_account(account_id))
     except BeeperError as e:
         return failed(e, account_id=account_id)
-    for chat_pk in result.get("collected", []):
+    unqueued = [chat_pk for chat_pk in result.get("collected", []) if not queue_reconcile_read(chat_pk)]
+    return {**result, "unqueued": unqueued} if unqueued else result
+
+
+def queue_reconcile_read(chat_pk: int) -> bool:
+    """Queue a reconcile read of the chat; False if the broker refused it."""
+    try:
         state.queue_chat_sync(chat_pk, random.randint(0, CHAT_JITTER_SECONDS), retry_stopped=True)
-    return result
+    except Exception:
+        logger.exception("Could not queue a read of Beeper chat %s", chat_pk)
+        return False
+    return True
 
 
 @app.task(name=SYNC_BEEPER_CHAT)

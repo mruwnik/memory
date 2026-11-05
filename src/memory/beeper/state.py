@@ -1,6 +1,8 @@
 """Short-lived Beeper state kept in Redis: which chats have a read queued, and
 which accounts' WebSockets are connected."""
 
+import contextlib
+
 import redis
 
 from memory.common import settings
@@ -33,8 +35,10 @@ def queue_chat_sync(chat_pk: int, countdown: int = 0, retry_stopped: bool = Fals
     try:
         app.send_task(SYNC_BEEPER_CHAT, args=[chat_pk], kwargs={"retry_stopped": retry_stopped}, countdown=countdown)
     except Exception:
-        # Nothing was queued, so nothing may wait on the mark.
-        client().delete(key)
+        # Nothing was queued, so nothing may wait on the mark; if Redis is down
+        # too, the mark lapses on its own and the broker error is the one to raise.
+        with contextlib.suppress(redis.RedisError):
+            client().delete(key)
         raise
     return True
 

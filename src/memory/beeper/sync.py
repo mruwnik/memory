@@ -211,10 +211,16 @@ async def sync_chat(chat_pk: int, budget: int, retry_stopped: bool = False) -> d
 
 
 def listed_messages(event: dict[str, Any], ids: list[str]) -> dict[str, beeper.Message]:
-    """The event's entries by the id the event names each with: its ids pair
-    with its entries in order, and an id may be the entry's Matrix event id."""
+    """The event's entries by the id the event names each with. An id may be
+    the entry's Matrix event id, which only position ties to an entry, and
+    nothing confirms the order of a longer batch. So a lone entry takes its id;
+    otherwise entries are keyed by their own ids and the caller fetches the
+    ids left over."""
     entries = event.get("entries") or []
-    named = zip(ids, entries) if len(ids) == len(entries) else ((e.get("id"), e) for e in entries)
+    in_order = len(ids) == len(entries) and (
+        len(entries) == 1 or all(i == e.get("id") for i, e in zip(ids, entries))
+    )
+    named = zip(ids, entries) if in_order else ((e.get("id"), e) for e in entries)
     messages = {}
     for name, entry in named:
         try:
