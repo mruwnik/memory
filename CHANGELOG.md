@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.4.3 (2026-11-05)
 
 ### Required env vars
 
@@ -127,8 +127,9 @@ snowflake, which is copied to the new `application_id`), unique per
 adds `discord_channels.bot_id`, filled for DMs from the bot of their first
 message; `discord_servers.verified` (true for existing rows) and the
 `discord_bot_servers` membership table, filled from existing server owners; and
-`slack_message.slack_app_id` (empty for existing rows). Fast. Its downgrade refuses while bots added under the new ids or Slack
-client IDs shared by several users exist.
+`slack_message.slack_app_id`, filled with the app of each workspace's
+earliest credential. Fast. Its downgrade refuses while bots added under the new
+ids or Slack client IDs shared by several users exist.
 
 `20261126_per_user_reactions` rewrites stored reactions as `{emoji: [user ids]}`.
 Slack reactions keep their users. Discord reactions were stored as counts without
