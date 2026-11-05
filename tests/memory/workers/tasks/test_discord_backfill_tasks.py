@@ -88,10 +88,11 @@ def test_resolve_channel_bot_happy_path(db_session):
     )
 
 
-@pytest.mark.parametrize("public_key, push_only", [(None, False), ("ab" * 32, True)])
-def test_resolve_channel_bot_marks_webhook_bots_push_only(db_session, public_key, push_only):
+@pytest.mark.parametrize("realtime, push_only", [("gateway", False), ("webhook", True)])
+def test_resolve_channel_bot_marks_webhook_bots_push_only(db_session, realtime, push_only):
     bot, _, _ = make_bot_server_channel(db_session)
-    bot.public_key = public_key
+    bot.public_key = "ab" * 32
+    bot.realtime = realtime
     db_session.commit()
 
     assert resolve_channel_bot(10).push_only is push_only
@@ -294,7 +295,7 @@ def test_schedule_dispatches_backfill_per_channel_and_threads_for_parents(db_ses
 
 def test_schedule_refreshes_servers_of_bots_with_tokens(db_session):
     make_bot_server_channel(db_session, token="abc")
-    db_session.add(DiscordBot(id=43, application_id=43, name="tokenless", public_key="ab" * 32))
+    db_session.add(DiscordBot(id=43, application_id=43, name="tokenless", realtime="webhook", public_key="ab" * 32))
     db_session.commit()
 
     with patch.object(discord_backfill, "discover_bot_servers", new=AsyncMock(return_value=1)) as discover, \

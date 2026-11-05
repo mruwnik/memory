@@ -25,7 +25,7 @@ LONG_TEXT = "a message long enough to be embedded by the pipeline"
 
 @pytest.fixture
 def webhook_bot(db_session):
-    bot = DiscordBot(application_id=777, name="Hooked", public_key="ab" * 32)
+    bot = DiscordBot(application_id=777, name="Hooked", realtime="webhook", public_key="ab" * 32)
     db_session.add(bot)
     db_session.commit()
     return bot
@@ -37,7 +37,7 @@ def user_owned_bot(db_session):
     owner = HumanUser(email="second@example.com", name="Second", password_hash="x")
     db_session.add(owner)
     db_session.flush()
-    bot = DiscordBot(application_id=777, name="Theirs", public_key="cd" * 32, created_by_user_id=owner.id)
+    bot = DiscordBot(application_id=777, name="Theirs", realtime="webhook", public_key="cd" * 32, created_by_user_id=owner.id)
     db_session.add(bot)
     db_session.commit()
     return bot
@@ -308,7 +308,7 @@ def attacker_bot(db_session):
     attacker = HumanUser(email="attacker@example.com", name="Attacker", password_hash="x")
     db_session.add(attacker)
     db_session.flush()
-    bot = DiscordBot(application_id=666, name="Forger", public_key="ef" * 32, created_by_user_id=attacker.id)
+    bot = DiscordBot(application_id=666, name="Forger", realtime="webhook", public_key="ef" * 32, created_by_user_id=attacker.id)
     db_session.add(bot)
     db_session.commit()
     return bot
@@ -343,7 +343,7 @@ def test_a_bot_of_the_same_owner_can_change_a_message(db_session, event_type, da
     db_session.add(user)
     db_session.flush()
     first, second = (
-        DiscordBot(application_id=app_id, name=f"bot {app_id}", public_key="ab" * 32, created_by_user_id=user.id)
+        DiscordBot(application_id=app_id, name=f"bot {app_id}", realtime="webhook", public_key="ab" * 32, created_by_user_id=user.id)
         for app_id in (1001, 1002)
     )
     db_session.add_all([first, second])

@@ -2,46 +2,28 @@
 """
 Discord collector API server.
 
-Provides HTTP endpoints for sending messages via the Discord collector bots.
-This runs alongside the collector and exposes its functionality via REST API.
+Runs the gateway collectors and reports their health; sending goes over the
+REST API, not through here.
 """
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
-from discord import abc, utils
+from discord import abc
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordChannel, DiscordUser
 from memory.discord.collector import CollectorManager
+from memory.discord.ingest import ensure_channel, ensure_server, ensure_user
 
 logger = logging.getLogger(__name__)
 
 # Global collector manager
 manager: CollectorManager | None = None
-
-
-class SendDMRequest(BaseModel):
-    bot_id: int
-    user: str | int  # User ID or username
-    message: str
-
-
-class SendChannelRequest(BaseModel):
-    bot_id: int
-    channel: str | int  # Channel ID or name
-    message: str
-
-
-class ReactionRequest(BaseModel):
-    bot_id: int
-    channel: str | int
-    message_id: int
-    emoji: str
 
 
 @asynccontextmanager
@@ -50,14 +32,15 @@ async def lifespan(app: FastAPI):
     global manager
 
     manager = CollectorManager(celery_app)
-
-    # Start all bots
-    await manager.start_all()
+    await manager.sync()
+    syncing = asyncio.create_task(manager.keep_synced())
     logger.info("Discord collector API started")
 
     yield
 
-    # Stop all bots
+    syncing.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await syncing
     await manager.stop_all()
     logger.info("Discord collector API stopped")
 
@@ -70,64 +53,6 @@ def get_manager() -> CollectorManager:
     if manager is None:
         raise HTTPException(status_code=503, detail="Collector not initialized")
     return manager
-
-
-# =============================================================================
-# Lookup Helpers
-# =============================================================================
-
-
-async def resolve_channel_id(channel: str | int) -> int:
-    """Resolve a channel name or ID to an ID."""
-    if isinstance(channel, int):
-        return channel
-
-    # Try to parse as int first
-    try:
-        return int(channel)
-    except ValueError:
-        pass
-
-    # Look up by name in database
-    with make_session() as session:
-        ch = session.query(DiscordChannel).filter_by(name=channel).first()
-        if ch:
-            return ch.id
-
-    raise HTTPException(status_code=404, detail=f"Channel '{channel}' not found")
-
-
-async def resolve_user_id(user: str | int, mgr: CollectorManager | None = None) -> int:
-    """Resolve a username or ID to an ID.
-
-    Tries in order:
-    1. Parse as integer ID
-    2. Username in the local database
-    3. Username among Discord guild members (if manager provided)
-    """
-    if isinstance(user, int):
-        return user
-
-    # Try to parse as int first
-    try:
-        return int(user)
-    except ValueError:
-        pass
-
-    # Usernames only: display names and nicknames are unique to nobody and
-    # picked by the member, so they would let anyone take a DM.
-    with make_session() as session:
-        u = session.query(DiscordUser).filter(DiscordUser.username == user).first()
-        if u:
-            return u.id
-
-    if mgr:
-        for collector in mgr.collectors.values():
-            for guild in collector.guilds:
-                if member := utils.get(guild.members, name=user):
-                    return member.id
-
-    raise HTTPException(status_code=404, detail=f"User '{user}' not found")
 
 
 @app.get("/health")
@@ -143,44 +68,10 @@ async def health() -> dict[str, Any]:
     return result
 
 
-@app.post("/send_dm")
-async def send_dm(request: SendDMRequest) -> dict[str, Any]:
-    """Send a DM to a user."""
-    mgr = get_manager()
-    user_id = await resolve_user_id(request.user, mgr)
-    success = await mgr.send_dm(request.bot_id, user_id, request.message)
-    return {"success": success}
-
-
-@app.post("/send_channel")
-async def send_channel(request: SendChannelRequest) -> dict[str, Any]:
-    """Send a message to a channel."""
-    mgr = get_manager()
-    channel_id = await resolve_channel_id(request.channel)
-    success = await mgr.send_message(request.bot_id, channel_id, request.message)
-    return {"success": success}
-
-
-@app.post("/add_reaction")
-async def add_reaction(request: ReactionRequest) -> dict[str, Any]:
-    """Add a reaction to a message."""
-    mgr = get_manager()
-    channel_id = await resolve_channel_id(request.channel)
-    collector = mgr.get_collector(request.bot_id)
-    if not collector:
-        return {"success": False}
-
-    success = await collector.add_reaction(channel_id, request.message_id, request.emoji)
-    return {"success": success}
-
-
 @app.post("/refresh_metadata")
 async def refresh_metadata() -> dict[str, Any]:
     """Refresh Discord metadata from API."""
     mgr = get_manager()
-
-    from memory.discord.ingest import ensure_channel, ensure_server, ensure_user
-
     updated = {"servers": 0, "channels": 0, "users": 0}
 
     for collector in mgr.collectors.values():

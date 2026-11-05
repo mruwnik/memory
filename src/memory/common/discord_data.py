@@ -118,7 +118,7 @@ def get_user_bots(session: DBSession, user_id: int) -> list[DiscordBot]:
     return (
         session.query(DiscordBot)
         .filter(DiscordBot.created_by_user_id == user_id)
-        .order_by(DiscordBot.public_key.is_not(None), DiscordBot.id)
+        .order_by(DiscordBot.realtime == "webhook", DiscordBot.id)
         .all()
     )
 

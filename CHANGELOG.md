@@ -12,6 +12,44 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## Unreleased
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Every Discord bot needs its token, and chooses its real-time delivery:
+  WebSocket gateway (the default) or webhook. Bots that had a public key keep
+  webhook delivery; the rest stay on the gateway. Bots registered without a
+  token are paused; add the token under **Edit** to resume one.
+- Every Discord bot now sends (messages, DMs, reactions) through the REST API
+  at its API base URL; the collector's `/send_dm`, `/send_channel` and
+  `/add_reaction` endpoints are gone.
+- A gateway bot with a custom API base URL takes its gateway from
+  `GET <API base URL>/gateway/bot`, so a Discord-compatible server can serve
+  the gateway too. Its REST and gateway connections get the same outbound
+  address checks as other user-supplied URLs (IP literals included), REST
+  redirects are refused, and the gateway host must be on the chat API
+  allowlist (`CHAT_API_ALLOWED_ORIGINS`, unless the bot's owner is an admin).
+  A bot whose login is refused waits for a new token instead of retrying.
+- The ingest hub re-reads the bot list every minute, so adding, pausing or
+  switching a bot no longer needs a restart.
+
+### Migrations
+
+`20261127_discord_realtime`: adds `discord_bots.realtime` and pauses tokenless
+bots. Fast.
+
+### Post-deploy commands
+
+None.
+
 ## v0.4.3 (2026-11-05)
 
 ### Required env vars

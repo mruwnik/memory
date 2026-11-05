@@ -81,11 +81,15 @@ def test_registering_another_users_application_makes_a_separate_bot(client, db_s
     assert (bot.created_by_user_id, bot.is_authorized(user)) == (owner.id, False)
 
 
+def webhook_bot_body(application_id: int, public_key: str = PUBLIC_KEY) -> dict:
+    return {"token": gateway_token(application_id), "realtime": "webhook", "public_key": public_key}
+
+
 @pytest.mark.parametrize(
     "registration",
     [
         {"token": gateway_token(22222)},
-        {"application_id": "22222", "public_key": PUBLIC_KEY},
+        webhook_bot_body(22222),
     ],
 )
 def test_registering_the_same_application_twice_returns_the_bot(client, db_session, user, registration):
@@ -96,48 +100,41 @@ def test_registering_the_same_application_twice_returns_the_bot(client, db_sessi
     assert db_session.query(DiscordBot).filter_by(application_id=22222).count() == 1
 
 
-def test_registering_again_applies_the_new_key_and_token(client, db_session, user):
-    first = client.post("/discord/bots", json={"name": "A", "application_id": "22223", "public_key": PUBLIC_KEY}).json()
+def test_registering_again_applies_the_new_mode_key_and_token(client, db_session, user):
+    first = client.post("/discord/bots", json={"name": "A", "token": gateway_token(22223)}).json()
 
-    again = client.post(
-        "/discord/bots",
-        json={"name": "A", "application_id": "22223", "public_key": "cd" * 32, "token": gateway_token(22223)},
-    ).json()
+    again = client.post("/discord/bots", json={"name": "A"} | webhook_bot_body(22223, "cd" * 32)).json()
 
     bot = db_session.get(DiscordBot, int(first["id"]))
     db_session.refresh(bot)
-    assert (again["id"], bot.public_key, bot.token) == (first["id"], "cd" * 32, gateway_token(22223))
+    assert (again["id"], bot.realtime, bot.public_key) == (first["id"], "webhook", "cd" * 32)
 
 
 def test_application_id_must_match_the_token(client, db_session, user):
     response = client.post(
         "/discord/bots",
-        json={"name": "A", "application_id": "33334", "public_key": PUBLIC_KEY, "token": gateway_token(44445)},
+        json={"name": "A", "application_id": "33334"} | webhook_bot_body(44445),
     )
 
     assert response.status_code == 400
 
 
-def test_webhook_bot_needs_no_token(client, db_session, user):
-    response = client.post(
-        "/discord/bots",
-        json={"name": "Hooked", "application_id": "33333", "public_key": PUBLIC_KEY},
-    )
+def test_a_webhook_bot_shows_its_events_url(client, db_session, user):
+    response = client.post("/discord/bots", json={"name": "Hooked"} | webhook_bot_body(33333))
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["has_token"] is False
-    assert body["public_key"] == PUBLIC_KEY
+    assert (body["realtime"], body["has_token"], body["public_key"]) == ("webhook", True, PUBLIC_KEY)
     assert body["api_base_url"] == "https://discord.com/api/v10"
     assert body["events_url"].endswith(f"/discord/events/{body['id']}")
     bot = db_session.get(DiscordBot, int(body["id"]))
-    assert (bot.application_id, bot.token, bot.runs_gateway) == (33333, None, False)
+    assert (bot.application_id, bot.runs_gateway) == (33333, False)
 
 
-def test_gateway_bot_has_no_events_url(client, db_session, user):
+def test_a_bot_runs_the_gateway_by_default(client, db_session, user):
     body = client.post("/discord/bots", json={"name": "G", "token": gateway_token(44444)}).json()
 
-    assert (body["events_url"], body["has_token"]) == (None, True)
+    assert (body["realtime"], body["has_token"]) == ("gateway", True)
     assert db_session.get(DiscordBot, int(body["id"])).runs_gateway is True
 
 
@@ -145,11 +142,14 @@ def test_gateway_bot_has_no_events_url(client, db_session, user):
     "body",
     [
         {"name": "x"},
-        {"name": "x", "public_key": PUBLIC_KEY},
-        {"name": "x", "application_id": "55555", "public_key": "not-hex"},
-        {"name": "x", "application_id": "55555", "public_key": "ab" * 31},
-        {"name": "x", "application_id": "not-a-number", "public_key": PUBLIC_KEY},
-        {"name": "x", "application_id": "55555", "public_key": PUBLIC_KEY, "api_base_url": "http://x.example.com"},
+        {"name": "x", "application_id": "55555", "public_key": PUBLIC_KEY},
+        {"name": "x", "application_id": "55555", "realtime": "webhook", "public_key": PUBLIC_KEY},
+        {"name": "x", "token": gateway_token(55555), "realtime": "webhook"},
+        {"name": "x", "token": gateway_token(55555), "realtime": "carrier-pigeon"},
+        {"name": "x"} | webhook_bot_body(55555, "not-hex"),
+        {"name": "x"} | webhook_bot_body(55555, "ab" * 31),
+        {"name": "x", "application_id": "not-a-number", "token": gateway_token(55555)},
+        {"name": "x", "token": gateway_token(55555), "api_base_url": "http://x.example.com"},
         {"name": "x", "token": "garbage"},
     ],
 )
@@ -160,26 +160,66 @@ def test_bot_registration_rejects_bad_input(client, db_session, user, body):
     assert db_session.query(DiscordBot).count() == 0
 
 
-def test_patch_sets_webhook_fields(client, db_session, user):
+def test_patch_switches_a_bot_to_webhook_and_back(client, db_session, user):
     bot_id = client.post("/discord/bots", json={"name": "G", "token": gateway_token(66666)}).json()["id"]
 
-    body = client.patch(
+    hooked = client.patch(
         f"/discord/bots/{bot_id}",
-        json={"public_key": PUBLIC_KEY, "api_base_url": "https://chat.example.com/discord/api/v10"},
+        json={"realtime": "webhook", "public_key": PUBLIC_KEY, "api_base_url": "https://chat.example.com/discord/api/v10"},
     ).json()
+    back = client.patch(f"/discord/bots/{bot_id}", json={"realtime": "gateway"}).json()
 
-    assert (body["public_key"], body["api_base_url"]) == (
-        PUBLIC_KEY,
-        "https://chat.example.com/discord/api/v10",
+    assert (hooked["realtime"], hooked["public_key"], hooked["api_base_url"]) == (
+        "webhook", PUBLIC_KEY, "https://chat.example.com/discord/api/v10",
     )
-    assert body["events_url"].endswith(f"/discord/events/{bot_id}")
+    assert hooked["events_url"].endswith(f"/discord/events/{bot_id}")
+    assert (back["realtime"], back["public_key"]) == ("gateway", PUBLIC_KEY)
+
+
+def test_patch_refuses_webhook_mode_without_a_public_key(client, db_session, user):
+    bot_id = client.post("/discord/bots", json={"name": "G", "token": gateway_token(66670)}).json()["id"]
+
+    response = client.patch(f"/discord/bots/{bot_id}", json={"realtime": "webhook"})
+
+    assert response.status_code == 400
+    assert db_session.get(DiscordBot, int(bot_id)).realtime == "gateway"
+
+
+def test_a_tokenless_bot_resumes_only_with_a_token(client, db_session, user):
+    bot = DiscordBot(application_id=77778, name="Old", created_by_user_id=user.id, is_active=False)
+    db_session.add(bot)
+    db_session.commit()
+
+    refused = client.patch(f"/discord/bots/{bot.id}", json={"is_active": True})
+    resumed = client.patch(f"/discord/bots/{bot.id}", json={"token": gateway_token(77778)})
+
+    assert (refused.status_code, resumed.status_code, resumed.json()["is_active"]) == (400, 200, True)
+
+
+def test_a_new_token_leaves_a_paused_bot_paused(client, db_session, user):
+    bot_id = client.post("/discord/bots", json={"name": "G", "token": gateway_token(77779)}).json()["id"]
+    client.patch(f"/discord/bots/{bot_id}", json={"is_active": False})
+
+    body = client.patch(f"/discord/bots/{bot_id}", json={"token": gateway_token(77779)}).json()
+
+    assert body["is_active"] is False
+
+
+@pytest.mark.parametrize("realtime, expected", [(None, "webhook"), ("gateway", "gateway")])
+def test_registering_again_changes_the_mode_only_when_asked(client, db_session, user, realtime, expected):
+    client.post("/discord/bots", json={"name": "A"} | webhook_bot_body(22224))
+    again = {"name": "A", "token": gateway_token(22224)} | ({"realtime": realtime} if realtime else {})
+
+    body = client.post("/discord/bots", json=again).json()
+
+    assert body["realtime"] == expected
 
 
 def test_members_cannot_point_a_bot_outside_the_allowlist(member_client, db_session, user):
     with patch("memory.common.chat_urls.settings.CHAT_API_ALLOWED_ORIGINS", []):
         created = member_client.post(
             "/discord/bots",
-            json={"name": "x", "application_id": "88888", "public_key": PUBLIC_KEY, "api_base_url": "https://chat.example.com/api"},
+            json={"name": "x", "token": gateway_token(88888), "api_base_url": "https://chat.example.com/api"},
         )
         bot_id = member_client.post("/discord/bots", json={"name": "G", "token": gateway_token(66667)}).json()["id"]
         patched = member_client.patch(f"/discord/bots/{bot_id}", json={"api_base_url": "https://chat.example.com/api"})

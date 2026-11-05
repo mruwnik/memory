@@ -25,6 +25,7 @@ def webhook_bot(db_session, user):
         application_id=123456789012345678,
         name="Hooked",
         created_by_user_id=user.id,
+        realtime="webhook",
         public_key=public_hex(SIGNING_KEY),
     )
     db_session.add(bot)
@@ -156,7 +157,7 @@ def test_malformed_signature_headers_get_401(client, webhook_bot, headers):
 @pytest.mark.parametrize(
     "change",
     [
-        {"public_key": None},
+        {"realtime": "gateway"},
         {"is_active": False},
     ],
 )

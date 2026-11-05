@@ -57,13 +57,17 @@ PublicKey = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$", to_lo
 Snowflake = Annotated[str, StringConstraints(pattern=r"^[0-9]{1,20}$")]
 
 
+Realtime = Literal["gateway", "webhook"]
+
+
 class DiscordBotCreate(BaseModel):
-    """A gateway bot needs its token; a webhook bot its application id and
-    public key (and optionally a token for the daily catch-up)."""
+    """Every bot needs its token; a webhook bot also its public key."""
 
     name: str
-    token: str | None = None
+    token: str
     application_id: Snowflake | None = None
+    # Kept on re-registration unless given; new bots default to the gateway
+    realtime: Realtime | None = None
     public_key: PublicKey | None = None
     api_base_url: HttpsUrl | None = None
 
@@ -72,6 +76,7 @@ class DiscordBotUpdate(BaseModel):
     name: str | None = None
     is_active: bool | None = None
     token: str | None = None
+    realtime: Realtime | None = None
     public_key: PublicKey | None = None
     api_base_url: HttpsUrl | None = None
 
@@ -82,9 +87,11 @@ class DiscordBotResponse(BaseModel):
     name: str
     is_active: bool
     has_token: bool
+    realtime: str
     public_key: str | None
     api_base_url: str
-    events_url: str | None
+    # Where webhook delivery posts; shown before switching a bot to it
+    events_url: str
     last_event_at: str | None
     created_at: str | None
     updated_at: str | None
@@ -177,6 +184,13 @@ def application_id_from_token(token: str) -> int:
         raise HTTPException(status_code=400, detail="Invalid bot token format")
 
 
+def require_usable(realtime: str, public_key: str | None, is_active: bool, has_token: bool) -> None:
+    if realtime == "webhook" and not public_key:
+        raise HTTPException(status_code=400, detail="Webhook delivery needs the public key that signs the events")
+    if is_active and not has_token:
+        raise HTTPException(status_code=400, detail="Add the bot's token to resume it")
+
+
 def bot_to_response(
     bot: DiscordBot, connected: bool | None = None
 ) -> DiscordBotResponse:
@@ -187,9 +201,10 @@ def bot_to_response(
         name=cast(str, bot.name),
         is_active=cast(bool, bot.is_active),
         has_token=bot.token_encrypted is not None,
+        realtime=bot.realtime,
         public_key=bot.public_key,
         api_base_url=bot.api_base_url,
-        events_url=events_url_for(bot) if bot.public_key else None,
+        events_url=events_url_for(bot),
         last_event_at=bot.last_event_at.isoformat() if bot.last_event_at else None,
         created_at=bot.created_at.isoformat() if bot.created_at else None,
         updated_at=bot.updated_at.isoformat() if bot.updated_at else None,
@@ -264,18 +279,12 @@ def create_bot(
 ) -> DiscordBotResponse:
     """Register a Discord bot for the caller.
 
-    The application id comes from the body, else from the token. Each user
-    has their own row per application; registering one again updates its key,
-    token and API URL.
+    The application id comes from the token (a given one must match). Each
+    user has their own row per application; registering one again updates it.
     """
-    token_application_id = application_id_from_token(data.token) if data.token else None
-    if data.application_id is None and token_application_id is None:
-        raise HTTPException(status_code=400, detail="Give a bot token or an application id")
-    application_id = int(data.application_id) if data.application_id else token_application_id
-    if token_application_id is not None and token_application_id != application_id:
+    application_id = application_id_from_token(data.token)
+    if data.application_id is not None and int(data.application_id) != application_id:
         raise HTTPException(status_code=400, detail="The bot token belongs to another application")
-    if not data.token and not data.public_key:
-        raise HTTPException(status_code=400, detail="A bot without a token needs a public key")
     if data.api_base_url:
         require_chat_url(data.api_base_url, user)
 
@@ -287,13 +296,15 @@ def create_bot(
         )
         .first()
     )
+    realtime = data.realtime or (existing.realtime if existing else "gateway")
+    require_usable(realtime, data.public_key or (existing and existing.public_key), True, True)
     bot = existing or DiscordBot(application_id=application_id, name=data.name, created_by_user_id=user.id)
+    bot.token = data.token
+    bot.realtime = realtime
     if data.public_key:
         bot.public_key = data.public_key
     if data.api_base_url:
         bot.api_base_url = data.api_base_url
-    if data.token:
-        bot.token = data.token
 
     db.add(bot)
     db.commit()
@@ -309,21 +320,33 @@ def update_bot(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> DiscordBotResponse:
-    """Update a Discord bot."""
+    """Update a Discord bot, including switching its real-time delivery."""
     bot = get_user_bot(db, bot_id, user)
+    if updates.token and application_id_from_token(updates.token) != bot.application_id:
+        raise HTTPException(status_code=400, detail="The bot token belongs to another application")
+    if updates.api_base_url:
+        require_chat_url(updates.api_base_url, user)
+    require_usable(
+        updates.realtime or bot.realtime,
+        updates.public_key or bot.public_key,
+        bot.is_active if updates.is_active is None else updates.is_active,
+        bool(updates.token) or bot.token_encrypted is not None,
+    )
 
     if updates.name is not None:
         bot.name = updates.name
     if updates.is_active is not None:
         bot.is_active = updates.is_active
     if updates.token:
-        if application_id_from_token(updates.token) != bot.application_id:
-            raise HTTPException(status_code=400, detail="The bot token belongs to another application")
+        # Bots registered before tokens were required were paused for lack of one.
+        if bot.token_encrypted is None and updates.is_active is None:
+            bot.is_active = True
         bot.token = updates.token
+    if updates.realtime is not None:
+        bot.realtime = updates.realtime
     if updates.public_key:
         bot.public_key = updates.public_key
     if updates.api_base_url:
-        require_chat_url(updates.api_base_url, user)
         bot.api_base_url = updates.api_base_url
 
     db.commit()
@@ -577,7 +600,7 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
     signature = request.headers.get("x-signature-ed25519", "")
 
     bot = db.get(DiscordBot, bot_id)
-    if bot is None or not bot.is_active or not bot.public_key:
+    if bot is None or not bot.is_active or bot.realtime != "webhook" or not bot.public_key:
         return unauthorized
     if not is_fresh(timestamp) or not verify_discord_signature(bot.public_key, timestamp, body, signature):
         logger.info("Discord event rejected for bot %s", bot_id)

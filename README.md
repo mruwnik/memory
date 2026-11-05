@@ -227,42 +227,49 @@ Behind a reverse proxy, `/transcripts/ingest/` must reach the api without a logi
 
 ### Discord integration
 
-Add a bot in **Sources → Discord**. By default it receives messages by webhook:
-enter the bot's application ID and the Ed25519 public key that signs its
-[Webhook Events](https://docs.discord.com/developers/events/webhook-events), and
-Memory shows the bot's events URL, `<SERVER_URL>/discord/events/<bot id>`, to
-paste as the webhook URL. The endpoint answers a signed PING with 204 and a bad
-signature with 401. Events carry gateway payloads (`MESSAGE_CREATE`,
-`MESSAGE_UPDATE`, `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, the four
-`MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
-acknowledged and ignored. Servers and DMs first seen through a webhook bot
-collect everything it receives; turn collection off per server or channel as
-usual. Several people can each add the same application with their own key and
+Add a bot in **Sources → Discord** with its name and token (the application ID
+is read from the token). Every bot reads and sends with its token over the REST
+API, and a daily catch-up (`DISCORD_BACKFILL_INTERVAL`, default a day) refreshes
+its servers and channels, re-reads the last `DISCORD_CATCH_UP_DAYS` (2) of each
+collected channel to store messages that didn't arrive and apply missed edits,
+and continues the history backfill. Missed deletes and reactions are not
+repaired. Several people can each add the same application with their own
 token; a message they can all see is stored once.
+
+**Real-time delivery** picks how new messages arrive; switch it any time with
+**Edit**, and the ingest hub picks the change up within a minute:
+
+- **WebSocket gateway** (the default): the ingest hub keeps a gateway
+  connection open for the bot.
+- **Webhook**: the bot gets signed
+  [Webhook Events](https://docs.discord.com/developers/events/webhook-events)
+  instead. Enter the Ed25519 public key that signs them, and paste the bot's
+  events URL, `<SERVER_URL>/discord/events/<bot id>`, as the webhook URL. The
+  endpoint answers a signed PING with 204 and a bad signature (or a bot not in
+  webhook mode) with 401. Events carry gateway payloads (`MESSAGE_CREATE`,
+  `MESSAGE_UPDATE`, `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, the four
+  `MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
+  acknowledged and ignored. Servers and DMs first seen through a webhook bot
+  collect everything it receives; turn collection off per server or channel as
+  usual.
 
 A signing key only proves which Memory user sent an event, so pushes are
 limited to that user's own rows: edits, deletes and reactions only touch
 messages their bots delivered or that sit in servers (or DMs) their bots own,
 and a push never renames or claims an existing server or channel, changes a
 stored Discord user's name, or links an author to a person by username. A
-server first seen in a pushed event isn't listed or manageable until a bot
-with a token (gateway, or the daily REST listing) confirms it, which takes it
-over with default access settings. A DM is
-managed by the owner of the bot that first delivered it.
+server first seen in a pushed event isn't listed or manageable until the
+token confirms it (the gateway, or the daily REST listing), which takes it
+over with default access settings. A DM is managed by the owner of the bot
+that first delivered it.
 
-The bot token is optional for a webhook bot. With one, the bot can send (through
-the REST API, as it has no gateway connection), and a daily catch-up
-(`DISCORD_BACKFILL_INTERVAL`, default a day) refreshes the bot's servers and
-channels, re-reads the last `DISCORD_CATCH_UP_DAYS` (2) of each collected
-channel to store deliveries that didn't arrive and apply missed edits, and
-continues the history backfill. Missed deletes and reactions are not repaired.
 Under **Advanced**, **API base URL** points the bot at any server speaking
-Discord's REST API (default `https://discord.com/api/v10`); it is called with
-`Authorization: Bot <token>`.
+Discord's API (default `https://discord.com/api/v10`). REST calls go there with
+`Authorization: Bot <token>`, and a gateway bot asks it for the gateway
+(`GET <API base URL>/gateway/bot`, which must return a `wss://` URL on the same
+allowlist as the API URL) and connects there with zlib-stream compression. Bots on `discord.com` connect to Discord's gateway directly.
 
-The other option, **Gateway bot**, takes only a token and runs a gateway
-connection in the ingest hub instead. To get notifications in Discord through a
-gateway bot, [create a bot](https://discord.com/developers/applications), then run:
+To get notifications in Discord, [create a bot](https://discord.com/developers/applications), then run:
 
 ```bash
 python tools/discord_setup.py generate-invite --bot-token <your bot token>

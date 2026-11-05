@@ -105,11 +105,11 @@ class User(Base):
     )
 
     # Discord relationships
-    # Gateway bots first, so the default sender is stable and can use the gateway.
+    # Gateway bots first, so the default sender is stable.
     discord_bots: Mapped[list[DiscordBot]] = relationship(
         "DiscordBot",
         back_populates="owner",
-        order_by="(DiscordBot.public_key.is_not(None), DiscordBot.id)",
+        order_by="(DiscordBot.realtime == 'webhook', DiscordBot.id)",
     )
 
     # Slack relationships (per-user OAuth credentials)

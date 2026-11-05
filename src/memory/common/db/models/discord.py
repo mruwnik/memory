@@ -45,10 +45,11 @@ class DiscordBot(Base):
     """A Discord bot (application) we receive messages for.
 
     One row per (Discord application, registering user): several users can
-    each connect the same application with their own token and key. A bot
-    with a public key receives signed Webhook Events; one with only a token
-    runs a gateway collector. The token is stored encrypted; the REST API URL
-    defaults to Discord's.
+    each connect the same application with their own token and key. Every
+    bot reads and sends over the REST API with its token; ``realtime`` picks
+    how live events arrive: the gateway collector, or signed Webhook Events
+    checked with ``public_key``. The token is stored encrypted; the API URL
+    defaults to Discord's and also names the gateway (``GET /gateway/bot``).
     """
 
     __tablename__ = "discord_bots"
@@ -58,10 +59,11 @@ class DiscordBot(Base):
     application_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # Encrypted Discord bot token
+    # Encrypted Discord bot token; NULL only on rows from before tokens were required, which stay paused
     token_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # Hex Ed25519 key that signs Webhook Events
     public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    realtime: Mapped[str] = mapped_column(Text, nullable=False, default="gateway", server_default="gateway")
     api_base_url: Mapped[str] = mapped_column(
         Text, nullable=False, default=DEFAULT_DISCORD_API_BASE_URL,
         server_default=DEFAULT_DISCORD_API_BASE_URL,
@@ -88,12 +90,15 @@ class DiscordBot(Base):
         UniqueConstraint(
             "application_id", "created_by_user_id", name="uq_discord_bots_application_user"
         ),
+        CheckConstraint("realtime IN ('gateway', 'webhook')", name="ck_discord_bots_realtime"),
+        CheckConstraint(
+            "realtime <> 'webhook' OR public_key IS NOT NULL", name="ck_discord_bots_webhook_key"
+        ),
     )
 
     @property
     def runs_gateway(self) -> bool:
-        """Webhook bots get their events pushed; a gateway would duplicate them."""
-        return self.token_encrypted is not None and self.public_key is None
+        return self.realtime == "gateway"
 
     @property
     def token(self) -> str | None:

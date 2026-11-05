@@ -5,7 +5,9 @@ Discord message collector bot.
 This module provides a Discord bot that:
 - Listens for messages in configured channels/servers
 - Queues messages for storage and embedding via Celery
-- Provides methods for sending messages (used by MCP tools)
+
+Sends go over the REST API (``memory.common.discord``), so they work whether or
+not a bot's gateway connection is up.
 """
 from __future__ import annotations
 
@@ -16,19 +18,23 @@ from typing import TYPE_CHECKING
 
 from discord import (
     Intents,
+    LoginFailure,
     Message,
     RawReactionActionEvent,
     RawReactionClearEmojiEvent,
     RawReactionClearEvent,
     abc,
 )
+import yarl
 from discord.ext import commands
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, UPDATE_REACTIONS
 from memory.common.db.connection import make_session
 from memory.common.discord_events import emoji_key as event_emoji_key
 from memory.common.db.models import DiscordBot, DiscordChannel
+from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
 from memory.discord.ingest import (
     ensure_channel,
     ensure_message_entities,
@@ -37,6 +43,9 @@ from memory.discord.ingest import (
     queue_message,
     should_collect,
 )
+from memory.common.chat_urls import chat_url_allowed
+from memory.discord.proxied_http import ProxiedHTTPClient
+from memory.discord.rest import bot_access
 
 if TYPE_CHECKING:
     from celery import Celery
@@ -46,15 +55,40 @@ def emoji_key(emoji) -> str | None:
     return event_emoji_key({"id": emoji.id, "name": emoji.name})
 
 
-@dataclass
+@dataclass(frozen=True)
 class BotInfo:
-    """Simple data holder for bot info to avoid SQLAlchemy session issues."""
+    """What a collector runs with, detached from the session; a change restarts it."""
 
     id: int
     name: str
     token: str
+    api_base_url: str = DEFAULT_DISCORD_API_BASE_URL
+
 
 logger = logging.getLogger(__name__)
+
+# How often the collector picks up bots added, paused or switched between modes.
+SYNC_INTERVAL_SECONDS = 60
+
+
+def gateway_allowed(bot_id: int, url: str) -> bool:
+    """A gateway URL is held to the chat API allowlist, as the bot's owner
+    stands now, like its API URL."""
+    with make_session() as session:
+        bot = session.get(DiscordBot, bot_id)
+        if bot is None:
+            return False
+        return chat_url_allowed(str(yarl.URL(url).with_scheme("https")), bot.owner)
+
+
+def gateway_bots(session: Session) -> list[BotInfo]:
+    """Active gateway-mode bots with a token and an allowed API URL."""
+    bots = session.query(DiscordBot).filter_by(is_active=True, realtime="gateway").order_by(DiscordBot.id)
+    return [
+        BotInfo(id=bot.id, name=bot.name, token=access.token, api_base_url=access.api_base_url)
+        for bot in bots
+        if (access := bot_access(bot))
+    ]
 
 
 class MessageCollector(commands.Bot):
@@ -74,6 +108,11 @@ class MessageCollector(commands.Bot):
         intents.reactions = True
 
         super().__init__(command_prefix="!", intents=intents)
+        if bot_info.api_base_url.rstrip("/") != DEFAULT_DISCORD_API_BASE_URL:
+            self.http = ProxiedHTTPClient(
+                bot_info.api_base_url, lambda url: gateway_allowed(bot_info.id, url), self.http.loop
+            )
+            self._connection.http = self.http
 
         self.bot_info = bot_info
         self.celery_app = celery_app
@@ -245,50 +284,6 @@ class MessageCollector(commands.Bot):
         queue_message(self.celery_app, message, self.bot_info.id, is_edit)
         logger.debug(f"Queued message {message.id} for processing")
 
-    async def send_message(self, channel_id: int, content: str) -> bool:
-        """Send a message to a channel."""
-        try:
-            channel = self.get_channel(channel_id)
-            if channel is None:
-                channel = await self.fetch_channel(channel_id)
-            if channel and hasattr(channel, "send"):
-                await channel.send(content)  # type: ignore[union-attr]
-                return True
-        except Exception:
-            logger.exception(f"Failed to send message to channel {channel_id}")
-        return False
-
-    async def send_dm(self, user_id: int, content: str) -> bool:
-        """Send a DM to a user."""
-        try:
-            user = self.get_user(user_id)
-            if user is None:
-                user = await self.fetch_user(user_id)
-            if user:
-                await user.send(content)
-                return True
-        except Exception:
-            logger.exception(f"Failed to send DM to user {user_id}")
-        return False
-
-    async def add_reaction(
-        self, channel_id: int, message_id: int, emoji: str
-    ) -> bool:
-        """Add a reaction to a message."""
-        try:
-            channel = self.get_channel(channel_id)
-            if channel is None:
-                channel = await self.fetch_channel(channel_id)
-            if channel and hasattr(channel, "fetch_message"):
-                message = await channel.fetch_message(message_id)  # type: ignore[union-attr]
-                await message.add_reaction(emoji)
-                return True
-        except Exception:
-            logger.exception(
-                f"Failed to add reaction to message {message_id} in channel {channel_id}"
-            )
-        return False
-
 
 class CollectorManager:
     """Manages multiple Discord bot collectors."""
@@ -297,19 +292,29 @@ class CollectorManager:
         self.celery_app = celery_app
         self.collectors: dict[int, MessageCollector] = {}
         self._tasks: dict[int, asyncio.Task] = {}
+        # Logins Discord refused, not retried until the bot's settings change
+        self.refused: dict[int, BotInfo] = {}
 
-    async def start_all(self) -> None:
-        """Start all active bots."""
-        bot_infos: list[BotInfo] = []
+    async def sync(self) -> None:
+        """Run exactly the bots that should be on the gateway, restarting any
+        whose token, name or API URL changed."""
         with make_session() as session:
-            bots = session.query(DiscordBot).filter_by(is_active=True).all()
-            for bot in bots:
-                token = bot.token
-                if token and bot.runs_gateway:
-                    bot_infos.append(BotInfo(id=bot.id, name=bot.name, token=token))
+            wanted = {info.id: info for info in gateway_bots(session)}
+        for bot_id, collector in list(self.collectors.items()):
+            if wanted.get(bot_id) != collector.bot_info:
+                await self.stop_bot(bot_id)
+        for bot_id, info in wanted.items():
+            if bot_id not in self.collectors and self.refused.get(bot_id) != info:
+                self.refused.pop(bot_id, None)
+                await self.start_bot(info)
 
-        for bot_info in bot_infos:
-            await self.start_bot(bot_info)
+    async def keep_synced(self) -> None:
+        while True:
+            await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+            try:
+                await self.sync()
+            except Exception:
+                logger.exception("Discord collector sync failed")
 
     async def start_bot(self, bot_info: BotInfo) -> None:
         """Start a single bot."""
@@ -330,11 +335,16 @@ class CollectorManager:
         """Run a bot until stopped."""
         try:
             await collector.start(bot_info.token)
+        except LoginFailure:
+            logger.error(f"Discord bot {bot_info.id} was refused at login; waiting for a new token")
+            self.refused[bot_info.id] = bot_info
         except Exception:
             logger.exception(f"Bot {bot_info.id} crashed")
         finally:
-            self.collectors.pop(bot_info.id, None)
-            self._tasks.pop(bot_info.id, None)
+            # A restart may already have put a new collector under this id.
+            if self.collectors.get(bot_info.id) is collector:
+                self.collectors.pop(bot_info.id, None)
+                self._tasks.pop(bot_info.id, None)
 
     async def stop_bot(self, bot_id: int) -> None:
         """Stop a single bot."""
@@ -352,23 +362,3 @@ class CollectorManager:
         """Stop all bots."""
         for bot_id in list(self.collectors.keys()):
             await self.stop_bot(bot_id)
-
-    def get_collector(self, bot_id: int) -> MessageCollector | None:
-        """Get a collector by bot ID."""
-        return self.collectors.get(bot_id)
-
-    async def send_message(
-        self, bot_id: int, channel_id: int, content: str
-    ) -> bool:
-        """Send a message using a specific bot."""
-        collector = self.get_collector(bot_id)
-        if collector:
-            return await collector.send_message(channel_id, content)
-        return False
-
-    async def send_dm(self, bot_id: int, user_id: int, content: str) -> bool:
-        """Send a DM using a specific bot."""
-        collector = self.get_collector(bot_id)
-        if collector:
-            return await collector.send_dm(user_id, content)
-        return False

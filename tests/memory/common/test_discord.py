@@ -7,13 +7,6 @@ from memory.common import discord
 BOT_ID = 42
 
 
-@pytest.fixture(autouse=True)
-def gateway_bots():
-    """These tests cover the collector path, taken by bots with a gateway."""
-    with patch("memory.common.discord.rest_access", return_value=None):
-        yield
-
-
 @pytest.fixture
 def mock_api_url():
     """Mock the API URL to avoid using actual settings"""
@@ -28,104 +21,6 @@ def mock_api_url():
 def test_get_api_url():
     """Test API URL construction"""
     assert discord.get_api_url() == "http://testhost:9999"
-
-
-@patch("requests.post")
-def test_send_dm_success(mock_post, mock_api_url):
-    """Test successful DM sending"""
-    mock_response = Mock()
-    mock_response.json.return_value = {"success": True}
-    mock_response.raise_for_status.return_value = None
-    mock_post.return_value = mock_response
-
-    result = discord.send_dm(BOT_ID, "user123", "Hello!")
-
-    assert result is True
-    mock_post.assert_called_once_with(
-        "http://localhost:8000/send_dm",
-        json={"bot_id": BOT_ID, "user": "user123", "message": "Hello!"},
-        timeout=10,
-    )
-
-
-@patch("requests.post")
-def test_send_dm_api_failure(mock_post, mock_api_url):
-    """Test DM sending when API returns failure"""
-    mock_response = Mock()
-    mock_response.json.return_value = {"success": False}
-    mock_response.raise_for_status.return_value = None
-    mock_post.return_value = mock_response
-
-    result = discord.send_dm(BOT_ID, "user123", "Hello!")
-
-    assert result is False
-
-
-@patch("requests.post")
-def test_send_dm_request_exception(mock_post, mock_api_url):
-    """Test DM sending when request raises exception"""
-    mock_post.side_effect = requests.RequestException("Network error")
-
-    result = discord.send_dm(BOT_ID, "user123", "Hello!")
-
-    assert result is False
-
-
-@patch("requests.post")
-def test_send_dm_http_error(mock_post, mock_api_url):
-    """Test DM sending when HTTP error occurs"""
-    mock_response = Mock()
-    mock_response.raise_for_status.side_effect = requests.HTTPError("404 Not Found")
-    mock_post.return_value = mock_response
-
-    result = discord.send_dm(BOT_ID, "user123", "Hello!")
-
-    assert result is False
-
-
-@patch("requests.post")
-def test_broadcast_message_success(mock_post, mock_api_url):
-    """Test successful channel message broadcast"""
-    mock_response = Mock()
-    mock_response.json.return_value = {"success": True}
-    mock_response.raise_for_status.return_value = None
-    mock_post.return_value = mock_response
-
-    result = discord.broadcast_message(BOT_ID, "general", "Announcement!")
-
-    assert result is True
-    mock_post.assert_called_once_with(
-        "http://localhost:8000/send_channel",
-        json={
-            "bot_id": BOT_ID,
-            "channel": "general",
-            "message": "Announcement!",
-        },
-        timeout=10,
-    )
-
-
-@patch("requests.post")
-def test_broadcast_message_failure(mock_post, mock_api_url):
-    """Test channel message broadcast failure"""
-    mock_response = Mock()
-    mock_response.json.return_value = {"success": False}
-    mock_response.raise_for_status.return_value = None
-    mock_post.return_value = mock_response
-
-    result = discord.broadcast_message(BOT_ID, "general", "Announcement!")
-
-    assert result is False
-
-
-@patch("requests.post")
-def test_broadcast_message_exception(mock_post, mock_api_url):
-    """Test channel message broadcast with exception"""
-    mock_post.side_effect = requests.Timeout("Request timeout")
-
-    result = discord.broadcast_message(BOT_ID, "general", "Announcement!")
-
-    assert result is False
 
 
 @patch("requests.get")
@@ -207,16 +102,16 @@ def test_refresh_discord_metadata_http_error(mock_post, mock_api_url):
     assert result is None
 
 
-@patch("memory.common.discord.broadcast_message")
+@patch("memory.common.discord.send_to_channel")
 @patch("memory.common.settings.DISCORD_ERROR_CHANNEL", "errors")
-def test_send_error_message(mock_broadcast):
+def test_send_error_message(mock_send):
     """Test sending error message to error channel"""
-    mock_broadcast.return_value = True
+    mock_send.return_value = True
 
     result = discord.send_error_message(BOT_ID, "Something broke")
 
     assert result is True
-    mock_broadcast.assert_called_once_with(BOT_ID, "errors", "Something broke")
+    mock_send.assert_called_once_with(BOT_ID, "errors", "Something broke")
 
 
 @patch("memory.common.discord.send_error_message")
@@ -358,42 +253,6 @@ def test_notify_task_failure_send_error_exception(mock_send_error):
     discord.notify_task_failure("test_task", "Error occurred", bot_id=BOT_ID)
 
     mock_send_error.assert_called_once()
-
-
-@patch("requests.post")
-def test_send_dm_with_special_characters(mock_post, mock_api_url):
-    """Test sending DM with special characters"""
-    mock_response = Mock()
-    mock_response.json.return_value = {"success": True}
-    mock_response.raise_for_status.return_value = None
-    mock_post.return_value = mock_response
-
-    message_with_special_chars = "Hello! 🎉 <@123> #general"
-    result = discord.send_dm(BOT_ID, "user123", message_with_special_chars)
-
-    assert result is True
-    call_args = mock_post.call_args
-    json_payload = call_args[1]["json"]
-    assert json_payload["message"] == message_with_special_chars
-    assert json_payload["bot_id"] == BOT_ID
-
-
-@patch("requests.post")
-def test_broadcast_message_with_long_message(mock_post, mock_api_url):
-    """Test broadcasting a long message"""
-    mock_response = Mock()
-    mock_response.json.return_value = {"success": True}
-    mock_response.raise_for_status.return_value = None
-    mock_post.return_value = mock_response
-
-    long_message = "A" * 2000
-    result = discord.broadcast_message(BOT_ID, "general", long_message)
-
-    assert result is True
-    call_args = mock_post.call_args
-    json_payload = call_args[1]["json"]
-    assert json_payload["message"] == long_message
-    assert json_payload["bot_id"] == BOT_ID
 
 
 @patch("requests.get")

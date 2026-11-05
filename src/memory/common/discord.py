@@ -1,8 +1,8 @@
 """
 Discord integration.
 
-Gateway bots send through the Discord collector's API server; bots without a
-gateway connection (webhook bots) send through the REST API at their API URL.
+Every bot sends through the REST API at its API URL, whichever way it takes
+its real-time events. The collector's API server reports gateway health.
 """
 
 import asyncio
@@ -32,12 +32,11 @@ def get_api_url() -> str:
 
 
 def rest_access(bot_id: int) -> BotAccess | None:
-    """REST access for a bot that has no gateway connection, else None."""
     with make_session() as session:
-        bot = session.get(DiscordBot, bot_id)
-        if bot is None or bot.runs_gateway:
-            return None
-        return bot_access(bot)
+        access = bot_access(session.get(DiscordBot, bot_id))
+    if access is None:
+        logger.warning(f"Discord bot {bot_id} cannot send: unknown, paused, tokenless or off the allowlist")
+    return access
 
 
 def resolve_id(model: type[DiscordChannel] | type[DiscordUser], identifier: int | str) -> int | None:
@@ -64,107 +63,39 @@ def send_over_rest(access: BotAccess, action: Callable[[DiscordRest], Awaitable[
 
 
 def send_dm(bot_id: int, user_identifier: str, message: str) -> bool:
-    """Send a DM, through the REST API for a webhook bot, else the collector."""
-    if access := rest_access(bot_id):
-        user_id = resolve_id(DiscordUser, user_identifier)
-        if user_id is None:
-            logger.error(f"Discord bot {bot_id}: no known user to DM")
-            return False
-
-        async def dm(rest: DiscordRest) -> None:
-            await rest.send_message(await rest.open_dm(user_id), message)
-
-        return send_over_rest(access, dm)
-    try:
-        response = requests.post(
-            f"{get_api_url()}/send_dm",
-            json={"bot_id": bot_id, "user": user_identifier, "message": message},
-            timeout=10,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("success", False)
-
-    except requests.RequestException as e:
-        logger.error(f"Failed to send DM to {user_identifier}: {e}")
+    """Send a DM to a user by id or username."""
+    if not (access := rest_access(bot_id)):
         return False
+    user_id = resolve_id(DiscordUser, user_identifier)
+    if user_id is None:
+        logger.error(f"Discord bot {bot_id}: no known user to DM")
+        return False
+
+    async def dm(rest: DiscordRest) -> None:
+        await rest.send_message(await rest.open_dm(user_id), message)
+
+    return send_over_rest(access, dm)
 
 
 def send_to_channel(bot_id: int, channel: int | str, message: str) -> bool:
-    """Send message to a channel by name or ID (ID supports threads)"""
-    if access := rest_access(bot_id):
-        channel_id = resolve_id(DiscordChannel, channel)
-        if channel_id is None:
-            logger.error(f"Discord bot {bot_id}: no known channel to send to")
-            return False
-        return send_over_rest(access, lambda rest: rest.send_message(channel_id, message))
-    try:
-        response = requests.post(
-            f"{get_api_url()}/send_channel",
-            json={
-                "bot_id": bot_id,
-                "channel": channel,
-                "message": message,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("success", False)
-
-    except requests.RequestException as e:
-        logger.error(f"Failed to send to channel {channel}: {e}")
+    """Send a message to a channel by name or id (an id also reaches threads)."""
+    if not (access := rest_access(bot_id)):
         return False
+    channel_id = resolve_id(DiscordChannel, channel)
+    if channel_id is None:
+        logger.error(f"Discord bot {bot_id}: no known channel to send to")
+        return False
+    return send_over_rest(access, lambda rest: rest.send_message(channel_id, message))
 
 
 def add_reaction(bot_id: int, channel: int | str, message_id: int, emoji: str) -> bool:
-    """Add a reaction to a message in a channel"""
-    if access := rest_access(bot_id):
-        channel_id = resolve_id(DiscordChannel, channel)
-        if channel_id is None:
-            return False
-        return send_over_rest(access, lambda rest: rest.add_reaction(channel_id, message_id, emoji))
-    try:
-        response = requests.post(
-            f"{get_api_url()}/add_reaction",
-            json={
-                "bot_id": bot_id,
-                "channel": channel,
-                "message_id": message_id,
-                "emoji": emoji,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("success", False)
-
-    except requests.RequestException as e:
-        logger.error(
-            f"Failed to add reaction {emoji} to message {message_id} in channel {channel}: {e}"
-        )
+    """Add a reaction to a message in a channel."""
+    if not (access := rest_access(bot_id)):
         return False
-
-
-def broadcast_message(bot_id: int, channel: int | str, message: str) -> bool:
-    """Send a message to a channel by name or ID (ID supports threads)"""
-    try:
-        response = requests.post(
-            f"{get_api_url()}/send_channel",
-            json={
-                "bot_id": bot_id,
-                "channel": channel,
-                "message": message,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("success", False)
-
-    except requests.RequestException as e:
-        logger.error(f"Failed to send message to channel {channel}: {e}")
+    channel_id = resolve_id(DiscordChannel, channel)
+    if channel_id is None:
         return False
+    return send_over_rest(access, lambda rest: rest.add_reaction(channel_id, message_id, emoji))
 
 
 def is_collector_healthy(bot_id: int) -> bool:
@@ -235,7 +166,7 @@ def resolve_guild(guild: int | str | None, session: "Session | scoped_session[Se
 # Convenience functions
 def send_error_message(bot_id: int, message: str) -> bool:
     """Send an error message to the error channel"""
-    return broadcast_message(bot_id, settings.DISCORD_ERROR_CHANNEL, message)
+    return send_to_channel(bot_id, settings.DISCORD_ERROR_CHANNEL, message)
 
 
 def notify_task_failure(
