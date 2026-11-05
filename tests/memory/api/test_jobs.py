@@ -102,6 +102,88 @@ def failed_job(db_session, user):
     return job
 
 
+def test_get_job_by_id(client: TestClient, job_for_user):
+    """Test getting a job by ID."""
+    response = client.get(f"/api/jobs/{job_for_user.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == job_for_user.id
+    assert data["job_type"] == "meeting"
+    assert data["status"] == "pending"
+    assert data["external_id"] == "user-job-ext-123"
+
+
+def test_get_job_not_found(client: TestClient):
+    """Test getting a non-existent job."""
+    response = client.get("/api/jobs/99999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job not found"
+
+
+def test_get_job_other_user_returns_404(non_admin_client: TestClient, job_for_other_user):
+    """Test that non-admin users cannot see other users' jobs."""
+    response = non_admin_client.get(f"/api/jobs/{job_for_other_user.id}")
+
+    # Should return 404 (not 403) to avoid leaking job existence
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job not found"
+
+
+def test_get_job_by_external_id(client: TestClient, job_for_user):
+    """Test getting a job by external ID."""
+    response = client.get(f"/api/jobs/external/{job_for_user.external_id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == job_for_user.id
+    assert data["external_id"] == job_for_user.external_id
+
+
+def test_get_job_by_external_id_with_type_filter(client: TestClient, db_session, user):
+    """Test getting a job by external ID with job type filter."""
+    # Create jobs with same external_id but different types
+    job1 = PendingJob(
+        job_type=JobType.MEETING.value,
+        external_id="shared-ext-id",
+        params={},
+        status=JobStatus.PENDING.value,
+        user_id=user.id,
+    )
+    job2 = PendingJob(
+        job_type=JobType.REPROCESS.value,
+        external_id="shared-ext-id",
+        params={},
+        status=JobStatus.COMPLETE.value,
+        user_id=user.id,
+    )
+    db_session.add_all([job1, job2])
+    db_session.commit()
+
+    # Filter by job_type=meeting
+    response = client.get("/api/jobs/external/shared-ext-id?job_type=meeting")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_type"] == "meeting"
+
+
+def test_get_job_by_external_id_not_found(client: TestClient):
+    """Test getting a job by non-existent external ID."""
+    response = client.get("/api/jobs/external/nonexistent-ext-id")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job not found"
+
+
+def test_get_job_by_external_id_other_user(non_admin_client: TestClient, job_for_other_user):
+    """Test that external_id lookup respects user ownership."""
+    response = non_admin_client.get(f"/api/jobs/external/{job_for_other_user.external_id}")
+
+    assert response.status_code == 404
+
+
 def test_list_jobs(client: TestClient, db_session, user):
     """Test listing jobs for current user."""
     # Create multiple jobs
@@ -338,6 +420,26 @@ def test_retry_job_other_user(non_admin_client: TestClient, db_session, other_us
     assert response.status_code == 404
 
 
+def test_route_ordering_external_before_job_id(client: TestClient, job_for_user):
+    """Test that /external/{external_id} route works and isn't captured by /{job_id}."""
+    # This tests the route ordering fix - "external" should not be parsed as an integer
+    response = client.get("/api/jobs/external/user-job-ext-123")
+
+    # Should succeed (not fail with "invalid integer")
+    assert response.status_code == 200
+    assert response.json()["external_id"] == "user-job-ext-123"
+
+
+def test_get_job_includes_user_id(client: TestClient, job_for_user):
+    """Test that job responses include user_id field."""
+    response = client.get(f"/api/jobs/{job_for_user.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "user_id" in data
+    assert data["user_id"] == job_for_user.user_id
+
+
 def test_list_jobs_includes_user_id(client: TestClient, job_for_user):
     """Test that listed jobs include user_id field."""
     response = client.get("/api/jobs")
@@ -447,6 +549,15 @@ def admin_client(app_client, db_session, admin_user):
         app.dependency_overrides.pop(get_current_user, None)
 
 
+def test_admin_can_see_other_user_job(admin_client: TestClient, job_for_other_user):
+    """Test that admin can view another user's job."""
+    response = admin_client.get(f"/api/jobs/{job_for_other_user.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == job_for_other_user.id
+
+
 def test_admin_list_all_users_jobs(admin_client: TestClient, db_session, user, other_user):
     """Test that admin with no user_id filter sees all jobs."""
     # Create jobs for both users
@@ -530,7 +641,7 @@ def test_non_admin_cannot_filter_by_user_id(non_admin_client: TestClient, job_fo
     assert job_for_other_user.id not in job_ids
 
 
-# ---------- /jobs/types cross-tenant isolation ----------
+# ---------- /api/jobs/types cross-tenant isolation ----------
 
 
 def test_get_job_types_non_admin_excludes_other_users(
@@ -585,7 +696,7 @@ def test_get_job_types_admin_sees_all(
     assert {"meeting", "reprocess"} <= set(types)
 
 
-# ---------- /jobs created_after/created_before garbage handling ----------
+# ---------- /api/jobs created_after/created_before garbage handling ----------
 
 
 @pytest.mark.parametrize("param", ["created_after", "created_before"])

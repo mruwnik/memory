@@ -17,7 +17,7 @@ def test_create_meeting_queues_job(client: TestClient, user):
         mock_dispatch.return_value = type("DispatchResult", (), {
             "job": mock_job,
             "is_new": True,
-            "message": "Job 100 queued.",
+            "message": "Job queued. Track status via GET /api/jobs/100",
         })()
 
         response = client.post(
@@ -39,7 +39,7 @@ def test_create_meeting_queues_job(client: TestClient, user):
     assert data["job_id"] == 100
     assert data["status"] == "queued"
     assert data["external_id"] == "meeting-ext-123"
-    assert data["message"] == "Job 100 queued."
+    assert "Job queued" in data["message"]
 
     # Verify dispatch_job was called correctly
     mock_dispatch.assert_called_once()

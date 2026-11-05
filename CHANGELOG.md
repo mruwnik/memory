@@ -36,9 +36,9 @@ named API paths to the api must now forward everything.
 - The REST endpoints that shared a path with a UI page moved under `/api`:
   `/settings`, `/users`, `/usage`, `/jobs`, `/ssh-keys` and `/polls/respond`
   are now `/api/settings`, `/api/users`, … Scripts that call them directly
-  need the new paths. `GET /jobs/{id}`, `GET /jobs/external/{external_id}` and
-  `GET /users/{id}` are gone, so job-queued messages no longer point at a
-  status URL.
+  need the new paths: meeting ingest clients poll job status at
+  `/api/jobs/{id}` or `/api/jobs/external/{external_id}`. `GET /users/{id}` is
+  gone.
 - OAuth sign-in works on an api run on a host whose clock isn't UTC; it used to
   reject every authorization code as expired.
 - The setup token log line now points at `/setup`.

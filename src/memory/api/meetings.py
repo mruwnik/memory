@@ -67,7 +67,7 @@ def create_meeting(
     Use external_id for idempotency - resubmitting with the same external_id
     will skip creation if the meeting already exists.
 
-    Returns the job_id of the processing job
+    Returns a job_id that can be used to track processing status via GET /api/jobs/{job_id}
     """
     if len(data.transcript) > MAX_TRANSCRIPT_SIZE:
         raise HTTPException(
