@@ -6,7 +6,20 @@ from unittest.mock import Mock
 
 from memory.api.search.types import SearchResult, chunk_score, elide_content
 from memory.common import settings
-from memory.common.db.models import Chunk, MailMessage, SourceItem
+from memory.common.db.models import (
+    BeeperAccount,
+    BeeperChat,
+    BeeperNetwork,
+    Chunk,
+    DiscordChannel,
+    DiscordMessage,
+    DiscordUser,
+    MailMessage,
+    SlackChannel,
+    SlackMessage,
+    SourceItem,
+)
+from memory.common.db.models.source_items import BeeperMessage
 
 
 class TestElideContent:
@@ -214,3 +227,56 @@ def test_search_score_scales_the_chunks_boost_by_its_score(score, boost):
 @pytest.mark.parametrize("score", [0.5, 0.02, -0.5])
 def test_a_positive_boost_raises_any_score(score):
     assert chunk_score(make_chunk(score, 0.1)) > chunk_score(make_chunk(score))
+
+
+SENT = datetime(2026, 11, 5, tzinfo=timezone.utc)
+LONG = "lunch? " * 500
+
+
+@pytest.mark.parametrize(
+    "source, title",
+    [
+        (
+            BeeperMessage(
+                id=1, sha256=b"x", content=LONG, sender_name="Bob", sent_at=SENT,
+                chat=BeeperChat(title="#social", network=BeeperNetwork(network="Slack", account=BeeperAccount())),
+            ),
+            "[Slack] #social — Bob",
+        ),
+        (BeeperMessage(id=1, sha256=b"x", content=LONG, sender_name="Bob", sent_at=SENT), "Bob"),
+        (
+            DiscordMessage(
+                id=1, sha256=b"x", content=LONG, sent_at=SENT, author=DiscordUser(username="bob"),
+                channel=DiscordChannel(name="social", channel_type="text"),
+            ),
+            "bob in #social",
+        ),
+        (
+            DiscordMessage(
+                id=1, sha256=b"x", content=LONG, sent_at=SENT, author=DiscordUser(username="bob"),
+                channel=DiscordChannel(name="bob", channel_type="dm"),
+            ),
+            "bob",
+        ),
+        (
+            SlackMessage(
+                id=1, sha256=b"x", content=LONG, author_name="Bob",
+                channel=SlackChannel(name="social", channel_type="channel"),
+            ),
+            "Bob in #social",
+        ),
+        (
+            SlackMessage(
+                id=1, sha256=b"x", content=LONG, author_name="Bob",
+                channel=SlackChannel(name="D123", channel_type="dm"),
+            ),
+            "Bob",
+        ),
+        (make_source(LONG), None),
+    ],
+)
+def test_a_chat_result_is_titled_by_where_it_was_said_not_what(source, title):
+    source.people = []
+    result = SearchResult.from_source_item(source, [make_chunk(0.5)])
+    assert result.metadata is not None
+    assert result.metadata.get("title") == title

@@ -88,6 +88,13 @@ None.
 - Memory MCP tools that only read now carry `readOnlyHint`, so `agent_catalog`
   reports them as `read_only` and creating a trigger or agent no longer warns
   about them.
+- Discord, Slack and Beeper search results are titled by sender and channel
+  (`alice in #general`, `[Slack] #general — alice`) in the web UI instead of
+  "Untitled".
+- Beeper message text that is HTML (Matrix formatted bodies, e.g. bridged
+  Slack mentions) is stored as plain text, mentions as `@Name`. Bridged
+  "… has joined/left the channel" notices aren't stored, as the Slack
+  integration already skips them.
 
 ### Migrations
 
