@@ -12,7 +12,7 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## Unreleased
+## v0.4.4 (2026-11-05)
 
 ### Required env vars
 
@@ -53,7 +53,9 @@ named API paths to the api must now forward everything.
   address checks as other user-supplied URLs (IP literals included), REST
   redirects are refused, and the gateway host must be on the chat API
   allowlist (`CHAT_API_ALLOWED_ORIGINS`, unless the bot's owner is an admin).
-  A bot whose login is refused waits for a new token instead of retrying.
+  A bot whose login Discord refuses waits for a settings change, or a pause
+  and resume, instead of retrying; one missing privileged intents retries
+  hourly; a crashed one backs off from a minute up to an hour.
 - The ingest hub re-reads the bot list every minute, so adding, pausing or
   switching a bot no longer needs a restart.
 
