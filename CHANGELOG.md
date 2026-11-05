@@ -12,6 +12,35 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## v0.4.6 (2026-11-05)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- The ingest-hub image makes its supervisor config readable by the
+  container's user. `tools/update.sh` writes changed files root-only, so on
+  v0.4.5 ingest-hub crash-looped ("could not read config file") and the
+  update failed its containers-stay-up check after the stack was already on
+  v0.4.5. Updating to v0.4.6 fixes it and clears the failed-update marker.
+- A transcript account's webhook dialog generates a secret when it opens on
+  an account that has none, instead of showing "Not set".
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None. Instances updating from before v0.4.5 still run v0.4.5's post-deploy
+command.
+
 ## v0.4.5 (2026-11-05)
 
 ### Required env vars
