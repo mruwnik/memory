@@ -91,7 +91,7 @@ class Hold:
 
 
 def refused(error: Exception) -> bool:
-    if isinstance(error, (LoginFailure, PrivilegedIntentsRequired)):
+    if isinstance(error, LoginFailure):
         return True
     return isinstance(error, ConnectionClosed) and error.code in REFUSED_CLOSE_CODES
 
@@ -324,6 +324,8 @@ class CollectorManager:
         whose token, name or API URL changed."""
         with make_session() as session:
             wanted = {info.id: info for info in gateway_bots(session)}
+        # Pausing and resuming a bot is how its owner asks for a retry.
+        self.held = {bot_id: hold for bot_id, hold in self.held.items() if bot_id in wanted}
         for bot_id, collector in list(self.collectors.items()):
             if wanted.get(bot_id) != collector.bot_info:
                 await self.stop_bot(bot_id)
@@ -361,23 +363,29 @@ class CollectorManager:
         try:
             await collector.start(bot_info.token)
         except Exception as e:
-            if refused(e):
+            if isinstance(e, PrivilegedIntentsRequired):
+                # Intents are switched on in the developer portal, which changes nothing we can see.
+                logger.error(f"Bot {bot_info.id} lacks privileged intents; retrying in an hour")
+                self.held[bot_info.id] = Hold(bot_info, monotonic() + MAX_RETRY_DELAY_SECONDS)
+            elif refused(e):
                 logger.error(f"Discord refused bot {bot_info.id}; waiting for its settings to change")
                 self.held[bot_info.id] = Hold(bot_info)
             else:
                 logger.exception(f"Bot {bot_info.id} crashed")
-                self.hold_after_crash(bot_info, collector)
+                # close() clears READY, so read it first.
+                self.hold_after_crash(bot_info, collector.is_ready())
+                await collector.close()
         finally:
             # A restart may already have put a new collector under this id.
             if self.collectors.get(bot_info.id) is collector:
                 self.collectors.pop(bot_info.id, None)
                 self._tasks.pop(bot_info.id, None)
 
-    def hold_after_crash(self, bot_info: BotInfo, collector: MessageCollector) -> None:
+    def hold_after_crash(self, bot_info: BotInfo, was_ready: bool) -> None:
         """Back off exponentially, starting over once a bot has reached READY."""
         previous = self.held.get(bot_info.id)
         crashes = 1
-        if previous and previous.info == bot_info and not collector.is_ready():
+        if previous and previous.info == bot_info and not was_ready:
             crashes = previous.crashes + 1
         delay = min(SYNC_INTERVAL_SECONDS * 2 ** (crashes - 1), MAX_RETRY_DELAY_SECONDS)
         self.held[bot_info.id] = Hold(bot_info, monotonic() + delay, crashes)

@@ -141,13 +141,78 @@ async def test_a_bot_discord_refuses_waits_for_new_settings(db_session, refusal)
 
 
 @pytest.mark.asyncio
-async def test_a_crashing_bot_is_retried_with_growing_delays(db_session):
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        LoginFailure("Improper token has been passed."),
+        PrivilegedIntentsRequired(None),
+        ConnectionClosed(SimpleNamespace(close_code=4004), shard_id=None),
+    ],
+)
+async def test_pausing_and_resuming_a_refused_bot_retries_it(db_session, refusal):
+    bot = add_bot(db_session, 1)
+    logins: list[str] = []
+
+    async def refuse(self, token):
+        logins.append(token)
+        raise refusal
+
+    manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
+    with patch.object(MessageCollector, "start", refuse), patch.object(MessageCollector, "close", AsyncMock()):
+        for active in (True, False, True):
+            bot.is_active = active
+            db_session.commit()
+            await manager.sync()
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+    assert logins == ["tok", "tok"]
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_a_bot_missing_privileged_intents_is_retried_hourly(db_session):
+    add_bot(db_session, 1)
+    clock = [0.0]
+    starts: list[float] = []
+
+    async def refuse(self, token):
+        starts.append(clock[0])
+        raise PrivilegedIntentsRequired(None)
+
+    manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
+    with (
+        patch.object(MessageCollector, "start", refuse),
+        patch.object(MessageCollector, "close", AsyncMock()),
+        patch("memory.discord.collector.monotonic", lambda: clock[0]),
+    ):
+        for clock[0] in range(0, 7201, 600):
+            await manager.sync()
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+    assert starts == [0, 3600, 7200]
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ready_on_start, expected",
+    [
+        (None, [0, 60, 180, 420]),
+        # Reaching READY means the bot worked, so the backoff starts over.
+        (3, [0, 60, 180, 240, 360]),
+    ],
+)
+async def test_a_crashing_bot_is_retried_with_growing_delays(db_session, ready_on_start, expected):
     add_bot(db_session, 1)
     clock = [0.0]
     starts: list[float] = []
 
     async def crash(self, token):
         starts.append(clock[0])
+        if len(starts) == ready_on_start:
+            self._ready.set()
         raise RuntimeError("gateway fell over")
 
     manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
@@ -161,7 +226,37 @@ async def test_a_crashing_bot_is_retried_with_growing_delays(db_session):
             for _ in range(3):
                 await asyncio.sleep(0)
 
-    assert starts == [0, 60, 180, 420]
+    assert starts == expected
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_collector_is_closed_before_its_restart(db_session):
+    add_bot(db_session, 1)
+    clock = [0.0]
+    events: list[tuple[str, int]] = []
+
+    async def crash(self, token):
+        events.append(("start", id(self)))
+        raise RuntimeError("gateway fell over")
+
+    async def close(self):
+        events.append(("close", id(self)))
+
+    manager = CollectorManager(celery_app=None)  # type: ignore[arg-type]
+    with (
+        patch.object(MessageCollector, "start", crash),
+        patch.object(MessageCollector, "close", close),
+        patch("memory.discord.collector.monotonic", lambda: clock[0]),
+    ):
+        for clock[0] in (0, 60):
+            await manager.sync()
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+    first, _, second, _ = (collector for _, collector in events)
+    assert [event for event, _ in events] == ["start", "close", "start", "close"]
+    assert events[1] == ("close", first) and second != first
     await manager.stop_all()
 
 
