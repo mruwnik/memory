@@ -6,6 +6,7 @@ import threading
 import zlib
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import discord
@@ -25,6 +26,12 @@ from memory.discord.collector import BotInfo, CollectorManager, MessageCollector
 from memory.discord.proxied_http import PolicyConnector, PolicyResolver, ProxiedHTTPClient, ZlibTextFrames
 
 PROXY_API = "https://chat.example.com/discord/api/v10"
+CLOSED_AS_UNAUTHORIZED: Any = SimpleNamespace(close_code=4004)
+REFUSALS = [
+    LoginFailure("Improper token has been passed."),
+    PrivilegedIntentsRequired(None),
+    ConnectionClosed(CLOSED_AS_UNAUTHORIZED, shard_id=None),
+]
 
 
 @pytest.fixture
@@ -111,14 +118,7 @@ async def test_a_proxied_bot_sends_rest_and_gateway_through_one_client():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "refusal",
-    [
-        LoginFailure("Improper token has been passed."),
-        PrivilegedIntentsRequired(None),
-        ConnectionClosed(SimpleNamespace(close_code=4004), shard_id=None),
-    ],
-)
+@pytest.mark.parametrize("refusal", REFUSALS)
 async def test_a_bot_discord_refuses_waits_for_new_settings(db_session, refusal):
     bot = add_bot(db_session, 1)
     logins: list[str] = []
@@ -143,14 +143,7 @@ async def test_a_bot_discord_refuses_waits_for_new_settings(db_session, refusal)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "refusal",
-    [
-        LoginFailure("Improper token has been passed."),
-        PrivilegedIntentsRequired(None),
-        ConnectionClosed(SimpleNamespace(close_code=4004), shard_id=None),
-    ],
-)
+@pytest.mark.parametrize("refusal", REFUSALS)
 async def test_pausing_and_resuming_a_refused_bot_retries_it(db_session, refusal):
     bot = add_bot(db_session, 1)
     logins: list[str] = []
@@ -398,14 +391,15 @@ async def test_the_gateway_transport_caps_message_size():
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     proxied = ProxiedHTTPClient(PROXY_API, allow_all, asyncio.get_running_loop())
-    proxied._HTTPClient__session = ClientSession()  # what static_login would set
+    session = ClientSession()
+    setattr(proxied, "_HTTPClient__session", session)  # what static_login would set
 
     with patch.object(proxied_http, "MAX_GATEWAY_MESSAGE_BYTES", 1024):
         socket = await proxied.dial(f"ws://127.0.0.1:{runner.addresses[0][1]}/")
         message = await socket.receive()
 
     await socket.close()
-    await proxied._HTTPClient__session.close()
+    await session.close()
     await runner.cleanup()
     assert message.type is WSMsgType.ERROR
 

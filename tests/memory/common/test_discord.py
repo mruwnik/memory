@@ -102,6 +102,14 @@ def test_refresh_discord_metadata_http_error(mock_post, mock_api_url):
     assert result is None
 
 
+@patch("requests.post")
+def test_refresh_discord_metadata_for_a_bot_not_running(mock_post, mock_api_url):
+    mock_post.return_value = Mock(status_code=404)
+
+    with pytest.raises(discord.BotNotConnected):
+        discord.refresh_discord_metadata(BOT_ID)
+
+
 @patch("memory.common.discord.send_to_channel")
 @patch("memory.common.settings.DISCORD_ERROR_CHANNEL", "errors")
 def test_send_error_message(mock_send):

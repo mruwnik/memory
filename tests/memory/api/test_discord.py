@@ -358,6 +358,17 @@ def test_refreshing_a_bot_refreshes_only_that_bot(member_client, db_session, use
     refresh.assert_called_once_with(bot.id)
 
 
+def test_refreshing_a_bot_not_on_the_gateway_says_so(member_client, db_session, user):
+    bot = DiscordBot(application_id=5, name="b", created_by_user_id=user.id)
+    db_session.add(bot)
+    db_session.commit()
+
+    with patch.object(discord_client, "refresh_discord_metadata", side_effect=discord_client.BotNotConnected(bot.id)):
+        response = member_client.post(f"/discord/bots/{bot.id}/refresh")
+
+    assert (response.status_code, response.json()["detail"]) == (409, "Bot is not connected to the gateway")
+
+
 def test_patch_rejects_a_token_for_another_application(client, db_session, user):
     bot_id = client.post("/discord/bots", json={"name": "G", "token": gateway_token(66668)}).json()["id"]
 
@@ -382,3 +393,21 @@ def test_owner_removes_the_bot(client, db_session, user):
     db_session.commit()
     assert client.delete("/discord/bots/11111").status_code == 200
     assert db_session.get(DiscordBot, 11111) is None
+
+
+def test_deleting_a_bot_hands_its_server_to_the_owners_other_bot(client, db_session, user):
+    project = Project(title="Discord project", state="open")
+    first = DiscordBot(application_id=1, name="first", created_by_user_id=user.id)
+    second = DiscordBot(application_id=2, name="second", created_by_user_id=user.id)
+    db_session.add_all([project, first, second])
+    db_session.flush()
+    db_session.add(DiscordServer(id=9, name="s", bot_id=first.id, verified=True, project_id=project.id))
+    db_session.flush()
+    db_session.add_all([DiscordBotServer(bot_id=first.id, server_id=9), DiscordBotServer(bot_id=second.id, server_id=9)])
+    db_session.commit()
+
+    assert client.delete(f"/discord/bots/{first.id}").status_code == 200
+
+    db_session.expire_all()
+    server = db_session.get_one(DiscordServer, 9)
+    assert (server.bot_id, server.project_id) == (second.id, project.id)

@@ -27,6 +27,7 @@ from discord import (
     LoginFailure,
     Member,
     Message,
+    PartialEmoji,
     PrivilegedIntentsRequired,
     RawBulkMessageDeleteEvent,
     RawMessageDeleteEvent,
@@ -41,11 +42,11 @@ from discord.ext import commands
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT, UPDATE_REACTIONS
+from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
 from memory.common.db.connection import make_session
-from memory.common.discord_events import emoji_key as event_emoji_key
-from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer
 from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
+from memory.common.discord_events import hand_off_server
 from memory.discord.ingest import (
     ensure_channel,
     ensure_message_entities,
@@ -62,8 +63,14 @@ if TYPE_CHECKING:
     from celery import Celery
 
 
-def emoji_key(emoji) -> str | None:
-    return event_emoji_key({"id": emoji.id, "name": emoji.name})
+def reaction_data(message_id: int, emoji: PartialEmoji | None = None, user_id: int | None = None) -> dict[str, Any]:
+    """A raw reaction event in the shape Discord pushes to the events endpoint."""
+    data: dict[str, Any] = {"message_id": str(message_id)}
+    if user_id is not None:
+        data["user_id"] = str(user_id)
+    if emoji is not None:
+        data["emoji"] = {"id": str(emoji.id) if emoji.id else None, "name": emoji.name}
+    return data
 
 
 @dataclass(frozen=True)
@@ -151,6 +158,9 @@ class MessageCollector(commands.Bot):
 
         self.bot_info = bot_info
         self.celery_app = celery_app
+        # Runs this bot's server syncs and leaves in the order Discord sent them,
+        # one thread at a time rather than one per server at connect.
+        self.guild_lock = asyncio.Lock()
 
     async def on_ready(self) -> None:
         # Each server's GUILD_CREATE, at startup too, records it (on_guild_available/on_guild_join).
@@ -163,7 +173,8 @@ class MessageCollector(commands.Bot):
         await self.sync_guilds([guild])
 
     async def on_guild_remove(self, guild: Guild) -> None:
-        await asyncio.to_thread(self.forget_guild, guild.id)
+        async with self.guild_lock:
+            await asyncio.to_thread(self.forget_guild, guild.id)
 
     async def sync_guild_metadata(self) -> dict[str, int]:
         return await self.sync_guilds(self.guilds)
@@ -175,20 +186,25 @@ class MessageCollector(commands.Bot):
         snapshot = [
             (guild, [c for c in guild.channels if isinstance(c, abc.Messageable)], guild.members) for guild in guilds
         ]
-        return await asyncio.to_thread(self.store_guilds, snapshot)
+        async with self.guild_lock:
+            return await asyncio.to_thread(self.store_guilds, snapshot)
 
     def store_guilds(self, guilds: Sequence[tuple[Guild, Sequence[abc.Messageable], Sequence[Member]]]) -> dict[str, int]:
+        """One transaction per server, so concurrent message handling waits on at
+        most one server's uncommitted rows. Rows go in the order messages create
+        them (server, channels, users; each by id), so the two can't deadlock."""
         counts = {"servers": 0, "channels": 0, "users": 0}
         with make_session() as session:
             for guild, channels, members in guilds:
                 ensure_server(session, guild, bot_id=self.bot_info.id)
                 counts["servers"] += 1
-                for channel in channels:
+                for channel in sorted(channels, key=lambda c: c.id):
                     ensure_channel(session, channel, guild.id)
                     counts["channels"] += 1
-                for member in members:
+                for member in sorted(members, key=lambda m: m.id):
                     ensure_user(session, member)
                     counts["users"] += 1
+                session.commit()
             if bot := session.get(DiscordBot, self.bot_info.id):
                 bot.last_sync_at = datetime.now(timezone.utc)
             session.commit()
@@ -196,8 +212,13 @@ class MessageCollector(commands.Bot):
         return counts
 
     def forget_guild(self, guild_id: int) -> None:
+        """Drop this bot from the server, handing it off if this bot owned it."""
         with make_session() as session:
             session.query(DiscordBotServer).filter_by(bot_id=self.bot_info.id, server_id=guild_id).delete()
+            server = session.get(DiscordServer, guild_id)
+            bot = session.get(DiscordBot, self.bot_info.id)
+            if server is not None and bot is not None:
+                hand_off_server(session, server, bot)
             session.commit()
 
     async def on_message(self, message: Message) -> None:
@@ -238,11 +259,6 @@ class MessageCollector(commands.Bot):
                 channel_model = ensure_channel(session, channel, channel.guild.id)  # type: ignore[arg-type]
                 collect = should_collect(channel_model)
                 session.commit()
-        except IntegrityError:
-            # Race with MCP's eager ensure_channel_record — the row is already
-            # present, no work to do. Don't let it surface as an error.
-            logger.debug(f"Channel {channel.id} already persisted (race with MCP)")
-            return
         except Exception:
             logger.exception(f"Failed to persist created channel {channel.id}")
             return
@@ -291,33 +307,16 @@ class MessageCollector(commands.Bot):
             logger.exception(f"Failed to delete channel {channel.id}")
 
     async def on_raw_reaction_add(self, payload: RawReactionActionEvent) -> None:
-        self._queue_reaction(payload.message_id, "add", emoji_key(payload.emoji), payload.user_id)
+        self.queue_event("MESSAGE_REACTION_ADD", reaction_data(payload.message_id, payload.emoji, payload.user_id))
 
     async def on_raw_reaction_remove(self, payload: RawReactionActionEvent) -> None:
-        self._queue_reaction(payload.message_id, "remove", emoji_key(payload.emoji), payload.user_id)
+        self.queue_event("MESSAGE_REACTION_REMOVE", reaction_data(payload.message_id, payload.emoji, payload.user_id))
 
     async def on_raw_reaction_clear(self, payload: RawReactionClearEvent) -> None:
-        self._queue_reaction(payload.message_id, "clear")
+        self.queue_event("MESSAGE_REACTION_REMOVE_ALL", reaction_data(payload.message_id))
 
     async def on_raw_reaction_clear_emoji(self, payload: RawReactionClearEmojiEvent) -> None:
-        self._queue_reaction(payload.message_id, "clear_emoji", emoji_key(payload.emoji))
-
-    def _queue_reaction(
-        self,
-        message_id: int,
-        action: str,
-        emoji: str | None = None,
-        user_id: int | None = None,
-    ) -> None:
-        self.celery_app.send_task(
-            UPDATE_REACTIONS,
-            kwargs={
-                "message_id": message_id,
-                "action": action,
-                "emoji": emoji,
-                "user_id": str(user_id) if user_id is not None else None,
-            },
-        )
+        self.queue_event("MESSAGE_REACTION_REMOVE_EMOJI", reaction_data(payload.message_id, payload.emoji))
 
     async def _process_message(self, message: Message) -> None:
         """Process a message - check collection settings and queue for storage."""

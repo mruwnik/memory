@@ -161,12 +161,14 @@ describe('useDiscord servers', () => {
   })
 })
 
+const CHANNEL_FIELDS = ['id', 'name', 'type', 'server_id', 'collect_messages', 'effective_collect', 'project_id', 'sensitivity']
+
 describe('useDiscord channels (MCP-backed list)', () => {
   it('listChannels transforms the MCP response into DiscordChannel objects', async () => {
     mockFetch(async () =>
       mcpResponse({
         channels: [
-          { id: 12345, name: 'general', type: 'text', server_id: 999, collect_messages: true, project_id: 7, sensitivity: 'internal' },
+          { id: 12345, name: 'general', type: 'text', server_id: 999, collect_messages: null, effective_collect: true, project_id: 7, sensitivity: 'internal' },
         ],
       }),
     )
@@ -178,7 +180,7 @@ describe('useDiscord channels (MCP-backed list)', () => {
         server_name: null,
         name: 'general',
         channel_type: 'text',
-        collect_messages: true,
+        collect_messages: null,
         effective_collect: true,
         project_id: 7,
         sensitivity: 'internal',
@@ -206,7 +208,7 @@ describe('useDiscord channels (MCP-backed list)', () => {
     await setup().listChannels(serverId, serverName)
     const call = fetchMock.mock.calls.find((c) => mcpToolFromRequest(c[0], c[1]) === 'discord_list_channels')
     const body = JSON.parse(call?.[1]?.body as string)
-    expect(body.params.arguments).toEqual(expected)
+    expect(body.params.arguments).toEqual({ ...expected, fields: CHANNEL_FIELDS })
   })
 
   it('listChannels returns [] when the MCP payload lacks a channels key', async () => {

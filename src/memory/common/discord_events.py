@@ -7,6 +7,9 @@ so this mirrors ``memory.discord.ingest`` without importing discord.py.
 
 from typing import Any
 
+from sqlalchemy import literal_column
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
@@ -100,38 +103,68 @@ def ensure_server(session: DBSession, server_id: int, bot_id: int, collect: bool
     """A server row for a pushed event, named by its id. A pushed guild id is
     only as trustworthy as the bot's owner, so the row is unverified: it gives
     that owner nothing until a token-authenticated bot claims it."""
-    server = session.get(DiscordServer, server_id)
-    if server is None:
-        server = DiscordServer(
-            id=server_id, name=f"Server {server_id}", bot_id=bot_id, collect_messages=collect, verified=False
-        )
-        session.add(server)
-        session.flush()
+    server, _ = get_or_insert(
+        session, DiscordServer, server_id,
+        id=server_id, name=f"Server {server_id}", bot_id=bot_id, collect_messages=collect, verified=False,
+    )
     return server
+
+
+def insert_missing(session: DBSession, model: type, **values: Any) -> bool:
+    """Insert a row unless one with its key exists; True if this call made it.
+    The gateway loop, its sync threads, Celery and webhooks all create these
+    rows, so a plain get-then-insert would raise on the loser of a race."""
+    stmt = pg_insert(model).values(**values).on_conflict_do_nothing().returning(literal_column("1"))
+    return session.execute(stmt).first() is not None
+
+
+def get_or_insert[T](session: DBSession, model: type[T], key: Any, **values: Any) -> tuple[T, bool]:
+    """The row with this key, inserted from ``values`` if missing; True if this call made it."""
+    if (row := session.get(model, key)) is not None:
+        return row, False
+    created = insert_missing(session, model, **values)
+    return session.get_one(model, key), created
 
 
 def verify_server(
     session: DBSession, server_id: int, bot_id: int, collect: bool, name: str | None = None
 ) -> DiscordServer:
     """Record that a bot's own token lists this server. The bot claims a server
-    no verified bot owns; one first claimed by a push starts over with default
-    access settings. Only the owning bot renames it."""
-    server = session.get(DiscordServer, server_id)
-    if server is None:
-        server = DiscordServer(
-            id=server_id, name=name or f"Server {server_id}", bot_id=bot_id,
-            collect_messages=collect, verified=True,
-        )
-        session.add(server)
-        session.flush()
-    elif not server.verified:
+    no verified bot owns; one first claimed by a push, or left by its owning
+    bot, starts over with default access settings. Only the owning bot renames it."""
+    server, created = get_or_insert(
+        session, DiscordServer, server_id,
+        id=server_id, name=name or f"Server {server_id}", bot_id=bot_id, collect_messages=collect, verified=True,
+    )
+    if not created and (not server.verified or server.bot_id is None):
         server.bot_id, server.verified = bot_id, True
         server.project_id, server.sensitivity = None, "basic"
         server.name = name or server.name
     elif name and server.bot_id == bot_id:
         server.name = name
-    session.merge(DiscordBotServer(bot_id=bot_id, server_id=server_id))
+    insert_missing(session, DiscordBotServer, bot_id=bot_id, server_id=server_id)
     return server
+
+
+def hand_off_server(session: DBSession, server: DiscordServer, leaving: DiscordBot) -> None:
+    """Pass a server the leaving bot owns to another of its owner's bots still
+    in it, else to none, and the next bot to claim it starts over with default
+    access settings: ``bot_id`` decides who manages them, so they never carry
+    over to another owner."""
+    if server.bot_id != leaving.id:
+        return
+    server.bot_id = (
+        session.query(DiscordBotServer.bot_id)
+        .join(DiscordBot, DiscordBot.id == DiscordBotServer.bot_id)
+        .filter(
+            DiscordBotServer.server_id == server.id,
+            DiscordBotServer.bot_id != leaving.id,
+            DiscordBot.created_by_user_id == leaving.created_by_user_id,
+        )
+        .order_by(DiscordBotServer.bot_id)
+        .limit(1)
+        .scalar()
+    )
 
 
 def ensure_channel(
@@ -147,19 +180,16 @@ def ensure_channel(
     """A channel row, named by its id until a name is known. ``collect`` is
     only set on creation, so later choices made in the UI stand; only the
     bot owning the channel (or its server) renames it."""
-    channel = session.get(DiscordChannel, channel_id)
-    if channel is None:
-        channel = DiscordChannel(
-            id=channel_id,
-            server_id=server_id,
-            bot_id=bot_id,
-            name=name or f"Channel {channel_id}",
-            channel_type=channel_type or ("text" if server_id else "dm"),
-            collect_messages=collect,
-        )
-        session.add(channel)
-        session.flush()
-    elif name and owns_channel(channel, {bot_id}):
+    channel, created = get_or_insert(
+        session, DiscordChannel, channel_id,
+        id=channel_id,
+        server_id=server_id,
+        bot_id=bot_id,
+        name=name or f"Channel {channel_id}",
+        channel_type=channel_type or ("text" if server_id else "dm"),
+        collect_messages=collect,
+    )
+    if not created and name and owns_channel(channel, {bot_id}):
         channel.name = name
     return channel
 
@@ -190,12 +220,11 @@ def owner_bot_ids(session: DBSession, bot: DiscordBot) -> set[int]:
 def ensure_user(session: DBSession, author: dict) -> DiscordUser:
     """The author's row, created if missing. Pushed names never overwrite stored ones."""
     user_id = int(author["id"])
-    user = session.get(DiscordUser, user_id)
-    if user is None:
-        username = author.get("username") or str(user_id)
-        user = DiscordUser(id=user_id, username=username, display_name=author.get("global_name") or username)
-        session.add(user)
-        session.flush()
+    username = author.get("username") or str(user_id)
+    user, _ = get_or_insert(
+        session, DiscordUser, user_id,
+        id=user_id, username=username, display_name=author.get("global_name") or username,
+    )
     return user
 
 

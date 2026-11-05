@@ -333,7 +333,8 @@ async def list_channels(
                 - type: text, voice, dm, group_dm or thread
                 - server_id: Server (guild) ID
                 - category_id: Category ID
-                - collect_messages: Whether messages are collected (after server inheritance)
+                - collect_messages: The channel's own setting (null = inherit from server)
+                - effective_collect: Whether messages are collected (after server inheritance)
                 - project_id: Associated project ID for access control
                 - sensitivity: Sensitivity level (public, basic, internal, confidential)
 

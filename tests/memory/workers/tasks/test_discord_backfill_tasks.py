@@ -29,6 +29,12 @@ from memory.workers.tasks.discord_backfill import (
 ACCESS = BotAccess(bot_id=42, token="tok", api_base_url="https://discord.com/api/v10", push_only=False)
 
 
+def channel_bot(channel_id: int) -> BotAccess:
+    access = resolve_channel_bot(channel_id)
+    assert access is not None
+    return access
+
+
 def test_backfill_task_names():
     assert BACKFILL_DISCORD_CHANNEL == (
         "memory.workers.tasks.discord_backfill.backfill_channel"
@@ -95,7 +101,7 @@ def test_resolve_channel_bot_marks_webhook_bots_push_only(db_session, realtime, 
     bot.realtime = realtime
     db_session.commit()
 
-    assert resolve_channel_bot(10).push_only is push_only
+    assert channel_bot(10).push_only is push_only
 
 
 @pytest.mark.parametrize(
@@ -146,7 +152,7 @@ def test_resolve_channel_bot_for_a_dm_uses_only_its_owners_bots(db_session, firs
     delivered(db_session, 99, 60, message_id=500)
     db_session.commit()
 
-    assert resolve_channel_bot(99).bot_id == expected
+    assert channel_bot(99).bot_id == expected
 
 
 @pytest.mark.parametrize("memberships", [[], [60]])
@@ -157,7 +163,7 @@ def test_a_push_delivery_never_chooses_the_bot(db_session, memberships):
     db_session.add_all([DiscordBotServer(bot_id=b, server_id=1) for b in memberships])
     db_session.commit()
 
-    assert resolve_channel_bot(10).bot_id == 42
+    assert channel_bot(10).bot_id == 42
 
 
 def unusable_owner_with_a_second_bot(db_session) -> None:
@@ -172,7 +178,7 @@ def test_a_verified_member_reads_when_the_owner_cannot(db_session):
     db_session.add(DiscordBotServer(bot_id=60, server_id=1))
     db_session.commit()
 
-    assert resolve_channel_bot(10).bot_id == 60
+    assert channel_bot(10).bot_id == 60
 
 
 def test_a_bot_that_only_pushed_never_reads(db_session):

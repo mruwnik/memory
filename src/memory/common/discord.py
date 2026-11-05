@@ -115,10 +115,16 @@ def is_collector_healthy(bot_id: int) -> bool:
     return bot_id in connected_bots()
 
 
+class BotNotConnected(Exception):
+    """The collector has no gateway connection running for this bot."""
+
+
 def refresh_discord_metadata(bot_id: int) -> dict[str, Any] | None:
     """Have the collector record a running bot's servers, channels and members again."""
     try:
         response = requests.post(f"{get_api_url()}/refresh_metadata/{bot_id}", timeout=30)
+        if response.status_code == 404:
+            raise BotNotConnected(bot_id)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:

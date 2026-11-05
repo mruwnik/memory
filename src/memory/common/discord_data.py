@@ -221,7 +221,8 @@ CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
     "type": lambda ch: ch.channel_type,
     "server_id": lambda ch: str(ch.server_id) if ch.server_id else None,
     "category_id": lambda ch: str(ch.category_id) if ch.category_id else None,
-    "collect_messages": lambda ch: ch.should_collect,
+    "collect_messages": lambda ch: ch.collect_messages,
+    "effective_collect": lambda ch: ch.should_collect,
     "project_id": lambda ch: ch.project_id,
     "sensitivity": lambda ch: ch.sensitivity,
 }

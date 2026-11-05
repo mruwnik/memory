@@ -1,4 +1,6 @@
+import asyncio
 import threading
+from time import monotonic, sleep
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -7,13 +9,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from discord import MessageType
 from fastapi import HTTPException
+from sqlalchemy import text
 
 from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
-from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser, Project
 from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
 from memory.discord import api as collector_api
 from memory.discord import collector as collector_module
 from memory.discord.collector import BotInfo, CollectorManager, MessageCollector
+from memory.discord.ingest import ensure_user
 
 
 def fake_guild_channel(channel_id=10, guild_id=1):
@@ -76,10 +80,26 @@ def handled_events(celery_app) -> list[dict]:
             SimpleNamespace(message_id=5, data={"id": "5", "content": "new"}),
             ("MESSAGE_UPDATE", {"id": "5", "content": "new"}),
         ),
+        (
+            "on_raw_reaction_add",
+            SimpleNamespace(message_id=5, user_id=7, emoji=SimpleNamespace(id=None, name="🔥")),
+            ("MESSAGE_REACTION_ADD", {"message_id": "5", "user_id": "7", "emoji": {"id": None, "name": "🔥"}}),
+        ),
+        (
+            "on_raw_reaction_remove",
+            SimpleNamespace(message_id=5, user_id=7, emoji=SimpleNamespace(id=9, name="party")),
+            ("MESSAGE_REACTION_REMOVE", {"message_id": "5", "user_id": "7", "emoji": {"id": "9", "name": "party"}}),
+        ),
+        (
+            "on_raw_reaction_clear_emoji",
+            SimpleNamespace(message_id=5, emoji=SimpleNamespace(id=None, name="🔥")),
+            ("MESSAGE_REACTION_REMOVE_EMOJI", {"message_id": "5", "emoji": {"id": None, "name": "🔥"}}),
+        ),
+        ("on_raw_reaction_clear", SimpleNamespace(message_id=5), ("MESSAGE_REACTION_REMOVE_ALL", {"message_id": "5"})),
     ],
 )
 @pytest.mark.asyncio
-async def test_deletes_and_edits_go_through_the_owner_scoped_event_task(event, payload, expected):
+async def test_edits_deletes_and_reactions_go_through_the_owner_scoped_event_task(event, payload, expected):
     celery_app = MagicMock()
 
     await getattr(collector_with(celery_app), event)(payload)
@@ -106,19 +126,115 @@ async def test_a_server_joined_after_ready_is_recorded_as_the_bots(db_session, e
     assert db_session.get(DiscordBotServer, (42, 1)) is not None
 
 
+@pytest.mark.parametrize(
+    "owner, other_members, new_owner",
+    [(42, [], None), (42, [44], None), (42, [44, 43], 43), (44, [44], 44)],
+)
 @pytest.mark.asyncio
-async def test_leaving_a_server_drops_the_bots_membership(db_session):
-    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
-    db_session.add(DiscordServer(id=1, name="Guild", bot_id=42))
+async def test_leaving_a_server_hands_ownership_only_to_the_same_owners_bot(
+    db_session, admin_user, regular_user, owner, other_members, new_owner
+):
+    db_session.add_all(
+        [
+            DiscordBot(id=42, application_id=42, name="a", created_by_user_id=admin_user.id),
+            DiscordBot(id=43, application_id=43, name="b", created_by_user_id=admin_user.id),
+            DiscordBot(id=44, application_id=44, name="c", created_by_user_id=regular_user.id),
+        ]
+    )
+    db_session.add(DiscordServer(id=1, name="Guild", bot_id=owner))
     db_session.flush()
-    db_session.add(DiscordBotServer(bot_id=42, server_id=1))
+    db_session.add_all([DiscordBotServer(bot_id=b, server_id=1) for b in [42, *other_members]])
     db_session.commit()
 
     await collector_with().on_guild_remove(fake_guild())
 
     db_session.expire_all()
     assert db_session.get(DiscordBotServer, (42, 1)) is None
-    assert db_session.get(DiscordServer, 1) is not None
+    assert db_session.get(DiscordServer, 1).bot_id == new_owner
+
+
+@pytest.mark.asyncio
+async def test_another_owners_bot_claiming_a_left_server_starts_with_default_access(db_session, admin_user, regular_user):
+    project = Project(title="Discord project", state="open")
+    db_session.add_all(
+        [
+            project,
+            DiscordBot(id=42, application_id=42, name="a", created_by_user_id=admin_user.id),
+            DiscordBot(id=44, application_id=44, name="c", created_by_user_id=regular_user.id),
+        ]
+    )
+    db_session.flush()
+    db_session.add(DiscordServer(id=1, name="Guild", bot_id=42, project_id=project.id, sensitivity="confidential"))
+    db_session.flush()
+    db_session.add_all([DiscordBotServer(bot_id=b, server_id=1) for b in [42, 44]])
+    db_session.commit()
+
+    await collector_with().on_guild_remove(fake_guild())
+    await MessageCollector(BotInfo(id=44, name="c", token="t"), MagicMock()).on_guild_available(fake_guild())
+
+    db_session.expire_all()
+    server = db_session.get_one(DiscordServer, 1)
+    assert (server.bot_id, server.project_id, server.sensitivity) == (44, None, "basic")
+
+
+@pytest.mark.transactional_db
+@pytest.mark.asyncio
+async def test_bots_syncing_servers_with_shared_members_at_once_all_succeed(db_session):
+    bot_ids = range(42, 47)
+    db_session.add_all([DiscordBot(id=b, application_id=b, name=f"b{b}") for b in bot_ids])
+    db_session.commit()
+    member = SimpleNamespace(id=7, name="alice", display_name="Alice")
+    collectors = [MessageCollector(BotInfo(id=b, name=f"b{b}", token="t"), MagicMock()) for b in bot_ids]
+    guilds: list[Any] = [SimpleNamespace(**{**vars(fake_guild(guild_id=b % 2)), "members": [member]}) for b in bot_ids]
+
+    await asyncio.gather(*(c.sync_guilds([g]) for c, g in zip(collectors, guilds)))
+
+    db_session.expire_all()
+    assert db_session.query(DiscordUser).count() == 1
+    assert {(m.bot_id, m.server_id) for m in db_session.query(DiscordBotServer)} == {(b, b % 2) for b in bot_ids}
+
+
+@pytest.mark.transactional_db
+def test_a_message_from_a_member_an_unfinished_sync_inserted_waits_for_it_then_succeeds(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.add(DiscordServer(id=1, name="Guild", bot_id=42, verified=True, collect_messages=True))
+    db_session.commit()
+    author: Any = SimpleNamespace(id=7, name="alice", display_name="Alice")
+    message = MagicMock(
+        id=99, guild=fake_guild(), author=author, content="hi", created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        edited_at=None, reference=None, thread=None, type=MessageType.default, pinned=False, attachments=[], embeds=[],
+    )
+    message.channel = SimpleNamespace(id=10, name="general", category_id=None)
+    celery_app = MagicMock()
+    collector = collector_with(celery_app)
+    errors = []
+
+    def handle_message():
+        try:
+            asyncio.run(collector._process_message(message))
+        except Exception as e:
+            errors.append(e)
+
+    with collector_module.make_session() as sync:
+        ensure_user(sync, author)
+        sync.flush()
+        handler = threading.Thread(target=handle_message)
+        handler.start()
+        wait_for_a_blocked_query(db_session)
+        sync.commit()
+    handler.join(timeout=10)
+
+    assert errors == []
+    assert [c.kwargs["kwargs"]["message_id"] for c in celery_app.send_task.call_args_list] == [99]
+
+
+def wait_for_a_blocked_query(session, timeout=10.0):
+    deadline = monotonic() + timeout
+    query = text("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()")
+    while not session.execute(query).scalar():
+        assert monotonic() < deadline, "no query blocked"
+        session.rollback()
+        sleep(0.05)
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ from memory.common.db.models.discord import (
     DiscordChannel,
     DiscordServer,
 )
+from memory.common.discord_events import hand_off_server
 from memory.common.discord_data import (
     fetch_servers,
     get_bot_for_user,
@@ -366,6 +367,8 @@ def delete_bot(
 ):
     """Delete a bot owned by the caller."""
     bot = get_user_bot(db, bot_id, user)
+    for server in db.query(DiscordServer).filter(DiscordServer.bot_id == bot.id).all():
+        hand_off_server(db, server, bot)
     db.delete(bot)
 
     db.commit()
@@ -392,7 +395,10 @@ def refresh_bot_metadata(
 ):
     """Record this bot's servers, channels and members again, if it is on the gateway."""
     get_user_bot(db, bot_id, user)  # Verify authorization
-    result = discord_client.refresh_discord_metadata(bot_id)
+    try:
+        result = discord_client.refresh_discord_metadata(bot_id)
+    except discord_client.BotNotConnected:
+        raise HTTPException(status_code=409, detail="Bot is not connected to the gateway")
     if result is None:
         raise HTTPException(status_code=503, detail="Failed to refresh metadata")
     return {"success": True, **result}

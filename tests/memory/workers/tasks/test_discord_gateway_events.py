@@ -1,5 +1,6 @@
 """Gateway event payloads (as carried by Discord Webhook Events) stored like collected messages."""
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -152,6 +153,7 @@ def test_message_create_is_idempotent(db_session, webhook_bot, qdrant):
 
 
 EDITED = "the message after its author edited it, still long"
+EDITED_AT = datetime(2026, 11, 5, 13, tzinfo=timezone.utc)
 
 
 @pytest.mark.parametrize(
@@ -167,7 +169,7 @@ def test_message_update_with_content_edits(db_session, webhook_bot, update, qdra
     handle(webhook_bot, "MESSAGE_UPDATE", update)
 
     message = stored(db_session)
-    assert (message.content, message.edited_at.isoformat()) == (EDITED, "2026-11-05T13:00:00+00:00")
+    assert (message.content, message.edited_at) == (EDITED, EDITED_AT)
 
 
 def test_message_update_without_content_changes_nothing(db_session, webhook_bot, qdrant):
@@ -417,7 +419,7 @@ def test_a_content_only_update_keeps_the_edit_time(db_session, webhook_bot, qdra
 
     message = stored(db_session)
     assert result["status"] != "error"
-    assert (message.content, message.edited_at.isoformat()) == (EDITED, "2026-11-05T13:00:00+00:00")
+    assert (message.content, message.edited_at) == (EDITED, EDITED_AT)
 
 
 def test_a_full_update_without_an_edit_time_keeps_the_stored_one(db_session, webhook_bot, qdrant):
@@ -425,7 +427,7 @@ def test_a_full_update_without_an_edit_time_keeps_the_stored_one(db_session, web
 
     handle(webhook_bot, "MESSAGE_UPDATE", message_create(content=EDITED))
 
-    assert stored(db_session).edited_at.isoformat() == "2026-11-05T13:00:00+00:00"
+    assert stored(db_session).edited_at == EDITED_AT
 
 
 

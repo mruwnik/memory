@@ -22,7 +22,7 @@ from discord import (
 from memory.common.celery_app import ADD_DISCORD_MESSAGE
 from memory.common.db.connection import DBSession
 from memory.common.db.models import DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
-from memory.common.discord_events import verify_server
+from memory.common.discord_events import get_or_insert, insert_missing, verify_server
 
 
 def get_channel_type(channel: abc.Messageable) -> str:
@@ -40,6 +40,22 @@ def get_channel_type(channel: abc.Messageable) -> str:
     return getattr(getattr(channel, "type", None), "name", "unknown")
 
 
+def update_server(session: DBSession, server: DiscordServer, guild: Guild, bot_id: int | None) -> None:
+    if bot_id is not None and (not server.verified or server.bot_id is None):
+        # A gateway connection proves membership; a server claimed only by
+        # pushed events, or left by its owning bot, starts over under this bot.
+        verify_server(session, guild.id, bot_id, collect=server.collect_messages, name=guild.name)
+        return
+    if guild.name and server.name != guild.name:
+        server.name = guild.name
+    description = getattr(guild, "description", None)
+    if description and server.description != description:
+        server.description = description
+    member_count = getattr(guild, "member_count", None)
+    if member_count is not None:
+        server.member_count = member_count
+
+
 def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -> DiscordServer:
     """Ensure a Discord server record exists.
 
@@ -50,36 +66,21 @@ def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -
             first creation so that the API can scope visibility to the
             servers each user's bots are in.
     """
-    server = session.get(DiscordServer, guild.id)
-    if server is None:
-        server = DiscordServer(
-            id=guild.id,
-            name=guild.name or f"Server {guild.id}",
-            description=getattr(guild, "description", None),
-            member_count=getattr(guild, "member_count", None),
-            bot_id=bot_id,
-            verified=bot_id is not None,
-        )
-        session.add(server)
-        session.flush()
-    elif bot_id is not None and not server.verified:
-        # A gateway connection proves membership; a server so far claimed
-        # only by pushed events starts over under this bot.
-        verify_server(session, guild.id, bot_id, collect=server.collect_messages, name=guild.name)
-    else:
-        if guild.name and server.name != guild.name:
-            server.name = guild.name
-        description = getattr(guild, "description", None)
-        if description and server.description != description:
-            server.description = description
-        member_count = getattr(guild, "member_count", None)
-        if member_count is not None:
-            server.member_count = member_count
-        # Back-fill bot_id if not yet set
-        if server.bot_id is None and bot_id is not None:
-            server.bot_id = bot_id
+    server, created = get_or_insert(
+        session,
+        DiscordServer,
+        guild.id,
+        id=guild.id,
+        name=guild.name or f"Server {guild.id}",
+        description=getattr(guild, "description", None),
+        member_count=getattr(guild, "member_count", None),
+        bot_id=bot_id,
+        verified=bot_id is not None,
+    )
+    if not created:
+        update_server(session, server, guild, bot_id)
     if bot_id is not None:
-        session.merge(DiscordBotServer(bot_id=bot_id, server_id=guild.id))
+        insert_missing(session, DiscordBotServer, bot_id=bot_id, server_id=guild.id)
     return server
 
 
@@ -97,45 +98,39 @@ def ensure_channel(
     # Get category_id if available (TextChannel, VoiceChannel have it)
     category_id = getattr(channel, "category_id", None)
 
-    channel_model = session.get(DiscordChannel, channel_id)
-    if channel_model is None:
-        channel_model = DiscordChannel(
-            id=channel_id,
-            server_id=guild_id,
-            bot_id=bot_id,
-            category_id=category_id,
-            name=getattr(channel, "name", f"Channel {channel_id}"),
-            channel_type=get_channel_type(channel),
-        )
-        session.add(channel_model)
-        session.flush()
-    else:
-        name = getattr(channel, "name", None)
-        if name and channel_model.name != name:
-            channel_model.name = name
-        # Update category_id if changed
-        if category_id is not None and channel_model.category_id != category_id:
-            channel_model.category_id = category_id
+    channel_model, created = get_or_insert(
+        session,
+        DiscordChannel,
+        channel_id,
+        id=channel_id,
+        server_id=guild_id,
+        bot_id=bot_id,
+        category_id=category_id,
+        name=getattr(channel, "name", f"Channel {channel_id}"),
+        channel_type=get_channel_type(channel),
+    )
+    if created:
+        return channel_model
+    name = getattr(channel, "name", None)
+    if name and channel_model.name != name:
+        channel_model.name = name
+    if category_id is not None and channel_model.category_id != category_id:
+        channel_model.category_id = category_id
     return channel_model
 
 
 def ensure_user(session: DBSession, discord_user: abc.User) -> DiscordUser:
     """Ensure a Discord user record exists."""
-    user = session.get(DiscordUser, discord_user.id)
     display_name = getattr(discord_user, "display_name", discord_user.name)
-    if user is None:
-        user = DiscordUser(
-            id=discord_user.id,
-            username=discord_user.name,
-            display_name=display_name,
-        )
-        session.add(user)
-        session.flush()
-    else:
-        if user.username != discord_user.name:
-            user.username = discord_user.name
-        if display_name and user.display_name != display_name:
-            user.display_name = display_name
+    user, created = get_or_insert(
+        session, DiscordUser, discord_user.id, id=discord_user.id, username=discord_user.name, display_name=display_name
+    )
+    if created:
+        return user
+    if user.username != discord_user.name:
+        user.username = discord_user.name
+    if display_name and user.display_name != display_name:
+        user.display_name = display_name
     return user
 
 

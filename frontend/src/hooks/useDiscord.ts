@@ -102,8 +102,11 @@ interface MCPChannelResponse {
   name: string
   type: string
   server_id: string | number | null
-  collect_messages: boolean
+  collect_messages: boolean | null
+  effective_collect: boolean
 }
+
+const CHANNEL_FIELDS = ['id', 'name', 'type', 'server_id', 'collect_messages', 'effective_collect', 'project_id', 'sensitivity']
 
 export const useDiscord = () => {
   const { apiCall } = useAuth()
@@ -184,7 +187,7 @@ export const useDiscord = () => {
 
   const listChannels = useCallback(async (serverId?: string, serverName?: string): Promise<DiscordChannel[]> => {
     // Use MCP tool for listing channels
-    const params: Record<string, unknown> = {}
+    const params: Record<string, unknown> = { fields: CHANNEL_FIELDS }
     const server = serverId || serverName
     if (server) params.server = server
 
@@ -208,7 +211,7 @@ export const useDiscord = () => {
       collect_messages: ch.collect_messages,
       project_id: ch.project_id,
       sensitivity: ch.sensitivity,
-      effective_collect: ch.collect_messages, // MCP returns the resolved value
+      effective_collect: ch.effective_collect,
     }))
   }, [mcpCall])
 

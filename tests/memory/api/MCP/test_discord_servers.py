@@ -265,6 +265,31 @@ async def test_list_channels_fields(two_owners, fields, expected):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server_collects,channel_collects,expected",
+    [
+        (True, None, {"collect_messages": None, "effective_collect": True}),
+        (False, None, {"collect_messages": None, "effective_collect": False}),
+        (True, False, {"collect_messages": False, "effective_collect": False}),
+        (False, True, {"collect_messages": True, "effective_collect": True}),
+    ],
+)
+async def test_list_channels_collect_fields_separate_own_setting_from_inherited(
+    db_session, two_owners, server_collects, channel_collects, expected
+):
+    db_session.get(DiscordServer, 1001).collect_messages = server_collects
+    db_session.get(DiscordChannel, 10011).collect_messages = channel_collects
+    db_session.commit()
+
+    with mcp_auth_context(two_owners.token):
+        result = await get_fn(list_channels)(
+            name="mine-general", fields=["collect_messages", "effective_collect"]
+        )
+
+    assert result["channels"] == [expected]
+
+
+@pytest.mark.asyncio
 async def test_list_channels_rejects_unknown_fields(two_owners):
     with mcp_auth_context(two_owners.token):
         with pytest.raises(ValueError, match="Invalid fields"):

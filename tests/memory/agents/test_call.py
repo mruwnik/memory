@@ -145,7 +145,7 @@ async def test_a_spent_key_is_refused_before_calling(db_session, regular_user, l
     llm_key.max_cost_usd_per_day = Decimal("1")
     caps.record_spend(
         db_session, key_id=llm_key.id, user_id=None, agent="system:hyde",
-        model=SUMMARISE.model_for("anthropic"), cost=Decimal("1"), usage=AgentUsage(),
+        model=SUMMARISE.models[0], cost=Decimal("1"), usage=AgentUsage(),
     )
     db_session.commit()
 

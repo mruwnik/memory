@@ -25,9 +25,14 @@ None.
 ### Other changes for operators
 
 - Deleting an email account (its mail and attachments), book, Slack channel or
-  workspace, forum post or Claude session now deletes the source items under
-  it. It used to delete only the subclass rows and leave their source items,
-  chunks and vectors behind; search then failed on every query that hit one.
+  workspace, forum post or Claude session now deletes the source items and
+  chunks under it. Their Qdrant vectors stay until the next scheduled
+  `clean_all_collections` run; search drops them meanwhile. It used to delete
+  only the subclass rows and leave their source items, chunks and vectors
+  behind; search then failed on every query that hit one. The trigger runs one
+  DELETE per row at commit, so deleting an account with very many items (say
+  100k emails) makes for a long commit; raise the client's statement timeout
+  if one times out.
 - Search skips an item it can't load (logged at WARNING with its id) instead
   of failing.
 - Discord gateway bots now apply deletes and edits of older messages, and
@@ -37,6 +42,16 @@ None.
   backfill stops once its collection is paused. The collector's
   `POST /refresh_metadata` is now `POST /refresh_metadata/{bot_id}` and
   refreshes only that bot.
+- Reactions a gateway bot sees now only apply to messages its owner's bots
+  stored, as webhook deliveries already did; a reaction on another owner's
+  message is dropped.
+- A bot leaving a server hands it to another of the same owner's bots still
+  in it, else leaves it with no owning bot. The next bot to claim it then
+  takes it with the project and sensitivity reset to defaults, so another
+  owner never inherits its access settings.
+- The `discord_list_channels` MCP tool's `collect_messages` is now the
+  channel's own setting (null when it inherits the server's); the value in
+  effect is in the new `effective_collect` field.
 
 ### Migrations
 

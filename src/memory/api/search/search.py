@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Integer, Text, and_, func, or_, values
 from sqlalchemy import column as sql_column
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from memory.agents.provider_keys import Credential, credential, system_key
@@ -113,7 +114,7 @@ def apply_query_term_boost(
         chunk.boost += QUERY_TERM_BOOST * (matches / len(query_terms))
 
 
-def loadable(db, sources: Sequence[SourceItem]) -> list[SourceItem]:
+def loadable(db: Session, sources: Sequence[SourceItem]) -> list[SourceItem]:
     """``sources`` minus those whose subclass row is gone: reading them raises."""
     orphans = set(orphaned_source_ids(db, [s.id for s in sources]))
     for source_id in sorted(orphans):

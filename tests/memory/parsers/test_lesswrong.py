@@ -567,7 +567,7 @@ def graphql_response(data):
     return response
 
 
-def raw_comment(comment_id, score, html="<p>Hello there</p>", parent=None, user="Alice"):
+def raw_comment(comment_id, score, html="<p>Hello there</p>", parent=None, user: str | None = "Alice"):
     return {
         "_id": comment_id,
         "postId": "post1",

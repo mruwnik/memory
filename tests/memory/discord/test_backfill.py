@@ -418,7 +418,7 @@ async def test_discover_bot_servers_stores_servers_and_text_channels(db_session,
 
 
 @pytest.mark.asyncio
-async def test_discovery_never_renames_or_claims_another_bots_servers(db_session, fake_api):
+async def test_discovery_claims_ownerless_servers_but_never_another_bots(db_session, fake_api):
     db_session.add_all([
         DiscordBot(id=42, application_id=42, name="bot"),
         DiscordBot(id=43, application_id=43, name="other"),
@@ -444,7 +444,7 @@ async def test_discovery_never_renames_or_claims_another_bots_servers(db_session
 
     db_session.expire_all()
     assert (db_session.get(DiscordServer, 7).name, db_session.get(DiscordServer, 7).bot_id) == ("Theirs", 43)
-    assert (db_session.get(DiscordServer, 8).name, db_session.get(DiscordServer, 8).bot_id) == ("Orphan", None)
+    assert (db_session.get(DiscordServer, 8).name, db_session.get(DiscordServer, 8).bot_id) == ("Mine now", 42)
     assert db_session.get(DiscordChannel, 70).name == "general"
 
 
