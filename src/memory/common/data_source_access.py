@@ -49,6 +49,8 @@ SUPPORTED_SOURCE_TYPES = frozenset(
         "slack_workspace",
         "discord_channel",
         "discord_server",
+        "beeper_chat",
+        "beeper_network",
         "calendar_account",
         "google_folder",
         "article_feed",

@@ -45,6 +45,7 @@ from memory.common.db.models.source_item import (
     truncate_preview,
 )
 if TYPE_CHECKING:
+    from memory.common.db.models.beeper import BeeperChat
     from memory.common.db.models.discord import (
         DiscordBot,
         DiscordChannel,
@@ -638,6 +639,91 @@ class SlackMessage(SourceItem):
         if self.channel.workspace is not None:
             chain.append(self.channel.workspace)
         return chain
+
+
+class BeeperMessage(SourceItem):
+    """A message from a Beeper chat.
+
+    ``message_id`` is Beeper Server's per-install id; ``event_id`` is the
+    Matrix event id, which survives rebuilding the Server's data. Reactions
+    are stored on the message they react to.
+    """
+
+    __tablename__ = "beeper_message"
+
+    @classmethod
+    def get_collections(cls) -> list[str]:
+        return ["message"]
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
+    )
+    chat_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("beeper_chats.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    sender_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sender_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_sender: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # linkedMessageID: the message this one replies to
+    reply_to_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # TEXT, NOTICE, IMAGE, VIDEO, VOICE, AUDIO, FILE, STICKER, LOCATION
+    message_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="TEXT")
+
+    mentions: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    # {reaction key: [participant ids]}
+    reactions: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB, nullable=True)
+    attachments: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    images: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+
+    chat: Mapped[BeeperChat | None] = relationship("BeeperChat", foreign_keys=[chat_id])
+
+    __mapper_args__ = {
+        "polymorphic_identity": "beeper_message",
+    }
+
+    __table_args__ = (
+        Index("beeper_message_chat_message_idx", "chat_id", "message_id", unique=True),
+        Index("beeper_message_event_idx", "event_id"),
+        Index("beeper_message_chat_sent_idx", "chat_id", "sent_at"),
+    )
+
+    @property
+    def preview_text(self) -> str | None:
+        return truncate_preview(self.title)
+
+    @property
+    def title(self) -> str:
+        return f"{self.sender_name or self.sender_id or 'unknown'}: {self.content or ''}"
+
+    @property
+    def should_embed(self) -> bool:
+        return bool(self.content) and len(self.content) >= 20
+
+    @property
+    def embedding_text(self) -> str:
+        return self.title if self.should_embed else ""
+
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        text = self.embedding_text
+        if not text:
+            return []
+        return extract.extract_text(text, modality="message")
+
+    def get_data_source_chain(self) -> list[Any]:
+        if not self.chat:
+            return []
+        return [self.chat, self.chat.network]
+
+    @property
+    def llm_registrant_id(self) -> int | None:
+        return self.chat.network.llm_registrant_id if self.chat else None
 
 
 class GitCommit(SourceItem):

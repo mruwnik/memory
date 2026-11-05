@@ -26,6 +26,7 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 from sqlalchemy import event
 
+from memory.common.db.models.beeper import BeeperChat, BeeperNetwork
 from memory.common.db.models.discord import DiscordChannel, DiscordServer
 from memory.common.db.models.slack import SlackChannel, SlackWorkspace
 from memory.common.db.models.sources import (
@@ -52,6 +53,8 @@ ACCESS_CONTROLLED_SOURCE_MODELS: dict[str, type] = {
         SlackWorkspace,
         DiscordChannel,
         DiscordServer,
+        BeeperChat,
+        BeeperNetwork,
         CalendarAccount,
         GoogleFolder,
         ArticleFeed,

@@ -26,6 +26,8 @@ from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
 from tests.providers.email_provider import MockEmailProvider
 
+pytest_plugins = ["tests.memory.fake_beeper"]
+
 MOCK_SUMMARY_RESPONSE = json.dumps({"summary": "test summary", "tags": ["tag1", "tag2"]})
 
 

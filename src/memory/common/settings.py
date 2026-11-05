@@ -498,6 +498,22 @@ CHAT_API_ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("CHAT_API_ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
 
+# Beeper Server origins (e.g. http://beeper:23373) users may connect Beeper
+# accounts through. They are usually private addresses, so memory talks to
+# them only, never through public_http_client.
+BEEPER_SERVER_URLS = [
+    o.strip() for o in os.getenv("BEEPER_SERVER_URLS", "").split(",") if o.strip()
+]
+# Matrix homeservers that may receive a Beeper account's token, to sign it out.
+BEEPER_HOMESERVER_ORIGINS = [
+    o.strip()
+    for o in os.getenv("BEEPER_HOMESERVER_ORIGINS", "https://matrix.beeper.com").split(",")
+    if o.strip()
+]
+# The release docker/beeper/Dockerfile pins; other versions get a warning.
+BEEPER_SERVER_VERSION = os.getenv("BEEPER_SERVER_VERSION", "4.3.284")
+BEEPER_REQUEST_TIMEOUT = float(os.getenv("BEEPER_REQUEST_TIMEOUT", 60))
+
 
 # S3 backups are on only when S3_BACKUP_BUCKET is set, and then need
 # BACKUP_ENCRYPTION_KEY (checked at startup by require_settings).

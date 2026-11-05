@@ -88,11 +88,12 @@ def test_dry_run_plans_update_to_newest_tag_without_changing_anything(clone):
 
 def test_dry_run_stops_every_app_service_built_from_the_repo(clone):
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
-    # migrate is a one-shot `compose run`, not a running service.
+    # migrate is a one-shot `compose run`, not a running service; opt-in
+    # profile services (beeper) don't touch the database.
     app_services = {
         name
         for name, service in compose["services"].items()
-        if "build" in service and name != "migrate"
+        if "build" in service and name != "migrate" and "profiles" not in service
     }
 
     code, output = dry_run(clone)

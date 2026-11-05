@@ -52,6 +52,20 @@ None.
 - The `discord_list_channels` MCP tool's `collect_messages` is now the
   channel's own setting (null when it inherits the server's); the value in
   effect is in the new `effective_collect` field.
+- Beeper accounts (setup and settings only so far; nothing is collected yet).
+  Users sign a Beeper account in through a Beeper Server at `/beeper/*`.
+  Beeper Server is closed source with no licence, and unsigned: the opt-in
+  `beeper` compose service (`--profile beeper`) builds a pinned release
+  (`docker/beeper/Dockerfile`, checked against the update feed's sha512) that
+  runs as non-root on a private network shared only with `api` and
+  `ingest-hub`. Never publish its port: its setup endpoints need no auth until
+  sign-in. Its `beeper_data` volume holds the session and encryption keys.
+  New optional settings: `BEEPER_SERVER_URLS` (the Server origins users may
+  connect through, e.g. `http://beeper:23373`; none by default),
+  `BEEPER_HOMESERVER_ORIGINS` (Matrix homeservers that may receive a token to
+  sign it out; default `https://matrix.beeper.com`), `BEEPER_SERVER_VERSION`
+  (the pinned release; other versions are flagged) and
+  `BEEPER_REQUEST_TIMEOUT` (seconds, default 60).
 
 ### Migrations
 
@@ -62,6 +76,9 @@ function and the triggers.
 
 `20261129_discord_bot_last_sync`: adds the nullable `discord_bots.last_sync_at`
 column. Fast.
+
+`20261130_beeper`: creates the `beeper_accounts`, `beeper_networks`,
+`beeper_chats`, `beeper_participants` and `beeper_message` tables. Fast.
 
 ### Post-deploy commands
 

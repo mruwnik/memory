@@ -57,6 +57,7 @@ from memory.api.instance_settings import router as instance_settings_router
 from memory.api.users import check_single_user, router as users_router
 from memory.api.password_reset import router as password_reset_router
 from memory.api.setup import announce_setup_token, router as setup_router
+from memory.api.beeper import router as beeper_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.source_tabs import router as source_tabs_router
@@ -133,6 +134,7 @@ tags_metadata = [
     {"name": "usage", "description": "LLM usage and cost"},
     {"name": "polls", "description": "Create and manage polls"},
     {"name": "settings", "description": "Server settings (admin)"},
+    {"name": "beeper", "description": "Beeper integration"},
     {"name": "discord", "description": "Discord integration"},
     {"name": "slack", "description": "Slack integration"},
     {"name": "celery", "description": "Celery task overview and ingestion summary"},
@@ -507,6 +509,7 @@ app.include_router(instance_settings_router)
 app.include_router(users_router)
 app.include_router(password_reset_router)
 app.include_router(setup_router)
+app.include_router(beeper_router)
 app.include_router(discord_router)
 app.include_router(slack_router)
 app.include_router(source_tabs_router)

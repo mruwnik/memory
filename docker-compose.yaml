@@ -3,6 +3,9 @@ networks:
   kbnet:
     # internal overlay – NOT exposed
     driver: bridge
+  # Only api and ingest-hub reach Beeper Server: its setup endpoints need no auth until sign-in.
+  beepernet:
+    driver: bridge
 
 # --------------------------------------------------------------------- secrets
 secrets:
@@ -19,6 +22,7 @@ volumes:
   qdrant_data: {} # Qdrant
   qdrant_snapshots: {} # Qdrant snapshots; on disk because tmpfs counts against qdrant's memory limit
   redis_data: {} # Redis
+  beeper_data: {} # Beeper Server: session and E2EE keys; losing it means signing in and verifying again
 
 # ------------------------------ X-templates ----------------------------
 x-common-env: &env
@@ -224,6 +228,7 @@ services:
     restart: unless-stopped
     networks:
       kbnet:
+      beepernet:
     security_opt: ["no-new-privileges=true"]
     # Healthy, not just started: the api reads its module flags from Postgres as it boots.
     depends_on:
@@ -360,6 +365,7 @@ services:
       dockerfile: docker/ingest_hub/Dockerfile
       args:
         APP_VERSION: ${APP_VERSION:-dev}
+    networks: [kbnet, beepernet]
     environment:
       <<: *worker-env
       DISCORD_NOTIFICATIONS_ENABLED: ${DISCORD_NOTIFICATIONS_ENABLED:-true}
@@ -373,6 +379,31 @@ services:
       - /var/log/supervisor
       - /var/run/supervisor
     deploy: { resources: { limits: { cpus: "0.5", memory: 512m } } }
+
+  # ------------------------------------------------------------ Beeper Server
+  # Opt in with `--profile beeper` and add http://beeper:23373 to BEEPER_SERVER_URLS.
+  # Never publish its port.
+  beeper:
+    build:
+      context: docker/beeper
+    profiles: [beeper]
+    restart: unless-stopped
+    networks: [beepernet]
+    volumes:
+      - beeper_data:/data:rw
+    tmpfs:
+      - /tmp
+    security_opt: ["no-new-privileges=true"]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          memory: 256M
+    logging:
+      options: { max-size: "10m", max-file: "3" }
 
   # ------------------------------------------------------------ database backups
   backup:

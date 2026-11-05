@@ -15,6 +15,7 @@ from memory.common.db.models.source_items import (
     ChatMessage,
     DiscordMessage,
     SlackMessage,
+    BeeperMessage,
     BlogPost,
     Comic,
     BookSection,
@@ -54,6 +55,12 @@ from memory.common.db.models.discord import (
     DiscordServer,
     DiscordChannel,
     DiscordUser,
+)
+from memory.common.db.models.beeper import (
+    BeeperAccount,
+    BeeperChat,
+    BeeperNetwork,
+    BeeperParticipant,
 )
 from memory.common.db.models.slack import (
     SlackApp,
@@ -210,6 +217,11 @@ __all__ = [
     "AgentObservation",
     "ChatMessage",
     "DiscordMessage",
+    "BeeperMessage",
+    "BeeperAccount",
+    "BeeperChat",
+    "BeeperNetwork",
+    "BeeperParticipant",
     "BlogPost",
     "Comic",
     "BookSection",

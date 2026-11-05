@@ -27,6 +27,7 @@ from memory.common import (
 from memory.agents import triggers
 from memory.agents.cancel import cancel_tree
 from memory.common.db.models.agents import MAX_RETENTION_DAYS, RunStatus
+from memory.common.db.models.beeper import BeeperChat
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
 from memory.common.celery_app import (
@@ -81,6 +82,7 @@ from memory.common.db.models import (
     TelemetryEvent,
 )
 from memory.common.db.models.source_items import (
+    BeeperMessage,
     BlogPost,
     CalendarEvent,
     DiscordMessage,
@@ -869,6 +871,15 @@ def get_items_for_source(
         return paginate_source_items(
             session, DiscordMessage,
             DiscordMessage.channel_id.in_(channel_ids), offset, limit,
+        )
+    elif source_type == "beeper_chat":
+        return paginate_source_items(
+            session, BeeperMessage, BeeperMessage.chat_id == source_id, offset, limit,
+        )
+    elif source_type == "beeper_network":
+        chat_ids = select(BeeperChat.id).where(BeeperChat.network_id == source_id)
+        return paginate_source_items(
+            session, BeeperMessage, BeeperMessage.chat_id.in_(chat_ids), offset, limit,
         )
     elif source_type == "calendar_account":
         return paginate_source_items(
