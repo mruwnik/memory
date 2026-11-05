@@ -478,7 +478,7 @@ if [ "$NON_INTERACTIVE" != true ]; then
     info "Next steps:"
     echo "  1. Review configuration: $ENV_FILE"
     echo "  2. Migrate, then start services: docker compose run --rm migrate && docker compose up -d"
-    echo "  3. Create the first account at http://localhost:8000/ui/setup with the setup token"
+    echo "  3. Create the first account at http://localhost:8000/setup with the setup token"
     echo "     from: docker compose logs api | grep 'setup token'"
     echo "     or create an admin: ADD_USER_PASSWORD=yourpass docker compose exec -e ADD_USER_PASSWORD api \\"
     echo "       python tools/add_user.py --email you@example.com --name 'Your Name' --admin"
@@ -518,9 +518,9 @@ if [ "$NON_INTERACTIVE" = true ]; then
         token=$(docker compose logs api | grep -o 'setup token: [A-Za-z0-9_-]*' | tail -n 1 | cut -d' ' -f3)
     fi
     if [ -n "$token" ]; then
-        info "Create the first account at https://$DOMAIN/ui/setup with setup token: $token"
+        info "Create the first account at https://$DOMAIN/setup with setup token: $token"
     else
-        info "Create the first account at https://$DOMAIN/ui/setup with the setup token from: docker compose logs api | grep 'setup token'"
+        info "Create the first account at https://$DOMAIN/setup with the setup token from: docker compose logs api | grep 'setup token'"
     fi
     info "The api makes a new token each time it restarts, until the account exists."
 fi

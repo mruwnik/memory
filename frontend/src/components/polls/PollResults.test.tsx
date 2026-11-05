@@ -97,11 +97,11 @@ function mockResults({
 function renderResults(slug = 'results-me') {
   const user = userEvent.setup()
   render(
-    <MemoryRouter initialEntries={[`/ui/polls/results/${slug}`]}>
+    <MemoryRouter initialEntries={[`/polls/results/${slug}`]}>
       <Routes>
-        <Route path="/ui/polls/results/:slug" element={<PollResults />} />
-        <Route path="/ui/polls/edit/:slug" element={<div>Edit page</div>} />
-        <Route path="/ui/polls/respond/:slug" element={<div>Respond page</div>} />
+        <Route path="/polls/results/:slug" element={<PollResults />} />
+        <Route path="/polls/edit/:slug" element={<div>Edit page</div>} />
+        <Route path="/polls/respond/:slug" element={<div>Respond page</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -180,7 +180,7 @@ describe('PollResults - rendering', () => {
     await screen.findByRole('heading', { name: /^Results Poll/ })
     expect(
       screen.getByRole('link', { name: 'Add your availability' }),
-    ).toHaveAttribute('href', '/ui/polls/respond/results-me')
+    ).toHaveAttribute('href', '/polls/respond/results-me')
   })
 
   it('hides the add-availability link when the poll is closed', async () => {
@@ -202,7 +202,7 @@ describe('PollResults - share link', () => {
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
     await user.click(screen.getByRole('button', { name: 'Copy share link' }))
     expect(writeText).toHaveBeenCalledWith(
-      expect.stringContaining('/ui/polls/respond/results-me'),
+      expect.stringContaining('/polls/respond/results-me'),
     )
     expect(await screen.findByText('Link copied')).toBeInTheDocument()
   })
@@ -221,7 +221,7 @@ describe('PollResults - management visibility', () => {
     setAuthCookies()
     mockResults({ authed: true, owner: false })
     renderResults()
-    expect(await screen.findByRole('link', { name: /Polls/ })).toHaveAttribute('href', '/ui/polls')
+    expect(await screen.findByRole('link', { name: /Polls/ })).toHaveAttribute('href', '/polls')
     expect(screen.queryByRole('link', { name: 'Edit poll' })).not.toBeInTheDocument()
   })
 
@@ -229,7 +229,7 @@ describe('PollResults - management visibility', () => {
     setAuthCookies()
     mockResults({ authed: true })
     renderResults()
-    expect(await screen.findByRole('link', { name: 'Edit poll' })).toHaveAttribute('href', '/ui/polls/edit/results-me')
+    expect(await screen.findByRole('link', { name: 'Edit poll' })).toHaveAttribute('href', '/polls/edit/results-me')
   })
 })
 

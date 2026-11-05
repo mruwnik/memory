@@ -35,10 +35,10 @@ beforeEach(() => {
 
 const renderPage = () => renderWithRouter(
   <Routes>
-    <Route path="/ui/agents/runs/new" element={<AdHocRun />} />
-    <Route path="/ui/agents/:id" element={<p>agent page</p>} />
+    <Route path="/agents/runs/new" element={<AdHocRun />} />
+    <Route path="/agents/:id" element={<p>agent page</p>} />
   </Routes>,
-  { initialEntries: ['/ui/agents/runs/new'] },
+  { initialEntries: ['/agents/runs/new'] },
 )
 
 describe('AdHocRun', () => {

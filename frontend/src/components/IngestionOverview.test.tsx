@@ -17,7 +17,7 @@ it('explains an empty inventory and links to Sources', async () => {
   apiCall.mockResolvedValue({ ok: true, json: async () => ({ ...overview, total: 0, by_type: [] }) })
   renderWithRouter(<IngestionOverview />)
   expect(await screen.findByText('No items ingested yet')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute('href', '/ui/sources')
+  expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute('href', '/sources')
 })
 it('shows a load failure instead of pretending there are zero items', async () => {
   apiCall.mockRejectedValue(new Error('Unavailable'))

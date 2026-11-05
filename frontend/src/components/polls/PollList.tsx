@@ -41,7 +41,7 @@ export const PollList: React.FC = () => {
   return (
     <Page
       title="Polls"
-      actions={<ButtonLink variant="primary" to="/ui/polls/new">New poll</ButtonLink>}
+      actions={<ButtonLink variant="primary" to="/polls/new">New poll</ButtonLink>}
       width="default"
     >
       <Toolbar>
@@ -61,7 +61,7 @@ export const PollList: React.FC = () => {
       ) : polls.length === 0 ? (
         <EmptyState
           message={statusFilter ? `No ${statusFilter} polls found.` : "You haven't created any polls yet."}
-          action={!statusFilter && <ButtonLink variant="primary" to="/ui/polls/new">New poll</ButtonLink>}
+          action={!statusFilter && <ButtonLink variant="primary" to="/polls/new">New poll</ButtonLink>}
         />
       ) : (
         <List>
@@ -69,7 +69,7 @@ export const PollList: React.FC = () => {
             <Row
               key={poll.id}
               title={poll.title}
-              to={`/ui/polls/results/${poll.slug}`}
+              to={`/polls/results/${poll.slug}`}
               badges={<PollStatusBadge status={poll.status} />}
               meta={[
                 `${formatShortDate(poll.datetime_start)} - ${formatShortDate(poll.datetime_end)}`,
@@ -77,8 +77,8 @@ export const PollList: React.FC = () => {
                 poll.finalized_time && `Meeting: ${formatUserDateTime(poll.finalized_time)}`,
               ]}
               actions={<>
-                <ButtonLink size="sm" to={`/ui/polls/edit/${poll.slug}`}>Edit</ButtonLink>
-                <Button size="sm" onClick={() => run(() => copyText(`${window.location.origin}/ui/polls/respond/${poll.slug}`), 'Link copied')}>
+                <ButtonLink size="sm" to={`/polls/edit/${poll.slug}`}>Edit</ButtonLink>
+                <Button size="sm" onClick={() => run(() => copyText(`${window.location.origin}/polls/respond/${poll.slug}`), 'Link copied')}>
                   Copy link
                 </Button>
                 <ConfirmButton confirm={`Delete the poll "${poll.title}"?`} onConfirm={() => handleDelete(poll.id)}

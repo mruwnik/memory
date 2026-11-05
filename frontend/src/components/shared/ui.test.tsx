@@ -270,7 +270,7 @@ describe('Row', () => {
 describe('NewTabLink', () => {
   it.each([
     ['an external href', { href: 'https://example.com' }, 'https://example.com'],
-    ['an app route', { to: '/ui/keys' }, '/ui/keys'],
+    ['an app route', { to: '/keys' }, '/keys'],
   ])('opens %s in a new tab and says so, to eyes and to screen readers', (_, target, href) => {
     render(<MemoryRouter><NewTabLink {...target}>Docs</NewTabLink></MemoryRouter>)
     const link = screen.getByRole('link', { name: /^Docs/ })

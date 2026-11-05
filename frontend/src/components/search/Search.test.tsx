@@ -117,7 +117,7 @@ describe('Search', () => {
 
   it('runs the search in the URL on load and puts a new query in the URL', async () => {
     const fetchMock = installFetch({ results: [textResult('alpha.txt')] })
-    const { user } = renderWithRouter(<><Search /><LocationProbe /></>, { initialEntries: ['/ui/search?q=alpha'] })
+    const { user } = renderWithRouter(<><Search /><LocationProbe /></>, { initialEntries: ['/search?q=alpha'] })
     expect(await screen.findByText('alpha.txt')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Search your knowledge base...')).toHaveValue('alpha')
     const query = screen.getByPlaceholderText('Search your knowledge base...')

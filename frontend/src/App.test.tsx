@@ -81,7 +81,7 @@ beforeEach(() => {
   oauthState.handleCallback = vi.fn(async () => true)
   oauthState.clearError = vi.fn()
   getNeedsAccount.mockResolvedValue(false)
-  setPath('/ui/login')
+  setPath('/login')
 })
 
 describe('App routing & auth', () => {
@@ -106,21 +106,21 @@ describe('App routing & auth', () => {
     expect(oauthState.startOAuth).toHaveBeenCalled()
   })
 
-  it('renders the login prompt when unauthenticated on /ui/login', () => {
-    setPath('/ui/login')
+  it('renders the login prompt when unauthenticated on /login', () => {
+    setPath('/login')
     render(<App />)
     expect(screen.getByText('LOGIN_PROMPT')).toBeInTheDocument()
   })
 
   it('sends visitors of a server with no account yet to setup', async () => {
     getNeedsAccount.mockResolvedValue(true)
-    setPath('/ui/dashboard')
+    setPath('/dashboard')
     render(<App />)
     await waitFor(() => expect(screen.getByText('SETUP_WIZARD')).toBeInTheDocument())
   })
 
   it('redirects unauthenticated users from a protected route to login', async () => {
-    setPath('/ui/dashboard')
+    setPath('/dashboard')
     render(<App />)
     await waitFor(() => expect(screen.getByText('LOGIN_PROMPT')).toBeInTheDocument())
     expect(screen.queryByText('DASHBOARD')).not.toBeInTheDocument()
@@ -128,34 +128,34 @@ describe('App routing & auth', () => {
 
   it('renders the dashboard for an authenticated user', () => {
     authState.isAuthenticated = true
-    setPath('/ui/dashboard')
+    setPath('/dashboard')
     render(<App />)
     expect(screen.getByText('DASHBOARD')).toBeInTheDocument()
   })
 
   it('redirects an authenticated user from login to dashboard', async () => {
     authState.isAuthenticated = true
-    setPath('/ui/login')
+    setPath('/login')
     render(<App />)
     await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
   })
 
-  it('logs out and redirects when navigating to /ui/logout', async () => {
+  it('logs out and redirects when navigating to /logout', async () => {
     authState.isAuthenticated = true
-    setPath('/ui/logout')
+    setPath('/logout')
     render(<App />)
     await waitFor(() => expect(authState.logout).toHaveBeenCalled())
   })
 
   it('allows the public poll respond route without auth', () => {
-    setPath('/ui/polls/respond/my-slug')
+    setPath('/polls/respond/my-slug')
     render(<App />)
     expect(screen.getByText('POLL_RESPOND')).toBeInTheDocument()
   })
 
   it.each([
-    ['/ui/forgot-password', 'FORGOT_PASSWORD'],
-    ['/ui/reset-password', 'RESET_PASSWORD'],
+    ['/forgot-password', 'FORGOT_PASSWORD'],
+    ['/reset-password', 'RESET_PASSWORD'],
   ])('allows %s without auth', (path, marker) => {
     setPath(path)
     render(<App />)
@@ -167,7 +167,7 @@ describe('App routing & auth', () => {
     [true, 1],
   ])('renders poll results (signed in: %s) with %i app shell', (signedIn, shells) => {
     authState.isAuthenticated = signedIn
-    setPath('/ui/polls/results/my-slug')
+    setPath('/polls/results/my-slug')
     render(<App />)
     expect(screen.getByText('POLL_RESULTS')).toBeInTheDocument()
     expect(screen.queryAllByRole('navigation', { name: 'Sections' })).toHaveLength(shells)
@@ -176,7 +176,7 @@ describe('App routing & auth', () => {
   it('gates the celery route behind the admin scope (redirects non-admin)', async () => {
     authState.isAuthenticated = true
     authState.hasScope = vi.fn((s) => s !== 'admin')
-    setPath('/ui/celery')
+    setPath('/celery')
     render(<App />)
     await waitFor(() => expect(screen.getByText('DASHBOARD')).toBeInTheDocument())
     expect(screen.queryByText('CELERY')).not.toBeInTheDocument()
@@ -185,21 +185,21 @@ describe('App routing & auth', () => {
   it('renders celery for an admin', () => {
     authState.isAuthenticated = true
     authState.hasScope = vi.fn(() => true)
-    setPath('/ui/celery')
+    setPath('/celery')
     render(<App />)
     expect(screen.getByText('CELERY')).toBeInTheDocument()
   })
 
   it.each([
-    ['/ui/teams', 'teams', 'TEAMS'],
-    ['/ui/projects', 'teams', 'PROJECTS'],
+    ['/teams', 'teams', 'TEAMS'],
+    ['/projects', 'teams', 'PROJECTS'],
   ])('explains that %s needs %s while it is off', (path, module, marker) => {
     authState.isAuthenticated = true
     authState.user.modules = [...ALL_MODULES].filter(m => m !== module)
     setPath(path)
     render(<App />)
     expect(screen.getByText(/module, which is off on this server/)).toHaveTextContent(`This page needs the ${module} module, which is off on this server. Turn it on in Server settings.`)
-    expect(screen.getByRole('link', { name: 'Open Server settings' })).toHaveAttribute('href', '/ui/server-settings')
+    expect(screen.getByRole('link', { name: 'Open Server settings' })).toHaveAttribute('href', '/server-settings')
     expect(screen.queryByText(marker)).not.toBeInTheDocument()
   })
 
@@ -207,15 +207,15 @@ describe('App routing & auth', () => {
     authState.isAuthenticated = true
     authState.hasScope = vi.fn(() => false)
     authState.user.modules = []
-    setPath('/ui/teams')
+    setPath('/teams')
     render(<App />)
     expect(screen.getByText(/Ask an admin to turn it on/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Server settings' })).not.toBeInTheDocument()
   })
 
   it.each([
-    ['/ui/teams', 'teams', 'TEAMS'],
-    ['/ui/projects', 'teams', 'PROJECTS'],
+    ['/teams', 'teams', 'TEAMS'],
+    ['/projects', 'teams', 'PROJECTS'],
   ])('renders %s while %s is on', (path, module, marker) => {
     authState.isAuthenticated = true
     authState.user.modules = [module]
@@ -225,7 +225,7 @@ describe('App routing & auth', () => {
   })
 
   it('completes OAuth callback and redirects to dashboard when ?code present', async () => {
-    setPath('/ui/login?code=abc123')
+    setPath('/login?code=abc123')
     render(<App />)
     await waitFor(() => expect(oauthState.handleCallback).toHaveBeenCalled())
     await waitFor(() => expect(authState.checkAuth).toHaveBeenCalled())

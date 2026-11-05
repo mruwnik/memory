@@ -239,7 +239,7 @@ const UsageView = ({ isAdmin }: { isAdmin: boolean }) => {
                     agent runs, and Claude Code sessions that send telemetry to this server.
                   </p>
                 </>}
-                action={<ButtonLink to="/ui/keys">Manage LLM keys</ButtonLink>}
+                action={<ButtonLink to="/keys">Manage LLM keys</ButtonLink>}
               />
             ) : <UsageChart data={usage} groupBy={usage.group_by[0] ?? 'kind'} measure={measure} />}
           </Card>

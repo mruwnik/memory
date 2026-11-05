@@ -102,7 +102,7 @@ def test_session_stats_aggregates_per_session_with_names(client, db_session, use
     add_event(db_session, user.id, "cost.usage", 0.25, str(named.id))
     add_event(db_session, user.id, "token.usage", 10, "not-a-uuid")
 
-    response = client.get("/usage/sessions", params=window())
+    response = client.get("/api/usage/sessions", params=window())
 
     assert response.status_code == 200, response.text
     sessions = response.json()["sessions"]
@@ -122,7 +122,7 @@ def test_session_stats_hides_names_of_other_users_sessions(client, db_session, o
     db_session.commit()
     add_event(db_session, other_user.id, "token.usage", 100, str(theirs.id))
 
-    response = client.get("/usage/sessions", params=window())
+    response = client.get("/api/usage/sessions", params=window())
 
     assert [(s["label"], s["summary"]) for s in response.json()["sessions"]] == [(str(theirs.id)[:8], None)]
 
@@ -132,7 +132,7 @@ def test_session_stats_filters_by_api_key(client, db_session, user):
     add_event(db_session, user.id, "token.usage", 100, "with-key", api_key_id=key.id)
     add_event(db_session, user.id, "token.usage", 100, "no-key")
 
-    response = client.get("/usage/sessions", params={**window(), "api_key_id": key.id})
+    response = client.get("/api/usage/sessions", params={**window(), "api_key_id": key.id})
 
     assert [s["session_id"] for s in response.json()["sessions"]] == ["with-key"]
 
@@ -169,7 +169,7 @@ def test_metrics_group_by_api_key(client, db_session, user):
     add_event(db_session, user.id, "token.usage", 7, api_key_id=server.id)
 
     response = client.get(
-        "/usage/metrics",
+        "/api/usage/metrics",
         params={**window(), "metric": "token.usage", "granularity": 1440, "group_by": "api_key_id"},
     )
 
@@ -182,7 +182,7 @@ def test_metrics_filter_by_api_key(client, db_session, user):
     add_event(db_session, user.id, "token.usage", 7)
 
     response = client.get(
-        "/usage/metrics",
+        "/api/usage/metrics",
         params={**window(), "metric": "token.usage", "granularity": 1440, "group_by": [], "api_key_id": laptop.id},
     )
 
@@ -194,7 +194,7 @@ def test_raw_filter_by_api_key(client, db_session, user):
     add_event(db_session, user.id, "token.usage", 100, api_key_id=laptop.id)
     add_event(db_session, user.id, "token.usage", 7)
 
-    response = client.get("/usage/raw", params={**window(), "api_key_id": laptop.id})
+    response = client.get("/api/usage/raw", params={**window(), "api_key_id": laptop.id})
 
     assert [(e["value"], e["api_key_id"]) for e in response.json()["events"]] == [(100, laptop.id)]
 
@@ -206,7 +206,7 @@ def test_api_keys_lists_only_keys_with_telemetry(client, db_session, user, other
     add_event(db_session, user.id, "token.usage", 1, api_key_id=used.id)
     add_event(db_session, other_user.id, "token.usage", 1, api_key_id=theirs.id)
 
-    response = client.get("/usage/api-keys")
+    response = client.get("/api/usage/api-keys")
 
     assert sorted((k["id"], k["name"], k["user_id"]) for k in response.json()) == [
         (used.id, "laptop", user.id),
@@ -221,7 +221,7 @@ def test_api_keys_non_admin_sees_only_own_keys(regular_client, db_session, user,
     add_event(db_session, user.id, "token.usage", 1, api_key_id=used.id)
     add_event(db_session, other_user.id, "token.usage", 1, api_key_id=theirs.id)
 
-    response = regular_client.get("/usage/api-keys")
+    response = regular_client.get("/api/usage/api-keys")
 
     assert [k["id"] for k in response.json()] == [used.id]
 
@@ -231,7 +231,7 @@ def test_session_stats_caps_number_of_sessions(client, db_session, user, monkeyp
     for name, value in [("small", 1), ("big", 30), ("mid", 20)]:
         add_event(db_session, user.id, "token.usage", value, name)
 
-    response = client.get("/usage/sessions", params=window())
+    response = client.get("/api/usage/sessions", params=window())
 
     assert [s["session_id"] for s in response.json()["sessions"]] == ["big", "mid"]
 
@@ -289,7 +289,7 @@ def test_tool_usage_aggregates_tool_calls(client, db_session, user, other_user):
     add_tool_call(db_session, user.id, "Bash", 1000, 0, minutes_ago=120)
     add_tool_call(db_session, other_user.id, "Bash", 1000, 0)
 
-    response = client.get("/usage/tools", params={**window(), "user_id": user.id})
+    response = client.get("/api/usage/tools", params={**window(), "user_id": user.id})
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -314,7 +314,7 @@ def test_tool_usage_does_not_read_transcripts(client, db_session, user, tmp_path
     }
     (tmp_path / "t.jsonl").write_text(json.dumps(event) + "\n")
 
-    response = client.get("/usage/tools", params=window())
+    response = client.get("/api/usage/tools", params=window())
 
     assert response.status_code == 200, response.text
     assert response.json()["tools"] == []
@@ -416,7 +416,7 @@ def test_usage_combines_the_three_sources_by_kind(client, db_session, user):
     add_claude_code(db_session, user.id, 2.0)
     add_event(db_session, user.id, "tool.token.usage", 999)
 
-    response = client.get("/usage", params=usage_params(group_by="kind"))
+    response = client.get("/api/usage", params=usage_params(group_by="kind"))
 
     assert totals(response) == [
         (("claude-code",), 2.0, 1000, 200, 300, 100, 1600),
@@ -440,7 +440,7 @@ def test_usage_groups_by_dimension(client, db_session, user, other_user, group_b
     add_spend(db_session, key.id, other_user.id, "0.5", agent="system:search")
     add_run(db_session, user.id, "1.25", key.id)
 
-    response = client.get("/usage", params=usage_params(group_by=group_by))
+    response = client.get("/api/usage", params=usage_params(group_by=group_by))
 
     assert [t[0] for t in totals(response)] == expected(user, other_user)
 
@@ -450,7 +450,7 @@ def test_usage_groups_by_several_dimensions(client, db_session, user):
     add_spend(db_session, key.id, user.id, "0.5")
     add_spend(db_session, key.id, user.id, "0.25", model="claude-sonnet")
 
-    response = client.get("/usage", params=usage_params(group_by=["agent", "model"]))
+    response = client.get("/api/usage", params=usage_params(group_by=["agent", "model"]))
 
     assert [(t[0], t[1]) for t in totals(response)] == [
         (("system:summarize", "claude-haiku"), 0.5),
@@ -464,7 +464,7 @@ def test_usage_groups_by_key_and_labels_keys_and_users(client, db_session, user)
     add_spend(db_session, mine.id, user.id, "0.5")
     add_run(db_session, user.id, "1.25", spare.id)
 
-    response = client.get("/usage", params=usage_params(group_by=["key", "user"]))
+    response = client.get("/api/usage", params=usage_params(group_by=["key", "user"]))
 
     assert [(t[0], t[1]) for t in totals(response)] == [((mine.id, user.id), 0.5), ((spare.id, user.id), 1.25)]
     assert response.json()["keys"] == {str(mine.id): "mine", str(spare.id): "spare"}
@@ -484,7 +484,7 @@ def test_usage_buckets_by_interval(client, db_session, user, interval, expected)
         add_run(db_session, user.id, "1", at=datetime.fromisoformat(at).replace(tzinfo=timezone.utc))
 
     response = client.get(
-        "/usage", params={"from": "2026-03-01T00:00:00Z", "to": "2026-03-31T00:00:00Z", "interval": interval}
+        "/api/usage", params={"from": "2026-03-01T00:00:00Z", "to": "2026-03-31T00:00:00Z", "interval": interval}
     )
 
     assert response.status_code == 200, response.text
@@ -495,12 +495,12 @@ def test_usage_keeps_to_the_time_window(client, db_session, user):
     add_run(db_session, user.id, "1")
     add_run(db_session, user.id, "7", at=NOW - timedelta(days=10))
 
-    assert costs(client.get("/usage", params=usage_params(days=5))) == [1.0]
+    assert costs(client.get("/api/usage", params=usage_params(days=5))) == [1.0]
 
 
 @pytest.mark.parametrize("params", [{"group_by": "secret"}, {"interval": "minute"}])
 def test_usage_rejects_unknown_parameters(client, params):
-    assert client.get("/usage", params=params).status_code == 422
+    assert client.get("/api/usage", params=params).status_code == 422
 
 
 def seed_mixed_ownership(db_session, user, other_user) -> None:
@@ -522,7 +522,7 @@ def test_usage_access(request, db_session, user, other_user, client_fixture, exp
     seed_mixed_ownership(db_session, user, other_user)
     api = request.getfixturevalue(client_fixture)
 
-    assert costs(api.get("/usage", params=usage_params())) == expected
+    assert costs(api.get("/api/usage", params=usage_params())) == expected
 
 
 @pytest.mark.parametrize("client_fixture, expected", [("client", [86.0]), ("member_client", [2.0])])
@@ -530,7 +530,7 @@ def test_usage_user_filter_narrows_within_access(request, db_session, user, othe
     seed_mixed_ownership(db_session, user, other_user)
     api = request.getfixturevalue(client_fixture)
 
-    response = api.get("/usage", params=usage_params(user_id=other_user.id))
+    response = api.get("/api/usage", params=usage_params(user_id=other_user.id))
 
     assert costs(response) == expected
 
@@ -544,7 +544,7 @@ def test_usage_labels_only_your_own_keys(request, db_session, user, other_user, 
     ids = {k.label: str(k.id) for k in db_session.query(LLMProviderKey)}
     api = request.getfixturevalue(client_fixture)
 
-    response = api.get("/usage", params=usage_params(group_by="key"))
+    response = api.get("/api/usage", params=usage_params(group_by="key"))
 
     assert response.json()["keys"] == {ids[label]: shown for label, shown in expected.items()}
 
@@ -554,7 +554,7 @@ def test_usage_includes_the_spend_bucket_that_from_falls_in(client, db_session, 
     add_spend(db_session, None, user.id, "1", at=hour)
 
     response = client.get(
-        "/usage",
+        "/api/usage",
         params={"from": (hour + timedelta(minutes=30)).isoformat(), "to": (hour + timedelta(hours=2)).isoformat()},
     )
 
@@ -564,11 +564,11 @@ def test_usage_includes_the_spend_bucket_that_from_falls_in(client, db_session, 
 @pytest.mark.parametrize(
     "path, params, event, rows",
     [
-        ("/usage/raw", {}, "token.usage", lambda body: body["events"]),
-        ("/usage/metrics", {"metric": "token.usage", "group_by": []}, "token.usage", lambda body: body["data"]),
-        ("/usage/sessions", {}, "token.usage", lambda body: body["sessions"]),
-        ("/usage/tools", {}, "tool.token.usage", lambda body: body["tools"]),
-        ("/usage", {}, "token.usage", lambda body: body["data"]),
+        ("/api/usage/raw", {}, "token.usage", lambda body: body["events"]),
+        ("/api/usage/metrics", {"metric": "token.usage", "group_by": []}, "token.usage", lambda body: body["data"]),
+        ("/api/usage/sessions", {}, "token.usage", lambda body: body["sessions"]),
+        ("/api/usage/tools", {}, "tool.token.usage", lambda body: body["tools"]),
+        ("/api/usage", {}, "token.usage", lambda body: body["data"]),
     ],
 )
 def test_to_is_exclusive(client, db_session, user, path, params, event, rows):

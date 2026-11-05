@@ -378,7 +378,7 @@ const Calendar = () => {
         : events.length > 0 && filteredEvents.length === 0 ? <Notice tone="info">No calendars selected.</Notice>
         : events.length === 0 && (
           <Notice tone="info">
-            No events this month. <Link to="/ui/sources?tab=calendar" className="underline">Configure calendar accounts</Link>
+            No events this month. <Link to="/sources?tab=calendar" className="underline">Configure calendar accounts</Link>
           </Notice>
         )
       )}
@@ -575,7 +575,7 @@ const Calendar = () => {
               ) : (
                 <div className="text-center py-4">
                   <div className="text-slate-500 mb-2">No profile found for this person</div>
-                  <Link to="/ui/people" className="text-sm text-primary hover:underline">Add them in People</Link>
+                  <Link to="/people" className="text-sm text-primary hover:underline">Add them in People</Link>
                 </div>
               )}
             </div>
@@ -584,7 +584,7 @@ const Calendar = () => {
 
       {events.length > 0 && (
         <footer className="text-center">
-          <Link to="/ui/sources?tab=calendar" className="inline-block py-2 text-primary text-sm hover:underline">
+          <Link to="/sources?tab=calendar" className="inline-block py-2 text-primary text-sm hover:underline">
             Configure calendar accounts
           </Link>
         </footer>

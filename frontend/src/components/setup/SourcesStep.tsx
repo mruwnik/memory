@@ -61,7 +61,7 @@ export const SourcesStep = () => {
             meta={[source.description]}
             actions={source.panels
               ? <Button size="sm" aria-label={`Set up ${source.title}`} onClick={() => setOpen(source)}>Set up</Button>
-              : <ButtonLink size="sm" to="/ui/notes" target="_blank" rel="noopener noreferrer">Open notes<NewTabMark /></ButtonLink>} />
+              : <ButtonLink size="sm" to="/notes" target="_blank" rel="noopener noreferrer">Open notes<NewTabMark /></ButtonLink>} />
         ))}
       </List>
       {open?.panels && (

@@ -79,21 +79,21 @@ export default function AgentEditor() {
     setSpec(stored.spec)
     setChangedTools([])
     setSaved(snapshot(stored.name, stored.description, stored.spec))
-    if (isNew) bypass(() => navigate(`/ui/agents/${stored.id}`))
+    if (isNew) bypass(() => navigate(`/agents/${stored.id}`))
   })
 
   const run = () => running.submit(async () => {
     const { run_id } = await startRun({ input, definitionId })
-    navigate(`/ui/agents/runs/${run_id}?from=agent`)
+    navigate(`/agents/runs/${run_id}?from=agent`)
   })
 
   const remove = () => act(async () => {
     if (definitionId === undefined) return
     await deleteDefinition(definitionId)
-    bypass(() => navigate('/ui/agents'))
+    bypass(() => navigate('/agents'))
   })
 
-  const back = { to: '/ui/agents', label: 'Agents' }
+  const back = { to: '/agents', label: 'Agents' }
   if (!validId || missing) return <Page back={back} title="Agent" error="This agent doesn't exist or isn't yours" />
   if (!catalog || !spec) return <Page back={back} title={isNew ? 'New agent' : 'Agent'} loading="Loading agent..." error={loadError} onRetry={load} />
 
@@ -136,7 +136,7 @@ export default function AgentEditor() {
           {!!runs.length && (
             <List>
               {runs.map(r => (
-                <Row key={r.id} to={`/ui/agents/runs/${r.id}?from=agent`} title={r.input} badges={<StatusBadge status={r.status} />}
+                <Row key={r.id} to={`/agents/runs/${r.id}?from=agent`} title={r.input} badges={<StatusBadge status={r.status} />}
                   meta={[formatRelativeTime(r.created_at), formatCost(r.cost_usd)]} />
               ))}
             </List>

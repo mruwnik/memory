@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useAuth } from './useAuth'
+import { CLIENT_ID_KEY, useAuth } from './useAuth'
 import { mockFetch, mockResponse, clearCookies } from '@/test/utils'
 
 const setCookie = (name: string, value: string) => {
@@ -194,7 +194,7 @@ describe('apiCall', () => {
   it('refreshes the token on 401 then retries with the new token', async () => {
     setCookie('access_token', 'old')
     setCookie('refresh_token', 'refresh')
-    localStorage.setItem('oauth_client_id', 'client-1')
+    localStorage.setItem(CLIENT_ID_KEY, 'client-1')
 
     let fooCalls = 0
     const fetchMock = mockFetch(async (input) => {
@@ -260,7 +260,7 @@ describe('token refresh', () => {
   const seedRefreshable = () => {
     setCookie('access_token', 'old')
     setCookie('refresh_token', 'r1')
-    localStorage.setItem('oauth_client_id', 'client-1')
+    localStorage.setItem(CLIENT_ID_KEY, 'client-1')
   }
   const callsTo = (fetchMock: ReturnType<typeof mockFetch>, path: string) =>
     fetchMock.mock.calls.filter(([u]) => u.toString().endsWith(path))
@@ -383,7 +383,7 @@ describe('logout', () => {
     setCookie('access_token', 'tok')
     setCookie('refresh_token', 'r')
     setCookie('session_id', 's')
-    localStorage.setItem('oauth_client_id', 'client-1')
+    localStorage.setItem(CLIENT_ID_KEY, 'client-1')
     mockFetch(async () =>
       mockResponse({
         json: {
@@ -403,14 +403,14 @@ describe('logout', () => {
     })
     expect(result.current.isAuthenticated).toBe(false)
     expect(result.current.user).toBeNull()
-    expect(localStorage.getItem('oauth_client_id')).toBeNull()
+    expect(localStorage.getItem(CLIENT_ID_KEY)).toBeNull()
     expect(document.cookie).not.toContain('access_token=tok')
   })
 
   it('does not refresh when the server rejects the logout', async () => {
     setCookie('access_token', 'tok')
     setCookie('refresh_token', 'r')
-    localStorage.setItem('oauth_client_id', 'client-1')
+    localStorage.setItem(CLIENT_ID_KEY, 'client-1')
     const fetchMock = mockFetch(async () => mockResponse({ status: 401 }))
     const { result } = renderHook(() => useAuth())
     await waitFor(() => expect(result.current.isLoading).toBe(false))

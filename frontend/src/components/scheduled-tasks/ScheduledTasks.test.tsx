@@ -193,7 +193,7 @@ describe('ScheduledTasks', () => {
   it('links a paused agent schedule to its agent instead of resuming it here', async () => {
     listTasks.mockResolvedValue([makeTask({ task_type: 'agent_run', enabled: false, data: { definition_id: 9 } })])
     renderWithRouter(<ScheduledTasks />)
-    expect(await screen.findByRole('link', { name: 'Resume on agent page' })).toHaveAttribute('href', '/ui/agents/9')
+    expect(await screen.findByRole('link', { name: 'Resume on agent page' })).toHaveAttribute('href', '/agents/9')
     expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument()
   })
 
@@ -370,7 +370,7 @@ describe('ScheduledTasks formatting branches', () => {
     renderWithRouter(<ScheduledTasks />)
     await waitFor(() => expect(screen.getByText('agent hist')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: 'History' }))
-    await waitFor(() => expect(screen.getByRole('link', { name: 'view run' })).toHaveAttribute('href', '/ui/agents/runs/r-live'))
+    await waitFor(() => expect(screen.getByRole('link', { name: 'view run' })).toHaveAttribute('href', '/agents/runs/r-live'))
     expect(screen.getAllByRole('link', { name: 'view run' })).toHaveLength(1)
     expect(screen.getByText('run expired')).toBeInTheDocument()
   })

@@ -16,13 +16,13 @@ describe('Dashboard', () => {
   })
 
   it.each([
-    ['Search', '/ui/search'],
-    ['Sources', '/ui/sources'],
-    ['Notes', '/ui/notes'],
-    ['Reports', '/ui/reports'],
-    ['Calendar', '/ui/calendar'],
-    ['Tasks', '/ui/tasks'],
-    ['Scheduled tasks', '/ui/scheduled-tasks'],
+    ['Search', '/search'],
+    ['Sources', '/sources'],
+    ['Notes', '/notes'],
+    ['Reports', '/reports'],
+    ['Calendar', '/calendar'],
+    ['Tasks', '/tasks'],
+    ['Scheduled tasks', '/scheduled-tasks'],
   ])('links the %s card to %s', (label, href) => {
     renderDashboard(() => true)
     const heading = screen.getByText(label)

@@ -29,7 +29,7 @@ export default function ServersPage() {
 
   return (
     <Page
-      back={{ to: '/ui/agents', label: 'Agents' }}
+      back={{ to: '/agents', label: 'Agents' }}
       title="MCP servers"
       description="Remote MCP servers your agents can call. Only you can use the servers you add."
       actions={<Button variant="primary" onClick={() => setAdding(true)}>Add server</Button>}
@@ -42,7 +42,7 @@ export default function ServersPage() {
           <ServerForm onSubmit={async values => {
             const result = await upsertServer(values)
             // OAuth and failed setups keep the modal open to say what to do next.
-            if (!result.authorize_url && !result.error) navigate(`/ui/agents/servers/${result.server.id}`)
+            if (!result.authorize_url && !result.error) navigate(`/agents/servers/${result.server.id}`)
             else load()
             return result
           }} />
@@ -54,7 +54,7 @@ export default function ServersPage() {
           {servers.map(s => (
             <Row
               key={s.id}
-              to={`/ui/agents/servers/${s.id}`}
+              to={`/agents/servers/${s.id}`}
               title={s.name}
               badges={<ServerStatusBadge status={s.status} />}
               meta={[

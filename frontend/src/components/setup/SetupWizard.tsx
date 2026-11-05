@@ -68,8 +68,8 @@ export const SetupWizard = ({ isAuthenticated, user, checkAuth }: Props) => {
   // The step lives only in this history entry, so once setup is left no URL leads back to it.
   const step = steps.findIndex(s => s.value === (location.state as { step?: string } | null)?.step)
   // flushSync: the router otherwise updates in a transition, so a sign-in landing first would see no step.
-  const go = (index: number) => navigate('/ui/setup', { replace: true, state: { step: steps[index].value }, flushSync: true })
-  const finish = () => navigate('/ui/dashboard', { replace: true })
+  const go = (index: number) => navigate('/setup', { replace: true, state: { step: steps[index].value }, flushSync: true })
+  const finish = () => navigate('/dashboard', { replace: true })
   const heading = useRef<HTMLSpanElement>(null)
 
   // A step replaces the page in place, so start it at the top and tell screen readers where they are.
@@ -84,7 +84,7 @@ export const SetupWizard = ({ isAuthenticated, user, checkAuth }: Props) => {
       await checkAuth()
     }} />
   }
-  if (step < 0 || !user) return <Navigate to="/ui/dashboard" replace />
+  if (step < 0 || !user) return <Navigate to="/dashboard" replace />
 
   const current = steps[step]
   const last = step === steps.length - 1

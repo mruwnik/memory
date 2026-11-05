@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderWithRouter, screen, mockFetch, mockResponse } from '@/test/utils'
 import ResetPassword from './ResetPassword'
 
-const openLink = (hash: string) => window.history.replaceState(null, '', `/ui/reset-password${hash}`)
+const openLink = (hash: string) => window.history.replaceState(null, '', `/reset-password${hash}`)
 
 describe('ResetPassword', () => {
   beforeEach(() => openLink('#token=v1.abc.def'))
@@ -48,7 +48,7 @@ describe('ResetPassword', () => {
     await user.click(screen.getByRole('button', { name: 'Set password' }))
 
     expect(await screen.findByText('This reset link is invalid or has expired')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Request a new link' })).toHaveAttribute('href', '/ui/forgot-password')
+    expect(screen.getByRole('link', { name: 'Request a new link' })).toHaveAttribute('href', '/forgot-password')
   })
 
   it('explains a link without a token', () => {

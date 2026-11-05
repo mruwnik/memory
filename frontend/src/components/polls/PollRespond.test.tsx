@@ -96,12 +96,12 @@ function mockRespond({
   })
 }
 
-function renderRespond(entry = '/ui/polls/respond/respond-me') {
+function renderRespond(entry = '/polls/respond/respond-me') {
   const user = userEvent.setup()
   render(
     <MemoryRouter initialEntries={[entry]}>
       <Routes>
-        <Route path="/ui/polls/respond/:slug" element={<PollRespond />} />
+        <Route path="/polls/respond/:slug" element={<PollRespond />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -241,7 +241,7 @@ describe('PollRespond - edit mode via token', () => {
 
   it('prefills the form from an existing response when an edit token is in the URL', async () => {
     mockRespond({ existing })
-    renderRespond('/ui/polls/respond/respond-me?edit=tok-xyz')
+    renderRespond('/polls/respond/respond-me?edit=tok-xyz')
     expect(await screen.findByDisplayValue('Existing User')).toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: 'Update availability' }),
@@ -250,7 +250,7 @@ describe('PollRespond - edit mode via token', () => {
 
   it('updates the existing response and shows the success screen', async () => {
     mockRespond({ existing })
-    const { user } = renderRespond('/ui/polls/respond/respond-me?edit=tok-xyz')
+    const { user } = renderRespond('/polls/respond/respond-me?edit=tok-xyz')
     await screen.findByDisplayValue('Existing User')
     await user.click(screen.getByRole('button', { name: 'Update availability' }))
     expect(await screen.findByText('Response submitted')).toBeInTheDocument()
@@ -258,7 +258,7 @@ describe('PollRespond - edit mode via token', () => {
 
   it('falls back to a fresh form when the edit token is invalid', async () => {
     mockRespond({ existing: new Error('bad token') })
-    renderRespond('/ui/polls/respond/respond-me?edit=garbage')
+    renderRespond('/polls/respond/respond-me?edit=garbage')
     // No prefill, plain submit button (create mode).
     expect(
       await screen.findByRole('button', { name: 'Submit availability' }),
@@ -287,7 +287,7 @@ describe('PollRespond - results link', () => {
     expect(await screen.findByText(/2 responses so far/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'View full results' })).toHaveAttribute(
       'href',
-      '/ui/polls/results/respond-me',
+      '/polls/results/respond-me',
     )
   })
 })

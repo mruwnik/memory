@@ -284,7 +284,7 @@ const UserManagement = () => {
             {createError && <Notice tone="error">{createError}</Notice>}
 
             <Field label="User type" hint={humanLocked && <>
-              This server allows one human user. Turn on the <code>multi_user</code> module in {hasScope('admin') ? <Link className="underline" to="/ui/server-settings">Server settings</Link> : 'Server settings'} for more.
+              This server allows one human user. Turn on the <code>multi_user</code> module in {hasScope('admin') ? <Link className="underline" to="/server-settings">Server settings</Link> : 'Server settings'} for more.
             </>}>
               <Select
                 value={userType}

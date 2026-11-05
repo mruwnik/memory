@@ -52,7 +52,7 @@ describe('UserMenu', () => {
     const { user } = renderMenu()
     await user.click(screen.getByRole('button', { name: 'Ada Lovelace, account menu' }))
     const link = screen.getByRole('menuitem', { name: /Settings/ })
-    expect(link).toHaveAttribute('href', '/ui/settings')
+    expect(link).toHaveAttribute('href', '/settings')
   })
 
   it('calls onLogout and closes when Log out is clicked', async () => {

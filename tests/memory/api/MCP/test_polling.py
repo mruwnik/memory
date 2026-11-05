@@ -107,8 +107,8 @@ async def test_upsert_poll_create_new(mock_poll_to_payload, mock_make_session, m
     )
 
     assert result["title"] == "Team Meeting"
-    assert "/ui/polls/respond/" in result["share_url"]
-    assert "/ui/polls/results/" in result["results_url"]
+    assert "/polls/respond/" in result["share_url"]
+    assert "/polls/results/" in result["results_url"]
     mock_session.add.assert_called_once()
     mock_session.commit.assert_called_once()
 

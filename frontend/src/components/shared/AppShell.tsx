@@ -71,7 +71,7 @@ export const AppShell = ({ user, onLogout, hasScope }: AppShellProps) => {
               <path strokeLinecap="round" strokeWidth={2} d={navOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 6h16M4 12h16M4 18h16'} />
             </svg>
           </button>
-          <Link to="/ui/dashboard" className="max-lg:py-2 text-lg font-semibold text-primary">Memory</Link>
+          <Link to="/dashboard" className="max-lg:py-2 text-lg font-semibold text-primary">Memory</Link>
           <div className="ml-auto">{user && <UserMenu user={user} onLogout={onLogout} />}</div>
         </div>
       </header>

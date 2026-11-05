@@ -9,7 +9,7 @@ export const ModuleOff = ({ path, module, isAdmin }: { path: string; module: Mod
     <Page title={title}>
       <EmptyState
         message={<>This page needs the <code>{module}</code> module, which is off on this server. {isAdmin ? 'Turn it on in Server settings.' : 'Ask an admin to turn it on.'}</>}
-        action={isAdmin ? <ButtonLink to="/ui/server-settings">Open Server settings</ButtonLink> : undefined}
+        action={isAdmin ? <ButtonLink to="/server-settings">Open Server settings</ButtonLink> : undefined}
       />
     </Page>
   )

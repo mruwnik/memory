@@ -23,8 +23,8 @@ const run = (o = {}) => ({
   created_at: null, started_at: null, finished_at: null, agent: null, executor: 'server', parent_run_id: null, depth: 0, ...o,
 })
 
-const view = (path = '/ui/agents/runs/r1') => renderWithRouter(
-  <Routes><Route path="/ui/agents/runs/:runId" element={<RunView />} /></Routes>,
+const view = (path = '/agents/runs/r1') => renderWithRouter(
+  <Routes><Route path="/agents/runs/:runId" element={<RunView />} /></Routes>,
   { initialEntries: [path] },
 )
 
@@ -89,8 +89,8 @@ describe('RunView', () => {
     // StrictMode mounts effects twice, so two polls race for the same page.
     waitRun.mockResolvedValue(page)
     renderWithRouter(
-      <StrictMode><Routes><Route path="/ui/agents/runs/:runId" element={<RunView />} /></Routes></StrictMode>,
-      { initialEntries: ['/ui/agents/runs/r1'] },
+      <StrictMode><Routes><Route path="/agents/runs/:runId" element={<RunView />} /></Routes></StrictMode>,
+      { initialEntries: ['/agents/runs/r1'] },
     )
     await waitFor(() => expect(screen.getByText('second step')).toBeInTheDocument())
     expect(screen.getAllByText('first step')).toHaveLength(1)
@@ -118,7 +118,7 @@ describe('RunView', () => {
     })
     view()
     expect(await screen.findByRole('heading', { name: /digest/ })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/3')
+    expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/agents/3')
     expect(screen.getByText('do it')).toBeInTheDocument()
     expect(screen.getByText('Schedule')).toBeInTheDocument()
     expect(screen.getByText('2m 5s')).toBeInTheDocument()
@@ -127,9 +127,9 @@ describe('RunView', () => {
   })
 
   it.each([
-    ['/ui/agents/runs/r1', 3, 'Runs', '/ui/agents/runs'],
-    ['/ui/agents/runs/r1?from=agent', 3, 'digest', '/ui/agents/3'],
-    ['/ui/agents/runs/r1?from=agent', null, 'Runs', '/ui/agents/runs'],
+    ['/agents/runs/r1', 3, 'Runs', '/agents/runs'],
+    ['/agents/runs/r1?from=agent', 3, 'digest', '/agents/3'],
+    ['/agents/runs/r1?from=agent', null, 'Runs', '/agents/runs'],
   ])('from %s, a run of agent %s goes back to %s', async (path, definitionId, label, href) => {
     waitRun.mockResolvedValueOnce({ run: run({ status: 'done', definition_id: definitionId }), steps: [] })
     view(path)

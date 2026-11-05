@@ -35,7 +35,7 @@ const ResetPassword = () => {
     }
   }
 
-  const newLink = <Link to="/ui/forgot-password" className="underline">Request a new link</Link>
+  const newLink = <Link to="/forgot-password" className="underline">Request a new link</Link>
 
   return (
     <Page title="Choose a new password" width="narrow">
@@ -45,7 +45,7 @@ const ResetPassword = () => {
         <Card>
           <Notice tone="success">Password changed and all your sessions ended; API keys are unchanged (manage them in Settings). Log in with your new password.</Notice>
           <FormActions>
-            <ButtonLink to="/ui/login" variant="primary">Log in</ButtonLink>
+            <ButtonLink to="/login" variant="primary">Log in</ButtonLink>
           </FormActions>
         </Card>
       ) : (

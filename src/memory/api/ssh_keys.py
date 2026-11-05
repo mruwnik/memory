@@ -16,7 +16,7 @@ from memory.common.db.models import User
 from memory.common.db.models.ssh_keys import SSHKey
 from memory.common.ssh_keys import can_use_key, encode_key, import_key
 
-router = APIRouter(prefix="/ssh-keys", tags=["ssh-keys"])
+router = APIRouter(prefix="/api/ssh-keys", tags=["ssh-keys"])
 
 
 class KeyUpdate(BaseModel):

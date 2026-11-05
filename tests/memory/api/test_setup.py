@@ -86,7 +86,7 @@ def test_claiming_makes_the_one_human_a_single_user_install_allows(
         check_single_user(db_session, frozenset())
     assert not [r for r in caplog.records if r.name == "memory.api.users"]
     second = setup_client.post(
-        "/users",
+        "/api/users",
         json={"name": "Two", "email": "two@example.com", "password": "longenough2", "user_type": "human"},
         headers=bearer(session_id),
     )
@@ -182,8 +182,10 @@ def test_status_for_the_signed_in_user(setup_client, db_session, admin_user, reg
         ArticleFeed(user_id=regular_user.id, url="https://example.com/other"),
         Note(content="hi", modality="note", sha256=unique_sha256("note"), creator_id=admin_user.id),
     ])
-    oauth_client(db_session, "ui", "React Memory App", "https://memory.example.com/ui")
+    oauth_client(db_session, "ui", "React Memory App", f"{settings.SERVER_URL}/")
     oauth_client(db_session, "cc", "Claude Code", "http://localhost:4321/callback")
+    oauth_client(db_session, "cli", "Root callback", "http://127.0.0.1:4322/")
+    oauth_client(db_session, "old-ui", "React Memory App", f"{settings.SERVER_URL}/ui")
     oauth_client(db_session, "old", "Old client", "http://localhost:1/callback")
     oauth_client(db_session, "lapsed", "Lapsed client", "http://localhost:3/callback")
     oauth_client(db_session, "theirs", "Their client", "http://localhost:2/callback")
@@ -191,6 +193,8 @@ def test_status_for_the_signed_in_user(setup_client, db_session, admin_user, reg
     grant(db_session, "ui", admin_user.id)
     grant(db_session, "cc", admin_user.id)
     grant(db_session, "cc", admin_user.id)
+    grant(db_session, "cli", admin_user.id)
+    grant(db_session, "old-ui", admin_user.id)
     grant(db_session, "old", admin_user.id, revoked=True)
     grant(db_session, "lapsed", admin_user.id, expires_in=-timedelta(minutes=1))
     grant(db_session, "theirs", regular_user.id)
@@ -204,6 +208,6 @@ def test_status_for_the_signed_in_user(setup_client, db_session, admin_user, reg
             "email": 1, "google": 0, "github": 0, "slack": 0,
             "discord": 0, "feeds": 1, "notes": 1, "transcripts": 0,
         },
-        "mcp_clients": ["Claude Code"],
+        "mcp_clients": ["Claude Code", "Root callback"],
         "mcp_url": f"{settings.SERVER_URL}/mcp",
     }

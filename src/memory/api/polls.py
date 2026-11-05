@@ -27,7 +27,7 @@ from memory.common.db.models import (
 from memory.common.db.models.users import hash_token
 from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
 
-router = APIRouter(prefix="/polls", tags=["polls"])
+router = APIRouter(prefix="/api/polls", tags=["polls"])
 
 # Public poll endpoints (no auth) need DoS guards. The slug isn't a secret —
 # it's typically shared via Slack/Discord/email — so anyone can spam responses

@@ -50,7 +50,7 @@ The installer will:
 
 Re-run it any time — it skips anything already configured.
 
-For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN` is required (it exits before writing anything without it), `ADMIN_EMAIL` and `ADMIN_PASSWORD` are optional but go together, `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, runs the migrations, starts the api, and creates the admin user (full access) from `ADMIN_EMAIL` and `ADMIN_PASSWORD` if it doesn't exist. Without them it prints the setup token to claim the instance with at `https://$DOMAIN/ui/setup` (or, if the token can't be read from the api log, the command that shows it). To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
+For unattended installs, run `./tools/install.sh --non-interactive`. It never prompts: `DOMAIN` is required (it exits before writing anything without it), `ADMIN_EMAIL` and `ADMIN_PASSWORD` are optional but go together, `VOYAGE_API_KEY` is optional (an admin can set it on the settings page instead), and `POSTGRES_PASSWORD` and `REDIS_PASSWORD` are used instead of generating them. It also requires an explicit backup choice, and exits before writing anything without one: `S3_BACKUP_BUCKET` (optionally `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION`, `BACKUP_ENCRYPTION_KEY`) to back up to S3, or `S3_BACKUP=off`. Supplied values may only use `A-Za-z0-9._@:/+-`, except `ADMIN_PASSWORD`. It binds the API to `127.0.0.1:8000` for a reverse proxy on the same host, sets `SERVER_URL=https://$DOMAIN`, runs the migrations, starts the api, and creates the admin user (full access) from `ADMIN_EMAIL` and `ADMIN_PASSWORD` if it doesn't exist. Without them it prints the setup token to claim the instance with at `https://$DOMAIN/setup` (or, if the token can't be read from the api log, the command that shows it). To add users by hand without putting a password in argv, set `ADD_USER_PASSWORD` instead of `--password` for `tools/add_user.py`.
 
 ### 2. Start the stack
 
@@ -69,7 +69,7 @@ curl http://localhost:8000/health
 
 ### 3. Create a user
 
-Open <http://localhost:8000/ui/setup> to create the first account as an admin. It asks for the setup token the api logs at startup while no account exists:
+Open <http://localhost:8000/setup> to create the first account as an admin. It asks for the setup token the api logs at startup while no account exists:
 
 ```bash
 docker compose logs api | grep "setup token"
@@ -84,25 +84,25 @@ docker compose exec api python tools/add_user.py \
 
 `--admin` gives the user full access (the `*` scope). Without it, a new user gets the default `read` scope.
 
-Unless the `multi_user` module is on (see [Modules](#modules)), an install has one human user: `add_user.py` gives that user `*` and refuses a second human, as does `POST /users`, and the api refuses to start if several humans already exist. Bot users and API keys are unaffected.
+Unless the `multi_user` module is on (see [Modules](#modules)), an install has one human user: `add_user.py` gives that user `*` and refuses a second human, as does `POST /api/users`, and the api refuses to start if several humans already exist. Bot users and API keys are unaffected.
 
 If you'd rather run it on the host (e.g. as part of a script), `pip install -e ".[all]"` first — but note that the host CLI needs to reach Postgres, which is **not** exposed by default. See [Local development](#local-development-without-docker-for-the-app) for how to publish the data-service ports. The other extras defined in `setup.py` are `api`, `common`, `dev`, `ingesters`, `workers`, and `all` (a superset).
 
 ### 4. Use it
 
-- Web UI: <http://localhost:8000/ui> — log in with the account you just created
+- Web UI: <http://localhost:8000> — log in with the account you just created
 - API docs (OpenAPI): <http://localhost:8000/docs> — requires an authenticated session
 - MCP endpoint: <http://localhost:8000/mcp>
 
 ## Modules
 
-Two optional features are off by default. An admin switches them on the Server settings page (`/ui/server-settings`), then restarts the api from its banner. An operator can instead name them in `.env` with `ENABLE_MODULES` or `DISABLE_MODULES` (comma-separated), then restart every service: a module named there is locked on the page. An unknown name, or one in both variables, stops every process from starting; the removed `claude_containers` is ignored with a warning.
+Two optional features are off by default. An admin switches them on the Server settings page (`/server-settings`), then restarts the api from its banner. An operator can instead name them in `.env` with `ENABLE_MODULES` or `DISABLE_MODULES` (comma-separated), then restart every service: a module named there is locked on the page. An unknown name, or one in both variables, stops every process from starting; the removed `claude_containers` is ignored with a warning.
 
 The page refuses a value the api can't run with (`multi_user` off while several humans exist). If the environment later changes under a saved value, the api logs an ERROR, boots with the module the other way, and the page flags the row. Workers follow what the api runs, which it records at startup, rather than the saved values: the agents worker catches up at the start of each agent task, mounting the servers of a module switched on and hiding those of one switched off.
 
 | Module | Adds |
 |---|---|
-| `multi_user` | More than one human user. Off, `tools/add_user.py` and `POST /users` allow one human, who gets `*` |
+| `multi_user` | More than one human user. Off, `tools/add_user.py` and `POST /api/users` allow one human, who gets `*` |
 | `teams` | Teams, their members and projects: MCP servers, scopes, and the team and project pickers |
 
 Everything else (search, ingest, people, notes, reports, journal, tasks, polls, agents, keys, transcript search) is always on. Modules never change who can see what. Off means 404 routes, unmounted MCP servers (their tools disappear from `tools/list` and from agent tool catalogs) and hidden scopes; data and existing scope grants stay, so turning a module back on restores it.
@@ -283,7 +283,7 @@ Queues live in `src/memory/common/celery_app.py` (`task_routes`) and the full se
 
 ## MCP client library for HTML reports
 
-If you're embedding interactive content in stored reports, the API serves a small JS client at `/ui/mcp-client.js` that authenticates via the user's session cookie and exposes the MCP tool surface as a JS API:
+If you're embedding interactive content in stored reports, the API serves a small JS client at `/mcp-client.js` that authenticates via the user's session cookie and exposes the MCP tool surface as a JS API:
 
 ```html
 <!DOCTYPE html>
@@ -291,7 +291,7 @@ If you're embedding interactive content in stored reports, the API serves a smal
 <head>
   <meta charset='utf-8'>
   <title>My Report</title>
-  <script src="/ui/mcp-client.js"></script>
+  <script src="/mcp-client.js"></script>
 </head>
 <body>
   <h1>Interactive Report</h1>
@@ -322,7 +322,7 @@ Reports must be created with `allow_scripts=True` for this to load (set via the 
 
 ## Configuration
 
-Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic or OpenAI key, added under LLM API keys (`/ui/keys`); admins can optionally designate their keys as shared system defaults for everyone. On the keys page, admins can choose **Use as system default** or **Clear system default**. One shared default is allowed per provider; clearing or deleting it leaves no shared default for that provider. System agents use personal defaults first, then shared defaults, while explicit source keys and **No LLM** retain precedence. Shared usage counts against the selected key’s daily cap. Custom agent runs still require personal keys. Summaries and search steps use the default Anthropic key, else the default OpenAI one. An admin can also set the Voyage key and the search `ENABLE_*` switches on the settings page (`/settings` API), where a value set in the env wins and shows read-only, and switch MCP servers off there. Key settings:
+Configuration lives in `.env` (or environment variables on the host). LLM features (summaries, HyDE, query analysis, meeting notes, agents) run on each user's own Anthropic or OpenAI key, added under LLM API keys (`/keys`); admins can optionally designate their keys as shared system defaults for everyone. On the keys page, admins can choose **Use as system default** or **Clear system default**. One shared default is allowed per provider; clearing or deleting it leaves no shared default for that provider. System agents use personal defaults first, then shared defaults, while explicit source keys and **No LLM** retain precedence. Shared usage counts against the selected key’s daily cap. Custom agent runs still require personal keys. Summaries and search steps use the default Anthropic key, else the default OpenAI one. An admin can also set the Voyage key and the search `ENABLE_*` switches on the settings page (`/api/settings` API), where a value set in the env wins and shows read-only, and switch MCP servers off there. Key settings:
 
 | Variable                          | Default              | Purpose                                                        |
 | --------------------------------- | -------------------- | -------------------------------------------------------------- |

@@ -84,7 +84,7 @@ const settings = (rows: SettingRow[], overrides: Partial<SettingsState> = {}): S
   ...overrides,
 })
 
-const atStep = (step: string) => ({ initialEntries: [{ pathname: '/ui/setup', state: { step } }] })
+const atStep = (step: string) => ({ initialEntries: [{ pathname: '/setup', state: { step } }] })
 
 beforeEach(() => {
   getNeedsAccount.mockResolvedValue(true)
@@ -100,7 +100,7 @@ afterEach(() => {
 describe('SetupWizard', () => {
   it('creates the first account with the setup token, signs in, and moves on to keys', async () => {
     createAccount.mockResolvedValue('session-1')
-    const { user } = renderWithRouter(<Harness />, { initialEntries: ['/ui/setup'] })
+    const { user } = renderWithRouter(<Harness />, { initialEntries: ['/setup'] })
 
     await user.type(await screen.findByLabelText('Name'), 'Ada')
     await user.type(screen.getByLabelText('Email'), 'ada@example.com')
@@ -116,7 +116,7 @@ describe('SetupWizard', () => {
 
   it('shows why the server refused the account', async () => {
     createAccount.mockRejectedValue(new Error('That setup token is not the one in the server log'))
-    const { user } = renderWithRouter(<Harness />, { initialEntries: ['/ui/setup'] })
+    const { user } = renderWithRouter(<Harness />, { initialEntries: ['/setup'] })
 
     await user.type(await screen.findByLabelText('Name'), 'Ada')
     await user.type(screen.getByLabelText('Email'), 'ada@example.com')
@@ -131,14 +131,14 @@ describe('SetupWizard', () => {
 
   it('offers only a login once the server has an account', async () => {
     getNeedsAccount.mockResolvedValue(false)
-    renderWithRouter(<Harness />, { initialEntries: ['/ui/setup'] })
+    renderWithRouter(<Harness />, { initialEntries: ['/setup'] })
 
     expect(await screen.findByText(/already set up/)).toBeInTheDocument()
     expect(screen.queryByLabelText('Setup token')).not.toBeInTheDocument()
   })
 
   it("can't be reopened by a signed-in user who isn't in the middle of it", () => {
-    renderWithRouter(<Harness signedIn />, { initialEntries: ['/ui/setup'] })
+    renderWithRouter(<Harness signedIn />, { initialEntries: ['/setup'] })
     expect(screen.queryByRole('heading', { name: 'Set up Memory' })).not.toBeInTheDocument()
   })
 

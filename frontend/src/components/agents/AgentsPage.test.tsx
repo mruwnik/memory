@@ -22,7 +22,7 @@ describe('AgentsPage', () => {
     renderWithRouter(<AgentsPage />)
     await waitFor(() => expect(screen.getByText('You have no agents yet')).toBeInTheDocument())
     expect(screen.getAllByRole('link', { name: 'New agent' })).toHaveLength(2)
-    expect(screen.getByRole('link', { name: 'LLM keys' })).toHaveAttribute('href', '/ui/keys')
+    expect(screen.getByRole('link', { name: 'LLM keys' })).toHaveAttribute('href', '/keys')
   })
 
   it('lists definitions with their last run status', async () => {
@@ -32,7 +32,7 @@ describe('AgentsPage', () => {
     renderWithRouter(<AgentsPage />)
     await waitFor(() => expect(screen.getByText('digest')).toBeInTheDocument())
     expect(screen.getByText('Failed')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/1')
+    expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/agents/1')
   })
 
   it('flags definitions with a tripped trigger', async () => {

@@ -43,7 +43,7 @@ from memory.common.db.models import (
     User,
 )
 
-router = APIRouter(prefix="/usage", tags=["usage"])
+router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 GroupBy = Literal["user", "key", "agent", "model", "kind"]
 Interval = Literal["hour", "day", "week", "month"]

@@ -38,7 +38,7 @@ def admin_user(db_session):
 
 def test_list_my_api_keys_empty(client: TestClient, admin_user):
     """Test listing API keys when user has none."""
-    response = client.get(f"/users/{admin_user.id}/api-keys")
+    response = client.get(f"/api/users/{admin_user.id}/api-keys")
 
     assert response.status_code == 200
     data = response.json()
@@ -48,7 +48,7 @@ def test_list_my_api_keys_empty(client: TestClient, admin_user):
 def test_create_my_api_key(client: TestClient, admin_user, db_session):
     """Test creating a new API key for current user."""
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Test Key", "key_type": "internal"},
     )
 
@@ -63,7 +63,7 @@ def test_create_my_api_key(client: TestClient, admin_user, db_session):
 
 def test_create_my_api_key_unknown_type_rejected(client: TestClient, admin_user):
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Retired Key", "key_type": "one_time"},
     )
 
@@ -73,7 +73,7 @@ def test_create_my_api_key_unknown_type_rejected(client: TestClient, admin_user)
 def test_create_my_api_key_with_expiration(client: TestClient, admin_user, db_session):
     """Test creating an API key with expiration."""
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Expiring Key", "expires_in_days": 30},
     )
 
@@ -85,7 +85,7 @@ def test_create_my_api_key_with_expiration(client: TestClient, admin_user, db_se
 def test_create_my_api_key_invalid_type(client: TestClient, admin_user, db_session):
     """Test creating an API key with invalid type fails."""
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Bad Key", "key_type": "invalid_type"},
     )
 
@@ -96,14 +96,14 @@ def test_list_my_api_keys_after_create(client: TestClient, admin_user, db_sessio
     """Test listing API keys shows created keys."""
     # Create a key first
     create_response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Listed Key"},
     )
     assert create_response.status_code == 200
     created_key_id = create_response.json()["id"]
 
     # List keys
-    response = client.get(f"/users/{admin_user.id}/api-keys")
+    response = client.get(f"/api/users/{admin_user.id}/api-keys")
 
     assert response.status_code == 200
     data = response.json()
@@ -121,7 +121,7 @@ def test_list_my_api_keys_after_create(client: TestClient, admin_user, db_sessio
 def test_create_api_key_all_types(client: TestClient, admin_user, db_session, key_type):
     """Test creating API keys with all valid types."""
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": f"{key_type} key", "key_type": key_type},
     )
 
@@ -134,13 +134,13 @@ def test_api_key_serialization_hides_full_key(client: TestClient, admin_user, db
     """Test that list response shows preview, not full key."""
     # Create a key
     create_response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Preview Test"},
     )
     full_key = create_response.json()["key"]
 
     # List keys
-    list_response = client.get(f"/users/{admin_user.id}/api-keys")
+    list_response = client.get(f"/api/users/{admin_user.id}/api-keys")
     keys = list_response.json()
     key_data = keys[-1]  # Most recently created
 
@@ -149,7 +149,7 @@ def test_api_key_serialization_hides_full_key(client: TestClient, admin_user, db
 
 
 def test_api_key_types_lists_every_type(client: TestClient, admin_user):
-    response = client.get("/users/api-key-types")
+    response = client.get("/api/users/api-key-types")
 
     assert response.status_code == 200
     assert response.json() == list(APIKeyType.ALL_TYPES)
@@ -175,7 +175,7 @@ def test_admin_list_user_api_keys(client: TestClient, admin_user, db_session):
     db_session.commit()
 
     # Admin lists other user's keys
-    response = client.get(f"/users/{other_user.id}/api-keys")
+    response = client.get(f"/api/users/{other_user.id}/api-keys")
 
     assert response.status_code == 200
     data = response.json()
@@ -196,7 +196,7 @@ def test_admin_create_user_api_key(client: TestClient, admin_user, db_session):
 
     # Admin creates key for other user
     response = client.post(
-        f"/users/{other_user.id}/api-keys",
+        f"/api/users/{other_user.id}/api-keys",
         json={"name": "Admin Created Key"},
     )
 
@@ -212,10 +212,10 @@ def test_admin_create_user_api_key(client: TestClient, admin_user, db_session):
 def test_get_current_user_shows_api_key_count(client: TestClient, admin_user, db_session):
     """Test that user response includes API key count."""
     # Create a few keys
-    client.post(f"/users/{admin_user.id}/api-keys", json={"name": "Key 1"})
-    client.post(f"/users/{admin_user.id}/api-keys", json={"name": "Key 2"})
+    client.post(f"/api/users/{admin_user.id}/api-keys", json={"name": "Key 1"})
+    client.post(f"/api/users/{admin_user.id}/api-keys", json={"name": "Key 2"})
 
-    response = client.get("/users/me")
+    response = client.get("/api/users/me")
 
     assert response.status_code == 200
     data = response.json()
@@ -228,7 +228,7 @@ def test_get_current_user_shows_api_key_count(client: TestClient, admin_user, db
 
 def test_list_available_scopes(client: TestClient, admin_user):
     """Test listing available scopes."""
-    response = client.get("/users/scopes")
+    response = client.get("/api/users/scopes")
 
     assert response.status_code == 200
     data = response.json()
@@ -253,7 +253,7 @@ def test_list_available_scopes(client: TestClient, admin_user):
 def test_create_user_with_invalid_scope(client: TestClient, admin_user, db_session):
     """Test that creating a user with invalid scopes fails."""
     response = client.post(
-        "/users",
+        "/api/users",
         json={
             "name": "Test User",
             "email": "invalid_scope_user@example.com",
@@ -271,7 +271,7 @@ def test_update_user_with_invalid_scope(client: TestClient, admin_user, db_sessi
     """Test that updating a user with invalid scopes fails."""
     # Create a valid user first
     create_response = client.post(
-        "/users",
+        "/api/users",
         json={
             "name": "Test User",
             "email": "valid_user@example.com",
@@ -284,7 +284,7 @@ def test_update_user_with_invalid_scope(client: TestClient, admin_user, db_sessi
 
     # Try to update with invalid scope
     response = client.patch(
-        f"/users/{user_id}",
+        f"/api/users/{user_id}",
         json={"scopes": ["read", "nonexistent_scope"]},
     )
 
@@ -296,7 +296,7 @@ def test_stored_unknown_user_scope_is_hidden_and_resave_succeeds(
     client: TestClient, admin_user, db_session
 ):
     created = client.post(
-        "/users",
+        "/api/users",
         json={
             "name": "Stale Scope",
             "email": "stale_scope@example.com",
@@ -308,28 +308,28 @@ def test_stored_unknown_user_scope_is_hidden_and_resave_succeeds(
     user.scopes = ["read", "discord-admin"]
     db_session.commit()
 
-    listed = client.get(f"/users/{created['id']}").json()
+    listed = next(u for u in client.get("/api/users").json() if u["id"] == created["id"])
     assert listed["scopes"] == ["read"]
 
-    response = client.patch(f"/users/{created['id']}", json={"scopes": listed["scopes"]})
+    response = client.patch(f"/api/users/{created['id']}", json={"scopes": listed["scopes"]})
     assert response.status_code == 200
 
 
 def test_stored_unknown_api_key_scope_is_hidden(client: TestClient, admin_user, db_session):
     created = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Stale Key", "scopes": ["read"]},
     ).json()
     key = db_session.get(APIKey, created["id"])
     key.scopes = ["read", "discord-admin:write"]
     db_session.commit()
 
-    keys = client.get(f"/users/{admin_user.id}/api-keys").json()
+    keys = client.get(f"/api/users/{admin_user.id}/api-keys").json()
     assert [k["scopes"] for k in keys if k["id"] == created["id"]] == [["read"]]
 
 
 def test_update_user_refuses_removing_own_admin_scope(client: TestClient, admin_user, db_session):
-    response = client.patch(f"/users/{admin_user.id}", json={"scopes": ["read"]})
+    response = client.patch(f"/api/users/{admin_user.id}", json={"scopes": ["read"]})
 
     assert response.status_code == 400
     assert "your own" in response.json()["detail"]
@@ -344,7 +344,7 @@ def test_reset_password_sets_it_and_signs_the_user_out(client: TestClient, admin
     db_session.add(UserSession(user_id=target.id, expires_at=datetime.now() + timedelta(days=1)))
     db_session.commit()
 
-    response = client.post(f"/users/{target.id}/reset-password", json={"new_password": "newpass123"})
+    response = client.post(f"/api/users/{target.id}/reset-password", json={"new_password": "newpass123"})
 
     assert response.status_code == 200
     assert "newpass123" not in response.text
@@ -356,7 +356,7 @@ def test_reset_password_sets_it_and_signs_the_user_out(client: TestClient, admin
 def test_create_user_with_valid_scopes(client: TestClient, admin_user, db_session):
     """Test that creating a user with valid scopes succeeds."""
     response = client.post(
-        "/users",
+        "/api/users",
         json={
             "name": "Test User",
             "email": "valid_scopes_user@example.com",
@@ -380,7 +380,7 @@ def test_create_user_allows_one_human_without_multi_user(
     set_modules(modules)
 
     response = client.post(
-        "/users",
+        "/api/users",
         json={
             "name": "Second",
             "email": "second@example.com",
@@ -417,7 +417,7 @@ def test_create_user_links_an_existing_person_only_by_email(
     db_session.commit()
 
     response = client.post(
-        "/users",
+        "/api/users",
         json={"name": "Alice Smith", "email": "alice@example.com", "password": "testpass123"},
     )
 
@@ -445,7 +445,7 @@ def test_create_user_links_only_a_person_no_other_non_admin_made(
     db_session.commit()
 
     response = client.post(
-        "/users",
+        "/api/users",
         json={"name": "Alice Smith", "email": "alice@example.com", "password": "testpass123"},
     )
 
@@ -469,7 +469,7 @@ def test_create_user_passes_over_a_planted_person_for_the_ingest_one(
     db_session.commit()
 
     response = client.post(
-        "/users", json={"name": "Alice", "email": "alice@example.com", "password": "testpass123"}
+        "/api/users", json={"name": "Alice", "email": "alice@example.com", "password": "testpass123"}
     )
 
     db_session.expire_all()
@@ -502,7 +502,7 @@ def test_create_user_judges_a_person_by_its_creator_when_made(
     db_session.commit()
 
     response = client.post(
-        "/users", json={"name": "Alice", "email": "alice@example.com", "password": "testpass123"}
+        "/api/users", json={"name": "Alice", "email": "alice@example.com", "password": "testpass123"}
     )
 
     db_session.expire_all()
@@ -511,7 +511,7 @@ def test_create_user_judges_a_person_by_its_creator_when_made(
 
 def test_create_user_points_a_taken_email_at_the_email_field(client: TestClient, admin_user):
     response = client.post(
-        "/users",
+        "/api/users",
         json={"name": "Bot", "email": admin_user.email, "user_type": "bot", "scopes": ["read"]},
     )
 
@@ -558,7 +558,7 @@ def test_check_single_user_warns_when_sole_human_lacks_full_access(db_session, c
 def test_create_api_key_scope_escalation_blocked(regular_client: TestClient, user, db_session):
     """Regular user cannot create an API key with admin (*) scope they don't have."""
     response = regular_client.post(
-        f"/users/{user.id}/api-keys",
+        f"/api/users/{user.id}/api-keys",
         json={"name": "Escalated Key", "scopes": ["*"]},
     )
 
@@ -569,7 +569,7 @@ def test_create_api_key_scope_escalation_blocked(regular_client: TestClient, use
 def test_create_api_key_invalid_scope_rejected(client: TestClient, admin_user, db_session):
     """API key creation rejects unknown scope strings."""
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Bad Scope Key", "scopes": ["totally_fake_scope"]},
     )
 
@@ -580,7 +580,7 @@ def test_create_api_key_invalid_scope_rejected(client: TestClient, admin_user, d
 def test_create_api_key_admin_can_grant_full_scope(client: TestClient, admin_user, db_session):
     """Admin can create a key with full (*) scope."""
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Admin Full Scope Key", "scopes": ["*"]},
     )
 
@@ -601,7 +601,7 @@ def test_create_api_key_cannot_exceed_the_target_users_scopes(
     client: TestClient, regular_user, scopes, status, refused
 ):
     response = client.post(
-        f"/users/{regular_user.id}/api-keys", json={"name": "k", "scopes": scopes}
+        f"/api/users/{regular_user.id}/api-keys", json={"name": "k", "scopes": scopes}
     )
 
     assert response.status_code == status
@@ -622,7 +622,7 @@ def test_create_api_key_cannot_exceed_the_target_users_scopes(
 def test_create_api_key_with_agent_caps(
     client: TestClient, admin_user, db_session, body, run_cap, daily_cap
 ):
-    response = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "agents"} | body)
+    response = client.post(f"/api/users/{admin_user.id}/api-keys", json={"name": "agents"} | body)
 
     assert response.status_code == 200
     data = response.json()
@@ -641,7 +641,7 @@ def test_create_api_key_with_agent_caps(
 def test_api_key_agent_caps_must_be_positive(
     client: TestClient, admin_user, db_session, body, expected
 ):
-    response = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "agents"} | body)
+    response = client.post(f"/api/users/{admin_user.id}/api-keys", json={"name": "agents"} | body)
 
     assert response.status_code in (400, 422)
     assert expected in response.text
@@ -652,7 +652,7 @@ def test_api_key_agent_caps_must_be_positive(
 
 @pytest.mark.parametrize("tz", ["Europe/London", "Asia/Kolkata", "UTC"])
 def test_user_sets_own_timezone(regular_client: TestClient, user, db_session, tz):
-    response = regular_client.patch(f"/users/{user.id}", json={"timezone": tz})
+    response = regular_client.patch(f"/api/users/{user.id}", json={"timezone": tz})
 
     assert response.status_code == 200
     assert response.json()["timezone"] == tz
@@ -662,7 +662,7 @@ def test_user_sets_own_timezone(regular_client: TestClient, user, db_session, tz
 
 @pytest.mark.parametrize("tz", ["Mars/Olympus_Mons", "", "../../etc/passwd"])
 def test_update_user_rejects_unknown_timezone(client: TestClient, admin_user, db_session, tz):
-    response = client.patch(f"/users/{admin_user.id}", json={"timezone": tz})
+    response = client.patch(f"/api/users/{admin_user.id}", json={"timezone": tz})
 
     assert response.status_code == 422
     db_session.refresh(admin_user)
@@ -674,10 +674,11 @@ def test_admin_sets_another_users_timezone(client: TestClient, admin_user, db_se
     db_session.add(target)
     db_session.commit()
 
-    response = client.patch(f"/users/{target.id}", json={"timezone": "Asia/Tokyo"})
+    response = client.patch(f"/api/users/{target.id}", json={"timezone": "Asia/Tokyo"})
 
     assert (response.status_code, response.json()["timezone"]) == (200, "Asia/Tokyo")
-    assert client.get(f"/users/{target.id}").json()["timezone"] == "Asia/Tokyo"
+    db_session.refresh(target)
+    assert target.timezone == "Asia/Tokyo"
 
 
 def test_regular_user_cannot_set_another_users_timezone(regular_client: TestClient, user, db_session):
@@ -685,7 +686,7 @@ def test_regular_user_cannot_set_another_users_timezone(regular_client: TestClie
     db_session.add(target)
     db_session.commit()
 
-    response = regular_client.patch(f"/users/{target.id}", json={"timezone": "Asia/Tokyo"})
+    response = regular_client.patch(f"/api/users/{target.id}", json={"timezone": "Asia/Tokyo"})
 
     assert response.status_code == 403
     db_session.refresh(target)
@@ -703,7 +704,7 @@ def test_changing_timezone_moves_pending_cron_runs(client: TestClient, admin_use
     db_session.add_all([recurring, paused, one_off])
     db_session.commit()
 
-    client.patch(f"/users/{admin_user.id}", json={"timezone": "Asia/Kolkata"})
+    client.patch(f"/api/users/{admin_user.id}", json={"timezone": "Asia/Kolkata"})
 
     db_session.refresh(recurring)
     db_session.refresh(paused)
@@ -715,18 +716,18 @@ def test_changing_timezone_moves_pending_cron_runs(client: TestClient, admin_use
 
 
 def test_revoke_my_api_key(client: TestClient, admin_user, db_session):
-    key_id = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "To Revoke"}).json()["id"]
+    key_id = client.post(f"/api/users/{admin_user.id}/api-keys", json={"name": "To Revoke"}).json()["id"]
 
-    response = client.delete(f"/users/{admin_user.id}/api-keys/{key_id}")
+    response = client.delete(f"/api/users/{admin_user.id}/api-keys/{key_id}")
 
     assert response.status_code == 200
     assert response.json()["status"] == "revoked"
-    keys = client.get(f"/users/{admin_user.id}/api-keys").json()
+    keys = client.get(f"/api/users/{admin_user.id}/api-keys").json()
     assert [k["revoked"] for k in keys if k["id"] == key_id] == [True]
 
 
 def test_revoke_nonexistent_key(client: TestClient, admin_user):
-    response = client.delete(f"/users/{admin_user.id}/api-keys/99999")
+    response = client.delete(f"/api/users/{admin_user.id}/api-keys/99999")
 
     assert response.status_code == 404
 
@@ -741,7 +742,7 @@ def test_admin_revoke_user_api_key(client: TestClient, admin_user, db_session):
     db_session.add(key)
     db_session.commit()
 
-    response = client.delete(f"/users/{other_user.id}/api-keys/{key.id}")
+    response = client.delete(f"/api/users/{other_user.id}/api-keys/{key.id}")
 
     assert response.status_code == 200
     db_session.refresh(key)
@@ -766,7 +767,7 @@ def test_regular_user_cannot_revoke_another_users_key(
 ):
     key = someone_elses_key
 
-    response = regular_client.delete(f"/users/{key.user_id}/api-keys/{key.id}")
+    response = regular_client.delete(f"/api/users/{key.user_id}/api-keys/{key.id}")
 
     assert response.status_code == 403
     db_session.refresh(key)
@@ -778,7 +779,7 @@ def test_revoke_rejects_a_key_of_another_user_under_own_id(
 ):
     key = someone_elses_key
 
-    response = regular_client.delete(f"/users/{user.id}/api-keys/{key.id}")
+    response = regular_client.delete(f"/api/users/{user.id}/api-keys/{key.id}")
 
     assert response.status_code == 404
     db_session.refresh(key)
@@ -786,9 +787,9 @@ def test_revoke_rejects_a_key_of_another_user_under_own_id(
 
 
 def test_rotate_api_keys_revokes_only_target_users_keys(client, admin_user, someone_elses_key, db_session):
-    old = client.post(f"/users/{admin_user.id}/api-keys", json={"name": "Old"}).json()
+    old = client.post(f"/api/users/{admin_user.id}/api-keys", json={"name": "Old"}).json()
     response = client.post(
-        f"/users/{admin_user.id}/api-keys",
+        f"/api/users/{admin_user.id}/api-keys",
         json={"name": "Replacement", "revoke_existing": True},
     )
     assert response.status_code == 200
@@ -803,7 +804,7 @@ def test_rotate_api_keys_revokes_only_target_users_keys(client, admin_user, some
 
 def test_regular_user_cannot_rotate_someone_elses_keys(regular_client, someone_elses_key, db_session):
     response = regular_client.post(
-        f"/users/{someone_elses_key.user_id}/api-keys", json={"revoke_existing": True}
+        f"/api/users/{someone_elses_key.user_id}/api-keys", json={"revoke_existing": True}
     )
     assert response.status_code == 403
     db_session.refresh(someone_elses_key)
@@ -893,7 +894,7 @@ def test_delete_user_with_owned_sources(client, db_session, regular_user, loaded
         for name in owned:
             list(getattr(regular_user, name))
 
-    response = client.delete(f"/users/{user_id}")
+    response = client.delete(f"/api/users/{user_id}")
 
     assert response.status_code == 200, response.text
     db_session.expire_all()
@@ -926,7 +927,7 @@ def test_delete_user_with_oauth_refresh_tokens(client, db_session, regular_user)
     db_session.commit()
     token_id, session_id = token.id, session.id
 
-    response = client.delete(f"/users/{user_id}")
+    response = client.delete(f"/api/users/{user_id}")
 
     assert response.status_code == 200, response.text
     db_session.expire_all()

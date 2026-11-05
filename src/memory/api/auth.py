@@ -58,12 +58,11 @@ WHITELIST = {
     "/mcp",
     "/oauth/",
     "/.well-known/",
-    "/ui",
     "/google-drive/callback",  # Google OAuth callback
     # External MCP server OAuth callback: authenticates the session itself
     # so a logged-out user gets a page to act on instead of a bare 401.
     "/auth/mcp/callback",
-    "/polls/respond",  # Public poll response endpoints
+    "/api/polls/respond",  # Public poll response endpoints
     # Generic content upload. The endpoint authenticates the request itself
     # by verifying the signed ingest token in the ``?token=`` query string
     # (ingest_tokens.verify_token: HMAC over a domain-tagged payload + exp +
@@ -109,7 +108,7 @@ def is_whitelisted_path(path: str) -> bool:
 
     Trailing-slash whitelist entries (``/oauth/``, ``/.well-known/``)
     match anything below them. Bare entries (``/health``, ``/mcp``,
-    ``/ui``, …) match the exact path or a child segment delimited by
+    ``/setup``, …) match the exact path or a child segment delimited by
     ``/`` — they deliberately do NOT match ``/healthcheck`` or
     ``/mcphidden``. The previous ``str.startswith`` everywhere version
     was a latent auth-bypass any time someone added a sibling route

@@ -394,7 +394,7 @@ def test_queue_message_never_ingests_password_reset_mail(
         from_addr=from_addr,
         to=["victim@example.com"],
         subject=subject,
-        body="https://memory.example.com/ui/reset-password#token=secret",
+        body="https://memory.example.com/reset-password#token=secret",
         headers=headers,
     ).as_string()
 

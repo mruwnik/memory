@@ -77,7 +77,7 @@ export const PollResults: React.FC = () => {
   }
 
   const displayBestSlots = bestSlots.slice(0, 5)
-  const back = isAuthenticated ? { to: '/ui/polls', label: 'Polls' } : undefined
+  const back = isAuthenticated ? { to: '/polls', label: 'Polls' } : undefined
 
   if (loading || error || !poll) {
     return <Page title="Poll results" back={back} loading={loading && 'Loading results...'} error={loading ? null : error ?? 'Poll not found'} />
@@ -119,7 +119,7 @@ export const PollResults: React.FC = () => {
             {poll.status === 'closed' && (
               <Button size="sm" onClick={() => manage(() => updatePoll({ poll_id: poll.id, status: 'open' }), 'open')} disabled={actionLoading}>Reopen poll</Button>
             )}
-            <ButtonLink size="sm" to={`/ui/polls/edit/${slug}`}>Edit poll</ButtonLink>
+            <ButtonLink size="sm" to={`/polls/edit/${slug}`}>Edit poll</ButtonLink>
             {poll.status !== 'cancelled' && (
               <ConfirmButton disabled={actionLoading}
                 confirm={`Cancel "${poll.title}"? It will stop accepting responses.`}
@@ -246,14 +246,14 @@ export const PollResults: React.FC = () => {
         <div className="flex gap-3 flex-wrap">
           {poll.status === 'open' && (
             <ButtonLink variant="primary"
-              to={`/ui/polls/respond/${slug}`}
+              to={`/polls/respond/${slug}`}
             >
               Add your availability
             </ButtonLink>
           )}
           <Button
             type="button"
-            onClick={() => run(() => copyText(`${window.location.origin}/ui/polls/respond/${slug}`), 'Link copied')}
+            onClick={() => run(() => copyText(`${window.location.origin}/polls/respond/${slug}`), 'Link copied')}
           >
             Copy share link
           </Button>

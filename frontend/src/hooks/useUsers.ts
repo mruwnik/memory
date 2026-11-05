@@ -68,7 +68,7 @@ export const useUsers = () => {
   const { apiCall } = useAuth()
 
   const listUsers = useCallback(async (): Promise<User[]> => {
-    const response = await apiCall('/users')
+    const response = await apiCall('/api/users')
     if (!response.ok) {
       if (response.status === 403) throw new Error('Insufficient permissions')
       throw await apiError(response, 'Failed to fetch users')
@@ -77,7 +77,7 @@ export const useUsers = () => {
   }, [apiCall])
 
   const listScopes = useCallback(async (): Promise<ScopeInfo[]> => {
-    const response = await apiCall('/users/scopes')
+    const response = await apiCall('/api/users/scopes')
     if (!response.ok) {
       if (response.status === 403) throw new Error('Insufficient permissions')
       throw await apiError(response, 'Failed to fetch available scopes')
@@ -85,24 +85,14 @@ export const useUsers = () => {
     return response.json()
   }, [apiCall])
 
-  const getUser = useCallback(async (id: number): Promise<User> => {
-    const response = await apiCall(`/users/${id}`)
-    if (!response.ok) {
-      if (response.status === 403) throw new Error('Insufficient permissions')
-      if (response.status === 404) throw new Error('User not found')
-      throw await apiError(response, 'Failed to fetch user')
-    }
-    return response.json()
-  }, [apiCall])
-
   const getCurrentUser = useCallback(async (): Promise<User> => {
-    const response = await apiCall('/users/me')
+    const response = await apiCall('/api/users/me')
     if (!response.ok) throw await apiError(response, 'Failed to fetch current user')
     return response.json()
   }, [apiCall])
 
   const createUser = useCallback(async (data: UserCreate): Promise<User> => {
-    const response = await apiCall('/users', {
+    const response = await apiCall('/api/users', {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -111,7 +101,7 @@ export const useUsers = () => {
   }, [apiCall])
 
   const updateUser = useCallback(async (id: number, data: UserUpdate): Promise<User> => {
-    const response = await apiCall(`/users/${id}`, {
+    const response = await apiCall(`/api/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     })
@@ -120,12 +110,12 @@ export const useUsers = () => {
   }, [apiCall])
 
   const deleteUser = useCallback(async (id: number): Promise<void> => {
-    const response = await apiCall(`/users/${id}`, { method: 'DELETE' })
+    const response = await apiCall(`/api/users/${id}`, { method: 'DELETE' })
     if (!response.ok) throw await apiError(response, 'Failed to delete user')
   }, [apiCall])
 
   const regenerateApiKey = useCallback(async (id: number): Promise<ApiKeyResponse> => {
-    const response = await apiCall(`/users/${id}/api-keys`, {
+    const response = await apiCall(`/api/users/${id}/api-keys`, {
       method: 'POST',
       body: JSON.stringify({ name: 'Default API Key', revoke_existing: true }),
     })
@@ -134,19 +124,19 @@ export const useUsers = () => {
   }, [apiCall])
 
   const listApiKeys = useCallback(async (userId: number): Promise<ApiKey[]> => {
-    const response = await apiCall(`/users/${userId}/api-keys`)
+    const response = await apiCall(`/api/users/${userId}/api-keys`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch API keys')
     return response.json()
   }, [apiCall])
 
   const listApiKeyTypes = useCallback(async (): Promise<string[]> => {
-    const response = await apiCall('/users/api-key-types')
+    const response = await apiCall('/api/users/api-key-types')
     if (!response.ok) throw await apiError(response, 'Failed to fetch API key types')
     return response.json()
   }, [apiCall])
 
   const createApiKey = useCallback(async (userId: number, data: ApiKeyCreate): Promise<ApiKey & ApiKeyResponse> => {
-    const response = await apiCall(`/users/${userId}/api-keys`, {
+    const response = await apiCall(`/api/users/${userId}/api-keys`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -155,12 +145,12 @@ export const useUsers = () => {
   }, [apiCall])
 
   const revokeApiKey = useCallback(async (userId: number, keyId: number): Promise<void> => {
-    const response = await apiCall(`/users/${userId}/api-keys/${keyId}`, { method: 'DELETE' })
+    const response = await apiCall(`/api/users/${userId}/api-keys/${keyId}`, { method: 'DELETE' })
     if (!response.ok) throw await apiError(response, 'Failed to revoke API key')
   }, [apiCall])
 
   const changePassword = useCallback(async (data: PasswordChange): Promise<void> => {
-    const response = await apiCall('/users/me/change-password', {
+    const response = await apiCall('/api/users/me/change-password', {
       method: 'POST',
       body: JSON.stringify(data),
     })
@@ -169,7 +159,7 @@ export const useUsers = () => {
 
   // Admin-only; the server also signs the user out everywhere
   const resetPassword = useCallback(async (id: number, newPassword: string): Promise<void> => {
-    const response = await apiCall(`/users/${id}/reset-password`, {
+    const response = await apiCall(`/api/users/${id}/reset-password`, {
       method: 'POST',
       body: JSON.stringify({ new_password: newPassword }),
     })
@@ -179,7 +169,6 @@ export const useUsers = () => {
   return {
     listUsers,
     listScopes,
-    getUser,
     getCurrentUser,
     createUser,
     updateUser,

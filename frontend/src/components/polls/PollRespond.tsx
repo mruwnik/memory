@@ -163,7 +163,7 @@ export const PollRespond: React.FC = () => {
 
   if (submitted) {
     const editUrl = responseEditToken
-      ? `${window.location.origin}/ui/polls/respond/${slug}?edit=${responseEditToken}`
+      ? `${window.location.origin}/polls/respond/${slug}?edit=${responseEditToken}`
       : null
 
     return (
@@ -202,7 +202,7 @@ export const PollRespond: React.FC = () => {
               >
                 Edit response
               </Button>
-              <ButtonLink to={`/ui/polls/results/${slug}`}>View results</ButtonLink>
+              <ButtonLink to={`/polls/results/${slug}`}>View results</ButtonLink>
             </div>
           </Card>
       </Page>
@@ -294,7 +294,7 @@ export const PollRespond: React.FC = () => {
           <div className="text-center">
             <p className="text-slate-600">
               {poll.response_count} {poll.response_count === 1 ? 'response' : 'responses'} so far.{' '}
-              <Link to={`/ui/polls/results/${slug}`} className="text-primary hover:underline">
+              <Link to={`/polls/results/${slug}`} className="text-primary hover:underline">
                 View full results
               </Link>
             </p>

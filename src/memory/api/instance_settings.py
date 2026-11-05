@@ -44,7 +44,7 @@ from memory.common.audit import record_audit
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 class SettingView(BaseModel):

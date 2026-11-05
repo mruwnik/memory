@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Valid API key types for validation (derived from APIKeyType constants)
 VALID_KEY_TYPES = frozenset(APIKeyType.ALL_TYPES)
 
-router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(get_interactive_user)])
+router = APIRouter(prefix="/api/users", tags=["users"], dependencies=[Depends(get_interactive_user)])
 
 
 class UserCreate(BaseModel):
@@ -305,17 +305,6 @@ def list_available_scopes(
 def list_api_key_types() -> list[str]:
     """The key types an API key can be created with."""
     return list(APIKeyType.ALL_TYPES)
-
-
-@router.get("/{user_id}")
-def get_user(
-    user_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
-) -> UserResponse:
-    """Get a user by ID. Admins can get any user, others can only get themselves."""
-    target_user = authorize_user_self_or_admin(db, user_id, user)
-    return user_to_response(target_user)
 
 
 @router.patch("/{user_id}")

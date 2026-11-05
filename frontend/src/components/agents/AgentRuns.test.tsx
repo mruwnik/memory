@@ -26,7 +26,7 @@ beforeEach(() => {
 describe('AgentRuns', () => {
   it('titles a run with its agent, or as ad-hoc, and keeps the input as the body', async () => {
     renderWithRouter(<AgentRuns />)
-    expect(await screen.findByRole('link', { name: 'digest' })).toHaveAttribute('href', '/ui/agents/runs/r1')
+    expect(await screen.findByRole('link', { name: 'digest' })).toHaveAttribute('href', '/agents/runs/r1')
     expect(screen.getByRole('link', { name: 'Ad-hoc run' })).toBeInTheDocument()
     expect(screen.getAllByText('New report: - [report #5] summary')).toHaveLength(2)
     expect(screen.getByText('New items')).toBeInTheDocument()

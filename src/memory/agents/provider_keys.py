@@ -61,7 +61,7 @@ class KeyUnavailable(ValueError):
 
 
 def keys_page() -> str:
-    return f"{settings.SERVER_URL.rstrip('/')}/ui/keys"
+    return f"{settings.SERVER_URL.rstrip('/')}/keys"
 
 
 def resolve_key_ref(db: DBSession, user_id: int, ref: int | str) -> LLMProviderKey:

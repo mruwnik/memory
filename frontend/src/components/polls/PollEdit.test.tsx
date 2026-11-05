@@ -74,11 +74,11 @@ function mockEdit({ loadResult = makePoll(), updateResult = {} }: EditMocks = {}
 function renderEdit(slug = 'edit-me') {
   const user = userEvent.setup()
   render(
-    <MemoryRouter initialEntries={[`/ui/polls/edit/${slug}`]}>
+    <MemoryRouter initialEntries={[`/polls/edit/${slug}`]}>
       <Routes>
-        <Route path="/ui/polls/edit/:slug" element={<PollEdit />} />
-        <Route path="/ui/polls/results/:slug" element={<div>Results page</div>} />
-        <Route path="/ui/polls" element={<div>Polls list</div>} />
+        <Route path="/polls/edit/:slug" element={<PollEdit />} />
+        <Route path="/polls/results/:slug" element={<div>Results page</div>} />
+        <Route path="/polls" element={<div>Polls list</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -106,7 +106,7 @@ describe('PollEdit - loading and error states', () => {
     expect(await screen.findByText('Poll vanished')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Polls' })).toHaveAttribute(
       'href',
-      '/ui/polls',
+      '/polls',
     )
   })
 })

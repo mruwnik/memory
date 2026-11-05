@@ -545,7 +545,7 @@ def test_admin_email_and_password_go_together(project, admin):
 
 TOKEN_LINE = (
     "api-1  | WARNING memory.api.setup: No account exists yet. "
-    "Create it at https://memory.example.com/ui/setup with setup token: Tok_en-9xY\n"
+    "Create it at https://memory.example.com/setup with setup token: Tok_en-9xY\n"
 )
 
 

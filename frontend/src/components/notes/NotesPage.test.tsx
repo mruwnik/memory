@@ -126,7 +126,7 @@ describe('NotesPage', () => {
   it('asks before a URL change replaces unsaved edits, and restores the URL on cancel', async () => {
     listNotes.mockResolvedValue([['/notes/readme.md', '/notes/other.md']])
     const user = userEvent.setup()
-    renderWithRouter(<><NotesPage /><Link to="?file=other.md">go other</Link></>, { initialEntries: ['/ui/notes?file=readme.md'] })
+    renderWithRouter(<><NotesPage /><Link to="?file=other.md">go other</Link></>, { initialEntries: ['/notes?file=readme.md'] })
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
     await user.type(await screen.findByRole('textbox'), '!')
 
@@ -145,8 +145,8 @@ describe('NotesPage', () => {
     listNotes.mockResolvedValue([['/notes/readme.md']])
     const user = userEvent.setup()
     renderWithRouter(
-      <><Routes><Route path="/ui/notes" element={<NotesPage />} /><Route path="/ui/elsewhere" element={<p>Elsewhere</p>} /></Routes><Link to="/ui/elsewhere">leave</Link></>,
-      { initialEntries: ['/ui/notes?file=readme.md'] },
+      <><Routes><Route path="/notes" element={<NotesPage />} /><Route path="/elsewhere" element={<p>Elsewhere</p>} /></Routes><Link to="/elsewhere">leave</Link></>,
+      { initialEntries: ['/notes?file=readme.md'] },
     )
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
     await user.type(await screen.findByRole('textbox'), '!')
@@ -164,7 +164,7 @@ describe('NotesPage', () => {
   it('warns before the tab closes only while there are unsaved edits', async () => {
     listNotes.mockResolvedValue([['/notes/readme.md']])
     const user = userEvent.setup()
-    renderWithRouter(<NotesPage />, { initialEntries: ['/ui/notes?file=readme.md'] })
+    renderWithRouter(<NotesPage />, { initialEntries: ['/notes?file=readme.md'] })
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
     expect(fireEvent(window, new Event('beforeunload', { cancelable: true }))).toBe(true)
     await user.type(await screen.findByRole('textbox'), '!')
@@ -236,7 +236,7 @@ describe('NotesPage', () => {
 
   it('auto-selects and loads a file from the ?file= URL param', async () => {
     listNotes.mockResolvedValue([['/notes/readme.md']])
-    renderWithRouter(<NotesPage />, { initialEntries: ['/ui/notes?file=readme.md'] })
+    renderWithRouter(<NotesPage />, { initialEntries: ['/notes?file=readme.md'] })
     await waitFor(() => expect(fetchFile).toHaveBeenCalledWith('/notes/readme.md'))
   })
 

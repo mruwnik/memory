@@ -29,24 +29,24 @@ export default function AgentsPage() {
       title="Agents"
       description="Agents run a model with your memory tools on demand, on a schedule, or when new items arrive."
       actions={<>
-        <ButtonLink to="/ui/agents/new" variant="primary">New agent</ButtonLink>
-        <ButtonLink to="/ui/agents/runs">Runs</ButtonLink>
-        <ButtonLink to="/ui/agents/servers">MCP servers</ButtonLink>
-        <ButtonLink to="/ui/keys">LLM keys</ButtonLink>
+        <ButtonLink to="/agents/new" variant="primary">New agent</ButtonLink>
+        <ButtonLink to="/agents/runs">Runs</ButtonLink>
+        <ButtonLink to="/agents/servers">MCP servers</ButtonLink>
+        <ButtonLink to="/keys">LLM keys</ButtonLink>
       </>}
       loading={definitions === null && 'Loading agents...'}
       error={error}
       onRetry={load}
     >
       {definitions?.length === 0 && (
-        <EmptyState message="You have no agents yet" action={<ButtonLink to="/ui/agents/new" variant="primary">New agent</ButtonLink>} />
+        <EmptyState message="You have no agents yet" action={<ButtonLink to="/agents/new" variant="primary">New agent</ButtonLink>} />
       )}
       {!!definitions?.length && (
         <List>
           {definitions.map(d => (
             <Row
               key={d.id}
-              to={`/ui/agents/${d.id}`}
+              to={`/agents/${d.id}`}
               title={d.name}
               badges={<>
                 {!!d.problems?.length && <Badge tone="danger">Can't run</Badge>}

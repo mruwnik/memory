@@ -208,7 +208,7 @@ describe('UserManagement create flow', () => {
     expect(type.value).toBe(locked ? 'bot' : 'human')
     expect((within(type).getByRole('option', { name: 'Human' }) as HTMLOptionElement).disabled).toBe(locked)
     expect(screen.queryAllByText(/This server allows one human user/)).toHaveLength(locked ? 1 : 0)
-    expect(screen.queryAllByRole('link', { name: 'Server settings' }).map(a => a.getAttribute('href'))).toEqual(locked ? ['/ui/server-settings'] : [])
+    expect(screen.queryAllByRole('link', { name: 'Server settings' }).map(a => a.getAttribute('href'))).toEqual(locked ? ['/server-settings'] : [])
   })
 
   it('surfaces a server error inside the create modal', async () => {

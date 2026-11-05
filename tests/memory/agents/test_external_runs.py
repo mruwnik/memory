@@ -115,7 +115,7 @@ async def test_runs_fail_naming_the_server_and_notify_once(
     assert all(
         "MCP server 'fake' needs re-authorization" in (r.error or "") for r in runs
     )
-    assert f"/ui/agents/servers/{server.id}" in (runs[0].error or "")
+    assert f"/agents/servers/{server.id}" in (runs[0].error or "")
     assert len(notifications) == 1
 
 

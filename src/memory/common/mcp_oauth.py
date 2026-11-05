@@ -115,7 +115,7 @@ def redirect_uri() -> str:
 
 
 def server_page(server_id: int) -> str:
-    return f"{settings.SERVER_URL.rstrip('/')}/ui/agents/servers/{server_id}"
+    return f"{settings.SERVER_URL.rstrip('/')}/agents/servers/{server_id}"
 
 
 def describe(error: BaseException | str) -> str:

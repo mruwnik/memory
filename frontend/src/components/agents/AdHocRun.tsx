@@ -12,7 +12,7 @@ function SaveAsAgent({ spec, onClose }: { spec: AgentSpec; onClose: () => void }
   const { busy, error, submit } = useSubmit()
 
   const save = () => submit(async () => {
-    navigate(`/ui/agents/${(await saveDefinition({ name: name.trim(), description, spec })).id}`)
+    navigate(`/agents/${(await saveDefinition({ name: name.trim(), description, spec })).id}`)
   })
 
   return (
@@ -53,13 +53,13 @@ export default function AdHocRun() {
   useEffect(load, [load])
 
   const page = {
-    back: { to: '/ui/agents/runs', label: 'Runs' },
+    back: { to: '/agents/runs', label: 'Runs' },
     title: 'Ad-hoc run',
     description: 'Try a one-off configuration without saving an agent.',
   }
   if (!catalog || !spec) return <Page {...page} loading error={loadError} onRetry={load} />
 
-  const run = () => running.submit(async () => navigate(`/ui/agents/runs/${(await startRun({ input, spec })).run_id}`))
+  const run = () => running.submit(async () => navigate(`/agents/runs/${(await startRun({ input, spec })).run_id}`))
 
   return (
     <Page {...page}>

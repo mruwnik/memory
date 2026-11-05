@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react'
+import { CLIENT_ID_KEY, REDIRECT_URI } from '@/hooks/useAuth'
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
-const REDIRECT_URI = `${window.location.origin}/ui`
 
 // OAuth utilities
 const generateCodeVerifier = () => {
@@ -39,8 +39,8 @@ const setCookie = (name: string, value: string, days = 30) => {
   document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`
 }
 
-const getClientId = () => localStorage.getItem('oauth_client_id')
-const setClientId = (clientId: string) => localStorage.setItem('oauth_client_id', clientId)
+const getClientId = () => localStorage.getItem(CLIENT_ID_KEY)
+const setClientId = (clientId: string) => localStorage.setItem(CLIENT_ID_KEY, clientId)
 
 // Exchange the authorization code for tokens; resolves to an error message, or null on success
 const exchangeCode = async (clientId: string, code: string, codeVerifier: string | null) => {
@@ -102,6 +102,7 @@ export const useOAuth = () => {
       if (response.ok) {
         const clientInfo = await response.json()
         setClientId(clientInfo.client_id)
+        localStorage.removeItem('oauth_client_id') // where clients registered for /ui were kept
         return clientInfo.client_id
       }
       return null
@@ -191,7 +192,7 @@ export const useOAuth = () => {
 
   const clearError = useCallback(() => {
     setError(null)
-    localStorage.removeItem('oauth_client_id') // Force re-registration on retry
+    localStorage.removeItem(CLIENT_ID_KEY) // Force re-registration on retry
   }, [])
 
   return {

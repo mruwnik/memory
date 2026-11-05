@@ -5,7 +5,7 @@ import { AppShell } from './AppShell'
 
 describe('AppShell section drawer', () => {
   it('keeps Tab inside the open drawer and returns focus to the toggle on Escape', async () => {
-    const { user } = renderWithRouter(<AppShell user={null} onLogout={vi.fn()} hasScope={() => false} />, { initialEntries: ['/ui/dashboard'] })
+    const { user } = renderWithRouter(<AppShell user={null} onLogout={vi.fn()} hasScope={() => false} />, { initialEntries: ['/dashboard'] })
     const toggle = screen.getByRole('button', { name: 'Sections' })
     await user.click(toggle)
 

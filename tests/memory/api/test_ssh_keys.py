@@ -14,7 +14,7 @@ from memory.common.notes_ssh import ssh_command
 
 def create(client, **values):
     response = client.post(
-        "/ssh-keys", json={"name": "Git identity", "generate": True, **values}
+        "/api/ssh-keys", json={"name": "Git identity", "generate": True, **values}
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -27,7 +27,7 @@ def test_generate_replace_and_delete(client, db_session):
     assert private.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
     assert "private" not in str(result)
     assert result["fingerprint"].startswith("SHA256:")
-    assert [k["id"] for k in client.get("/ssh-keys").json()] == [key.id]
+    assert [k["id"] for k in client.get("/api/ssh-keys").json()] == [key.id]
     replacement = (
         Ed25519PrivateKey.generate()
         .private_bytes(
@@ -38,7 +38,7 @@ def test_generate_replace_and_delete(client, db_session):
         .decode()
     )
     response = client.put(
-        f"/ssh-keys/{key.id}",
+        f"/api/ssh-keys/{key.id}",
         json={
             "name": "Replaced",
             "private_key": replacement,
@@ -49,7 +49,7 @@ def test_generate_replace_and_delete(client, db_session):
     db_session.refresh(key)
     assert decrypt_value(key.private_key_encrypted) != private
     assert response.json()["public_key"] != result["public_key"]
-    assert client.delete(f"/ssh-keys/{key.id}").status_code == 200
+    assert client.delete(f"/api/ssh-keys/{key.id}").status_code == 200
     assert db_session.get(SSHKey, key.id) is None
 
 
@@ -63,9 +63,9 @@ def test_ownership_and_instance_permissions(client, user, regular_user, db_sessi
     db_session.add(other)
     db_session.commit()
     instance = create(client, instance=True)
-    assert other.id not in [key["id"] for key in client.get("/ssh-keys").json()]
-    assert client.put(f"/ssh-keys/{other.id}", json={"name": "Taken"}).status_code == 404
-    assert client.delete(f"/ssh-keys/{other.id}").status_code == 404
+    assert other.id not in [key["id"] for key in client.get("/api/ssh-keys").json()]
+    assert client.put(f"/api/ssh-keys/{other.id}", json={"name": "Taken"}).status_code == 404
+    assert client.delete(f"/api/ssh-keys/{other.id}").status_code == 404
     assert client.put(
         "/notes-source/git/ssh",
         json={
@@ -76,15 +76,15 @@ def test_ownership_and_instance_permissions(client, user, regular_user, db_sessi
     ).status_code == 422
     user.scopes = ["read", "write"]
     db_session.commit()
-    assert client.get("/ssh-keys").json() == []
+    assert client.get("/api/ssh-keys").json() == []
     assert (
         client.post(
-            "/ssh-keys", json={"name": "Instance", "generate": True, "instance": True}
+            "/api/ssh-keys", json={"name": "Instance", "generate": True, "instance": True}
         ).status_code
         == 403
     )
     assert (
-        client.put(f"/ssh-keys/{instance['id']}", json={"name": "Taken"}).status_code
+        client.put(f"/api/ssh-keys/{instance['id']}", json={"name": "Taken"}).status_code
         == 404
     )
 
@@ -101,7 +101,7 @@ def test_notes_binding_and_temporary_identity(client, db_session, instance_owned
     response = client.put("/notes-source/git/ssh", json=setup)
     assert response.status_code == 200
     assert response.json()["git"]["ssh_public_key"] == instance["public_key"]
-    assert client.delete(f"/ssh-keys/{instance['id']}").status_code == 409
+    assert client.delete(f"/api/ssh-keys/{instance['id']}").status_code == 409
     with ssh_command(remote) as command:
         assert command is not None
         args = shlex.split(command)
@@ -126,7 +126,7 @@ def test_notes_binding_and_temporary_identity(client, db_session, instance_owned
         client.put("/notes-source/git/ssh", json={**setup, "key_id": None}).status_code
         == 200
     )
-    assert client.delete(f"/ssh-keys/{instance['id']}").status_code == 200
+    assert client.delete(f"/api/ssh-keys/{instance['id']}").status_code == 200
     with pytest.raises(ValueError, match="Select a database SSH key"):
         with ssh_command(remote):
             pass
@@ -141,7 +141,7 @@ def test_notes_binding_and_temporary_identity(client, db_session, instance_owned
     ],
 )
 def test_invalid_import_does_not_echo_material(client, body):
-    response = client.post("/ssh-keys", json=body)
+    response = client.post("/api/ssh-keys", json=body)
     assert response.status_code == 422
     if body.get("private_key"):
         assert body["private_key"] not in response.text
