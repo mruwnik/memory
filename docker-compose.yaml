@@ -267,6 +267,8 @@ services:
       OAUTH_REDIRECT_URI_ALLOWLIST: ${OAUTH_REDIRECT_URI_ALLOWLIST:-}
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-127.0.0.1,::1}
       LATEST_RELEASE_URL: ${LATEST_RELEASE_URL:-}
+      BEEPER_SERVER_URLS: ${BEEPER_SERVER_URLS:-}
+      BEEPER_HOMESERVER_ORIGINS: ${BEEPER_HOMESERVER_ORIGINS:-https://matrix.beeper.com}
     secrets:
       [postgres_password, voyage_key, secrets_encryption_key, ssh_public_key]
     volumes:
