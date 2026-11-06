@@ -368,8 +368,20 @@ describe('SlackPanel - event setup', () => {
     expect(screen.getAllByRole('button', { name: 'Connect workspace' })).toHaveLength(1)
   })
 
-  it('deletes an unfinished app after confirmation', async () => {
-    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done' }])
+  it('lists a live app whose workspace was removed, so it can be reconnected instead of blocking its client ID', async () => {
+    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Orphan', setup_state: 'live' }])
+    const { user } = renderWithUser(<SlackPanel />)
+
+    expect(await screen.findByText('Orphan')).toBeInTheDocument()
+    expect(screen.getByText('No workspace')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Reconnect' }))
+    const wizard = screen.getByTestId('slack-wizard')
+    expect(wizard).toHaveAttribute('data-app-id', '6')
+    expect(wizard).toHaveAttribute('data-connected', 'false')
+  })
+
+  it.each(['draft', 'live'])('deletes a %s app with no workspace after confirmation', async (setup_state) => {
+    listApps.mockResolvedValue([{ ...draftApp, id: 6, name: 'Half done', setup_state }])
     const { user } = renderWithUser(<SlackPanel />)
 
     await user.click(await screen.findByRole('button', { name: 'Delete' }))

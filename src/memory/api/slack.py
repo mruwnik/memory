@@ -934,7 +934,7 @@ def create_slack_app(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="You already have a Slack app with this client_id.",
+            detail="You already have a Slack app with this client ID. Reconnect or delete it on the Slack tab.",
         )
     db.refresh(app)
     return slack_app_to_response(app, user)

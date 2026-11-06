@@ -1115,7 +1115,7 @@ def test_create_slack_app_duplicate_client_id_returns_409(client, db_session, us
         "/slack/apps", json={"name": "Second", "client_id": "dup.id"}
     )
     assert second.status_code == 409
-    assert second.json()["detail"] == "You already have a Slack app with this client_id."
+    assert second.json()["detail"] == "You already have a Slack app with this client ID. Reconnect or delete it on the Slack tab."
 
 
 def test_two_users_can_register_the_same_client_id(client, db_session, user, other_user):

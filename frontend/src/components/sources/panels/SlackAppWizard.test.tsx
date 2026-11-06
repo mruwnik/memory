@@ -116,10 +116,23 @@ describe('SlackAppWizard - initial step', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
-  it('resumes an app that was never authorized at the OAuth step, with its redirect URL', async () => {
-    renderWithUser(<SlackAppWizard initialApp={app({ client_secret_configured: true })} initialAppConnected={false} onCancel={vi.fn()} />)
+  it.each(['draft', 'live'] as const)('resumes a %s app with no workspace at the OAuth step, with its redirect URL', async (setup_state) => {
+    renderWithUser(<SlackAppWizard initialApp={app({ client_secret_configured: true, setup_state })} initialAppConnected={false} onCancel={vi.fn()} />)
     expect(await screen.findByText(nonce.callback_url)).toBeInTheDocument()
     expect(screen.getByText('Step 3 of 7')).toBeInTheDocument()
+  })
+
+  it('reconnecting a live app finishes once OAuth completes', async () => {
+    const live = app({ client_secret_configured: true, signing_secret_configured: true, setup_state: 'live' })
+    getApp.mockResolvedValue(live)
+    renderWithUser(<SlackAppWizard initialApp={live} initialAppConnected={false} onCancel={vi.fn()} />)
+    await screen.findByRole('button', { name: 'Authorize workspace' })
+
+    const channel = new BroadcastChannel('slack-oauth-42')
+    channel.postMessage({ type: 'oauth-complete' })
+    channel.close()
+
+    expect(await screen.findByText(/configured and live/)).toBeInTheDocument()
   })
 })
 

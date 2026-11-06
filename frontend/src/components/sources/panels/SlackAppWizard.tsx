@@ -35,11 +35,12 @@ type Step =
   | 'test-message'    // user posts the token; we poll for match
   | 'done'
 
+// An app with no workspace needs OAuth first, even if it was live before its workspace was removed.
 const resumeStep = (app: SlackAppResponse, connected: boolean): Step => {
+  if (!connected && app.client_secret_configured) return 'oauth'
   if (app.setup_state === 'live' || app.setup_state === 'degraded') return 'done'
   if (app.setup_state === 'signing_verified') return 'test-message'
   if (!app.client_secret_configured) return 'client-secret'
-  if (!connected) return 'oauth'
   if (!app.signing_secret_configured) return 'signing-secret'
   return 'events-url'
 }
@@ -187,7 +188,7 @@ export const SlackAppWizard = ({
       if (evt.data?.type === 'oauth-complete' && app) {
         const fresh = await wizard.getApp(app.id)
         setApp(fresh)
-        setStep('signing-secret')
+        setStep(resumeStep(fresh, true))
       }
     })
     return () => channel.close()

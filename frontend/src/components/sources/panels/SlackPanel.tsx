@@ -144,24 +144,29 @@ export const SlackPanel = () => {
     setChannelsByWorkspace(prev => ({ ...prev, [channel.workspace_id]: channels }))
   })
 
-  // Apps the user started but never authorized: resuming one avoids creating a duplicate in Slack.
+  // Owned apps with no workspace: unfinished, or their workspace was removed. They still hold their
+  // client ID, so they must be visible to be reconnected or deleted rather than re-registered.
   const connectedAppIds = new Set(workspaces.flatMap(w => w.apps.map(a => a.id)))
-  const unfinishedApps = apps.filter(app => app.is_owner && !EVENTS_LIVE.includes(app.setup_state) && !connectedAppIds.has(app.id))
+  const idleApps = apps.filter(app => app.is_owner && !connectedAppIds.has(app.id))
 
   const body = loading && !loaded ? <LoadingState /> : error ? <ErrorState message={error} onRetry={loadData} /> : (
     <Section title="Slack" actions={<Button variant="primary" onClick={handleConnect}>Connect workspace</Button>}>
       {notice}
 
-      {unfinishedApps.length > 0 && (
+      {idleApps.length > 0 && (
         <List>
-          {unfinishedApps.map(app => (
-            <Row key={app.id} title={app.name} badges={<Badge tone="warning">Setup incomplete</Badge>}
-              meta={['No workspace connected yet']}
-              actions={<>
-                <Button size="sm" onClick={() => { setResume({ app, connected: false }); setWizardOpen(true) }}>Resume setup</Button>
-                <ConfirmButton confirm={`Delete the unfinished Slack app "${app.name}"?`} onConfirm={() => handleDeleteApp(app)} />
-              </>} />
-          ))}
+          {idleApps.map(app => {
+            const live = EVENTS_LIVE.includes(app.setup_state)
+            return (
+              <Row key={app.id} title={app.name}
+                badges={live ? <Badge>No workspace</Badge> : <Badge tone="warning">Setup incomplete</Badge>}
+                meta={[live ? 'Its workspace was disconnected' : 'No workspace connected yet']}
+                actions={<>
+                  <Button size="sm" onClick={() => { setResume({ app, connected: false }); setWizardOpen(true) }}>{live ? 'Reconnect' : 'Resume setup'}</Button>
+                  <ConfirmButton confirm={`Delete the Slack app "${app.name}"?`} onConfirm={() => handleDeleteApp(app)} />
+                </>} />
+            )
+          })}
         </List>
       )}
 
@@ -190,7 +195,7 @@ export const SlackPanel = () => {
             />
           ))}
         </List>
-      ) : unfinishedApps.length === 0 && (
+      ) : idleApps.length === 0 && (
         <EmptyState
           message="No Slack workspaces connected. Connect a workspace to start collecting messages."
           actionLabel="Connect workspace"
