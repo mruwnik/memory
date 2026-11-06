@@ -13,8 +13,12 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, object_session, scoped_session
 
-from memory.common import collections, embedding, paths, qdrant, settings
-from memory.common.content_processing import push_chunks_to_qdrant
+from memory.common import collections, embedding, paths, settings
+from memory.common.content_processing import (
+    chunk_ids_by_collection,
+    delete_vectors,
+    push_chunks_to_qdrant,
+)
 from memory.common.db.models import EmailAccount, EmailAttachment, MailMessage
 from memory.common.people import link_people
 from memory.parsers.email import Attachment, EmailMessage, RawEmailResponse
@@ -533,53 +537,15 @@ def should_delete_email(_email: MailMessage) -> bool:
     return True
 
 
-def extract_vector_deletion_info(email: MailMessage) -> dict:
-    """Extract info needed for vector deletion before session detachment.
+def extract_vector_deletion_info(email: MailMessage) -> dict[str, list[str]]:
+    """Chunk ids of the email and its attachments, by collection.
 
-    Call this before commit to capture chunk IDs and modalities while the
-    session is still active.
+    Call this before commit, while the session can still load the chunks.
     """
-    info = {
-        "email_chunk_ids": [str(c.id) for c in email.chunks] if email.chunks else [],
-        "email_modality": cast(str, email.modality),
-        "attachments": [],
-    }
+    chunks = [*(email.chunks or [])]
     for attachment in email.attachments:
-        if attachment.chunks:
-            info["attachments"].append(
-                {
-                    "chunk_ids": [str(c.id) for c in attachment.chunks],
-                    "modality": cast(str, attachment.modality),
-                }
-            )
-    return info
-
-
-def delete_email_vectors_from_info(info: dict) -> None:
-    """Delete vectors using pre-extracted info (safe to call after session commit)."""
-    qdrant_client = qdrant.get_qdrant_client()
-
-    # Delete email chunks
-    if info["email_chunk_ids"]:
-        try:
-            qdrant.delete_points(
-                client=qdrant_client,
-                collection_name=info["email_modality"],
-                ids=info["email_chunk_ids"],
-            )
-        except Exception as e:
-            logger.warning(f"Error deleting email vectors: {e}")
-
-    # Delete attachment chunks
-    for att_info in info["attachments"]:
-        try:
-            qdrant.delete_points(
-                client=qdrant_client,
-                collection_name=att_info["modality"],
-                ids=att_info["chunk_ids"],
-            )
-        except Exception as e:
-            logger.warning(f"Error deleting attachment vectors: {e}")
+        chunks.extend(attachment.chunks or [])
+    return chunk_ids_by_collection(chunks)
 
 
 def delete_removed_emails(
@@ -1002,6 +968,9 @@ def delete_emails(
 
     # Now safe to delete vectors using pre-extracted info
     for info in deletion_info:
-        delete_email_vectors_from_info(info)
+        try:
+            delete_vectors(info)
+        except IOError:
+            logger.warning("Error deleting vectors of a removed email", exc_info=True)
 
     return len(deletion_info)

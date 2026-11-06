@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from itertools import batched
 from typing import Any, cast
 
-from memory.common import qdrant, settings
+from memory.common import settings
 from memory.common.celery_app import SYNC_GOOGLE_DOC, SYNC_GOOGLE_FOLDER, app
 from memory.common.db.connection import make_session
 from memory.common.db.models import GoogleDoc, JobStatus
@@ -20,6 +20,7 @@ from memory.parsers.google_drive import (
 )
 from memory.common.content_processing import (
     create_content_hash,
+    delete_chunk_vectors,
     create_task_result,
     process_content_item,
 )
@@ -105,11 +106,9 @@ def _update_existing_doc(
 
     # Delete old chunks from Qdrant
     existing_chunks = existing.chunks or []
-    chunk_ids = [str(c.id) for c in existing_chunks if c.id]
-    if chunk_ids:
+    if existing_chunks:
         try:
-            client = qdrant.get_qdrant_client()
-            qdrant.delete_points(client, cast(str, existing.modality), chunk_ids)
+            delete_chunk_vectors(existing_chunks)
         except IOError as e:
             # Re-raise to fail the task - leaving stale vectors causes duplicate results
             logger.error(f"Error deleting chunks from Qdrant: {e}")

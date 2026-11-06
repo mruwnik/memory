@@ -240,7 +240,7 @@ def test_delete_orphaned_item_with_chunks():
     chunk2 = Mock(id="chunk-2", collection_name="mail")
     item = Mock(id=1, type="mail_message", chunks=[chunk1, chunk2], attachments=[])
 
-    with patch("memory.workers.verification.qdrant") as mock_qdrant:
+    with patch("memory.common.content_processing.qdrant") as mock_qdrant:
         mock_client = Mock()
         mock_qdrant.get_qdrant_client.return_value = mock_client
 
@@ -258,7 +258,7 @@ def test_delete_orphaned_item_qdrant_failure():
     chunk1 = Mock(id="chunk-1", collection_name="mail")
     item = Mock(id=1, type="mail_message", chunks=[chunk1], attachments=[])
 
-    with patch("memory.workers.verification.qdrant") as mock_qdrant:
+    with patch("memory.common.content_processing.qdrant") as mock_qdrant:
         mock_qdrant.get_qdrant_client.side_effect = Exception("Qdrant down")
 
         with pytest.raises(Exception, match="Qdrant down"):
@@ -291,7 +291,7 @@ def test_delete_orphaned_item_with_attachments():
         attachments=[attachment1, attachment2],
     )
 
-    with patch("memory.workers.verification.qdrant") as mock_qdrant:
+    with patch("memory.common.content_processing.qdrant") as mock_qdrant:
         mock_client = Mock()
         mock_qdrant.get_qdrant_client.return_value = mock_client
 

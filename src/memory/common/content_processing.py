@@ -12,7 +12,7 @@ import inspect
 import time
 import traceback
 import logging
-from typing import Any, Callable, Sequence, TypeVar, cast
+from typing import Any, Callable, Iterable, Sequence, TypeVar, cast
 
 from celery.exceptions import Retry, TaskPredicate
 from sqlalchemy import or_
@@ -35,6 +35,30 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+def chunk_ids_by_collection(chunks: Iterable[Chunk]) -> dict[str, list[str]]:
+    """Group chunk ids by the Qdrant collection each chunk is stored in, which
+    need not be its item's modality (observations live in semantic/temporal)."""
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for chunk in chunks:
+        if chunk.id and chunk.collection_name:
+            grouped[chunk.collection_name].append(str(chunk.id))
+    return grouped
+
+
+def delete_vectors(ids_by_collection: dict[str, list[str]]) -> None:
+    """Delete points from each collection. Raises IOError on the first failure."""
+    if not ids_by_collection:
+        return
+    client = qdrant.get_qdrant_client()
+    for collection, ids in ids_by_collection.items():
+        qdrant.delete_points(client, collection, ids)
+
+
+def delete_chunk_vectors(chunks: Iterable[Chunk]) -> None:
+    """Delete the chunks' points from their own collections. Raises IOError."""
+    delete_vectors(chunk_ids_by_collection(chunks))
+
+
 def clear_item_chunks(item: SourceItem, session) -> int:
     """
     Delete all chunks for a source item from both Qdrant and PostgreSQL.
@@ -49,16 +73,11 @@ def clear_item_chunks(item: SourceItem, session) -> int:
     if not item.chunks:
         return 0
 
-    chunk_ids = [str(c.id) for c in item.chunks if c.id]
-    count = len(chunk_ids)
-
-    # Delete from Qdrant
-    if chunk_ids:
-        client = qdrant.get_qdrant_client()
-        try:
-            qdrant.delete_points(client, item.modality, chunk_ids)
-        except IOError as e:
-            logger.error(f"Error deleting chunks from Qdrant for item {item.id}: {e}")
+    count = len(item.chunks)
+    try:
+        delete_chunk_vectors(item.chunks)
+    except IOError:
+        logger.exception("Error deleting chunks from Qdrant for item %s", item.id)
 
     # Delete from PostgreSQL. Iterate a snapshot — `item.chunks` is the
     # backing collection of the relationship, and the delete-orphan cascade

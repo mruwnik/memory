@@ -98,6 +98,7 @@ from memory.common.db.models.source_items import (
 )
 from memory.common.content_processing import (
     clear_item_chunks,
+    delete_vectors,
     process_content_item,
 )
 from memory.common.jobs import LOST_JOB_ERROR, tracked_task
@@ -1276,7 +1277,6 @@ def clean_mail_headers() -> dict[str, str | int]:
 def delete_orphaned_source_items(batch_size: int = 1000) -> dict[str, str | int]:
     """Delete source items whose subclass row is gone, their Qdrant vectors first.
     Safe to re-run."""
-    client = qdrant.get_qdrant_client()
     deleted = 0
     with make_session() as session:
         orphans = orphaned_source_ids(session)
@@ -1287,8 +1287,7 @@ def delete_orphaned_source_items(batch_size: int = 1000) -> dict[str, str | int]
             by_collection: dict[str, list[str]] = defaultdict(list)
             for chunk_id, collection in chunks:
                 by_collection[collection].append(str(chunk_id))
-            for collection, ids in by_collection.items():
-                qdrant.delete_points(client, collection, ids)
+            delete_vectors(by_collection)
             result = session.execute(
                 delete(SourceItem)
                 .where(SourceItem.id.in_(batch))

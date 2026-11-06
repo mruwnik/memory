@@ -13,12 +13,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from collections import defaultdict
 from typing import Any, Callable, Sequence, cast
 
 from sqlalchemy import select
 
-from memory.common import qdrant, settings
+from memory.common import settings
+from memory.common.content_processing import delete_chunk_vectors
 from memory.common.db.connection import DBSession
 from memory.common.db.models import GithubItem, MailMessage, SourceItem
 from memory.common.db.models.sources import EmailAccount, GithubRepo
@@ -298,19 +298,6 @@ def group_items_by_batch_key(
     return groups
 
 
-def collect_chunks_by_collection(
-    items: Sequence[SourceItem],
-) -> dict[str, list[str]]:
-    """Collect all chunk IDs grouped by collection from a list of items."""
-    chunks_by_collection: dict[str, list[str]] = defaultdict(list)
-    for item in items:
-        if item.chunks:
-            for chunk in item.chunks:
-                if chunk.id and chunk.collection_name:
-                    chunks_by_collection[chunk.collection_name].append(str(chunk.id))
-    return chunks_by_collection
-
-
 def delete_orphaned_item(item: SourceItem, session: DBSession) -> bool:
     """
     Delete an orphaned item and its vectors from Qdrant.
@@ -330,12 +317,7 @@ def delete_orphaned_item(item: SourceItem, session: DBSession) -> bool:
         items_to_delete.extend(attachments)
 
     # Delete vectors from Qdrant first - if this fails, don't delete from DB
-    chunks_by_collection = collect_chunks_by_collection(items_to_delete)
-
-    if chunks_by_collection:
-        client = qdrant.get_qdrant_client()
-        for collection, chunk_ids in chunks_by_collection.items():
-            qdrant.delete_points(client, collection, chunk_ids)
+    delete_chunk_vectors(chunk for i in items_to_delete for chunk in i.chunks or [])
 
     session.delete(item)
     logger.info(f"Deleted orphaned {item.type} {item.id}")

@@ -6,6 +6,7 @@ import pytest
 from memory.common import settings
 
 from memory.common.db.models import (
+    AgentObservation,
     BlogPost,
     Chunk,
     ChatMessage,
@@ -17,6 +18,7 @@ from memory.common.db.models import (
 from memory.common.embedding import EmbeddingError, EmbeddingsNotConfigured
 from memory.common.content_processing import (
     check_content_exists,
+    clear_item_chunks,
     create_content_hash,
     create_task_result,
     embed_source_item,
@@ -505,6 +507,33 @@ def test_create_task_result(item_factory, status, additional_fields, expected_id
     assert result["chunks_count"] == 2
     assert result["embed_status"] == str(item.embed_status)
     assert result[expected_id_key] == item.id
+
+
+def test_clear_item_chunks_deletes_vectors_from_each_chunks_collection(
+    db_session, qdrant
+):
+    observation = AgentObservation(
+        sha256=b"clear_obs" + bytes(23),
+        content="User prefers tea",
+        subject="drinks",
+        observation_type="preference",
+        agent_model="test",
+        modality="observation",
+    )
+    db_session.add(observation)
+    db_session.flush()
+    embed_source_item(observation)
+    push_to_qdrant([observation])
+    db_session.flush()
+    chunk_ids = [str(c.id) for c in observation.chunks]
+    collections = {c.collection_name for c in observation.chunks}
+    assert collections >= {"semantic", "temporal"}
+
+    assert clear_item_chunks(observation, db_session) == len(chunk_ids)
+
+    left = [p.id for name in collections for p in qdrant.retrieve(name, ids=chunk_ids)]
+    assert left == []
+    assert db_session.query(Chunk).filter(Chunk.source_id == observation.id).count() == 0
 
 
 def test_create_task_result_no_title():

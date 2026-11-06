@@ -144,7 +144,7 @@ def test_create_google_doc_handles_none_folder_tags(sample_file_data):
 # Tests for _update_existing_doc (including null chunks fix)
 
 
-@patch("memory.workers.tasks.google_drive.qdrant")
+@patch("memory.common.content_processing.qdrant")
 @patch("memory.workers.tasks.google_drive.process_content_item")
 def test_update_existing_doc_returns_unchanged_when_no_reindex(
     mock_process, mock_qdrant, mock_folder, mock_existing_doc, sample_file_data
@@ -160,7 +160,7 @@ def test_update_existing_doc_returns_unchanged_when_no_reindex(
     mock_process.assert_not_called()
 
 
-@patch("memory.workers.tasks.google_drive.qdrant")
+@patch("memory.common.content_processing.qdrant")
 @patch("memory.workers.tasks.google_drive.process_content_item")
 def test_update_existing_doc_handles_null_chunks(
     mock_process, mock_qdrant, mock_folder, mock_existing_doc, sample_file_data
@@ -178,14 +178,14 @@ def test_update_existing_doc_handles_null_chunks(
     mock_process.assert_called_once()
 
 
-@patch("memory.workers.tasks.google_drive.qdrant")
+@patch("memory.common.content_processing.qdrant")
 @patch("memory.workers.tasks.google_drive.process_content_item")
 def test_update_existing_doc_deletes_old_chunks(
     mock_process, mock_qdrant, mock_folder, mock_existing_doc, sample_file_data
 ):
     """Deletes old chunks from Qdrant and database."""
-    chunk1 = Mock(id=1)
-    chunk2 = Mock(id=2)
+    chunk1 = Mock(id=1, collection_name="doc")
+    chunk2 = Mock(id=2, collection_name="doc")
     mock_existing_doc.chunks = [chunk1, chunk2]
     mock_existing_doc.content_hash = "old_hash"
     session = Mock()
@@ -206,7 +206,7 @@ def test_update_existing_doc_deletes_old_chunks(
     )
 
 
-@patch("memory.workers.tasks.google_drive.qdrant")
+@patch("memory.common.content_processing.qdrant")
 @patch("memory.workers.tasks.google_drive.process_content_item")
 def test_update_existing_doc_updates_fields(
     mock_process, mock_qdrant, mock_folder, mock_existing_doc, sample_file_data
@@ -226,7 +226,7 @@ def test_update_existing_doc_updates_fields(
     session.flush.assert_called_once()
 
 
-@patch("memory.workers.tasks.google_drive.qdrant")
+@patch("memory.common.content_processing.qdrant")
 @patch("memory.workers.tasks.google_drive.process_content_item")
 def test_update_existing_doc_raises_on_qdrant_error(
     mock_process, mock_qdrant, mock_folder, mock_existing_doc, sample_file_data
@@ -236,7 +236,7 @@ def test_update_existing_doc_raises_on_qdrant_error(
     If Qdrant deletion fails but we continue to delete DB chunks,
     we'd end up with orphaned vectors causing duplicate search results.
     """
-    chunk = Mock(id=1)
+    chunk = Mock(id=1, collection_name="doc")
     mock_existing_doc.chunks = [chunk]
     mock_existing_doc.content_hash = "old_hash"
     session = Mock()

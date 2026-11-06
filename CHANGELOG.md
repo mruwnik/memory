@@ -69,6 +69,11 @@ a new, empty `## Unreleased` above it.
   mail's body no longer decodes its attachments. PDF pages are rendered no
   larger than the 2 MP an embedding uses.
 - Word documents are text-searchable page by page, as PDFs already were.
+- Clearing or reindexing an item deletes its vectors from the Qdrant collection
+  each chunk is stored in, not one named after the item's modality. Observations
+  (stored in `semantic` and `temporal`) used to keep their vectors and log a
+  "Collection `observation` doesn't exist" error. Vectors already left behind
+  are removed by the nightly `clean-all-collections` task.
 - Embedding splits an item's chunks across several Voyage requests, within Voyage's 1000-inputs and per-request token caps (120K text, 320K multimodal), so a long PDF, ebook or forum post no longer fails every embed attempt.
 - Two attachments of one email that share a filename (after cleaning) are stored as separate files: the repeat gets a content-hash suffix, stable across reingests. Already-ingested emails keep the overwritten file until reingested.
 - Reprocessing a meeting (by hand, by the stuck-meeting cleanup, or a redelivered ingest) keeps its action items: pending ones are recreated by the new extraction, and ones someone started, finished or cancelled stay attached instead of being orphaned. A rerun also reattaches action items an earlier rerun orphaned.
