@@ -9,6 +9,12 @@ from memory.common import settings
 
 logger = logging.getLogger(__name__)
 
+# A line per HTTP request (qdrant, LLM and sync APIs) and per task receipt would
+# fill the size-capped container logs in hours; "succeeded"/failure lines
+# already name each task.
+for noisy in ("httpx", "httpcore", "celery.worker.strategy"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+
 REDIS_BEAT_SCHEDULE_KEY = "memory:custom-beat-schedule"
 
 EMAIL_ROOT = "memory.workers.tasks.email"

@@ -147,7 +147,7 @@ def clean_all_collections():
 @app.task(name=REINGEST_CHUNK)
 @tracked_task
 def reingest_chunk(chunk_id: str, collection: str):
-    logger.info(f"Reingesting chunk {chunk_id}")
+    logger.debug(f"Reingesting chunk {chunk_id}")
     with make_session() as session:
         chunk = session.get(Chunk, chunk_id)
         if not chunk:
@@ -242,7 +242,7 @@ def get_item_class(item_type: str) -> type[SourceItem]:
 @app.task(name=REINGEST_ITEM)
 @tracked_task
 def reingest_item(item_id: str, item_type: str):
-    logger.info(f"Reingesting {item_type} {item_id}")
+    logger.debug(f"Reingesting {item_type} {item_id}")
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
@@ -325,7 +325,7 @@ def process_raw_item(item_id: int, item_type: str):
     Returns:
         Task result dict with status and metadata
     """
-    logger.info(f"Processing RAW item {item_type} {item_id}")
+    logger.debug(f"Processing RAW item {item_type} {item_id}")
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
@@ -542,7 +542,7 @@ def reingest_missing_chunks(
             if not chunks:
                 break
 
-            logger.info(
+            logger.debug(
                 f"Processing batch {batch_num + 1}/{num_batches} with {len(chunks)} chunks"
             )
             batch_stats = check_batch(chunks)
@@ -576,7 +576,7 @@ def _payloads_equal(current: dict[str, Any], new: dict[str, Any]) -> bool:
 @tracked_task
 def update_metadata_for_item(item_id: str, item_type: str):
     """Update metadata in Qdrant for all chunks of a single source item, merging tags."""
-    logger.info(f"Updating metadata for {item_type} {item_id}")
+    logger.debug(f"Updating metadata for {item_type} {item_id}")
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:

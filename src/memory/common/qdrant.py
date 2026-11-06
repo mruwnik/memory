@@ -60,7 +60,7 @@ def ensure_payload_indexes(
 
 def get_qdrant_client(timeout: int = settings.QDRANT_TIMEOUT) -> qdrant_client.QdrantClient:
     """Create and return a Qdrant client using environment configuration."""
-    logger.info(
+    logger.debug(
         f"Connecting to Qdrant at {settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
     )
 

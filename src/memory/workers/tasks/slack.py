@@ -1070,7 +1070,7 @@ def store_slack_message(
     ``slack_app_id`` scopes credential lookup so the right Slack token is
     used to resolve mentions and download files.
     """
-    logger.info(f"Adding Slack message {message_ts} from channel {channel_id}")
+    logger.debug(f"Adding Slack message {message_ts} from channel {channel_id}")
 
     if not author_id:
         # Skip messages without an author (system messages, etc.)

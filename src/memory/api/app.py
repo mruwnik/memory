@@ -74,6 +74,16 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(format="[%(asctime)s: %(levelname)s/%(name)s] %(message)s")
 
 
+def is_passing_health_check(record: logging.LogRecord) -> bool:
+    """uvicorn access records carry (client, method, path, http_version, status)."""
+    args = record.args
+    return isinstance(args, tuple) and len(args) == 5 and args[2] == "/health" and args[4] == 200
+
+
+# The container healthcheck polls /health every 15s; only failures are worth a line.
+logging.getLogger("uvicorn.access").addFilter(lambda r: not is_passing_health_check(r))
+
+
 # Refuse to boot when DISABLE_AUTH is set in a production-shaped
 # environment (non-loopback SERVER_URL, S3 backups enabled, or a
 # non-loopback OAuth redirect allowlist). A single env-var toggle that

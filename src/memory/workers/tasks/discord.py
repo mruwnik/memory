@@ -154,7 +154,7 @@ def add_discord_message(
     ``link_by_username`` is off for pushed messages, whose author names are
     only as trustworthy as the pushing bot's owner.
     """
-    logger.info(f"Adding Discord message {message_id}")
+    logger.debug(f"Adding Discord message {message_id}")
 
     # Include message_id in hash to ensure uniqueness
     content_hash = hashlib.sha256(f"{message_id}:{content}".encode()).digest()

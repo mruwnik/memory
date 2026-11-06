@@ -94,8 +94,8 @@ x-worker-base: &worker-base
   cap_drop: [ALL]
   volumes:
     - ./memory_files:/app/memory_files:rw
-  logging:
-    options: { max-size: "10m", max-file: "3" }
+  logging: &logging
+    options: { max-size: "50m", max-file: "5" }
   user: kb
 
 # ================================ SERVICES ============================
@@ -273,6 +273,7 @@ services:
       [postgres_password, voyage_key, secrets_encryption_key, ssh_public_key]
     volumes:
       - ./memory_files:/app/memory_files:rw
+    logging: *logging
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 15s

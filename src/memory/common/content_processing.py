@@ -72,7 +72,7 @@ def clear_item_chunks(item: SourceItem, session) -> int:
     # instances (which would raise InvalidRequestError: "Instance has been
     # deleted").
     session.expire(item, ["chunks"])
-    logger.info(f"Deleted {count} chunks for {item.__class__.__name__} {item.id}")
+    logger.debug(f"Deleted {count} chunks for {item.__class__.__name__} {item.id}")
     return count
 
 
@@ -326,7 +326,7 @@ def push_to_qdrant(source_items: Sequence[SourceItem]):
 
         for item in items_to_process:
             item.embed_status = "STORED"  # type: ignore
-            logger.info(
+            logger.debug(
                 f"Successfully stored embeddings for: {getattr(item, 'title', 'unknown')}"
             )
 
@@ -419,7 +419,7 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         push_chunks_to_qdrant(chunks_with_vectors)
         status = "processed"
         item.embed_status = "STORED"  # type: ignore
-        logger.info(
+        logger.debug(
             f"Successfully processed {type(item).__name__}: {getattr(item, 'title', 'unknown')} ({chunks_count} chunks embedded)"
         )
     except Exception:

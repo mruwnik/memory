@@ -259,7 +259,7 @@ def _update_existing_item(
     if not _needs_reindex(existing, issue_data):
         return create_task_result(existing, "unchanged")
 
-    logger.info(
+    logger.debug(
         f"Content changed for {repo.repo_path}#{issue_data['number']}, reindexing"
     )
 
@@ -507,7 +507,7 @@ def sync_github_item(
 ) -> dict[str, Any]:
     """Sync a single GitHub issue or PR."""
     issue_data = _deserialize_issue_data(issue_data_serialized)
-    logger.info(
+    logger.debug(
         f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}"
     )
 

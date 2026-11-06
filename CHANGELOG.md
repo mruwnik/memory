@@ -69,6 +69,7 @@ a new, empty `## Unreleased` above it.
   mail's body no longer decodes its attachments. PDF pages are rendered no
   larger than the 2 MP an embedding uses.
 - Word documents are text-searchable page by page, as PDFs already were.
+- Container logs cover days rather than hours. Per-item and per-request lines no longer log at INFO: the httpx/httpcore line for every HTTP request, Celery's "Task … received" line (the "succeeded" and failure lines still name each task), passing `/health` checks in the api access log, and per-item ingest lines ("Adding Slack/Discord message", "Successfully processed …", "Connecting to Qdrant", "Job N completed", an email's per-chunk listing, per-item reingest/metadata lines). The api and worker containers keep 5 × 50 MB of logs instead of 3 × 10 MB. ERROR and CRITICAL logging is unchanged.
 - Meetings record their size, so search's `min_size`/`max_size` filters no longer drop them.
 - A synced meeting is linked to its owner's calendar event for the occurrence it recorded (Fireflies `cal_id` matched to the event's calendar id).
 - A meeting whose worker died while it was being embedded is rerun once, like one lost mid-extraction, instead of sitting `extracted` with no chunks; a redelivered rerun recreates its pending action items rather than keeping stale ones.
@@ -144,6 +145,8 @@ None.
   attachment can take when embedded.
 - The ingest-hub container's memory limit rises from 512 MiB to 1 GiB: beat,
   the Discord collector and the Beeper collector together sat at its limit.
+- Docker applies the new `logging` options only to recreated containers: `docker compose up -d` after pulling recreates them. Allow up to 250 MB of disk per api/worker container (5 containers ≈ 1.25 GB worst case).
+- The demoted lines are still there at DEBUG: run a worker with `LOGLEVEL=DEBUG` (or `--loglevel=DEBUG` for agents-worker) to get them back while you diagnose something.
 - The first sync of a Gmail account with no folders selected backfills its
   archived mail: only messages not stored yet are downloaded, but on a large
   mailbox that can be thousands of messages to fetch and embed (and Voyage

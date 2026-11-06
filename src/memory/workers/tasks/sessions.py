@@ -121,7 +121,7 @@ def summarize_session(session_id: str) -> dict:
     Returns:
         Dict with status and summary
     """
-    logger.info(f"Summarizing session {session_id}")
+    logger.debug(f"Summarizing session {session_id}")
 
     try:
         session_uuid = UUID(session_id)
@@ -169,7 +169,7 @@ def summarize_session(session_id: str) -> dict:
         session.summary_updated_at = datetime.now(timezone.utc)
         db.commit()
 
-        logger.info(f"Summarized session {session_id}: {summary[:100]}...")
+        logger.debug(f"Summarized session {session_id}: {summary[:100]}...")
         return {"status": "success", "summary": summary}
 
 
@@ -359,7 +359,7 @@ def index_session(session_id: str) -> dict:
                 "indexed_up_to": session.indexed_up_to,
             }
 
-        logger.info(
+        logger.debug(
             f"Indexed session {session_id}: {created} segments created, "
             f"{duplicates} already present, watermark {session.indexed_up_to}"
         )

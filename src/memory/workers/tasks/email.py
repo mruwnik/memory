@@ -171,14 +171,7 @@ def store_email_message(
             db.commit()
             queue_trigger_match(mail_message.id)
 
-            logger.info(f"Stored embedding for message {mail_message.message_id}")
-            logger.info("Chunks:")
-            for chunk in mail_message.chunks:
-                logger.info(f" - {chunk.id}")
-            for attachment in mail_message.attachments:
-                logger.info(f" - Attachment {attachment.id}")
-                for chunk in attachment.chunks:
-                    logger.info(f"   - {chunk.id}")
+            logger.debug(f"Stored embedding for message {mail_message.message_id}")
 
             return {
                 "status": "processed",
@@ -214,7 +207,7 @@ def process_message(
     Returns:
         dict with processing result
     """
-    logger.info(f"Processing message {message_id} for account {account_id}")
+    logger.debug(f"Processing message {message_id} for account {account_id}")
     raw_email = read_spooled_email(spool_name)
     if raw_email is None:
         # Spool file gone (e.g. a previous run already consumed it, or a hard

@@ -463,7 +463,7 @@ def find_duplicate(
         note = cast(Note, existing)
         if creator_id is not None and not admin and note.creator_id != creator_id:
             return {"status": "forbidden"}, None
-        logger.info(f"Note already exists: {note.subject}")
+        logger.debug(f"Note already exists: {note.subject}")
         missing = save_to_file and note_file_missing(note)
         return create_task_result(note, "already_exists"), (note.id if missing else None)
 
@@ -580,7 +580,7 @@ def upsert_note(
     """
     confidences = confidences or {}
     tags = tags or []
-    logger.info(f"Syncing note {subject}")
+    logger.debug(f"Syncing note {subject}")
     text = Note.as_text(content, subject)
     sha256 = create_content_hash(text)
 

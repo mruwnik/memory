@@ -309,7 +309,7 @@ def extract_docx(
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 pdf_path = docx_to_pdf(file_path, pathlib.Path(tmp_dir) / "out.pdf")
-                logger.info(f"Extracted PDF from {file_path}")
+                logger.debug(f"Extracted PDF from {file_path}")
                 return extract_pdf(pdf_path, max_image_pages=max_image_pages)
         except Exception as e:
             logger.warning(f"PDF conversion failed for {file_path}, falling back to text extraction: {e}")
@@ -395,7 +395,7 @@ def extract_data_chunks(
     max_image_pages: int | None = None,
 ) -> list[DataChunk]:
     chunks = []
-    logger.info(f"Extracting content from {mime_type}")
+    logger.debug(f"Extracting content from {mime_type}")
     if mime_type == "application/pdf":
         chunks = extract_pdf(content, max_image_pages=max_image_pages)
     elif mime_type in [

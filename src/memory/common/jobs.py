@@ -189,7 +189,7 @@ def complete_job(
     if not job:
         return None
     job.mark_complete(result_id=result_id, result_type=result_type)
-    logger.info(
+    logger.debug(
         f"Job {job_id} completed (result: {result_type} #{result_id})"
         if result_id
         else f"Job {job_id} completed"
