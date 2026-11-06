@@ -1285,7 +1285,10 @@ def test_a_second_rotation_keeps_every_key_used(keyed):
 
     assert code == 0, output
     second = current_keys(keyed)["BACKUP_ENCRYPTION_KEY"]
-    assert list(box_keyring(keyed, "BACKUP_ENCRYPTION_KEY").values()) == [OLD["BACKUP_ENCRYPTION_KEY"], first, first, second]
+    # Entries are <timestamp>-<pid>: two rotations in one second sort by pid, not by age.
+    assert sorted(box_keyring(keyed, "BACKUP_ENCRYPTION_KEY").values()) == sorted(
+        [OLD["BACKUP_ENCRYPTION_KEY"], first, first, second]
+    )
 
 
 @pytest.mark.parametrize(
