@@ -22,6 +22,7 @@ from memory.workers.verification import (
     verify_github_items,
     verify_items,
 )
+from tests.providers.gmail_provider import FakeGmailService
 
 
 # =============================================================================
@@ -571,66 +572,28 @@ def test_verify_emails_imap_no_uid():
     assert results[1].exists is True
 
 
-def test_verify_emails_gmail_message_exists():
+@pytest.mark.parametrize(
+    "mailbox,exists",
+    [
+        ({"msg123": ["INBOX"]}, True),
+        ({"msg123": []}, True),  # archived
+        ({"msg123": ["TRASH"]}, False),
+        ({"msg123": ["SPAM"]}, False),
+        ({}, False),
+    ],
+)
+def test_verify_emails_gmail(mailbox, exists):
     session = Mock()
-    account = Mock(account_type="gmail")
-    session.get.return_value = account
-
+    session.get.return_value = Mock(account_type="gmail")
     msg = Mock(id=1, imap_uid="msg123")
 
-    with patch("memory.workers.email.get_gmail_message_ids") as mock_gmail:
-        mock_gmail.return_value = ({"msg123", "msg456"}, None)
-
-        results = verify_emails(session, 1, [msg])
-
-    assert results[1].exists is True
-
-
-def test_verify_emails_gmail_message_missing():
-    """Test that Gmail messages not in labels AND not found by direct lookup are marked missing."""
-    session = Mock()
-    account = Mock(account_type="gmail")
-    session.get.return_value = account
-
-    msg = Mock(id=1, imap_uid="msg999")
-
-    with (
-        patch("memory.workers.email.get_gmail_message_ids") as mock_gmail,
-        patch("memory.workers.email.gmail_message_exists") as mock_exists,
+    with patch(
+        "memory.workers.email.get_gmail_service",
+        return_value=FakeGmailService(mailbox),
     ):
-        mock_service = Mock()
-        mock_gmail.return_value = ({"msg123", "msg456"}, mock_service)
-        # Message not in labels, and direct lookup confirms it's deleted
-        mock_exists.return_value = False
-
         results = verify_emails(session, 1, [msg])
 
-    assert results[1].exists is False
-    # Verify fallback was called with the message ID
-    mock_exists.assert_called_once_with(mock_service, "msg999")
-
-
-def test_verify_emails_gmail_message_archived():
-    """Test that archived Gmail messages (not in labels but still exist) are preserved."""
-    session = Mock()
-    account = Mock(account_type="gmail")
-    session.get.return_value = account
-
-    msg = Mock(id=1, imap_uid="msg999")
-
-    with (
-        patch("memory.workers.email.get_gmail_message_ids") as mock_gmail,
-        patch("memory.workers.email.gmail_message_exists") as mock_exists,
-    ):
-        mock_service = Mock()
-        mock_gmail.return_value = ({"msg123", "msg456"}, mock_service)
-        # Message not in labels, but direct lookup shows it still exists (archived)
-        mock_exists.return_value = True
-
-        results = verify_emails(session, 1, [msg])
-
-    assert results[1].exists is True
-    mock_exists.assert_called_once_with(mock_service, "msg999")
+    assert results[1].exists is exists
 
 
 def test_verify_emails_api_error():

@@ -7,7 +7,7 @@ import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Generator, Sequence, cast
+from typing import Callable, Generator, Iterable, Sequence, cast
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -415,6 +415,9 @@ class ImapFolder:
     name: str
     flags: list[str]
     selectable: bool
+    # The name exactly as LIST printed it (quoted, modified UTF-7), which is
+    # what SELECT must be sent; ``name`` is the decoded form shown to users.
+    mailbox: str
 
 
 def decode_imap_utf7(value: str) -> str:
@@ -469,7 +472,8 @@ def parse_folder_line(line: bytes) -> ImapFolder | None:
         return None
 
     flags = match.group("flags").decode("ascii", "replace").split()
-    name = match.group("name").decode("utf-8", "replace").strip()
+    mailbox = match.group("name").decode("utf-8", "replace").strip()
+    name = mailbox
     if len(name) >= 2 and name.startswith('"') and name.endswith('"'):
         # IMAP quoted-string: strip the surrounding quotes and unescape the only
         # two characters a quoted-string may backslash-escape (RFC 3501 §4.3):
@@ -482,7 +486,7 @@ def parse_folder_line(line: bytes) -> ImapFolder | None:
     # compare case-folded (\NOSELECT is valid too).
     non_selectable = {"\\noselect", "\\nonexistent"}
     selectable = not any(f.lower() in non_selectable for f in flags)
-    return ImapFolder(name=name, flags=flags, selectable=selectable)
+    return ImapFolder(name=name, flags=flags, selectable=selectable, mailbox=mailbox)
 
 
 def list_imap_folders(conn: imaplib.IMAP4) -> list[ImapFolder]:
@@ -583,8 +587,9 @@ def delete_removed_emails(
     Delete emails from the database that are no longer on the IMAP server.
 
     Compares UIDs on the server with UIDs in the database for the given
-    account and folder, and deletes any emails that are no longer present
-    on the server.
+    account and folder. A stored email whose UID left the folder but whose
+    Message-ID turns up in another folder (other than Trash/Junk) is re-pointed
+    there; the rest are deleted.
 
     Args:
         conn: IMAP connection
@@ -608,8 +613,78 @@ def delete_removed_emails(
     # server_uids as "delete nothing" (it can't tell empty-because-erased from
     # empty-because-unreadable), so emptying a watched folder on the server
     # leaves the local copies in the DB rather than wiping them.
-    emails_to_delete = find_removed_emails(db_session, account_id, server_uids, folder)
-    return delete_emails(emails_to_delete, db_session)
+    departed = find_removed_emails(db_session, account_id, server_uids, folder)
+    if not departed:
+        return 0
+
+    # A message that left the folder was usually moved (archived, filed), not
+    # deleted; only mail found nowhere outside Trash/Junk is gone.
+    try:
+        located = locate_imap_messages(
+            conn, {cast(str, email.message_id) for email in departed}, folder
+        )
+    except Exception:
+        logger.exception(
+            "Skipping deletion for account %s: could not search its other folders",
+            account_id,
+        )
+        return 0
+
+    gone = []
+    for email in departed:
+        if location := located.get(cast(str, email.message_id)):
+            email.folder, email.imap_uid = location
+        else:
+            gone.append(email)
+    db_session.commit()
+    return delete_emails(gone, db_session)
+
+
+IMAP_DISCARD_FLAGS = {"\\trash", "\\junk"}
+IMAP_DISCARD_NAMES = {"trash", "junk", "spam", "bin", "deleted items", "deleted messages"}
+
+
+def is_discard_folder(folder: ImapFolder) -> bool:
+    """Trash or Junk, by RFC 6154 special-use flag or, for servers without it, by name."""
+    leaf = re.split(r"[/.]", folder.name)[-1].casefold()
+    return leaf in IMAP_DISCARD_NAMES or any(
+        flag.casefold() in IMAP_DISCARD_FLAGS for flag in folder.flags
+    )
+
+
+def imap_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def locate_imap_messages(
+    conn: imaplib.IMAP4, message_ids: set[str], exclude_folder: str
+) -> dict[str, tuple[str, str]]:
+    """Find where each Message-ID lives now: ``{message_id: (folder, uid)}``.
+
+    Searches every selectable folder except ``exclude_folder`` and Trash/Junk.
+    Raises FolderUidsError if a folder can't be searched, so an unsearched
+    folder is never mistaken for one that lacks the message.
+    """
+    found: dict[str, tuple[str, str]] = {}
+    for folder in list_imap_folders(conn):
+        remaining = message_ids - found.keys()
+        if not remaining:
+            break
+        if not folder.selectable or folder.name == exclude_folder or is_discard_folder(folder):
+            continue
+        status, _ = conn.select(folder.mailbox, readonly=True)
+        if status != "OK":
+            raise FolderUidsError(f"Error selecting folder {folder.name}")
+        for message_id in remaining:
+            status, data = conn.uid(
+                "SEARCH", "UNDELETED", "HEADER", "Message-ID", imap_quote(message_id)
+            )
+            if status != "OK":
+                raise FolderUidsError(f"Error searching folder {folder.name}")
+            uids = (data[0] or b"").split() if data else []
+            if uids:
+                found[message_id] = (folder.name, uids[-1].decode())
+    return found
 
 
 # -----------------------------------------------------------------------------
@@ -792,68 +867,60 @@ def fetch_gmail_messages_by_ids(
             yield (msg_id, cast(str, raw_email))
 
 
-def get_gmail_message_ids(
-    account: EmailAccount,
-    session: Session | scoped_session,
-    service=None,
-) -> tuple[set[str], object]:
-    """
-    Get all message IDs currently in Gmail for the configured labels.
+GMAIL_MAILBOX_QUERY = "-in:drafts -in:chats"
 
-    Used for deletion tracking - messages not in this set can be deleted.
-    Returns the service object for reuse to avoid recreating it.
 
-    Args:
-        account: EmailAccount with linked GoogleAccount
-        session: Database session for credential refresh
-        service: Optional existing Gmail API service (to avoid recreating)
-
-    Returns:
-        Tuple of (set of Gmail message IDs, Gmail service object)
-    """
-    if service is None:
-        service = get_gmail_service(account, session)
-
-    folders = cast(list[str], account.folders) or ["INBOX"]
-    label_ids = get_gmail_label_ids(service, folders)
-
-    message_ids = {
+def list_gmail_message_ids(service, label_ids: list[str] | None = None) -> set[str]:
+    """IDs of the messages carrying any of ``label_ids``, or with ``None`` of
+    every mail outside Spam and Trash (Gmail's own default for a listing)."""
+    if label_ids is None:
+        # An unfiltered listing also returns unsent drafts and Hangouts chats.
+        return {
+            msg_id
+            for msg_id, _ in iterate_gmail_messages(service, query=GMAIL_MAILBOX_QUERY)
+        }
+    # labelIds on one listing means "carries all of these", so union per label
+    return {
         msg_id
         for label_id in label_ids
-        for msg_id, _ in iterate_gmail_messages(
-            service, label_ids=[label_id], fetch_content=False
-        )
+        for msg_id, _ in iterate_gmail_messages(service, label_ids=[label_id])
     }
 
-    return message_ids, service
+
+GMAIL_GONE_LABELS = {"TRASH", "SPAM"}
+# Google advises at most 50 calls per batch; larger ones get rate limited
+GMAIL_BATCH_SIZE = 50
 
 
-def gmail_message_exists(service, message_id: str) -> bool:
+def gmail_gone_message_ids(service, message_ids: Iterable[str]) -> set[str]:
+    """The messages that are deleted (404) or sit in Trash or Spam.
+
+    A message whose status can't be read (rate limit, server error) is not
+    reported gone, so it is kept and asked about again next time.
     """
-    Check if a Gmail message exists by its ID.
+    gone: set[str] = set()
 
-    Uses the messages.get API with minimal fields to check existence efficiently.
-    This is useful for verifying individual messages that might have been archived
-    (removed from monitored labels) but still exist in Gmail.
+    def record(message_id: str, response: dict | None, exception: Exception | None):
+        if exception is None:
+            if GMAIL_GONE_LABELS & set((response or {}).get("labelIds", [])):
+                gone.add(message_id)
+        elif isinstance(exception, HttpError) and exception.resp.status == 404:
+            gone.add(message_id)
+        else:
+            logger.warning(f"Could not check Gmail message {message_id}: {exception}")
 
-    Args:
-        service: Gmail API service object
-        message_id: Gmail message ID to check
-
-    Returns:
-        True if the message exists, False if deleted or not found
-    """
-    try:
-        # Use fields parameter to minimize data transfer - we only need to know it exists
-        service.users().messages().get(
-            userId="me", id=message_id, format="minimal", fields="id"
-        ).execute()
-        return True
-    except HttpError as e:
-        if e.resp.status == 404:
-            return False
-        # For other errors (rate limiting, auth), we can't confirm non-existence
-        raise
+    ids = sorted(message_ids)
+    for start in range(0, len(ids), GMAIL_BATCH_SIZE):
+        batch = service.new_batch_http_request(callback=record)
+        for message_id in ids[start : start + GMAIL_BATCH_SIZE]:
+            batch.add(
+                service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="minimal", fields="id,labelIds"),
+                request_id=message_id,
+            )
+        batch.execute()
+    return gone
 
 
 def find_removed_emails(

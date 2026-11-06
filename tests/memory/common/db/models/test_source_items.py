@@ -1,3 +1,4 @@
+import hashlib
 from sqlalchemy.orm import Session
 from unittest.mock import patch, Mock, PropertyMock
 from typing import Any, cast
@@ -76,11 +77,19 @@ def test_mail_message_modality(modality, expected_modality):
 def test_mail_message_attachments_path(sender, folder, expected_path):
     """Test MailMessage.attachments_path property"""
     mail_message = MailMessage(
-        sha256=b"test", content="test", sender=sender, folder=folder
+        sha256=b"test",
+        content="test",
+        message_id="<a@example.com>",
+        sender=sender,
+        folder=folder,
     )
 
+    message_dir = hashlib.sha256(b"<a@example.com>").hexdigest()[:16]
     result = mail_message.attachments_path
-    assert str(result) == f"{settings.FILE_STORAGE_DIR}/emails/{expected_path}"
+    assert (
+        str(result)
+        == f"{settings.FILE_STORAGE_DIR}/emails/{expected_path}/{message_dir}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -96,10 +105,18 @@ def test_mail_message_attachments_path(sender, folder, expected_path):
 def test_mail_message_safe_filename(tmp_path, filename, expected):
     """Test MailMessage.safe_filename method"""
     mail_message = MailMessage(
-        sha256=b"test", content="test", sender="user@example.com", folder="INBOX"
+        sha256=b"test",
+        content="test",
+        message_id="<a@example.com>",
+        sender="user@example.com",
+        folder="INBOX",
     )
 
-    expected = settings.FILE_STORAGE_DIR / f"emails/user_example_com/INBOX/{expected}"
+    message_dir = hashlib.sha256(b"<a@example.com>").hexdigest()[:16]
+    expected = (
+        settings.FILE_STORAGE_DIR
+        / f"emails/user_example_com/INBOX/{message_dir}/{expected}"
+    )
     assert mail_message.safe_filename(filename) == expected
 
 

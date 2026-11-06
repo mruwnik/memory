@@ -154,9 +154,10 @@ interface FolderPickerProps {
   folders: ImapFolder[]
   selected: string[]
   onChange: (selected: string[]) => void
+  emptyHint: string
 }
 
-const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
+const FolderPicker = ({ folders, selected, onChange, emptyHint }: FolderPickerProps) => {
   const toggle = (name: string) =>
     onChange(
       selected.includes(name)
@@ -166,7 +167,7 @@ const FolderPicker = ({ folders, selected, onChange }: FolderPickerProps) => {
 
   return (
     <Fieldset legend="Folders to sync">
-      <Hint>Leave all unchecked to sync only INBOX.</Hint>
+      <Hint>{emptyHint}</Hint>
       <div className="max-h-48 overflow-y-auto border border-slate-200 rounded p-2 flex flex-col gap-1">
         {folders.map(folder => (
           <Checkbox key={folder.name}
@@ -379,6 +380,7 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
                 folders={availableFolders}
                 selected={formData.folders}
                 onChange={folders => setFormData({ ...formData, folders })}
+                emptyHint="Leave all unchecked to sync only INBOX."
               />
             )}
 
@@ -442,9 +444,10 @@ const EmailForm = ({ account, googleAccounts, projects, onSubmit, onCancel }: Em
             {foldersError && <Notice tone="error">{foldersError}</Notice>}
             {availableFolders.length > 0 && (
               <FolderPicker folders={availableFolders} selected={formData.folders}
-                onChange={folders => setFormData({ ...formData, folders })} />
+                onChange={folders => setFormData({ ...formData, folders })}
+                emptyHint="Leave all unchecked to sync all mail except Spam and Trash." />
             )}
-            <Hint>Gmail folders are labels. Messages in any selected label are synced once. Previously ingested messages outside the selection are removed from Memory on the next sync.</Hint>
+            <Hint>Gmail folders are labels. Messages in any selected label are synced. A message stays in Memory when it is archived or loses the label, and is removed once it is deleted or moved to Spam or Trash.</Hint>
           </>
         )}
 

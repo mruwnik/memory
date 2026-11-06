@@ -69,6 +69,20 @@ a new, empty `## Unreleased` above it.
   mail's body no longer decodes its attachments. PDF pages are rendered no
   larger than the 2 MP an embedding uses.
 - Word documents are text-searchable page by page, as PDFs already were.
+- Meetings record their size, so search's `min_size`/`max_size` filters no longer drop them.
+- A synced meeting is linked to its owner's calendar event for the occurrence it recorded (Fireflies `cal_id` matched to the event's calendar id).
+- A meeting whose worker died while it was being embedded is rerun once, like one lost mid-extraction, instead of sitting `extracted` with no chunks; a redelivered rerun recreates its pending action items rather than keeping stale ones.
+- The stuck-meeting cleanup reruns a meeting under the job that brought it in, so that job completes (or fails when the cleanup gives up) instead of being failed as lost while the meeting finished.
+- Email attachments are stored in a directory per message, so a sender's recurring same-named attachment (a monthly `invoice.pdf`) no longer overwrites the previous one.
+
+Operator note: existing attachment rows keep their old paths and still resolve. Where two emails from the same sender and folder shared an attachment name, the older row already points at the newer file; the original bytes are gone from disk. Reingesting the email doesn't fix this, since an existing message is skipped. Deleting the older message and syncing again would. No migration.
+- Archiving mail no longer removes it from Memory. Gmail and IMAP sync used to
+  delete every stored message that left the synced labels/folders; now a
+  message is removed only once it is deleted or sits in Trash or Spam (IMAP:
+  Trash or Junk). An IMAP message moved to another folder is tracked there.
+- A Gmail account with no folders selected syncs all mail except Spam and
+  Trash, not just INBOX, so mail archived before a sync (by hand or by a
+  filter or script) is ingested too.
 - Large Google Drive folders finish syncing: the folder sync only lists files
   and queues one job per new or changed file, which downloads and stores it, so
   a first sync no longer hits the 1-hour task limit and starts over. A file
@@ -130,6 +144,15 @@ None.
   attachment can take when embedded.
 - The ingest-hub container's memory limit rises from 512 MiB to 1 GiB: beat,
   the Discord collector and the Beeper collector together sat at its limit.
+- The first sync of a Gmail account with no folders selected backfills its
+  archived mail: only messages not stored yet are downloaded, but on a large
+  mailbox that can be thousands of messages to fetch and embed (and Voyage
+  spend). An interrupted backfill resumes at the next sync. Accounts with folders selected keep
+  syncing only those labels.
+- Gmail sync now lists the whole mailbox each run (500 ids per call) to tell
+  archived mail from deleted mail, and checks the few missing ids in batches
+  of 50. The orphan verifier checks Gmail items the same way instead of
+  listing the synced labels.
 - New optional setting `GOOGLE_DRIVE_MAX_FILE_BYTES` (default 52428800, 50MB):
   Drive files listed as larger are not downloaded. Google Docs, Sheets and
   Slides list no size and are not limited by it.
@@ -147,6 +170,7 @@ None.
 
 - `20261204_meeting_cal_event_uid`: adds the nullable `meeting.calendar_event_uid`
   column (the calendar event occurrence a meeting recorded). Fast.
+- `20261205_meeting_backfill`: fills `size` for stored meetings, links meetings carrying a calendar uid to their owner's matching event, and moves meetings left `extracted` (extracted but never stored) back to `processing` so the hourly `cleanup_stuck_meetings` reruns each once. Fast (meeting table only). The reruns re-extract on the owner's LLM key.
 
 ### Post-deploy commands
 

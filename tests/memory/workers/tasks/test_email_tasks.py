@@ -1,6 +1,7 @@
 import base64
 import io
 import pathlib
+from datetime import datetime
 
 import pytest
 from typing import cast
@@ -33,7 +34,9 @@ from memory.workers.tasks.email import (
     spool_path,
     spool_raw_email,
     sync_account,
+    sync_gmail_messages,
 )
+from tests.providers.gmail_provider import FakeGmailService
 from sqlalchemy.exc import OperationalError, PendingRollbackError
 
 
@@ -592,23 +595,16 @@ def gmail_email_account(db_session, test_user):
 
 def test_sync_account_routes_to_gmail(db_session, gmail_email_account, qdrant):
     """Test that sync_account routes Gmail accounts to sync_gmail_messages."""
-    mock_service = MagicMock()
-
-    with patch("memory.workers.tasks.email.get_gmail_message_ids") as mock_ids:
-        mock_ids.return_value = (set(), mock_service)
-
-        with patch("memory.workers.tasks.email.fetch_gmail_messages_by_ids") as mock_fetch:
-            mock_fetch.return_value = iter([])  # Generator
-
-            with patch("memory.workers.tasks.email.find_removed_emails") as mock_find:
-                mock_find.return_value = []
-
-                result = sync_account(gmail_email_account.id)
+    with patch(
+        "memory.workers.tasks.email.get_gmail_service",
+        return_value=FakeGmailService({}),
+    ) as mock_service:
+        result = sync_account(gmail_email_account.id)
 
     assert result["status"] == "completed"
     assert result["account_type"] == "gmail"
     assert result["account"] == "test@gmail.com"
-    mock_ids.assert_called_once()
+    mock_service.assert_called_once()
 
 
 def test_sync_account_routes_to_imap(db_session, test_email_account, qdrant):
@@ -655,50 +651,10 @@ def test_sync_account_nonexistent_account(db_session):
     assert "not found" in result["error"]
 
 
-def test_sync_gmail_processes_messages(db_session, gmail_email_account, qdrant):
-    """Test that Gmail sync processes new messages."""
-    raw_email = (
-        "From: sender@example.com\n"
-        "To: test@gmail.com\n"
-        "Subject: Test Gmail\n"
-        "Message-ID: <gmail-test@example.com>\n"
-        "Date: Tue, 14 May 2024 10:00:00 +0000\n\n"
-        "Test body"
-    )
-    mock_service = MagicMock()
-
-    def mock_generator(service, ids):
-        for msg_id in ids:
-            yield (msg_id, raw_email)
-
-    with patch("memory.workers.tasks.email.get_gmail_message_ids") as mock_ids:
-        mock_ids.return_value = ({"gmail_msg_1"}, mock_service)
-
-        with patch("memory.workers.tasks.email.fetch_gmail_messages_by_ids") as mock_fetch:
-            mock_fetch.side_effect = mock_generator
-
-            with patch("memory.workers.tasks.email.find_removed_emails") as mock_find:
-                mock_find.return_value = []
-
-                with patch(
-                    "memory.workers.tasks.email.process_message"
-                ) as mock_process:
-                    # Mock the delay method
-                    mock_process.delay = MagicMock()
-
-                    result = sync_account(gmail_email_account.id)
-
-    assert result["status"] == "completed"
-    assert result["account_type"] == "gmail"
-    assert result["messages_found"] == 1
-    assert result["new_messages"] == 1
-    mock_process.delay.assert_called_once()
-
-
 def test_sync_gmail_handles_api_error(db_session, gmail_email_account, qdrant):
     """Test that Gmail sync handles API errors gracefully."""
-    with patch("memory.workers.tasks.email.get_gmail_message_ids") as mock_ids:
-        mock_ids.side_effect = Exception("Gmail API error")
+    with patch("memory.workers.tasks.email.get_gmail_service") as mock_service:
+        mock_service.side_effect = Exception("Gmail API error")
 
         result = sync_account(gmail_email_account.id)
 
@@ -708,6 +664,98 @@ def test_sync_gmail_handles_api_error(db_session, gmail_email_account, qdrant):
     # Verify sync_error was recorded
     db_session.refresh(gmail_email_account)
     assert gmail_email_account.sync_error == "Gmail API error"
+
+
+def add_gmail_mail(db_session, account: EmailAccount, gmail_id: str) -> None:
+    db_session.add(
+        MailMessage(
+            sha256=gmail_id.encode().ljust(32, b"\0"),
+            tags=["test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="STORED",
+            message_id=f"<{gmail_id}@x>",
+            subject=gmail_id,
+            sender="alice@example.com",
+            recipients=["test@gmail.com"],
+            content=gmail_id,
+            folder="INBOX",
+            modality="mail",
+            email_account_id=account.id,
+            imap_uid=gmail_id,
+        )
+    )
+    db_session.commit()
+
+
+def run_gmail_sync(db_session, account: EmailAccount, service: FakeGmailService):
+    with (
+        patch("memory.workers.tasks.email.get_gmail_service", return_value=service),
+        patch("memory.workers.tasks.email.process_message") as mock_process,
+    ):
+        stats = sync_gmail_messages(account, db_session, datetime(1970, 1, 1))
+    return stats, mock_process
+
+
+@pytest.mark.parametrize(
+    "folders,mailbox,kept",
+    [
+        (["INBOX"], {"stored": ["INBOX"]}, True),
+        # Archived: no longer under the synced label, still in the mailbox
+        (["INBOX"], {"stored": ["CATEGORY_UPDATES"]}, True),
+        (["INBOX"], {"stored": []}, True),
+        ([], {"stored": []}, True),
+        ([], {"stored": ["SENT"]}, True),
+        (["SPAM"], {"stored": ["SPAM"]}, True),
+        (["INBOX"], {"stored": ["TRASH"]}, False),
+        ([], {"stored": ["SPAM"]}, False),
+        ([], {}, False),
+        (["INBOX"], {}, False),
+    ],
+)
+def test_sync_gmail_deletes_only_mail_gone_from_the_mailbox(
+    db_session, gmail_email_account, qdrant, folders, mailbox, kept
+):
+    gmail_email_account.folders = folders
+    add_gmail_mail(db_session, gmail_email_account, "stored")
+    service = FakeGmailService(mailbox)
+
+    stats, _ = run_gmail_sync(db_session, gmail_email_account, service)
+
+    remaining = db_session.query(MailMessage).filter_by(imap_uid="stored").count()
+    assert remaining == int(kept)
+    assert stats["deleted_messages"] == int(not kept)
+    assert service.raw_fetches == []
+
+
+@pytest.mark.parametrize(
+    "folders,fetched",
+    [
+        ([], {"archived", "sent", "new"}),
+        (["INBOX"], {"new"}),
+    ],
+)
+def test_sync_gmail_fetches_only_unstored_mail_in_the_synced_labels(
+    db_session, gmail_email_account, qdrant, folders, fetched
+):
+    gmail_email_account.folders = folders
+    add_gmail_mail(db_session, gmail_email_account, "stored")
+    service = FakeGmailService(
+        {
+            "stored": ["INBOX"],
+            "new": ["INBOX", "UNREAD"],
+            "archived": ["CATEGORY_UPDATES"],
+            "sent": ["SENT"],
+            "trashed": ["TRASH"],
+            "spam": ["SPAM"],
+        }
+    )
+
+    stats, mock_process = run_gmail_sync(db_session, gmail_email_account, service)
+
+    assert set(service.raw_fetches) == fetched
+    assert stats["new_messages"] == len(fetched)
+    assert {c.kwargs["message_id"] for c in mock_process.delay.call_args_list} == fetched
 
 
 class PoisonableSession:

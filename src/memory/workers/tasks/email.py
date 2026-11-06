@@ -22,9 +22,11 @@ from memory.workers.email import (
     delete_emails,
     delete_removed_emails,
     fetch_gmail_messages_by_ids,
-    find_removed_emails,
-    get_gmail_message_ids,
+    get_gmail_label_ids,
+    get_gmail_service,
+    gmail_gone_message_ids,
     imap_connection,
+    list_gmail_message_ids,
     process_folder,
     vectorize_email,
 )
@@ -460,21 +462,29 @@ def sync_gmail_messages(
     cutoff_date: datetime,
     lock: Lock | None = None,
 ) -> dict:
-    """Sync emails from a Gmail account using the Gmail API."""
-    # Get all message IDs from Gmail (single API call)
-    server_message_ids, service = get_gmail_message_ids(account, db)
+    """Sync emails from a Gmail account using the Gmail API.
 
-    # Find which messages we don't have in the DB yet
-    existing_uids = {
+    Syncs the account's selected labels, or with none selected all mail outside
+    Spam and Trash. Every sync lists the ids and fetches only those not stored
+    yet, so it needs no date cutoff and picks up mail archived before it ran.
+    """
+    service = get_gmail_service(account, db)
+    mailbox_ids = list_gmail_message_ids(service)
+    folders = cast(list[str], account.folders)
+    synced_ids = (
+        list_gmail_message_ids(service, get_gmail_label_ids(service, folders))
+        if folders
+        else mailbox_ids
+    )
+
+    stored_ids = {
         uid
-        for (uid,) in db.query(MailMessage.imap_uid)
-        .filter(
+        for (uid,) in db.query(MailMessage.imap_uid).filter(
             MailMessage.email_account_id == account.id,
-            MailMessage.imap_uid.in_(server_message_ids),
+            MailMessage.imap_uid.isnot(None),
         )
-        .all()
     }
-    new_message_ids = server_message_ids - existing_uids
+    new_message_ids = synced_ids - stored_ids
 
     # Release the read transaction from the existing-UID query before the
     # Gmail body fetch, which is network-bound and can exceed the 60s
@@ -484,15 +494,24 @@ def sync_gmail_messages(
     # Fetch content only for new messages
     messages = fetch_gmail_messages_by_ids(service, new_message_ids)
     stats = process_email_batch(account, db, messages, folder="INBOX", lock=lock)
+    if stats.get("aborted"):
+        return stats
 
-    # Delete emails that are no longer in Gmail (reuse server_message_ids)
-    emails_to_delete = find_removed_emails(
-        db, cast(int, account.id), server_message_ids
+    # Losing a synced label (archiving, relabelling) keeps a message; only one
+    # missing from the whole mailbox might be gone, and Gmail confirms which.
+    gone_ids = gmail_gone_message_ids(service, stored_ids - mailbox_ids - synced_ids)
+    emails_to_delete = (
+        db.query(MailMessage)
+        .filter(
+            MailMessage.email_account_id == account.id,
+            MailMessage.imap_uid.in_(gone_ids),
+        )
+        .all()
     )
     deleted_count = delete_emails(emails_to_delete, db)
 
     return {
-        "messages_found": len(server_message_ids),
+        "messages_found": len(synced_ids),
         "new_messages": stats["new_messages"],
         "deleted_messages": deleted_count,
         "errors": stats["errors"],

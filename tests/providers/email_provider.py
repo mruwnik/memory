@@ -9,7 +9,11 @@ class MockEmailProvider:
     Can be initialized with predefined emails to return.
     """
 
-    def __init__(self, emails_by_folder: dict[str, list[dict[str, Any]]] | None = None):
+    def __init__(
+        self,
+        emails_by_folder: dict[str, list[dict[str, Any]]] | None = None,
+        folder_flags: dict[str, str] | None = None,
+    ):
         """
         Initialize with a dictionary of emails organized by folder.
 
@@ -17,7 +21,9 @@ class MockEmailProvider:
             emails_by_folder: A dictionary mapping folder names to lists of email dictionaries.
                 Each email dict should have: 'uid', 'flags', 'date', 'from', 'to', 'subject',
                 'message_id', 'body', and optionally 'attachments'.
+            folder_flags: Extra LIST attributes per folder, e.g. ``{"Bin": "\\Trash"}``.
         """
+        self.folder_flags = folder_flags or {}
         self.emails_by_folder = emails_by_folder or {
             "INBOX": [],
             "Sent": [],
@@ -82,6 +88,8 @@ class MockEmailProvider:
             IMAP-style response with message count
         """
         folder_name = folder.decode() if isinstance(folder, bytes) else folder
+        # Mailbox names arrive on the wire as LIST printed them, quotes included
+        folder_name = folder_name.removeprefix('"').removesuffix('"')
         self.current_folder = folder_name
         message_count = len(self.emails_by_folder.get(folder_name, []))
         return ("OK", [str(message_count).encode()])
@@ -90,7 +98,8 @@ class MockEmailProvider:
         """List available folders."""
         folders = []
         for folder in self.emails_by_folder.keys():
-            folders.append(f'(\\HasNoChildren) "/" "{folder}"'.encode())
+            flags = " ".join(["\\HasNoChildren", self.folder_flags.get(folder, "")]).strip()
+            folders.append(f'({flags}) "/" "{folder}"'.encode())
         return ("OK", folders)
 
     def _current_emails(self) -> List[dict[str, Any]]:
@@ -139,6 +148,13 @@ class MockEmailProvider:
         """
         cmd = command.upper()
         emails = self._current_emails()
+        if cmd == "SEARCH" and "HEADER" in args:
+            wanted = args[-1].removeprefix('"').removesuffix('"')
+            emails = [
+                e
+                for e in emails
+                if e.get("message_id", f"<test-{e['uid']}@example.com>") == wanted
+            ]
         if cmd == "SEARCH":
             uids = [str(e["uid"]).encode() for e in emails]
             return ("OK", [b" ".join(uids) if uids else b""])

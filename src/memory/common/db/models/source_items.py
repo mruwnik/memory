@@ -4,6 +4,7 @@ Database models for the knowledge base system.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import pathlib
 import textwrap
@@ -146,7 +147,16 @@ class MailMessage(SourceItem):
     def attachments_path(self) -> pathlib.Path:
         clean_sender = clean_filename(self.sender or "")
         clean_folder = clean_filename(self.folder or "INBOX")
-        return pathlib.Path(settings.EMAIL_STORAGE_DIR) / clean_sender / clean_folder
+        # Per-message directory, so a sender's recurring "invoice.pdf" doesn't
+        # overwrite the previous one; derived from message_id so reingest reuses it.
+        message_key = self.message_id or (self.sha256 or b"").hex()
+        message_dir = hashlib.sha256(message_key.encode()).hexdigest()[:16]
+        return (
+            pathlib.Path(settings.EMAIL_STORAGE_DIR)
+            / clean_sender
+            / clean_folder
+            / message_dir
+        )
 
     def safe_filename(self, filename: str) -> pathlib.Path:
         suffix = pathlib.Path(filename).suffix

@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import imaplib
 import pathlib
 from datetime import datetime
 from typing import cast
@@ -30,9 +32,10 @@ from memory.workers.email import (
     find_removed_emails,
     get_folder_uids,
     get_gmail_label_ids,
-    get_gmail_message_ids,
-    gmail_message_exists,
+    get_gmail_service,
+    gmail_gone_message_ids,
     imap_connection,
+    list_gmail_message_ids,
     list_imap_folders,
     parse_folder_line,
     process_attachment,
@@ -41,6 +44,8 @@ from memory.workers.email import (
     should_delete_email,
     vectorize_email,
 )
+from tests.providers.email_provider import MockEmailProvider
+from tests.providers.gmail_provider import FakeGmailService
 
 
 @pytest.fixture
@@ -118,9 +123,38 @@ def test_process_attachment_disk(attachment_size, max_inline_size, message_id):
 
     assert result is not None
     assert not cast(str, result.content)
+    message_dir = hashlib.sha256(message_id.encode()).hexdigest()[:16]
     assert (
         cast(str, result.filename)
-        == "emails/sender_example_com/INBOX/test_with_special_chars.txt"
+        == f"emails/sender_example_com/INBOX/{message_dir}/test_with_special_chars.txt"
+    )
+
+
+def test_process_attachment_same_name_from_same_sender_kept_apart():
+    def store(message_id: str, content: bytes) -> EmailAttachment | None:
+        attachment = {
+            "filename": "invoice.pdf",
+            "content_type": "application/pdf",
+            "size": len(content),
+            "content": content,
+        }
+        message = MailMessage(
+            message_id=message_id, sender="billing@example.com", folder="INBOX"
+        )
+        return process_attachment(cast(Attachment, attachment), message)
+
+    october = store("<october@example.com>", b"october invoice")
+    november = store("<november@example.com>", b"november invoice")
+    october_again = store("<october@example.com>", b"october invoice")
+
+    assert october and november and october_again
+    assert october.filename != november.filename
+    assert october_again.filename == october.filename
+    assert (settings.FILE_STORAGE_DIR / cast(str, october.filename)).read_bytes() == (
+        b"october invoice"
+    )
+    assert (settings.FILE_STORAGE_DIR / cast(str, november.filename)).read_bytes() == (
+        b"november invoice"
     )
 
 
@@ -214,7 +248,11 @@ def test_process_attachments_mixed():
     assert cast(str, results[2].content) == "c" * 30
 
     # Verify large attachment has a path
-    assert cast(str, results[1].filename) == "emails/sender_example_com/INBOX/large.txt"
+    message_dir = hashlib.sha256(b"<test@example.com>").hexdigest()[:16]
+    assert (
+        cast(str, results[1].filename)
+        == f"emails/sender_example_com/INBOX/{message_dir}/large.txt"
+    )
 
 
 def test_extract_email_uid_valid():
@@ -683,6 +721,82 @@ def test_delete_removed_emails_skips_on_read_error(
     assert remaining == 1
 
 
+def add_stored_mail(db_session, account_id: int, uid: str, message_id: str) -> None:
+    db_session.add(
+        MailMessage(
+            sha256=f"hash_{uid}".encode().ljust(32, b"\0"),
+            tags=["test"],
+            size=100,
+            mime_type="message/rfc822",
+            embed_status="RAW",
+            message_id=message_id,
+            subject=f"Test {uid}",
+            sender="alice@example.com",
+            recipients=["bob@example.com"],
+            content=f"Test email {uid}",
+            folder="INBOX",
+            modality="mail",
+            email_account_id=account_id,
+            imap_uid=uid,
+        )
+    )
+
+
+MOVED = "<moved@example.com>"
+
+
+@pytest.mark.parametrize(
+    "elsewhere,folder_flags,expected",
+    [
+        # Moved (e.g. archived) to a folder that isn't synced: kept, and tracked there
+        ({"Archive": [{"uid": 7, "message_id": MOVED}]}, {}, ("Archive", "7")),
+        ({"[Gmail]/All Mail": [{"uid": 9, "message_id": MOVED}]}, {}, ("[Gmail]/All Mail", "9")),
+        # Moved to the bin or junk: gone
+        ({"Trash": [{"uid": 7, "message_id": MOVED}]}, {}, None),
+        ({"INBOX.Junk": [{"uid": 7, "message_id": MOVED}]}, {}, None),
+        ({"Bin": [{"uid": 7, "message_id": MOVED}]}, {"Bin": "\\Trash"}, None),
+        # Expunged: gone
+        ({"Archive": []}, {}, None),
+    ],
+)
+def test_delete_removed_emails_keeps_mail_moved_to_another_folder(
+    db_session, gmail_account, qdrant, elsewhere, folder_flags, expected
+):
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider({"INBOX": [{"uid": 102}], **elsewhere}, folder_flags=folder_flags),
+    )
+    add_stored_mail(db_session, gmail_account.id, "101", MOVED)
+    add_stored_mail(db_session, gmail_account.id, "102", "<test-102@example.com>")
+    db_session.commit()
+
+    delete_removed_emails(provider, db_session, gmail_account.id, "INBOX")
+
+    locations = {
+        m.message_id: (m.folder, m.imap_uid)
+        for m in db_session.query(MailMessage).filter(
+            MailMessage.email_account_id == gmail_account.id
+        )
+    }
+    assert locations.get(MOVED) == expected
+    assert locations["<test-102@example.com>"] == ("INBOX", "102")
+
+
+def test_delete_removed_emails_keeps_mail_when_other_folders_unreadable(
+    db_session, gmail_account
+):
+    provider = cast(imaplib.IMAP4, MockEmailProvider({"INBOX": [], "Archive": []}))
+    provider.list = MagicMock(return_value=("NO", [b"error"]))
+    add_stored_mail(db_session, gmail_account.id, "101", MOVED)
+    db_session.commit()
+
+    deleted = delete_removed_emails(provider, db_session, gmail_account.id, "INBOX")
+
+    assert deleted == 0
+    stored = db_session.query(MailMessage).filter_by(message_id=MOVED).one()
+    assert (stored.folder, stored.imap_uid) == ("INBOX", "101")
+
+
 @pytest.mark.parametrize(
     "line,name,flags,selectable",
     [
@@ -728,8 +842,21 @@ def test_delete_removed_emails_skips_on_read_error(
     ],
 )
 def test_parse_folder_line(line, name, flags, selectable):
-    folder = parse_folder_line(line)
-    assert folder == ImapFolder(name=name, flags=flags, selectable=selectable)
+    folder = cast(ImapFolder, parse_folder_line(line))
+    assert (folder.name, folder.flags, folder.selectable) == (name, flags, selectable)
+
+
+@pytest.mark.parametrize(
+    "line,mailbox",
+    [
+        (b'(\\HasNoChildren) "/" INBOX', "INBOX"),
+        (b'(\\HasNoChildren) "/" "AI orgs"', '"AI orgs"'),
+        (b'(\\HasNoChildren) "/" "&AOQ-rger"', '"&AOQ-rger"'),
+    ],
+)
+def test_parse_folder_line_keeps_the_name_as_sent(line, mailbox):
+    """SELECT needs the name as the server printed it, not the decoded one."""
+    assert cast(ImapFolder, parse_folder_line(line)).mailbox == mailbox
 
 
 @pytest.mark.parametrize("line", [b"", b"* OK noise", b"garbage"])
@@ -1090,37 +1217,12 @@ def test_fetch_gmail_messages_by_ids(mock_gmail_service):
     assert all(content == raw_email for _, content in messages)
 
 
-def test_get_gmail_message_ids(db_session, gmail_account):
-    """Test getting all message IDs from Gmail."""
-    with patch("memory.workers.email.refresh_credentials") as mock_refresh:
-        mock_refresh.return_value = MagicMock()
-
-        with patch("memory.workers.email.build") as mock_build:
-            mock_service = MagicMock()
-            mock_build.return_value = mock_service
-
-            # Mock message list with pagination
-            mock_service.users().messages().list().execute.return_value = {
-                "messages": [{"id": "msg1"}, {"id": "msg2"}, {"id": "msg3"}]
-            }
-            mock_service.users().messages().list_next.return_value = None
-
-            # Mock labels list
-            mock_service.users().labels().list().execute.return_value = {"labels": []}
-
-            message_ids, service = get_gmail_message_ids(gmail_account, db_session)
-
-    assert message_ids == {"msg1", "msg2", "msg3"}
-    assert service is mock_service
-
-
-def test_get_gmail_message_ids_no_google_account(db_session, test_user):
-    """Test that get_gmail_message_ids raises error without GoogleAccount."""
+def test_get_gmail_service_requires_google_account(db_session, test_user):
     email_account = EmailAccount(
         name="Bad Gmail Account",
         email_address="bad@gmail.com",
         account_type="gmail",
-        google_account_id=None,  # No linked GoogleAccount
+        google_account_id=None,
         folders=["INBOX"],
         tags=["test"],
         active=True,
@@ -1130,51 +1232,71 @@ def test_get_gmail_message_ids_no_google_account(db_session, test_user):
     db_session.commit()
 
     with pytest.raises(ValueError, match="Gmail account requires linked GoogleAccount"):
-        get_gmail_message_ids(email_account, db_session)
+        get_gmail_service(email_account, db_session)
 
 
-def test_gmail_message_exists_found():
-    """Test gmail_message_exists returns True when message exists."""
-    mock_service = MagicMock()
-    mock_service.users().messages().get().execute.return_value = {"id": "msg123"}
-
-    result = gmail_message_exists(mock_service, "msg123")
-
-    assert result is True
-    mock_service.users().messages().get.assert_called_with(
-        userId="me", id="msg123", format="minimal", fields="id"
-    )
+GMAIL_MAILBOX = {
+    "inbox": ["INBOX", "UNREAD"],
+    "archived": ["CATEGORY_UPDATES"],
+    "sent": ["SENT"],
+    "both": ["INBOX", "SENT"],
+    "trashed": ["TRASH"],
+    "spam": ["SPAM", "INBOX"],
+}
 
 
-def test_gmail_message_exists_not_found():
-    """Test gmail_message_exists returns False when message is deleted."""
-    from googleapiclient.errors import HttpError
-
-    mock_service = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.status = 404
-    mock_service.users().messages().get().execute.side_effect = HttpError(
-        mock_resp, b"Not Found"
-    )
-
-    result = gmail_message_exists(mock_service, "msg_deleted")
-
-    assert result is False
+@pytest.mark.parametrize(
+    "label_ids,expected",
+    [
+        (None, {"inbox", "archived", "sent", "both"}),
+        (["INBOX"], {"inbox", "both"}),
+        (["INBOX", "SENT"], {"inbox", "sent", "both"}),
+        (["SPAM"], {"spam"}),
+    ],
+)
+def test_list_gmail_message_ids(label_ids, expected):
+    service = FakeGmailService(dict(GMAIL_MAILBOX))
+    assert list_gmail_message_ids(service, label_ids) == expected
 
 
-def test_gmail_message_exists_api_error():
-    """Test gmail_message_exists raises on non-404 errors."""
-    from googleapiclient.errors import HttpError
+def test_gmail_listing_failure_is_not_an_empty_mailbox():
+    service = MagicMock()
+    service.users().messages().list().execute.side_effect = RuntimeError("API unavailable")
+    with pytest.raises(RuntimeError, match="API unavailable"):
+        list_gmail_message_ids(service)
 
-    mock_service = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.status = 500
-    mock_service.users().messages().get().execute.side_effect = HttpError(
-        mock_resp, b"Internal Server Error"
-    )
 
-    with pytest.raises(HttpError):
-        gmail_message_exists(mock_service, "msg123")
+@pytest.mark.parametrize(
+    "mailbox,errors,expected_gone",
+    [
+        ({"m": ["INBOX"]}, {}, set()),
+        ({"m": []}, {}, set()),
+        ({"m": ["CATEGORY_PROMOTIONS"]}, {}, set()),
+        ({"m": ["TRASH"]}, {}, {"m"}),
+        ({"m": ["SPAM"]}, {}, {"m"}),
+        ({}, {}, {"m"}),
+        # Rate limits and server errors can't prove the message is gone
+        ({"m": ["INBOX"]}, {"m": 429}, set()),
+        ({}, {"m": 500}, set()),
+    ],
+)
+def test_gmail_gone_message_ids(mailbox, errors, expected_gone):
+    service = FakeGmailService(mailbox, errors=errors)
+    assert gmail_gone_message_ids(service, {"m"}) == expected_gone
+
+
+def test_gmail_gone_message_ids_batches_requests():
+    service = FakeGmailService({})
+    ids = {f"m{i}" for i in range(120)}
+
+    assert gmail_gone_message_ids(service, ids) == ids
+    assert service.batch_sizes == [50, 50, 20]
+
+
+def test_gmail_gone_message_ids_makes_no_request_for_nothing():
+    service = FakeGmailService({})
+    assert gmail_gone_message_ids(service, set()) == set()
+    assert service.batch_sizes == []
 
 
 @patch("memory.workers.email.imaplib")
@@ -1235,24 +1357,3 @@ def test_imap_starttls_failure_never_sends_password(connect):
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
     connect.return_value.logout.assert_called_once()
-
-
-def test_gmail_selected_folders_are_unioned(db_session, gmail_account):
-    gmail_account.folders = ["INBOX", "SENT"]
-    service = MagicMock()
-    service.users().messages().list().execute.side_effect = [
-        {"messages": [{"id": "inbox"}, {"id": "both"}]},
-        {"messages": [{"id": "sent"}, {"id": "both"}]},
-    ]
-    service.users().messages().list_next.return_value = None
-    ids, _ = get_gmail_message_ids(gmail_account, db_session, service)
-    assert ids == {"inbox", "sent", "both"}
-    calls = service.users().messages().list.call_args_list
-    assert {tuple(call.kwargs["labelIds"]) for call in calls if call.kwargs} == {("INBOX",), ("SENT",)}
-
-
-def test_gmail_listing_failure_is_not_an_empty_mailbox(db_session, gmail_account):
-    service = MagicMock()
-    service.users().messages().list().execute.side_effect = RuntimeError("API unavailable")
-    with pytest.raises(RuntimeError, match="API unavailable"):
-        get_gmail_message_ids(gmail_account, db_session, service)

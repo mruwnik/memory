@@ -57,38 +57,16 @@ def get_email_batch_key(item: SourceItem) -> tuple[str, Any]:
 
 
 def verify_gmail_messages(
-    service: Any,
-    gmail_ids: set[str],
+    gone_ids: set[str],
     items: Sequence[SourceItem],
-    gmail_message_exists: Callable[[Any, str], bool],
 ) -> dict[int, VerificationResult]:
-    """Verify Gmail messages exist using message IDs.
-
-    Checks against monitored labels first, then falls back to individual
-    message existence checks for messages that may have been archived.
-    """
-    results: dict[int, VerificationResult] = {}
-
-    for item in items:
-        msg = cast(MailMessage, item)
-        remote_id = cast(str | None, msg.imap_uid)
-
-        if remote_id is None:
-            results[item.id] = VerificationResult(item.id, exists=True)
-        elif remote_id in gmail_ids:
-            results[item.id] = VerificationResult(item.id, exists=True)
-        else:
-            # Not in monitored labels - check if it still exists (might be archived)
-            try:
-                exists = gmail_message_exists(service, remote_id)
-                results[item.id] = VerificationResult(item.id, exists=exists)
-            except Exception as e:
-                # API error - assume exists to be safe
-                results[item.id] = VerificationResult(
-                    item.id, exists=True, error=str(e)
-                )
-
-    return results
+    """Archived or relabelled mail exists; deleted, trashed or spammed mail doesn't."""
+    return {
+        item.id: VerificationResult(
+            item.id, exists=cast(MailMessage, item).imap_uid not in gone_ids
+        )
+        for item in items
+    }
 
 
 def verify_imap_messages(
@@ -124,8 +102,8 @@ def verify_emails(
     """Verify email messages exist in IMAP or Gmail."""
     from memory.workers.email import (
         get_folder_uids,
-        get_gmail_message_ids,
-        gmail_message_exists,
+        get_gmail_service,
+        gmail_gone_message_ids,
         imap_connection,
     )
 
@@ -140,8 +118,15 @@ def verify_emails(
 
     try:
         if account_type == "gmail":
-            gmail_ids, service = get_gmail_message_ids(account, session)
-            return verify_gmail_messages(service, gmail_ids, items, gmail_message_exists)
+            service = get_gmail_service(account, session)
+            remote_ids = {
+                cast(str, msg.imap_uid)
+                for msg in cast(Sequence[MailMessage], items)
+                if msg.imap_uid is not None
+            }
+            return verify_gmail_messages(
+                gmail_gone_message_ids(service, remote_ids), items
+            )
         else:
             imap_uids: dict[str, set[str]] = {}
             with imap_connection(account) as conn:
