@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.4.10 (2026-11-06)
+
 ### Changes
 
 - Workers only see their own user's runs: `agent_work_claim` hands an
@@ -42,6 +44,10 @@ a new, empty `## Unreleased` above it.
 - Sources with a working push channel are polled only as a gap-filler: a GitHub repo whose webhook delivered an event within `PUSH_STALE_HOURS` is synced every `max(check_interval, PUSH_GAP_FILL_MINUTES)`; once events stop it returns to its own `check_interval`.
 - Slack workspaces switch to their background-sweep frequency only while every polling app has received an event within `PUSH_STALE_HOURS` (previously: whenever the app's setup reached "live", even if delivery later broke).
 
+### Required env vars
+
+None.
+
 ### Manual steps
 
 - To use webhooks: generate the secret on each GitHub account and add the hook on GitHub (payload URL, `application/json`, the secret; events Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses).
@@ -61,6 +67,10 @@ a new, empty `## Unreleased` above it.
 
 - `20261206_slack_bot_user`: adds nullable `slack_user_credentials.bot_user_id`. Fast.
 - `20261206_github_webhooks`: adds `github_accounts.webhook_secret_encrypted`, `github_repos.last_event_at`, `github_item.head_sha` and `github_item.checks`, and a partial index on `github_item (repo_id, head_sha)`. Nullable columns and a partial index over no rows yet: fast.
+
+### Post-deploy commands
+
+None.
 
 ## v0.4.9 (2026-11-06)
 
