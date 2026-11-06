@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from memory.common.settings import (
-    OAUTH_LOOPBACK_DEFAULTS,
+    OAUTH_REDIRECT_DEFAULTS,
     build_redirect_allowlist,
     missing_required_settings,
     require_settings,
@@ -56,13 +56,21 @@ def test_secret_env_strips_file_whitespace(monkeypatch, tmp_path):
 # --- build_redirect_allowlist (additive OAuth redirect allowlist) ----------
 
 
-def test_build_redirect_allowlist_empty_returns_loopback_defaults():
-    assert build_redirect_allowlist("") == OAUTH_LOOPBACK_DEFAULTS
+def test_build_redirect_allowlist_empty_returns_defaults():
+    assert build_redirect_allowlist("") == OAUTH_REDIRECT_DEFAULTS
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["http://localhost", "http://127.0.0.1", "https://claude.ai", "https://claude.com", "https://chatgpt.com", "https://grok.com"],
+)
+def test_build_redirect_allowlist_allows_loopback_and_hosted_connectors_unconfigured(origin):
+    assert origin in build_redirect_allowlist("")
 
 
 def test_build_redirect_allowlist_adds_origin_to_defaults():
     assert build_redirect_allowlist("https://app.example.com") == [
-        *OAUTH_LOOPBACK_DEFAULTS,
+        *OAUTH_REDIRECT_DEFAULTS,
         "https://app.example.com",
     ]
 
@@ -72,7 +80,7 @@ def test_build_redirect_allowlist_dedupes_listed_loopback():
     # order is preserved (defaults first).
     assert build_redirect_allowlist(
         "http://localhost,https://app.example.com"
-    ) == [*OAUTH_LOOPBACK_DEFAULTS, "https://app.example.com"]
+    ) == [*OAUTH_REDIRECT_DEFAULTS, "https://app.example.com"]
 
 
 def test_build_redirect_allowlist_star_disables_check():
@@ -81,7 +89,7 @@ def test_build_redirect_allowlist_star_disables_check():
 
 def test_build_redirect_allowlist_strips_whitespace_and_blanks():
     assert build_redirect_allowlist("  https://app.example.com , , ") == [
-        *OAUTH_LOOPBACK_DEFAULTS,
+        *OAUTH_REDIRECT_DEFAULTS,
         "https://app.example.com",
     ]
 
@@ -107,7 +115,7 @@ def test_build_redirect_allowlist_always_allows_server_origin(
     env_value, server_url, expected_extra
 ):
     expected = (
-        ["*"] if expected_extra is None else [*OAUTH_LOOPBACK_DEFAULTS, *expected_extra]
+        ["*"] if expected_extra is None else [*OAUTH_REDIRECT_DEFAULTS, *expected_extra]
     )
     assert build_redirect_allowlist(env_value, server_url) == expected
 

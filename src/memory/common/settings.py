@@ -42,16 +42,23 @@ def secret_env(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
-# Loopback origins are always permitted: RFC 8252 native-app clients
-# (Claude Code/Desktop, Cursor, mcp-inspector) bind an ephemeral localhost
-# port for the OAuth redirect, so the port is unknowable at config time and
-# the matcher relaxes loopback to (scheme, host). These must survive any
-# operator config — see build_redirect_allowlist.
-OAUTH_LOOPBACK_DEFAULTS = ["http://localhost", "http://127.0.0.1"]
+# Always permitted, whatever the operator configures (see build_redirect_allowlist).
+# Loopback: RFC 8252 native-app clients (Claude Code/Desktop, Cursor,
+# mcp-inspector) bind an ephemeral localhost port for the OAuth redirect, so the
+# port is unknowable at config time and the matcher relaxes loopback to
+# (scheme, host). The rest are the hosted chat apps' connector callbacks.
+OAUTH_REDIRECT_DEFAULTS = [
+    "http://localhost",
+    "http://127.0.0.1",
+    "https://claude.ai",
+    "https://claude.com",
+    "https://chatgpt.com",
+    "https://grok.com",
+]
 
 
 def build_redirect_allowlist(env_value: str, server_url: str = "") -> list[str]:
-    """Layer operator-configured redirect origins on top of the loopback defaults.
+    """Layer operator-configured redirect origins on top of the defaults.
 
     Configured entries are *added* to the defaults, never replace them — this
     matches the "expand the default allowlist" contract documented in
@@ -68,7 +75,7 @@ def build_redirect_allowlist(env_value: str, server_url: str = "") -> list[str]:
         return ["*"]
     parts = urlsplit(server_url)
     own_origin = [f"{parts.scheme}://{parts.netloc}"] if parts.netloc else []
-    return list(dict.fromkeys(OAUTH_LOOPBACK_DEFAULTS + configured + own_origin))
+    return list(dict.fromkeys(OAUTH_REDIRECT_DEFAULTS + configured + own_origin))
 
 
 # Database settings
@@ -335,9 +342,8 @@ SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 
 # OAuth settings
 # Comma-separated list of redirect-URI origins permitted in dynamic client
-# registration, ADDED to the always-present loopback defaults (see
-# OAUTH_LOOPBACK_DEFAULTS) so adding a web origin can't lock out native-app
-# clients. Set to "*" to allow any redirect_uri (not recommended for production).
+# registration, ADDED to the always-present defaults (see
+# OAUTH_REDIRECT_DEFAULTS) so adding a web origin can't lock out other clients. Set to "*" to allow any redirect_uri (not recommended for production).
 # Example: "https://app.example.com"
 OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = build_redirect_allowlist(
     os.getenv("OAUTH_REDIRECT_URI_ALLOWLIST", ""), SERVER_URL
