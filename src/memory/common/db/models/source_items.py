@@ -187,7 +187,7 @@ class MailMessage(SourceItem):
         key = (self.content or "", self.message_id or "")
         cached = getattr(self, "parsed_mail", None)
         if cached is None or cached[0] != key:
-            result = parse_email_message(*key)
+            result = parse_email_message(*key, with_attachments=False)
             cached = (key, dict(result) if result else {})
             setattr(self, "parsed_mail", cached)
         return cached[1]
@@ -318,13 +318,25 @@ class EmailAttachment(SourceItem):
             ),
         )
 
-    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        if self.filename:
-            contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
-        else:
-            contents = self.content or ""
+    @property
+    def should_embed(self) -> bool:
+        # Decoding one (PDF pages, images) takes many times its size in worker RAM.
+        return (self.size or 0) <= settings.MAX_ATTACHMENT_EMBED_SIZE
 
-        return extract.extract_data_chunks(self.mime_type or "", contents)
+    def _chunk_contents(self) -> Sequence[extract.DataChunk]:
+        mime_type = self.mime_type or ""
+        content: str | bytes | pathlib.Path = self.content or ""
+        if self.filename:
+            content = settings.FILE_STORAGE_DIR / self.filename
+        # Images go as bytes so their chunk gets its own copy: a later attachment
+        # of the same name from the same sender overwrites this file. Anything
+        # else goes as the path, which extractors read in place, where bytes
+        # would be copied once more into memory and again into a /tmp (tmpfs) file.
+        if isinstance(content, pathlib.Path) and mime_type.startswith("image/"):
+            content = content.read_bytes()
+        return extract.extract_data_chunks(
+            mime_type, content, max_image_pages=settings.MAX_ATTACHMENT_EMBED_PAGES
+        )
 
     @property
     def display_contents(self) -> dict:

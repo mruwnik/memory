@@ -2,11 +2,13 @@ import hashlib
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from memory.common import settings
 
 from memory.common.db.models import (
     BlogPost,
     Chunk,
     ChatMessage,
+    EmailAttachment,
     ForumPost,
     MailMessage,
     SourceItem,
@@ -703,6 +705,45 @@ def test_process_content_item(
     assert db_item is not None
     assert str(db_item.embed_status) == expected_embed_status
     assert (queued == [mail_message.id]) is triggers_checked
+
+
+@pytest.mark.parametrize(
+    "size, expected_status, expected_embed_status",
+    [(100, "processed", "STORED"), (101, "skipped", "SKIPPED")],
+)
+def test_process_content_item_skips_email_attachment_over_embed_size(
+    db_session, qdrant, sample_mail_message, size, expected_status, expected_embed_status
+):
+    db_session.add(sample_mail_message)
+    db_session.flush()
+    attachment = EmailAttachment(
+        mail_message_id=sample_mail_message.id,
+        size=size,
+        content="attachment content",
+        modality="text",
+        sha256=b"attachment" + bytes(22),
+        mime_type="text/plain",
+        embed_status="RAW",
+    )
+    chunk = Chunk(
+        id="00000000-0000-0000-0000-000000000001",
+        content="attachment content",
+        embedding_model="test-model",
+        vector=[0.1] * 1024,
+        item_metadata={"source_id": 1},
+        collection_name="text",
+    )
+
+    with (
+        patch.object(settings, "MAX_ATTACHMENT_EMBED_SIZE", 100),
+        patch("memory.common.embedding.embed_source_item", return_value=[chunk]),
+    ):
+        result = process_content_item(attachment, db_session)
+
+    assert (result["status"], result["embed_status"]) == (
+        expected_status,
+        expected_embed_status,
+    )
 
 
 @pytest.mark.parametrize(

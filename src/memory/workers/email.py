@@ -4,7 +4,6 @@ import imaplib
 import ssl
 import logging
 import re
-from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +14,7 @@ from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, object_session, scoped_session
 
 from memory.common import collections, embedding, paths, qdrant, settings
+from memory.common.content_processing import push_chunks_to_qdrant
 from memory.common.db.models import EmailAccount, EmailAttachment, MailMessage
 from memory.common.people import link_people
 from memory.parsers.email import Attachment, EmailMessage, RawEmailResponse
@@ -321,30 +321,20 @@ def vectorize_email(email: MailMessage):
             item.embed_status = "FAILED"  # type: ignore
         embedding.warn_not_configured()
         return
-    qdrant_client = qdrant.get_qdrant_client()
 
-    chunks = embedding.embed_source_item(email)
-    email.chunks = chunks
-    if chunks:
-        vector_ids = [str(c.id) for c in chunks]
-        vectors = [c.vector for c in chunks]
-        metadata = [c.item_metadata for c in chunks]
-        qdrant.upsert_vectors(
-            client=qdrant_client,
-            collection_name=cast(str, email.modality),
-            ids=vector_ids,
-            vectors=vectors,  # type: ignore
-            payloads=metadata,  # type: ignore
-        )
+    email.chunks = embedding.embed_source_item(email)
+    chunks = list(email.chunks)
 
-    embeds = defaultdict(list)
     # The flush drops attachments whose content is already stored
     # (handle_duplicate_sha256); chunking those only writes chunk images
     # that no row will ever reference.
     stored = [a for a in email.attachments if object_session(a) is not None]
     for attachment in stored:
+        if not attachment.should_embed:
+            attachment.embed_status = "SKIPPED"  # type: ignore
+            continue
         try:
-            chunks = embedding.embed_source_item(attachment)
+            attachment_chunks = embedding.embed_source_item(attachment)
         except Exception:
             # One undecodable attachment (e.g. a decompression-bomb image) must
             # not abort the whole email: marking it FAILED and continuing lets
@@ -354,27 +344,19 @@ def vectorize_email(email: MailMessage):
             )
             attachment.embed_status = "FAILED"  # type: ignore
             continue
-        if not chunks:
-            continue
 
-        attachment.chunks = chunks
-        embeds[attachment.modality].extend(chunks)
+        attachment.chunks = attachment_chunks
+        # Page and image rasters are on disk by now; holding every
+        # attachment's at once is what can take a worker past its memory cap.
+        for chunk in attachment_chunks:
+            chunk.images = []
+        chunks.extend(attachment_chunks)
 
-    for collection, chunks in embeds.items():
-        ids = [c.id for c in chunks]
-        vectors = [c.vector for c in chunks]
-        metadata = [c.item_metadata for c in chunks]
-        qdrant.upsert_vectors(
-            client=qdrant_client,
-            collection_name=collection,
-            ids=ids,
-            vectors=vectors,
-            payloads=metadata,
-        )
+    push_chunks_to_qdrant(chunks)
 
     email.embed_status = "STORED"  # type: ignore
     for attachment in email.attachments:
-        if cast(str, attachment.embed_status) != "FAILED":
+        if cast(str, attachment.embed_status) not in ("FAILED", "SKIPPED"):
             attachment.embed_status = "STORED"
 
     logger.info(f"Stored embedding for message {email.message_id}")

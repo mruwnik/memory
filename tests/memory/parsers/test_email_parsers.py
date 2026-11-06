@@ -352,11 +352,12 @@ def test_parse_email_hash_uses_raw_headers():
     assert result["hash"] == compute_message_hash("<m@x>", raw_subject, raw_from, "body")
 
 
-def test_parse_email_with_attachments():
+@pytest.mark.parametrize("with_attachments, filenames", [(True, ["test.txt"]), (False, [])])
+def test_parse_email_with_attachments(with_attachments, filenames):
     attachments = [{"filename": "test.txt", "content": b"attachment content"}]
     msg = create_email_message(attachments=attachments)
 
-    result = parse_email_message(msg.as_string(), "123")
+    result = parse_email_message(msg.as_string(), "123", with_attachments=with_attachments)
 
-    assert len(result["attachments"]) == 1
-    assert result["attachments"][0]["filename"] == "test.txt"
+    assert [a["filename"] for a in result["attachments"]] == filenames
+    assert result["body"] == parse_email_message(msg.as_string(), "123")["body"]

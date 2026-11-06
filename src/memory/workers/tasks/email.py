@@ -157,6 +157,9 @@ def store_email_message(
                 email_account_id=account_id,
                 imap_uid=message_id,
             )
+            # The attachments are on disk or in their rows now; their decoded
+            # bytes would otherwise stay in memory through vectorize_email.
+            parsed_email["attachments"] = []
 
             db.flush()
             for item in [mail_message, *mail_message.attachments]:
@@ -274,7 +277,7 @@ def queue_message(
         return False
     spooled: str | None = None
     try:
-        parsed_email = parse_email_message(raw_email, message_id)
+        parsed_email = parse_email_message(raw_email, message_id, with_attachments=False)
         if find_stored_message(db, account_id, parsed_email):
             return False
         if killed_its_worker(db, "process_message", account_id=account_id, message_id=message_id):

@@ -382,7 +382,8 @@ services:
       - /var/tmp
       - /var/log/supervisor
       - /var/run/supervisor
-    deploy: { resources: { limits: { cpus: "0.5", memory: 512m } } }
+    # Beat, discord-api and beeper-collector each import the full model stack.
+    deploy: { resources: { limits: { cpus: "0.5", memory: 1g } } }
 
   # ------------------------------------------------------------ Beeper Server
   # Opt in with `--profile beeper` and add http://beeper:23373 to BEEPER_SERVER_URLS.

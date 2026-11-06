@@ -152,9 +152,6 @@ def clean_filename(filename: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", filename).strip("_")[:30]
 
 
-# voyage-multimodal-3 downsamples every image to at most this many pixels
-# (multimodal_image_pixels_max in its client_config.json), so more is wasted.
-MAX_CHUNK_IMAGE_PIXELS = 2_000_000
 MAX_WEBP_SIDE = 16383
 CHUNK_IMAGE_QUALITY = 85
 
@@ -163,7 +160,7 @@ def shrink_for_embedding(image: Image.Image) -> bool:
     """Downscale `image` in place to fit Voyage's pixels and WebP's side; whether it was."""
     width, height = image.size
     scale = min(
-        math.sqrt(MAX_CHUNK_IMAGE_PIXELS / (width * height)),
+        math.sqrt(extract.MAX_CHUNK_IMAGE_PIXELS / (width * height)),
         MAX_WEBP_SIDE / max(width, height),
     )
     if scale >= 1:

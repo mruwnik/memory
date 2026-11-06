@@ -221,6 +221,14 @@ if str(FILE_STORAGE_DIR).startswith("/tmp"):
 MAX_INLINE_ATTACHMENT_SIZE = int(
     os.getenv("MAX_INLINE_ATTACHMENT_SIZE", 1 * 1024 * 1024)
 )
+# Larger email attachments are stored but not chunked or embedded (SKIPPED).
+MAX_ATTACHMENT_EMBED_SIZE = int(
+    os.getenv("MAX_ATTACHMENT_EMBED_SIZE", 20 * 1024 * 1024)
+)
+# Email PDF/docx attachments get page images for this many pages, text for all:
+# each page image (1.45MB for Letter, up to 6MB) is held until the item is
+# embedded, and a worker child has ~700MB.
+MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
 
 # Qdrant settings
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")

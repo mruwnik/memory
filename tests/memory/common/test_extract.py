@@ -18,10 +18,12 @@ from memory.common.extract import (
     doc_to_images,
     extract_pdf,
     extract_image,
+    extract_data_chunks,
     safe_image_open,
     docx_to_pdf,
     merge_metadata,
     MIN_PDF_PAGE_TEXT_CHARS,
+    MAX_CHUNK_IMAGE_PIXELS,
     DataChunk,
 )
 
@@ -76,6 +78,15 @@ def test_extract_text_with_path(tmp_path):
 
     assert extract_text(test_file) == [
         DataChunk(data=["file text content"], metadata={}, modality="text")
+    ]
+
+
+def test_extract_text_with_path_replaces_invalid_utf8(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_bytes(b"caf\xe9 text")
+
+    assert extract_text(test_file) == [
+        DataChunk(data=["caf\ufffd text"], metadata={}, modality="text")
     ]
 
 
@@ -149,6 +160,67 @@ def test_extract_pdf_image_only_when_no_text_layer():
     assert len(result) == 1
     assert any(isinstance(d, Image.Image) for d in result[0].data)
     assert not any(isinstance(d, str) for d in result[0].data)
+
+
+def page_images(chunks: list[DataChunk]) -> list[Image.Image]:
+    return [d for c in chunks for d in c.data if isinstance(d, Image.Image)]
+
+
+def pdf_of_pages(*sizes: tuple[float, float]) -> bytes:
+    doc = pymupdf.open()
+    for width, height in sizes:
+        doc.new_page(width=width, height=height)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    return pdf_bytes
+
+
+@pytest.mark.parametrize("extract", [doc_to_images, extract_pdf])
+@pytest.mark.parametrize(
+    "width, height", [(14400, 14400), (14400, 200), (200, 14400), (1500, 1334)]
+)
+def test_oversized_pdf_page_renders_within_chunk_image_cap(extract, width, height):
+    # At 72dpi a 200x200in page would be a 622MB raster.
+    [image] = page_images(extract(pdf_of_pages((width, height))))
+
+    assert image.width * image.height <= MAX_CHUNK_IMAGE_PIXELS
+    assert image.width / image.height == pytest.approx(width / height, rel=0.05)
+
+
+@pytest.mark.parametrize("extract", [doc_to_images, extract_pdf])
+def test_letter_pdf_page_renders_at_72dpi(extract):
+    [image] = page_images(extract(pdf_of_pages((612, 792))))
+
+    assert image.size == (612, 792)
+
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+@pytest.mark.parametrize("mime_type", ["application/pdf", DOCX_MIME])
+@pytest.mark.parametrize(
+    "max_image_pages, image_pages", [(None, [0, 1, 2]), (2, [0, 1]), (0, [])]
+)
+def test_page_images_stop_at_max_image_pages_but_text_does_not(
+    mime_type, max_image_pages, image_pages
+):
+    doc = pymupdf.open()
+    for number in range(3):
+        doc.new_page(width=200, height=200).insert_text((20, 50), f"page {number} has some text")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    def convert(_docx, output_path):
+        output_path.write_bytes(pdf_bytes)
+        return output_path
+
+    with patch("memory.common.extract.docx_to_pdf", side_effect=convert):
+        chunks = extract_data_chunks(mime_type, pdf_bytes, max_image_pages=max_image_pages)
+
+    assert [c.metadata["page"] for c in chunks if page_images([c])] == image_pages
+    assert [c.data for c in chunks if not page_images([c])] == [
+        [f"page {number} has some text"] for number in range(3)
+    ]
 
 
 def test_extract_pdf_short_text_below_threshold_is_skipped():

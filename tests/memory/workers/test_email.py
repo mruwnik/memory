@@ -558,6 +558,56 @@ def test_vectorize_email_marks_failed_attachment_and_continues(
     assert cast(str, good.embed_status) == "STORED"
 
 
+@pytest.mark.parametrize("size, embedded, status", [(100, True, "STORED"), (101, False, "SKIPPED")])
+def test_vectorize_email_skips_attachments_over_embed_size(
+    db_session, qdrant, size, embedded, status
+):
+    mail_message = MailMessage(
+        sha256=b"big_msg_hash" + bytes(20),
+        tags=["test"],
+        size=100,
+        mime_type="message/rfc822",
+        embed_status="RAW",
+        message_id="<big-attach@example.com>",
+        subject="Email with a big attachment",
+        sender="sender@example.com",
+        recipients=["recipient@example.com"],
+        content="Body",
+        folder="INBOX",
+        modality="mail",
+    )
+    db_session.add(mail_message)
+    db_session.flush()
+    attachment = EmailAttachment(
+        mail_message_id=mail_message.id,
+        size=size,
+        content="attachment",
+        modality="doc",
+        sha256=b"big_att_hash" + bytes(20),
+        tags=["test"],
+        mime_type="application/pdf",
+        embed_status="RAW",
+    )
+    db_session.add(attachment)
+    db_session.flush()
+    embedded_items = []
+
+    def fake_embed(item):
+        embedded_items.append(item)
+        return []
+
+    with (
+        patch.object(settings, "MAX_ATTACHMENT_EMBED_SIZE", 100),
+        patch.object(embedding, "embed_source_item", side_effect=fake_embed),
+    ):
+        vectorize_email(mail_message)
+
+    db_session.commit()
+    assert (attachment in embedded_items) == embedded
+    assert cast(str, attachment.embed_status) == status
+    assert cast(str, mail_message.embed_status) == "STORED"
+
+
 def test_get_folder_uids(email_provider):
     """Test getting all UIDs from a folder."""
     # Get UIDs from INBOX

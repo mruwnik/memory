@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, replace
 import io
 import logging
+import math
 import mimetypes
 import os
 import pathlib
@@ -158,9 +159,33 @@ def as_file(content: bytes | str | pathlib.Path) -> Generator[pathlib.Path, None
             yield pathlib.Path(f.name)
 
 
+# voyage-multimodal-3 downsamples every image to at most this many pixels
+# (multimodal_image_pixels_max in its client_config.json), so more is wasted.
+MAX_CHUNK_IMAGE_PIXELS = 2_000_000
+
+
+def page_zoom(width: float, height: float) -> float:
+    """The largest zoom, at most 1, whose render fits MAX_CHUNK_IMAGE_PIXELS.
+
+    PyMuPDF rounds each side up to a whole pixel, so this solves
+    (width*zoom + 1) * (height*zoom + 1) = MAX_CHUNK_IMAGE_PIXELS: a render
+    that overshot by a pixel would be resampled again for embedding.
+    """
+    area, perimeter = max(1.0, width * height), width + height
+    discriminant = perimeter**2 + 4 * area * (MAX_CHUNK_IMAGE_PIXELS - 1)
+    return min(1.0, (math.sqrt(discriminant) - perimeter) / (2 * area))
+
+
 def page_to_image(page: pymupdf.Page) -> Image.Image:
-    pix = page.get_pixmap()  # type: ignore
+    # Render oversized pages straight at the size they'd be shrunk to: a page's
+    # raster is unbounded (200x200in at 72dpi is 622MB) and no pixel guard sees it.
+    zoom = page_zoom(page.rect.width, page.rect.height)
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))  # type: ignore
     return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+
+def page_metadata(page: pymupdf.Page) -> dict[str, Any]:
+    return {"page": page.number, "width": page.rect.width, "height": page.rect.height}
 
 
 def page_image_chunk(page: pymupdf.Page, modality: str = "doc") -> DataChunk:
@@ -169,11 +194,7 @@ def page_image_chunk(page: pymupdf.Page, modality: str = "doc") -> DataChunk:
     can't drift."""
     return DataChunk(
         data=[page_to_image(page)],
-        metadata={
-            "page": page.number,
-            "width": page.rect.width,
-            "height": page.rect.height,
-        },
+        metadata=page_metadata(page),
         mime_type="image/jpeg",
         modality=modality,
     )
@@ -187,6 +208,19 @@ def doc_to_images(
             return [page_image_chunk(page, modality) for page in pdf.pages()]
 
 
+def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
+    try:
+        text = cast(str, page.get_text()).strip()
+    except Exception:
+        logger.warning("get_text failed for page %s; ingesting image-only", page.number)
+        return []
+    if len(text) < MIN_PDF_PAGE_TEXT_CHARS:
+        return []
+    return extract_text(
+        text, metadata=page_metadata(page), modality=modality, skip_summary=True
+    )
+
+
 # A PDF page whose embedded text layer strips to fewer than this many characters
 # is treated as image-only (a scan, or a near-blank/figure page): below this a
 # get_text() chunk would just be noise (page numbers, stray ligatures, "").
@@ -194,39 +228,26 @@ MIN_PDF_PAGE_TEXT_CHARS = 16
 
 
 def extract_pdf(
-    content: bytes | str | pathlib.Path, modality: str = "doc"
+    content: bytes | str | pathlib.Path,
+    modality: str = "doc",
+    max_image_pages: int | None = None,
 ) -> list[DataChunk]:
     """Chunk a PDF into one image per page, plus a text chunk for every page
     that has a real embedded text layer.
 
     Born-digital PDFs become text-searchable (text-model embeddings + BM25) for
     free and exactly, while scanned pages — whose ``get_text()`` is empty — fall
-    back to image-only multimodal chunks, preserving the previous behaviour.
-    The text and image chunks for a page share its ``page`` metadata.
+    back to image-only multimodal chunks. The text and image chunks for a page
+    share its ``page`` metadata. Only the first ``max_image_pages`` pages get an
+    image, since every page image is held in memory until the item is embedded.
     """
     chunks: list[DataChunk] = []
     with as_file(content) as file_path:
         with pymupdf.open(file_path) as pdf:
             for page in pdf.pages():
-                image_chunk = page_image_chunk(page, modality)
-                chunks.append(image_chunk)
-                try:
-                    text = page.get_text().strip()
-                except Exception:
-                    logger.warning(
-                        "get_text failed for page %s; ingesting image-only",
-                        page.number,
-                    )
-                    text = ""
-                if len(text) >= MIN_PDF_PAGE_TEXT_CHARS:
-                    chunks.extend(
-                        extract_text(
-                            text,
-                            metadata=image_chunk.metadata,
-                            modality=modality,
-                            skip_summary=True,
-                        )
-                    )
+                if max_image_pages is None or page.number < max_image_pages:
+                    chunks.append(page_image_chunk(page, modality))
+                chunks.extend(page_text_chunks(page, modality))
     return chunks
 
 
@@ -277,7 +298,9 @@ def extract_docx_text(docx_path: pathlib.Path) -> list[DataChunk]:
     return extract_text(text)
 
 
-def extract_docx(docx_path: pathlib.Path | bytes | str) -> list[DataChunk]:
+def extract_docx(
+    docx_path: pathlib.Path | bytes | str, max_image_pages: int | None = None
+) -> list[DataChunk]:
     """Extract content from DOCX by converting to PDF first, then processing.
 
     Falls back to plain text extraction if PDF conversion fails (e.g. LaTeX errors).
@@ -287,7 +310,7 @@ def extract_docx(docx_path: pathlib.Path | bytes | str) -> list[DataChunk]:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 pdf_path = docx_to_pdf(file_path, pathlib.Path(tmp_dir) / "out.pdf")
                 logger.info(f"Extracted PDF from {file_path}")
-                return doc_to_images(pdf_path)
+                return extract_pdf(pdf_path, max_image_pages=max_image_pages)
         except Exception as e:
             logger.warning(f"PDF conversion failed for {file_path}, falling back to text extraction: {e}")
             return extract_docx_text(file_path)
@@ -329,7 +352,7 @@ def extract_text(
     skip_summary: bool = False,
 ) -> list[DataChunk]:
     if isinstance(content, pathlib.Path):
-        content = content.read_text()
+        content = content.read_text(encoding="utf-8", errors="replace")
     if isinstance(content, bytes):
         content = content.decode("utf-8")
 
@@ -369,16 +392,17 @@ def extract_data_chunks(
     content: bytes | str | pathlib.Path,
     chunk_size: int | None = None,
     skip_summary: bool = False,
+    max_image_pages: int | None = None,
 ) -> list[DataChunk]:
     chunks = []
     logger.info(f"Extracting content from {mime_type}")
     if mime_type == "application/pdf":
-        chunks = extract_pdf(content)
+        chunks = extract_pdf(content, max_image_pages=max_image_pages)
     elif mime_type in [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/msword",
     ]:
-        chunks = extract_docx(content)
+        chunks = extract_docx(content, max_image_pages=max_image_pages)
     elif mime_type.startswith("text/"):
         chunks = extract_text(content, chunk_size, skip_summary=skip_summary)
     elif mime_type.startswith("image/"):

@@ -261,7 +261,7 @@ def test_first_sighting_is_recorded_once(repo, select, signed_tag, state_dir):
 
 @pytest.fixture
 def release_repo(repo, tmp_path):
-    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## v1.2.3\n\n- stuff\n")
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## v1.2.3\n\n### Changes\n\n- stuff\n")
     frontend = repo / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text(

@@ -131,7 +131,10 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
         content_type = part.get_content_type()
         content_disposition = str(part.get("Content-Disposition", ""))
 
-        if "attachment" in content_disposition:
+        if "attachment" in content_disposition or content_type not in (
+            "text/plain",
+            "text/html",
+        ):
             continue
 
         try:
@@ -143,7 +146,7 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
 
             if content_type == "text/html":
                 html_body += content + "\n"
-            elif content_type == "text/plain":
+            else:
                 plain_body += content + "\n"
         except Exception as e:
             logger.error(f"Error decoding message part: {str(e)}")
@@ -213,12 +216,16 @@ def compute_message_hash(msg_id: str, subject: str, sender: str, body: str) -> b
     return hashlib.sha256(hash_content).digest()
 
 
-def parse_email_message(raw_email: str, message_id: str) -> EmailMessage:
+def parse_email_message(
+    raw_email: str, message_id: str, with_attachments: bool = True
+) -> EmailMessage:
     """
     Parse raw email into structured data.
 
     Args:
         raw_email: Raw email content as string
+        with_attachments: Decode attachment bytes; readers of the body alone
+            skip it, since a large attachment costs its full size again in RAM.
 
     Returns:
         Dict with parsed email data
@@ -237,6 +244,6 @@ def parse_email_message(raw_email: str, message_id: str) -> EmailMessage:
         recipients=extract_recipients(msg),
         sent_at=extract_date(msg),
         body=body,
-        attachments=extract_attachments(msg),
+        attachments=extract_attachments(msg) if with_attachments else [],
         hash=compute_message_hash(message_id, subject, from_, body),
     )

@@ -311,8 +311,8 @@ def test_email_attachment_as_payload(created_at, expected_date):
 @pytest.mark.parametrize(
     "has_filename,content_source,expected_content",
     [
-        (True, "file", b"test file content"),
-        (False, "content", "attachment content"),
+        (True, "file", lambda tmp_path: tmp_path / "test.txt"),
+        (False, "content", lambda tmp_path: "attachment content"),
     ],
 )
 @patch("memory.common.extract.extract_data_chunks")
@@ -351,7 +351,11 @@ def test_email_attachment_data_chunks(
         result = attachment.data_chunks({"extra": "metadata"})
 
     # Verify the method calls
-    mock_extract.assert_called_once_with("text/plain", expected_content)
+    mock_extract.assert_called_once_with(
+        "text/plain",
+        expected_content(tmp_path),
+        max_image_pages=settings.MAX_ATTACHMENT_EMBED_PAGES,
+    )
     mock_make.assert_called_once_with(
         extract.DataChunk(data=["extracted text"], metadata={"source": content_source}),
         {"extra": "metadata"},

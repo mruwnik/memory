@@ -61,6 +61,14 @@ a new, empty `## Unreleased` above it.
   lost database or Redis connections not) is skipped and logged as an ERROR.
   That log line, in the operator logs, is the lasting record of the skip: the
   workspace's sync error shows it only until the workspace's next sync.
+- Email ingest needs less memory per message: attachments over
+  `MAX_ATTACHMENT_EMBED_SIZE` are stored but not embedded (`SKIPPED`), also
+  when reingested; PDF and Word attachments get page images for their first
+  `MAX_ATTACHMENT_EMBED_PAGES` pages and searchable text for every page; each
+  attachment's page images are released once it is embedded; and reading a
+  mail's body no longer decodes its attachments. PDF pages are rendered no
+  larger than the 2 MP an embedding uses.
+- Word documents are text-searchable page by page, as PDFs already were.
 
 ### Required env vars
 
@@ -110,6 +118,11 @@ None.
   (or to `--since`, when earlier) and resyncs it. Channels mid-sync are listed
   as `busy` and left alone; run it again for them. `--dry-run` only lists what
   it would do.
+- New settings `MAX_ATTACHMENT_EMBED_SIZE` (default 20 MiB) and
+  `MAX_ATTACHMENT_EMBED_PAGES` (default 50) bound the memory an email
+  attachment can take when embedded.
+- The ingest-hub container's memory limit rises from 512 MiB to 1 GiB: beat,
+  the Discord collector and the Beeper collector together sat at its limit.
 
 ### Migrations
 
