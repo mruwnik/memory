@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -17,6 +18,7 @@ import voyageai
 from sqlalchemy import create_engine, event, make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
@@ -251,8 +253,7 @@ class MockRedis:
         cls._shared_data.clear()
 
 
-def get_test_db_name() -> str:
-    return f"test_db_{uuid.uuid4().hex[:8]}"
+TEST_DB_PREFIX = "test_memory_session_"
 
 
 def validate_db_identifier(name: str) -> str:
@@ -261,7 +262,6 @@ def validate_db_identifier(name: str) -> str:
     Prevents SQL injection by ensuring the name contains only
     alphanumeric characters and underscores.
     """
-    import re
     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
         raise ValueError(f"Invalid database identifier: {name}")
     if len(name) > 63:  # PostgreSQL identifier limit
@@ -283,72 +283,75 @@ def url_with_db(db_name: str) -> str:
     )
 
 
-def create_test_database(test_db_name: str) -> str:
+@contextmanager
+def admin_connection():
+    engine = create_engine(settings.DB_URL, poolclass=NullPool)
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            yield conn
+    finally:
+        engine.dispose()
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def is_stale_test_db(name: str) -> bool:
+    """A session DB whose pytest process (the PID suffix) no longer exists.
+
+    Session DBs leak whenever pytest dies without running teardown (SIGKILL,
+    a tool timeout, an xdist worker crash, or Postgres being down at teardown).
     """
-    Create a test database with a unique name.
+    pid = name.removeprefix(TEST_DB_PREFIX).rpartition("_")[2]
+    return name.startswith(TEST_DB_PREFIX) and pid.isdigit() and not pid_alive(int(pid))
 
-    Args:
-        test_db_name: Name for the test database
 
-    Returns:
-        URL to the test database
+def drop_stale_test_databases() -> list[str]:
+    """Drop leaked session DBs that nobody is connected to.
+
+    Plain ``DROP DATABASE`` (no FORCE) so a DB that gained a connection since
+    the check survives: other runs on the shared dev server may own it.
     """
-    # Validate to prevent SQL injection
-    safe_name = validate_db_identifier(test_db_name)
-    admin_engine = create_engine(settings.DB_URL)
-
-    # Create a new database - must use autocommit for DDL
-    with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        # Terminate any stale connections from previous crashed runs
-        conn.execute(
+    with admin_connection() as conn:
+        names = conn.execute(
             text(
-                f"""
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{safe_name}'
-                AND pid <> pg_backend_pid()
                 """
-            )
-        )
+                SELECT datname FROM pg_database d
+                WHERE datname LIKE :prefix
+                AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)
+                """
+            ),
+            {"prefix": TEST_DB_PREFIX.replace("_", r"\_") + "%"},
+        ).scalars()
+        dropped = []
+        for name in filter(is_stale_test_db, list(names)):
+            try:
+                conn.execute(text(f"DROP DATABASE IF EXISTS {validate_db_identifier(name)}"))
+            except OperationalError:
+                continue
+            dropped.append(name)
+    return dropped
 
-        conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name}"))
+
+def create_test_database(test_db_name: str) -> str:
+    safe_name = validate_db_identifier(test_db_name)
+    with admin_connection() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name} WITH (FORCE)"))
         conn.execute(text(f"CREATE DATABASE {safe_name}"))
-
-    admin_engine.dispose()
-
     return url_with_db(test_db_name)
 
 
 def drop_test_database(test_db_name: str) -> None:
-    """
-    Drop the test database after terminating all active connections.
-
-    Args:
-        test_db_name: Name of the test database to drop
-    """
-    # Validate to prevent SQL injection
     safe_name = validate_db_identifier(test_db_name)
-    admin_engine = create_engine(settings.DB_URL)
-
-    with admin_engine.connect() as conn:
-        conn.execute(text("COMMIT"))  # Close any open transaction
-
-        # Terminate all connections to the database
-        conn.execute(
-            text(
-                f"""
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{safe_name}'
-                AND pid <> pg_backend_pid()
-                """
-            )
-        )
-
-        # Drop the database
-        conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name}"))
-
-    admin_engine.dispose()
+    with admin_connection() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS {safe_name} WITH (FORCE)"))
 
 
 def run_alembic_migrations(db_name: str) -> None:
@@ -383,10 +386,10 @@ def test_db():
     # drop each other's databases via the create_test_database cleanup. Also
     # carries the xdist worker id for parallel runs within a single invocation.
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
-    test_db_name = f"test_memory_session_{worker_id}_{os.getpid()}"
+    test_db_name = f"{TEST_DB_PREFIX}{worker_id}_{os.getpid()}"
 
-    # Create test database
     try:
+        drop_stale_test_databases()
         test_db_url = create_test_database(test_db_name)
     except OperationalError as e:
         pytest.skip(f"Failed to create test database: {e}")
@@ -416,8 +419,6 @@ def db_engine(test_db):
     (aborted)" state, a pooled connection would carry that bad state into the
     next test and eventually deadlock on row locks.
     """
-    from sqlalchemy.pool import NullPool
-
     engine = create_engine(test_db, poolclass=NullPool)
     yield engine
     engine.dispose()

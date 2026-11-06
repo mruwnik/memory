@@ -175,6 +175,10 @@ If you want to run the API or workers on the host while keeping infrastructure i
 services:
   postgres:
     ports: ["15432:5432"]
+    # Room for parallel test runs: each makes its own database next to yours.
+    deploy:
+      resources:
+        limits: { cpus: "4.0", memory: 3G }
   redis:
     ports: ["16379:6379"]
   qdrant:
@@ -564,7 +568,9 @@ sweeps default to daily. Set **Sources → Slack → Background sweep frequency*
 workspace, or use **Sync now** for an immediate sweep. Initial imports run immediately.
 If any polling app for a workspace lacks verified events, normal polling continues.
 The scheduler checks on `SLACK_SYNC_INTERVAL` (default one hour), so sweeps run on
-the next scheduler tick after their interval expires.
+the next scheduler tick after their interval expires. Each sweep also re-reads the
+threads started in the last `SLACK_THREAD_LOOKBACK_DAYS` (14; 0 turns it off) whose
+latest reply isn't stored, so replies whose events were missed still arrive.
 
 The wizard's **Advanced** section takes an **Authorize URL**, **Token URL** and
 **API base URL** for a Slack-compatible server (defaults `https://slack.com/oauth/v2/authorize`,
