@@ -29,6 +29,12 @@ a new, empty `## Unreleased` above it.
   runs belong to the trigger's or schedule's owner), and renewing or
   submitting another user's run is refused as an unknown run. Admins get no
   exception.
+- Ingest trigger runs carry what a worker needs to act on each item: its url (GitHub, Slack permalink, Discord jump link), its type's ids (repo/number/state/head sha/checks, Slack channel/ts/thread_ts, Discord guild/channel/message, email headers), meeting summary, notes, attendees and action items, and what changed. Item text arrives inside `<untrusted_item>` delimiters it can't close.
+- Trigger templates take `{items}`, `{items_json}` and, with per-item delivery, `{item.<field>}`; saving a trigger whose template names an unknown placeholder or field is refused with the valid fields listed.
+
+### Other changes for operators
+
+- An existing trigger whose template contains a `{word}` that isn't a placeholder is refused the next time it is saved; its runs keep rendering it literally.
 
 ## v0.4.9 (2026-11-06)
 

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.spec import MAX_TEXT_CHARS, AgentSpec
+from memory.agents.trigger_input import render_input
 from memory.agents.triggers import (
     INGEST,
     Delivery,
@@ -12,7 +13,6 @@ from memory.agents.triggers import (
     accessible_ids,
     dedupe_key,
     edited_ids,
-    render_input,
     trigger_key,
 )
 from memory.common.notify import notify_user_now
@@ -73,13 +73,13 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
                 return None
             delivered = [d for d in claimed if d.item_id in allowed]
             items = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).order_by(SourceItem.id).all()
+            edited = edited_ids(delivered)
+            changes = {i: ["edited" if i in edited else "new"] for i in allowed}
             run = enqueue_run(
                 db,
                 user_id=owner.id,
                 spec=AgentSpec.model_validate(definition.spec),
-                input=render_input(
-                    config.template, items, MAX_TEXT_CHARS, edited_ids(delivered)
-                ),
+                input=render_input(config.template, items, MAX_TEXT_CHARS, changes),
                 trigger=TriggerInfo(
                     kind=INGEST,
                     ref={"trigger_id": trigger.id, "item_ids": allowed},

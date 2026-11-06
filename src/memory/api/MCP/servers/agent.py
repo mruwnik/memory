@@ -69,10 +69,12 @@ from memory.agents.spec import (
     uses_server,
 )
 from memory.agents.system import SYSTEM_AGENTS, SystemAgent
+from memory.agents.trigger_input import check_template
 from memory.agents.triggers import (
     INGEST,
     Batch,
     IngestConfig,
+    PerItem,
     buffer_client,
     buffer_key,
     source_types,
@@ -1024,16 +1026,23 @@ async def trigger_upsert(
 
     config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
     text_contains, regex, exclude_authors}, "delivery": {"mode": "per_item"} or {"mode": "batch",
-    "window_sec", "max_items"}, "template": the run's input, where "{items}" becomes
-    one line per item with its id, "on_edit": bool}. Set filter values must all
+    "window_sec", "max_items"}, "template": the run's input, "on_edit": bool}. Set filter values must all
     hold; within a list, any value matches. exclude_channel_ids drops items in
     those channels and their threads; a Discord thread whose parent isn't known
     yet still matches until a thread listing or thread event records it. Beeper
     chats aren't matched by channel id. Only items stored since it was last
     enabled match, each at most once, and only if you can read them.
 
+    Template placeholders: {items} renders each item with its type, id, changes, url
+    and its type's ids (repo/number, Slack channel_id/ts/thread_ts, Discord
+    guild/channel/message ids, meeting summary/action items/attendees, email
+    headers) plus a text preview; {items_json} is a JSON list of the short fields;
+    with per_item delivery, {item.<field>} is one field (an unknown field is refused,
+    listing the valid ones). A template without placeholders gets {items} appended.
+    Text people wrote arrives inside <untrusted_item id=… field=…> delimiters.
+
     With "on_edit": true, an item this trigger has matched fires again each time its
-    title or text changes (its line in {items} then says "edited"); reprocessing
+    title or text changes (its changes then say "edited"); reprocessing
     unchanged content never does. Edits to items it never matched don't fire.
 
     Loop protection: posts by our own Discord bots and by your Slack user never
@@ -1066,6 +1075,9 @@ async def trigger_upsert(
             parsed = IngestConfig.model_validate(config)
         except ValidationError as e:
             raise ValueError(f"invalid trigger config: {e}") from e
+        check_template(
+            parsed.template, parsed.filter.source_types, isinstance(parsed.delivery, PerItem)
+        )
         spec = parse_spec(definition.spec)
         await check_spec(spec)
         key = token_api_key(token, db)

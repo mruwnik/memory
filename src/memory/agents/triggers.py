@@ -70,9 +70,6 @@ REGEX_TIMEOUT_SEC = 0.1
 MAX_TEMPLATE_CHARS = 20_000
 ITEMS_PLACEHOLDER = "{items}"
 DEFAULT_TEMPLATE = f"New items matched this trigger:\n\n{ITEMS_PLACEHOLDER}"
-ITEM_PREVIEW_CHARS = 500
-ITEM_TITLE_CHARS = 200
-CLIPPED = "\n[input truncated]"
 BUFFER_TTL_SEC = 86_400
 # Reprocessing that would re-match an item (re-syncs, upstream edits) mostly
 # happens soon after ingest, so claims older than this are purged; items older
@@ -175,7 +172,7 @@ class IngestConfig(BaseModel):
 
     filter: IngestFilter
     delivery: Annotated[PerItem | Batch, Field(discriminator="mode")] = PerItem()
-    # The run's input; {items} is replaced by one line per matched item.
+    # The run's input; placeholders are filled by memory.agents.trigger_input.
     template: str = Field(
         default=DEFAULT_TEMPLATE, min_length=1, max_length=MAX_TEMPLATE_CHARS
     )
@@ -605,23 +602,3 @@ def queue_trigger_match(item_id: int) -> None:
     except Exception:
         logger.exception("could not queue trigger matching for item %s", item_id)
 
-
-def item_line(item: SourceItem, edited: bool) -> str:
-    title = " ".join((item_title(item) or "").split())[:ITEM_TITLE_CHARS]
-    preview = " ".join(item_body(item).split())[:ITEM_PREVIEW_CHARS]
-    label = f"{item.type} #{item.id}" + (", edited" if edited else "")
-    return f"- [{label}] {title}: {preview}" if title else f"- [{label}] {preview}"
-
-
-def render_input(
-    template: str, items: list[SourceItem], max_chars: int, edited: Collection[int] = ()
-) -> str:
-    """Clipped rather than refused: an oversized input would trip the trigger."""
-    lines = "\n".join(item_line(i, i.id in edited) for i in items)
-    if ITEMS_PLACEHOLDER in template:
-        text = template.replace(ITEMS_PLACEHOLDER, lines)
-    else:
-        text = f"{template}\n\n{lines}"
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - len(CLIPPED)] + CLIPPED

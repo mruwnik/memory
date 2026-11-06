@@ -72,6 +72,15 @@ def fire_dispatched(dispatch):
     dispatch.reset_mock()
 
 
+def rendered(p, change="new", body="body"):
+    return (
+        f"- [blog_post #{p.id}] {change}\n"
+        f"  inserted_at: {p.inserted_at.isoformat()}\n"
+        f"  <untrusted_item id={p.id} field=title>{p.title}</untrusted_item>\n"
+        f"  <untrusted_item id={p.id} field=content>{body}</untrusted_item>"
+    )
+
+
 def claimed(*items):
     return [Delivery(i.id, content_version(i).hex(), False).encode() for i in items]
 
@@ -96,9 +105,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
         {"trigger_id": trigger.id, "item_ids": [a.id, b.id]},
         trigger.definition_id,
     )
-    assert run.input == (
-        f"New:\n- [blog_post #{a.id}] A: body\n- [blog_post #{b.id}] B: body"
-    )
+    assert run.input == "New:\n" + "\n".join(rendered(p) for p in (a, b))
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
 
 
@@ -107,12 +114,12 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     [
         (
             {"mode": "per_item"},
-            ["New:\n- [blog_post #{id}] A: body", "New:\n- [blog_post #{id}, edited] A: body, edited"],
+            [("new", "body"), ("edited", "body, edited")],
         ),
         # Edited before the batch went out, so the run is the agent's first sight of it.
         (
             {"mode": "batch", "window_sec": 60, "max_items": 10},
-            ["New:\n- [blog_post #{id}] A: body, edited"],
+            [("new", "body, edited")],
         ),
     ],
 )
@@ -136,7 +143,7 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
 
     # Every run in a test shares one transaction, so created_at can't order them.
     assert sorted(r.input for r in db_session.query(AgentRun)) == sorted(
-        i.format(id=item.id) for i in inputs
+        "New:\n" + rendered(item, change, body) for change, body in inputs
     )
 
 

@@ -18,7 +18,6 @@ from memory.agents.triggers import (
     item_facts,
     matches,
     regex_search,
-    render_input,
 )
 from memory.common.celery_app import FIRE_TRIGGER, MATCH_INGEST_TRIGGERS
 from memory.common.db.models import (
@@ -220,37 +219,6 @@ def test_discord_facts_carry_channel_and_author_identities():
         frozenset({"100", "alice", "al"}),
         "hi",
     )
-
-
-@pytest.mark.parametrize(
-    "template,edited,expected",
-    [
-        ("Triage these:\n{items}\nThanks", set(), "Triage these:\n- [blog_post #7] T: body text\nThanks"),
-        ("Triage", set(), "Triage\n\n- [blog_post #7] T: body text"),
-        ("{items}", {7}, "- [blog_post #7, edited] T: body text"),
-    ],
-)
-def test_render_input(template, edited, expected):
-    post = BlogPost(id=7, type="blog_post", title="T", content="body   text")
-
-    assert render_input(template, [post], max_chars=1000, edited=edited) == expected
-
-
-def test_render_input_caps_titles():
-    post = BlogPost(id=7, type="blog_post", title="T" * 10_000, content="body")
-
-    rendered = render_input("{items}", [post], max_chars=100_000)
-
-    assert rendered == f"- [blog_post #7] {'T' * triggers.ITEM_TITLE_CHARS}: body"
-
-
-def test_render_input_is_clipped_to_the_run_input_limit():
-    post = BlogPost(id=7, type="blog_post", title="T", content="body " * 200)
-
-    rendered = render_input("{items}" * 50, [post], max_chars=2000)
-
-    assert len(rendered) == 2000
-    assert rendered.endswith("\n[input truncated]")
 
 
 def make_definition(db, user):

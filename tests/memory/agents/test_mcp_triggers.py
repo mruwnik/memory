@@ -59,6 +59,10 @@ async def test_triggers_are_created_listed_updated_and_deleted(
         ({"filter": {}}, "set at least one of"),
         ({"filter": {"regex": "("}}, "regex does not compile"),
         ({"filter": {"tags_any": ["x"]}, "nope": 1}, "Extra inputs"),
+        (
+            {"filter": {"source_types": ["blog_post"]}, "template": "{item.repo}"},
+            r"unknown field \{item.repo\}; valid fields: author,",
+        ),
     ],
 )
 async def test_invalid_configs_are_refused_with_reasons(
