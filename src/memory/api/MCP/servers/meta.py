@@ -228,7 +228,7 @@ async def get_tags() -> list[str]:
 
 
 @meta_mcp.tool(annotations=READ_ONLY)
-@visible_when()  # genuinely public utility — no PII, no side effects
+@visible_when(require_scopes(SCOPE_READ))
 async def get_current_time() -> dict:
     """Get the current time in UTC."""
     logger.info("get_current_time tool called")

@@ -469,7 +469,7 @@ async def test_verify_token_empty_api_key_scopes_does_not_inherit_user_admin(db_
     # The empty-list key must NOT silently re-grant the user's admin scope.
     assert "*" not in result.scopes
     # It collapses to the safe default — read only.
-    assert result.scopes == ["read"]
+    assert result.scopes == ["read", "mcp"]
 
 
 @pytest.mark.asyncio

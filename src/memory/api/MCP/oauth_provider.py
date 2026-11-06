@@ -40,7 +40,13 @@ from memory.api.auth import (
     lookup_principal,
     system_scopes,
 )
-from memory.common.scopes import SCOPE_CLAUDE_AI, SCOPE_READ, SCOPE_WRITE
+from memory.common.scopes import (
+    SCOPE_ADMIN,
+    SCOPE_AGENTS_WORK,
+    SCOPE_CLAUDE_AI,
+    SCOPE_READ,
+    SCOPE_WRITE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +131,18 @@ def raises_token_error(fn):
 ALLOWED_SCOPES = [SCOPE_READ, SCOPE_WRITE, SCOPE_CLAUDE_AI]
 BASE_SCOPES = [SCOPE_READ]
 RW_SCOPES = [SCOPE_READ, SCOPE_WRITE]
+
+# FastMCP's gate demands every one of its required scopes, but a credential may enter
+# with any one of these (an agents:work key must not need read), so verify_token adds
+# MCP_GATE_SCOPE for them and the per-tool checks decide everything past the gate.
+MCP_ENTRY_SCOPES = {SCOPE_READ, SCOPE_AGENTS_WORK, SCOPE_ADMIN}
+MCP_GATE_SCOPE = "mcp"
+
+
+def with_gate_scope(scopes: list[str]) -> list[str]:
+    if MCP_ENTRY_SCOPES.isdisjoint(scopes):
+        return scopes
+    return [*scopes, MCP_GATE_SCOPE]
 
 
 # Token configuration constants
@@ -328,7 +346,7 @@ class SimpleOAuthProvider(OAuthProvider):
                 valid_scopes=ALLOWED_SCOPES,
                 default_scopes=BASE_SCOPES,
             ),
-            required_scopes=BASE_SCOPES,
+            required_scopes=[MCP_GATE_SCOPE],
         )
 
     async def verify_token(self, token: str) -> FastMCPAccessToken | None:
@@ -352,18 +370,19 @@ class SimpleOAuthProvider(OAuthProvider):
            what the admin configured.
 
         The token returned here is consumed by the visibility middleware, so
-        we expose ``User.scopes`` (system scopes) plus ``read``/``write`` (so
-        FastMCP's OAuth gate is satisfied even if the admin only granted a
-        named scope like ``github``). PR #76 briefly conflated the two by
-        sourcing scopes from ``OAuthState.scopes`` here, which silently
-        dropped admin privileges from any OAuth-authenticated user — the
-        token would carry only what the MCP client requested at registration
-        (``[read, write]``), so account-level admin (``user.scopes = ["*"]``)
-        never reached the visibility checker.
+        it carries the credential's system scopes (``credential_scopes``: a
+        login session's are its user's plus ``read``/``write``, an API key's
+        are its own capped by its user's), plus ``MCP_GATE_SCOPE`` when they
+        include one of ``MCP_ENTRY_SCOPES``, which is what FastMCP's gate
+        checks. PR #76 briefly conflated the two by sourcing scopes from
+        ``OAuthState.scopes`` here, which silently dropped admin privileges
+        from any OAuth-authenticated user — the token would carry only what
+        the MCP client requested at registration (``[read, write]``), so
+        account-level admin (``user.scopes = ["*"]``) never reached the
+        visibility checker.
 
         ``load_access_token`` separately uses the OAuth scopes (via
-        ``resolve_session_scopes``) — that's the right shape for the OAuth
-        auth gate, since FastMCP just checks for ``read`` there.
+        ``resolve_session_scopes``), for the SDK's own token endpoints.
 
         Implementation note: the lookup, expiry check, and last-used bump
         are shared with ``load_access_token`` via
@@ -377,10 +396,8 @@ class SimpleOAuthProvider(OAuthProvider):
             if principal is None:
                 return None
 
+            scopes = with_gate_scope(system_scopes(principal))
             if principal.user_session is not None:
-                # OAuth/cookie session path: project SYSTEM scopes
-                # (User.scopes) + the OAuth-gate primer (read/write).
-                scopes = system_scopes(principal)
                 client_id = (
                     cast(str, principal.user_session.oauth_state.client_id)
                     if principal.user_session.oauth_state is not None
@@ -398,10 +415,6 @@ class SimpleOAuthProvider(OAuthProvider):
                     scopes=scopes,
                 )
 
-            # API key path: a key with its own scopes gets them as listed
-            # (capped by its user's), not primed with read/write, so a
-            # narrowly scoped key must list ``read`` to pass the MCP gate.
-            scopes = system_scopes(principal)
             logger.info(
                 f"User {principal.user.name} (id={principal.user.id}) "
                 f"authenticated via API key"

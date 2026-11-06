@@ -54,10 +54,8 @@ async def test_api_key_is_limited_to_its_own_scopes(db_session, admin_user):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scopes", [[], ["people"]])
-async def test_no_effective_scopes_leaves_only_unscoped_tools(
-    db_session, user_session, scopes
-):
-    assert await listed(user_session.token, scopes) == {"meta_get_current_time"}
+async def test_no_effective_scopes_leaves_no_tools(db_session, user_session, scopes):
+    assert await listed(user_session.token, scopes) == set()
 
 
 @pytest.mark.asyncio

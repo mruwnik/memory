@@ -26,6 +26,10 @@ a new, empty `## Unreleased` above it.
 
 - Workers may report a run's cost as zero, as one on a flat-rate subscription
   honestly does.
+- An API key whose only scope is `agents:work` (or `*`) gets into MCP instead of
+  a 403, and sees only `agent_work_claim` and `agent_work_submit`; it no longer
+  needs `read`, which would open the owner's knowledge base to the worker.
+  `meta_get_current_time` now needs `read` like every other tool.
 
 ### Required env vars
 
