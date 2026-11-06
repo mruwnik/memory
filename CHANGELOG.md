@@ -69,6 +69,10 @@ a new, empty `## Unreleased` above it.
   mail's body no longer decodes its attachments. PDF pages are rendered no
   larger than the 2 MP an embedding uses.
 - Word documents are text-searchable page by page, as PDFs already were.
+- Items whose embedding failed are retried hourly with backoff (1h, 2h, 4h... up to 8 attempts, about five days) instead of only within 48 hours of being added; up to 300 items per run.
+- Items that failed because no Voyage key was set don't use up attempts, and are retried within the hour once a key exists, including a key set in the environment rather than on the settings page.
+- Blog and forum posts whose downloaded images are missing from disk are embedded from their text instead of failing.
+- Slack history sync picks up replies posted later under threads it had already passed: each sync re-lists the channel's history of the last `SLACK_THREAD_LOOKBACK_DAYS` and reads, from the newest stored reply on, every thread whose `latest_reply` isn't stored. Replies whose events were missed (downtime, deploys, failed webhooks) are no longer lost.
 - Container logs cover days rather than hours. Per-item and per-request lines no longer log at INFO: the httpx/httpcore line for every HTTP request, Celery's "Task … received" line (the "succeeded" and failure lines still name each task), passing `/health` checks in the api access log, and per-item ingest lines ("Adding Slack/Discord message", "Successfully processed …", "Connecting to Qdrant", "Job N completed", an email's per-chunk listing, per-item reingest/metadata lines). The api and worker containers keep 5 × 50 MB of logs instead of 3 × 10 MB. ERROR and CRITICAL logging is unchanged.
 - Meetings record their size, so search's `min_size`/`max_size` filters no longer drop them.
 - A synced meeting is linked to its owner's calendar event for the occurrence it recorded (Fireflies `cal_id` matched to the event's calendar id).
@@ -145,6 +149,11 @@ None.
   attachment can take when embedded.
 - The ingest-hub container's memory limit rises from 512 MiB to 1 GiB: beat,
   the Discord collector and the Beeper collector together sat at its limit.
+- `process_raw_items` runs hourly at :25 instead of daily at 04:00.
+- A failed embed logs `Embedding <Type> <id> failed: <ExceptionType>` at WARNING (it used to be ERROR, with no item id). The last error type is stored in `source_item.embed_error`, and the next retry time in `embed_retry_at`: `SELECT type, embed_error, count(*) FROM source_item WHERE embed_status = 'FAILED' GROUP BY 1, 2`.
+- New optional setting `SLACK_THREAD_LOOKBACK_DAYS` (default 14; 0 turns it off). Threads started earlier than this are not checked; replies missing there still need `slack rewind-cursors --since`.
+- Cost per channel sync: `ceil(messages in the lookback / 100)` extra `conversations.history` calls, plus one `conversations.replies` call per thread with replies that aren't stored. In steady state that's usually zero replies calls. A thread whose latest reply is never stored (a `bot_message`, a reply without an author, or a reply skipped after repeated failures) is read again on every sync until it falls out of the lookback.
+- The first sync after deploying reads every thread in the lookback whose latest reply was missed. That is a one-off burst of `conversations.replies` calls; Slack's rate limiting handles it the same way it handles the rest of the sync.
 - Docker applies the new `logging` options only to recreated containers: `docker compose up -d` after pulling recreates them. Allow up to 250 MB of disk per api/worker container (5 containers ≈ 1.25 GB worst case).
 - The demoted lines are still there at DEBUG: run a worker with `LOGLEVEL=DEBUG` (or `--loglevel=DEBUG` for agents-worker) to get them back while you diagnose something.
 - The first sync of a Gmail account with no folders selected backfills its
@@ -174,6 +183,7 @@ None.
 - `20261204_meeting_cal_event_uid`: adds the nullable `meeting.calendar_event_uid`
   column (the calendar event occurrence a meeting recorded). Fast.
 - `20261205_meeting_backfill`: fills `size` for stored meetings, links meetings carrying a calendar uid to their owner's matching event, and moves meetings left `extracted` (extracted but never stored) back to `processing` so the hourly `cleanup_stuck_meetings` reruns each once. Fast (meeting table only). The reruns re-extract on the owner's LLM key.
+- `20261205_embed_retry` adds `embed_attempts`, `embed_error` and `embed_retry_at` to `source_item`. These are metadata-only column adds, so it's fast even on a large table.
 
 ### Post-deploy commands
 

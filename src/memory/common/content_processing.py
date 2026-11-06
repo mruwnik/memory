@@ -222,24 +222,33 @@ def embed_source_item(
 
     try:
         chunks = embedding.embed_source_item(source_item, before_embed)
-        if chunks:
-            source_item.chunks = chunks
-            source_item.embed_status = "QUEUED"  # type: ignore
-            return len(chunks)
-        else:
-            source_item.embed_status = "FAILED"  # type: ignore
-            logger.warning(
-                f"No chunks generated for {type(source_item).__name__}: {getattr(source_item, 'title', 'unknown')}"
-            )
-            return 0
     except embedding.EmbeddingsNotConfigured:
-        source_item.embed_status = "FAILED"  # type: ignore
+        # Not the item's fault: retried as soon as a key is set, however long that takes.
+        source_item.embed_failed("EmbeddingsNotConfigured", counts=False)
         embedding.warn_not_configured()
         return 0
-    except Exception:
-        source_item.embed_status = "FAILED"  # type: ignore
-        logger.exception(f"Failed to embed {type(source_item).__name__}")
+    except Exception as e:
+        error = error_name(e)
+        source_item.embed_failed(error)
+        logger.warning(
+            f"Embedding {type(source_item).__name__} {source_item.id} failed: {error}",
+            exc_info=True,
+        )
         return 0
+
+    if not chunks:
+        source_item.embed_failed("no chunks")
+        logger.warning(f"No chunks generated for {type(source_item).__name__} {source_item.id}")
+        return 0
+    source_item.chunks = chunks
+    source_item.embed_status = "QUEUED"  # type: ignore
+    return len(chunks)
+
+
+def error_name(e: BaseException) -> str:
+    """The exception's type, and its cause's: EmbeddingError wraps Voyage's real error."""
+    cause = e.__cause__
+    return f"{type(e).__name__}: {type(cause).__name__}" if cause else type(e).__name__
 
 
 def by_collection(chunks: Sequence[Chunk]) -> dict[str, dict[str, Any]]:
@@ -325,14 +334,14 @@ def push_to_qdrant(source_items: Sequence[SourceItem]):
             )
 
         for item in items_to_process:
-            item.embed_status = "STORED"  # type: ignore
+            item.embed_stored()
             logger.debug(
                 f"Successfully stored embeddings for: {getattr(item, 'title', 'unknown')}"
             )
 
-    except Exception:
+    except Exception as e:
         for item in items_to_process:
-            item.embed_status = "FAILED"  # type: ignore
+            item.embed_failed(error_name(e))
         logger.exception("Failed to push embeddings to Qdrant")
         raise
 
@@ -418,13 +427,13 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     try:
         push_chunks_to_qdrant(chunks_with_vectors)
         status = "processed"
-        item.embed_status = "STORED"  # type: ignore
+        item.embed_stored()
         logger.debug(
             f"Successfully processed {type(item).__name__}: {getattr(item, 'title', 'unknown')} ({chunks_count} chunks embedded)"
         )
-    except Exception:
+    except Exception as e:
         status = "failed"
-        item.embed_status = "FAILED"  # type: ignore
+        item.embed_failed(error_name(e))
         logger.exception("Failed to push embeddings to Qdrant")
     session.commit()
     if status == "processed":

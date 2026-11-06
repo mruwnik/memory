@@ -8,7 +8,7 @@ import logging
 import math
 import pathlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Annotated, Sequence, TypedDict, cast
 import uuid
@@ -153,6 +153,11 @@ def clean_filename(filename: str) -> str:
 
 
 MAX_WEBP_SIDE = 16383
+
+# Failed embeds are retried EMBED_RETRY_BASE, then 2x, 4x... later: about five
+# days of retries before an item is left FAILED for good.
+MAX_EMBED_ATTEMPTS = 8
+EMBED_RETRY_BASE = timedelta(hours=1)
 CHUNK_IMAGE_QUALITY = 85
 
 
@@ -196,7 +201,9 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
     if not content.strip():
         return []
 
-    images = [Image.open(settings.FILE_STORAGE_DIR / image) for image in image_paths]
+    # A post whose downloaded image went missing is still worth finding by its text.
+    paths = [settings.FILE_STORAGE_DIR / image for image in image_paths]
+    images = [Image.open(path) for path in paths if path.is_file()]
 
     is_long = summarizer.needs_summary(content)
     result = summarizer.summarize_or_defer(content, {} if is_long else None)
@@ -532,6 +539,14 @@ class SourceItem(AccessControlMixin, Base):
 
     # Chunks relationship
     embed_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="RAW")
+    embed_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # The exception type of the last failed embed, never its message (item text).
+    embed_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embed_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     chunks: Mapped[list[Chunk]] = relationship(
         "Chunk", backref="source", cascade="all, delete-orphan"
     )
@@ -685,6 +700,23 @@ class SourceItem(AccessControlMixin, Base):
             is_summary=data.metadata.get("type") == "summary",
         )
         return chunk
+
+    def embed_failed(self, error: str, *, counts: bool = True) -> None:
+        """Mark FAILED; a counted failure schedules the next retry, backing off."""
+        self.embed_status = "FAILED"
+        self.embed_error = error
+        if not counts:
+            return
+        self.embed_attempts = (self.embed_attempts or 0) + 1
+        self.embed_retry_at = datetime.now(timezone.utc) + EMBED_RETRY_BASE * 2 ** (
+            self.embed_attempts - 1
+        )
+
+    def embed_stored(self) -> None:
+        self.embed_status = "STORED"
+        self.embed_attempts = 0
+        self.embed_error = None
+        self.embed_retry_at = None
 
     def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
         metadata = metadata or {}

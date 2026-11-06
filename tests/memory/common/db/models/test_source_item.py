@@ -661,6 +661,15 @@ def test_chunk_mixed_with_images(tmp_path):
     assert len([d for d in result[0].data if isinstance(d, Image.Image)]) == 2
 
 
+def test_chunk_mixed_embeds_the_text_of_a_post_whose_image_file_is_gone(tmp_path):
+    Image.new("RGB", (1, 1), color="red").save(tmp_path / "kept.png")
+
+    with patch.object(settings, "FILE_STORAGE_DIR", tmp_path):
+        result = chunk_mixed("Post text", ["kept.png", "gone.png"])
+
+    assert [type(d).__name__ for d in result[0].data] == ["str", "PngImageFile"]
+
+
 @pytest.mark.parametrize("words", [10, 600, 819])
 def test_chunk_mixed_content_within_two_chunks_is_only_tagged(words):
     content = "word " * words

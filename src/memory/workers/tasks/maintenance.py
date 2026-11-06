@@ -81,6 +81,7 @@ from memory.common.db.models import (
     TaskExecution,
     TelemetryEvent,
 )
+from memory.common.db.models.source_item import EMBED_RETRY_BASE, MAX_EMBED_ATTEMPTS
 from memory.common.db.models.source_items import (
     BeeperMessage,
     BlogPost,
@@ -347,7 +348,8 @@ def process_raw_item(item_id: int, item_type: str):
 
 
 RAW_ITEM_GRACE = timedelta(hours=1)
-FAILED_ITEM_RETRY_WINDOW = timedelta(hours=48)
+# Hourly, so a backlog of failures drains in a day without flooding Voyage.
+RAW_ITEMS_PER_RUN = 300
 
 
 @app.task(name=PROCESS_RAW_ITEMS)
@@ -355,29 +357,19 @@ FAILED_ITEM_RETRY_WINDOW = timedelta(hours=48)
 def process_raw_items(
     item_type: str | None = None,
     modality: str | None = None,
-    batch_size: int = 100,
+    batch_size: int = RAW_ITEMS_PER_RUN,
 ):
-    """Find and process items with embed_status='RAW', and retry recently FAILED ones.
+    """Embed RAW items, and retry FAILED ones whose backoff is over.
 
     RAW items updated within RAW_ITEM_GRACE are skipped: process_content_item
-    commits new items as RAW while it embeds them. FAILED items are retried
-    while inserted less than FAILED_ITEM_RETRY_WINDOW ago (about two daily
-    runs): a retry bumps updated_at, which would never let them age out.
+    commits new items as RAW while it embeds them. FAILED items are retried until
+    MAX_EMBED_ATTEMPTS counted failures (see SourceItem.embed_failed).
 
     Can filter by item_type (e.g., 'slack_message') or modality (e.g., 'message').
-    Dispatches individual process_raw_item tasks for each item found.
-
-    Args:
-        item_type: Filter by specific item type (optional)
-        modality: Filter by modality (optional, e.g., 'message', 'mail')
-        batch_size: Maximum items to process per run (default 100)
-
-    Returns:
-        Dict with status and count of items queued for processing
+    Dispatches individual process_raw_item / reingest_item tasks, newest first.
     """
-    logger.info(
-        f"Finding RAW items to process (item_type={item_type}, modality={modality})"
-    )
+    if not embedding.configured():
+        return {"status": "skipped", "reason": "embeddings not configured"}
 
     class_ = SourceItem
     if item_type:
@@ -397,7 +389,8 @@ def process_raw_items(
                 ),
                 and_(
                     class_.embed_status == "FAILED",
-                    class_.inserted_at >= now - FAILED_ITEM_RETRY_WINDOW,
+                    class_.embed_attempts < MAX_EMBED_ATTEMPTS,
+                    or_(class_.embed_retry_at.is_(None), class_.embed_retry_at <= now),
                 ),
             )
         )
@@ -405,7 +398,20 @@ def process_raw_items(
             query = query.filter(class_.modality == modality)
 
         items = query.order_by(class_.inserted_at.desc()).limit(batch_size).all()
-        logger.info(f"Found {len(items)} RAW or recently FAILED items to process")
+        logger.info(f"Found {len(items)} RAW or retryable FAILED items to process")
+
+        # Push each retry's next slot forward now, so a later run doesn't queue it
+        # again while this one still waits in the queue; the outcome resets it.
+        failed_ids = [item_id for item_id, _, status in items if status == "FAILED"]
+        session.execute(
+            update(SourceItem)
+            .where(SourceItem.id.in_(failed_ids))
+            .values(
+                embed_retry_at=literal(now)
+                + literal(EMBED_RETRY_BASE) * func.power(2, SourceItem.embed_attempts)
+            )
+        )
+        session.commit()
 
         for item_id, type_name, embed_status in items:
             # reingest_item also clears chunks a failed Qdrant push left behind.

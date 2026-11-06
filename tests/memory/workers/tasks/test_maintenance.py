@@ -48,6 +48,8 @@ from memory.workers.tasks.maintenance import (
     get_item_class,
     _payloads_equal,
 )
+from memory.common.db.models.source_item import MAX_EMBED_ATTEMPTS
+from tests.conftest import unique_sha256
 import memory.workers.tasks.maintenance as maintenance_module
 
 from memory.common.db.models import (
@@ -659,44 +661,58 @@ def test_reingest_empty_source_items_selection(
     assert mock_reingest.call_args_list == [call(item.id, "MailMessage")][: int(requeued)]
 
 
-@pytest.mark.parametrize("item_type", [None, "mail_message"])
-@pytest.mark.parametrize(
-    "embed_status, inserted_hours_ago, updated_hours_ago, raw_queued, failed_queued",
-    [
-        ("RAW", 3, 2, True, False),
-        # Probably still being embedded by the task that created it.
-        ("RAW", 1, 0.5, False, False),
-        ("FAILED", 24, 0, False, True),
-        # Retries bump updated_at, so only inserted_at bounds them.
-        ("FAILED", 72, 0, False, False),
-        ("STORED", 3, 2, False, False),
-        ("SKIPPED", 3, 2, False, False),
-    ],
-)
-def test_process_raw_items_selection(
-    db_session,
-    item_type,
-    embed_status,
-    inserted_hours_ago,
-    updated_hours_ago,
-    raw_queued,
-    failed_queued,
-):
-    now = datetime.now(timezone.utc)
-    item = MailMessage(
-        sha256=b"raw_selection" + bytes(19),
+PAST = datetime(2000, 1, 1, tzinfo=timezone.utc)
+FUTURE = datetime(2999, 1, 1, tzinfo=timezone.utc)
+
+
+def raw_items_mail(**fields) -> MailMessage:
+    return MailMessage(
+        sha256=unique_sha256(),
         size=100,
         mime_type="message/rfc822",
-        embed_status=embed_status,
-        message_id="<raw-selection@example.com>",
+        message_id=f"<{uuid.uuid4()}@example.com>",
         subject="Subject",
         sender="sender@example.com",
         recipients=["recipient@example.com"],
         content="Content",
         folder="INBOX",
         modality="mail",
-        inserted_at=now - timedelta(hours=inserted_hours_ago),
-        updated_at=now - timedelta(hours=updated_hours_ago),
+        **fields,
+    )
+
+
+@pytest.mark.parametrize("item_type", [None, "mail_message"])
+@pytest.mark.parametrize(
+    "embed_status, updated_hours_ago, attempts, retry_at, raw_queued, failed_queued",
+    [
+        ("RAW", 2, 0, None, True, False),
+        # Probably still being embedded by the task that created it.
+        ("RAW", 0.5, 0, None, False, False),
+        # Failed before any retry was scheduled, e.g. while no Voyage key was set.
+        ("FAILED", 0, 0, None, False, True),
+        ("FAILED", 0, 3, PAST, False, True),
+        ("FAILED", 0, 3, FUTURE, False, False),
+        ("FAILED", 0, MAX_EMBED_ATTEMPTS, PAST, False, False),
+        ("STORED", 2, 0, None, False, False),
+        ("SKIPPED", 2, 0, None, False, False),
+    ],
+)
+def test_process_raw_items_selection(
+    db_session,
+    item_type,
+    embed_status,
+    updated_hours_ago,
+    attempts,
+    retry_at,
+    raw_queued,
+    failed_queued,
+):
+    item = raw_items_mail(
+        embed_status=embed_status,
+        embed_attempts=attempts,
+        embed_retry_at=retry_at,
+        inserted_at=datetime(2001, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=updated_hours_ago),
     )
     db_session.add(item)
     db_session.commit()
@@ -717,21 +733,8 @@ def test_process_raw_items_selection(
 def test_process_raw_items_retries_newest_failures_first(db_session):
     now = datetime.now(timezone.utc)
     items = [
-        MailMessage(
-            sha256=bytes([i]) * 32,
-            size=100,
-            mime_type="message/rfc822",
-            embed_status="FAILED",
-            message_id=f"<order-{i}@example.com>",
-            subject="Subject",
-            sender="sender@example.com",
-            recipients=["recipient@example.com"],
-            content="Content",
-            folder="INBOX",
-            modality="mail",
-            inserted_at=now - timedelta(hours=hours_ago),
-        )
-        for i, hours_ago in enumerate([40, 2, 20], start=1)
+        raw_items_mail(embed_status="FAILED", inserted_at=now - timedelta(hours=hours_ago))
+        for hours_ago in [40, 2, 20]
     ]
     db_session.add_all(items)
     db_session.commit()
@@ -743,6 +746,31 @@ def test_process_raw_items_retries_newest_failures_first(db_session):
         call(items[1].id, "mail_message"),
         call(items[2].id, "mail_message"),
     ]
+
+
+def test_process_raw_items_does_not_requeue_a_retry_still_waiting_in_the_queue(db_session):
+    item = raw_items_mail(embed_status="FAILED", embed_attempts=2)
+    db_session.add(item)
+    db_session.commit()
+
+    with patch.object(reingest_item, "delay") as mock_reingest:
+        maintenance_module.process_raw_items()
+        maintenance_module.process_raw_items()
+
+    assert mock_reingest.call_args_list == [call(item.id, "mail_message")]
+
+
+def test_process_raw_items_waits_for_a_voyage_key(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "VOYAGE_API_KEY", "")
+    item = raw_items_mail(embed_status="FAILED")
+    db_session.add(item)
+    db_session.commit()
+
+    with patch.object(reingest_item, "delay") as mock_reingest:
+        result = maintenance_module.process_raw_items()
+
+    assert result == {"status": "skipped", "reason": "embeddings not configured"}
+    assert mock_reingest.call_args_list == []
 
 
 def test_reingest_empty_source_items_invalid_type(db_session):

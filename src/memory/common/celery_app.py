@@ -506,7 +506,7 @@ def build_beat_schedule() -> dict:
         },
         "process-raw-items": {
             "task": PROCESS_RAW_ITEMS,
-            "schedule": crontab(hour="4", minute="0"),
+            "schedule": crontab(minute="25"),
         },
         "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
         "sweep-worker-runs": {"task": SWEEP_WORKER_RUNS, "schedule": 60},

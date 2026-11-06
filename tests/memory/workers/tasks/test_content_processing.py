@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from memory.common.db.models import (
     MailMessage,
     SourceItem,
 )
+from memory.common.embedding import EmbeddingError, EmbeddingsNotConfigured
 from memory.common.content_processing import (
     check_content_exists,
     create_content_hash,
@@ -208,6 +210,88 @@ def test_embed_source_item(
     assert str(sample_mail_message.embed_status) == expected_status
     if mock_return == "chunks":
         assert sample_mail_message.chunks == sample_chunks
+
+
+def chained(error: Exception, cause: Exception) -> Exception:
+    error.__cause__ = cause
+    return error
+
+
+@pytest.mark.parametrize(
+    "error, prior_attempts, expected_error, retry_in",
+    [
+        (FileNotFoundError("gone.png"), 0, "FileNotFoundError", timedelta(hours=1)),
+        (
+            chained(EmbeddingError("retries spent"), RuntimeError("429")),
+            2,
+            "EmbeddingError: RuntimeError",
+            timedelta(hours=4),
+        ),
+    ],
+)
+def test_embed_failure_schedules_a_backed_off_retry(
+    sample_mail_message, error, prior_attempts, expected_error, retry_in
+):
+    sample_mail_message.embed_attempts = prior_attempts
+    before = datetime.now(timezone.utc)
+
+    with patch("memory.common.embedding.embed_source_item", side_effect=error):
+        embed_source_item(sample_mail_message)
+
+    assert sample_mail_message.embed_status == "FAILED"
+    assert sample_mail_message.embed_attempts == prior_attempts + 1
+    assert sample_mail_message.embed_error == expected_error
+    assert before + retry_in <= sample_mail_message.embed_retry_at
+    assert sample_mail_message.embed_retry_at <= datetime.now(timezone.utc) + retry_in
+
+
+def test_embed_without_a_voyage_key_spends_no_attempt(sample_mail_message):
+    sample_mail_message.embed_attempts = 2
+
+    with patch(
+        "memory.common.embedding.embed_source_item",
+        side_effect=EmbeddingsNotConfigured(),
+    ):
+        embed_source_item(sample_mail_message)
+
+    assert sample_mail_message.embed_status == "FAILED"
+    assert sample_mail_message.embed_attempts == 2
+    assert sample_mail_message.embed_error == "EmbeddingsNotConfigured"
+    assert sample_mail_message.embed_retry_at is None
+
+
+def test_embed_failure_is_logged_with_the_item_and_error_type(
+    sample_mail_message, caplog
+):
+    sample_mail_message.id = 4242
+
+    with patch(
+        "memory.common.embedding.embed_source_item",
+        side_effect=FileNotFoundError("gone.png"),
+    ):
+        embed_source_item(sample_mail_message)
+
+    assert [
+        (r.levelname, r.getMessage())
+        for r in caplog.records
+        if r.name == "memory.common.content_processing"
+    ] == [("WARNING", "Embedding MailMessage 4242 failed: FileNotFoundError")]
+
+
+def test_stored_item_forgets_earlier_failures(db_session, qdrant, sample_mail_message):
+    sample_mail_message.embed_status = "FAILED"
+    sample_mail_message.embed_attempts = 3
+    sample_mail_message.embed_error = "EmbeddingError: RuntimeError"
+    sample_mail_message.embed_retry_at = datetime.now(timezone.utc)
+
+    result = process_content_item(sample_mail_message, db_session)
+
+    assert result["embed_status"] == "STORED"
+    assert (
+        sample_mail_message.embed_attempts,
+        sample_mail_message.embed_error,
+        sample_mail_message.embed_retry_at,
+    ) == (0, None, None)
 
 
 def test_embed_source_item_skipped_when_should_embed_false(sample_mail_message):
