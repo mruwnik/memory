@@ -12,6 +12,35 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## v0.4.7 (2026-11-06)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Deleting a Discord bot that has collected messages no longer fails with a
+  500; its messages are kept with no bot.
+- Slack apps whose workspace was disconnected are listed on the Slack tab, to
+  reconnect or delete. They were hidden before, while still blocking a new
+  app with the same client ID.
+
+### Migrations
+
+- `20261202_discord_msg_bot_null`: `discord_message.bot_id` becomes
+  `ON DELETE SET NULL`. Re-adding the foreign key validates every Discord
+  message row, a quick scan.
+
+### Post-deploy commands
+
+None. Instances updating from before v0.4.5 still run v0.4.5's post-deploy
+command.
+
 ## v0.4.6 (2026-11-05)
 
 ### Required env vars
