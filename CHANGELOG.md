@@ -69,6 +69,7 @@ a new, empty `## Unreleased` above it.
   mail's body no longer decodes its attachments. PDF pages are rendered no
   larger than the 2 MP an embedding uses.
 - Word documents are text-searchable page by page, as PDFs already were.
+- Reprocessing a meeting (by hand, by the stuck-meeting cleanup, or a redelivered ingest) keeps its action items: pending ones are recreated by the new extraction, and ones someone started, finished or cancelled stay attached instead of being orphaned. A rerun also reattaches action items an earlier rerun orphaned.
 - Items whose embedding failed are retried hourly with backoff (1h, 2h, 4h... up to 8 attempts, about five days) instead of only within 48 hours of being added; up to 300 items per run.
 - Items that failed because no Voyage key was set don't use up attempts, and are retried within the hour once a key exists, including a key set in the environment rather than on the settings page.
 - Blog and forum posts whose downloaded images are missing from disk are embedded from their text instead of failing.
@@ -211,6 +212,18 @@ older than a channel's newest stored message, are only refetched by rewinding
 further, e.g. `--since 2026-06-01` (dry run first, as above). That rereads
 every collected channel's history and threads from that date, which takes a
 while under Slack's rate limits.
+
+Reattach the action items earlier meeting reruns left without a meeting. Safe
+to re-run; a task whose title was edited since can't be matched and stays
+detached:
+
+```bash
+docker compose exec -T postgres psql -U kb -d kb -c "
+UPDATE task t SET source_item_id = m.id
+FROM source_item s, meeting m
+WHERE s.id = t.id AND t.source_item_id IS NULL
+  AND s.sha256 = digest('meeting:' || m.id || ':' || t.task_title, 'sha256')"
+```
 
 ## v0.4.8 (2026-11-06)
 

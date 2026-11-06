@@ -1362,9 +1362,64 @@ def test_process_meeting_replace_drops_untouched_action_items(
 
     remaining = {t.id: t.source_item_id for t in mock_make_session.query(Task).all()}
     attached = {i for i, source in remaining.items() if source == first["meeting_id"]}
-    assert remaining[done_id] is None
+    assert done_id in attached
     assert not set(pending_ids) & set(remaining)
-    assert attached
+    assert len(attached) == 3
+
+
+def rerun_by_reprocess(meeting_id, user_id, transcript, retry=False):
+    meetings.reprocess_meeting(item_id=meeting_id, retry=retry)
+
+
+def rerun_by_replace(meeting_id, user_id, transcript):
+    meetings.process_meeting(creator_id=user_id, transcript="Ann: Corrected.", external_id="ff-1", replace=True)
+
+
+def rerun_by_redelivery(meeting_id, user_id, transcript):
+    meetings.process_meeting(creator_id=user_id, transcript=transcript, external_id="ff-1")
+
+
+@pytest.mark.parametrize(
+    "rerun, in_flight",
+    [
+        (rerun_by_reprocess, "complete"),
+        (lambda *args: rerun_by_reprocess(*args, retry=True), "processing"),
+        (rerun_by_replace, "complete"),
+        (rerun_by_redelivery, "processing"),
+    ],
+)
+def test_a_rerun_meeting_keeps_its_action_items(
+    rerun, in_flight, scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript,
+    mock_make_session, qdrant,
+):
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+    first = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
+    done = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).first()
+    done.status = "done"
+    mock_make_session.get(Meeting, first["meeting_id"]).extraction_status = in_flight
+    mock_make_session.commit()
+
+    rerun(first["meeting_id"], regular_user.id, sample_transcript)
+
+    attached = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
+    assert len(attached) == 3
+    assert (done.source_item_id, done.status) == (first["meeting_id"], "done")
+    assert mock_make_session.query(Task).count() == 3
+
+
+def test_reprocessing_reattaches_action_items_an_earlier_rerun_orphaned(
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
+):
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+    first = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
+    orphans = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
+    meetings.detach_meeting_tasks(mock_make_session, mock_make_session.get(Meeting, first["meeting_id"]))
+    mock_make_session.commit()
+
+    meetings.reprocess_meeting(item_id=first["meeting_id"])
+
+    attached = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
+    assert {t.id for t in attached} == {t.id for t in orphans}
 
 
 @pytest.mark.parametrize(

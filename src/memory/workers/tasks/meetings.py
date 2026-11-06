@@ -365,6 +365,13 @@ def create_action_item_tasks(
     for item in action_items:
         if not item.get("description"):
             continue
+        sha256 = make_task_sha256(meeting.id, item["description"])
+        # A task kept through a rerun, or one an older release's rerun left
+        # detached: the same action item, which someone may have worked on.
+        if existing := session.query(Task).filter(Task.sha256 == sha256).one_or_none():
+            existing.source_item_id = meeting.id
+            tasks.append(existing)
+            continue
 
         task_tags = ["meeting", "action-item"]
 
@@ -389,7 +396,7 @@ def create_action_item_tasks(
             priority=priority,
             status="pending",
             tags=task_tags,
-            sha256=make_task_sha256(meeting.id, item["description"]),
+            sha256=sha256,
         )
 
         # Link assignee to task via people relationship
@@ -408,8 +415,8 @@ def create_action_item_tasks(
     return created_tasks
 
 
-def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
-    """Detach action item tasks from a meeting (for reingest). Returns count detached.
+def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
+    """Detach action item tasks from a meeting about to be deleted.
 
     Detached tasks keep the access control they inherited from the meeting:
     marking it explicit stops it from re-resolving to no source at all.
@@ -420,20 +427,17 @@ def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> int:
         task.project_id_inherited = False
         task.sensitivity_inherited = False
     session.flush()
-    return len(tasks)
 
 
-# Tasks nobody has started, finished or cancelled. Replacing a meeting deletes
-# these (extraction recreates them) and detaches the rest.
+# Tasks nobody has started, finished or cancelled. Rerunning a meeting deletes
+# these (extraction recreates them) and keeps the rest.
 UNTOUCHED_TASK_STATUSES = ("pending",)
 
 
-def delete_meeting_tasks(
-    session: DBSession, meeting: Meeting, statuses: Sequence[str] | None = None
-) -> None:
-    query = session.query(Task).filter(Task.source_item_id == meeting.id)
-    if statuses is not None:
-        query = query.filter(Task.status.in_(statuses))
+def delete_untouched_tasks(session: DBSession, meeting: Meeting) -> None:
+    query = session.query(Task).filter(
+        Task.source_item_id == meeting.id, Task.status.in_(UNTOUCHED_TASK_STATUSES)
+    )
     for task in query:
         session.delete(task)
 
@@ -534,10 +538,11 @@ def create_meeting_record(
 
 def prepare_meeting_for_reingest(session: DBSession, item_id: int, retry: bool = False) -> Meeting | None:
     """
-    Fetch an existing meeting and clear its chunks/tasks for reprocessing.
+    Fetch an existing meeting and clear its chunks and untouched tasks for reprocessing.
 
-    Clears chunks and action item tasks but leaves people relationships intact
-    (they're still valuable and will be re-linked during processing). A
+    Tasks someone worked on stay attached, and extraction keeps them rather
+    than recreating them. People relationships are left intact (they're
+    re-linked during processing). A
     `retry` is cleanup_stuck_meetings rerunning a lost run, and isn't rerun again.
     """
     meeting = session.get(Meeting, item_id)
@@ -545,13 +550,13 @@ def prepare_meeting_for_reingest(session: DBSession, item_id: int, retry: bool =
         return None
 
     chunks_deleted = clear_item_chunks(meeting, session)
-    tasks_detached = detach_meeting_tasks(session, meeting)
+    delete_untouched_tasks(session, meeting)
     # Committed with the cleared chunks before the LLM call, so a worker lost
     # mid-call leaves it for cleanup_stuck_meetings rather than looking done.
     mark_in_flight(meeting, RETRYING if retry else "processing")
     logger.info(
         f"Prepared meeting {item_id} for reingest: "
-        f"cleared {chunks_deleted} chunks, detached {tasks_detached} tasks"
+        f"cleared {chunks_deleted} chunks"
     )
     return meeting
 
@@ -667,7 +672,7 @@ def execute_meeting_processing(
         outcome = (extract_result or {}).get("status", "")
         meeting.extraction_status = {"success": "extracted", "skipped": "skipped"}.get(outcome, "failed")
         # Tasks would point at a meeting search can't return; reprocessing recreates them.
-        delete_meeting_tasks(session, meeting)
+        delete_untouched_tasks(session, meeting)
         if job_id:
             job_utils.fail_job(session, job_id, str(e))
         session.commit()
@@ -910,8 +915,6 @@ def process_meeting(
         )
         # "processing": a worker lost mid-run had its task redelivered.
         if existing and (replacing or existing.extraction_status == "processing"):
-            delete_meeting_tasks(session, existing, statuses=UNTOUCHED_TASK_STATUSES)
-            session.flush()
             prepare_meeting_for_reingest(session, existing.id, retry=not replacing)
             meeting = existing
             if replacing:
@@ -984,7 +987,7 @@ def reprocess_meeting(
     """
     Reprocess an existing meeting.
 
-    Fetches the meeting, clears chunks and detaches tasks, then re-runs
+    Fetches the meeting, clears chunks and untouched tasks, then re-runs
     the full processing pipeline (LLM extraction + embeddings).
 
     Args:

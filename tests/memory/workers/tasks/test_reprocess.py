@@ -88,12 +88,12 @@ def pending_job(db_session):
     return job
 
 
-def test_prepare_meeting_for_reingest_clears_chunks_and_detaches_tasks(
+def test_prepare_meeting_for_reingest_clears_chunks_and_untouched_tasks(
     db_session, meeting_with_tasks, qdrant
 ):
-    """Test that prepare_meeting_for_reingest clears chunks and detaches (not deletes) tasks."""
+    """Pending tasks go (extraction recreates them); tasks someone worked on stay attached."""
     meeting, tasks = meeting_with_tasks
-    original_task_ids = [t.id for t in tasks]
+    tasks[0].status = "done"
 
     # Add a chunk
     chunk = Chunk(
@@ -110,18 +110,14 @@ def test_prepare_meeting_for_reingest_clears_chunks_and_detaches_tasks(
         "memory.common.content_processing.qdrant.delete_points"
     ) as mock_delete:
         result = prepare_meeting_for_reingest(db_session, meeting.id)
+    db_session.flush()
 
     assert result is not None
     assert result.id == meeting.id
     mock_delete.assert_called_once()
 
-    # Verify tasks still exist but are detached (source_item_id is None)
-    remaining_tasks = (
-        db_session.query(Task).filter(Task.id.in_(original_task_ids)).all()
-    )
-    assert len(remaining_tasks) == 3  # Tasks still exist
-    for task in remaining_tasks:
-        assert task.source_item_id is None  # But detached from meeting
+    remaining = db_session.query(Task).filter(Task.id.in_([t.id for t in tasks])).all()
+    assert [(t.id, t.source_item_id) for t in remaining] == [(tasks[0].id, meeting.id)]
 
     # Verify chunk was deleted. The relationship is cached on the in-memory
     # `meeting` object — refresh it so we observe the post-flush state rather
