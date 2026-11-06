@@ -157,6 +157,9 @@ class MockRedis:
         self._data[key] = current
         return current
 
+    def decr(self, key: str, amount: int = 1) -> int:
+        return self.incr(key, -amount)
+
     def llen(self, key: str) -> int:
         """List length — return 0 for any key (queues are empty in mock)."""
         v = self._data.get(key, [])

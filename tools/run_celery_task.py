@@ -17,6 +17,7 @@ Usage:
     python run_celery_task.py forums sync-lesswrong --since-date "2025-01-01" --min-karma 10 --limit 50 --cooldown 0.5 --max-items 1000
     python run_celery_task.py github sync-all-repos
     python run_celery_task.py github sync-repo --repo-id 1 --force-full
+    python run_celery_task.py --wait slack rewind-cursors --dry-run
 """
 
 import json
@@ -60,6 +61,7 @@ from memory.common.celery_app import (
     BACKUP_PATH,
     BACKUP_ALL,
     SYNC_GITHUB_REPO,
+    REWIND_SLACK_CURSORS,
     app,
 )
 
@@ -116,6 +118,9 @@ TASK_MAPPINGS = {
     },
     "github": {
         "sync_repo": SYNC_GITHUB_REPO,
+    },
+    "slack": {
+        "rewind_cursors": REWIND_SLACK_CURSORS,
     },
 }
 QUEUE_MAPPINGS = {
@@ -612,6 +617,29 @@ def github(ctx):
 def github_sync_repo(ctx, repo_id, force_full):
     """Sync a specific GitHub repo."""
     execute_task(ctx, "github", "sync_repo", repo_id=repo_id, force_full=force_full)
+
+
+@cli.group()  # type: ignore[attr-defined]
+@click.pass_context
+def slack(ctx):
+    """Slack-related tasks."""
+    pass
+
+
+@slack.command("rewind-cursors")
+@click.option(
+    "--since",
+    help="Also rewind every channel to this ISO date (UTC), e.g. 2026-09-01. Thread replies "
+    "missing under parents older than a channel's newest stored message are only refetched this way.",
+)
+@click.option("--dry-run", is_flag=True, help="Only list the channels that would be rewound")
+@click.pass_context
+def slack_rewind_cursors(ctx, since, dry_run):
+    """Rewind channel cursors past unstored messages and resync those channels.
+
+    Channels whose sync is running are left alone and listed as busy; run it again later for them.
+    """
+    execute_task(ctx, "slack", "rewind_cursors", since=since, dry_run=dry_run)
 
 
 if __name__ == "__main__":

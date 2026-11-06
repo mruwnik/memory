@@ -18,19 +18,24 @@ import logging
 import os
 import pathlib
 import re
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import islice
 from typing import Any
 from urllib.parse import urlparse
 
 import redis
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 
 from memory.common import paths, settings
-from memory.common.redis_lock import distributed_lock
+from memory.common.redis_lock import Lock, distributed_lock
 from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
     MARK_SLACK_MESSAGE_DELETED,
+    REWIND_SLACK_CURSORS,
     SYNC_ALL_SLACK_WORKSPACES,
     SYNC_SLACK_CHANNEL,
     SYNC_SLACK_WORKSPACE,
@@ -75,6 +80,29 @@ USER_CACHE_TTL_SECONDS = 300
 # Lock TTL for channel sync (10 minutes) - safety timeout if task crashes
 CHANNEL_SYNC_LOCK_TTL_SECONDS = 600
 
+# A sync stops at its first step past the budget and queues its continuation,
+# so a long backlog lets other channels' syncs take turns on the single
+# slack-sync worker. Each message stored renews the lock's TTL.
+CHANNEL_SYNC_BUDGET_SECONDS = 300
+CHANNEL_SYNC_CONTINUE_AFTER_SECONDS = 5
+
+# History is read in time windows of at most a page, each stored before the
+# next is read: a window too full for one page is halved, one under a quarter
+# full doubled.
+HISTORY_PAGE_SIZE = 100
+HISTORY_WINDOW_SECONDS = 24 * 3600
+MIN_HISTORY_WINDOW_SECONDS = 1
+
+# A message that fails to store this often is skipped, so it can't hold the
+# channel's cursor back forever. Attempts are counted before they start, so a
+# store that kills the worker counts too; lost connections say nothing about
+# the message and don't count.
+MESSAGE_FAILURE_LIMIT = 3
+MESSAGE_FAILURE_TTL_SECONDS = 7 * 24 * 3600
+CONNECTION_ERRORS = (OperationalError, InterfaceError, redis.ConnectionError)
+
+SKIPPED_SUBTYPES = frozenset({"channel_join", "channel_leave", "bot_message"})
+
 # Hard cap for downloaded Slack files. Slack itself allows up to 1 GB
 # uploads which would OOM the worker if we buffered the body. 100 MiB is
 # plenty for typical attachments (slides, PDFs, transcripts) and bounds
@@ -118,9 +146,7 @@ def is_channel_sync_locked(channel_id: str) -> bool:
     return client.exists(channel_sync_lock_key(channel_id)) > 0  # type: ignore[operator]
 
 
-def get_cached_user_mapping(
-    workspace_id: str, credentials: SlackUserCredentials
-) -> dict[str, str]:
+def get_cached_user_mapping(workspace_id: str, token: str, base_url: str) -> dict[str, str]:
     """Get user ID -> name mapping with Redis caching.
 
     Caches the result for 5 minutes to avoid N API calls when processing
@@ -136,7 +162,7 @@ def get_cached_user_mapping(
 
     # Cache miss - fetch from API
     try:
-        with slack_client_for(credentials) as client:
+        with SlackClient(token, base_url=base_url) as client:
             users_by_id = build_user_cache(client)
         # Cache the result
         redis_client.setex(cache_key, USER_CACHE_TTL_SECONDS, json.dumps(users_by_id))
@@ -477,11 +503,11 @@ def sync_slack_channel(
     """
     Sync messages from a Slack channel under a specific SlackApp.
 
-    Uses incremental sync based on last_message_ts cursor.
-    Uses Redis lock to prevent concurrent syncs of the same channel.
-
-    ``slack_app_id`` scopes credential lookup and propagates to all
-    enqueued downstream tasks.
+    Stores the channel's messages newer than its ``last_message_ts`` cursor,
+    oldest first and each with its thread replies, moving the cursor past a
+    message once it is stored or deliberately skipped. A failed sync resumes
+    from the last stored message; one out of time queues its continuation.
+    A Redis lock keeps syncs of one channel apart.
     """
     # Try to acquire lock - skip if another sync is already running.
     # Release happens automatically on context-manager exit, with an
@@ -494,129 +520,211 @@ def sync_slack_channel(
             return {"status": "skipped", "reason": "sync_in_progress"}
 
         logger.info(f"Syncing Slack channel {channel_id}")
-        return _sync_slack_channel_impl(channel_id, slack_app_id)
+        return _sync_slack_channel_impl(channel_id, slack_app_id, lock)
 
 
-def _sync_slack_channel_impl(
-    channel_id: str, slack_app_id: int
-) -> dict[str, Any]:
+def _sync_slack_channel_impl(channel_id: str, slack_app_id: int, lock: Lock) -> dict[str, Any]:
     """Implementation of channel sync (called with lock held)."""
+    # Slack calls can outlast Postgres' idle_in_transaction_session_timeout,
+    # so no session stays open across them.
     with make_session() as session:
         channel = session.get(SlackChannel, channel_id)
         if not channel:
             return {"status": "error", "error": "Channel not found"}
-
-        workspace = channel.workspace
-        if not workspace:
-            return {"status": "error", "error": "No workspace"}
-
-        # Get valid credentials
-        credentials = get_workspace_credentials(session, workspace.id, slack_app_id)
+        workspace_id = channel.workspace_id
+        cursor = channel.last_message_ts
+        credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
         if not credentials or not credentials.access_token:
             return {"status": "error", "error": "No valid workspace credentials"}
-
         try:
-            with slack_client_for(credentials) as client:
-                messages_synced = 0
-                oldest = channel.last_message_ts
-                newest_ts = oldest
-
-                for msg in iter_messages(client, channel_id, oldest=oldest):
-                    msg_ts = msg.get("ts")
-                    if not msg_ts:
-                        continue
-
-                    # Track newest message for final cursor update
-                    if not newest_ts or msg_ts > newest_ts:
-                        newest_ts = msg_ts
-
-                    # Skip non-message subtypes we don't want
-                    subtype = msg.get("subtype")
-                    if subtype in ("channel_join", "channel_leave", "bot_message"):
-                        continue
-
-                    # Process message
-                    app.send_task(
-                        ADD_SLACK_MESSAGE,
-                        kwargs={
-                            "workspace_id": workspace.id,
-                            "channel_id": channel_id,
-                            "message_ts": msg_ts,
-                            "author_id": msg.get("user"),
-                            "content": msg.get("text", ""),
-                            "thread_ts": msg.get("thread_ts"),
-                            "reply_count": msg.get("reply_count"),
-                            "subtype": subtype,
-                            "edited_ts": msg.get("edited", {}).get("ts"),
-                            "reactions": msg.get("reactions"),
-                            "files": msg.get("files"),
-                            "slack_app_id": slack_app_id,
-                            "polled": True,
-                        },
-                    )
-                    messages_synced += 1
-
-                    # Fetch thread replies if this is a thread parent
-                    if msg.get("reply_count", 0) > 0:
-                        thread_messages = fetch_thread_replies(
-                            client, channel_id, msg_ts, workspace.id, slack_app_id
-                        )
-                        messages_synced += thread_messages
-
-                # Update cursor
-                if newest_ts:
-                    channel.last_message_ts = newest_ts
-                session.commit()
-
-                return {
-                    "status": "completed",
-                    "channel_id": channel_id,
-                    "messages_synced": messages_synced,
-                }
-
+            client = slack_client_for(credentials)
         except SlackAPIError as e:
             return {"status": "error", "error": str(e)}
 
-
-def fetch_thread_replies(
-    client: SlackClient,
-    channel_id: str,
-    thread_ts: str,
-    workspace_id: str,
-    slack_app_id: int | None = None,
-) -> int:
-    """Fetch and queue thread replies using iterator."""
-    messages_queued = 0
-
+    sync = ChannelHistorySync(
+        channel_id=channel_id,
+        workspace_id=workspace_id,
+        slack_app_id=slack_app_id,
+        client=client,
+        lock=lock,
+        cursor=cursor,
+        deadline=time.monotonic() + CHANNEL_SYNC_BUDGET_SECONDS,
+    )
     try:
-        for msg in iter_thread_replies(client, channel_id, thread_ts):
-            msg_ts = msg.get("ts")
-            if not msg_ts:
-                continue
-
-            app.send_task(
-                ADD_SLACK_MESSAGE,
-                kwargs={
-                    "workspace_id": workspace_id,
-                    "channel_id": channel_id,
-                    "message_ts": msg_ts,
-                    "author_id": msg.get("user"),
-                    "content": msg.get("text", ""),
-                    "thread_ts": thread_ts,
-                    "subtype": msg.get("subtype"),
-                    "edited_ts": msg.get("edited", {}).get("ts"),
-                    "reactions": msg.get("reactions"),
-                    "files": msg.get("files"),
-                    "slack_app_id": slack_app_id,
-                    "polled": True,
-                },
-            )
-            messages_queued += 1
-
+        with client:
+            finished = sync.run()
     except SlackAPIError as e:
-        logger.error(f"Failed to fetch thread replies for {thread_ts}: {e}")
+        return {"status": "error", "error": str(e), "messages_read": sync.read}
+    except ChannelSyncInterrupted:
+        logger.warning(f"Slack channel {channel_id}: sync stopped, its lock expired or another sync moved its cursor")
+        return {"status": "error", "error": "sync_interrupted", "messages_read": sync.read}
 
-    return messages_queued
+    if not finished:
+        app.send_task(
+            SYNC_SLACK_CHANNEL,
+            kwargs={"channel_id": channel_id, "slack_app_id": slack_app_id},
+            countdown=CHANNEL_SYNC_CONTINUE_AFTER_SECONDS,
+        )
+        return {"status": "continuing", "channel_id": channel_id, "messages_read": sync.read}
+    return {"status": "completed", "channel_id": channel_id, "messages_read": sync.read}
+
+
+class ChannelSyncInterrupted(Exception):
+    """The channel's sync lock expired, or another sync moved its cursor."""
+
+
+@dataclass
+class ChannelHistorySync:
+    """One turn of storing a channel's history, oldest first, from its cursor on.
+
+    The cursor moves past a message once it and its thread's replies are
+    stored or deliberately skipped.
+    """
+
+    channel_id: str
+    workspace_id: str
+    slack_app_id: int
+    client: SlackClient
+    lock: Lock
+    cursor: str | None
+    deadline: float
+    advanced: bool = False
+    read: int = 0
+
+    def out_of_time(self) -> bool:
+        # Every turn moves the cursor at least once, so no window or thread
+        # too slow for one budget can stall the channel.
+        return self.advanced and time.monotonic() > self.deadline
+
+    def run(self) -> bool:
+        """Store the history up to now; False when out of time first."""
+        # Without a cursor the whole history is one window, so an empty or
+        # small channel costs a single call.
+        position = self.cursor or "0"
+        span = float(HISTORY_WINDOW_SECONDS) if self.cursor else float("inf")
+        while not self.out_of_time():
+            now = time.time()
+            latest = min(float(position) + span, now)
+            page = self.window(position, latest)
+            if page is None:
+                span = (latest - float(position)) / 2
+                continue
+            for message in page:
+                if self.out_of_time() or not self.store_with_replies(message):
+                    return False
+                self.advance(message["ts"])
+            if latest >= now:
+                return True
+            span = span * 2 if len(page) < HISTORY_PAGE_SIZE // 4 else span
+            position = f"{latest:.6f}"
+        return False
+
+    def window(self, oldest: str, latest: float) -> list[dict] | None:
+        """The messages after ``oldest`` up to ``latest``, oldest first; None
+        when they overflow a page and the window can still shrink."""
+        # One more than a page fits the overflow probe in a single call.
+        listing = iter_messages(
+            self.client, self.channel_id, oldest=oldest, latest=f"{latest:.6f}", inclusive=True, limit=HISTORY_PAGE_SIZE + 1
+        )
+        shrinkable = latest - float(oldest) > MIN_HISTORY_WINDOW_SECONDS
+        messages = list(islice(listing, HISTORY_PAGE_SIZE + 1) if shrinkable else listing)
+        if shrinkable and len(messages) > HISTORY_PAGE_SIZE:
+            return None
+        newer = [m for m in messages if m.get("ts") and float(m["ts"]) > float(oldest)]
+        return sorted(newer, key=lambda m: float(m["ts"]))
+
+    def store_with_replies(self, message: dict) -> bool:
+        """Store a message and its thread's replies; False when out of time among the replies."""
+        self.store(message)
+        if not message.get("reply_count"):
+            return True
+        try:
+            for reply in iter_thread_replies(self.client, self.channel_id, message["ts"]):
+                if self.out_of_time():
+                    return False
+                if reply.get("ts"):
+                    self.store(reply, thread_ts=message["ts"])
+        except SlackAPIError as e:
+            if e.error != "thread_not_found":
+                raise
+            logger.info(f"Slack thread {message['ts']} in {self.channel_id} is gone; no replies to store")
+        return True
+
+    def store(self, message: dict, thread_ts: str | None = None) -> None:
+        # A first thread can take longer than the lock's TTL, so every
+        # message renews it, not just each move of the cursor.
+        if not self.lock.extend():
+            raise ChannelSyncInterrupted(self.channel_id)
+        self.read += 1
+        redis_client = get_redis_client()
+        key = message_failures_key(self.channel_id, message["ts"])
+        pipe = redis_client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, MESSAGE_FAILURE_TTL_SECONDS)
+        attempt, _ = pipe.execute()
+        if int(attempt) > MESSAGE_FAILURE_LIMIT:
+            redis_client.delete(key)
+            error = f"Slack message {message['ts']} in channel {self.channel_id} failed {MESSAGE_FAILURE_LIMIT} times; skipped"
+            logger.error(error)
+            record_workspace_sync_error(self.workspace_id, error)
+            return
+        try:
+            store_history_message(message, self.workspace_id, self.channel_id, self.slack_app_id, thread_ts)
+        except CONNECTION_ERRORS:
+            redis_client.decr(key)
+            raise
+        redis_client.delete(key)
+
+    def advance(self, message_ts: str) -> None:
+        if not set_channel_cursor(self.channel_id, self.cursor, message_ts):
+            raise ChannelSyncInterrupted(self.channel_id)
+        self.cursor, self.advanced = message_ts, True
+
+
+def message_failures_key(channel_id: str, message_ts: str) -> str:
+    """Redis key counting the attempts to store a message that did not succeed."""
+    return f"slack_message_failures:{channel_id}:{message_ts}"
+
+
+def record_workspace_sync_error(workspace_id: str, error: str) -> None:
+    with make_session() as session:
+        if workspace := session.get(SlackWorkspace, workspace_id):
+            workspace.record_sync(error)
+
+
+def set_channel_cursor(channel_id: str, expected: str | None, message_ts: str | None) -> bool:
+    """Move a channel's cursor from ``expected`` to ``message_ts``; False when it was elsewhere."""
+    with make_session() as session:
+        moved = (
+            session.query(SlackChannel)
+            .filter(SlackChannel.id == channel_id, SlackChannel.last_message_ts.is_not_distinct_from(expected))
+            .update({SlackChannel.last_message_ts: message_ts}, synchronize_session=False)
+        )
+    return moved == 1
+
+
+def store_history_message(
+    msg: dict, workspace_id: str, channel_id: str, slack_app_id: int, thread_ts: str | None = None
+) -> dict[str, Any]:
+    """Store a message read with the app's own token, unless it is of a kind not collected."""
+    subtype = msg.get("subtype")
+    if subtype in SKIPPED_SUBTYPES:
+        return {"status": "skipped", "reason": subtype}
+    return store_slack_message(
+        workspace_id=workspace_id,
+        channel_id=channel_id,
+        message_ts=msg["ts"],
+        author_id=msg.get("user"),
+        content=msg.get("text", ""),
+        slack_app_id=slack_app_id,
+        thread_ts=thread_ts or msg.get("thread_ts"),
+        reply_count=msg.get("reply_count"),
+        subtype=subtype,
+        edited_ts=msg.get("edited", {}).get("ts"),
+        reactions=msg.get("reactions"),
+        files=msg.get("files"),
+        polled=True,
+    )
 
 
 def ensure_slack_channel(workspace_id: str, channel_id: str) -> bool:
@@ -868,24 +976,26 @@ def _insert_new_slack_message(session, msg_kwargs: dict) -> dict[str, Any]:
 
     credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
     access_token = credentials.access_token if credentials else None
+    api_base_url = None
+    if credentials and access_token:
+        with contextlib.suppress(SlackAPIError):
+            api_base_url = slack_api_base_url(credentials.slack_app)
+    # Fetching the user list and the files can outlast Postgres'
+    # idle_in_transaction_session_timeout, which would kill the connection.
+    session.commit()
 
     users_by_id: dict[str, str] = {}
-    if credentials and access_token:
-        users_by_id = get_cached_user_mapping(workspace_id, credentials)
+    if api_base_url and access_token:
+        users_by_id = get_cached_user_mapping(workspace_id, access_token, api_base_url)
 
     resolved_content = resolve_mentions(content, users_by_id)
     author_name = users_by_id.get(author_id) if author_id else None
 
     saved_images: list[str] = []
-    if msg_kwargs["files"] and credentials and access_token:
-        try:
-            api_base_url = slack_api_base_url(credentials.slack_app)
-        except SlackAPIError:
-            api_base_url = None
-        if api_base_url:
-            saved_images = download_message_images(
-                msg_kwargs["files"], access_token, message_ts, workspace_id, api_base_url=api_base_url
-            )
+    if msg_kwargs["files"] and api_base_url and access_token:
+        saved_images = download_message_images(
+            msg_kwargs["files"], access_token, message_ts, workspace_id, api_base_url=api_base_url
+        )
 
     message = _build_slack_message(msg_kwargs, author_name, resolved_content, saved_images)
     _link_author_person(session, message, workspace_id)
@@ -913,6 +1023,10 @@ def _try_add_slack_message(msg_kwargs: dict) -> dict[str, Any] | None:
         return None
 
 
+class SlackMessageNotStored(Exception):
+    pass
+
+
 def _merge_after_race(msg_kwargs: dict) -> dict[str, Any]:
     """Race recovery path: re-fetch the existing row in a fresh session and merge."""
     with make_session() as session:
@@ -920,22 +1034,15 @@ def _merge_after_race(msg_kwargs: dict) -> dict[str, Any]:
         if not existing:
             # IntegrityError raised but no row visible — likely the winner's
             # transaction hasn't committed yet, or a different constraint failed.
-            logger.error(
+            raise SlackMessageNotStored(
                 f"IntegrityError raced but no SlackMessage row visible for "
                 f"({msg_kwargs['workspace_id']}, {msg_kwargs['channel_id']}, "
                 f"{msg_kwargs['message_ts']})"
             )
-            return {
-                "status": "error",
-                "reason": "race_detected_no_row",
-                "message_ts": msg_kwargs["message_ts"],
-            }
         return _apply_merge(session, existing, msg_kwargs)
 
 
-@app.task(name=ADD_SLACK_MESSAGE)
-@tracked_task
-def add_slack_message(
+def store_slack_message(
     workspace_id: str,
     channel_id: str,
     message_ts: str,
@@ -997,6 +1104,9 @@ def add_slack_message(
 
     # Race detected — re-fetch and merge in a fresh session.
     return _merge_after_race(msg_kwargs)
+
+
+add_slack_message = app.task(name=ADD_SLACK_MESSAGE)(tracked_task(job_type="add_slack_message")(store_slack_message))
 
 
 # ---------------------------------------------------------------------------
@@ -1148,3 +1258,72 @@ def update_slack_channel(
             "status": "created" if created else "updated",
             "channel_id": channel_id,
         }
+
+
+def slack_ts(moment: str) -> str:
+    """The Slack timestamp of an ISO date or datetime, UTC unless it names a zone."""
+    parsed = datetime.fromisoformat(moment)
+    return f"{parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).timestamp():.6f}"
+
+
+def rewound_cursor(newest_stored: str | None, since_ts: str | None) -> str | None:
+    """Where a channel's history sync restarts: its newest stored top-level
+    message or ``since_ts``, whichever is earlier; None is the whole history."""
+    return min((ts for ts in (newest_stored, since_ts) if ts), key=float, default=None)
+
+
+def rewind_channel(channel_id: str, cursor: str, target: str | None, dry_run: bool) -> bool:
+    """Move a channel's cursor back to ``target``; False while its sync runs."""
+    if dry_run:
+        return not is_channel_sync_locked(channel_id)
+    with channel_sync_lock(channel_id) as lock:
+        return lock is not None and set_channel_cursor(channel_id, cursor, target)
+
+
+@app.task(name=REWIND_SLACK_CURSORS)
+@tracked_task
+def rewind_slack_cursors(since: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """Rewind the history cursor of each collected channel to its newest stored
+    top-level message, or to ``since`` (ISO date) when earlier, and resync it.
+
+    A cursor past messages that were never stored hides them from every later
+    sync; after the rewind they are fetched again, and messages already stored
+    are merged rather than duplicated. Replies missing under parents older than
+    the rewound cursor are only fetched again by rewinding to ``since``.
+    Channels mid-sync are left alone and reported as busy. ``dry_run`` only
+    reports what would be done.
+    """
+    since_ts = slack_ts(since) if since else None
+    top_level = or_(SlackMessage.thread_ts.is_(None), SlackMessage.thread_ts == SlackMessage.message_ts)
+    plans: list[tuple[str, str, str | None, list[int]]] = []
+    with make_session() as session:
+        newest: dict[str, str] = {
+            channel_id: ts
+            for channel_id, ts in session.query(SlackMessage.channel_id, func.max(SlackMessage.message_ts))
+            .filter(top_level)
+            .group_by(SlackMessage.channel_id)
+        }
+        channels = (
+            session.query(SlackChannel)
+            .filter(SlackChannel.last_message_ts.isnot(None), SlackChannel.is_archived.is_(False))
+            .order_by(SlackChannel.id)
+            .all()
+        )
+        for channel in channels:
+            cursor = channel.last_message_ts or "0"
+            target = rewound_cursor(newest.get(channel.id), since_ts)
+            if channel.should_collect and float(target or 0) < float(cursor):
+                app_ids = workspace_poll_plan(session, channel.workspace_id)[0]
+                plans.append((channel.id, cursor, target, app_ids))
+
+    rewound: list[dict[str, Any]] = []
+    busy: list[str] = []
+    for channel_id, cursor, target, app_ids in plans:
+        if not rewind_channel(channel_id, cursor, target, dry_run):
+            busy.append(channel_id)
+            continue
+        rewound.append({"channel_id": channel_id, "cursor": cursor, "rewound_to": target, "queued": bool(app_ids)})
+        for app_id in [] if dry_run else app_ids:
+            app.send_task(SYNC_SLACK_CHANNEL, kwargs={"channel_id": channel_id, "slack_app_id": app_id})
+    logger.info(f"Rewound {len(rewound)} Slack channel cursors, {len(busy)} busy (dry run: {dry_run})")
+    return {"dry_run": dry_run, "since": since_ts, "channels": rewound, "busy": busy}

@@ -1,12 +1,17 @@
 """Tests for Slack Celery tasks."""
 
+import contextlib
 import logging
+import time
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+import redis
+from sqlalchemy.exc import InterfaceError, OperationalError
 
-from memory.common.celery_app import SYNC_SLACK_WORKSPACE
+from memory.common.celery_app import SYNC_SLACK_CHANNEL, SYNC_SLACK_WORKSPACE
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackApp,
@@ -15,6 +20,7 @@ from memory.common.db.models.slack import (
     SlackWorkspace,
 )
 from memory.common.db.models.source_items import SlackMessage
+from memory.common.redis_lock import Lock
 from memory.workers.tasks import slack
 
 
@@ -1093,7 +1099,7 @@ def test_add_slack_message_uses_only_the_pushing_apps_credentials(
 
     with patch(
         "memory.workers.tasks.slack.get_cached_user_mapping",
-        side_effect=lambda workspace_id, credentials: {"U12345678": credentials.access_token},
+        side_effect=lambda workspace_id, token, base_url: {"U12345678": token},
     ):
         slack.add_slack_message(**sample_message_data | {"slack_app_id": app_id})
 
@@ -1444,19 +1450,490 @@ def test_a_push_cannot_change_an_unclaimed_message(db_session, unclaimed_message
     assert (unclaimed_message.reactions, unclaimed_message.slack_app_id) == ({"fire": ["U1"]}, None)
 
 
-@pytest.mark.parametrize("task", ["sync_slack_channel", "thread"])
-def test_polls_mark_their_messages_as_polled(db_session, slack_channel, slack_credentials, slack_app, task):
-    message = {"ts": "1.1", "user": "U1", "text": "x"}
+
+
+def history_message(ts: str, **fields) -> dict:
+    return {"ts": ts, "user": "U1", "text": f"message {ts}", **fields}
+
+
+def lost_connection() -> OperationalError:
+    return OperationalError("COMMIT", {}, Exception("server closed the connection unexpectedly"))
+
+
+def failing_store_of(ts: str, error=lost_connection):
+    """process_content_item that raises ``error()`` while storing message ``ts``."""
+    store = slack.process_content_item
+
+    def process(item, session):
+        if item.message_ts == ts:
+            raise error()
+        return store(item, session)
+
+    return process
+
+
+def stored_timestamps(db_session, channel_id: str) -> list[str]:
+    rows = db_session.query(SlackMessage.message_ts).filter(SlackMessage.channel_id == channel_id)
+    return sorted((ts for (ts,) in rows), key=float)
+
+
+def channel_cursor(db_session, channel: SlackChannel) -> str | None:
+    db_session.refresh(channel)
+    return channel.last_message_ts
+
+
+@pytest.fixture
+def slack_history(slack_credentials):
+    """A channel's history and thread replies, served from lists instead of Slack.
+
+    ``messages`` is in Slack's order, newest first; ``replies`` maps a thread
+    to its replies or to the error reading them raises. ``listed`` counts the
+    messages each history listing yielded and ``pages`` the pages of ``limit``
+    messages it fetched; ``sent`` records queued tasks.
+    """
+    history: dict[str, Any] = {"messages": [], "replies": {}, "listed": [], "pages": [], "sent": []}
+
+    def messages(client, channel_id, oldest=None, latest=None, inclusive=False, limit=100):
+        low, high = float(oldest or 0), float(latest or "inf")
+        history["listed"].append(0)
+        history["pages"].append(1)
+        for message in history["messages"]:
+            ts = float(message["ts"])
+            if (low <= ts <= high) if inclusive else (low < ts < high):
+                history["pages"][-1] += history["listed"][-1] and history["listed"][-1] % limit == 0
+                history["listed"][-1] += 1
+                yield message
+
+    def replies(client, channel_id, thread_ts):
+        found = history["replies"].get(thread_ts, [])
+        if isinstance(found, Exception):
+            raise found
+        return found
+
     with (
-        patch.object(slack, "iter_messages", return_value=[message]),
-        patch.object(slack, "iter_thread_replies", return_value=[message]),
         patch.object(slack, "slack_client_for") as client,
-        patch.object(slack.app, "send_task") as send,
+        patch.object(slack, "iter_messages", side_effect=messages),
+        patch.object(slack, "iter_thread_replies", side_effect=replies),
+        patch.object(slack, "build_user_cache", return_value={}),
+        patch.object(slack.app, "send_task", side_effect=lambda name, kwargs, **options: history["sent"].append((name, kwargs))),
     ):
         client.return_value.__enter__.return_value = MagicMock()
-        {
-            "sync_slack_channel": lambda: slack._sync_slack_channel_impl(slack_channel.id, slack_app.id),
-            "thread": lambda: slack.fetch_thread_replies(MagicMock(), slack_channel.id, "1.0", slack_channel.workspace_id, slack_app.id),
-        }[task]()
+        yield history
 
-    assert send.call_args.kwargs["kwargs"]["polled"] is True
+
+def test_a_failed_sync_resumes_from_the_last_stored_message(db_session, slack_channel, slack_app, slack_history):
+    slack_history["messages"] = [history_message("3.0"), history_message("2.0"), history_message("1.0")]
+
+    with patch.object(slack, "process_content_item", side_effect=failing_store_of("2.0")):
+        with pytest.raises(OperationalError):
+            slack.sync_slack_channel(slack_channel.id, slack_app.id)
+    after_failure = (stored_timestamps(db_session, slack_channel.id), channel_cursor(db_session, slack_channel))
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert after_failure == (["1.0"], "1.0")
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0", "2.0", "3.0"]
+    assert channel_cursor(db_session, slack_channel) == "3.0"
+
+
+def test_a_message_that_keeps_failing_is_skipped_after_three_attempts(
+    db_session, slack_workspace, slack_channel, slack_app, slack_history, caplog
+):
+    slack_history["messages"] = [history_message("3.0"), history_message("2.0"), history_message("1.0")]
+
+    with patch.object(slack, "process_content_item", side_effect=failing_store_of("2.0", ValueError)):
+        for _ in range(slack.MESSAGE_FAILURE_LIMIT):
+            with pytest.raises(ValueError):
+                slack.sync_slack_channel(slack_channel.id, slack_app.id)
+        with caplog.at_level(logging.ERROR, logger=slack.logger.name):
+            caplog.clear()
+            slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    db_session.refresh(slack_workspace)
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0", "3.0"]
+    assert channel_cursor(db_session, slack_channel) == "3.0"
+    assert [r.getMessage() for r in caplog.records] == [
+        f"Slack message 2.0 in channel {slack_channel.id} failed 3 times; skipped"
+    ]
+    assert slack_workspace.sync_error == f"Slack message 2.0 in channel {slack_channel.id} failed 3 times; skipped"
+
+
+def test_a_message_whose_store_was_killed_three_times_is_skipped(db_session, slack_channel, slack_app, slack_history):
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0")]
+    for _ in range(slack.MESSAGE_FAILURE_LIMIT):
+        slack.get_redis_client().incr(slack.message_failures_key(slack_channel.id, "2.0"))
+
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0"]
+    assert channel_cursor(db_session, slack_channel) == "2.0"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        lost_connection,
+        lambda: InterfaceError("SELECT", {}, Exception("connection already closed")),
+        lambda: redis.ConnectionError("Connection refused"),
+    ],
+    ids=["postgres", "postgres-interface", "redis"],
+)
+def test_losing_a_connection_never_skips_a_message(db_session, slack_channel, slack_app, slack_history, error):
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0")]
+
+    with patch.object(slack, "process_content_item", side_effect=failing_store_of("2.0", error)):
+        for _ in range(slack.MESSAGE_FAILURE_LIMIT + 1):
+            with pytest.raises(type(error())):
+                slack.sync_slack_channel(slack_channel.id, slack_app.id)
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0", "2.0"]
+
+
+@pytest.mark.parametrize(
+    "skipped",
+    [
+        history_message("2.0", subtype="channel_join"),
+        history_message("2.0", subtype="channel_leave"),
+        {"ts": "2.0", "subtype": "bot_message", "bot_id": "B1", "text": "deploy finished"},
+        {"ts": "2.0", "text": "a message without an author"},
+    ],
+)
+def test_the_cursor_passes_messages_skipped_on_purpose(db_session, slack_channel, slack_app, slack_history, skipped):
+    slack_history["messages"] = [skipped, history_message("1.0")]
+
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0"]
+    assert channel_cursor(db_session, slack_channel) == "2.0"
+
+
+def test_the_cursor_stays_before_a_thread_whose_replies_could_not_be_read(
+    db_session, slack_channel, slack_app, slack_history
+):
+    slack_history["messages"] = [history_message("1.0", thread_ts="1.0", reply_count=1)]
+    slack_history["replies"] = {"1.0": slack.SlackAPIError("ratelimited")}
+
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], channel_cursor(db_session, slack_channel)) == ("error", None)
+
+
+def test_the_cursor_passes_a_thread_that_is_gone(db_session, slack_channel, slack_app, slack_history):
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0", thread_ts="1.0", reply_count=1)]
+    slack_history["replies"] = {"1.0": slack.SlackAPIError("thread_not_found")}
+
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0", "2.0"]
+    assert channel_cursor(db_session, slack_channel) == "2.0"
+
+
+def test_thread_replies_are_stored_with_their_parent(db_session, slack_channel, slack_app, slack_history):
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0", thread_ts="1.0", reply_count=2)]
+    slack_history["replies"] = {"1.0": [history_message("1.5"), history_message("3.0")]}
+
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert stored_timestamps(db_session, slack_channel.id) == ["1.0", "1.5", "2.0", "3.0"]
+    assert channel_cursor(db_session, slack_channel) == "2.0"
+
+
+def test_a_sync_out_of_time_continues_in_a_new_task(db_session, slack_channel, slack_app, slack_history):
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0")]
+
+    with patch.object(slack, "CHANNEL_SYNC_BUDGET_SECONDS", 0):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], stored_timestamps(db_session, slack_channel.id)) == ("continuing", ["1.0"])
+    assert channel_cursor(db_session, slack_channel) == "1.0"
+    assert slack_history["sent"] == [(SYNC_SLACK_CHANNEL, {"channel_id": slack_channel.id, "slack_app_id": slack_app.id})]
+
+
+def test_a_turn_lists_history_a_page_at_a_time(db_session, slack_channel, slack_app, slack_history):
+    hour = 3600
+    slack_history["messages"] = [history_message(f"{n * hour}.000000") for n in range(500, 0, -1)]
+
+    with patch.object(slack, "HISTORY_PAGE_SIZE", 5), patch.object(slack, "CHANNEL_SYNC_BUDGET_SECONDS", 0):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], stored_timestamps(db_session, slack_channel.id)) == ("continuing", [f"{hour}.000000"])
+    assert (max(slack_history["listed"]), max(slack_history["pages"])) == (6, 1)
+
+
+def test_messages_on_a_window_edge_are_read_once(db_session, slack_channel, slack_app, slack_history):
+    day = 86400
+    slack_channel.last_message_ts = f"{day:.6f}"
+    db_session.commit()
+    slack_history["messages"] = [history_message(f"{k * day:.6f}") for k in range(20, 0, -1)]
+
+    with patch.object(slack, "HISTORY_PAGE_SIZE", 5):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], result["messages_read"]) == ("completed", 19)
+    assert stored_timestamps(db_session, slack_channel.id) == [f"{k * day:.6f}" for k in range(2, 21)]
+
+
+def test_a_second_too_full_for_a_page_is_read_whole(db_session, slack_channel, slack_app, slack_history):
+    slack_channel.last_message_ts = "1000.000000"
+    db_session.commit()
+    timestamps = [f"1000.{n}50000" for n in range(10)]
+    slack_history["messages"] = [history_message(ts) for ts in reversed(timestamps)]
+
+    with patch.object(slack, "HISTORY_PAGE_SIZE", 5):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], result["messages_read"]) == ("completed", 10)
+    assert stored_timestamps(db_session, slack_channel.id) == timestamps
+
+
+def test_an_empty_channel_without_a_cursor_is_listed_once(db_session, slack_channel, slack_app, slack_history):
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], len(slack_history["listed"])) == ("completed", 1)
+
+
+def test_a_window_cut_short_by_now_is_halved_from_where_it_ends(db_session, slack_channel, slack_app, slack_history):
+    start = int(time.time()) - 100
+    slack_channel.last_message_ts = f"{start:.6f}"
+    db_session.commit()
+    slack_history["messages"] = [history_message(f"{start + s:.6f}") for s in range(95, 0, -10)]
+
+    with patch.object(slack, "HISTORY_PAGE_SIZE", 5):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], result["messages_read"]) == ("completed", 10)
+    assert len(slack_history["listed"]) <= 4
+
+
+def test_a_sparse_history_is_listed_in_growing_windows(db_session, slack_channel, slack_app, slack_history):
+    start = int(time.time()) - 30 * 86400
+    slack_channel.last_message_ts = f"{start:.6f}"
+    db_session.commit()
+    slack_history["messages"] = [history_message(f"{start + h * 3600:.6f}") for h in range(30 * 24, 0, -6)]
+
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], result["messages_read"]) == ("completed", 120)
+    assert len(slack_history["listed"]) <= 10
+
+
+def test_a_sync_that_lost_its_lock_leaves_the_cursor(db_session, slack_channel, slack_app, slack_history):
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0")]
+
+    with patch.object(Lock, "extend", return_value=False):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], stored_timestamps(db_session, slack_channel.id)) == ("error", [])
+    assert channel_cursor(db_session, slack_channel) is None
+
+
+def test_a_sync_whose_lock_expires_in_the_first_thread_stops(db_session, slack_channel, slack_app, slack_history):
+    def replies_while_the_lock_expires():
+        yield history_message("1.1")
+        slack.get_redis_client().delete(slack.channel_sync_lock_key(slack_channel.id))
+        yield history_message("1.2")
+
+    slack_history["messages"] = [history_message("2.0"), history_message("1.0", thread_ts="1.0", reply_count=2)]
+    slack_history["replies"] = {"1.0": replies_while_the_lock_expires()}
+
+    result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert (result["status"], stored_timestamps(db_session, slack_channel.id)) == ("error", ["1.0", "1.1"])
+    assert channel_cursor(db_session, slack_channel) is None
+
+
+def test_a_sync_through_an_api_url_off_the_allowlist_reports_it(
+    db_session, slack_channel, slack_app, slack_credentials, slack_user
+):
+    custom_api_app(db_session, slack_app, slack_user, ["read"])
+
+    with patch("memory.common.chat_urls.settings.CHAT_API_ALLOWED_ORIGINS", []):
+        result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert result == {"status": "error", "error": "Slack API error: api_base_url_not_allowed"}
+
+
+@pytest.mark.parametrize(
+    "files, calls",
+    [
+        (None, {"history": False, "users": False}),
+        ([{"mimetype": "image/png", "url_private": "https://files.slack.com/a.png"}], {"history": False, "users": False, "images": False}),
+    ],
+)
+def test_slack_is_never_called_inside_a_db_transaction(db_session, slack_channel, slack_app, slack_history, files, calls):
+    """Postgres kills a connection left idle in a transaction for a minute, and
+    Slack calls (history pages, rate-limit waits, user lists, downloads) can take longer."""
+    sessions = []
+    make_session = slack.make_session
+
+    @contextlib.contextmanager
+    def tracked_session():
+        with make_session() as session:
+            sessions.append(session)
+            yield session
+            sessions.remove(session)
+
+    in_transaction: dict[str, bool] = {}
+
+    def recording(call, respond):
+        def side_effect(*args, **kwargs):
+            in_transaction[call] = any(s.in_transaction() for s in sessions)
+            return respond(*args, **kwargs)
+        return side_effect
+
+    slack_history["messages"] = [history_message("1.0", files=files)]
+    with (
+        patch.object(slack, "make_session", tracked_session),
+        patch.object(slack, "iter_messages", side_effect=recording("history", cast(MagicMock, slack.iter_messages).side_effect)),
+        patch.object(slack, "build_user_cache", side_effect=recording("users", lambda *a: {})),
+        patch.object(slack, "download_message_images", side_effect=recording("images", lambda *a, **kw: [])),
+    ):
+        slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert in_transaction == calls
+
+
+UNCLAIMED_TS = "1704067300.000100"
+
+
+@pytest.mark.parametrize(
+    "messages, replies",
+    [
+        ([history_message(UNCLAIMED_TS)], {}),
+        ([history_message("1.0", thread_ts="1.0", reply_count=1)], {"1.0": [history_message(UNCLAIMED_TS)]}),
+    ],
+)
+def test_a_sync_claims_messages_no_app_has_claimed(
+    db_session, unclaimed_message, slack_channel, slack_app, slack_history, messages, replies
+):
+    slack_history["messages"] = messages
+    slack_history["replies"] = replies
+
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    db_session.refresh(unclaimed_message)
+    assert (unclaimed_message.message_ts, unclaimed_message.slack_app_id) == (UNCLAIMED_TS, slack_app.id)
+
+
+@pytest.fixture
+def stored_history(db_session, slack_workspace, slack_channel, slack_app):
+    """``slack_channel`` holds top-level messages of Oct 1 and 5 and an Oct 20 reply to the first."""
+    for day, thread in [("2026-10-01", "2026-10-01"), ("2026-10-05", None), ("2026-10-20", "2026-10-01")]:
+        db_session.add(
+            SlackMessage(
+                modality="message",
+                sha256=day.encode() + bytes(22),
+                content=f"message of {day}",
+                message_ts=slack.slack_ts(day),
+                thread_ts=thread and slack.slack_ts(thread),
+                channel_id=slack_channel.id,
+                workspace_id=slack_workspace.id,
+                author_id="U1",
+                message_type="message",
+                slack_app_id=slack_app.id,
+            )
+        )
+    db_session.commit()
+    return slack_channel
+
+
+@pytest.mark.parametrize(
+    "cursor, since, rewound_to",
+    [
+        ("2026-11-05", None, "2026-10-05"),
+        ("2026-10-25", None, "2026-10-05"),
+        ("2026-11-05", "2026-10-03", "2026-10-03"),
+        ("2026-11-05", "2026-10-10", "2026-10-05"),
+    ],
+)
+def test_rewinding_moves_a_cursor_back_to_the_newest_stored_message(
+    db_session, stored_history, slack_credentials, slack_app, cursor, since, rewound_to
+):
+    stored_history.last_message_ts = slack.slack_ts(cursor)
+    db_session.commit()
+
+    with patch.object(slack.app, "send_task") as send:
+        slack.rewind_slack_cursors(since=since)
+
+    assert channel_cursor(db_session, stored_history) == slack.slack_ts(rewound_to)
+    assert [c.kwargs["kwargs"] for c in send.call_args_list] == [
+        {"channel_id": stored_history.id, "slack_app_id": slack_app.id}
+    ]
+
+
+@pytest.mark.parametrize("cursor, since", [("2026-10-05", None), ("2026-10-02", "2026-10-10")])
+def test_rewinding_leaves_a_cursor_at_or_before_its_target(
+    db_session, stored_history, slack_credentials, slack_app, cursor, since
+):
+    stored_history.last_message_ts = slack.slack_ts(cursor)
+    db_session.commit()
+
+    with patch.object(slack.app, "send_task") as send:
+        result = slack.rewind_slack_cursors(since=since)
+
+    assert (result["channels"], send.call_count) == ([], 0)
+    assert channel_cursor(db_session, stored_history) == slack.slack_ts(cursor)
+
+
+@pytest.mark.parametrize("since, rewound_to", [(None, None), ("2026-05-01", slack.slack_ts("2026-05-01"))])
+def test_rewinding_a_channel_with_nothing_stored_refetches_its_history_from_since(
+    db_session, slack_channel, slack_credentials, slack_app, since, rewound_to
+):
+    slack_channel.last_message_ts = slack.slack_ts("2026-05-16")
+    db_session.commit()
+
+    with patch.object(slack.app, "send_task"):
+        result = slack.rewind_slack_cursors(since=since)
+
+    assert channel_cursor(db_session, slack_channel) == rewound_to
+    assert result["channels"] == [
+        {"channel_id": slack_channel.id, "cursor": slack.slack_ts("2026-05-16"), "rewound_to": rewound_to, "queued": True}
+    ]
+
+
+@pytest.mark.parametrize("collect_messages, is_archived", [(False, False), (True, True)])
+def test_rewinding_leaves_channels_that_are_not_collected(
+    db_session, slack_channel, slack_credentials, slack_app, collect_messages, is_archived
+):
+    slack_channel.last_message_ts = slack.slack_ts("2026-05-16")
+    slack_channel.collect_messages = collect_messages
+    slack_channel.is_archived = is_archived
+    db_session.commit()
+
+    with patch.object(slack.app, "send_task") as send:
+        result = slack.rewind_slack_cursors()
+
+    assert (result["channels"], send.call_count) == ([], 0)
+    assert channel_cursor(db_session, slack_channel) == slack.slack_ts("2026-05-16")
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_rewinding_reports_a_channel_whose_sync_is_running(
+    db_session, stored_history, slack_credentials, slack_app, dry_run
+):
+    stored_history.last_message_ts = slack.slack_ts("2026-11-05")
+    db_session.commit()
+
+    with slack.channel_sync_lock(stored_history.id), patch.object(slack.app, "send_task") as send:
+        result = slack.rewind_slack_cursors(dry_run=dry_run)
+
+    assert (result["channels"], result["busy"], send.call_count) == ([], [stored_history.id], 0)
+    assert channel_cursor(db_session, stored_history) == slack.slack_ts("2026-11-05")
+
+
+def test_a_dry_run_rewinds_nothing(db_session, stored_history, slack_credentials, slack_app):
+    stored_history.last_message_ts = slack.slack_ts("2026-11-05")
+    db_session.commit()
+
+    with patch.object(slack.app, "send_task") as send:
+        result = slack.rewind_slack_cursors(dry_run=True)
+
+    assert result["channels"] == [
+        {
+            "channel_id": stored_history.id,
+            "cursor": slack.slack_ts("2026-11-05"),
+            "rewound_to": slack.slack_ts("2026-10-05"),
+            "queued": True,
+        }
+    ]
+    assert (channel_cursor(db_session, stored_history), send.call_count) == (slack.slack_ts("2026-11-05"), 0)

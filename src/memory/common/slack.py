@@ -314,6 +314,8 @@ def iter_messages(
     client: SlackClient,
     channel_id: str,
     oldest: str | None = None,
+    latest: str | None = None,
+    inclusive: bool = False,
     limit: int = 100,
 ) -> Iterator[dict]:
     """Iterate over messages in a channel with automatic pagination.
@@ -322,6 +324,8 @@ def iter_messages(
         client: SlackClient instance
         channel_id: Channel to fetch messages from
         oldest: Only fetch messages after this timestamp (for incremental sync)
+        latest: Only fetch messages before this timestamp
+        inclusive: Also fetch messages at exactly ``oldest`` or ``latest``
         limit: Messages per page (max 100)
 
     Yields:
@@ -330,6 +334,10 @@ def iter_messages(
     params: dict[str, Any] = {"channel": channel_id, "limit": limit}
     if oldest:
         params["oldest"] = oldest
+    if latest:
+        params["latest"] = latest
+    if inclusive:
+        params["inclusive"] = "true"
     yield from _paginate(
         client, "conversations.history", "messages", params, check_has_more=True
     )

@@ -59,6 +59,7 @@ ADD_SLACK_MESSAGE = f"{SLACK_ROOT}.add_slack_message"
 MARK_SLACK_MESSAGE_DELETED = f"{SLACK_ROOT}.mark_slack_message_deleted"
 UPDATE_SLACK_REACTIONS = f"{SLACK_ROOT}.update_slack_reactions"
 UPDATE_SLACK_CHANNEL = f"{SLACK_ROOT}.update_slack_channel"
+REWIND_SLACK_CURSORS = f"{SLACK_ROOT}.rewind_slack_cursors"
 
 SYNC_NOTE = f"{NOTES_ROOT}.sync_note"
 WRITE_NOTE_FILE = f"{NOTES_ROOT}.write_note_file_when_free"

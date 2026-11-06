@@ -53,6 +53,14 @@ a new, empty `## Unreleased` above it.
 - A task that keeps killing its worker is dropped after 3 starts instead of
   being redelivered forever; an email that kills its worker is not re-queued
   by later syncs.
+- Slack history sync no longer loses messages whose store failed: it stores
+  each message itself, oldest first and with its thread replies, and moves a
+  channel's cursor past it only once stored, so a failed sync resumes where it
+  stopped. Long syncs no longer fail with "server closed the connection
+  unexpectedly". A message whose store fails 3 times (worker crashes included,
+  lost database or Redis connections not) is skipped and logged as an ERROR.
+  That log line, in the operator logs, is the lasting record of the skip: the
+  workspace's sync error shows it only until the workspace's next sync.
 
 ### Required env vars
 
@@ -91,6 +99,17 @@ None.
   ones. The bad email on existing instances (all those sweep failures) is
   therefore skipped from the first sync after the update; a manual retry of
   its failed job still runs it.
+- Slack history is read in time windows of at most a page, and a channel's
+  sync works for about 5 minutes per turn, then queues its continuation, so a
+  large backlog takes several turns on the `slack-sync` worker.
+- Slack history messages are now stored one at a time on the `slack-sync`
+  worker instead of being fanned out as separate tasks, so large backfills and
+  rewinds take longer than before.
+- New `slack rewind-cursors` command of `tools/run_celery_task.py`: moves the
+  cursor of each collected channel back to its newest stored top-level message
+  (or to `--since`, when earlier) and resyncs it. Channels mid-sync are listed
+  as `busy` and left alone; run it again for them. `--dry-run` only lists what
+  it would do.
 
 ### Migrations
 
@@ -109,6 +128,20 @@ transcript. Check the list with `--dry-run` first. Safe to re-run:
 docker compose exec -T worker python - --wait maintenance dedupe-meetings --dry-run < tools/run_celery_task.py
 docker compose exec -T worker python - --wait maintenance dedupe-meetings < tools/run_celery_task.py
 ```
+
+Refetch Slack messages that earlier syncs skipped after a channel's newest
+stored message. Look at the dry run first:
+
+```bash
+docker compose exec -T worker python - --wait slack rewind-cursors --dry-run < tools/run_celery_task.py
+docker compose exec -T worker python - --wait slack rewind-cursors < tools/run_celery_task.py
+```
+
+Gaps between stored messages, including thread replies missing under parents
+older than a channel's newest stored message, are only refetched by rewinding
+further, e.g. `--since 2026-06-01` (dry run first, as above). That rereads
+every collected channel's history and threads from that date, which takes a
+while under Slack's rate limits.
 
 ## v0.4.8 (2026-11-06)
 
