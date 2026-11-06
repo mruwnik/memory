@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call
-from memory.common import instance_settings, metrics, module_settings, settings, summarizer
+from memory.common import instance_settings, metrics, module_settings, qdrant as qdrant_module, settings, summarizer
 from memory.common.db.models import LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
@@ -966,6 +966,13 @@ def qdrant(qdrant_container):
 
     with patch.object(qdrant_client, "QdrantClient", return_value=client):
         yield client
+
+
+@pytest.fixture(autouse=True)
+def fresh_thread_qdrant_clients():
+    """Search threads are pooled across tests, so a client one test cached in a
+    thread (often a mock) would otherwise serve every later test's searches."""
+    qdrant_module.thread_clients = threading.local()
 
 
 @pytest.fixture(autouse=True)
