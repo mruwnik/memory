@@ -511,6 +511,10 @@ DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN = int(
 # ≤1h staleness on partial outages, so 1h is the smallest interval that
 # stays comfortably inside Slack's tier-3 rate limits while meeting RTO.
 SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 3600))  # seconds (1 hour)
+# Replies posted under a thread whose parent is older than a channel's cursor
+# never appear in its history, so each sync re-lists this many days of
+# history and reads the threads whose latest reply isn't stored. 0 turns it off.
+SLACK_THREAD_LOOKBACK_DAYS = float(os.getenv("SLACK_THREAD_LOOKBACK_DAYS", 14))
 
 # Extra https origins (e.g. https://chat.example.com) that non-admin users may
 # point Slack apps' OAuth/Web API URLs and Discord bots' REST URL at. Slack's

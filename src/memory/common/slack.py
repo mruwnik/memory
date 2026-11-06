@@ -347,6 +347,7 @@ def iter_thread_replies(
     client: SlackClient,
     channel_id: str,
     thread_ts: str,
+    oldest: str | None = None,
     limit: int = 100,
 ) -> Iterator[dict]:
     """Iterate over thread replies with automatic pagination.
@@ -355,12 +356,15 @@ def iter_thread_replies(
         client: SlackClient instance
         channel_id: Channel containing the thread
         thread_ts: Parent message timestamp
+        oldest: Only fetch replies after this timestamp
         limit: Replies per page (max 100)
 
     Yields:
         Reply message dicts (excludes parent message)
     """
     params: dict[str, Any] = {"channel": channel_id, "ts": thread_ts, "limit": limit}
+    if oldest:
+        params["oldest"] = oldest
     for msg in _paginate(
         client, "conversations.replies", "messages", params, check_has_more=True
     ):

@@ -1489,9 +1489,10 @@ def slack_history(slack_credentials):
     ``messages`` is in Slack's order, newest first; ``replies`` maps a thread
     to its replies or to the error reading them raises. ``listed`` counts the
     messages each history listing yielded and ``pages`` the pages of ``limit``
-    messages it fetched; ``sent`` records queued tasks.
+    messages it fetched; ``threads_read`` records each thread read and the
+    ``oldest`` it was read after; ``sent`` records queued tasks.
     """
-    history: dict[str, Any] = {"messages": [], "replies": {}, "listed": [], "pages": [], "sent": []}
+    history: dict[str, Any] = {"messages": [], "replies": {}, "listed": [], "pages": [], "threads_read": [], "sent": []}
 
     def messages(client, channel_id, oldest=None, latest=None, inclusive=False, limit=100):
         low, high = float(oldest or 0), float(latest or "inf")
@@ -1504,11 +1505,12 @@ def slack_history(slack_credentials):
                 history["listed"][-1] += 1
                 yield message
 
-    def replies(client, channel_id, thread_ts):
+    def replies(client, channel_id, thread_ts, oldest=None):
+        history["threads_read"].append((thread_ts, oldest))
         found = history["replies"].get(thread_ts, [])
         if isinstance(found, Exception):
             raise found
-        return found
+        return (r for r in found if float(r["ts"]) > float(oldest or 0))
 
     with (
         patch.object(slack, "slack_client_for") as client,
@@ -1638,6 +1640,30 @@ def test_thread_replies_are_stored_with_their_parent(db_session, slack_channel, 
     assert channel_cursor(db_session, slack_channel) == "2.0"
 
 
+@pytest.mark.parametrize(
+    "parent_age_days, newest_reply_age_days, read_again",
+    [(3, 1 / 24, True), (3, 2.5, False), (20, 1 / 24, False)],
+    ids=["new-reply", "no-new-reply", "parent-older-than-lookback"],
+)
+def test_a_later_sync_reads_replies_posted_under_a_thread_it_already_passed(
+    db_session, slack_channel, slack_app, slack_history, parent_age_days, newest_reply_age_days, read_again
+):
+    now = time.time()
+    parent, first, newest = (f"{now - days * 86400:.6f}" for days in (parent_age_days, 2.5, newest_reply_age_days))
+    slack_history["messages"] = [history_message(parent, thread_ts=parent, reply_count=1, latest_reply=first)]
+    slack_history["replies"] = {parent: [history_message(first)]}
+    slack.sync_slack_channel(slack_channel.id, slack_app.id)
+    slack_history["threads_read"].clear()
+
+    slack_history["messages"] = [history_message(parent, thread_ts=parent, reply_count=2, latest_reply=newest)]
+    slack_history["replies"] = {parent: [history_message(ts) for ts in sorted({first, newest}, key=float)]}
+    with patch.object(slack.settings, "SLACK_THREAD_LOOKBACK_DAYS", 14):
+        slack.sync_slack_channel(slack_channel.id, slack_app.id)
+
+    assert len(stored_timestamps(db_session, slack_channel.id)) == 2 + read_again
+    assert slack_history["threads_read"] == [(parent, first)] * read_again
+
+
 def test_a_sync_out_of_time_continues_in_a_new_task(db_session, slack_channel, slack_app, slack_history):
     slack_history["messages"] = [history_message("2.0"), history_message("1.0")]
 
@@ -1698,7 +1724,7 @@ def test_a_window_cut_short_by_now_is_halved_from_where_it_ends(db_session, slac
     db_session.commit()
     slack_history["messages"] = [history_message(f"{start + s:.6f}") for s in range(95, 0, -10)]
 
-    with patch.object(slack, "HISTORY_PAGE_SIZE", 5):
+    with patch.object(slack, "HISTORY_PAGE_SIZE", 5), patch.object(slack.settings, "SLACK_THREAD_LOOKBACK_DAYS", 0):
         result = slack.sync_slack_channel(slack_channel.id, slack_app.id)
 
     assert (result["status"], result["messages_read"]) == ("completed", 10)

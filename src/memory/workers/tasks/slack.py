@@ -505,7 +505,8 @@ def sync_slack_channel(
 
     Stores the channel's messages newer than its ``last_message_ts`` cursor,
     oldest first and each with its thread replies, moving the cursor past a
-    message once it is stored or deliberately skipped. A failed sync resumes
+    message once it is stored or deliberately skipped, then the replies posted
+    since under recent threads it had passed. A failed sync resumes
     from the last stored message; one out of time queues its continuation.
     A Redis lock keeps syncs of one channel apart.
     """
@@ -578,7 +579,9 @@ class ChannelHistorySync:
     """One turn of storing a channel's history, oldest first, from its cursor on.
 
     The cursor moves past a message once it and its thread's replies are
-    stored or deliberately skipped.
+    stored or deliberately skipped. History never lists replies posted later
+    under a message the cursor has passed, so each sync's last step reads
+    them from the threads started within ``SLACK_THREAD_LOOKBACK_DAYS``.
     """
 
     channel_id: str
@@ -600,6 +603,7 @@ class ChannelHistorySync:
         """Store the history up to now; False when out of time first."""
         # Without a cursor the whole history is one window, so an empty or
         # small channel costs a single call.
+        started_at = self.cursor
         position = self.cursor or "0"
         span = float(HISTORY_WINDOW_SECONDS) if self.cursor else float("inf")
         while not self.out_of_time():
@@ -614,7 +618,7 @@ class ChannelHistorySync:
                     return False
                 self.advance(message["ts"])
             if latest >= now:
-                return True
+                return self.catch_up_threads(started_at)
             span = span * 2 if len(page) < HISTORY_PAGE_SIZE // 4 else span
             position = f"{latest:.6f}"
         return False
@@ -633,21 +637,43 @@ class ChannelHistorySync:
         newer = [m for m in messages if m.get("ts") and float(m["ts"]) > float(oldest)]
         return sorted(newer, key=lambda m: float(m["ts"]))
 
+    def catch_up_threads(self, until: str | None) -> bool:
+        """Store the replies posted since they were last read under threads
+        started within the lookback, up to ``until``; False when out of time first."""
+        # Threads after ``until`` were just read whole by this turn.
+        oldest = time.time() - settings.SLACK_THREAD_LOOKBACK_DAYS * 86400
+        if until is None or float(until) < oldest:
+            return True
+        listing = iter_messages(
+            self.client, self.channel_id, oldest=f"{oldest:.6f}", latest=until, inclusive=True, limit=HISTORY_PAGE_SIZE
+        )
+        latest_replies = {m["ts"]: m["latest_reply"] for m in listing if m.get("latest_reply")}
+        newest_stored = newest_stored_replies(self.channel_id, list(latest_replies))
+        for thread_ts, latest_reply in latest_replies.items():
+            stored = newest_stored.get(thread_ts)
+            if stored and float(stored) >= float(latest_reply):
+                continue
+            if self.out_of_time() or not self.store_replies(thread_ts, after=stored):
+                return False
+        return True
+
     def store_with_replies(self, message: dict) -> bool:
         """Store a message and its thread's replies; False when out of time among the replies."""
         self.store(message)
-        if not message.get("reply_count"):
-            return True
+        return not message.get("reply_count") or self.store_replies(message["ts"])
+
+    def store_replies(self, thread_ts: str, after: str | None = None) -> bool:
+        """Store a thread's replies after ``after``; False when out of time among them."""
         try:
-            for reply in iter_thread_replies(self.client, self.channel_id, message["ts"]):
+            for reply in iter_thread_replies(self.client, self.channel_id, thread_ts, oldest=after):
                 if self.out_of_time():
                     return False
                 if reply.get("ts"):
-                    self.store(reply, thread_ts=message["ts"])
+                    self.store(reply, thread_ts=thread_ts)
         except SlackAPIError as e:
             if e.error != "thread_not_found":
                 raise
-            logger.info(f"Slack thread {message['ts']} in {self.channel_id} is gone; no replies to store")
+            logger.info(f"Slack thread {thread_ts} in {self.channel_id} is gone; no replies to store")
         return True
 
     def store(self, message: dict, thread_ts: str | None = None) -> None:
@@ -679,6 +705,23 @@ class ChannelHistorySync:
         if not set_channel_cursor(self.channel_id, self.cursor, message_ts):
             raise ChannelSyncInterrupted(self.channel_id)
         self.cursor, self.advanced = message_ts, True
+
+
+def newest_stored_replies(channel_id: str, thread_timestamps: list[str]) -> dict[str, str]:
+    """The newest stored reply of each of these threads that has one."""
+    if not thread_timestamps:
+        return {}
+    with make_session() as session:
+        rows = (
+            session.query(SlackMessage.thread_ts, func.max(SlackMessage.message_ts))
+            .filter(
+                SlackMessage.channel_id == channel_id,
+                SlackMessage.thread_ts.in_(thread_timestamps),
+                SlackMessage.message_ts != SlackMessage.thread_ts,
+            )
+            .group_by(SlackMessage.thread_ts)
+        )
+        return {thread_ts: ts for thread_ts, ts in rows}
 
 
 def message_failures_key(channel_id: str, message_ts: str) -> str:
