@@ -31,10 +31,20 @@ a new, empty `## Unreleased` above it.
   exception.
 - Ingest trigger runs carry what a worker needs to act on each item: its url (GitHub, Slack permalink, Discord jump link), its type's ids (repo/number/state/head sha/checks, Slack channel/ts/thread_ts, Discord guild/channel/message, email headers), meeting summary, notes, attendees and action items, and what changed. Item text arrives inside `<untrusted_item>` delimiters it can't close.
 - Trigger templates take `{items}`, `{items_json}` and, with per-item delivery, `{item.<field>}`; saving a trigger whose template names an unknown placeholder or field is refused with the valid fields listed.
+- Ingest triggers match every stored item, whether or not it was embedded: short chat messages ("@bot hi") and items whose embedding failed now trigger.
+- Ingest trigger filters take `repos` (GitHub "owner/name", case-insensitive) and `mentions_me` (Discord/Slack messages that @-mention one of the owner's Discord bots or Slack app bot users).
+- `on_changes` limits an on_edit trigger to edits reporting given changes (edited, commits, comments, review, checks, state); a triggered run's `trigger_ref.changes` lists each item's changes, "new" for a first match.
+- Beeper messages match trigger `channel_ids` (their beeper_chat_id) and `exclude_authors` (sender id or name).
+- Posts by connected Slack apps' bot users never trigger agents, closing a loop for agents that post with a bot token.
 
 ### Other changes for operators
 
 - An existing trigger whose template contains a `{word}` that isn't a placeholder is refused the next time it is saved; its runs keep rendering it literally.
+- Slack bot users are recorded when a user next connects Slack; until each user reconnects, their app's bot posts aren't loop-protected and `mentions_me` doesn't see Slack mentions of it.
+
+### Migrations
+
+- `20261206_slack_bot_user`: adds nullable `slack_user_credentials.bot_user_id`. Fast.
 
 ## v0.4.9 (2026-11-06)
 

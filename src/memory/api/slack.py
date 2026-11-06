@@ -438,8 +438,8 @@ def oauth_error_code(error: object) -> str | None:
 async def _exchange_slack_oauth_code(
     slack_app: SlackApp, code: str, redirect_uri: str
 ) -> dict:
-    """POST to Slack's oauth.v2.access. Returns the parsed authed_user payload
-    plus the validated team. Raises 400 on Slack-reported errors, missing
+    """POST to Slack's oauth.v2.access. Returns the parsed authed_user payload,
+    the app's bot user id and the validated team. Raises 400 on Slack-reported errors, missing
     user token, or malformed team_id."""
     async with public_http_client(timeout=30.0) as client:
         response = await client.post(
@@ -475,6 +475,7 @@ async def _exchange_slack_oauth_code(
         "authed_user": authed_user,
         "team_id": team_id,
         "team_name": team.get("name", "Unknown Workspace"),
+        "bot_user_id": data.get("bot_user_id"),
     }
 
 
@@ -485,6 +486,7 @@ def _persist_oauth_credentials(
     team_id: str,
     team_name: str,
     authed_user: dict,
+    bot_user_id: str | None = None,
 ) -> None:
     """Upsert the SlackWorkspace + SlackUserCredentials row from a successful
     Slack token-exchange response. Computes token expiry with a 5-minute
@@ -526,6 +528,7 @@ def _persist_oauth_credentials(
     creds.scopes = authed_user.get("scope", "").replace(",", " ").split()
     creds.token_expires_at = token_expires_at
     creds.slack_user_id = authed_user.get("id")
+    creds.bot_user_id = bot_user_id
 
     workspace.record_sync(None)
     db.commit()
@@ -609,6 +612,7 @@ async def slack_callback_for_app(
         team_id=exchange["team_id"],
         team_name=exchange["team_name"],
         authed_user=exchange["authed_user"],
+        bot_user_id=exchange["bot_user_id"],
     )
 
     # Trigger an immediate workspace sync (slack-changes.md §3.7 backfill).

@@ -11,8 +11,8 @@ from memory.agents.triggers import (
     Delivery,
     IngestConfig,
     accessible_ids,
+    changes_by_item,
     dedupe_key,
-    edited_ids,
     trigger_key,
 )
 from memory.common.notify import notify_user_now
@@ -55,7 +55,11 @@ def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
 
 
 def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
-    """Enqueue one run for these encoded Deliveries; returns its id, or None if nothing ran."""
+    """Enqueue one run for these encoded Deliveries; returns its id, or None if nothing ran.
+
+    The run's trigger ref is {"trigger_id", "item_ids": [readable ids], "changes":
+    {"<item id>": [Change tags delivered for it]}}.
+    """
     claimed = [Delivery.decode(d) for d in deliveries]
     with make_session() as db:
         trigger = db.get(AgentTrigger, trigger_id, with_for_update=True)
@@ -73,8 +77,7 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
                 return None
             delivered = [d for d in claimed if d.item_id in allowed]
             items = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).order_by(SourceItem.id).all()
-            edited = edited_ids(delivered)
-            changes = {i: ["edited" if i in edited else "new"] for i in allowed}
+            changes = changes_by_item(delivered)
             run = enqueue_run(
                 db,
                 user_id=owner.id,
@@ -82,7 +85,11 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
                 input=render_input(config.template, items, MAX_TEXT_CHARS, changes),
                 trigger=TriggerInfo(
                     kind=INGEST,
-                    ref={"trigger_id": trigger.id, "item_ids": allowed},
+                    ref={
+                        "trigger_id": trigger.id,
+                        "item_ids": allowed,
+                        "changes": changes,
+                    },
                     dedupe_key=dedupe_key(trigger.id, delivered),
                 ),
                 definition=definition,

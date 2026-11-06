@@ -746,11 +746,11 @@ def test_by_collection_preserves_order():
 
 
 @pytest.mark.parametrize(
-    "embedding_return,qdrant_error,expected_status,expected_embed_status,triggers_checked",
+    "embedding_return,qdrant_error,expected_status,expected_embed_status",
     [
-        ("success", False, "processed", "STORED", True),
-        ("success", True, "failed", "FAILED", False),
-        ("empty", False, "failed", "FAILED", False),
+        ("success", False, "processed", "STORED"),
+        ("success", True, "failed", "FAILED"),
+        ("empty", False, "failed", "FAILED"),
     ],
 )
 def test_process_content_item(
@@ -762,7 +762,6 @@ def test_process_content_item(
     qdrant_error,
     expected_status,
     expected_embed_status,
-    triggers_checked,
 ):
     queued = []
     monkeypatch.setattr(
@@ -817,7 +816,7 @@ def test_process_content_item(
     db_item = db_session.query(MailMessage).filter_by(id=mail_message.id).first()
     assert db_item is not None
     assert str(db_item.embed_status) == expected_embed_status
-    assert (queued == [mail_message.id]) is triggers_checked
+    assert queued == [mail_message.id]
 
 
 @pytest.mark.parametrize(

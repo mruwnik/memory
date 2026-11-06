@@ -43,6 +43,7 @@ from memory.common.db.models import (
     AgentTrigger,
     APIKey,
     AgentTriggerMatch,
+    BeeperMessage,
     BlogPost,
     CalendarEvent,
     Comic,
@@ -77,6 +78,10 @@ BUFFER_TTL_SEC = 86_400
 MATCH_RETENTION = timedelta(days=30)
 
 FilterValues = Annotated[list[str], Field(max_length=MAX_FILTER_VALUES)]
+# What changed about an item, as ingesters report it to queue_trigger_match.
+Change = Literal["new", "edited", "commits", "comments", "review", "checks", "state"]
+# Discord <@123> / <@!123>, Slack <@U123> / <@U123|name>.
+MENTION = re.compile(r"<@!?(\w+)(?:\|[^>]*)?>")
 
 
 def source_types() -> list[str]:
@@ -105,6 +110,10 @@ class IngestFilter(BaseModel):
     regex: str | None = Field(default=None, max_length=MAX_REGEX_CHARS)
     # Author ids, usernames or email addresses (case-insensitive, exact).
     exclude_authors: FilterValues = []
+    # GitHub "owner/name" (case-insensitive).
+    repos: FilterValues = []
+    # Discord/Slack messages that @-mention one of the owner's bots.
+    mentions_me: bool = False
 
     @field_validator("channel_ids", "exclude_channel_ids")
     @classmethod
@@ -143,10 +152,12 @@ class IngestFilter(BaseModel):
             or self.channel_ids
             or self.text_contains
             or self.regex
+            or self.repos
+            or self.mentions_me
         ):
             raise ValueError(
                 "set at least one of source_types, tags_any, channel_ids, "
-                "text_contains or regex"
+                "text_contains, regex, repos or mentions_me"
             )
         return self
 
@@ -178,6 +189,19 @@ class IngestConfig(BaseModel):
     )
     # Not part of the filter: it decides which events count, not which items.
     on_edit: bool = False
+    # Edits fire only when they report one of these changes; empty means any edit.
+    on_changes: list[Change] = []
+
+    @model_validator(mode="after")
+    def changes_need_edits(self) -> "IngestConfig":
+        if self.on_changes and not self.on_edit:
+            raise ValueError("on_changes needs on_edit: only edits are filtered by change")
+        return self
+
+    def refires(self, changes: list[str] | None) -> bool:
+        """Whether an edit reporting `changes` fires again; an unreported edit is "edited"."""
+        wanted = set(self.on_changes)
+        return self.on_edit and (not wanted or bool(wanted & set(changes or ["edited"])))
 
 
 @dataclass(frozen=True)
@@ -190,6 +214,10 @@ class ItemFacts:
     text: str
     # A Discord thread's parent; Slack thread replies carry their channel's id.
     parent_channel_id: str | None = None
+    # Lowercased GitHub "owner/name".
+    repo: str | None = None
+    # Lowercased ids the message @-mentions, as its raw content spells them.
+    mentions: frozenset[str] = frozenset()
 
 
 def lowered(values: Iterable[Any]) -> frozenset[str]:
@@ -209,6 +237,8 @@ def channel_and_authors(item: SourceItem) -> tuple[str | None, list[Any]]:
         return str(item.channel_id), [item.author_id, *names]
     if isinstance(item, SlackMessage):
         return item.channel_id, [item.author_id, item.author_name]
+    if isinstance(item, BeeperMessage):
+        return str(item.chat_id), [item.sender_id, item.sender_name]
     if isinstance(item, MailMessage):
         return None, mail_authors(item.sender)
     if isinstance(item, ForumPost):
@@ -255,6 +285,12 @@ def parent_channel_id(item: SourceItem) -> str | None:
     return None if parent is None else str(parent)
 
 
+def mentioned_ids(item: SourceItem) -> frozenset[str]:
+    if not isinstance(item, (DiscordMessage, SlackMessage)):
+        return frozenset()
+    return lowered(MENTION.findall(item.content or ""))
+
+
 def item_facts(item: SourceItem) -> ItemFacts:
     channel_id, authors = channel_and_authors(item)
     return ItemFacts(
@@ -264,6 +300,8 @@ def item_facts(item: SourceItem) -> ItemFacts:
         authors=lowered(authors),
         text=item_text(item),
         parent_channel_id=parent_channel_id(item),
+        repo=item.repo_path.lower() if isinstance(item, GithubItem) and item.repo_path else None,
+        mentions=mentioned_ids(item),
     )
 
 
@@ -296,7 +334,8 @@ def regex_search(pattern: str, text: str) -> bool:
         signal.signal(signal.SIGALRM, previous)
 
 
-def matches(f: IngestFilter, facts: ItemFacts) -> bool:
+def matches(f: IngestFilter, facts: ItemFacts, mine: frozenset[str] = frozenset()) -> bool:
+    """`mine`: the owner's bot ids, which mentions_me looks for."""
     if f.source_types and facts.source_type not in f.source_types:
         return False
     if f.tags_any and not facts.tags & set(f.tags_any):
@@ -307,6 +346,10 @@ def matches(f: IngestFilter, facts: ItemFacts) -> bool:
         return False
     if facts.authors & lowered(f.exclude_authors):
         return False
+    if f.repos and facts.repo not in lowered(f.repos):
+        return False
+    if f.mentions_me and not facts.mentions & mine:
+        return False
     text = facts.text[:MAX_MATCH_TEXT_CHARS].lower()
     if f.text_contains and not any(t.lower() in text for t in f.text_contains):
         return False
@@ -314,18 +357,33 @@ def matches(f: IngestFilter, facts: ItemFacts) -> bool:
 
 
 def own_authors(db: DBSession, owner_id: int) -> frozenset[str]:
-    """Accounts an agent's own posts come from: any of our Discord bots, and the
-    owner's Slack integration user. Matching their items would let an agent
-    that posts to a channel re-trigger itself."""
+    """Accounts an agent's own posts come from: any of our Discord bots and Slack
+    app bot users, and the owner's Slack integration user. Matching their items
+    would let an agent that posts to a channel re-trigger itself."""
     bots = db.scalars(
         select(DiscordBot.application_id).where(DiscordBot.token_encrypted.is_not(None))
     ).all()
+    slack_bots = db.scalars(select(SlackUserCredentials.bot_user_id)).all()
     slack = db.scalars(
         select(SlackUserCredentials.slack_user_id).where(
             SlackUserCredentials.user_id == owner_id
         )
     ).all()
-    return lowered([*bots, *slack])
+    return lowered([*bots, *slack_bots, *slack])
+
+
+def owner_bots(db: DBSession, owner_id: int) -> frozenset[str]:
+    """Bot user ids whose mention addresses the owner's agents: the Discord bots
+    they registered and the bot users of their Slack app installs."""
+    discord = db.scalars(
+        select(DiscordBot.application_id).where(
+            DiscordBot.created_by_user_id == owner_id, DiscordBot.token_encrypted.is_not(None)
+        )
+    ).all()
+    slack = db.scalars(
+        select(SlackUserCredentials.bot_user_id).where(SlackUserCredentials.user_id == owner_id)
+    ).all()
+    return lowered([*discord, *slack])
 
 
 def trigger_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKey | None:
@@ -385,21 +443,38 @@ class Delivery:
     version: str
     # The trigger had already matched an earlier version.
     edited: bool
+    # Sorted Change tags, from delivered_changes.
+    changes: tuple[str, ...] = ()
 
     def encode(self) -> str:
-        return f"{self.item_id}:{self.version}:{int(self.edited)}"
+        return f"{self.item_id}:{self.version}:{int(self.edited)}:{','.join(self.changes)}"
 
     @classmethod
     def decode(cls, raw: str) -> "Delivery":
-        item_id, version, edited = raw.split(":")
-        return cls(int(item_id), version, edited == "1")
+        item_id, version, edited, *changes = raw.split(":")
+        tags = tuple(changes[0].split(",")) if changes and changes[0] else ()
+        return cls(int(item_id), version, edited == "1", tags)
 
 
-def edited_ids(deliveries: list[Delivery]) -> set[int]:
-    """Items delivered only as edits: one whose first version is among them is new to the run."""
-    return {d.item_id for d in deliveries if d.edited} - {
-        d.item_id for d in deliveries if not d.edited
-    }
+def delivered_changes(edited: bool, changes: list[str] | None) -> tuple[str, ...]:
+    """A first match is always "new"; an edit that reports no changes is "edited"."""
+    tags = set(changes or [])
+    if not edited:
+        tags.add("new")
+    return tuple(sorted(tags or {"edited"}))
+
+
+def changes_by_item(deliveries: list[Delivery]) -> dict[str, list[str]]:
+    """Every change delivered for each item, keyed by its id as a string (a JSON key).
+
+    An item whose first version is among the deliveries is just "new": the run is
+    the agent's first sight of it, so later edits in the same batch aren't changes.
+    """
+    merged: dict[str, set[str]] = {}
+    for d in deliveries:
+        merged.setdefault(str(d.item_id), set()).update(d.changes)
+    first_seen = {str(d.item_id) for d in deliveries if not d.edited}
+    return {item_id: ["new"] if item_id in first_seen else sorted(tags) for item_id, tags in merged.items()}
 
 
 def dedupe_key(trigger_id: int, deliveries: list[Delivery]) -> str:
@@ -444,7 +519,14 @@ def may_claim(seen: Collection[bytes], version: bytes, *, fresh: bool, on_edit: 
 
 
 def claim(
-    db: DBSession, trigger_id: int, item_id: int, version: bytes, *, fresh: bool, on_edit: bool
+    db: DBSession,
+    trigger_id: int,
+    item_id: int,
+    version: bytes,
+    *,
+    fresh: bool,
+    on_edit: bool,
+    changes: list[str] | None = None,
 ) -> Delivery | None:
     """Record that trigger_id matched this version of item_id; None if it may not.
 
@@ -460,7 +542,9 @@ def claim(
         return None
     db.add(AgentTriggerMatch(trigger_id=trigger_id, item_id=item_id, content_hash=version))
     db.commit()
-    return Delivery(item_id, version.hex(), edited=bool(seen))
+    return Delivery(
+        item_id, version.hex(), edited=bool(seen), changes=delivered_changes(bool(seen), changes)
+    )
 
 
 def item_claims(db: DBSession, item_id: int) -> dict[int, set[bytes]]:
@@ -516,11 +600,14 @@ def dispatch(trigger_id: int, deliveries: list[Delivery]) -> None:
     app.send_task(FIRE_TRIGGER, args=[trigger_id, [d.encode() for d in deliveries]])
 
 
-def match_ingest_triggers(item_id: int, client: redis.Redis | None = None) -> list[int]:
+def match_ingest_triggers(
+    item_id: int, client: redis.Redis | None = None, changes: list[str] | None = None
+) -> list[int]:
     """Route one stored item to every enabled ingest trigger it matches.
 
-    Returns the matching trigger ids. Per-item triggers fire now; batch triggers
-    buffer the item for the sweep.
+    `changes` are the Change tags its ingester reported. Returns the matching
+    trigger ids. Per-item triggers fire now; batch triggers buffer the item for
+    the sweep.
     """
     with make_session() as db:
         item = db.get(SourceItem, item_id)
@@ -541,20 +628,24 @@ def match_ingest_triggers(item_id: int, client: redis.Redis | None = None) -> li
             fresh = item.inserted_at is not None and item.inserted_at >= max(
                 trigger.active_since, oldest
             )
-            if not may_claim(
-                claims.get(trigger.id, set()), version, fresh=fresh, on_edit=config.on_edit
-            ):
-                continue
-            if not matches(config.filter, facts):
+            refires = config.refires(changes)
+            if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
                 continue
             owner = db.get(User, trigger.definition.user_id)
-            if owner is None or facts.authors & own_authors(db, owner.id):
+            if owner is None:
+                continue
+            mine = owner_bots(db, owner.id) if config.filter.mentions_me else frozenset()
+            if not matches(config.filter, facts, mine):
+                continue
+            if facts.authors & own_authors(db, owner.id):
                 continue
             # Validity is left to the fire, which trips the breaker if the key is gone.
             key = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id else None
             if not accessible_ids(db, owner, key, [item_id]):
                 continue
-            delivery = claim(db, trigger.id, item_id, version, fresh=fresh, on_edit=config.on_edit)
+            delivery = claim(
+                db, trigger.id, item_id, version, fresh=fresh, on_edit=refires, changes=changes
+            )
             if delivery is None:
                 continue
             try:
@@ -592,13 +683,17 @@ def sweep_trigger_buffers(client: redis.Redis | None = None) -> dict[int, int]:
     return fired
 
 
-def queue_trigger_match(item_id: int) -> None:
-    """Hand a freshly stored item to trigger matching without ever failing ingestion."""
+def queue_trigger_match(item_id: int, changes: list[str] | None = None) -> None:
+    """Hand a stored item to trigger matching without ever failing ingestion.
+
+    `changes`: Change tags saying what an update changed. on_changes filters
+    edits by them, and runs see them in their trigger ref.
+    """
     try:
         with make_session() as db:
             if not any_ingest_trigger(db):
                 return
-        app.send_task(MATCH_INGEST_TRIGGERS, args=[item_id])
+        app.send_task(MATCH_INGEST_TRIGGERS, args=[item_id, changes])
     except Exception:
         logger.exception("could not queue trigger matching for item %s", item_id)
 

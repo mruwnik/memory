@@ -24,17 +24,20 @@ from memory.common.db.models import (
     AgentDefinition,
     AgentTrigger,
     AgentTriggerMatch,
+    BeeperMessage,
     BlogPost,
     DiscordBot,
     DiscordChannel,
     DiscordMessage,
     DiscordServer,
     DiscordUser,
+    GithubItem,
     SlackChannel,
     SlackMessage,
     SlackWorkspace,
 )
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials
+from memory.common.content_processing import process_content_item
 from tests.conftest import unique_sha256
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
@@ -84,6 +87,11 @@ def facts(**overrides):
             "greater than or equal to 60",
         ),
         ({"filter": {"tags_any": ["x"]}, "bogus": 1}, "Extra inputs"),
+        ({"filter": {"tags_any": ["x"]}, "on_changes": ["commits"]}, "on_changes needs on_edit"),
+        (
+            {"filter": {"tags_any": ["x"]}, "on_edit": True, "on_changes": ["pushed"]},
+            "Input should be",
+        ),
     ],
 )
 def test_config_validation_names_the_problem(config, expected):
@@ -105,10 +113,58 @@ def test_config_validation_names_the_problem(config, expected):
         ({"regex": r"^Runs"}, False),
         ({"tags_any": ["ai"], "exclude_authors": ["ALICE"]}, False),
         ({"tags_any": ["ai"], "text_contains": ["nothing"]}, False),
+        ({"repos": ["EquiStamp/Memory"]}, True),
+        ({"repos": ["equistamp/other"]}, False),
+        ({"mentions_me": True}, True),
+        ({"tags_any": ["ai"], "mentions_me": True, "repos": ["x/y"]}, False),
     ],
 )
 def test_matches_every_set_criterion(f, expected):
-    assert matches(IngestFilter.model_validate(f), facts()) is expected
+    item = facts(repo="equistamp/memory", mentions=frozenset({"200", "u_other"}))
+    assert matches(IngestFilter.model_validate(f), item, mine=frozenset({"200"})) is expected
+
+
+@pytest.mark.parametrize("mine", [frozenset(), frozenset({"u_bot"})])
+def test_mentions_me_needs_a_mention_of_one_of_mine(mine):
+    f = IngestFilter.model_validate({"mentions_me": True})
+
+    assert matches(f, facts(mentions=frozenset({"200"})), mine=mine) is False
+
+
+@pytest.mark.parametrize(
+    "item,mentions",
+    [
+        (
+            DiscordMessage(
+                type="discord_message", channel_id=1, author_id=1, content="<@200> hi <@!201>"
+            ),
+            {"200", "201"},
+        ),
+        (
+            SlackMessage(type="slack_message", channel_id="C1", content="<@U1> and <@W2|bob>"),
+            {"u1", "w2"},
+        ),
+        (SlackMessage(type="slack_message", channel_id="C1", content="<#C1> <!here>"), set()),
+    ],
+)
+def test_message_facts_carry_the_ids_they_mention(item, mentions):
+    assert item_facts(item).mentions == frozenset(mentions)
+
+
+def test_github_facts_carry_the_repo():
+    item = GithubItem(type="github_item", repo_path="EquiStamp/Memory", author="al")
+
+    assert item_facts(item).repo == "equistamp/memory"
+
+
+def test_beeper_facts_carry_chat_and_sender():
+    item = BeeperMessage(
+        type="beeper_message", chat_id=5, sender_id="@a:beeper.com", sender_name="Alice"
+    )
+
+    got = item_facts(item)
+
+    assert (got.channel_id, got.authors) == ("5", frozenset({"@a:beeper.com", "alice"}))
 
 
 @pytest.mark.parametrize(
@@ -271,7 +327,8 @@ def test_per_item_triggers_fire_at_once(
 
     assert matched == [on.id]
     no_celery_dispatch.assert_called_once_with(
-        FIRE_TRIGGER, args=[on.id, [Delivery(post.id, content_version(post).hex(), False).encode()]]
+        FIRE_TRIGGER,
+        args=[on.id, [Delivery(post.id, content_version(post).hex(), False, ("new",)).encode()]],
     )
 
 
@@ -286,8 +343,10 @@ def test_items_the_owner_cannot_read_never_match(
     no_celery_dispatch.assert_not_called()
 
 
-def discord_message(db, author_id, bot_token="tok"):
-    bot = DiscordBot(id=200, application_id=200, name="ourbot")
+def discord_message(db, author_id, bot_token="tok", content="ai news", owner=None):
+    bot = DiscordBot(
+        id=200, application_id=200, name="ourbot", created_by_user_id=owner and owner.id
+    )
     bot.token = bot_token
     db.add_all(
         [
@@ -303,7 +362,7 @@ def discord_message(db, author_id, bot_token="tok"):
     message = DiscordMessage(
         sha256=unique_sha256("dm"),
         modality="message",
-        content="ai news",
+        content=content,
         message_id=1,
         channel_id=10,
         server_id=1,
@@ -332,6 +391,28 @@ def test_our_own_discord_bots_never_trigger(
     assert bool(triggers.match_ingest_triggers(message.id, client)) is fires
 
 
+@pytest.mark.parametrize("content,fires", [("<@200>", True), ("hi", False)])
+def test_a_short_message_mentioning_our_bot_fires(
+    db_session, admin_user, client, no_celery_dispatch, monkeypatch, content, fires
+):
+    queued = []
+    monkeypatch.setattr("memory.common.content_processing.queue_trigger_match", queued.append)
+    trigger = make_trigger(
+        db_session,
+        make_definition(db_session, admin_user),
+        filter={"source_types": ["discord_message"], "mentions_me": True},
+    )
+    message = discord_message(db_session, 100, content=content, owner=admin_user)
+    message.embed_status = "RAW"
+
+    process_content_item(message, db_session)
+
+    assert message.embed_status == "SKIPPED"
+    assert [triggers.match_ingest_triggers(i, client) for i in queued] == [
+        [trigger.id] if fires else []
+    ]
+
+
 def slack_message(db, owner, author_id):
     app = SlackApp(client_id="c", name="app")
     db.add_all([app, SlackWorkspace(id="T1", name="w")])
@@ -340,7 +421,11 @@ def slack_message(db, owner, author_id):
         [
             SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel"),
             SlackUserCredentials(
-                slack_app_id=app.id, workspace_id="T1", user_id=owner.id, slack_user_id="U_OWNER"
+                slack_app_id=app.id,
+                workspace_id="T1",
+                user_id=owner.id,
+                slack_user_id="U_OWNER",
+                bot_user_id="U_BOT",
             ),
         ]
     )
@@ -361,8 +446,10 @@ def slack_message(db, owner, author_id):
     return message
 
 
-@pytest.mark.parametrize("author_id,fires", [("U_OTHER", True), ("U_OWNER", False)])
-def test_the_owners_slack_integration_user_never_triggers(
+@pytest.mark.parametrize(
+    "author_id,fires", [("U_OTHER", True), ("U_OWNER", False), ("U_BOT", False)]
+)
+def test_the_owners_slack_integration_and_bot_users_never_trigger(
     db_session, admin_user, client, no_celery_dispatch, author_id, fires
 ):
     make_trigger(db_session, make_definition(db_session, admin_user))
@@ -422,9 +509,9 @@ def test_matching_is_queued_only_when_an_ingest_trigger_exists(
 ):
     triggers.queue_trigger_match(1)
     make_trigger(db_session, make_definition(db_session, admin_user))
-    triggers.queue_trigger_match(2)
+    triggers.queue_trigger_match(2, ["commits"])
 
-    no_celery_dispatch.assert_called_once_with(MATCH_INGEST_TRIGGERS, args=[2])
+    no_celery_dispatch.assert_called_once_with(MATCH_INGEST_TRIGGERS, args=[2, ["commits"]])
 
 
 def test_queueing_a_match_never_raises(monkeypatch):
@@ -449,13 +536,19 @@ def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
 @pytest.mark.parametrize(
     "deliveries,expected",
     [
-        ([Delivery(1, "a", False), Delivery(2, "b", True)], {2}),
+        (
+            [Delivery(1, "a", False, ("new",)), Delivery(2, "b", True, ("commits",))],
+            {"1": ["new"], "2": ["commits"]},
+        ),
         # Buffered fresh, then edited before the batch went out: the run is its first sight.
-        ([Delivery(1, "a", False), Delivery(1, "b", True)], set()),
+        (
+            [Delivery(1, "a", False, ("new",)), Delivery(1, "b", True, ("comments", "edited"))],
+            {"1": ["new"]},
+        ),
     ],
 )
-def test_edited_ids_label_by_what_this_delivery_holds(deliveries, expected):
-    assert triggers.edited_ids(deliveries) == expected
+def test_changes_by_item_merges_each_items_deliveries(deliveries, expected):
+    assert triggers.changes_by_item(deliveries) == expected
 
 
 def test_content_versions_follow_what_an_agent_sees():
@@ -512,6 +605,26 @@ def test_an_edit_fires_again_only_with_on_edit(
 
     assert no_celery_dispatch.call_count == runs
     assert db_session.query(AgentTriggerMatch).count() == runs
+
+
+def test_on_changes_limits_which_edits_fire(
+    db_session, admin_user, client, no_celery_dispatch
+):
+    trigger = make_trigger(
+        db_session, make_definition(db_session, admin_user), on_edit=True, on_changes=["commits"]
+    )
+    post = blog_post(db_session)
+
+    new = triggers.match_ingest_triggers(post.id, client, changes=["state"])
+    edit(db_session, post)
+    commented = triggers.match_ingest_triggers(post.id, client, changes=["comments"])
+    unknown = triggers.match_ingest_triggers(post.id, client)
+    pushed = triggers.match_ingest_triggers(post.id, client, changes=["comments", "commits"])
+
+    assert (new, commented, unknown, pushed) == ([trigger.id], [], [], [trigger.id])
+    assert [
+        Delivery.decode(c.kwargs["args"][1][0]).changes for c in no_celery_dispatch.call_args_list
+    ] == [("new", "state"), ("comments", "commits")]
 
 
 def test_a_batch_buffers_each_version_of_an_item_edited_while_buffered(

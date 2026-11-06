@@ -259,6 +259,8 @@ class SlackUserCredentials(Base):
 
     # Slack user info for this credential
     slack_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The app's bot user in this workspace, which posts made with its bot token come from
+    bot_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -429,6 +429,9 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     if not chunks_count:
         # Reflect actual embed_status in task result
         status = "skipped" if item.embed_status == "SKIPPED" else "failed"
+        # Triggers match what was stored, embedded or not: "@bot hi" is too short to embed.
+        session.commit()
+        queue_trigger_match(item.id)
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     # Commit DB changes first to ensure chunks are persisted.
@@ -455,8 +458,7 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         item.embed_failed(error_name(e))
         logger.exception("Failed to push embeddings to Qdrant")
     session.commit()
-    if status == "processed":
-        queue_trigger_match(item.id)
+    queue_trigger_match(item.id)
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))
 

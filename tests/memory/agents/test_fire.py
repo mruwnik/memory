@@ -82,7 +82,7 @@ def rendered(p, change="new", body="body"):
 
 
 def claimed(*items):
-    return [Delivery(i.id, content_version(i).hex(), False).encode() for i in items]
+    return [Delivery(i.id, content_version(i).hex(), False, ("new",)).encode() for i in items]
 
 
 def test_a_fire_starts_one_run_with_the_rendered_input(
@@ -102,7 +102,11 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     assert redelivered == run_id
     assert (run.trigger_kind, run.trigger_ref, run.definition_id) == (
         "ingest",
-        {"trigger_id": trigger.id, "item_ids": [a.id, b.id]},
+        {
+            "trigger_id": trigger.id,
+            "item_ids": [a.id, b.id],
+            "changes": {str(a.id): ["new"], str(b.id): ["new"]},
+        },
         trigger.definition_id,
     )
     assert run.input == "New:\n" + "\n".join(rendered(p) for p in (a, b))
@@ -145,6 +149,23 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
     assert sorted(r.input for r in db_session.query(AgentRun)) == sorted(
         "New:\n" + rendered(item, change, body) for change, body in inputs
     )
+
+
+def test_the_changes_that_matched_reach_the_runs_trigger_ref(
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
+):
+    client = fakeredis.FakeRedis()
+    setup(db_session, admin_user, config=CONFIG | {"on_edit": True})
+    item = post(db_session, "A")
+
+    triggers.match_ingest_triggers(item.id, client)
+    item.content = "body, pushed"
+    db_session.commit()
+    triggers.match_ingest_triggers(item.id, client, changes=["commits"])
+    fire_dispatched(no_celery_dispatch)
+
+    refs = [run.trigger_ref["changes"] for run in db_session.query(AgentRun).order_by(AgentRun.id)]
+    assert refs == [{str(item.id): ["new"]}, {str(item.id): ["commits"]}]
 
 
 def test_disabled_triggers_and_unreadable_items_start_nothing(

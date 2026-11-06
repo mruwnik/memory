@@ -619,6 +619,7 @@ def _mock_slack_token_exchange(team_id: str, **authed_user_overrides):
         return_value={
             "ok": True,
             "authed_user": authed_user,
+            "bot_user_id": "U_BOT",
             "team": {"id": team_id, "name": "Test"},
         }
     )
@@ -777,7 +778,7 @@ def test_callback_happy_path_creates_credentials_with_slack_app_id(
     )
     assert creds is not None
     assert creds.access_token == "xoxp-test-access"
-    assert creds.slack_app_id == authorized_slack_app.id
+    assert (creds.slack_app_id, creds.bot_user_id) == (authorized_slack_app.id, "U_BOT")
 
 
 @pytest.mark.parametrize(

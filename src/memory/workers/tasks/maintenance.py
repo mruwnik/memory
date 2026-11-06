@@ -1726,9 +1726,9 @@ def purge_agent_runs() -> dict[str, int]:
 
 
 @app.task(name=MATCH_INGEST_TRIGGERS)
-def match_ingest_triggers(item_id: int) -> list[int]:
+def match_ingest_triggers(item_id: int, changes: list[str] | None = None) -> list[int]:
     """Start or buffer agent runs for every ingest trigger a stored item matches."""
-    return triggers.match_ingest_triggers(item_id)
+    return triggers.match_ingest_triggers(item_id, changes=changes)
 
 
 @app.task(name=SWEEP_TRIGGER_BUFFERS)

@@ -276,13 +276,13 @@ def test_an_edited_message_refires_an_on_edit_trigger(
 
     discord.add_discord_message(**sample_message_data)
     [stored] = no_celery_dispatch.call_args_list
-    [item_id] = stored.kwargs["args"]
+    [item_id, _] = stored.kwargs["args"]
     first = triggers.match_ingest_triggers(item_id, client)
     no_celery_dispatch.reset_mock()
     edit(sample_message_data)
     queued = no_celery_dispatch.call_args_list
 
-    assert [(c.args[0], c.kwargs["args"]) for c in queued] == [(MATCH_INGEST_TRIGGERS, [item_id])]
+    assert [(c.args[0], c.kwargs["args"]) for c in queued] == [(MATCH_INGEST_TRIGGERS, [item_id, None])]
     assert (first, triggers.match_ingest_triggers(item_id, client)) == ([trigger.id], [trigger.id])
 
 

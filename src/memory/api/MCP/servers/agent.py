@@ -1025,13 +1025,16 @@ async def trigger_upsert(
     """Create or update an ingest trigger: run one of your definitions when newly stored items match.
 
     config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
-    text_contains, regex, exclude_authors}, "delivery": {"mode": "per_item"} or {"mode": "batch",
-    "window_sec", "max_items"}, "template": the run's input, "on_edit": bool}. Set filter values must all
+    text_contains, regex, exclude_authors, repos, mentions_me}, "delivery": {"mode": "per_item"} or {"mode": "batch",
+    "window_sec", "max_items"}, "template": the run's input, "on_edit": bool, "on_changes": [...]}. Set filter values must all
     hold; within a list, any value matches. exclude_channel_ids drops items in
     those channels and their threads; a Discord thread whose parent isn't known
     yet still matches until a thread listing or thread event records it. Beeper
-    chats aren't matched by channel id. Only items stored since it was last
-    enabled match, each at most once, and only if you can read them.
+    messages match by their beeper_chat_id and sender. repos: GitHub "owner/name",
+    case-insensitive. mentions_me: true matches Discord and Slack messages that
+    @-mention one of your Discord bots or your Slack app's bot user. Every stored
+    item is matched, however short. Only items stored since it was last enabled
+    match, each at most once, and only if you can read them.
 
     Template placeholders: {items} renders each item with its type, id, changes, url
     and its type's ids (repo/number, Slack channel_id/ts/thread_ts, Discord
@@ -1044,11 +1047,15 @@ async def trigger_upsert(
     With "on_edit": true, an item this trigger has matched fires again each time its
     title or text changes (its changes then say "edited"); reprocessing
     unchanged content never does. Edits to items it never matched don't fire.
+    "on_changes" (needs on_edit) limits that to edits reporting one of: "edited",
+    "commits", "comments", "review", "checks", "state"; an edit that reports
+    nothing counts as "edited". The run's trigger_ref.changes lists each item's
+    changes, with "new" for a first match.
 
-    Loop protection: posts by our own Discord bots and by your Slack user never
-    match. An on_edit agent that edits the item it was given re-fires itself, and
-    anything else an agent writes that gets ingested again (email, GitHub,
-    Slack posted with a bot token) is only stopped by the caps: a trigger that hits
+    Loop protection: posts by our own Discord bots, by connected Slack apps' bot
+    users and by your Slack user never match. An on_edit agent that edits the
+    item it was given re-fires itself, and anything else an agent writes that
+    gets ingested again (email, GitHub, Beeper) is only stopped by the caps: a trigger that hits
     one (the definition's max_runs_per_hour or a daily cost pool) disables itself
     and notifies you; enabling it again clears that. The response's `warnings`
     lists the definition's tools that write or reach outside memory, which a

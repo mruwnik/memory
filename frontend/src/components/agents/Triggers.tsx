@@ -42,6 +42,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
   const { busy, error, submit } = useSubmit()
 
   const save = () => submit(() => onSave({
+    ...initial,
     filter: {
       ...initial.filter,
       source_types: types,
