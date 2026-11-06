@@ -19,6 +19,7 @@ from memory.common.db.models import (
     EmailAttachment,
 )
 from memory.common import embedding, settings
+from memory.common.jobs import LOST_JOB_ERROR, MAX_TASK_STARTS, WORKER_LOST_ERROR
 from memory.common.email_sender import (
     PASSWORD_RESET_HEADER,
     PASSWORD_RESET_SUBJECT,
@@ -400,6 +401,41 @@ def test_queue_message_spools_body_and_passes_only_filename(
     assert spool_path(name).read_text(encoding="utf-8") == SIMPLE_EMAIL_RAW
 
 
+@pytest.mark.parametrize(
+    "previous_jobs, queued",
+    [
+        ([("777", WORKER_LOST_ERROR, MAX_TASK_STARTS)], False),
+        ([("777", LOST_JOB_ERROR, 1)] * MAX_TASK_STARTS, False),
+        # One lost start is as likely a deploy as a poison message
+        ([("777", LOST_JOB_ERROR, 1)], True),
+        ([("777", "boom", MAX_TASK_STARTS)], True),
+        ([("778", WORKER_LOST_ERROR, MAX_TASK_STARTS)], True),
+    ],
+)
+def test_queue_message_skips_message_that_keeps_killing_its_worker(
+    db_session, test_email_account, previous_jobs, queued
+):
+    db_session.add_all(
+        PendingJob(
+            job_type="process_message",
+            params={"account_id": test_email_account.id, "message_id": message_id},
+            status=JobStatus.FAILED.value,
+            error_message=error,
+            attempts=attempts,
+        )
+        for message_id, error, attempts in previous_jobs
+    )
+    db_session.commit()
+
+    with patch("memory.workers.tasks.email.process_message") as mock_proc:
+        result = queue_message(
+            db_session, test_email_account.id, "777", "INBOX", SIMPLE_EMAIL_RAW
+        )
+
+    assert result is queued
+    assert mock_proc.delay.called is queued
+
+
 RESET_SENDER = "noreply@example.com"
 
 
@@ -689,8 +725,11 @@ class PoisonableSession:
 
 
 @patch("memory.workers.tasks.email.process_message")
+@patch("memory.workers.tasks.email.killed_its_worker", return_value=False)
 @patch("memory.workers.tasks.email.check_content_exists")
-def test_process_email_batch_recovers_after_db_error(mock_exists, mock_process_message):
+def test_process_email_batch_recovers_after_db_error(
+    mock_exists, _killed_its_worker, mock_process_message
+):
     """One dropped connection must not poison the whole batch.
 
     The first message's existence check fails (connection dropped); without

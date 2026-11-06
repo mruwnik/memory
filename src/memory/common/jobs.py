@@ -16,7 +16,8 @@ from typing import Any, Callable, TypeVar, overload
 from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 
-from celery.exceptions import TaskPredicate
+from celery import current_task
+from celery.exceptions import Reject, Retry, TaskPredicate
 
 from memory.common.celery_app import app as celery_app
 from memory.common.content_processing import (
@@ -25,6 +26,8 @@ from memory.common.content_processing import (
 )
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import PendingJob, JobStatus, JobType
+from memory.common.discord import notify_task_failure
+from memory.common.metrics import record_metric
 
 logger = logging.getLogger(__name__)
 
@@ -457,11 +460,9 @@ def retry_failed_job(
             "It may have been retried by another process."
         )
 
-    # Reset job status
-    locked_job.status = JobStatus.PENDING.value
-    locked_job.error_message = None
-    locked_job.completed_at = None
-    locked_job.updated_at = datetime.now(timezone.utc)
+    locked_job.mark_pending()
+    # A manual retry is a fresh chance, so earlier lost starts don't count towards MAX_TASK_STARTS.
+    locked_job.attempts = 0
     session.flush()
 
     # Reconstruct task_kwargs from params (excluding internal fields)
@@ -548,13 +549,9 @@ def reingest_job(
             "It may have been reingested by another process."
         )
 
-    # Reset job status
-    locked_job.status = JobStatus.PENDING.value
-    locked_job.error_message = None
-    locked_job.completed_at = None
+    locked_job.mark_pending()
     locked_job.result_id = None
     locked_job.result_type = None
-    locked_job.updated_at = datetime.now(timezone.utc)
     session.flush()
 
     # Reconstruct task_kwargs from params (excluding internal fields)
@@ -590,6 +587,31 @@ def reingest_job(
 # @tracked_task decorator
 # ---------------------------------------------------------------------------
 
+# acks_late + reject_on_worker_lost requeue a task whose worker died, so a task that
+# always kills its worker (OOM, segfault) would otherwise be redelivered forever.
+MAX_TASK_STARTS = 3
+WORKER_LOST_ERROR = f"Worker lost on {MAX_TASK_STARTS} starts; not retrying"
+LOST_JOB_ERROR = "Worker lost: still processing long after the task time limit"
+
+
+def killed_its_worker(session: DBSession, job_type: str, **params: Any) -> bool:
+    """Whether jobs of job_type with these params lost their worker on MAX_TASK_STARTS starts.
+
+    Counts starts across jobs, so work re-queued under a new task id each time
+    (a sync re-finding the same item) is caught too.
+    """
+    lost_starts = (
+        session.query(func.coalesce(func.sum(PendingJob.attempts), 0))
+        .filter(
+            PendingJob.job_type == job_type,
+            PendingJob.status == JobStatus.FAILED.value,
+            PendingJob.error_message.in_([WORKER_LOST_ERROR, LOST_JOB_ERROR]),
+            PendingJob.params.contains(params),
+        )
+        .scalar()
+    )
+    return lost_starts >= MAX_TASK_STARTS
+
 
 @overload
 def tracked_task(func: Callable[..., _R]) -> Callable[..., _R]: ...
@@ -609,7 +631,11 @@ def tracked_task(
 
     Two modes:
     - API-initiated: if ``job_id`` is in kwargs, uses the existing PendingJob
-    - Automatic/beat: creates a new PendingJob with user_id=NULL
+    - Automatic/beat: one PendingJob (user_id=NULL) per Celery task id, which a
+      redelivery of the same message reuses
+
+    A start that finds its job still processing follows a dead worker; after
+    MAX_TASK_STARTS such starts the job fails and the message is dropped.
 
     The ``job_id`` kwarg is consumed by the decorator and NOT passed to the
     wrapped function.
@@ -638,35 +664,40 @@ def tracked_task(
             # Consume job_id — don't pass it to the task function
             incoming_job_id: int | None = kwargs.pop("job_id", None)
 
-            # Resolve Celery task ID for correlation
             task_self = args[0] if args and hasattr(args[0], "request") else None
-            celery_task_id = _get_celery_task_id(task_self)
+            request = celery_request(task_self)
 
             # Build params snapshot for debugging/retry
             task_name = get_celery_task_name(fn, args)
             params = _build_job_params(task_name, fn, args, kwargs)
 
-            # Start or create the PendingJob
-            actual_job_id = _start_or_create_job(
+            actual_job_id, should_run = _start_or_create_job(
                 incoming_job_id=incoming_job_id,
                 job_type=resolved_job_type,
-                celery_task_id=celery_task_id,
+                celery_task_id=getattr(request, "id", None),
+                retries=getattr(request, "retries", None) or 0,
                 params=params,
             )
+            if not should_run:
+                report_dropped_task(task_name, fn.__name__, kwargs)
+                raise Reject(WORKER_LOST_ERROR, requeue=False)
 
-            # Run the task (safe_task_execution handles metrics + notifications)
             try:
                 result = safe_fn(*args, **kwargs)
+            except Retry:
+                # Pending, not processing: the retried run reuses this row by task id
+                # and must not mistake it for one whose worker died.
+                update_job(actual_job_id, PendingJob.mark_pending)
+                raise
             except TaskPredicate:
-                # Celery flow control — Retry/Reject/Ignore are not failures.
-                # The PendingJob row is left in its in-progress state so the
-                # retried run can pick it up via incoming_job_id.
+                # Reject and Ignore end the task by design.
+                update_job(actual_job_id, lambda job: job.mark_complete())
                 raise
             except Exception as exc:
-                _mark_job_failed(actual_job_id, str(exc)[:500])
+                update_job(actual_job_id, lambda job: job.mark_failed(str(exc)[:500]))
                 raise
 
-            _mark_job_complete(actual_job_id, result)
+            update_job(actual_job_id, lambda job: job.mark_complete(*result_link(result)))
             return result
 
         return wrapper  # type: ignore[return-value]
@@ -676,20 +707,11 @@ def tracked_task(
     return decorator
 
 
-def _get_celery_task_id(task_self: Any) -> str | None:
-    """Extract the Celery task ID from either a bound task or current_task."""
-    if task_self and hasattr(task_self, "request"):
-        tid = getattr(task_self.request, "id", None)
-        if tid:
-            return tid
-    try:
-        from celery import current_task
-        request = getattr(current_task, "request", None)
-        if request is not None:
-            return getattr(request, "id", None)
-    except Exception:
-        pass
-    return None
+def celery_request(task_self: Any) -> Any:
+    """The Celery request of a bound task, else of current_task (None outside a task)."""
+    if task_self and getattr(task_self.request, "id", None):
+        return task_self.request
+    return getattr(current_task, "request", None)
 
 
 def _build_job_params(
@@ -714,52 +736,83 @@ def _start_or_create_job(
     incoming_job_id: int | None,
     job_type: str,
     celery_task_id: str | None,
+    retries: int,
     params: dict[str, Any],
-) -> int | None:
-    """Start an existing job or create a new one. Returns the job ID or None."""
+) -> tuple[int | None, bool]:
+    """Start this delivery's job row, creating it if needed.
+
+    Returns the job id (None when untracked) and whether the task should run.
+    """
     try:
         with make_session() as session:
+            job = None
             if incoming_job_id:
-                job = start_job(session, incoming_job_id)
+                job = session.get(PendingJob, incoming_job_id, with_for_update=True)
                 if not job:
                     logger.warning("Job %s not found, proceeding without tracking", incoming_job_id)
-                    return None
-            else:
+                    return None, True
+            elif celery_task_id:
+                # A message redelivered after its worker died keeps its task id.
+                job = (
+                    session.query(PendingJob)
+                    .filter(
+                        PendingJob.celery_task_id == celery_task_id,
+                        PendingJob.job_type == job_type,
+                    )
+                    .order_by(PendingJob.id.desc())
+                    .with_for_update()
+                    .first()
+                )
+            if job is None:
                 job = create_job(session, job_type=job_type, params=params)
                 session.flush()
-                job.mark_processing()
 
+            # Still processing means the previous start never finished: its worker died.
+            # Each Celery retry was a start that did finish.
+            lost_starts = job.attempts - retries
+            if job.status == JobStatus.PROCESSING.value and lost_starts >= MAX_TASK_STARTS:
+                job.mark_failed(WORKER_LOST_ERROR)
+                logger.error("Job %s: worker lost on %s starts, dropping the task", job.id, lost_starts)
+                return job.id, False
+
+            job.mark_processing()
             if celery_task_id:
                 update_job_celery_task_id(session, job, celery_task_id)
-
-            return job.id
+            return job.id, True
     except Exception:
         logger.warning("Failed to start/create job tracking, proceeding without", exc_info=True)
-        return None
+        return None, True
 
 
-def _mark_job_failed(job_id: int | None, error: str) -> None:
-    """Mark a job as failed, swallowing DB errors."""
+def result_link(result: Any) -> tuple[int | None, str | None]:
+    """The (result_id, result_type) a task's result dict links its job to."""
+    if not isinstance(result, dict):
+        return None, None
+    return result.get("result_id"), result.get("result_type")
+
+
+def report_dropped_task(task_name: str, fn_name: str, kwargs: dict[str, Any]) -> None:
+    """Record a failure metric and notification for a task dropped for losing its worker."""
+    try:
+        record_metric(
+            metric_type="task",
+            name=task_name,
+            status="failure",
+            labels={"error": WORKER_LOST_ERROR},
+        )
+    except Exception:
+        logger.warning("Failed to record metric for %s", task_name, exc_info=True)
+    notify_task_failure(task_name=fn_name, error_message=WORKER_LOST_ERROR, task_kwargs=kwargs)
+
+
+def update_job(job_id: int | None, change: Callable[[PendingJob], None]) -> None:
+    """Apply change to a job row, swallowing DB errors so tracking never fails a task."""
     if not job_id:
         return
     try:
         with make_session() as session:
-            fail_job(session, job_id, error)
+            job = session.get(PendingJob, job_id)
+            if job:
+                change(job)
     except Exception:
-        logger.warning("Failed to mark job %s as failed", job_id, exc_info=True)
-
-
-def _mark_job_complete(job_id: int | None, result: Any) -> None:
-    """Mark a job as complete, extracting result linking from the return value."""
-    if not job_id:
-        return
-    result_id = None
-    result_type = None
-    if isinstance(result, dict):
-        result_id = result.get("result_id")
-        result_type = result.get("result_type")
-    try:
-        with make_session() as session:
-            complete_job(session, job_id, result_id=result_id, result_type=result_type)
-    except Exception:
-        logger.warning("Failed to mark job %s as complete", job_id, exc_info=True)
+        logger.warning("Failed to update job %s", job_id, exc_info=True)

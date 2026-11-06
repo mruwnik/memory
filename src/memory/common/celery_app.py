@@ -299,6 +299,8 @@ def get_broker_url() -> str:
     return url
 
 
+TASK_TIME_LIMIT = 3600
+
 app = Celery(
     settings.APP_NAME,
     broker=get_broker_url(),
@@ -321,8 +323,16 @@ app.conf.update(
     # result_expires is set, but it is routed to the default "celery" queue that
     # no worker consumes. None disables it; cleanup_old_task_results replaces it.
     result_expires=None,
-    task_time_limit=3600,  # 1 hour hard limit
-    task_soft_time_limit=3000,  # 50 minute soft limit
+    task_time_limit=TASK_TIME_LIMIT,
+    task_soft_time_limit=TASK_TIME_LIMIT - 600,
+    # Redis redelivers any message unacked for this long, including one still running
+    # (acks_late) or waiting on its countdown, so it must comfortably outlast the
+    # longest task and the longest countdown (the Discord backfill jitter).
+    broker_transport_options={
+        "visibility_timeout": 2 * max(TASK_TIME_LIMIT, settings.AGENT_MAX_TIMEOUT_SEC + 600)
+        + settings.DISCORD_BACKFILL_JITTER_SECONDS
+        + 3600
+    },
     task_routes={
         f"{EBOOK_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-ebooks"},
         f"{BLOGS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-blogs"},

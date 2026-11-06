@@ -549,7 +549,7 @@ def no_job_rows_without_db_session(request):
     if "db_session" in request.fixturenames:
         yield
         return
-    with patch("memory.common.jobs._start_or_create_job", return_value=None):
+    with patch("memory.common.jobs._start_or_create_job", return_value=(None, True)):
         yield
 
 

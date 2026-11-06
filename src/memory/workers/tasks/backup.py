@@ -37,7 +37,7 @@ class BackupError(Exception):
     A returned failure status would therefore still be recorded as a
     successful job — which is exactly the silent-outage bug this fixes.
     Raising routes through failure metrics, task-failure notifications, and
-    ``_mark_job_failed`` so every layer (logs, metrics, pending_jobs,
+    the job's failure so every layer (logs, metrics, pending_jobs,
     notifications) reflects that the backup did not happen.
     """
 

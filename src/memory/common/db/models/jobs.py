@@ -113,9 +113,18 @@ class PendingJob(Base):
             f"status={self.status}, external_id={self.external_id})>"
         )
 
+    def mark_pending(self) -> None:
+        """Mark job as waiting to (re)run."""
+        self.status = JobStatus.PENDING.value
+        self.error_message = None
+        self.completed_at = None
+        self.updated_at = datetime.now(timezone.utc)
+
     def mark_processing(self) -> None:
         """Mark job as processing and increment attempts."""
         self.status = JobStatus.PROCESSING.value
+        self.error_message = None
+        self.completed_at = None
         self.attempts += 1
         self.updated_at = datetime.now(timezone.utc)
 

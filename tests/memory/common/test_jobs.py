@@ -1,9 +1,12 @@
+# pyright: reportFunctionMemberAccess=false
 """Tests for job tracking utilities."""
 
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from celery import states
+from celery.exceptions import Ignore, Retry
 
 from memory.common.db.models import HumanUser, PendingJob, JobStatus, JobType
 from memory.common import jobs as job_utils
@@ -562,6 +565,7 @@ def test_retry_failed_job_resets_same_job(db_session):
         },
         status=JobStatus.FAILED.value,
         error_message="Original failure",
+        attempts=job_utils.MAX_TASK_STARTS,
     )
     original_job.completed_at = datetime.now(timezone.utc)
     db_session.add(original_job)
@@ -581,6 +585,7 @@ def test_retry_failed_job_resets_same_job(db_session):
     assert result.job.status == JobStatus.PENDING.value
     assert result.job.error_message is None
     assert result.job.completed_at is None
+    assert result.job.attempts == 0
 
     # Params preserved
     assert result.job.params["title"] == "Test Meeting"
@@ -639,30 +644,125 @@ def test_dispatch_job_stores_task_name(db_session):
     assert result.job.params["_task_name"] == "memory.workers.tasks.meetings.process_meeting"
 
 
-def test_tracked_task_passes_celery_retry_without_marking_failed():
-    """`@tracked_task` must not mark a PendingJob as FAILED when the wrapped
-    task raises celery.exceptions.Retry. Retries are an in-progress state, not
-    a final failure — marking the job FAILED would prematurely stop further
-    retry attempts from being correlated with the same job row.
-    """
-    from celery.exceptions import Retry
+@job_utils.celery_app.task(name="test.tracked_job")
+@job_utils.tracked_task
+def tracked_job(outcome: str = "done") -> dict:
+    raised = {
+        "retry": Retry(message="will retry", when=10),
+        "ignore": Ignore(),
+        "boom": ValueError("boom"),
+    }
+    if outcome in raised:
+        raise raised[outcome]
+    return {"outcome": outcome}
 
-    @job_utils.tracked_task
-    def retrying_task():
-        raise Retry(message="will retry", when=10)
 
-    with patch.object(
-        job_utils, "_start_or_create_job", return_value=42
-    ), patch.object(
-        job_utils, "_mark_job_failed"
-    ) as mark_failed, patch.object(
-        job_utils, "_mark_job_complete"
-    ) as mark_complete:
-        with pytest.raises(Retry):
-            retrying_task()
+@job_utils.celery_app.task(name="test.nesting_job")
+@job_utils.tracked_task
+def nesting_job() -> dict:
+    return {"inner": [tracked_job(outcome="a"), tracked_job(outcome="b")]}
 
-    mark_failed.assert_not_called()
-    mark_complete.assert_not_called()
+
+def tracked_rows(db_session, task_id: str) -> list[tuple[str, str, str | None, int]]:
+    db_session.expire_all()
+    rows = (
+        db_session.query(PendingJob)
+        .filter(PendingJob.celery_task_id == task_id)
+        .order_by(PendingJob.id)
+    )
+    return [(r.job_type, r.status, r.error_message, r.attempts) for r in rows]
+
+
+@pytest.mark.parametrize(
+    "job_kwargs",
+    [lambda job: {}, lambda job: {"job_id": job.id}],
+    ids=["automatic", "dispatched"],
+)
+@pytest.mark.parametrize(
+    "previous_starts, retries, expected_state, expected",
+    [
+        (1, 0, states.SUCCESS, (JobStatus.COMPLETE.value, None, 2)),
+        (
+            job_utils.MAX_TASK_STARTS - 1,
+            0,
+            states.SUCCESS,
+            (JobStatus.COMPLETE.value, None, job_utils.MAX_TASK_STARTS),
+        ),
+        (
+            job_utils.MAX_TASK_STARTS,
+            0,
+            states.REJECTED,
+            (JobStatus.FAILED.value, job_utils.WORKER_LOST_ERROR, job_utils.MAX_TASK_STARTS),
+        ),
+        # Starts that ended in a Celery retry didn't lose their worker
+        (
+            job_utils.MAX_TASK_STARTS + 1,
+            2,
+            states.SUCCESS,
+            (JobStatus.COMPLETE.value, None, job_utils.MAX_TASK_STARTS + 2),
+        ),
+        (
+            job_utils.MAX_TASK_STARTS + 2,
+            2,
+            states.REJECTED,
+            (JobStatus.FAILED.value, job_utils.WORKER_LOST_ERROR, job_utils.MAX_TASK_STARTS + 2),
+        ),
+    ],
+)
+def test_tracked_task_redelivery_after_worker_loss(
+    db_session, job_kwargs, previous_starts, retries, expected_state, expected
+):
+    # A worker killed mid-task leaves its row processing, and the broker redelivers
+    # the same message (same task id, same kwargs).
+    job = PendingJob(
+        job_type="tracked_job",
+        params={},
+        status=JobStatus.PROCESSING.value,
+        celery_task_id="lost-task",
+        attempts=previous_starts,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    result = tracked_job.apply(kwargs=job_kwargs(job), task_id="lost-task", retries=retries)
+
+    assert result.state == expected_state
+    assert tracked_rows(db_session, "lost-task") == [("tracked_job", *expected)]
+
+
+@pytest.mark.parametrize(
+    "outcome, expected_status",
+    [
+        ("retry", JobStatus.PENDING.value),
+        ("ignore", JobStatus.COMPLETE.value),
+        ("boom", JobStatus.FAILED.value),
+    ],
+)
+def test_tracked_task_redelivery_after_a_finished_start_runs_again(
+    db_session, outcome, expected_status
+):
+    with patch("memory.common.content_processing.notify_task_failure"):
+        for _ in range(job_utils.MAX_TASK_STARTS):
+            tracked_job.apply(kwargs={"outcome": outcome}, task_id="flow-task")
+            assert tracked_rows(db_session, "flow-task")[0][1] == expected_status
+
+    result = tracked_job.apply(task_id="flow-task")
+
+    assert result.result == {"outcome": "done"}
+    assert tracked_rows(db_session, "flow-task") == [
+        ("tracked_job", JobStatus.COMPLETE.value, None, job_utils.MAX_TASK_STARTS + 1)
+    ]
+
+
+def test_tracked_task_called_inside_another_gets_a_row_per_call(db_session):
+    nesting_job.apply(task_id="nesting-task")
+
+    rows = db_session.query(PendingJob).order_by(PendingJob.id)
+    assert [(r.job_type, r.celery_task_id, r.status, r.attempts) for r in rows] == [
+        ("nesting_job", "nesting-task", JobStatus.COMPLETE.value, 1),
+        ("tracked_job", None, JobStatus.COMPLETE.value, 1),
+        ("tracked_job", None, JobStatus.COMPLETE.value, 1),
+    ]
 
 
 # =============================================================================

@@ -50,6 +50,9 @@ a new, empty `## Unreleased` above it.
   no new xkcd or SMBC comics were found. SMBC comic pages, which the site
   currently serves with status 500, are read too. Comics that have dropped out
   of the feeds since then are not fetched back.
+- A task that keeps killing its worker is dropped after 3 starts instead of
+  being redelivered forever; an email that kills its worker is not re-queued
+  by later syncs.
 
 ### Required env vars
 
@@ -70,6 +73,24 @@ None.
   `COMIC_SYNC_INTERVAL`, `BEEPER_RECONCILE_INTERVAL` and
   `VERIFICATION_SYNC_INTERVAL` are removed: delete them from `.env`; they are
   ignored.
+- A dropped task fails its job with "Worker lost on 3 starts; not retrying",
+  records a task failure metric and sends the usual task-failure notification.
+  A redelivered task reuses its job row instead of adding one per delivery;
+  jobs waiting on a Celery retry show as pending, not processing; a manual
+  retry of a failed job starts its start count from zero.
+- The lost-job sweep also fails dispatched jobs still pending a day later (a
+  retry or queued message that never arrived).
+- Redis' `visibility_timeout` is now set (6 hours with default settings: twice
+  the longest task time limit plus `DISCORD_BACKFILL_JITTER_SECONDS` plus an
+  hour), so long-running or long-countdown tasks are no longer redelivered
+  while they run or wait. A message whose worker container died outright
+  (rather than one child process) waits up to that long to be redelivered.
+- An email stops being queued once its process_message jobs have lost their
+  worker on 3 starts in total, counting both the new "Worker lost on 3 starts"
+  failures and the sweep's "still processing long after the task time limit"
+  ones. The bad email on existing instances (all those sweep failures) is
+  therefore skipped from the first sync after the update; a manual retry of
+  its failed job still runs it.
 
 ### Migrations
 

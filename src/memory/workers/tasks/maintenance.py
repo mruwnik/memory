@@ -99,7 +99,7 @@ from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
 )
-from memory.common.jobs import tracked_task
+from memory.common.jobs import LOST_JOB_ERROR, tracked_task
 from memory.common.redis_lock import distributed_lock
 from memory.parsers.email import decode_mime_header
 
@@ -1393,14 +1393,18 @@ def apply_in_batches(statement, id_column, *conditions) -> int:
             total += result.rowcount
 
 
-LOST_JOB_ERROR = "Worker lost: still processing long after the task time limit"
+# A Celery retry is due within minutes or hours; a job pending on one for longer lost it.
+LOST_RETRY_AFTER = timedelta(days=1)
 
 
 def fail_lost_jobs() -> int:
-    """Fail processing jobs whose worker died (time-limit SIGKILL, OOM, deploy).
+    """Fail jobs that nothing will finish.
 
-    tracked_task can't mark those failed itself. start_job stamps updated_at,
-    and nothing else touches it while a job runs.
+    - Processing long past the time limit: the worker died (time-limit SIGKILL, OOM,
+      deploy), so tracked_task couldn't record it. mark_processing stamps updated_at,
+      and nothing else touches it while a job runs.
+    - Pending with a task id for a day: dispatched or awaiting a retry, and the
+      message was lost.
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(seconds=2 * app.conf.task_time_limit)
@@ -1412,8 +1416,14 @@ def fail_lost_jobs() -> int:
             updated_at=now,
         ),
         PendingJob.id,
-        PendingJob.status == JobStatus.PROCESSING.value,
-        PendingJob.updated_at < cutoff,
+        or_(
+            and_(PendingJob.status == JobStatus.PROCESSING.value, PendingJob.updated_at < cutoff),
+            and_(
+                PendingJob.status == JobStatus.PENDING.value,
+                PendingJob.celery_task_id.is_not(None),
+                PendingJob.updated_at < now - LOST_RETRY_AFTER,
+            ),
+        ),
     )
 
 

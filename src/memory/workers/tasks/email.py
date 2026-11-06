@@ -29,7 +29,7 @@ from memory.workers.email import (
     vectorize_email,
 )
 from memory.common.content_processing import check_content_exists
-from memory.common.jobs import tracked_task
+from memory.common.jobs import killed_its_worker, tracked_task
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +263,7 @@ def queue_message(
     """Parse, dedup, spool, and queue a single message for async processing.
 
     Returns True if the message was newly queued, False if it already
-    exists (dedup hit) or is password-reset mail. On any failure the shared session is rolled back
+    exists (dedup hit), is password-reset mail, or killed its worker before. On any failure the shared session is rolled back
     before the exception propagates: a dropped connection (e.g. Postgres'
     idle-in-transaction timeout firing mid-sync) otherwise poisons the
     transaction and every subsequent statement cascades into
@@ -276,6 +276,13 @@ def queue_message(
     try:
         parsed_email = parse_email_message(raw_email, message_id)
         if find_stored_message(db, account_id, parsed_email):
+            return False
+        if killed_its_worker(db, "process_message", account_id=account_id, message_id=message_id):
+            logger.warning(
+                "Not queueing message %s of account %s: it keeps killing its worker",
+                message_id,
+                account_id,
+            )
             return False
         spooled = spool_raw_email(
             account_id, message_id, raw_email, parsed_email["hash"].hex()

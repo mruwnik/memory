@@ -14,6 +14,7 @@ from sqlalchemy import insert, text, update
 from sqlalchemy.orm import Session
 
 from memory.common import qdrant as qd
+from memory.common.jobs import LOST_JOB_ERROR
 from memory.common.redis_lock import distributed_lock
 from memory.common import settings
 from memory.common.db.models import (
@@ -2051,19 +2052,23 @@ def test_cleanup_old_pending_jobs(db_session, status, age_days, kept):
 
 
 @pytest.mark.parametrize(
-    "status, started_hours_ago, expected_status",
+    "status, celery_task_id, started_hours_ago, expected_status",
     [
-        (JobStatus.PROCESSING.value, 3, JobStatus.FAILED.value),
-        (JobStatus.PROCESSING.value, 1, JobStatus.PROCESSING.value),
-        (JobStatus.PENDING.value, 3, JobStatus.PENDING.value),
-        (JobStatus.COMPLETE.value, 3, JobStatus.COMPLETE.value),
+        (JobStatus.PROCESSING.value, "t", 3, JobStatus.FAILED.value),
+        (JobStatus.PROCESSING.value, "t", 1, JobStatus.PROCESSING.value),
+        (JobStatus.PENDING.value, "t", 3, JobStatus.PENDING.value),
+        # Waiting on a Celery retry that never arrived
+        (JobStatus.PENDING.value, "t", 25, JobStatus.FAILED.value),
+        # Never dispatched: nothing will ever run it, but it isn't lost either
+        (JobStatus.PENDING.value, None, 25, JobStatus.PENDING.value),
+        (JobStatus.COMPLETE.value, "t", 3, JobStatus.COMPLETE.value),
     ],
 )
 def test_cleanup_old_pending_jobs_fails_lost_jobs(
-    db_session, status, started_hours_ago, expected_status
+    db_session, status, celery_task_id, started_hours_ago, expected_status
 ):
     # Created long ago but (re)started recently must count from the start.
-    job = make_job(status, 10)
+    job = make_job(status, 10, celery_task_id=celery_task_id)
     job.updated_at = datetime.now(timezone.utc) - timedelta(hours=started_hours_ago)
     db_session.add(job)
     db_session.commit()
@@ -2087,7 +2092,7 @@ def test_cleanup_old_pending_jobs_fails_lost_jobs_across_batches(db_session, mon
     assert {
         (j.status, j.error_message, j.completed_at is not None)
         for j in db_session.query(PendingJob).filter(PendingJob.job_type == "test")
-    } == {(JobStatus.FAILED.value, maintenance_module.LOST_JOB_ERROR, True)}
+    } == {(JobStatus.FAILED.value, LOST_JOB_ERROR, True)}
 
 
 @pytest.mark.parametrize(
